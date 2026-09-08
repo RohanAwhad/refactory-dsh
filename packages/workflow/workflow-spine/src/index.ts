@@ -15,7 +15,7 @@ import { Spine } from './spine.ts'
 import type { WorkflowGraph } from './types.ts'
 
 export const name = 'workflow-spine'
-export const inject = ['tools']
+export const inject = ['tools', 'systemPrompt']
 
 /** Config: the workflow graph plus tool naming and iteration bounds. */
 export interface Config {
@@ -51,6 +51,16 @@ function sync<T>(value: T): Promise<T> {
 export function apply(ctx: Context, config: Config): void {
   const { toolPrefix, maxIterations } = config
   const spine = new Spine(config.graph, { maxIterations })
+
+  // The "force the loop" guidance: advance only through the tools. The spine
+  // enforces this structurally (it hands over the next node only after the
+  // current one is reported complete), and this section tells the agent to
+  // cooperate rather than improvise.
+  ctx.systemPrompt.section({
+    name: `tool:${toolPrefix}-spine`,
+    order: ctx.systemPrompt.getSectionOrder('TOOL_WORKFLOW'),
+    text: `You are driving a workflow graph. Advance only through its tools: call ${toolPrefix}_next to learn the next node(s), perform exactly that node (spawn a subagent for an AgentNode, run the command for a FnNode), then report it with ${toolPrefix}_done. Route a gate with ${toolPrefix}_verdict (proceed/reloop/halt), fan out a director's plan with ${toolPrefix}_expand, and apply user steering ("skip the tests") with ${toolPrefix}_edit. Never skip, reorder, or bypass a node — the runner refuses to advance until you report the current node complete.`,
+  })
 
   ctx.tools.register(defineTool({
     name: `${toolPrefix}_next`,

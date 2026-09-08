@@ -58,12 +58,10 @@ cannot drift.
 
 ## Known limitations and deferred work
 
-- The spine is pure logic; the agent drives it via the six tools. A prompt
-  section that instructs the agent to only advance through the tools (the
-  "force the loop" guidance) is not yet registered.
 - `SubgraphForkNode` / `SelectionNode` / `LLMNode` are advanced through with an
   `unsupported` marker (they need worktrees / a sub-executor).
 - The graph is inlined via `config.graph`; loading a `graphPath` at apply time
   (via the `fs` seam) is not yet implemented.
-- Only the pure spine is unit-tested; the tool registration path has a smoke
-  test but not the repo-wide real-composition gate.
+- The "force the loop" guidance is a registered prompt section; the structural
+  enforcement (the spine only advances on a reported completion) is the
+  drift-proof guarantee, and the section only asks the agent to cooperate.
