@@ -1,25 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import type { Context } from '@deepseek-ai/cordis'
-import { apply } from '../src/index.ts'
+import { Context } from '@deepseek-ai/cordis'
+import ToolRuntime from '@deepseek-ai/dsh-tools'
+import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import * as workflowSpine from '../src/index.ts'
 import type { WorkflowGraph } from '../src/types.ts'
-
-/** A minimal fake context capturing the tools `apply` registers. */
-interface Registered {
-  name: string
-  execute(args: unknown, exec: unknown): Promise<unknown>
-}
-
-function capture(): { ctx: Context; registered: Registered[] } {
-  const registered: Registered[] = []
-  const ctx = {
-    tools: {
-      register(definition: { name: string; execute: (args: unknown, exec: unknown) => Promise<unknown> }): void {
-        registered.push(definition)
-      },
-    },
-  } as unknown as Context
-  return { ctx, registered }
-}
 
 const graph: WorkflowGraph = {
   name: 't',
@@ -36,28 +20,38 @@ const graph: WorkflowGraph = {
   ],
 }
 
-describe('workflow-spine plugin', () => {
+async function setup(): Promise<Context> {
+  const ctx = new Context()
+  await ctx.plugin(SystemPrompt)
+  await ctx.plugin(ToolRuntime)
+  await ctx.plugin(workflowSpine, { graph, toolPrefix: 'wf', maxIterations: 3 })
+  return ctx
+}
+
+interface StepResult {
+  status: string
+  nodes?: Array<{ id: string }>
+}
+
+async function run(ctx: Context, name: string, args: unknown): Promise<StepResult> {
+  const definition = ctx.tools.get(name)
+  expect(definition).toBeDefined()
+  return await definition.execute(args, {} as never) as unknown as StepResult
+}
+
+describe('workflow-spine real composition', () => {
   it('registers the six wf_* tools and walks a graph through them', async () => {
-    const { ctx, registered } = capture()
-    apply(ctx, { graph, toolPrefix: 'wf', maxIterations: 3 })
-    const names = registered.map(tool => tool.name)
-    expect(names).toEqual(['wf_next', 'wf_done', 'wf_verdict', 'wf_edit', 'wf_expand', 'wf_state'])
+    const ctx = await setup()
+    for (const name of ['wf_next', 'wf_done', 'wf_verdict', 'wf_edit', 'wf_expand', 'wf_state']) {
+      expect(ctx.tools.get(name)).toBeDefined()
+    }
 
-    const byName = (name: string): Registered => registered.find(tool => tool.name === name) as Registered
-
-    const next = await byName('wf_next').execute({}, {})
-    expect(next).toMatchObject({ status: 'ready', nodes: [{ id: 'a' }] })
-
-    await byName('wf_done').execute({ node: 'a' }, {})
-    const atGate = await byName('wf_next').execute({}, {})
-    expect(atGate).toMatchObject({ status: 'ready', nodes: [{ id: 'gate' }] })
-
-    await byName('wf_verdict').execute({ gate: 'gate', verdict: 'proceed' }, {})
-    const atB = await byName('wf_next').execute({}, {})
-    expect(atB).toMatchObject({ status: 'ready', nodes: [{ id: 'b' }] })
-
-    await byName('wf_done').execute({ node: 'b' }, {})
-    const done = await byName('wf_next').execute({}, {})
-    expect(done).toMatchObject({ status: 'done' })
+    expect(await run(ctx, 'wf_next', {})).toMatchObject({ status: 'ready', nodes: [{ id: 'a' }] })
+    await run(ctx, 'wf_done', { node: 'a' })
+    expect(await run(ctx, 'wf_next', {})).toMatchObject({ status: 'ready', nodes: [{ id: 'gate' }] })
+    await run(ctx, 'wf_verdict', { gate: 'gate', verdict: 'proceed' })
+    expect(await run(ctx, 'wf_next', {})).toMatchObject({ status: 'ready', nodes: [{ id: 'b' }] })
+    await run(ctx, 'wf_done', { node: 'b' })
+    expect(await run(ctx, 'wf_next', {})).toMatchObject({ status: 'done' })
   })
 })
