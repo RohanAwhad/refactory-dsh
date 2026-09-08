@@ -28,15 +28,10 @@ async function setup(): Promise<Context> {
   return ctx
 }
 
-interface StepResult {
-  status: string
-  nodes?: Array<{ id: string }>
-}
-
-async function run(ctx: Context, name: string, args: unknown): Promise<StepResult> {
+async function run(ctx: Context, name: string, args: unknown): Promise<unknown> {
   const definition = ctx.tools.get(name)
   expect(definition).toBeDefined()
-  return await definition.execute(args, {} as never) as unknown as StepResult
+  return definition.execute(args, {} as never)
 }
 
 describe('workflow-spine real composition', () => {
