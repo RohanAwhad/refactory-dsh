@@ -41,7 +41,7 @@ const graph: WorkflowGraph = {
 
 async function run(ctx: Context, name: string, args: unknown): Promise<unknown> {
   const definition = ctx.tools.get(name)
-  expect(definition).toBeDefined()
+  if (definition === undefined) throw new Error(`tool ${name} not registered`)
   return definition.execute(args, {} as never)
 }
 
