@@ -20,7 +20,7 @@ or bypass a checkpoint.
 |------|---------|
 | `wf_next` | The node(s) due now (agent task / fn / gate / fork), or `done`. |
 | `wf_done(node)` | Mark a non-gate node complete and advance. |
-| `wf_verdict(gate, proceed\|reloop\|halt, feedback?)` | Route a gate; reloop is iteration-capped. |
+| `wf_verdict(gate, verdict, feedback?)` | Route a gate by one of the `verdicts` its node view lists; reloop is iteration-capped. |
 | `wf_edit(node, skip\|unskip)` | Hot-remove / restore a node (steering). |
 | `wf_expand(director, entries)` | Hot-plug a director's N child agents from its plan. |
 | `wf_state` | Full live state (cursor, completed, skipped, verdicts, log). |
@@ -43,23 +43,47 @@ cannot drift.
 
 `graph` field names match refactory (`start_node`, `nodes`, `edges`,
 `prompt_template`, `evaluator_type`, `gate_prompt`, `writes`, `reads`,
-`expand`), so a `graph.json` file loads as-is.
+`expand`), so a `graph.json` file loads as-is. `validateGraph` rejects a graph
+whose structure the walk cannot follow — an unresolvable `start_node`, a dangling
+edge, a node with two unconditional edges, two edges carrying one gate verdict,
+an unknown node type, or a node the walk can never reach — so a bad graph fails
+at load rather than stalling a run.
+
+An edge `condition` is a label, not an enum. `proceed` exits along the edge,
+`reloop` rewinds, `halt` stops, and any other label is a forward outcome the gate
+itself names (`draft`, `merge`, …), matched case-insensitively. `maxIterations`
+caps a reloop only when the gate declares no `max_iterations` of its own.
+
+## Upstream vocabulary
+
+`@deepseek-ai/dsh-workflow-spine` is one consumer of refactory's `Workflow` IR;
+the [named-gate-outcomes Agent Note](../../../.agents/notes/implemented/architecture/2026-09-09-workflow-spine-named-gate-outcomes.md)
+owns the vocabulary decision and its verified coverage.
 
 ## Node → DSH mapping
 
 | refactory node | spine behavior |
 |----------------|----------------|
 | `AgentNode` | `wf_next` returns it; the agent runs a subagent, then `wf_done`. |
+| `LLMNode` | `wf_next` returns it with its `system_prompt` as `prompt_template`; the agent makes the one-shot call, then `wf_done`. |
 | `AgentNode` + `expand` (director) | `wf_expand` hot-plugs N children and fans out. |
 | `FnNode` / `Study` | `wf_next` returns it; the agent runs the deterministic op, then `wf_done`. |
 | `GateNode` fn/user/agent | `wf_next` returns it; the agent calls `wf_verdict`. |
-| `ForkNode` / `JoinNode` | `wf_done(fork)` fans out; the barrier is the `afters` stack. |
-| RELOOP edge | `wf_verdict(reloop, feedback)` rewinds, capped by `maxIterations`. |
+| `ForkNode` / `JoinNode` | `wf_done(fork)` fans out; each branch advances on its own, and the barrier is the `afters` stack. |
+| Named gate condition | `wf_verdict(gate, "draft")` advances along the matching edge. |
+| RELOOP edge | `wf_verdict(reloop, feedback)` rewinds, capped by the gate's `max_iterations` or `maxIterations`. |
 
-## Known limitations and deferred work
+## Known Limitations and Deferred Work
 
-- `SubgraphForkNode` / `SelectionNode` / `LLMNode` are advanced through with an
-  `unsupported` marker (they need worktrees / a sub-executor).
+- `SubgraphForkNode` / `SelectionNode` are advanced through with an `unsupported`
+  marker; both need an isolated-worktree sub-executor no current graph declares.
+- `LLMNode` is executed as a one-shot agent node: the driving agent makes the
+  call. Nothing enforces the declared `model`, `temperature`, or tool set.
+- A reloop collapses the cursor onto its target, discarding any other active
+  position, so a reloop gate reached with a fork in flight drops the other
+  branches. Graph authors must place reloop gates where the cursor is single.
+- The `afters` barrier is one stack, so a fork nested inside a fork branch makes
+  the inner barrier fire on the outer join.
 - The graph is inlined via `config.graph`; loading a `graphPath` at apply time
   (via the `fs` seam) is not yet implemented.
 - The "force the loop" guidance is a registered prompt section; the structural

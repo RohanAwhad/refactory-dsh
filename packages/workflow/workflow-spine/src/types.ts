@@ -27,6 +27,18 @@ export interface WorkflowNode {
   writes?: string[]
   reads?: string[]
   prompt_template?: string
+  /** `LLMNode`: the system prompt for the one-shot call. */
+  system_prompt?: string
+  /** `LLMNode`: an alternative per-instance prompt when no system prompt is set. */
+  instance_prompt?: string
+  /** `AgentNode` / `LLMNode`: the model the node was declared with. */
+  model?: string
+  /** `LLMNode`: sampling temperature. */
+  temperature?: number
+  /** `LLMNode`: the node's own turn cap. */
+  max_turns?: number
+  /** `GateNode`: the cap for this gate's reloop edge. */
+  max_iterations?: number
   content?: string
   command?: string
   evaluator_type?: 'fn' | 'user' | 'agent'
@@ -37,11 +49,17 @@ export interface WorkflowNode {
   [key: string]: unknown
 }
 
-/** One directed edge with an optional gate condition. */
+/** One directed edge with an optional gate condition label. */
 export interface WorkflowEdge {
   source: string
   target: string
-  condition?: 'proceed' | 'reloop' | 'halt' | null
+  /**
+   * The verdict label that routes along this edge, or null/absent for the
+   * unconditional edge. `proceed` / `reloop` / `halt` carry their usual
+   * meaning; any other label is a gate-named forward outcome (a switch), e.g.
+   * `draft` / `improve` / `debug`. Labels are compared in lowercase.
+   */
+  condition?: string | null
 }
 
 /** A workflow graph — the exact shape of refactory's `Workflow.to_dict()`. */
