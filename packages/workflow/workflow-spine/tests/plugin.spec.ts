@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
@@ -48,5 +49,108 @@ describe('workflow-spine real composition', () => {
     expect(await run(ctx, 'wf_next', {})).toMatchObject({ status: 'ready', nodes: [{ id: 'b' }] })
     await run(ctx, 'wf_done', { node: 'b' })
     expect(await run(ctx, 'wf_next', {})).toMatchObject({ status: 'done' })
+  })
+})
+
+/** A graph whose first two nodes are commands, so the plugin can run them. */
+const commandGraph: WorkflowGraph = {
+  name: 'commands',
+  start_node: 'prepare',
+  nodes: {
+    prepare: {
+      _type: 'FnNode', id: 'prepare', command: 'printf prepared',
+      reads: [], writes: ['note.txt'],
+    },
+    stop: {
+      _type: 'GateNode', id: 'stop', evaluator_type: 'fn', evaluator_command: 'echo proceed',
+      reads: [], writes: [],
+    },
+    work: {
+      _type: 'AgentNode', id: 'work', role: 'builder', prompt_template: 'W', reads: [], writes: [],
+    },
+  },
+  edges: [
+    { source: 'prepare', target: 'stop' },
+    { source: 'stop', target: 'work', condition: 'proceed' },
+    { source: 'stop', target: 'prepare', condition: 'reloop' },
+  ],
+}
+
+/** A shell executor that really runs the command, for the composition test. */
+function realShell(): object {
+  return {
+    resolve: (request: { command: string; workdir?: string; timeoutMs?: number; env?: Record<string, string> }) => ({
+      command: request.command,
+      workdir: request.workdir ?? process.cwd(),
+      timeoutMs: request.timeoutMs ?? 10_000,
+      stdoutMaxBytes: 100_000,
+      env: request.env,
+      sandboxPolicy: undefined,
+    }),
+    run: async (spec: { command: string; workdir: string; timeoutMs: number; env?: Record<string, string> }) => {
+      const started = spawnSync('/bin/sh', ['-c', spec.command], {
+        cwd: spec.workdir, encoding: 'utf8', timeout: spec.timeoutMs,
+        env: { ...process.env, ...spec.env },
+      })
+      return {
+        exitCode: started.status, signal: started.signal, timedOut: false, aborted: false,
+        timeoutMs: spec.timeoutMs,
+        stdout: { text: started.stdout ?? '', truncated: false },
+        stderr: { text: started.stderr ?? '', truncated: false },
+      }
+    },
+  }
+}
+
+describe('deterministic nodes run without the driver', () => {
+  async function commandSetup(options: { executeCommands: boolean }): Promise<Context> {
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    ctx.provide('shell', realShell() as never)
+    await ctx.plugin(workflowSpine, {
+      graph: commandGraph, toolPrefix: 'wf', maxIterations: 3, ...options,
+    })
+    return ctx
+  }
+
+  it('runs the FnNode and the fn gate, then hands over only the agent node', async () => {
+    const ctx = await commandSetup({ executeCommands: true })
+    expect(await run(ctx, 'wf_next', {})).toMatchObject({
+      status: 'ready', nodes: [{ id: 'work', _type: 'AgentNode' }],
+    })
+    const state = (await run(ctx, 'wf_state', {})) as { completed: string[]; gate_verdicts: Record<string, string> }
+    expect(state.completed).toContain('prepare')
+    expect(state.completed).toContain('stop')
+    expect(state.gate_verdicts).toEqual({ stop: 'proceed' })
+  })
+
+  it('hands the deterministic nodes over when execution is off', async () => {
+    const ctx = await commandSetup({ executeCommands: false })
+    expect(await run(ctx, 'wf_next', {})).toMatchObject({ status: 'ready', nodes: [{ id: 'prepare' }] })
+  })
+
+  it('reports a failing command and does not advance the cursor', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    ctx.provide('shell', realShell() as never)
+    await ctx.plugin(workflowSpine, {
+      graph: {
+        ...commandGraph,
+        nodes: {
+          ...commandGraph.nodes,
+          prepare: { _type: 'FnNode', id: 'prepare', command: 'echo broken >&2; exit 4', reads: [], writes: [] },
+        },
+      },
+      toolPrefix: 'wf',
+      executeCommands: true,
+    })
+
+    const result = (await run(ctx, 'wf_next', {})) as { status: string; exit_code: number; stderr: string }
+    expect(result.status).toBe('failed')
+    expect(result.exit_code).toBe(4)
+    expect(result.stderr).toBe('broken')
+    expect(await run(ctx, 'wf_next', {})).toMatchObject({ status: 'failed' })
   })
 })

@@ -22,9 +22,14 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { Spine, validateGraph } from './spine.ts'
+import type { SpineNext } from './spine.ts'
+import { isDeterministic, runDeterministic } from './execute.ts'
+import type { CommandOutcome } from './execute.ts'
 import type { WorkflowGraph } from './types.ts'
 
 export { Spine, validateGraph } from './spine.ts'
+export { commandOf, isDeterministic, verdictOf, NODE_ENV_KEY } from './execute.ts'
+export type { CommandOutcome, CommandRunnerConfig, NodeManifest } from './execute.ts'
 export type { GraphIssue, NodeView, SpineNext } from './spine.ts'
 export type { WorkflowEdge, WorkflowGraph, WorkflowNode } from './types.ts'
 
@@ -39,6 +44,18 @@ export interface Config {
   toolPrefix: string
   /** Maximum reloop iterations before a gate halts. */
   maxIterations: number
+  /**
+   * Run deterministic nodes (`FnNode`/`Study` commands and `fn` gate evaluators)
+   * in-process instead of handing them to the driving agent. Requires a shell
+   * executor; with none mounted the nodes are handed over as before.
+   */
+  executeCommands: boolean
+  /** Working directory for node commands; absent uses the shell executor's own. */
+  workdir?: string
+  /** Extra environment entries for node commands. */
+  commandEnv: Record<string, string>
+  /** Foreground timeout for one node command. */
+  commandTimeoutMs: number
   /**
    * Global tools the CEO is not allowed to call. The guard denies these on the
    * CEO's own scope at `agent/created`, so subagents (which join the full
@@ -68,6 +85,10 @@ export const Config = z.object({
   graph: z.any(),
   toolPrefix: z.string().default('wf'),
   maxIterations: z.natural().default(3),
+  executeCommands: z.boolean().default(false),
+  workdir: z.string(),
+  commandEnv: z.dict(z.string()).default({}),
+  commandTimeoutMs: z.natural().default(600_000),
   ceoDeny: z.array(z.string()).default(DEFAULT_CEO_DENY),
 })
 
@@ -99,6 +120,51 @@ export function apply(ctx: Context, config: Config): void {
   }
   const spine = new Spine(config.graph, { maxIterations })
 
+  /**
+   * Run every deterministic node the cursor is sitting on, so `wf_next` reports
+   * only work a model must do. A node that fails leaves the cursor where it is
+   * and is reported instead: the graph must not advance past a step that did
+   * not happen.
+   */
+  async function drain(): Promise<{ next: SpineNext; failure?: CommandOutcome }> {
+    if (!config.executeCommands) return { next: spine.next() }
+    const shell = ctx.get('shell')
+    if (shell === undefined) return { next: spine.next() }
+    const runner = {
+      env: config.commandEnv,
+      timeoutMs: config.commandTimeoutMs,
+      ...(config.workdir === undefined ? {} : { workdir: config.workdir }),
+    }
+    for (;;) {
+      const state = spine.next()
+      if (state.status === 'done') return { next: state }
+      const automatic = (state.nodes ?? []).filter(isDeterministic)
+      if (automatic.length === 0) return { next: state }
+      for (const node of automatic) {
+        const outcome = await runDeterministic(shell, node, runner)
+        if (!outcome.ok) return { next: state, failure: outcome }
+        if (outcome.verdict === undefined) spine.complete(node.id)
+        else spine.verdict(node.id, outcome.verdict)
+      }
+    }
+  }
+
+  /** The `wf_next` payload: the due nodes, or the node that failed to run. */
+  async function report(): Promise<JsonValue> {
+    const { next, failure } = await drain()
+    if (failure !== undefined) {
+      return json({
+        status: 'failed',
+        node: failure.command,
+        exit_code: failure.exitCode,
+        error: failure.error ?? 'command failed',
+        stdout: failure.stdout,
+        stderr: failure.stderr,
+      })
+    }
+    return json(next)
+  }
+
   // The driving contract. The spine enforces "what is next" structurally (it
   // hands over the next node only after the current one is reported complete),
   // and the deny-guard below removes the CEO's coding tools. This section tells
@@ -112,11 +178,11 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.tools.register(defineTool({
     name: `${toolPrefix}_next`,
-    description: 'Get the next node(s) the workflow graph says are due now. Returns `{ status, nodes }`: for `ready`, a list of node views (agent task / fn / gate / fork) with the fields you need; for `done`, the run is complete. Always call this first and act only on what it returns — never skip or reorder.',
+    description: 'Get the next node(s) the workflow graph says are due now. Deterministic nodes (a command an `fn` gate or an `FnNode` runs) are executed for you and do not appear. Returns `{ status, nodes }`: for `ready`, the node views you must act on (agent task / one-shot LLM / user gate / fork) with the fields you need; for `done`, the run is complete; for `failed`, a deterministic node failed and the cursor has not moved. Always call this first and act only on what it returns — never skip or reorder.',
     parameters: {},
     output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
     execute() {
-      return sync(json(spine.next()))
+      return report()
     },
   }))
 

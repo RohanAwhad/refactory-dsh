@@ -15,6 +15,12 @@
       "path": "../../../vendor/schemastery"
     },
     {
+      "path": "../../core/agent"
+    },
+    {
+      "path": "../../core/scope"
+    },
+    {
       "path": "../../core/tools"
     },
     {
@@ -22,6 +28,9 @@
     },
     {
       "path": "../../util/values"
+    },
+    {
+      "path": "../../shell/shell"
     }
   ]
 }

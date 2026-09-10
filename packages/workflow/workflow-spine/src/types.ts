@@ -42,6 +42,7 @@ export interface WorkflowNode {
   content?: string
   command?: string
   evaluator_type?: 'fn' | 'user' | 'agent'
+  evaluator_command?: string
   gate_prompt?: string
   targets?: string[]
   sources?: string[]

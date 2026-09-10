@@ -18,7 +18,7 @@ or bypass a checkpoint.
 
 | Tool | Purpose |
 |------|---------|
-| `wf_next` | The node(s) due now (agent task / fn / gate / fork), or `done`. |
+| `wf_next` | The node(s) due now (agent task / one-shot LLM / user gate / fork), or `done`. Deterministic nodes are run for you and never appear. |
 | `wf_done(node)` | Mark a non-gate node complete and advance. |
 | `wf_verdict(gate, verdict, feedback?)` | Route a gate by one of the `verdicts` its node view lists; reloop is iteration-capped. |
 | `wf_edit(node, skip\|unskip)` | Hot-remove / restore a node (steering). |
@@ -39,6 +39,10 @@ cannot drift.
     graph: { ... }          # a refactory Workflow.to_dict() object (or a graph.json)
     toolPrefix: wf          # optional
     maxIterations: 3        # optional reloop cap
+    executeCommands: false  # optional: run deterministic nodes in-process
+    workdir: /runs/abc      # optional: working directory for node commands
+    commandEnv: {}          # optional: extra environment for node commands
+    commandTimeoutMs: 600000
 ```
 
 `graph` field names match refactory (`start_node`, `nodes`, `edges`,
@@ -59,6 +63,24 @@ caps a reloop only when the gate declares no `max_iterations` of its own.
 `@deepseek-ai/dsh-workflow-spine` is one consumer of refactory's `Workflow` IR;
 the [named-gate-outcomes Agent Note](../../../.agents/notes/implemented/architecture/2026-09-09-workflow-spine-named-gate-outcomes.md)
 owns the vocabulary decision and its verified coverage.
+
+## Deterministic nodes
+
+With `executeCommands: true` and a `shell` executor mounted, the plugin runs a
+node itself when the graph gives it a command: an `FnNode`/`Study` with a
+`command`, or a `GateNode` whose `evaluator_type` is `fn`. `wf_next` runs those,
+routes the gate by the **last non-empty stdout line** (lowercased, matching how
+edge conditions compare), and reports only the nodes a model must do. With no
+shell mounted, or with execution off, every node is handed to the driver as
+before.
+
+A node command is generic — it knows nothing about the graph that invoked it — so
+the plugin hands it its own declaration as JSON under `DSH_WORKFLOW_NODE`:
+`{ id, type, command, reads, writes }`. A command that exits nonzero, times out,
+is aborted, or (for a gate) prints no verdict **fails the node**: `wf_next`
+returns `{ status: 'failed', node, exit_code, error, stdout, stderr }` and the
+cursor does not move, because a step that did not happen must not look like one
+that did.
 
 ## Node → DSH mapping
 

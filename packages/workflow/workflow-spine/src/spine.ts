@@ -15,6 +15,8 @@ export interface NodeView {
   _type: string
   role?: string
   evaluator_type?: string
+  /** For an `fn` gate: the command whose last stdout line is the verdict. */
+  evaluator_command?: string
   gate_prompt?: string
   /**
    * For a gate: the verdict labels it accepts, derived from its outgoing
@@ -250,6 +252,7 @@ export class Spine {
     if (node.role !== undefined) view.role = node.role
     if (node._type === 'GateNode') {
       if (node.evaluator_type !== undefined) view.evaluator_type = node.evaluator_type
+      if (node.evaluator_command !== undefined) view.evaluator_command = node.evaluator_command
       view.gate_prompt = node.gate_prompt ?? ''
       view.reads = node.reads ?? []
       view.verdicts = this.outgoing(nid)
