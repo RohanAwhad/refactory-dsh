@@ -17,7 +17,7 @@ from refactory_dsh.paths import REPO_ROOT, python as _python, refactory_dsh_pkg,
 
 REPO = REPO_ROOT
 GRAPHS = refactory_dsh_pkg().parent / "graphs"
-SCIENCE_PRESET = refactory_dsh_pkg().parent / "presets" / "ceo-skeleton.cordis.yml"
+SCIENCE_PRESET = REPO_ROOT / "packages" / "preset" / "agent-presets" / "presets" / "ceo" / "agent.cordis.yml"
 PRESET_ROOT = Path.home() / ".dsh" / ".agent-presets"
 VENV = str(venv_bin())
 PY = str(_python())

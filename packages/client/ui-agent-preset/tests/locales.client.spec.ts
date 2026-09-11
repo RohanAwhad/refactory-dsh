@@ -7,8 +7,7 @@ const translate = (bundle: typeof en) => (key: keyof typeof en): string => bundl
 
 describe('preset display copy', () => {
   it.each([
-    ['standard', 'presetStandardName', 'presetStandardDescription'],
-    ['ptc', 'presetPtcName', 'presetPtcDescription'],
+    ['ceo', 'presetCeoName', 'presetCeoDescription'],
     ['minimal', 'presetMinimalName', 'presetMinimalDescription'],
     ['cordis', 'presetCordisName', 'presetCordisDescription'],
   ] as const)('localizes the shipped %s preset in English and Chinese', (id, nameKey, descriptionKey) => {
@@ -23,7 +22,7 @@ describe('preset display copy', () => {
   it('keeps file metadata for user and unknown system presets', () => {
     const fileCopy = { name: '我的标准', description: '团队自己的 preset。' }
 
-    expect(presetDisplayText({ id: 'standard', trust: 'user', ...fileCopy }, translate(en)))
+    expect(presetDisplayText({ id: 'ceo', trust: 'user', ...fileCopy }, translate(en)))
       .toEqual(fileCopy)
     expect(presetDisplayText({ id: 'deployment-extra', trust: 'system', ...fileCopy }, translate(en)))
       .toEqual(fileCopy)

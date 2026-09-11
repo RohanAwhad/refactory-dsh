@@ -41,9 +41,9 @@ const SNAPSHOT = {
   ],
   agentPresets: [
     {
-      id: 'standard',
+      id: 'ceo',
       trust: 'system',
-      name: '标准模式',
+      name: 'CEO',
       isDefault: true,
       rows: [
         { entryId: 'bash', moduleName: '@deepseek-ai/dsh-tool-bash', enabled: true, fiberPhase: 'active' },
@@ -61,7 +61,7 @@ const SNAPSHOT = {
       ],
     },
     {
-      id: 'ptc',
+      id: 'minimal',
       trust: 'system',
       isDefault: false,
       rows: [
@@ -88,11 +88,11 @@ describe('PluginInventorySettingsTab', () => {
     const view = await renderReady()
 
     const switcher = screen.getByRole('button', { name: en.switcherLabel })
-    expect(switcher.textContent).toBe('标准模式 (default)')
+    expect(switcher.textContent).toBe('CEO (default)')
     fireEvent.click(switcher)
     expect(screen.getAllByRole('menuitem').map(item => item.textContent)).toEqual([
-      '标准模式 (default)',
-      'ptc',
+      'CEO (default)',
+      'minimal',
       '坏预设 (failed to load)',
     ])
     fireEvent.keyDown(document, { key: 'Escape' })
@@ -117,7 +117,7 @@ describe('PluginInventorySettingsTab', () => {
     // A preset row expands into its provenance facts.
     fireEvent.click(screen.getByRole('button', { name: 'pwsh, Conditional' }))
     expect(screen.getByText(en.fromPreset)).toBeTruthy()
-    expect(screen.getByText('标准模式')).toBeTruthy()
+    expect(screen.getByText('CEO')).toBeTruthy()
     expect(screen.getByText(en.condition)).toBeTruthy()
     expect(screen.getByText('process.platform === \'win32\'')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'pwsh, Conditional' }))
@@ -151,7 +151,7 @@ describe('PluginInventorySettingsTab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'tool-bash, Enabled via presets' }))
     expect(screen.getByText(en.presetProvidedDetail)).toBeTruthy()
     expect(screen.getByText(en.enabledIn)).toBeTruthy()
-    expect(screen.getByText('标准模式 · ptc')).toBeTruthy()
+    expect(screen.getByText('CEO · minimal')).toBeTruthy()
 
     // The failed global card reports its runtime state.
     fireEvent.click(screen.getByRole('button', { name: 'telemetry, Failed' }))
@@ -177,11 +177,11 @@ describe('PluginInventorySettingsTab', () => {
       fireEvent.click(screen.getByRole('menuitem', { name: label }))
     }
 
-    pickPreset('ptc')
+    pickPreset('minimal')
     expect(view.container.querySelector('[data-preset-plugin-count]')?.getAttribute('data-preset-plugin-count')).toBe('3')
     fireEvent.click(screen.getAllByRole('button', { name: 'tool-bash, Enabled' })[0]!)
     // An unnamed preset labels provenance by its id.
-    expect(screen.getByText(en.fromPreset).nextElementSibling?.textContent).toBe('ptc')
+    expect(screen.getByText(en.fromPreset).nextElementSibling?.textContent).toBe('minimal')
 
     pickPreset('坏预设 (failed to load)')
     expect(screen.getByRole('alert').textContent).toBe('the composition file is missing')
@@ -218,33 +218,33 @@ describe('PluginInventorySettingsTab', () => {
     await screen.findByRole('searchbox', { name: en.search })
 
     const switcher = screen.getByRole('button', { name: en.switcherLabel })
-    expect(switcher.textContent).toBe('Localized standard (default)')
+    expect(switcher.textContent).toBe('Localized ceo (default)')
     fireEvent.click(switcher)
     expect(screen.getAllByRole('menuitem').map(item => item.textContent)).toEqual([
-      'Localized standard (default)',
-      'Localized ptc',
+      'Localized ceo (default)',
+      'Localized minimal',
       '坏预设 (failed to load)',
     ])
     fireEvent.keyDown(document, { key: 'Escape' })
 
     fireEvent.click(screen.getByRole('button', { name: 'pwsh, Conditional' }))
-    expect(screen.getByText(en.fromPreset).nextElementSibling?.textContent).toBe('Localized standard')
+    expect(screen.getByText(en.fromPreset).nextElementSibling?.textContent).toBe('Localized ceo')
 
     fireEvent.click(globalToggle())
     fireEvent.click(screen.getByRole('button', { name: 'tool-bash, Enabled via presets' }))
-    expect(screen.getByText('Localized standard · Localized ptc')).toBeTruthy()
+    expect(screen.getByText('Localized ceo · Localized minimal')).toBeTruthy()
   })
 
   it('jumps from a preset-provided row to the preset that enables it', async () => {
     await renderReady()
     fireEvent.click(screen.getByRole('button', { name: en.switcherLabel }))
-    fireEvent.click(screen.getByRole('menuitem', { name: 'ptc' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'minimal' }))
 
     fireEvent.click(globalToggle())
     fireEvent.click(screen.getByRole('button', { name: 'tool-bash, Enabled via presets' }))
     fireEvent.click(screen.getByRole('button', { name: en.viewInPreset }))
     expect(screen.getByRole('button', { name: en.switcherLabel }).textContent)
-      .toBe('标准模式 (default)')
+      .toBe('CEO (default)')
   })
 
   it('searches across scopes and points at matches in other presets', async () => {
@@ -259,8 +259,8 @@ describe('PluginInventorySettingsTab', () => {
     expect(screen.queryByText(`1 ${en.failedCountLabel}`)).toBeNull()
     const hint = screen.getByText((text: string) => text.startsWith('2 more matches'))
     expect(hint).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'ptc' }))
-    expect(screen.getByRole('button', { name: en.switcherLabel }).textContent).toBe('ptc')
+    fireEvent.click(screen.getByRole('button', { name: 'minimal' }))
+    expect(screen.getByRole('button', { name: en.switcherLabel }).textContent).toBe('minimal')
 
     // A match visible only in another preset keeps the pointer without rows.
     fireEvent.change(search, { target: { value: 'crashy' } })

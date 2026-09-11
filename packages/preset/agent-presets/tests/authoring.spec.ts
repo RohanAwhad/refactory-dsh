@@ -61,7 +61,7 @@ beforeEach(async () => {
   await ctx.plugin(Loader)
   ctx.loader.builtins.include = Include
   await mountAgentPresets(ctx, {
-    default: 'standard',
+    default: 'ceo',
     roots: [
       { path: join(FIXTURES, 'system'), trust: 'system' as const },
       { path: userRoot, trust: 'user' as const },
@@ -77,10 +77,10 @@ beforeEach(async () => {
 
 describe('copying a preset', () => {
   it('copies a shipped preset into the user root and lists it', async () => {
-    await ctx.agentPresets.copy('standard', 'mine')
+    await ctx.agentPresets.copy('ceo', 'mine')
 
     expect(await readFile(join(userRoot, 'mine', COMPOSITION_FILE), 'utf8'))
-      .toBe(await ctx.agentPresets.read('standard'))
+      .toBe(await ctx.agentPresets.read('ceo'))
     const listed = await ctx.agentPresets.list()
     expect(listed.find(preset => preset.id === 'mine')?.trust).toBe('user')
   })
@@ -120,7 +120,7 @@ describe('copying a preset', () => {
   })
 
   it('stores the display name the author supplied', async () => {
-    await ctx.agentPresets.copy('standard', 'mine', '我的模式')
+    await ctx.agentPresets.copy('ceo', 'mine', '我的模式')
 
     expect(await readFile(join(userRoot, 'mine', METADATA_FILE), 'utf8')).toContain('name: 我的模式')
     expect((await ctx.agentPresets.list()).find(preset => preset.id === 'mine'))
@@ -140,18 +140,18 @@ describe('copying a preset', () => {
 
   it('refuses an id that could escape the preset root', async () => {
     for (const id of ['../escape', 'a/b', '/abs', '..', 'Upper']) {
-      await expect(ctx.agentPresets.copy('standard', id)).rejects.toThrow(/must match/)
+      await expect(ctx.agentPresets.copy('ceo', id)).rejects.toThrow(/must match/)
     }
     // Nothing was created for any of them.
     expect(existsSync(join(userRoot, 'escape'))).toBe(false)
   })
 
   it('refuses an id the roster already supplies, shipped ones included', async () => {
-    await ctx.agentPresets.copy('standard', 'mine')
+    await ctx.agentPresets.copy('ceo', 'mine')
 
-    await expect(ctx.agentPresets.copy('standard', 'mine')).rejects.toThrow(/already exists/)
+    await expect(ctx.agentPresets.copy('ceo', 'mine')).rejects.toThrow(/already exists/)
     // A user directory named like a shipped preset would be shadowed by it.
-    await expect(ctx.agentPresets.copy('standard', 'minimal')).rejects.toThrow(/already exists/)
+    await expect(ctx.agentPresets.copy('ceo', 'minimal')).rejects.toThrow(/already exists/)
   })
 
   it('refuses a directory that occupies the name without being a preset', async () => {
@@ -160,7 +160,7 @@ describe('copying a preset', () => {
 
     // Discovery does not list it (no composition file), so only the disk
     // check can refuse it with a readable error instead of a filesystem code.
-    await expect(ctx.agentPresets.copy('standard', 'occupied')).rejects.toThrow(/already exists/)
+    await expect(ctx.agentPresets.copy('ceo', 'occupied')).rejects.toThrow(/already exists/)
     expect(await readFile(join(userRoot, 'occupied', 'README.txt'), 'utf8')).toBe('nope\n')
   })
 
@@ -187,7 +187,7 @@ describe('copying a preset', () => {
 
 describe('deleting a preset', () => {
   it('removes a locally authored one', async () => {
-    await ctx.agentPresets.copy('standard', 'mine')
+    await ctx.agentPresets.copy('ceo', 'mine')
 
     await ctx.agentPresets.remove('mine')
 
@@ -196,7 +196,7 @@ describe('deleting a preset', () => {
   })
 
   it('refuses to delete a shipped one', async () => {
-    await expect(ctx.agentPresets.remove('standard'))
+    await expect(ctx.agentPresets.remove('ceo'))
       .rejects.toThrow(/ships with the deployment/)
   })
 
@@ -215,7 +215,7 @@ describe('a deployment with more than one user root', () => {
     await layered.plugin(Loader)
     layered.loader.builtins.include = Include
     await mountAgentPresets(layered, {
-      default: 'standard',
+      default: 'ceo',
       roots: [
         { path: userRoot, trust: 'user' as const },
         { path: second, trust: 'user' as const },
@@ -240,14 +240,14 @@ describe('a deployment with no writable root', () => {
     await readOnly.plugin(Loader)
     readOnly.loader.builtins.include = Include
     await mountAgentPresets(readOnly, {
-      default: 'standard',
+      default: 'ceo',
       roots: [{ path: join(FIXTURES, 'system'), trust: 'system' as const }],
       includeShippedRoot: false,
       includeUserRoot: false,
     })
 
     expect(readOnly.agentPresets.authorable).toBe(false)
-    await expect(readOnly.agentPresets.copy('standard', 'mine'))
+    await expect(readOnly.agentPresets.copy('ceo', 'mine'))
       .rejects.toThrow(/no user-writable preset root/)
   })
 })
@@ -262,7 +262,7 @@ describe('a user root that does not exist yet', () => {
     await fresh.plugin(Loader)
     fresh.loader.builtins.include = Include
     await mountAgentPresets(fresh, {
-      default: 'standard',
+      default: 'ceo',
       roots: [
         { path: join(FIXTURES, 'system'), trust: 'system' as const },
         { path: absent, trust: 'user' as const },
@@ -271,16 +271,16 @@ describe('a user root that does not exist yet', () => {
       includeUserRoot: false,
     })
 
-    await fresh.agentPresets.copy('standard', 'mine')
+    await fresh.agentPresets.copy('ceo', 'mine')
 
     expect(await readFile(join(absent, 'mine', COMPOSITION_FILE), 'utf8'))
-      .toBe(await fresh.agentPresets.read('standard'))
+      .toBe(await fresh.agentPresets.read('ceo'))
   })
 })
 
 describe('display metadata beside a composition', () => {
   it('keeps a composition mountable when its metadata is unreadable', async () => {
-    await ctx.agentPresets.copy('standard', 'mine')
+    await ctx.agentPresets.copy('ceo', 'mine')
     await writeFile(join(userRoot, 'mine', METADATA_FILE), 'name: [unclosed\n')
 
     // Presentation is not capability: discovery still yields the preset.
@@ -296,7 +296,7 @@ describe('the on-disk occupancy backstop', () => {
     // is the race backstop: a directory appearing between the roster read and
     // the copy still gets the readable refusal, not a filesystem error code.
     await mkdir(join(userRoot, 'raced'), { recursive: true })
-    const source = await ctx.agentPresets.resolve('standard')
+    const source = await ctx.agentPresets.resolve('ceo')
 
     await expect(copyComposition(
       [{ path: userRoot, trust: 'user' as const }], source, 'raced',
@@ -314,12 +314,12 @@ describe('a ghost directory under the user root', () => {
 
     const ghost = (await ctx.agentPresets.list()).find(preset => preset.id === 'ghost')
     expect(ghost?.broken).toMatch(/agent\.cordis\.yml is missing/)
-    await expect(ctx.agentPresets.copy('standard', 'ghost')).rejects.toThrow(/already exists/)
+    await expect(ctx.agentPresets.copy('ceo', 'ghost')).rejects.toThrow(/already exists/)
 
     // remove is the way out the roster row offers; the id is claimable again.
     await ctx.agentPresets.remove('ghost')
     expect(existsSync(join(userRoot, 'ghost'))).toBe(false)
-    await ctx.agentPresets.copy('standard', 'ghost')
+    await ctx.agentPresets.copy('ceo', 'ghost')
     expect((await ctx.agentPresets.list()).map(preset => preset.id)).toContain('ghost')
     // A copy carries the whole preset directory, so a preset's own files
     // travel with it. This fixture's rows reach OUTSIDE that directory, which

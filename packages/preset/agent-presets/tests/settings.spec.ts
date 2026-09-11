@@ -57,7 +57,7 @@ async function harness(
   await ctx.plugin(AgentLoop, { agents: [] })
   const settingsFiber = ctx.plugin(FileSettingsProvider, { path: settingsFile, watch: false })
   await settingsFiber
-  await ctx.plugin(AgentPresets, { default: 'standard', roots: [...ROOTS, ...extraRoots], includeShippedRoot: false, includeUserRoot: false })
+  await ctx.plugin(AgentPresets, { default: 'ceo', roots: [...ROOTS, ...extraRoots], includeShippedRoot: false, includeUserRoot: false })
   return { ctx, settingsFile, settingsFiber }
 }
 
@@ -68,7 +68,7 @@ describe('the default preset as a user setting', () => {
   it('falls back to the composition default while the user set none', async () => {
     const { ctx } = await harness()
 
-    expect(ctx.agentPresets.defaultId).toBe('standard')
+    expect(ctx.agentPresets.defaultId).toBe('ceo')
   })
 
   it('takes the user default over the composition default', async () => {
@@ -104,7 +104,7 @@ describe('the default preset as a user setting', () => {
       expect(toolNames(ctx, running.agent)).toEqual(['alpha'])
 
       // Changing the default mid-flight must not reach an agent that already
-      // composed: its history was produced under `standard`'s tools.
+      // composed: its history was produced under `ceo`'s tools.
       await ctx.settings.update(NS, { default: 'minimal' })
 
       expect(ctx.agentPresets.defaultId).toBe('minimal')
@@ -121,7 +121,7 @@ describe('the default preset as a user setting', () => {
 
     await ctx.settings.replace(NS, {})
 
-    expect(ctx.agentPresets.defaultId).toBe('standard')
+    expect(ctx.agentPresets.defaultId).toBe('ceo')
   })
 
   it('clears a user default it has just deleted', async () => {
@@ -141,8 +141,8 @@ describe('the default preset as a user setting', () => {
     // Nothing will ever supply that id again, so leaving the setting pointed at
     // it would fail every session created without an explicit pick. Clearing it
     // exposes the deployment's own default underneath.
-    expect(ctx.agentPresets.defaultId).toBe('standard')
-    expect((await ctx.agentPresets.resolve()).id).toBe('standard')
+    expect(ctx.agentPresets.defaultId).toBe('ceo')
+    expect((await ctx.agentPresets.resolve()).id).toBe('ceo')
   })
 
   it('reports an unknown user default only when a session tries to use it', async () => {
@@ -167,6 +167,6 @@ describe('a settings provider that goes away', () => {
     // working on its composition default rather than holding a stale override.
     await settingsFiber.dispose()
 
-    expect(ctx.agentPresets.defaultId).toBe('standard')
+    expect(ctx.agentPresets.defaultId).toBe('ceo')
   })
 })

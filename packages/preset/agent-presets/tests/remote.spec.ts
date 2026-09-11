@@ -71,7 +71,7 @@ function reasonOf(failure: RemoteFailure): string {
 }
 
 async function harness(
-  roster: Config = { default: 'standard', roots: ROOTS, includeShippedRoot: false, includeUserRoot: false },
+  roster: Config = { default: 'ceo', roots: ROOTS, includeShippedRoot: false, includeUserRoot: false },
 ): Promise<Context> {
   const ctx = new Context()
   ctx.baseUrl = pathToFileURL(FIXTURES).href + '/'
@@ -118,8 +118,8 @@ describe('the roster a client reads', () => {
 
     expect(roster.authorable).toBe(true)
     expect(roster.presets).toEqual([
+      { id: 'ceo', trust: 'system', isDefault: false },
       { id: 'minimal', trust: 'system', isDefault: true },
-      { id: 'standard', trust: 'system', isDefault: false },
       { id: 'documented', trust: 'user', isDefault: false, name: '我的模式', description: '只做检索。' },
     ])
     // No row carries the composition's location: a preset is addressed by id
@@ -132,7 +132,7 @@ describe('the roster a client reads', () => {
     roots.push(userRoot)
     await mkdir(join(userRoot, 'damaged'), { recursive: true })
     const ctx = await harness({
-      default: 'standard',
+      default: 'ceo',
       roots: [{ path: join(FIXTURES, 'system'), trust: 'system' }, { path: userRoot, trust: 'user' }],
       includeShippedRoot: false,
       includeUserRoot: false,
@@ -146,7 +146,7 @@ describe('the roster a client reads', () => {
   })
 
   it('answers an empty roster with nothing authorable', async () => {
-    const ctx = await harness({ default: 'standard', roots: [], includeShippedRoot: false, includeUserRoot: false })
+    const ctx = await harness({ default: 'ceo', roots: [], includeShippedRoot: false, includeUserRoot: false })
 
     const roster = await ctx.agentPresets.remoteExportList()
 
@@ -169,14 +169,14 @@ describe('reading one composition', () => {
   it('answers the stored text with the row it belongs to', async () => {
     const ctx = await harness()
 
-    const document = await ctx.agentPresets.readDocument('standard')
+    const document = await ctx.agentPresets.readDocument('ceo')
 
     // The shipped set is readable: it is the known-good composition a copy
     // starts from, and trust is what tells a surface to say so.
     expect(document).toEqual({
-      agentPreset: 'standard',
+      agentPreset: 'ceo',
       trust: 'system',
-      content: await ctx.agentPresets.read('standard'),
+      content: await ctx.agentPresets.read('ceo'),
     })
   })
 
@@ -219,7 +219,7 @@ describe('reading one composition', () => {
     })
     expect(failure.message)
       .toMatch(/^agent-presets: preset "never-existed" not found \(available: .+\)$/)
-    expect(availableOf(failure)).toEqual(expect.arrayContaining(['minimal', 'standard']))
+    expect(availableOf(failure)).toEqual(expect.arrayContaining(['minimal', 'ceo']))
   })
 
   it('raises an unrelated read failure exactly as it was thrown', async () => {
@@ -227,7 +227,7 @@ describe('reading one composition', () => {
     const thrown = new Error('disk failed')
     vi.spyOn(ctx.agentPresets, 'read').mockRejectedValueOnce(thrown)
 
-    await expect(ctx.agentPresets.readDocument('standard')).rejects.toBe(thrown)
+    await expect(ctx.agentPresets.readDocument('ceo')).rejects.toBe(thrown)
   })
 })
 
@@ -239,7 +239,7 @@ describe('authoring over Remote', () => {
 
     for (const operation of [
       () => ctx.agentPresets.remoteExportCopy('', 'mine'),
-      () => ctx.agentPresets.remoteExportCopy('standard', ''),
+      () => ctx.agentPresets.remoteExportCopy('ceo', ''),
       () => ctx.agentPresets.remoteExportDelete(''),
     ]) {
       await expect(operation()).rejects.toMatchObject({ code: 'gateway/bad-request' })
@@ -252,13 +252,13 @@ describe('authoring over Remote', () => {
     const userRoot = await mkdtemp(join(tmpdir(), 'dsh-preset-remote-'))
     roots.push(userRoot)
     const ctx = await harness({
-      default: 'standard',
+      default: 'ceo',
       roots: [{ path: join(FIXTURES, 'system'), trust: 'system' }, { path: userRoot, trust: 'user' }],
       includeShippedRoot: false,
       includeUserRoot: false,
     })
 
-    await ctx.agentPresets.remoteExportCopy('standard', 'mine', '我的模式')
+    await ctx.agentPresets.remoteExportCopy('ceo', 'mine', '我的模式')
     expect((await ctx.agentPresets.resolve('mine')).name).toBe('我的模式')
 
     await ctx.agentPresets.remoteExportDelete('mine')
@@ -278,20 +278,20 @@ describe('authoring over Remote', () => {
     })
     expect(failure.message)
       .toMatch(/^agent-presets: preset "never-existed" not found \(available: .+\)$/)
-    expect(availableOf(failure)).toEqual(expect.arrayContaining(['minimal', 'standard']))
+    expect(availableOf(failure)).toEqual(expect.arrayContaining(['minimal', 'ceo']))
   })
 
   it('preserves invalid-id and occupied-id failures', async () => {
     const ctx = await harness()
 
-    const invalid = await remoteFailure(ctx.agentPresets.remoteExportCopy('standard', '../escape'))
+    const invalid = await remoteFailure(ctx.agentPresets.remoteExportCopy('ceo', '../escape'))
     expect(invalid).toMatchObject({
       code: 'agent-preset/invalid',
       details: { agentPreset: '../escape' },
     })
     expect(reasonOf(invalid)).toContain('must match')
 
-    const occupied = await remoteFailure(ctx.agentPresets.remoteExportCopy('standard', 'minimal'))
+    const occupied = await remoteFailure(ctx.agentPresets.remoteExportCopy('ceo', 'minimal'))
     expect(occupied).toMatchObject({
       code: 'agent-preset/invalid',
       details: { agentPreset: 'minimal' },
@@ -301,13 +301,13 @@ describe('authoring over Remote', () => {
 
   it('keeps the requested id when no writable root exists', async () => {
     const ctx = await harness({
-      default: 'standard',
+      default: 'ceo',
       roots: [{ path: join(FIXTURES, 'system'), trust: 'system' }],
       includeShippedRoot: false,
       includeUserRoot: false,
     })
 
-    const failure = await remoteFailure(ctx.agentPresets.remoteExportCopy('standard', 'mine'))
+    const failure = await remoteFailure(ctx.agentPresets.remoteExportCopy('ceo', 'mine'))
 
     expect(failure).toMatchObject({
       code: 'agent-preset/read-only',
@@ -319,10 +319,10 @@ describe('authoring over Remote', () => {
   it('preserves read-only and not-found delete failures', async () => {
     const ctx = await harness()
 
-    const readOnly = await remoteFailure(ctx.agentPresets.remoteExportDelete('standard'))
+    const readOnly = await remoteFailure(ctx.agentPresets.remoteExportDelete('ceo'))
     expect(readOnly).toMatchObject({
       code: 'agent-preset/read-only',
-      details: { agentPreset: 'standard' },
+      details: { agentPreset: 'ceo' },
     })
     expect(reasonOf(readOnly)).toContain('ships with the deployment')
 
@@ -331,7 +331,7 @@ describe('authoring over Remote', () => {
       code: 'agent-preset/not-found',
       details: { agentPreset: 'never-existed' },
     })
-    expect(availableOf(missing)).toEqual(expect.arrayContaining(['minimal', 'standard']))
+    expect(availableOf(missing)).toEqual(expect.arrayContaining(['minimal', 'ceo']))
   })
 
   it('raises an unrelated authoring failure exactly as it was thrown', async () => {
@@ -339,14 +339,14 @@ describe('authoring over Remote', () => {
     const thrown = new Error('copy failed')
     vi.spyOn(ctx.agentPresets, 'copy').mockRejectedValueOnce(thrown)
 
-    await expect(ctx.agentPresets.remoteExportCopy('standard', 'mine')).rejects.toBe(thrown)
+    await expect(ctx.agentPresets.remoteExportCopy('ceo', 'mine')).rejects.toBe(thrown)
   })
 })
 
 describe('switching one session\'s composition', () => {
   it('rejects an empty preset id before queuing a switch', async () => {
     const ctx = await harness()
-    const agent = await agentOn(ctx, 'sel-empty', 'standard')
+    const agent = await agentOn(ctx, 'sel-empty', 'ceo')
     const recompose = vi.spyOn(ctx.agentPresets, 'recompose')
 
     await expect(ctx.agentPresets.select(agent, ''))
@@ -356,7 +356,7 @@ describe('switching one session\'s composition', () => {
 
   it('recomposes a blank session and records what it now runs', async () => {
     const ctx = await harness()
-    const agent = await agentOn(ctx, 'sel-1', 'standard')
+    const agent = await agentOn(ctx, 'sel-1', 'ceo')
 
     expect(await ctx.agentPresets.select(agent, 'minimal')).toBe('minimal')
 
@@ -368,7 +368,7 @@ describe('switching one session\'s composition', () => {
 
   it('treats an absent turn boundary as no prior turn', async () => {
     const ctx = await harness()
-    const agent = await agentOn(ctx, 'sel-no-turn-boundary', 'standard')
+    const agent = await agentOn(ctx, 'sel-no-turn-boundary', 'ceo')
     const stateOf = ctx.sessionProjections.stateOf.bind(ctx.sessionProjections)
     vi.spyOn(ctx.sessionProjections, 'stateOf').mockImplementation((session, key) => (
       key === 'turnBoundary' ? undefined : stateOf(session, key)
@@ -379,26 +379,26 @@ describe('switching one session\'s composition', () => {
 
   it('serializes two concurrent switches on one session', async () => {
     const ctx = await harness()
-    const agent = await agentOn(ctx, 'sel-race', 'standard')
+    const agent = await agentOn(ctx, 'sel-race', 'ceo')
 
     // Both pass the blank check; unserialized, the second re-link finds the
     // record the first already replaced and two compositions end up in one
     // agent layer. A client's busy flag is not enforcement.
     await Promise.all([
       ctx.agentPresets.select(agent, 'minimal'),
-      ctx.agentPresets.select(agent, 'standard'),
+      ctx.agentPresets.select(agent, 'ceo'),
     ])
 
     // One winner, and the log agrees with it: the last committed switch.
-    expect(recordedPreset(agent)).toEqual({ agentPreset: 'standard' })
-    expect(ctx.agentPresets.composedPreset(agent.ctx)).toBe('standard')
+    expect(recordedPreset(agent)).toEqual({ agentPreset: 'ceo' })
+    expect(ctx.agentPresets.composedPreset(agent.ctx)).toBe('ceo')
   })
 
   it('refuses once the conversation has started', async () => {
     const ctx = await harness()
-    const agent = await agentOn(ctx, 'sel-locked', 'standard')
+    const agent = await agentOn(ctx, 'sel-locked', 'ceo')
     // One turn is enough: the history from here on was produced under
-    // `standard`'s tools, and a swap would strand those tool calls.
+    // `ceo`'s tools, and a swap would strand those tool calls.
     agent.session.append('turn/start', { turn: 0 })
 
     const failure = await remoteFailure(ctx.agentPresets.select(agent, 'minimal'))
@@ -408,13 +408,13 @@ describe('switching one session\'s composition', () => {
       message: 'session "sel-locked" has already started; its agent preset is fixed',
       details: { sessionId: SessionId('sel-locked'), agentPreset: 'minimal' },
     })
-    expect(ctx.agentPresets.composedPreset(agent.ctx)).toBe('standard')
+    expect(ctx.agentPresets.composedPreset(agent.ctx)).toBe('ceo')
     expect(recordedPreset(agent)).toBeUndefined()
   })
 
   it('leaves the session on its composition when the named preset is unknown', async () => {
     const ctx = await harness()
-    const agent = await agentOn(ctx, 'sel-unknown', 'standard')
+    const agent = await agentOn(ctx, 'sel-unknown', 'ceo')
 
     const failure = await remoteFailure(ctx.agentPresets.select(agent, 'nope'))
 
@@ -422,16 +422,16 @@ describe('switching one session\'s composition', () => {
       code: 'agent-preset/not-found',
       details: { agentPreset: 'nope' },
     })
-    expect(availableOf(failure)).toEqual(expect.arrayContaining(['minimal', 'standard']))
+    expect(availableOf(failure)).toEqual(expect.arrayContaining(['minimal', 'ceo']))
     // Resolution happens before any re-link, and nothing is recorded until the
     // swap commits.
-    expect(ctx.agentPresets.composedPreset(agent.ctx)).toBe('standard')
+    expect(ctx.agentPresets.composedPreset(agent.ctx)).toBe('ceo')
     expect(recordedPreset(agent)).toBeUndefined()
   })
 
   it('serves a later switch after one was refused', async () => {
     const ctx = await harness()
-    const agent = await agentOn(ctx, 'sel-after-failure', 'standard')
+    const agent = await agentOn(ctx, 'sel-after-failure', 'ceo')
 
     await expect(ctx.agentPresets.select(agent, 'nope')).rejects.toThrow(/not found/)
 
@@ -445,12 +445,12 @@ describe('switching one session\'s composition', () => {
     roots.push(userRoot)
     await mkdir(join(userRoot, 'damaged'), { recursive: true })
     const ctx = await harness({
-      default: 'standard',
+      default: 'ceo',
       roots: [{ path: join(FIXTURES, 'system'), trust: 'system' }, { path: userRoot, trust: 'user' }],
       includeShippedRoot: false,
       includeUserRoot: false,
     })
-    const agent = await agentOn(ctx, 'sel-broken', 'standard')
+    const agent = await agentOn(ctx, 'sel-broken', 'ceo')
 
     const failure = await remoteFailure(ctx.agentPresets.select(agent, 'damaged'))
 
@@ -463,7 +463,7 @@ describe('switching one session\'s composition', () => {
 
   it('raises an unrelated switch failure exactly as it was thrown', async () => {
     const ctx = await harness()
-    const agent = await agentOn(ctx, 'sel-internal', 'standard')
+    const agent = await agentOn(ctx, 'sel-internal', 'ceo')
     const thrown = new Error('mount failed')
     vi.spyOn(ctx.agentPresets, 'recompose').mockRejectedValueOnce(thrown)
 

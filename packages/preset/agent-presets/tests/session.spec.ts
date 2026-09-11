@@ -24,14 +24,14 @@ function selected(agentPreset: string, seq: SessionSeq): SessionEvent {
 
 describe('agent preset selection projection', () => {
   it('starts from the creation header, including no configured preset', () => {
-    expect(agentPresetProjectionDefinition.init(header('standard'))).toBe('standard')
+    expect(agentPresetProjectionDefinition.init(header('ceo'))).toBe('ceo')
     expect(agentPresetProjectionDefinition.init(header())).toBeNull()
   })
 
   it('starts from the header and keeps the latest selected preset', () => {
     const definition = agentPresetProjectionDefinition
-    let state = definition.init(header('standard'))
-    expect(state).toBe('standard')
+    let state = definition.init(header('ceo'))
+    expect(state).toBe('ceo')
 
     state = definition.apply(state, selected('minimal', SessionSeq(0)))
     state = definition.apply(state, {

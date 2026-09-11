@@ -79,7 +79,7 @@ function fakeApi(
 describe('the agent-preset roster store', () => {
   it('derives the display options from one roster call', async () => {
     const controller = derivedController(fakeApi([
-      { id: 'standard', trust: 'system', isDefault: true },
+      { id: 'ceo', trust: 'system', isDefault: true },
       { id: 'mine', trust: 'user', isDefault: false },
     ]))
 
@@ -88,14 +88,14 @@ describe('the agent-preset roster store', () => {
     const state = controller.store.getSnapshot()
     expect(state.status).toBe('ready')
     expect(state.options).toEqual([
-      { id: 'standard', trust: 'system' },
+      { id: 'ceo', trust: 'system' },
       { id: 'mine', trust: 'user' },
     ])
   })
 
   it('offers no broken preset: the pickers choose the NEXT session\'s composition', async () => {
     const controller = derivedController(fakeApi([
-      { id: 'standard', trust: 'system', isDefault: true },
+      { id: 'ceo', trust: 'system', isDefault: true },
       { id: 'damaged', trust: 'user', isDefault: false, broken: 'the composition is not valid YAML' },
     ] as never))
 
@@ -104,12 +104,12 @@ describe('the agent-preset roster store', () => {
     // A broken preset cannot compose a session; listing it here would defer
     // that discovery to a failed session start. The management section shows
     // (and deletes) it from its own store instead.
-    expect(controller.store.getSnapshot().options.map(option => option.id)).toEqual(['standard'])
+    expect(controller.store.getSnapshot().options.map(option => option.id)).toEqual(['ceo'])
   })
 
   it('carries the display metadata a preset published', async () => {
     const controller = derivedController(fakeApi([
-      { id: 'standard', trust: 'system', isDefault: true, name: '标准模式', description: '完整的编码 agent。' },
+      { id: 'ceo', trust: 'system', isDefault: true, name: '标准模式', description: '完整的编码 agent。' },
     ] as never))
 
     await controller.load()
@@ -117,7 +117,7 @@ describe('the agent-preset roster store', () => {
     // Surfaces beyond this row read the same options; the id alone never said
     // what a preset does.
     expect(controller.store.getSnapshot().options).toEqual([
-      { id: 'standard', trust: 'system', name: '标准模式', description: '完整的编码 agent。' },
+      { id: 'ceo', trust: 'system', name: '标准模式', description: '完整的编码 agent。' },
     ])
   })
 
@@ -146,7 +146,7 @@ describe('the agent-preset roster store', () => {
   it('writeDefaultPreset writes only the default field, into the agent-presets namespace', async () => {
     const writes: Recorded[] = []
     const ctx = fakeApi([
-      { id: 'standard', trust: 'system', isDefault: true },
+      { id: 'ceo', trust: 'system', isDefault: true },
       { id: 'minimal', trust: 'system', isDefault: false },
     ], { writes })
 
@@ -160,7 +160,7 @@ describe('the agent-preset roster store', () => {
 
   it('writeDefaultPreset surfaces the refusal message when the write fails', async () => {
     const ctx = fakeApi([
-      { id: 'standard', trust: 'system', isDefault: true },
+      { id: 'ceo', trust: 'system', isDefault: true },
     ], { failWrite: 'read-only settings' })
 
     expect(await writeDefaultPreset(ctx, 'minimal')).toBe('read-only settings')
@@ -179,7 +179,7 @@ describe('the agent-preset roster store', () => {
   it('ignores a load while one is already in flight', async () => {
     const writes: Recorded[] = []
     const controller = derivedController(fakeApi(
-      [{ id: 'standard', trust: 'system', isDefault: true }], { writes }))
+      [{ id: 'ceo', trust: 'system', isDefault: true }], { writes }))
 
     await Promise.all([controller.load(), controller.load()])
 
@@ -232,7 +232,7 @@ describe('the new-session chip controller', () => {
   }
 
   const ROSTER: { id: string; trust: 'system' | 'user'; isDefault: boolean }[] = [
-    { id: 'standard', trust: 'system', isDefault: true },
+    { id: 'ceo', trust: 'system', isDefault: true },
     { id: 'minimal', trust: 'system', isDefault: false },
   ]
 
@@ -243,9 +243,9 @@ describe('the new-session chip controller', () => {
 
     // The chip names the session about to start, and nothing about it is
     // decided yet — the default is the honest opening value.
-    expect(controller.store.getSnapshot().current).toBe('standard')
+    expect(controller.store.getSnapshot().current).toBe('ceo')
     expect(controller.store.getSnapshot().options).toEqual([
-      { id: 'standard', trust: 'system' },
+      { id: 'ceo', trust: 'system' },
       { id: 'minimal', trust: 'system' },
     ])
   })
@@ -262,13 +262,13 @@ describe('the new-session chip controller', () => {
 
   it('carries the display metadata into the menu rows', async () => {
     const controller = chip([
-      { id: 'standard', trust: 'system', isDefault: true, name: '标准模式', description: '完整的编码 agent。' },
+      { id: 'ceo', trust: 'system', isDefault: true, name: '标准模式', description: '完整的编码 agent。' },
     ] as never, undefined)
 
     await controller.load()
 
     expect(controller.store.getSnapshot().options).toEqual([
-      { id: 'standard', trust: 'system', name: '标准模式', description: '完整的编码 agent。' },
+      { id: 'ceo', trust: 'system', name: '标准模式', description: '完整的编码 agent。' },
     ])
   })
 
@@ -308,7 +308,7 @@ describe('the new-session chip controller', () => {
   it('replaces the default display when an existing blank session arrives after roster load', async () => {
     const state: { current?: SeatSession } = {}
     const controller = chip([
-      { id: 'standard', trust: 'system', isDefault: false },
+      { id: 'ceo', trust: 'system', isDefault: false },
       { id: 'minimal', trust: 'system', isDefault: true },
     ], () => state.current)
     await controller.load()
@@ -317,11 +317,11 @@ describe('the new-session chip controller', () => {
     state.current = {
       id: 's1' as SessionId,
       blank: true,
-      projectionValues: { agentPreset: 'standard' },
+      projectionValues: { agentPreset: 'ceo' },
     }
     await controller.apply()
 
-    expect(controller.store.getSnapshot().current).toBe('standard')
+    expect(controller.store.getSnapshot().current).toBe('ceo')
   })
 
   it('applies the stage to the blank session the flow lands on', async () => {
@@ -329,7 +329,7 @@ describe('the new-session chip controller', () => {
     const current = {
       id: 's1' as SessionId,
       blank: true,
-      projectionValues: { agentPreset: 'standard' },
+      projectionValues: { agentPreset: 'ceo' },
     }
     const controller = chip(ROSTER, current, { writes })
     await controller.load()
@@ -344,7 +344,7 @@ describe('the new-session chip controller', () => {
     const controller = chip(ROSTER, {
       id: 's1' as SessionId,
       blank: true,
-      projectionValues: { agentPreset: 'standard' },
+      projectionValues: { agentPreset: 'ceo' },
     }, { writes })
     await controller.load()
     await controller.select('minimal')
@@ -362,7 +362,7 @@ describe('the new-session chip controller', () => {
     const controller = chip(ROSTER, {
       id: 's1' as SessionId,
       blank: false,
-      projectionValues: { agentPreset: 'standard' },
+      projectionValues: { agentPreset: 'ceo' },
     }, { writes })
     await controller.load()
 
@@ -392,7 +392,7 @@ describe('the new-session chip controller', () => {
       {
         id: 's1' as SessionId,
         blank: true,
-        projectionValues: { agentPreset: 'standard' },
+        projectionValues: { agentPreset: 'ceo' },
       },
       { failSelect: 'already started' },
     )
@@ -402,7 +402,7 @@ describe('the new-session chip controller', () => {
 
     // Showing `minimal` after a refusal would claim a composition the session
     // never got.
-    expect(controller.store.getSnapshot()).toMatchObject({ current: 'standard', error: 'already started' })
+    expect(controller.store.getSnapshot()).toMatchObject({ current: 'ceo', error: 'already started' })
   })
 
   it('ignores a pick while a switch is in flight', async () => {
@@ -410,12 +410,12 @@ describe('the new-session chip controller', () => {
     const controller = chip(ROSTER, {
       id: 's1' as SessionId,
       blank: true,
-      projectionValues: { agentPreset: 'standard' },
+      projectionValues: { agentPreset: 'ceo' },
     }, { writes })
     await controller.load()
 
     const first = controller.select('minimal')
-    await controller.select('standard')
+    await controller.select('ceo')
     await first
 
     expect(writes).toEqual([{ ns: 'select', ops: 'minimal' }])

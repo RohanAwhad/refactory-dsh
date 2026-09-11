@@ -83,11 +83,11 @@ describe('preset discovery', () => {
   it('reports one preset per directory holding a composition, ordered by id', async () => {
     const found = await scanRoot(SYSTEM, HARNESS)
 
-    expect(found.map(preset => preset.id)).toEqual(['minimal', 'standard'])
+    expect(found.map(preset => preset.id)).toEqual(['ceo', 'minimal'])
     expect(found[0]).toEqual({
-      id: 'minimal',
+      id: 'ceo',
       trust: 'system',
-      path: join(SYSTEM.path, 'minimal', COMPOSITION_FILE),
+      path: join(SYSTEM.path, 'ceo', COMPOSITION_FILE),
     })
   })
 
@@ -125,9 +125,9 @@ describe('preset discovery', () => {
   it('lets the earlier root win a duplicate id', async () => {
     const found = await discoverPresets([SYSTEM, USER], HARNESS)
 
-    const standard = found.filter(preset => preset.id === 'standard')
-    expect(standard).toHaveLength(1)
-    expect(standard[0]?.trust).toBe('system')
+    const ceo = found.filter(preset => preset.id === 'ceo')
+    expect(ceo).toHaveLength(1)
+    expect(ceo[0]?.trust).toBe('system')
   })
 
   it('treats an absent root as supplying no presets', async () => {

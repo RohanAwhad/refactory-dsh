@@ -33,7 +33,7 @@ async function harness(roster: Partial<Config> = {}): Promise<Context> {
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(AgentLoop, { agents: [] })
-  await ctx.plugin(AgentPresets, { default: 'standard', roots: ROOTS, includeShippedRoot: false, includeUserRoot: false, ...roster })
+  await ctx.plugin(AgentPresets, { default: 'ceo', roots: ROOTS, includeShippedRoot: false, includeUserRoot: false, ...roster })
   await ctx.plugin(InvariantRegistry)
   await ctx.plugin(AgentPresetsInvariant)
   return ctx
@@ -44,26 +44,26 @@ describe('agent-presets invariants', () => {
     const ctx = await harness()
     const handle = await ctx.agents.create({
       sessionId: SessionId('inv-live'),
-      setup: async (agentCtx: Context) => void await ctx.agentPresets.mount(agentCtx, 'standard'),
+      setup: async (agentCtx: Context) => void await ctx.agentPresets.mount(agentCtx, 'ceo'),
     })
 
-    expect(livePresetMounts().map(mount => mount.presetId)).toContain('standard')
+    expect(livePresetMounts().map(mount => mount.presetId)).toContain('ceo')
 
     // A standing mount survives its agents: the composition a session joined
     // is shared, so one session ending must not strip it from the next.
     await handle.dispose()
-    expect(livePresetMounts().map(mount => mount.presetId)).toContain('standard')
+    expect(livePresetMounts().map(mount => mount.presetId)).toContain('ceo')
 
     // A second agent reuses the same mount rather than adding one.
     await ctx.agents.create({
       sessionId: SessionId('inv-live-2'),
-      setup: async (agentCtx: Context) => void await ctx.agentPresets.mount(agentCtx, 'standard'),
+      setup: async (agentCtx: Context) => void await ctx.agentPresets.mount(agentCtx, 'ceo'),
     })
-    expect(livePresetMounts().filter(mount => mount.presetId === 'standard')).toHaveLength(1)
+    expect(livePresetMounts().filter(mount => mount.presetId === 'ceo')).toHaveLength(1)
 
     // Whole-tree teardown is the boundary that does reclaim it.
     await ctx.fiber.dispose()
-    expect(livePresetMounts().map(mount => mount.presetId)).not.toContain('standard')
+    expect(livePresetMounts().map(mount => mount.presetId)).not.toContain('ceo')
   })
 
   it('rejects a composition that publishes a process-global service after its audit', async () => {
@@ -125,7 +125,7 @@ describe('agent-presets invariants', () => {
     const ctx = await harness()
     const handle = await ctx.agents.create({
       sessionId: SessionId('inv-joined'),
-      setup: async (agentCtx: Context) => void await ctx.agentPresets.mount(agentCtx, 'standard'),
+      setup: async (agentCtx: Context) => void await ctx.agentPresets.mount(agentCtx, 'ceo'),
     })
 
     await expect(ctx.systemPrompt.assemble(assembleContextFor(handle.agent))).resolves.toBeDefined()
@@ -135,7 +135,7 @@ describe('agent-presets invariants', () => {
     // has no parent of its own, so a chain-length rule would reject the cold
     // read that resolves presenters in it. `context.agent` is what keeps this
     // check to agent assemblies.
-    const standing = await ctx.agentPresets.standingKeyFor('standard')
+    const standing = await ctx.agentPresets.standingKeyFor('ceo')
     await expect(ctx.systemPrompt.assemble({ scope: standing })).resolves.toBeDefined()
   })
 })

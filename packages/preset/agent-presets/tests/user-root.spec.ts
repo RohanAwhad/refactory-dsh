@@ -55,7 +55,7 @@ async function roster(config: Partial<Config> = {}): Promise<Context> {
   ctx.loader.builtins.include = Include
   await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(AgentPresets, {
-    default: 'standard',
+    default: 'ceo',
     roots: [{ path: SYSTEM_ROOT, trust: 'system' as const }],
     // The package's shipped presets would shadow this file's fixture ids.
     includeShippedRoot: false,
@@ -77,7 +77,7 @@ describe('the harness-home preset root', () => {
     // every other case here passes the field explicitly. The cast stands for
     // the untyped document the Loader hands the schema, which is where a
     // composition that omits the key actually comes from.
-    const parsed = AgentPresets.Config({ default: 'standard' } as unknown as Config)
+    const parsed = AgentPresets.Config({ default: 'ceo' } as unknown as Config)
 
     expect(parsed).toMatchObject({ includeUserRoot: true, roots: [] })
   })
@@ -97,20 +97,20 @@ describe('the harness-home preset root', () => {
     const ctx = await roster()
 
     expect(ctx.agentPresets.authorable).toBe(true)
-    await ctx.agentPresets.copy('standard', 'copied')
+    await ctx.agentPresets.copy('ceo', 'copied')
 
     expect(existsSync(join(home, USER_ROOT_SEGMENT, 'copied', COMPOSITION_FILE))).toBe(true)
   })
 
   it('sorts after every configured root, so a shipped id still shadows a home directory', async () => {
-    // `standard` exists in the fixture system root; claiming the name at home
+    // `ceo` exists in the fixture system root; claiming the name at home
     // must not take it over, because `copy` refuses an id any root supplies
-    // and a session resolving `standard` must reach the shipped composition.
-    await seedHomePreset('standard')
+    // and a session resolving `ceo` must reach the shipped composition.
+    await seedHomePreset('ceo')
     const ctx = await roster()
 
-    expect((await ctx.agentPresets.resolve('standard')).trust).toBe('system')
-    await expect(ctx.agentPresets.copy('standard', 'standard')).rejects.toThrow(/already exists/)
+    expect((await ctx.agentPresets.resolve('ceo')).trust).toBe('system')
+    await expect(ctx.agentPresets.copy('ceo', 'ceo')).rejects.toThrow(/already exists/)
   })
 
   it('is absent under includeUserRoot: false, which leaves the roster unauthorable', async () => {
@@ -119,7 +119,7 @@ describe('the harness-home preset root', () => {
 
     expect((await ctx.agentPresets.list()).map(preset => preset.id)).not.toContain('mine')
     expect(ctx.agentPresets.authorable).toBe(false)
-    await expect(ctx.agentPresets.copy('standard', 'mine'))
+    await expect(ctx.agentPresets.copy('ceo', 'mine'))
       .rejects.toThrow(/no user-writable preset root/)
   })
 
@@ -133,7 +133,7 @@ describe('the harness-home preset root', () => {
       ],
     })
 
-    await ctx.agentPresets.copy('standard', 'copied')
+    await ctx.agentPresets.copy('ceo', 'copied')
 
     expect(existsSync(join(explicit, 'copied', COMPOSITION_FILE))).toBe(true)
     expect(existsSync(join(home, USER_ROOT_SEGMENT, 'copied'))).toBe(false)

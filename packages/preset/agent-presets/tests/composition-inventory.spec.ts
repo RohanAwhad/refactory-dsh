@@ -229,19 +229,19 @@ describe('AgentPresets.compositionInventory', () => {
 
     expect(await ctx.agentPresets.compositionInventory()).toEqual([
       {
-        id: 'minimal',
-        trust: 'system',
-        isDefault: true,
-        rows: [{ entryId: 'beta', moduleName: '../../plugins/contribute.js', enabled: true }],
-      },
-      {
-        id: 'standard',
+        id: 'ceo',
         trust: 'system',
         isDefault: false,
         rows: [
           { entryId: 'alpha', moduleName: '../../plugins/contribute.js', enabled: true },
           { entryId: 'alpha-extra', moduleName: '../../plugins/contribute.js', enabled: false },
         ],
+      },
+      {
+        id: 'minimal',
+        trust: 'system',
+        isDefault: true,
+        rows: [{ entryId: 'beta', moduleName: '../../plugins/contribute.js', enabled: true }],
       },
       {
         id: 'documented',
@@ -270,19 +270,19 @@ describe('AgentPresets.compositionInventory', () => {
 
   it('reads a mounted preset from its standing composition', async () => {
     const ctx = await harness({
-      default: 'standard',
+      default: 'ceo',
       roots: [SYSTEM_ROOT],
       includeShippedRoot: false,
       includeUserRoot: false,
     })
     await ctx.agents.create({
       sessionId: SessionId('composition-inventory'),
-      setup: async (agentCtx: Context) => void await ctx.agentPresets.mount(agentCtx, 'standard'),
+      setup: async (agentCtx: Context) => void await ctx.agentPresets.mount(agentCtx, 'ceo'),
     })
 
-    const standard = (await ctx.agentPresets.compositionInventory())
-      .find(composition => composition.id === 'standard')
-    expect(standard?.rows).toEqual([
+    const ceo = (await ctx.agentPresets.compositionInventory())
+      .find(composition => composition.id === 'ceo')
+    expect(ceo?.rows).toEqual([
       {
         entryId: 'alpha',
         moduleName: '../../plugins/contribute.js',
@@ -326,7 +326,7 @@ describe('AgentPresets.compositionInventory', () => {
 
   it('keeps another runtime\'s standing mount out of this runtime\'s inventory', async () => {
     const roster: Config = {
-      default: 'standard',
+      default: 'ceo',
       roots: [SYSTEM_ROOT],
       includeShippedRoot: false,
       includeUserRoot: false,
@@ -335,19 +335,19 @@ describe('AgentPresets.compositionInventory', () => {
     const idleRuntime = await harness(roster)
     await mountedRuntime.agents.create({
       sessionId: SessionId('cross-runtime'),
-      setup: async (agentCtx: Context) => void await mountedRuntime.agentPresets.mount(agentCtx, 'standard'),
+      setup: async (agentCtx: Context) => void await mountedRuntime.agentPresets.mount(agentCtx, 'ceo'),
     })
-    expect(livePresetMounts(mountedRuntime.fiber).filter(mount => mount.presetId === 'standard')).toHaveLength(1)
-    expect(livePresetMounts(idleRuntime.fiber).filter(mount => mount.presetId === 'standard')).toHaveLength(0)
+    expect(livePresetMounts(mountedRuntime.fiber).filter(mount => mount.presetId === 'ceo')).toHaveLength(1)
+    expect(livePresetMounts(idleRuntime.fiber).filter(mount => mount.presetId === 'ceo')).toHaveLength(0)
 
     // The other runtime's mount must not answer here: these rows come from
     // the file, so none carries a root-fiber state.
     const idle = (await idleRuntime.agentPresets.compositionInventory())
-      .find(composition => composition.id === 'standard')
+      .find(composition => composition.id === 'ceo')
     expect(idle?.rows.length).toBeGreaterThan(0)
     expect(idle?.rows.every(row => row.fiberState === undefined)).toBe(true)
     const live = (await mountedRuntime.agentPresets.compositionInventory())
-      .find(composition => composition.id === 'standard')
+      .find(composition => composition.id === 'ceo')
     expect(live?.rows.some(row => row.fiberState !== undefined)).toBe(true)
   })
 
@@ -387,13 +387,13 @@ describe('AgentPresets.compositionInventory', () => {
     // is exactly the shape that made EntryTree file the mount under it.
     await ctx.loader.create({
       name: 'cordis:agent-presets',
-      config: { default: 'standard', roots: [SYSTEM_ROOT], includeShippedRoot: false, includeUserRoot: false },
+      config: { default: 'ceo', roots: [SYSTEM_ROOT], includeShippedRoot: false, includeUserRoot: false },
     })
     const before = [...ctx.loader.entries()].map(entry => entry.id)
 
     await ctx.agents.create({
       sessionId: SessionId('loader-entry-guard'),
-      setup: async (agentCtx: Context) => void await ctx.agentPresets.mount(agentCtx, 'standard'),
+      setup: async (agentCtx: Context) => void await ctx.agentPresets.mount(agentCtx, 'ceo'),
     })
 
     // The agent joined a standing composition without the composition

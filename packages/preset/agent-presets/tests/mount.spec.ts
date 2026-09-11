@@ -40,7 +40,7 @@ const ROOTS = [
  * @param roster - roster config, defaulting to the fixture roots.
  * @returns the booted context.
  */
-async function harness(roster: Config = { default: 'standard', roots: ROOTS, includeShippedRoot: false, includeUserRoot: false }): Promise<Context> {
+async function harness(roster: Config = { default: 'ceo', roots: ROOTS, includeShippedRoot: false, includeUserRoot: false }): Promise<Context> {
   const ctx = new Context()
   ctx.baseUrl = pathToFileURL(FIXTURES).href + '/'
   await ctx.plugin(Loader)
@@ -117,7 +117,7 @@ describe('composing an agent from a preset', () => {
   })
 
   it('gives each session only its own preset\'s tools', async () => {
-    const alpha = await agentOn(ctx, 'sess-alpha', 'standard')
+    const alpha = await agentOn(ctx, 'sess-alpha', 'ceo')
     const beta = await agentOn(ctx, 'sess-beta', 'minimal')
 
     expect(toolNames(ctx, alpha)).toEqual(['alpha'])
@@ -126,7 +126,7 @@ describe('composing an agent from a preset', () => {
   })
 
   it('scopes prompt sections and assembled schemas to the same session', async () => {
-    const alpha = await agentOn(ctx, 'sess-alpha', 'standard')
+    const alpha = await agentOn(ctx, 'sess-alpha', 'ceo')
     const beta = await agentOn(ctx, 'sess-beta', 'minimal')
 
     const alphaPrompt = await ctx.systemPrompt.assemble(assembleContextFor(alpha))
@@ -145,8 +145,8 @@ describe('composing an agent from a preset', () => {
   })
 
   it('lets two sessions share one preset without colliding', async () => {
-    const first = await agentOn(ctx, 'sess-first', 'standard')
-    const second = await agentOn(ctx, 'sess-second', 'standard')
+    const first = await agentOn(ctx, 'sess-first', 'ceo')
+    const second = await agentOn(ctx, 'sess-second', 'ceo')
 
     expect(toolNames(ctx, first)).toEqual(['alpha'])
     expect(toolNames(ctx, second)).toEqual(['alpha'])
@@ -155,7 +155,7 @@ describe('composing an agent from a preset', () => {
   it('unwinds one session\'s composition without touching another\'s', async () => {
     const handle = await ctx.agents.create({
       sessionId: SessionId('sess-gone'),
-      setup: async (agentCtx: Context) => void await ctx.agentPresets.mount(agentCtx, 'standard'),
+      setup: async (agentCtx: Context) => void await ctx.agentPresets.mount(agentCtx, 'ceo'),
     })
     const survivor = await agentOn(ctx, 'sess-stays', 'minimal')
     expect(toolNames(ctx, handle.agent)).toEqual(['alpha'])
@@ -179,7 +179,7 @@ describe('composing a child agent from its parent', () => {
   }
 
   it('gives the child its parent\'s tools and prompt sections', async () => {
-    const parent = await agentOn(ctx, 'sess-parent', 'standard')
+    const parent = await agentOn(ctx, 'sess-parent', 'ceo')
 
     const child = await childOf(ctx, 'sess-child', parent)
 
@@ -189,7 +189,7 @@ describe('composing a child agent from its parent', () => {
   })
 
   it('joins the parent\'s own generation rather than remounting its preset', async () => {
-    const parent = await agentOn(ctx, 'sess-shared', 'standard')
+    const parent = await agentOn(ctx, 'sess-shared', 'ceo')
     const before = livePresetMounts().length
 
     await childOf(ctx, 'sess-shared-child', parent)
@@ -202,7 +202,7 @@ describe('composing a child agent from its parent', () => {
   it('keeps the child composed after its parent is disposed', async () => {
     const parentHandle = await ctx.agents.create({
       sessionId: SessionId('sess-dying-parent'),
-      setup: async (agentCtx: Context) => void await ctx.agentPresets.mount(agentCtx, 'standard'),
+      setup: async (agentCtx: Context) => void await ctx.agentPresets.mount(agentCtx, 'ceo'),
     })
     const child = await childOf(ctx, 'sess-orphan', parentHandle.agent)
 
@@ -235,7 +235,7 @@ describe('composing a child agent from its parent', () => {
   })
 
   it('refuses to compose an unscoped context', async () => {
-    const parent = await agentOn(ctx, 'sess-unscoped-parent', 'standard')
+    const parent = await agentOn(ctx, 'sess-unscoped-parent', 'ceo')
 
     expect(() => ctx.agentPresets.composeFrom(ctx, parent.ctx)).toThrow(/unscoped context/)
   })
@@ -243,7 +243,7 @@ describe('composing a child agent from its parent', () => {
 
 describe('rejecting a composition that cannot be used', () => {
   it('refuses to mount into a context that carries no agent scope', async () => {
-    await expect(ctx.agentPresets.mount(ctx, 'standard'))
+    await expect(ctx.agentPresets.mount(ctx, 'ceo'))
       .rejects.toThrow(/unscoped context/)
   })
 
@@ -317,7 +317,7 @@ describe('rejecting a composition that cannot be used', () => {
     // the lookup finds the NAME and must still refuse it: the instance lives
     // under another mount's fiber, not this agent's composition.
     await agentOn(ctx, 'sess-reach-other', 'isolated')
-    const agent = await agentOn(ctx, 'sess-reach-none', 'standard')
+    const agent = await agentOn(ctx, 'sess-reach-none', 'ceo')
 
     expect(ctx.agentPresets.serviceFor(agent, 'fixtureIsolatedSvc')).toBeUndefined()
   })
@@ -337,14 +337,14 @@ describe('rejecting a composition that cannot be used', () => {
   it('refuses to mount a preset directly into an unscoped context', async () => {
     // The service's own mount() guards this before delegating; the exported
     // function is callable on its own, so the boundary holds there too.
-    const preset = await ctx.agentPresets.resolve('standard')
+    const preset = await ctx.agentPresets.resolve('ceo')
 
     await expect(mountPreset(ctx, preset)).rejects.toThrow(/unscoped context/)
   })
 
   it('reports the known ids when a preset is unknown', async () => {
     await expect(ctx.agentPresets.resolve('nope'))
-      .rejects.toThrow(/preset "nope" not found \(available: .*standard/)
+      .rejects.toThrow(/preset "nope" not found \(available: .*ceo/)
   })
 })
 
@@ -354,13 +354,13 @@ describe('the preset roster', () => {
 
     // `not-a-preset` is the fixture ghost: no composition file, listed broken.
     expect(listed.map(preset => preset.id).sort())
-      .toEqual(['broken', 'isolated', 'late', 'leaky', 'minimal', 'nested-broken', 'not-a-preset', 'pending', 'standard', 'two-broken'])
-    expect(listed.find(preset => preset.id === 'standard')?.trust).toBe('system')
+      .toEqual(['broken', 'ceo', 'isolated', 'late', 'leaky', 'minimal', 'nested-broken', 'not-a-preset', 'pending', 'two-broken'])
+    expect(listed.find(preset => preset.id === 'ceo')?.trust).toBe('system')
     expect(listed.find(preset => preset.id === 'not-a-preset')?.broken).toMatch(/is missing/)
   })
 
   it('exposes the configured default id', () => {
-    expect(ctx.agentPresets.defaultId).toBe('standard')
+    expect(ctx.agentPresets.defaultId).toBe('ceo')
   })
 })
 
@@ -407,10 +407,10 @@ describe('a roster with nothing in it', () => {
     bare.baseUrl = pathToFileURL(FIXTURES).href + '/'
     await bare.plugin(Loader)
     await bare.plugin(SessionProjectionRegistry)
-    await bare.plugin(AgentPresets, { default: 'standard', roots: [], includeShippedRoot: false, includeUserRoot: false })
+    await bare.plugin(AgentPresets, { default: 'ceo', roots: [], includeShippedRoot: false, includeUserRoot: false })
 
     await expect(bare.agentPresets.resolve())
-      .rejects.toThrow(/preset "standard" not found \(available: none\)/)
+      .rejects.toThrow(/preset "ceo" not found \(available: none\)/)
   })
 })
 
@@ -425,7 +425,7 @@ describe('a roster with no base to resolve from', () => {
     await baseless.plugin(SessionProjectionRegistry)
 
     await expect(baseless.plugin(AgentPresets, {
-      default: 'standard', roots: ROOTS, includeShippedRoot: false, includeUserRoot: false,
+      default: 'ceo', roots: ROOTS, includeShippedRoot: false, includeUserRoot: false,
     })).rejects.toThrow(/needs `ctx\.baseUrl`/)
   })
 })
@@ -490,9 +490,9 @@ describe('attributing a service to a subtree', () => {
   it('attributes nothing to a subtree that is already torn down', async () => {
     const handle = await ctx.agents.create({
       sessionId: SessionId('sess-torn'),
-      setup: async (agentCtx: Context) => void await ctx.agentPresets.mount(agentCtx, 'standard'),
+      setup: async (agentCtx: Context) => void await ctx.agentPresets.mount(agentCtx, 'ceo'),
     })
-    const [mount] = livePresetMounts().filter(entry => entry.presetId === 'standard')
+    const [mount] = livePresetMounts().filter(entry => entry.presetId === 'ceo')
     expect(mount).toBeDefined()
 
     await handle.dispose()
@@ -505,7 +505,7 @@ describe('attributing a service to a subtree', () => {
 
 describe('replacing a composition', () => {
   it('publishes a committed preset selection for remote consumers', async () => {
-    const agent = await agentOn(ctx, 'sess-selected', 'standard')
+    const agent = await agentOn(ctx, 'sess-selected', 'ceo')
     const selected: Array<[SessionId, string]> = []
     ctx.on('agent-preset/selected', (sessionId, agentPreset) => {
       selected.push([sessionId, agentPreset])
@@ -517,10 +517,10 @@ describe('replacing a composition', () => {
   })
 
   it('swaps the agent\'s tools without touching another session', async () => {
-    const keeper = await agentOn(ctx, 'sess-keeper', 'standard')
+    const keeper = await agentOn(ctx, 'sess-keeper', 'ceo')
     const handle = await ctx.agents.create({
       sessionId: SessionId('sess-swap'),
-      setup: async (agentCtx: Context) => void await ctx.agentPresets.mount(agentCtx, 'standard'),
+      setup: async (agentCtx: Context) => void await ctx.agentPresets.mount(agentCtx, 'ceo'),
     })
     expect(toolNames(ctx, handle.agent)).toEqual(['alpha'])
 
@@ -534,7 +534,7 @@ describe('replacing a composition', () => {
   it('notifies tool views after reparenting and contains notification failures', async () => {
     const handle = await ctx.agents.create({
       sessionId: SessionId('sess-tool-change'),
-      setup: async (agentCtx: Context) => void await ctx.agentPresets.mount(agentCtx, 'standard'),
+      setup: async (agentCtx: Context) => void await ctx.agentPresets.mount(agentCtx, 'ceo'),
     })
     await ctx.agentPresets.standingKeyFor('minimal')
     let changes = 0
@@ -546,8 +546,8 @@ describe('replacing a composition', () => {
     const warnings: string[] = []
     ctx.logger.warn = ((message: unknown) => { warnings.push(String(message)) }) as typeof ctx.logger.warn
     const stopThrowing = ctx.on('tools/change', () => { throw new Error('listener failed') })
-    await expect(ctx.agentPresets.recompose(handle.agent.ctx, 'standard')).resolves.toMatchObject({ id: 'standard' })
-    expect(ctx.agentPresets.composedPreset(handle.agent.ctx)).toBe('standard')
+    await expect(ctx.agentPresets.recompose(handle.agent.ctx, 'ceo')).resolves.toMatchObject({ id: 'ceo' })
+    expect(ctx.agentPresets.composedPreset(handle.agent.ctx)).toBe('ceo')
     expect(warnings).toEqual([expect.stringContaining('tools/change listener failed')])
     stopThrowing()
   })
@@ -555,7 +555,7 @@ describe('replacing a composition', () => {
   it('leaves the agent on its previous composition when the new one is unknown', async () => {
     const handle = await ctx.agents.create({
       sessionId: SessionId('sess-unknown'),
-      setup: async (agentCtx: Context) => void await ctx.agentPresets.mount(agentCtx, 'standard'),
+      setup: async (agentCtx: Context) => void await ctx.agentPresets.mount(agentCtx, 'ceo'),
     })
 
     await expect(ctx.agentPresets.recompose(handle.agent.ctx, 'nope'))
@@ -568,7 +568,7 @@ describe('replacing a composition', () => {
   it('restores the previous composition when the new one fails to mount', async () => {
     const handle = await ctx.agents.create({
       sessionId: SessionId('sess-restore'),
-      setup: async (agentCtx: Context) => void await ctx.agentPresets.mount(agentCtx, 'standard'),
+      setup: async (agentCtx: Context) => void await ctx.agentPresets.mount(agentCtx, 'ceo'),
     })
 
     await expect(ctx.agentPresets.recompose(handle.agent.ctx, 'broken'))
@@ -601,7 +601,7 @@ describe('replacing a composition', () => {
     // exactly right there and the diagnostic must stay silent. Opting out is
     // what makes this rosterless — empty `roots` alone would still derive the
     // harness-home root, which is a roster like any other.
-    const rosterless = await harness({ default: 'standard', roots: [], includeShippedRoot: false, includeUserRoot: false })
+    const rosterless = await harness({ default: 'ceo', roots: [], includeShippedRoot: false, includeUserRoot: false })
     const warnings: string[] = []
     rosterless.logger.warn = ((message: unknown) => { warnings.push(String(message)) }) as typeof rosterless.logger.warn
 

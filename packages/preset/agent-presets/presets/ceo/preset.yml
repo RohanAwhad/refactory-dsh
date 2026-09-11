@@ -1,0 +1,3 @@
+name: CEO
+description: The interactive workflow CEO — drives refactory graphs (create-v2 / outer-loop / design-v2) and spawns content subagents.
+order: 1

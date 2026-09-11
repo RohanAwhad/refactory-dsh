@@ -141,14 +141,14 @@ function fakeCtx(
 
 function seed(): Map<string, FakePreset> {
   return new Map<string, FakePreset>([
-    ['standard', { trust: 'system', content: '- id: tool-bash\n', name: '标准模式' }],
+    ['ceo', { trust: 'system', content: '- id: tool-bash\n', name: '标准模式' }],
     ['mine', { trust: 'user', content: '- id: tool-read\n' }],
   ])
 }
 
 function harness(options: FakeOptions = {}) {
   const presets = seed()
-  const defaultId = { id: 'standard' }
+  const defaultId = { id: 'ceo' }
   const calls: Recorded[] = []
   let rosterChanges = 0
   const wired = { ...options, calls: options.calls ?? calls }
@@ -176,7 +176,7 @@ describe('loading the roster', () => {
     const state = controller.store.getSnapshot()
     expect(state.status).toBe('ready')
     expect(state.hasDocument).toBe(false)
-    expect(state.rows.map((row: PresetRow) => row.id)).toEqual(['standard', 'mine'])
+    expect(state.rows.map((row: PresetRow) => row.id)).toEqual(['ceo', 'mine'])
   })
 
   it('maps the roster onto rows with the capability flags', async () => {
@@ -188,7 +188,7 @@ describe('loading the roster', () => {
     expect(state.status).toBe('ready')
     expect(state.authorable).toBe(true)
     expect(state.hasDocument).toBe(false)
-    expect(state.rows.map((row: PresetRow) => row.id)).toEqual(['standard', 'mine'])
+    expect(state.rows.map((row: PresetRow) => row.id)).toEqual(['ceo', 'mine'])
     expect(state.rows[0]).toMatchObject({ trust: 'system', isDefault: true, name: '标准模式' })
   })
 
@@ -226,10 +226,10 @@ describe('the read-only viewer', () => {
     const { controller } = harness()
     await controller.load()
 
-    await controller.view('standard')
+    await controller.view('ceo')
 
     expect(controller.store.getSnapshot().view).toEqual({
-      id: 'standard', title: '标准模式', content: '- id: tool-bash\n',
+      id: 'ceo', title: '标准模式', content: '- id: tool-bash\n',
     })
   })
 
@@ -245,7 +245,7 @@ describe('the read-only viewer', () => {
   it('closes without touching the list', async () => {
     const { controller } = harness()
     await controller.load()
-    await controller.view('standard')
+    await controller.view('ceo')
 
     controller.closeView()
 
@@ -257,7 +257,7 @@ describe('the read-only viewer', () => {
     const { controller } = harness({ failRead: 'no peeking' })
     await controller.load()
 
-    await controller.view('standard')
+    await controller.view('ceo')
 
     expect(controller.store.getSnapshot().view).toBeNull()
     expect(controller.store.getSnapshot().error).toBe('no peeking')
@@ -270,10 +270,10 @@ describe('the copy dialog', () => {
     const { controller } = harness()
     await controller.load()
 
-    controller.beginCopy('standard')
+    controller.beginCopy('ceo')
 
     expect(copyOf(controller)).toMatchObject({
-      from: 'standard', fromTitle: '标准模式', id: '', name: '', saving: false,
+      from: 'ceo', fromTitle: '标准模式', id: '', name: '', saving: false,
     })
   })
 
@@ -289,7 +289,7 @@ describe('the copy dialog', () => {
   it('cancel discards whatever was typed', async () => {
     const { controller } = harness()
     await controller.load()
-    controller.beginCopy('standard')
+    controller.beginCopy('ceo')
     controller.setCopyId('half-typed')
 
     controller.cancelCopy()
@@ -312,7 +312,7 @@ describe('the copy dialog', () => {
   it('typing clears the previous failure', async () => {
     const { controller } = harness({ failCopy: 'disk full' })
     await controller.load()
-    controller.beginCopy('standard')
+    controller.beginCopy('ceo')
     controller.setCopyId('my-copy')
     await controller.confirmCopy()
     expect(copyOf(controller).error).toBe('disk full')
@@ -325,11 +325,11 @@ describe('the copy dialog', () => {
 
 describe('the copy blocker', () => {
   const rows: PresetRow[] = [
-    { id: 'standard', trust: 'system', isDefault: true },
+    { id: 'ceo', trust: 'system', isDefault: true },
     { id: 'mine', trust: 'user', isDefault: false },
   ]
   const draft = (id: string): CopyDraft =>
-    ({ from: 'standard', fromTitle: '标准模式', id, name: '', saving: false, error: null })
+    ({ from: 'ceo', fromTitle: '标准模式', id, name: '', saving: false, error: null })
 
   it('requires an id, a containable shape, and a free name', () => {
     expect(draftBlocker(draft(''), rows)).toBe('idRequired')
@@ -344,7 +344,7 @@ describe('submitting a copy', () => {
   it('copies, re-reads the roster, announces the change, and opens the files', async () => {
     const { controller, calls, rosterChanges } = harness()
     await controller.load()
-    controller.beginCopy('standard')
+    controller.beginCopy('ceo')
     controller.setCopyId('my-copy')
     controller.setCopyName('我的模式')
 
@@ -355,7 +355,7 @@ describe('submitting a copy', () => {
     expect(state.rows.map(row => row.id)).toContain('my-copy')
     expect(rosterChanges()).toBe(1)
     expect(calls.find(call => call.method === 'copy')?.payload)
-      .toEqual({ from: 'standard', id: 'my-copy', name: '我的模式' })
+      .toEqual({ from: 'ceo', id: 'my-copy', name: '我的模式' })
     // A preset is its files from here on, so landing in them completes the
     // copy rather than following it.
     expect(calls.find(call => call.method === 'openAgentPresetDirectory')?.payload)
@@ -365,20 +365,20 @@ describe('submitting a copy', () => {
   it('omits an empty name so the copy falls back to its id', async () => {
     const { controller, calls } = harness()
     await controller.load()
-    controller.beginCopy('standard')
+    controller.beginCopy('ceo')
     controller.setCopyId('my-copy')
     controller.setCopyName('   ')
 
     await controller.confirmCopy()
 
     expect(calls.find(call => call.method === 'copy')?.payload)
-      .toEqual({ from: 'standard', id: 'my-copy' })
+      .toEqual({ from: 'ceo', id: 'my-copy' })
   })
 
   it('reveals the new directory as text where the host has no desktop', async () => {
     const { controller } = harness({ hasDocument: false })
     await controller.load()
-    controller.beginCopy('standard')
+    controller.beginCopy('ceo')
     controller.setCopyId('my-copy')
 
     await controller.confirmCopy()
@@ -389,7 +389,7 @@ describe('submitting a copy', () => {
   it('keeps the dialog open with the refusal on it', async () => {
     const { controller, rosterChanges } = harness({ failCopy: 'id already exists' })
     await controller.load()
-    controller.beginCopy('standard')
+    controller.beginCopy('ceo')
     controller.setCopyId('my-copy')
 
     await controller.confirmCopy()
@@ -401,7 +401,7 @@ describe('submitting a copy', () => {
   it('refuses to submit while blocked or already saving', async () => {
     const { controller, calls } = harness()
     await controller.load()
-    controller.beginCopy('standard')
+    controller.beginCopy('ceo')
     controller.setCopyId('mine')
 
     await controller.confirmCopy()
@@ -487,7 +487,7 @@ describe('deleting', () => {
     controller.confirmDelete('mine')
     const removal = controller.remove()
 
-    controller.confirmDelete('standard')
+    controller.confirmDelete('ceo')
     await controller.remove()
     release()
     await removal
@@ -515,7 +515,7 @@ describe('a controller with no roster listener', () => {
     // The rosterChanged callback is optional wiring, not a requirement: a
     // page composed without sibling surfaces still deletes cleanly.
     const presets = seed()
-    const defaultId = { id: 'standard' }
+    const defaultId = { id: 'ceo' }
     const alone = new AgentPresetSectionController(
       fakeCtx(presets, defaultId))
     await alone.load()

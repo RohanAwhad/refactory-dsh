@@ -47,33 +47,13 @@ async function roster(config: Partial<Config> = {}): Promise<Context> {
   ctx.loader.builtins.include = Include
   await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(AgentPresets, {
-    default: 'standard',
+    default: 'ceo',
     roots: [],
     includeShippedRoot: true,
     includeUserRoot: true,
     ...config,
   })
   return ctx
-}
-
-interface ShippedEntry {
-  id?: unknown
-  disabled?: unknown
-  config?: unknown
-}
-
-/** Find one entry through the shipped composition's nested groups. */
-function findEntry(entries: unknown[], id: string): ShippedEntry | undefined {
-  for (const entry of entries) {
-    if (typeof entry !== 'object' || entry === null) continue
-    const candidate = entry as ShippedEntry
-    if (candidate.id === id) return candidate
-    if (Array.isArray(candidate.config)) {
-      const nested = findEntry(candidate.config, id)
-      if (nested !== undefined) return nested
-    }
-  }
-  return undefined
 }
 
 /** Read and validate one shipped preset's Cordis entry list. */
@@ -89,7 +69,7 @@ describe('the shipped preset root', () => {
     const ctx = await roster({ includeUserRoot: false })
 
     const listed = await ctx.agentPresets.list()
-    expect(listed.map(preset => preset.id).sort()).toEqual(['cordis', 'minimal', 'ptc', 'standard'])
+    expect(listed.map(preset => preset.id).sort()).toEqual(['ceo', 'cordis', 'minimal'])
     expect(listed.every(preset => preset.trust === 'system')).toBe(true)
     // Not `broken === undefined`: health asks whether each row's package is
     // installed above the base, and the shipped rows name packages the
@@ -129,7 +109,7 @@ describe('the shipped preset root', () => {
   })
 
   it('enables web_fetch in each tool-bearing Web app preset', async () => {
-    for (const id of ['cordis', 'ptc', 'standard']) {
+    for (const id of ['ceo', 'cordis']) {
       const entries = await shippedEntries(id)
       const toolWeb: unknown = entries.find((entry: unknown) =>
         typeof entry === 'object' && entry !== null && 'id' in entry && entry.id === 'tool-web')
@@ -138,17 +118,6 @@ describe('the shipped preset root', () => {
         throw new TypeError(`${id} preset must configure tool-web.fetch`)
       }
       expect(toolWeb.config.fetch, id).toBe(true)
-    }
-  })
-
-  it('omits the general workflow tool only from PTC while retaining Ralph infrastructure', async () => {
-    const ptc = await shippedEntries('ptc')
-    expect(findEntry(ptc, 'tool-workflow')?.disabled).toBe(true)
-    expect(findEntry(ptc, 'workflow-worker-thread')?.disabled).not.toBe(true)
-    expect(findEntry(ptc, 'tool-ralph')?.disabled).not.toBe(true)
-
-    for (const id of ['standard', 'cordis']) {
-      expect(findEntry(await shippedEntries(id), 'tool-workflow')?.disabled, id).not.toBe(true)
     }
   })
 })

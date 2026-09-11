@@ -30,7 +30,7 @@ import { apply as hostApply } from '../src/index.ts'
 const ROSTER_ONE = {
   ok: true as const,
   value: {
-    presets: [{ id: 'standard', trust: 'system', isDefault: true }],
+    presets: [{ id: 'ceo', trust: 'system', isDefault: true }],
     authorable: true,
   },
 }
@@ -40,7 +40,7 @@ const ROSTER_AUTHORED = {
   ok: true as const,
   value: {
     presets: [
-      { id: 'standard', trust: 'system', isDefault: true },
+      { id: 'ceo', trust: 'system', isDefault: true },
       { id: 'mine', trust: 'user', isDefault: false },
     ],
     authorable: true,
@@ -52,7 +52,7 @@ const ROSTER_MOVED = {
   ok: true as const,
   value: {
     presets: [
-      { id: 'standard', trust: 'system', isDefault: false },
+      { id: 'ceo', trust: 'system', isDefault: false },
       { id: 'minimal', trust: 'system', isDefault: true },
     ],
     authorable: true,
@@ -97,7 +97,7 @@ async function bench() {
     list: () => { calls.push('list'); return Promise.resolve(ROSTER) },
     read: () => Promise.resolve({
       ok: true as const,
-      value: { agentPreset: 'standard', trust: 'system', content: '' },
+      value: { agentPreset: 'ceo', trust: 'system', content: '' },
     }),
     copy: (_from: string, id: string) => {
       calls.push(`copy:${id}`)
@@ -215,9 +215,9 @@ describe('ui-agent-preset apply', () => {
 
     const section = (slots.entries('settings.section')[0]!.inject as unknown as () => AgentPresetSectionInjected)()
 
-    await section.makeDefault('standard')
+    await section.makeDefault('ceo')
     expect(section.hooks.agentPresetSection.getSnapshot().rows)
-      .toEqual([{ id: 'standard', trust: 'system', isDefault: true }])
+      .toEqual([{ id: 'ceo', trust: 'system', isDefault: true }])
   })
 
   it('routes the section actions to one controller', async () => {
@@ -227,13 +227,13 @@ describe('ui-agent-preset apply', () => {
     const section = (slots.entries('settings.section')[0]!.inject as unknown as () => AgentPresetSectionInjected)()
 
     await section.load()
-    section.beginCopy('standard')
+    section.beginCopy('ceo')
     section.cancelCopy()
-    section.beginCopy('standard')
+    section.beginCopy('ceo')
     section.setCopyId('mine')
     section.setCopyName('我的模式')
     await section.confirmCopy()
-    await section.view('standard')
+    await section.view('ceo')
     section.closeView()
     section.confirmDelete('mine')
     await Promise.all([section.openLocation('mine'), section.remove()])
@@ -328,7 +328,7 @@ describe('ui-agent-preset apply', () => {
     const chip = slots.entries('conversation.hero.agentPreset')[0]!
     const seat = (chip.inject as unknown as () => AgentPresetSeatInjected)()
     await seat.load()
-    expect(seat.hooks.agentPresetSeat.getSnapshot().current).toBe('standard')
+    expect(seat.hooks.agentPresetSeat.getSnapshot().current).toBe('ceo')
 
     // The chip opens on the deployment default, and the setting it comes from
     // lives on another screen: without this the next session — the very one
@@ -339,7 +339,7 @@ describe('ui-agent-preset apply', () => {
     moveDefault()
     remote.emit('settings/document-updated', ['llm-deepseek', 1])
     await Promise.resolve()
-    expect(seat.hooks.agentPresetSeat.getSnapshot().current).toBe('standard')
+    expect(seat.hooks.agentPresetSeat.getSnapshot().current).toBe('ceo')
 
     remote.emit('settings/document-updated', ['agent-presets', 1])
     await vi.waitFor(() => {
@@ -360,11 +360,11 @@ describe('ui-agent-preset apply', () => {
     const chip = slots.entries('conversation.hero.agentPreset')[0]!
     const seat = (chip.inject as unknown as () => AgentPresetSeatInjected)()
     await seat.load()
-    expect(seat.hooks.agentPresetSeat.getSnapshot().options.map(option => option.id)).toEqual(['standard'])
+    expect(seat.hooks.agentPresetSeat.getSnapshot().options.map(option => option.id)).toEqual(['ceo'])
 
     const section = (slots.entries('settings.section')[0]!.inject as unknown as () => AgentPresetSectionInjected)()
     await section.load()
-    section.beginCopy('standard')
+    section.beginCopy('ceo')
     section.setCopyId('mine')
     section.setCopyName('我的模式')
     await section.confirmCopy()
@@ -373,7 +373,7 @@ describe('ui-agent-preset apply', () => {
     // on the wire announces it: a preset created to be used must appear on
     // the one screen that starts sessions, without a reload.
     await vi.waitFor(() => {
-      expect(seat.hooks.agentPresetSeat.getSnapshot().options.map(option => option.id)).toEqual(['standard', 'mine'])
+      expect(seat.hooks.agentPresetSeat.getSnapshot().options.map(option => option.id)).toEqual(['ceo', 'mine'])
     })
     conversation()
   })
@@ -405,7 +405,7 @@ describe('ui-agent-preset apply', () => {
 
     state.current = 's1'
     state.byId['s1'] = {
-      id: 's1', blank: true, projectionValues: { agentPreset: 'standard' },
+      id: 's1', blank: true, projectionValues: { agentPreset: 'ceo' },
     }
     sessions.notify()
 
@@ -444,7 +444,7 @@ describe('ui-agent-preset apply', () => {
     const state = {
       current: 's1',
       byId: {
-        s1: { id: 's1', blank: true, projectionValues: { agentPreset: 'standard' } },
+        s1: { id: 's1', blank: true, projectionValues: { agentPreset: 'ceo' } },
       },
     }
     const sessions = sessionsDouble(state)
@@ -479,7 +479,7 @@ describe('ui-agent-preset apply', () => {
 
     await label.load()
 
-    expect(label.hooks.agentPresets.getSnapshot().options).toEqual([{ id: 'standard', trust: 'system' }])
+    expect(label.hooks.agentPresets.getSnapshot().options).toEqual([{ id: 'ceo', trust: 'system' }])
   })
 
   it('stages the creator preset and starts a session from the section', async () => {
@@ -580,7 +580,7 @@ describe('AgentPresetSeatController reconciliation', () => {
 
     await controller.load()
     await controller.apply()
-    expect(controller.store.getSnapshot().current).toBe('standard')
+    expect(controller.store.getSnapshot().current).toBe('ceo')
 
     state.current = { id: SessionId('uncomposed'), blank: true }
     await controller.apply()
