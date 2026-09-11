@@ -56,6 +56,8 @@ export interface Config {
   commandEnv: Record<string, string>
   /** Foreground timeout for one node command. */
   commandTimeoutMs: number
+  /** Sandbox mode for node commands; graph commands are trusted ops, so full access. */
+  commandSandboxMode: string
   /**
    * Global tools the CEO is not allowed to call. The guard denies these on the
    * CEO's own scope at `agent/created`, so subagents (which join the full
@@ -89,6 +91,7 @@ export const Config = z.object({
   workdir: z.string(),
   commandEnv: z.dict(z.string()).default({}),
   commandTimeoutMs: z.natural().default(600_000),
+  commandSandboxMode: z.string().default('danger-full-access'),
   ceoDeny: z.array(z.string()).default(DEFAULT_CEO_DENY),
 })
 
@@ -133,6 +136,7 @@ export function apply(ctx: Context, config: Config): void {
     const runner = {
       env: config.commandEnv,
       timeoutMs: config.commandTimeoutMs,
+      sandboxPolicy: { mode: config.commandSandboxMode as 'danger-full-access', workspaceRoot: config.workdir ?? process.cwd() },
       ...(config.workdir === undefined ? {} : { workdir: config.workdir }),
     }
     for (;;) {
@@ -173,7 +177,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.systemPrompt.section({
     name: `tool:${toolPrefix}-spine`,
     order: ctx.systemPrompt.getSectionOrder('TOOL_WORKFLOW'),
-    text: `You are the CEO of a workflow run, and you are DRIVING A WORKFLOW GRAPH. Your coding tools (bash, write, edit, web, skill) are disabled — you cannot implement, edit files, or browse yourself. Advance only through the wf tools. ${toolPrefix}_next is the ONLY way to learn what is due now: call it first, and call it again after every ${toolPrefix}_done / ${toolPrefix}_verdict / ${toolPrefix}_edit / ${toolPrefix}_expand — those tools only confirm the mutation, they do not tell you what is next. For an AgentNode, spawn a subagent (the subagent tool) with that node's task and wait for it, then report the node with ${toolPrefix}_done. For a FnNode, follow its content and report ${toolPrefix}_done. Route a gate with ${toolPrefix}_verdict, answering with one of the verdicts the gate view lists (proceed/reloop/halt, or the gate's own named outcomes) — for a user gate, first present the gate to the user with ask_user_question and route the verdict they give. Fan out a director's plan with ${toolPrefix}_expand, and apply user steering ("skip the tests") with ${toolPrefix}_edit. Never skip, reorder, or bypass a node — the runner refuses to advance until you report the current node complete.`,
+    text: `You are the CEO of a workflow run, and you are DRIVING A WORKFLOW GRAPH. Your coding tools (bash, write, edit, web, skill) are disabled — you cannot implement, edit files, or browse yourself. Advance only through the wf tools. ${toolPrefix}_next is the ONLY way to learn what is due now: call it first, and call it again after every ${toolPrefix}_done / ${toolPrefix}_verdict / ${toolPrefix}_edit / ${toolPrefix}_expand — those tools only confirm the mutation, they do not tell you what is next. For an AgentNode or LLMNode, spawn a subagent (the subagent tool) whose task is the node's prompt_template, and explicitly tell the subagent to read the node's reads files and write its result to the node's writes file (the filename in the node's writes field, e.g. candidate.py) — wait for it, then report the node with ${toolPrefix}_done. For a FnNode, follow its content and report ${toolPrefix}_done. Route a gate with ${toolPrefix}_verdict, answering with one of the verdicts the gate view lists (proceed/reloop/halt, or the gate's own named outcomes) — for a user gate, first present the gate to the user with ask_user_question and route the verdict they give. Fan out a director's plan with ${toolPrefix}_expand, and apply user steering ("skip the tests") with ${toolPrefix}_edit. Never skip, reorder, or bypass a node — the runner refuses to advance until you report the current node complete.`,
   })
 
   ctx.tools.register(defineTool({

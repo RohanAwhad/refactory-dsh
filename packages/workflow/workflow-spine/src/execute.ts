@@ -8,7 +8,7 @@
  * @module @deepseek-ai/dsh-workflow-spine/execute
  */
 
-import type { ShellExecutor } from '@deepseek-ai/dsh-shell'
+import type { ShellExecRequest, ShellExecutor } from '@deepseek-ai/dsh-shell'
 import type { NodeView } from './spine.ts'
 
 /**
@@ -36,6 +36,12 @@ export interface CommandRunnerConfig {
   env: Record<string, string>
   /** Foreground timeout for one node command. */
   timeoutMs: number
+  /**
+   * Per-command sandbox policy. A graph's commands are trusted deterministic
+   * ops, not model-authored code, so they run with full access by default; the
+   * model-authored candidate is confined by the op that scores it.
+   */
+  sandboxPolicy?: { mode: 'read-only' | 'workspace-write' | 'danger-full-access'; workspaceRoot: string }
 }
 
 /** The outcome of one deterministic node. */
@@ -124,12 +130,14 @@ export async function runDeterministic(
     return { ...base, error: `${node.id} has no command` }
   }
 
-  const spec = shell.resolve({
+  const request = {
     command,
     env: { ...config.env, [NODE_ENV_KEY]: JSON.stringify(manifestOf(node, command)) },
     timeoutMs: config.timeoutMs,
     ...(config.workdir === undefined ? {} : { workdir: config.workdir }),
-  })
+    ...(config.sandboxPolicy === undefined ? {} : { sandboxPolicy: config.sandboxPolicy }),
+  } as ShellExecRequest
+  const spec = shell.resolve(request)
   const result = await shell.run(spec)
   const stdout = result.stdout.text.trim()
   const stderr = result.stderr.text.trim()

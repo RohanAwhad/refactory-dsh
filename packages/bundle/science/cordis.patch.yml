@@ -1,0 +1,52 @@
+# The dsh-science bundle patch: the interactive scientific-research runner.
+# It stacks over dsh-base (which supplies shell, subagent, tools, and the LLM
+# providers), adds the command-line provider and the workflow spine, and mounts
+# the science runner that drives one CEO Agent to quiescence.
+#
+# The spine row reads its graph, work directory, and command environment from
+# the `scienceStartup` service, so `--mode/--task/--budget` select the run.
+
+- id: system-prompt
+  config:
+    personaSuffix: Your working directory is {{cwd}}.
+    personaPrefix: >-
+      You are the CEO of an interactive scientific-research workflow, powered by the {{model}} model.
+
+- id: tools
+  config:
+    mode: !!js process.env.DSH_TOOLS_MODE
+
+- insert:
+    - id: code-runtime
+      name: '@deepseek-ai/dsh-code-runtime-worker-thread'
+
+    - id: science-startup
+      name: '@deepseek-ai/dsh-science/src/startup'
+
+    - id: workflow-spine
+      name: '@deepseek-ai/dsh-workflow-spine'
+      inject: [scienceStartup]
+      config:
+        graph: !!js ctx.scienceStartup.graph
+        toolPrefix: wf
+        maxIterations: 500
+        executeCommands: true
+        workdir: !!js ctx.scienceStartup.workdir
+        commandEnv: !!js ctx.scienceStartup.commandEnv
+        commandTimeoutMs: 600000
+        ceoDeny:
+          - bash
+          - pwsh
+          - write
+          - edit
+          - str_replace_editor
+          - web_search
+          - web_fetch
+          - skill
+          - ralph
+          - workflow
+          - read_image
+
+    - id: science-runner
+      name: '@deepseek-ai/dsh-science/src/index'
+      inject: [scienceStartup]
