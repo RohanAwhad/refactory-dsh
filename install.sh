@@ -46,10 +46,12 @@ PY="$VENV/bin/python"
   'pydantic>=2' 'PyYAML>=6' 'structlog>=24' 'networkx>=3.6' 'filelock>=3'
 "$PY" -m pip install --disable-pip-version-check -q -e "$GLUE"
 
-# 5. path links so `factory` (refactory) and `srf` import beside refactory_dsh.
-SP="$("$PY" -c 'import site; print(site.getsitepackages()[0])')"
-printf '%s\n' "$VENDOR/remote-factory" > "$SP/refactory.pth"
-printf '%s\n' "$VENDOR/srf" > "$SP/srf.pth"
+# 5. editable install of the vendored refactory + SRF with `--no-deps` so their
+#    package metadata exists (importlib.metadata.version('remote-factory') etc.)
+#    while their imports resolve through the editable link and the minimal deps
+#    above — no heavy runtime deps are pulled.
+"$PY" -m pip install --disable-pip-version-check -q -e "$VENDOR/remote-factory" --no-deps
+"$PY" -m pip install --disable-pip-version-check -q -e "$VENDOR/srf" --no-deps
 
 # 6. regenerate the three agent presets + rewritten graphs.
 "$PY" "$GLUE/gen_presets.py"
