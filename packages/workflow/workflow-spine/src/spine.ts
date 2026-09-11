@@ -38,6 +38,16 @@ export interface NodeView {
   targets?: string[]
   sources?: string[]
   expand?: DirectorExpansion
+  /** For a `DataNode`: its resolved data source and the subgraph it iterates. */
+  task_ref?: string
+  source_path?: string
+  source_format?: string
+  inline_items?: Array<Record<string, unknown>>
+  subgraph_entry?: string
+  subgraph_exit?: string
+  limit?: number
+  /** For a `SelectionNode`: the selection strategy. */
+  strategy?: string
   unsupported?: boolean
 }
 
@@ -55,6 +65,7 @@ const DEFAULT_MAX_ITERATIONS = 3
 /** Node types the spine advances through; others are marked unsupported. */
 const EXECUTED_TYPES = new Set([
   'AgentNode', 'LLMNode', 'FnNode', 'Study', 'GateNode', 'ForkNode', 'JoinNode',
+  'DataNode', 'SelectionNode',
 ])
 
 /** Verdict labels the spine treats as control flow rather than a forward branch. */
@@ -281,6 +292,25 @@ export class Spine {
       view.writes = node.writes ?? []
       view.command = node.command ?? ''
       if (node.content !== undefined) view.content = node.content
+    }
+    if (node._type === 'DataNode') {
+      // A DataNode loads data items and drives per-item execution of its
+      // declared subgraph (subgraph_entry → subgraph_exit). The driving agent
+      // materializes the items and iterates the subgraph once per item.
+      view.writes = node.writes ?? []
+      view.reads = node.reads ?? []
+      view.task_ref = node.task_ref ?? ''
+      view.source_path = node.source_path ?? ''
+      view.source_format = node.source_format ?? ''
+      view.inline_items = node.inline_items ?? []
+      view.subgraph_entry = node.subgraph_entry ?? ''
+      view.subgraph_exit = node.subgraph_exit ?? ''
+      if (node.limit !== undefined) view.limit = node.limit
+    }
+    if (node._type === 'SelectionNode') {
+      view.strategy = node.strategy ?? 'best_score'
+      view.reads = node.reads ?? []
+      view.writes = node.writes ?? []
     }
     if (!EXECUTED_TYPES.has(node._type)) view.unsupported = true
     return view

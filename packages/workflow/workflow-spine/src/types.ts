@@ -47,6 +47,16 @@ export interface WorkflowNode {
   targets?: string[]
   sources?: string[]
   expand?: DirectorExpansion
+  /** `DataNode`: the resolved data source and the subgraph it iterates. */
+  task_ref?: string
+  source_path?: string
+  source_format?: string
+  inline_items?: Array<Record<string, unknown>>
+  subgraph_entry?: string
+  subgraph_exit?: string
+  limit?: number
+  /** `SelectionNode`: the selection strategy. */
+  strategy?: string
   [key: string]: unknown
 }
 

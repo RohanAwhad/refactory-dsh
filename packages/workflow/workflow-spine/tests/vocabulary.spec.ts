@@ -195,4 +195,55 @@ describe('validateGraph', () => {
       { node: 'stranded', message: 'unreachable from start_node' },
     ])
   })
+
+  it('accepts DataNode and SelectionNode as executable vocabulary', () => {
+    const graph: WorkflowGraph = {
+      name: 'data-driven',
+      start_node: 'data',
+      nodes: {
+        data: {
+          _type: 'DataNode', id: 'data',
+          inline_items: [{ id: 'i1' }, { id: 'i2' }],
+          subgraph_entry: 'work', subgraph_exit: 'end',
+          reads: [], writes: [],
+        },
+        work: { _type: 'FnNode', id: 'work', command: 'true', reads: [], writes: [] },
+        end: { _type: 'FnNode', id: 'end', command: 'true', reads: [], writes: [] },
+      },
+      edges: [
+        { source: 'data', target: 'work' },
+        { source: 'work', target: 'end' },
+      ],
+    }
+    expect(validateGraph(graph)).toEqual([])
+    const spine = new Spine(graph, { maxIterations: 2 })
+    expect(spine.next().nodes?.[0]).toMatchObject({ id: 'data', _type: 'DataNode' })
+  })
+
+  it('surfaces DataNode source and subgraph fields to the driving agent', () => {
+    const graph: WorkflowGraph = {
+      name: 'data-view',
+      start_node: 'data',
+      nodes: {
+        data: {
+          _type: 'DataNode', id: 'data',
+          source_path: '/data', source_format: 'jsonl',
+          subgraph_entry: 'a', subgraph_exit: 'b',
+          limit: 7, reads: [], writes: [],
+        },
+        a: { _type: 'FnNode', id: 'a', command: 'true', reads: [], writes: [] },
+        b: { _type: 'FnNode', id: 'b', command: 'true', reads: [], writes: [] },
+      },
+      edges: [{ source: 'data', target: 'a' }, { source: 'a', target: 'b' }],
+    }
+    const spine = new Spine(graph, { maxIterations: 2 })
+    expect(spine.next().nodes?.[0]).toMatchObject({
+      id: 'data',
+      source_path: '/data',
+      source_format: 'jsonl',
+      subgraph_entry: 'a',
+      subgraph_exit: 'b',
+      limit: 7,
+    })
+  })
 })
