@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# refactory-dsh — one-command install for the self-contained single repo.
+#
+# The repo is a DSH fork: the DSH source sits at the repo root, the glue at
+# `refactory/`, and the vendored dependencies (refactory + SRF) are git
+# submodules under `refactory/vendor/`. This script sets up the Node side
+# (pnpm) and the Python side (venv + editable install + path links) and
+# regenerates the three agent presets, so `./refactory-dsh` then boots DSH with
+# create-v2 / outer-loop / design-v2.
+#
+#   git clone <repo> --recurse-submodules
+#   ./install.sh
+#   ./refactory-dsh --port 3081 --no-open
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GLUE="$HERE/refactory"
+VENDOR="$GLUE/vendor"
+VENV="$HERE/.venv"
+
+echo "== refactory-dsh install =="
+echo "  repo:  $HERE"
+
+# 1. vendored dependencies (refactory + SRF) as git submodules.
+git -C "$HERE" submodule update --init --recursive
+
+# 2. Node side: install the pnpm workspace (DSH).
+if ! command -v pnpm >/dev/null 2>&1; then
+  echo "  error: pnpm not found — install Node >=22.19 + corepack, then retry" >&2
+  exit 1
+fi
+(cd "$HERE" && pnpm install --frozen-lockfile)
+
+# 3. Python side: self-contained venv.
+if [ ! -x "$VENV/bin/python" ]; then
+  echo "  creating venv at $VENV"
+  python3 -m venv "$VENV"
+fi
+PY="$VENV/bin/python"
+
+# 4. Python deps: the glue + the minimal semantics deps the vendored
+#    refactory (`factory.workflow`/`factory.outer_loop`) and SRF ops need.
+#    (No refactory/SRF runtime deps — fastapi/uvicorn/mcp/anthropic — because
+#    that runtime is retired; DSH is the runtime.)
+"$PY" -m pip install --disable-pip-version-check -q \
+  'pydantic>=2' 'PyYAML>=6' 'structlog>=24' 'networkx>=3.6' 'filelock>=3'
+"$PY" -m pip install --disable-pip-version-check -q -e "$GLUE"
+
+# 5. path links so `factory` (refactory) and `srf` import beside refactory_dsh.
+SP="$("$PY" -c 'import site; print(site.getsitepackages()[0])')"
+printf '%s\n' "$VENDOR/remote-factory" > "$SP/refactory.pth"
+printf '%s\n' "$VENDOR/srf" > "$SP/srf.pth"
+
+# 6. regenerate the three agent presets + rewritten graphs.
+"$PY" "$GLUE/gen_presets.py"
+
+echo "  done. run:  $HERE/refactory-dsh --port 3081 --no-open"

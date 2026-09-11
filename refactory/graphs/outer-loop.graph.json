@@ -1,0 +1,91 @@
+{
+  "name": "outer-loop",
+  "nodes": {
+    "seed": {
+      "id": "seed",
+      "reads": [],
+      "writes": [
+        ".factory/outer_loop/config.json",
+        ".factory/outer_loop/population/",
+        ".factory/outer_loop/archive/",
+        ".factory/outer_loop/state.json"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.ops.outer_loop calibrate",
+      "callable_name": null,
+      "notes": "Seed generation 0 from the base workflow via SwarmEngine.seed (the unmodified seed + novelty-filtered mutations), and persist population/archive/state.",
+      "_type": "FnNode"
+    },
+    "evolve": {
+      "id": "evolve",
+      "reads": [
+        ".factory/outer_loop/population/",
+        ".factory/outer_loop/archive/",
+        ".factory/outer_loop/state.json"
+      ],
+      "writes": [
+        ".factory/outer_loop/population/",
+        ".factory/outer_loop/archive/",
+        ".factory/outer_loop/state.json",
+        ".factory/outer_loop/events.jsonl"
+      ],
+      "blocking": true,
+      "command": "python -m refactory_dsh.ops.outer_loop evolve",
+      "callable_name": null,
+      "notes": "Advance exactly one generation: SwarmEngine.evolve_generation runs evaluate (inner loop) \u2192 contrastive reflection \u2192 tournament selection \u2192 8-operator mutation \u2192 archive placement, then persists the advanced generation.",
+      "_type": "FnNode"
+    },
+    "gate_converge": {
+      "id": "gate_converge",
+      "reads": [
+        ".factory/outer_loop/state.json",
+        ".factory/outer_loop/archive/"
+      ],
+      "writes": [],
+      "blocking": true,
+      "evaluator_type": "fn",
+      "evaluator_role": null,
+      "evaluator_command": "python -m refactory_dsh.ops.outer_loop check_converge",
+      "gate_prompt": "",
+      "max_iterations": null,
+      "_type": "GateNode"
+    },
+    "promote": {
+      "id": "promote",
+      "reads": [
+        ".factory/outer_loop/archive/",
+        ".factory/outer_loop/state.json"
+      ],
+      "writes": [],
+      "blocking": true,
+      "command": "python -m refactory_dsh.ops.outer_loop status",
+      "callable_name": null,
+      "notes": "The search has converged. The status output reports the best individual (id, score, MAP-Elites features) and archive size for promotion to a permanent mode.",
+      "_type": "FnNode"
+    }
+  },
+  "edges": [
+    {
+      "source": "seed",
+      "target": "evolve",
+      "condition": null
+    },
+    {
+      "source": "evolve",
+      "target": "gate_converge",
+      "condition": null
+    },
+    {
+      "source": "gate_converge",
+      "target": "evolve",
+      "condition": "reloop"
+    },
+    {
+      "source": "gate_converge",
+      "target": "promote",
+      "condition": "proceed"
+    }
+  ],
+  "start_node": "seed",
+  "terminal": true
+}

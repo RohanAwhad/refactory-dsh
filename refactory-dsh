@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# refactory-dsh — launch DSH with the refactory meta-modes.
+#
+# Starts the DSH web GUI. Pick a mode (preset) in the UI:
+#   create-v2  → create a new mode
+#   outer-loop → optimize an existing mode (MAP-Elites)
+#   design-v2  → design software
+#
+# This repo is a self-contained DSH fork: the launcher lives at its root and the
+# DSH source is the repo itself, so no path hop is needed.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DSH_ROOT="${DSH_ROOT:-$HERE}"
+
+# Node 22 is required; prefer the nvm version when present, else trust PATH.
+if [ -x "$HOME/.nvm/versions/node/v22.23.2/bin/node" ]; then
+  export PATH="$HOME/.nvm/versions/node/v22.23.2/bin:$PATH"
+fi
+
+cd "$DSH_ROOT"
+exec node --import tsx/esm apps/cli/src/bin.ts --profile web "$@"

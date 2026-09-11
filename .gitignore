@@ -43,3 +43,9 @@ apps/web/dist/
 worktrees/
 .agents/worktrees/
 .typert-*/
+
+# refactory-dsh (Python glue)
+.venv/
+refactory/**/__pycache__/
+refactory/**/*.egg-info/
+refactory/**/*.pyc
