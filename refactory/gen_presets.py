@@ -17,7 +17,7 @@ from refactory_dsh.paths import REPO_ROOT, python as _python, refactory_dsh_pkg,
 
 REPO = REPO_ROOT
 GRAPHS = refactory_dsh_pkg().parent / "graphs"
-SCIENCE_PRESET = Path.home() / ".dsh" / ".agent-presets" / "science" / "agent.cordis.yml"
+SCIENCE_PRESET = refactory_dsh_pkg().parent / "presets" / "ceo-skeleton.cordis.yml"
 PRESET_ROOT = Path.home() / ".dsh" / ".agent-presets"
 VENV = str(venv_bin())
 PY = str(_python())
@@ -86,11 +86,10 @@ def rewrite_graph(graph: dict) -> dict:
 
 
 def standard_skeleton() -> str:
-    """The science preset up to (not including) the workflow-spine row."""
-    text = SCIENCE_PRESET.read_text()
-    marker = "- id: workflow-spine\n"
-    idx = text.index(marker)
-    return text[:idx]
+    """The shipped CEO skeleton: the standard preset with the interactive-CEO
+    persona, without any workflow-spine row (the meta-mode's own spine is
+    appended by ``write_preset``)."""
+    return SCIENCE_PRESET.read_text()
 
 
 def write_preset(name: str, graph: dict) -> None:
