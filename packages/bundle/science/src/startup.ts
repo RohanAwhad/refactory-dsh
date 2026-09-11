@@ -8,6 +8,7 @@
  */
 
 import { readFileSync, existsSync, mkdirSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Command } from 'commander'
 import type { Context } from '@deepseek-ai/cordis'
@@ -39,8 +40,18 @@ const STATE_FILES: Record<string, string> = {
   autoscientists: 'autoscientists_state.json',
 }
 
-const DEFAULT_GRAPHS_DIR = '/Users/akash/dsh/refactory-dsh/srf/graphs'
-const DEFAULT_VENV_BIN = '/Users/akash/dsh/refactory-dsh/.venv/bin'
+/** Resolve a dependency path from an explicit env override, else relative to
+ * `REFACTORY_DSH_HOME`, else the workspace default. Keeps the science bundle
+ * relocatable instead of baking an absolute machine path. */
+function resolveDep(override: string | undefined, homeRelative: string, fallback: string): string {
+  if (override) return override
+  const home = process.env.REFACTORY_DSH_HOME
+  if (home) return `${home}/${homeRelative}`
+  return fallback
+}
+
+const DEFAULT_GRAPHS_DIR = resolveDep(process.env.SRF_GRAPHS, 'srf/graphs', join(homedir(), 'dsh/refactory-dsh/srf/graphs'))
+const DEFAULT_VENV_BIN = resolveDep(process.env.VENV_BIN, '.venv/bin', join(homedir(), 'dsh/refactory-dsh/.venv/bin'))
 
 /** Everything the run needs, resolved once from the command line. */
 export interface ScienceStartupValues {
@@ -78,6 +89,7 @@ function scienceCommand(): Command {
     .option('--graphs <dir>', 'directory of <mode>.graph.json', DEFAULT_GRAPHS_DIR)
     .option('--workdir <dir>', 'working directory for the run')
     .option('--python-bin <dir>', 'directory of the python with srf+factory installed', DEFAULT_VENV_BIN)
+    .option('--knobs <json>', 'JSON object of OptKnob overrides (e.g. {"temperature":0.5})', '{}')
     .addHelpText('after', `
 Examples:
   dsh --profile science run --mode gepa --task circle_packing --budget 20
@@ -106,7 +118,7 @@ export function apply(ctx: Context): void {
     const taskName = String(options.task)
     const budget = Number(options.budget)
     const graphsDir = String(options.graphs)
-    const workdir = String(options.workdir ?? join('/Users/akash/dsh/refactory-dsh/srf/outputs', `run-${mode}-${Date.now()}`))
+    const workdir = String(options.workdir ?? join(tmpdir(), `dsh-run-${mode}-${Date.now()}`))
     const pythonBin = String(options.pythonBin)
 
     const graph = loadGraph(mode, graphsDir)
@@ -115,8 +127,10 @@ export function apply(ctx: Context): void {
     const commandEnv: Record<string, string> = {
       SRF_WORK_DIR: workdir,
       SRF_TASK: taskName,
-      SRF_KNOBS: '{}',
+      SRF_KNOBS: String(options.knobs ?? '{}'),
       SRF_BUDGET: String(budget),
+      REFACTORY_WORKDIR: workdir,
+      REFACTORY_INTENT: taskName,
       PATH: `${pythonBin}:${process.env.PATH ?? ''}`,
     }
 
