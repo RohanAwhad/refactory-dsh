@@ -136,9 +136,12 @@ export function apply(ctx: Context): void {
 
     ctx.provide(SCIENCE_STARTUP_SERVICE, {
       task: 'Drive the workflow graph to completion. Call wf_next first and after every wf_done/wf_verdict. '
-        + 'For each AgentNode or LLMNode, spawn a subagent to read the node\'s reads and write its writes, '
-        + 'then report wf_done. Route each gate with wf_verdict. When wf_next returns done, stop and '
-        + 'report the final best score you observed.',
+        + 'For each AgentNode or LLMNode, spawn a subagent and give it a tight brief: it must write ONLY '
+        + 'the exact files in that node\'s `writes` list (reading only its `reads`), then stop and return '
+        + 'a one-line summary. The subagent must NOT run the eval, run tests, iterate, edit other files, or '
+        + 'spawn further subagents — the deterministic FnNode/gate commands run automatically afterward, so '
+        + 'a subagent that runs them itself wastes the budget. Then report wf_done for the node. Route each '
+        + 'gate with wf_verdict. When wf_next returns done, stop and report the final best score you observed.',
       graph,
       workdir,
       commandEnv,
