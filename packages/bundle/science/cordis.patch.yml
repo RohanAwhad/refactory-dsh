@@ -33,7 +33,7 @@
         executeCommands: true
         workdir: !!js ctx.scienceStartup.workdir
         commandEnv: !!js ctx.scienceStartup.commandEnv
-        commandTimeoutMs: 600000
+        commandTimeoutMs: 3600000
         ceoDeny:
           - bash
           - pwsh
