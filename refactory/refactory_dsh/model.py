@@ -1,0 +1,71 @@
+"""A :class:`ModelClient` backed by a one-shot DSH run.
+
+The outer loop's optimizers need exactly one thing from a model: text in, text
+out. DSH already exposes that as ``dsh --profile headless "<task>"``, which is
+the same mechanism the inner loop uses to run a mode, so nothing new is
+introduced to reach a model and the credentials come from the same place.
+
+The subprocess runs in a scratch directory: the headless profile is a full agent
+with tools, and an analysis prompt must not be able to write into the run.
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+from pathlib import Path
+
+from refactory_dsh.paths import dsh_root, node_bin
+
+#: Wall-clock ceiling for one completion. Analysis of a handful of traces takes
+#: seconds; anything near this is a hung subprocess, not a slow model.
+DEFAULT_TIMEOUT_S = 300
+
+
+class DshModelClient:
+    """One-shot completions through ``dsh --profile headless``.
+
+    Implements ``factory.outer_loop.optimizers.ModelClient``.
+    """
+
+    def __init__(self, timeout_s: int = DEFAULT_TIMEOUT_S, model: str = "") -> None:
+        self._timeout_s = timeout_s
+        self._model = model
+
+    def complete(self, prompt: str, *, system: str = "") -> str:
+        """Return the model's answer to ``prompt``.
+
+        Raises ``RuntimeError`` on a non-zero exit or timeout so the caller can
+        decide whether a failed proposal is fatal; the optimizers treat it as a
+        generation with no proposals, which is safe.
+        """
+        task = f"{system}\n\n{prompt}" if system else prompt
+        cmd = [
+            str(node_bin()),
+            "--import",
+            "tsx/esm",
+            "apps/cli/src/bin.ts",
+            "--profile",
+            "headless",
+        ]
+        if self._model:
+            cmd += ["--model", self._model]
+        cmd.append(task)
+
+        scratch = Path(os.environ.get("REFACTORY_MODEL_SCRATCH", "/tmp")) / "refactory-model"
+        scratch.mkdir(parents=True, exist_ok=True)
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                cwd=str(dsh_root()),
+                timeout=self._timeout_s,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"model completion timed out after {self._timeout_s}s") from exc
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"model completion failed (exit {proc.returncode}): {proc.stderr[-500:]}"
+            )
+        return proc.stdout
