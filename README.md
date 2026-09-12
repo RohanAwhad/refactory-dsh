@@ -75,12 +75,34 @@ the gates.
 node --import tsx/esm apps/cli/src/bin.ts --profile science run \
   --mode gepa \
   --task circle_packing \
-  --budget 1 \
-  --graphs refactory/vendor/srf/graphs \
-  --python-bin .venv/bin
+  --budget 1
 ```
 
-prints `{"best_score": …}` and the session log.
+prints `{"best_score": …}` and the session log. `--graphs` and `--python-bin`
+default to the checkout's own `.venv/bin` and `refactory/vendor/srf/graphs`, so a
+fresh clone needs neither flag. Pick the CEO model with `--provider` (e.g.
+`deepseek-official`, `openai`, `anthropic` — the pi-ai routes resolve keys from
+`settings.yaml` + `.env`).
+
+### SRF: the reference package of modes
+
+**SRF is the shipped example of how to build a *package of modes* on refactory.**
+It is not part of the runtime — it is a template you copy. Each mode is one
+`graph.json` (refactory `Workflow.to_dict()`) plus the Python ops its `FnNode`s
+call, all inside one package:
+
+```
+srf/
+  graphs/gepa.graph.json       # a mode: nodes + edges + knobs
+  srf/ops/gepa/…               # the ops that FnNode commands run
+  srf/tasks/…                  # benchmark tasks (circle_packing, …)
+```
+
+To add your own mode you only touch that package: write a `graph.json`, implement
+its ops, drop it in `graphs/`, and it runs under the same `--profile science`
+runner — no change to DSH. That is the whole refactory→DSH contract: the language
+defines the graph, the runtime executes it, and a mode package supplies the
+domain logic in between.
 
 ### End-to-end example: create a mode, then optimize it
 
@@ -150,8 +172,6 @@ independently.
 
 - **`trimul` (GPU task) needs `numpy`** — not in the minimal semantics deps; the
   math tasks (`circle_packing`, `autocorrelation_inequality`) don't need it.
-- The refactory **CLI/pipeline tests** (22) fail on a `remote-factory` package
-  *metadata* lookup — the submodule is `.pth`-linked, not `pip install -e`'d;
-  the 174 behavioral outer-loop tests pass.
+  Its tests `importorskip("numpy")`, so the suite passes without it.
 - The logo is an inlined downscale of `remote-factory/docs/assets/refactory_logo.png`;
   refresh it in `packages/client/ui-brand-refactory/src/client/logo.ts` if upstream changes.
