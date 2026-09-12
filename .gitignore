@@ -47,5 +47,8 @@ worktrees/
 # refactory-dsh (Python glue)
 .venv/
 refactory/**/__pycache__/
+
+# Run artifacts: per-mode outer/inner-loop state, traces and reports.
+refactory/workdirs/
 refactory/**/*.egg-info/
 refactory/**/*.pyc

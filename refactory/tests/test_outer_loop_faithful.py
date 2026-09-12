@@ -110,7 +110,6 @@ def test_every_operator_produces_a_mutation_record():
     direct = [
         MutationType.NODE_INSERT,
         MutationType.NODE_REMOVE,
-        MutationType.EDGE_REDIRECT,
         MutationType.PARALLELIZE,
         MutationType.PARAM_MUTATE,
         MutationType.PROMPT_MUTATE,
@@ -122,6 +121,14 @@ def test_every_operator_produces_a_mutation_record():
         wf, rec = result
         assert rec.operator is op, f"{op.value} recorded {rec.operator}"
         assert wf.to_dict()["nodes"], f"{op.value} produced an empty graph"
+
+    # EDGE_REDIRECT is refused on this fixture, and correctly so: every edge here
+    # is the only inbound edge of its target, so redirecting any of them orphans a
+    # node. Repair no longer prunes an orphan away, because a silently amputated
+    # graph still costs a full evaluation to discover it does nothing, so the
+    # mutation is refused instead. The positive case lives beside the operator in
+    # remote-factory's test_mutations.py::test_redirect_that_does_not_orphan_succeeds.
+    assert _apply_forced(base, MutationType.EDGE_REDIRECT) is None
 
     # SERIALIZE needs a fork: PARALLELIZE a consecutive pair deterministically
     # (a random pair can be non-consecutive, which the operator rejects), then

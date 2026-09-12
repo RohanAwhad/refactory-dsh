@@ -134,7 +134,12 @@ def write_preset(name: str, graph: dict) -> None:
     print(f"wrote preset {name} ({len(graph['nodes'])} nodes) + rewritten graph.json")
 
 
-PRESET_IDS = {"create_v2": "create-v2", "outer_loop": "outer-loop", "design_v2": "design-v2"}
+PRESET_IDS = {
+    "create_v2": "create-v2",
+    "outer_loop": "outer-loop",
+    "outer_loop_decomposed": "outer-loop-decomposed",
+    "design_v2": "design-v2",
+}
 
 
 def main() -> None:

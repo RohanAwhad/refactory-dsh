@@ -1,0 +1,138 @@
+{
+  "name": "outer-loop-decomposed",
+  "nodes": {
+    "seed": {
+      "id": "seed",
+      "_type": "FnNode",
+      "blocking": true,
+      "reads": [],
+      "writes": [
+        ".factory/outer_loop/config.json",
+        ".factory/outer_loop/population/",
+        ".factory/outer_loop/archive/",
+        ".factory/outer_loop/state.json"
+      ],
+      "command": "python -m refactory_dsh.ops.outer_loop calibrate",
+      "notes": "Build generation 0 from the target mode."
+    },
+    "evaluate": {
+      "id": "evaluate",
+      "_type": "FnNode",
+      "blocking": true,
+      "reads": [
+        ".factory/outer_loop/population/"
+      ],
+      "writes": [
+        ".factory/outer_loop/population/",
+        ".factory/outer_loop/graph_state.json"
+      ],
+      "command": "python -m refactory_dsh.ops.outer_loop evaluate",
+      "notes": "Evaluate only individuals no earlier step evaluated."
+    },
+    "reflect": {
+      "id": "reflect",
+      "_type": "FnNode",
+      "blocking": true,
+      "reads": [
+        ".factory/outer_loop/population/"
+      ],
+      "writes": [
+        ".factory/outer_loop/proposal-request.md",
+        ".factory/outer_loop/gradient.json"
+      ],
+      "command": "python -m refactory_dsh.ops.outer_loop reflect",
+      "notes": "Reflect, then write the gradient the propose node answers."
+    },
+    "propose": {
+      "id": "propose",
+      "_type": "AgentNode",
+      "blocking": true,
+      "reads": [
+        ".factory/outer_loop/proposal-request.md",
+        ".factory/outer_loop/gradient.json"
+      ],
+      "writes": [
+        ".factory/outer_loop/proposals.json"
+      ],
+      "prompt_template": "You are the optimizer of this search loop. You decide what to try next.\n\n1. Read `.factory/outer_loop/proposal-request.md`. It contains the recent candidate\n   runs with links to their full trace summaries, the mechanical reflection, and the\n   knobs you may move (each with its kind, bounds and whether it is expandable).\n2. Read any trace summary you need for detail. Do not guess at numbers you can read:\n   every summary links to the raw artifacts of that run.\n3. Write `.factory/outer_loop/proposals.json` with this exact shape:\n\n{\"diagnosis\": \"<what the evidence shows is limiting the score>\",\n \"proposals\": [{\"knob\": \"<knob name>\", \"value\": \"<new value>\",\n                \"rationale\": \"<why, citing the evidence>\",\n                \"prediction\": \"<expected effect>\", \"confidence\": 0.0}]}\n\nRules:\n- Propose a small number of well-argued changes, not many guesses.\n- Vary which knob you move so the search learns which knob matters.\n- For a `topology` knob the value is the name of a structural operation\n  (for example `parallelize_next` or `params`), not a number.\n- If the evidence says a knob is saturated, either push it past its bounds (only when\n  the knob is marked expandable) or leave it and move another.\n- Your prediction is recorded and later checked against the outcome, so state what you\n  expect and how you could be wrong.\n\nIf the evidence does not justify any change, write a diagnosis with an empty proposals\nlist rather than guessing. Report back what you wrote.",
+      "role": "ceo"
+    },
+    "apply": {
+      "id": "apply",
+      "_type": "FnNode",
+      "blocking": true,
+      "reads": [
+        ".factory/outer_loop/proposals.json"
+      ],
+      "writes": [
+        ".factory/outer_loop/population/",
+        ".factory/outer_loop/graph_state.json"
+      ],
+      "command": "python -m refactory_dsh.ops.outer_loop apply",
+      "notes": "Validate the proposals, then evaluate the accepted offspring."
+    },
+    "gate_converge": {
+      "id": "gate_converge",
+      "_type": "GateNode",
+      "blocking": true,
+      "reads": [
+        ".factory/outer_loop/state.json",
+        ".factory/outer_loop/archive/"
+      ],
+      "writes": [],
+      "evaluator_type": "fn",
+      "evaluator_command": "python -m refactory_dsh.ops.outer_loop check_converge",
+      "max_iterations": 500
+    },
+    "promote": {
+      "id": "promote",
+      "_type": "FnNode",
+      "blocking": true,
+      "reads": [
+        ".factory/outer_loop/archive/"
+      ],
+      "writes": [],
+      "command": "python -m refactory_dsh.ops.outer_loop status",
+      "notes": "Report the best individual and archive state."
+    }
+  },
+  "edges": [
+    {
+      "source": "seed",
+      "target": "evaluate",
+      "condition": null
+    },
+    {
+      "source": "evaluate",
+      "target": "gate_converge",
+      "condition": null
+    },
+    {
+      "source": "gate_converge",
+      "target": "reflect",
+      "condition": "reloop"
+    },
+    {
+      "source": "gate_converge",
+      "target": "promote",
+      "condition": "proceed"
+    },
+    {
+      "source": "reflect",
+      "target": "propose",
+      "condition": null
+    },
+    {
+      "source": "propose",
+      "target": "apply",
+      "condition": null
+    },
+    {
+      "source": "apply",
+      "target": "evaluate",
+      "condition": null
+    }
+  ],
+  "start_node": "seed",
+  "terminal": true
+}
