@@ -8,7 +8,7 @@
  */
 
 import { readFileSync, existsSync, mkdirSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Command } from 'commander'
 import type { Context } from '@deepseek-ai/cordis'
@@ -41,8 +41,10 @@ const STATE_FILES: Record<string, string> = {
 }
 
 /** Resolve a dependency path from an explicit env override, else relative to
- * `REFACTORY_DSH_HOME`, else the workspace default. Keeps the science bundle
- * relocatable instead of baking an absolute machine path. */
+ * `REFACTORY_DSH_HOME` (the repo root), else relative to the checkout the CLI
+ * runs from. Keeps the science bundle self-contained instead of baking an
+ * absolute machine path: a fresh clone's `.venv` and vendored SRF graphs are
+ * found without the pre-consolidation `~/dsh/refactory-dsh` layout. */
 function resolveDep(override: string | undefined, homeRelative: string, fallback: string): string {
   if (override) return override
   const home = process.env.REFACTORY_DSH_HOME
@@ -50,8 +52,8 @@ function resolveDep(override: string | undefined, homeRelative: string, fallback
   return fallback
 }
 
-const DEFAULT_GRAPHS_DIR = resolveDep(process.env.SRF_GRAPHS, 'srf/graphs', join(homedir(), 'dsh/refactory-dsh/srf/graphs'))
-const DEFAULT_VENV_BIN = resolveDep(process.env.VENV_BIN, '.venv/bin', join(homedir(), 'dsh/refactory-dsh/.venv/bin'))
+const DEFAULT_GRAPHS_DIR = resolveDep(process.env.SRF_GRAPHS, 'refactory/vendor/srf/graphs', join(process.cwd(), 'refactory/vendor/srf/graphs'))
+const DEFAULT_VENV_BIN = resolveDep(process.env.VENV_BIN, '.venv/bin', join(process.cwd(), '.venv/bin'))
 
 /** Everything the run needs, resolved once from the command line. */
 export interface ScienceStartupValues {
