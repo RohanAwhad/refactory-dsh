@@ -196,8 +196,19 @@ def _emit_basic_loop() -> None:
             },
         },
     }
-    (modes / "circle_packing_loop.graph.json").write_text(json.dumps(graph, indent=2))
-    print(f"emitted {modes / 'circle_packing_loop.graph.json'}")
+    emitted = modes / "circle_packing_loop.graph.json"
+    emitted.write_text(json.dumps(graph, indent=2))
+    # Pin the optimizable surface here, at the only moment its author can still
+    # cheaply fix a knob that nothing reads (see refactory_dsh.knobs).
+    from refactory_dsh.knobs import pin
+
+    surface = pin(emitted)
+    print(json.dumps({
+        "emitted": str(emitted),
+        "optimizable_knobs": [k["name"] for k in surface["knobs"]],
+        "dead_knobs": [d["name"] for d in surface["dead"]],
+        "unverified_knobs": [u["name"] for u in surface["unverified"]],
+    }))
 
 
 def precheck() -> None:
