@@ -18,18 +18,25 @@ GLUE="$HERE/refactory"
 VENDOR="$GLUE/vendor"
 VENV="$HERE/.venv"
 
+# Node 22 is required (engines: ^22.19 || >=24); prefer the nvm install when
+# present so `node` resolves to a supported version regardless of PATH.
+if [ -x "$HOME/.nvm/versions/node/v22.23.2/bin/node" ]; then
+  export PATH="$HOME/.nvm/versions/node/v22.23.2/bin:$PATH"
+fi
+
 echo "== refactory-dsh install =="
 echo "  repo:  $HERE"
 
 # 1. vendored dependencies (refactory + SRF) as git submodules.
 git -C "$HERE" submodule update --init --recursive
 
-# 2. Node side: install the pnpm workspace (DSH).
+# 2. Node side: install the pnpm workspace (DSH), then build the client/host
+#    bundles the web GUI serves at launch.
 if ! command -v pnpm >/dev/null 2>&1; then
   echo "  error: pnpm not found — install Node >=22.19 + corepack, then retry" >&2
   exit 1
 fi
-(cd "$HERE" && pnpm install --frozen-lockfile)
+(cd "$HERE" && pnpm install --frozen-lockfile && pnpm run build)
 
 # 3. Python side: self-contained venv via uv (fast; `--seed` keeps pip in the
 #    venv so the create-v2 mode's `pip install -e <plugin>` step still works).

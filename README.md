@@ -45,7 +45,7 @@ cd <this-repo>
 `install.sh` does, in order:
 
 1. `git submodule update --init --recursive` — pulls refactory + SRF
-2. `pnpm install` — the DSH workspace
+2. `pnpm install` + `pnpm run build` — the DSH workspace and its client/host bundles
 3. `uv venv .venv --seed` — a self-contained venv (pip kept for the create-v2 mode)
 4. `uv pip install` the glue + the minimal semantics deps (pydantic, structlog, networkx, pyyaml, filelock)
 5. `uv pip install -e … --no-deps` links `factory` (refactory) and `srf` into the venv
