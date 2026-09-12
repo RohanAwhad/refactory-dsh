@@ -29,7 +29,7 @@ Three **meta-modes** ship as DSH presets:
 
 - **Node ≥ 22.19** (nvm `v22.23.2` is what it's built against)
 - **pnpm** (via corepack)
-- **Python ≥ 3.11** (for the venv)
+- **uv** (Python package manager — creates the venv; it manages its own Python ≥ 3.11)
 - **git** (with `--recurse-submodules`)
 
 ---
@@ -46,9 +46,9 @@ cd <this-repo>
 
 1. `git submodule update --init --recursive` — pulls refactory + SRF
 2. `pnpm install` — the DSH workspace
-3. creates a self-contained `.venv`
-4. `pip install` the glue + the minimal semantics deps (pydantic, structlog, networkx, pyyaml, filelock)
-5. links `factory` (refactory) and `srf` into the venv
+3. `uv venv .venv --seed` — a self-contained venv (pip kept for the create-v2 mode)
+4. `uv pip install` the glue + the minimal semantics deps (pydantic, structlog, networkx, pyyaml, filelock)
+5. `uv pip install -e … --no-deps` links `factory` (refactory) and `srf` into the venv
 6. regenerates the three agent presets + their `graph.json`
 
 No absolute paths are baked in — everything resolves from the repo root
