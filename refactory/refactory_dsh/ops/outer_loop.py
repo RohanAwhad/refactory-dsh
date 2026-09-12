@@ -47,7 +47,7 @@ from factory.outer_loop.population import MAPElitesArchive, Population
 from factory.outer_loop.similarity import NoveltyFilter, compute_features
 from factory.workflow.primitives import Workflow
 
-from refactory_dsh import report, steering, trace
+from refactory_dsh import knobs, report, steering, trace
 from refactory_dsh.model import DshModelClient
 from refactory_dsh.paths import dsh_root, node_bin, python, srf_graphs, venv_bin
 from refactory_dsh.trace import FileTraceSource
@@ -299,6 +299,9 @@ def build_engine(config: SwarmConfig, evaluator_fn, project_dir: Path | None = N
     An unknown name fails loud rather than silently falling back: running the
     wrong optimizer invalidates every result of the run.
     """
+    # Refuse to search a mode with nothing to optimize, and report a surface that
+    # has shrunk since the mode was created.
+    knobs.require_surface(Path(os.environ.get("REFACTORY_TARGET_GRAPH", str(DEFAULT_TARGET))))
     evaluator = SwarmEvaluator(config, evaluator_fn=evaluator_fn, project_dir=project_dir)
     novelty = NoveltyFilter(min_edit_distance=3)
     settings = steering.load(Path(project_dir or Path.cwd()))
