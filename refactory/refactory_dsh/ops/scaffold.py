@@ -66,13 +66,37 @@ def graph_update() -> None:
 
 
 def _emit_basic_loop() -> None:
-    """Write a minimal circle-packing inner loop as the created mode's IR.
+    """Write the circle-packing inner loop as the created mode's IR.
 
-    create-v2 produces this *basic* loop (generate → eval → accept, budget-gated)
-    with two `OptKnob`s — `temperature` and `acceptance_mode` — so the outer loop
-    has real declared knobs to mutate. The deterministic nodes reuse SRF's ops
-    (which the science runner already drives); the LLM node writes `candidate.py`.
+    create-v2 produces this loop — seed the loop state, select a parent, generate
+    a candidate, consult the budget gate, then evaluate the candidate and accept or
+    reject it — with one `OptKnob`, `acceptance_mode`, so the outer loop has a real
+    declared knob to mutate. The deterministic nodes reuse SRF's ops (which the
+    science runner already drives); the LLM node writes `candidate.py`.
+
+    The gate sits immediately downstream of `generate`, the only node the driver is
+    ever handed, so a repeated completion report of that node re-advances the walk
+    onto the gate — a pure read of `budget_state.json` (`budget.py:62-76`) — rather
+    than onto `eval`, which would evaluate the same candidate a second time.
     """
+    generate_brief = (
+        "Write candidate.py: a complete Python module defining solve(n: int, radii: list[float]) "
+        "-> list[tuple[float, float]] that returns exactly n (x, y) centres inside the unit square. "
+        "Start from the parent program in selected_parent.json and change it to score higher than that "
+        "parent's recorded score. The module must import cleanly and must not import os or subprocess, "
+        "open files, or run shell commands."
+    )
+    # `seed_run` writes the six loop-state files and `accept` rewrites them; one
+    # list keeps the two declarations from drifting apart.
+    loop_state = [
+        "accepted_history.json", "best_solution.py", "genealogy.json",
+        "gepa_state.json", "population.json", "rejection_history.json",
+    ]
+    # `accept` also appends the two JSONL traces unconditionally on entry
+    # (`acceptance.py:44-45`). `run_eval` is the only consumer of a declared write
+    # list (`sandbox.py:50-55`) and it selects the alphabetically-first `.json`; a
+    # `.jsonl` name never matches that suffix, and `accept` runs no `run_eval`.
+    accept_writes = loop_state + ["candidates.jsonl", "evaluations.jsonl"]
     modes = FACTORY / "modes"
     modes.mkdir(parents=True, exist_ok=True)
     graph = {
@@ -83,27 +107,56 @@ def _emit_basic_loop() -> None:
                 "writes": ["task.yaml", "eval.py", "initial.py", "knobs.json", "budget_state.json"],
                 "command": "python -m srf.ops.common.task_input", "_type": "FnNode",
             },
+            "seed_run": {
+                "id": "seed_run", "reads": [], "blocking": True,
+                "writes": loop_state,
+                "command": "python -m srf.ops.common.seed accepted_history.json best_solution.py "
+                           "genealogy.json gepa_state.json population.json rejection_history.json",
+                "_type": "FnNode",
+            },
+            "select_parent": {
+                "id": "select_parent", "reads": ["gepa_state.json", "population.json"], "blocking": True,
+                # `select_parent` also saves the state it just loaded (`population.py:28-30` →
+                # `state.py:33-34`). `run_eval` is the only consumer of a declared write list
+                # (`sandbox.py:50-55`) and this node does not run it.
+                "writes": ["gepa_state.json", "selected_parent.json"],
+                "command": "python -m srf.ops.run srf.ops.gepa.population:select_parent",
+                "_type": "FnNode",
+            },
             "generate": {
-                "id": "generate", "reads": ["task.yaml", "initial.py"],
-                "writes": ["candidate.py"], "blocking": True, "system_prompt": "",
-                "instance_prompt": "Write candidate.py to solve the task.", "temperature": 0.7,
+                "id": "generate",
+                "reads": ["task.yaml", "initial.py", "selected_parent.json", "rejection_history.json"],
+                "writes": ["candidate.py"], "blocking": True, "system_prompt": generate_brief,
+                "instance_prompt": "", "temperature": 0.7,
                 "_type": "LLMNode",
             },
             "eval": {
-                "id": "eval", "reads": ["candidate.py"], "writes": ["score.json", "budget_state.json"],
+                # `run_eval` picks its result file as the alphabetically-first `.json` write
+                # (`sandbox.py:50-55`), so `budget_state.json` — which this node also rewrites
+                # through `record_eval` (`sandbox.py:88-89` → `budget.py:37-40`) — must NOT be
+                # declared: it sorts before `eval_result.json`, the score clobbers the counter
+                # and `record_eval` raises `KeyError: 'eval_count'`. `budget.jsonl` does not end
+                # in `.json`, so declaring it is selection-safe. The same op reads the counter
+                # (`budget.py:38`), so `budget_state.json` is declared as a read instead;
+                # `task_input` is its only writer and always precedes this node.
+                "id": "eval", "reads": ["budget_state.json", "candidate.py", "task.yaml"],
+                "writes": ["budget.jsonl", "eval_result.json"],
                 "blocking": True,
                 "command": "python -m srf.ops.run srf.ops.common.sandbox:run_eval", "_type": "FnNode",
             },
             "accept": {
-                "id": "accept", "reads": ["score.json"], "writes": [], "blocking": True,
-                "evaluator_type": "fn",
-                "evaluator_command": "python -m srf.ops.run srf.ops.gepa.acceptance:accept_or_reject",
-                "_type": "GateNode",
+                "id": "accept", "blocking": True,
+                "reads": ["candidate.py", "eval_result.json", "genealogy.json", "gepa_state.json",
+                          "population.json", "selected_parent.json"],
+                "writes": accept_writes,
+                "command": "python -m srf.ops.run srf.ops.gepa.acceptance:accept_or_reject",
+                "_type": "FnNode",
             },
             "budget_check": {
                 "id": "budget_check", "reads": ["budget_state.json"], "writes": [], "blocking": True,
                 "evaluator_type": "fn",
                 "evaluator_command": "python -m srf.ops.common.budget check",
+                "max_iterations": 500,
                 "_type": "GateNode",
             },
             "exit": {
@@ -111,29 +164,35 @@ def _emit_basic_loop() -> None:
                 "command": "true", "_type": "FnNode",
             },
         },
+        # Every non-gate node has exactly one outgoing edge and it is unconditional:
+        # `advance()` replaces a completed node with its `unconditionalTarget`, so a
+        # non-gate node whose only out-edges are conditional ends the walk `done`.
+        # The reloop lands on `eval`, and `uncompleteBetween(eval, budget_check)`
+        # (`spine.ts:234-257`) un-completes `eval`, `accept`, `select_parent` and
+        # `generate`, so `select_parent` re-runs on every iteration and the incumbent
+        # in `selected_parent.json` stays live for the next `accept`.
         "edges": [
-            {"source": "task_input", "target": "generate", "condition": None},
-            {"source": "generate", "target": "eval", "condition": None},
+            {"source": "task_input", "target": "seed_run", "condition": None},
+            {"source": "seed_run", "target": "select_parent", "condition": None},
+            {"source": "select_parent", "target": "generate", "condition": None},
+            {"source": "generate", "target": "budget_check", "condition": None},
             {"source": "eval", "target": "accept", "condition": None},
-            {"source": "accept", "target": "budget_check", "condition": "proceed"},
-            {"source": "accept", "target": "generate", "condition": "reloop"},
-            {"source": "budget_check", "target": "generate", "condition": "reloop"},
+            {"source": "accept", "target": "select_parent", "condition": None},
+            {"source": "budget_check", "target": "eval", "condition": "reloop"},
             {"source": "budget_check", "target": "exit", "condition": "proceed"},
         ],
         "start_node": "task_input",
         "terminal": True,
-        "knob_values": {"temperature": 0.7, "acceptance_mode": "strict"},
-        "knob_bounds": {"temperature": [0.3, 0.5, 0.7, 0.9, 1.0], "acceptance_mode": ["strict", "lenient"]},
+        "knob_values": {"acceptance_mode": "strict"},
+        "knob_bounds": {"acceptance_mode": ["strict", "lenient", "off"]},
         "knob_specs": {
-            "temperature": {
-                "kind": "threshold", "node_id": "generate", "default": 0.7,
-                "bounds": [0.3, 0.5, 0.7, 0.9, 1.0], "expandable": False,
-                "expansion_hint": "", "description": "LLM sampling temperature",
-            },
             "acceptance_mode": {
                 "kind": "prompt", "node_id": "accept", "default": "strict",
-                "bounds": ["strict", "lenient"], "expandable": False,
-                "expansion_hint": "", "description": "acceptance strictness",
+                "bounds": ["strict", "lenient", "off"], "expandable": False,
+                "expansion_hint": "",
+                "description": "acceptance strictness: consumed by srf.ops.gepa.acceptance via SRF_KNOBS; "
+                               "live only when the value is delivered with --knobs (the outer loop does; "
+                               "a direct science run passes {})",
             },
         },
     }
