@@ -175,3 +175,6 @@ independently.
   Its tests `importorskip("numpy")`, so the suite passes without it.
 - The logo is an inlined downscale of `remote-factory/docs/assets/refactory_logo.png`;
   refresh it in `packages/client/ui-brand-refactory/src/client/logo.ts` if upstream changes.
+- Ships as **repo + `install.sh`**, not a single binary — bundling Node + Python
+  runtimes into one per-platform executable was considered and deferred; the
+  repo is already self-contained and installable.
