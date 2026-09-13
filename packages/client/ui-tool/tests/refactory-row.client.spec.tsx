@@ -207,7 +207,7 @@ describe('refactoryCardModel', () => {
       callId: 'c1', name: 'refactory', argsRaw: JSON.stringify({ action: 'modes' }),
       turn: 1, step: 1, time: 1, subCalls: [],
     }
-    const card = refactoryCardModel(running as never, t)!
+    const card = refactoryCardModel(running, t)!
     expect(card.title).toBe('refactory 运行 modes')
     expect(card.body).toEqual([])
   })
