@@ -31,6 +31,7 @@ This table connects model-visible tool names to the plugin package and service s
 | `@deepseek-ai/dsh-schedule` | `schedule_create`, `schedule_delete`, `schedule_list` | `ctx.tools`, `ctx.sessions`, `Session persistence`, `a future live root Agent` | `tool/call`, `schedule/change create or delete`, `tool/result` | - | Registered only inside live root Agent scopes created after the opt-in Schedule plugin loads. Version 1 accepts after_seconds, explicit absolute at, and bounded fixed-rate every_seconds, and discloses session-local delivery; management reads and mutations require the shared Session persistence barrier. |
 | `@deepseek-ai/dsh-tool-lsp` | `lsp` | `ctx.tools`, `ctx.lsp`, `ctx.systemPrompt` | `tool/call`, `tool/result` | - | The lsp tool keeps provider selection and language-server subprocesses behind ctx.lsp, so its model-visible schema stays stable across providers. Requires a registered provider (e.g. `@deepseek-ai/dsh-lsp-stdio`) at runtime; without one, a query returns the structured `LSP_UNAVAILABLE` error rather than changing the schema. |
 | `@deepseek-ai/dsh-tool-ralph` | `ralph` | `ctx.tools`, `ctx.workflowEngine`, `ctx.subagents`, `ctx.systemPrompt`, `a calling Agent (exec.agent parents every fresh round)` | `tool/call`, `tool/result`, `workflow and child session events during execution` | - | A fixed foreground workflow starts one fresh structured child per round; the model selects only the immutable objective and an optional round cap. |
+| `@deepseek-ai/dsh-tool-refactory` | `refactory` | `ctx.tools`, `ctx.subprocess`, `ctx.systemPrompt`, `a python with refactory_dsh installed, reachable at the configured interpreter path` | `tool/call`, `tool/result` | - | One action per console verb; every action returns the console's JSON, which the result projects through `output.presentationMeta` for the browser card. Starting a run spawns a process that outlives the call, so a run continues after the session ends. |
 | `@deepseek-ai/dsh-tool-skill` | `skill` | `ctx.tools`, `ctx.agents`, `ctx.skills` | `tool/call`, `tool/result`, `user/message replacement catalogs via agent.inject()` | - | - |
 | `@deepseek-ai/dsh-tool-session-query` | `session_event_read`, `session_event_search`, `session_event_trace`, `session_search`, `session_trace` | `ctx.tools`, `ctx.systemPrompt`, `ctx.sessionQuery`, `a calling Agent for workspace authority` | `tool/call`, `tool/result` | - | The five read-only tools hide provider cursors and authorize every result from the immutable calling agent session. The package is opt-in; compositions that need enforced deadlines or bounded inline output also mount the generic timeout or spill policies. |
 | `@deepseek-ai/dsh-tool-subagent` | `list_subagent_models`, `subagent` | `ctx.tools`, `ctx.subagents`, `ctx.systemPrompt`, `ctx.llm for model discovery and selected-route validation` | `tool/call`, `tool/result`, `child session events through the chosen provider` | `subagent`, `subagent_fork` | The registered delegation name is the load-time `toolName` config (default `subagent`); the default schema above has model selection off, while the discovery schema is shown as the fixed companion available in an enabled Session. Web presets sample the Plugins preference for each new top-level Session and preserve that decision for its child Sessions; `subagent_fork` remains fixed-route. Each instance independently controls whether it reads model-selection settings and its background behavior through `modelSelectionSettings`, `backgroundMode`, and `enableRunInBackground`. |
@@ -1271,6 +1272,89 @@ Run a foreground fresh-agent Ralph loop toward one immutable objective. Use only
 Source: [`packages/workflow/tool-ralph/src/index.ts`](../packages/workflow/tool-ralph/src/index.ts)
 
 A fixed foreground workflow starts one fresh structured child per round; the model selects only the immutable objective and an optional round cap.
+
+<a id="deepseek-aidsh-tool-refactory"></a>
+
+## `@deepseek-ai/dsh-tool-refactory`
+
+### `refactory`
+
+Drive and read a refactory outer-loop run: the optimizer loop that proposes edits to a mode,
+evaluates them, and keeps what improves the score. Use it to start a run, watch it while it is
+in flight, and read what it produced.
+
+Actions: modes (List the modes a run can be started from, with their parameters.) runs (List runs under the run root, newest first.) start (Start a run in its own process; returns the run id to watch it with.) status (Where a run is, and the events since an offset.) artifacts (What a run left on disk, optionally with contents.) leaderboard (The run's candidates by score, each with its diff against its parent.) candidate (One candidate, with what it changed against the parent it came from.) stop (Ask a run to stop.)
+
+The loop runs in its own process, so a run continues after the call returns and after the
+session ends; watch it with action "status" and an "after" offset. Prefer this tool over
+running the loop in a shell: it is the same console the Web view renders, and a run started
+in a shell will not appear in the view unless it lives under the run root.
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "description": "The verb. modes: List the modes a run can be started from, with their parameters. runs: List runs under the run root, newest first. start: Start a run in its own process; returns the run id to watch it with. status: Where a run is, and the events since an offset. artifacts: What a run left on disk, optionally with contents. leaderboard: The run's candidates by score, each with its diff against its parent. candidate: One candidate, with what it changed against the parent it came from. stop: Ask a run to stop.",
+      "enum": [
+        "modes",
+        "runs",
+        "start",
+        "status",
+        "artifacts",
+        "leaderboard",
+        "candidate",
+        "stop"
+      ]
+    },
+    "mode": {
+      "type": "string",
+      "description": "Mode to run, as <package>/<name>. Required by action \"start\"."
+    },
+    "run": {
+      "type": "string",
+      "description": "The run id or absolute run directory. Required by status, artifacts, leaderboard, candidate, stop."
+    },
+    "runId": {
+      "type": "string",
+      "description": "Run id to claim, for action \"start\" (default: derived from the mode and the time)."
+    },
+    "candidate": {
+      "type": "string",
+      "description": "Candidate id to read. Required by action \"candidate\"."
+    },
+    "after": {
+      "type": "integer",
+      "description": "For action \"status\": only return events after this many progress lines, so a poll reads what is new."
+    },
+    "contents": {
+      "type": "boolean",
+      "description": "For action \"artifacts\": include each artifact's contents."
+    },
+    "limit": {
+      "type": "integer",
+      "description": "For action \"runs\"/\"leaderboard\": how many rows to return."
+    },
+    "runsRoot": {
+      "type": "string",
+      "description": "Directory holding the runs (default: <repoRoot>/.factory/loop)."
+    },
+    "settings": {
+      "type": "object",
+      "description": "Run settings for action \"start\": epochs, batch_size, optimizer, strategy, evaluator, seed, elite, attempts, preset, max_evaluations. Passed through as console flags.",
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "action"
+  ]
+}
+```
+
+Source: [`packages/refactory/tool-refactory/src/index.ts`](../packages/refactory/tool-refactory/src/index.ts)
+
+One action per console verb; every action returns the console's JSON, which the result projects through `output.presentationMeta` for the browser card. Starting a run spawns a process that outlives the call, so a run continues after the session ends.
 
 <a id="deepseek-aidsh-tool-skill"></a>
 

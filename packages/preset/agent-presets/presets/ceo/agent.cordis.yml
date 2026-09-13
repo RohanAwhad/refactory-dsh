@@ -233,6 +233,18 @@
         subagentProvider: spawn
         maxRounds: 64
 
+    # ── the outer loop ──────────────────────────────────────────────────────
+    # The optimizer loop is a Python program in the checkout; this row is the
+    # whole DSH-side surface over it. It runs `python -m refactory_dsh.console`
+    # through the host's subprocess capability, so a run started from the Web
+    # view is the same run a shell would start, and the browser card reads the
+    # same JSON. `repoRoot` is resolved at boot so a checkout elsewhere needs
+    # one edit here rather than an environment variable per launch.
+    - id: tool-refactory
+      name: '@deepseek-ai/dsh-tool-refactory'
+      config:
+        repoRoot: !!js process.cwd()
+
 # ── remaining model-facing rows ─────────────────────────────────────────────
 
 - id: tool-ask-user

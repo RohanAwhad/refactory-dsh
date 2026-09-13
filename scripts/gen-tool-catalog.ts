@@ -66,6 +66,7 @@ import { registerListSubagentModels } from '../packages/subagent/tool-subagent/s
 import * as ToolWeb from '@deepseek-ai/dsh-tool-web'
 import VmWorkflowEngine from '@deepseek-ai/dsh-workflow-worker-thread'
 import * as ToolRalph from '@deepseek-ai/dsh-tool-ralph'
+import * as ToolRefactory from '@deepseek-ai/dsh-tool-refactory'
 import * as ToolWorkflow from '@deepseek-ai/dsh-tool-workflow'
 import { githubSlug } from './verify-md-links.ts'
 
@@ -422,6 +423,19 @@ const TOOL_PACKAGES: ToolPackage[] = [
     },
     note:
       'A fixed foreground workflow starts one fresh structured child per round; the model selects only the immutable objective and an optional round cap.',
+  },
+  {
+    pkg: '@deepseek-ai/dsh-tool-refactory',
+    dir: 'tool-refactory',
+    source: 'packages/refactory/tool-refactory/src/index.ts',
+    requires: ['ctx.tools', 'ctx.subprocess', 'ctx.systemPrompt', 'a python with refactory_dsh installed, reachable at the configured interpreter path'],
+    writes: ['tool/call', 'tool/result'],
+    async mount(ctx) {
+      await ctx.plugin(LocalSubprocessRuntime)
+      await ctx.plugin(ToolRefactory, { pythonBin: '/nonexistent/bin', repoRoot: '/nonexistent' })
+    },
+    note:
+      'One action per console verb; every action returns the console\'s JSON, which the result projects through `output.presentationMeta` for the browser card. Starting a run spawns a process that outlives the call, so a run continues after the session ends.',
   },
   {
     pkg: '@deepseek-ai/dsh-tool-skill',
