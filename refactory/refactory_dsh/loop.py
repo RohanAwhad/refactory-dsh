@@ -25,6 +25,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
+from refactory_dsh import history as run_history
 from refactory_dsh import registry
 from refactory_dsh.nn import Knob, PackageError
 from refactory_dsh.nn import edits as nn_edits
@@ -64,6 +65,11 @@ class LoopConfig:
     attempts: int = 3
     #: Knobs the operator freezes for this run, whatever the candidate says.
     frozen: tuple[str, ...] = ()
+    #: How many evaluated candidates the optimizer is shown. Bounded on purpose:
+    #: an unbounded history in a prompt is how a search stops thinking.
+    history_limit: int = 200
+    #: How many previous runs to summarise as a prior.
+    prior_runs: int = 3
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -193,7 +199,7 @@ class Loop:
         for edit in edits:
             proposal = Proposal(edit=edit, parent=seed.id, rationale="starting population")
             outcome = sampler.attempt(
-                proposal, seed, self.invariants, True, self.config.frozen
+                proposal, seed, self.invariants, True, self.config.frozen, self._tried()
             )
             if isinstance(outcome, Candidate):
                 self.population.append(outcome)
@@ -398,6 +404,7 @@ class Loop:
             parents=parents,
             invariants=self.invariants,
             preset=self.config.edit_preset,
+            seen=self._tried(),
         )
         self.rejections.extend(rejections)
         for candidate in candidates:
@@ -452,6 +459,20 @@ class Loop:
         added: list[Candidate] = []
         for candidate in candidates:
             if candidate.id in known:
+                # The optimizer's loop refuses these now, so reaching here means a
+                # strategy bypassed it. Record it rather than losing the slot in
+                # silence: a batch that tried fewer points than it claimed is a
+                # result nobody can trust.
+                self.rejections.append(
+                    Rejection(
+                        attempt=0,
+                        edit=candidate.edits[-1] if candidate.edits else {},
+                        reasons=[
+                            "E-duplicate: the candidate's state already exists, so its "
+                            "batch slot was lost"
+                        ],
+                    )
+                )
                 continue
             known.add(candidate.id)
             self.population.append(candidate)
@@ -678,6 +699,12 @@ class Loop:
             nodes=described["nodes"],
             edges=described["edges"],
             leaderboard=[c.describe() for c in board],
+            history=self._history(),
+            tried=self._tried(),
+            history_truncated=self._history_truncated(),
+            prior_runs=run_history.prior_summaries(
+                self.root.parent, limit=self.config.prior_runs, exclude=self.root
+            ),
             traces=[self.gradient] if self.gradient else [],
             catalogue=nn_edits.catalogue(self.config.edit_preset),
             insertable=[node.to_state() for node in self.mode.insertable()],
@@ -687,6 +714,18 @@ class Loop:
             ],
             preset=self.config.edit_preset,
         )
+
+    def _tried(self) -> list[str]:
+        """Every state id that exists, so a duplicate can be refused."""
+        return sorted(candidate.id for candidate in self.population)
+
+    def _history(self) -> list[dict[str, Any]]:
+        """The evaluated candidates, newest last, bounded."""
+        evaluated = [c.describe() for c in self.population if c.evaluated]
+        return evaluated[-self.config.history_limit :]
+
+    def _history_truncated(self) -> bool:
+        return sum(1 for c in self.population if c.evaluated) > self.config.history_limit
 
     # ── persistence ────────────────────────────────────────────────────────
     def _write(self, name: str, payload: Any) -> Path:

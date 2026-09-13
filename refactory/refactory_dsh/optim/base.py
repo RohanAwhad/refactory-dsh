@@ -139,6 +139,16 @@ class ProposalContext:
     catalogue: list[dict[str, Any]] = field(default_factory=list)
     insertable: list[dict[str, Any]] = field(default_factory=list)
     rejections: list[dict[str, Any]] = field(default_factory=list)
+    #: Every evaluated candidate this run, bounded. An optimizer that can only see
+    #: the top few cannot ask "have I tried this?", and the base class cannot refuse
+    #: a duplicate without knowing what already exists.
+    history: list[dict[str, Any]] = field(default_factory=list)
+    #: The state ids that already exist, so a proposal recreating one can be refused
+    #: instead of silently consuming a batch slot.
+    tried: list[str] = field(default_factory=list)
+    history_truncated: bool = False
+    #: Summaries of previous runs, so a strategy can carry a prior across runs.
+    prior_runs: list[dict[str, Any]] = field(default_factory=list)
     #: Knobs the operator has frozen for this run, on top of the ones the mode
     #: itself declares frozen. Freezing is a property of the run, not of the mode,
     #: so it cannot be edited into the definition by a candidate.
@@ -188,6 +198,45 @@ class ProposalContext:
             _table(["what", "value"],
                    [[str(k), json.dumps(v, default=str)] for k, v in _flatten(self.traces)]),
         ]
+        sections += [
+            "",
+            "## What this run has already tried",
+            (
+                f"{len(self.history)} candidate(s), best "
+                f"{max((c.get('score') or 0.0) for c in self.history):.6g}"
+                if self.history
+                else "(nothing evaluated yet)"
+            )
+            + (
+                " — older candidates omitted, so do not assume the list is complete"
+                if self.history_truncated
+                else ""
+            ),
+            _table(
+                ["id", "parent", "score", "structural", "ok", "edits"],
+                [
+                    [c.get("id"), c.get("parent"), c.get("score"), c.get("structural"),
+                     c.get("exit_ok"), json.dumps(c.get("edits"), default=str)]
+                    for c in self.history[-16:]
+                ],
+            ),
+        ]
+        if self.prior_runs:
+            sections += [
+                "",
+                "## Previous runs of this mode",
+                "What earlier searches already settled, so it does not have to be "
+                "rediscovered:",
+                _table(
+                    ["path", "optimizer", "seed", "best", "bound", "best edits"],
+                    [
+                        [r.get("path"), r.get("optimizer"), r.get("seed_score"),
+                         r.get("best_score"), r.get("bound"),
+                         json.dumps(r.get("best_edits"), default=str)]
+                        for r in self.prior_runs
+                    ],
+                ),
+            ]
         if self.rejections:
             sections += [
                 "",
@@ -277,6 +326,7 @@ class Optimizer:
         invariants: tuple[Invariant, ...] = (),
         preset: str = "broad",
         resolve_calls: bool = True,
+        seen: Sequence[str] | None = None,
     ) -> tuple[list[Candidate], list[Rejection]]:
         """Propose until ``n`` valid candidates exist, or the attempts run out.
 
@@ -311,7 +361,7 @@ class Optimizer:
                     break
                 parent = self._pick_parent(proposal, parents)
                 outcome = self.attempt(
-                    proposal, parent, invariants, resolve_calls, ctx.frozen
+                    proposal, parent, invariants, resolve_calls, ctx.frozen, seen
                 )
                 if isinstance(outcome, Candidate):
                     accepted.append(outcome)
@@ -345,6 +395,7 @@ class Optimizer:
         invariants: tuple[Invariant, ...],
         resolve_calls: bool,
         frozen: Sequence[str] | None = None,
+        seen: Sequence[str] | None = None,
     ) -> Candidate | list[str]:
         """Apply and validate one proposal: a candidate, or the reasons it failed.
 
@@ -375,6 +426,15 @@ class Optimizer:
             return [
                 f"E-noop: {proposal.edit.get('op')} leaves the state identical to its "
                 "parent, so it would re-evaluate a candidate already scored"
+            ]
+
+        if candidate_id(state) in set(seen or ()):
+            # Without this the proposal passes every gate and is then dropped
+            # silently by the loop, which loses the batch slot and makes the run
+            # report a batch it did not actually try.
+            return [
+                "E-duplicate: this state already exists in the search, so evaluating it "
+                "again would spend a batch slot on a point already scored"
             ]
 
         issues = validate_state(state, invariants=invariants, resolve_calls=resolve_calls)

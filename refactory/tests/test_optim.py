@@ -396,3 +396,53 @@ def test_a_real_change_is_still_accepted():
         _context(mode), 1, parents=parents, invariants=mode.invariants()
     )
     assert len(candidates) == 1 and not rejections
+
+
+# ── history and the duplicate refusal (the history issue) ──────────────────
+def test_a_proposal_that_recreates_an_existing_state_is_refused():
+    """Not just the parent's state: anything the search already holds."""
+    mode = _mode()
+    seed = mode.state_dict()
+    moved = nn.edits.apply({"op": "set_knob", "name": "order", "value": "asc"}, seed)
+    parent = Candidate.from_state(moved)
+    existing = Candidate.from_state(seed)
+    optimizer = ScriptedOptimizer(
+        [{"op": "set_knob", "name": "order", "value": seed["knobs"]["order"]["value"]}],
+        k=1,
+    )
+    candidates, rejections = optimizer.propose_valid(
+        _context(mode), 1, parents=[parent], invariants=mode.invariants(),
+        seen=[parent.id, existing.id],
+    )
+    assert candidates == []
+    assert rejections[0].codes() == ["E-duplicate"]
+    assert "already exists" in rejections[0].reasons[0]
+
+
+def test_a_duplicate_is_still_refused_without_the_seen_set():
+    """Defence in depth: the loop always passes seen, but the gate stands alone."""
+    mode = _mode()
+    seed = mode.state_dict()
+    parent = Candidate.from_state(seed)
+    currently = seed["knobs"]["order"]["value"]
+    optimizer = ScriptedOptimizer(
+        [{"op": "set_knob", "name": "order", "value": currently}], k=1
+    )
+    _candidates, rejections = optimizer.propose_valid(
+        _context(mode), 1, parents=[parent], invariants=mode.invariants()
+    )
+    assert rejections[0].codes() == ["E-noop"], (
+        "the parent's own state is a no-op, which is the more specific refusal"
+    )
+
+
+def test_a_new_state_is_not_refused_as_a_duplicate():
+    mode = _mode()
+    seed = mode.state_dict()
+    parent = Candidate.from_state(seed)
+    optimizer = ScriptedOptimizer([{"op": "set_knob", "name": "order", "value": "asc"}], k=1)
+    candidates, rejections = optimizer.propose_valid(
+        _context(mode), 1, parents=[parent], invariants=mode.invariants(),
+        seen=[parent.id],
+    )
+    assert len(candidates) == 1 and not rejections
