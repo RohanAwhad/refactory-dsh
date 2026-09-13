@@ -129,6 +129,180 @@ def _reference(extends: str) -> str:
     return "\n\n".join(blocks)
 
 
+STRATEGY_SCHEMA = """\
+Write one JSON object and nothing else:
+
+{"considered": [{"approach": "...", "why_not": "..."}],
+ "chosen": "<the approach>",
+ "why": "<why it wins>",
+ "will_not": ["<something deliberately out of scope>"],
+ "closest_existing": "<package>/<mode>, or 'none'",
+ "knobs": [{"name": "...", "kind": "int|float|bool|str|enum", "default": ...,
+            "lo": null, "hi": null, "enum": [], "description": "..."}],
+ "nodes": [{"id": "...", "kind": "op|agent|gate",
+            "call": "<module>:<function>  (op and agent only)",
+            "evaluator": "<module>:<function>  (gate only, instead of call)",
+            "reads": [], "writes": [], "produces": [], "knobs": [],
+            "notes": "..."}],
+ "edges": [{"source": "...", "target": "...", "condition": null}],
+ "start": "<node id>",
+ "score": "<which produced fact score() reads, and why that is the right number>"}
+
+Rules:
+- At least two approaches in `considered`. One approach is not a choice.
+- `nodes` and `edges` describe the graph you intend to write, so it can be checked
+  before any code exists. Use the operations declared in `knobs` on the nodes that
+  consume them.
+- Every read must be written by some node, and every declared knob consumed.
+- `closest_existing` must name a mode from the survey, or be 'none' if none is close.
+"""
+
+
+def survey(ctx: Any) -> dict[str, Any]:
+    """What already exists, before anything is invented.
+
+    Cheap and deterministic, and it makes "does this already exist?" a question the
+    system can answer instead of a question nobody asked. Without it, `--extends` is
+    the only reuse channel and it is manual.
+    """
+    installed: list[dict[str, Any]] = []
+    for name in registry.discover_names(Path.cwd()):
+        try:
+            package = registry.load(name, Path.cwd())
+        except PackageError as exc:
+            installed.append({"package": name, "problem": str(exc)})
+            continue
+        entry: dict[str, Any] = {
+            "package": name,
+            "description": package.description,
+            "requires": list(package.requires),
+            "modes": [],
+        }
+        for mode_class in package.modes:
+            try:
+                mode = mode_class()
+            except Exception as exc:
+                entry["modes"].append({"name": mode_class.name, "problem": str(exc)})
+                continue
+            entry["modes"].append({
+                "id": f"{name}/{mode_class.name}",
+                "description": getattr(mode_class, "description", ""),
+                "knobs": sorted(mode.parameters()),
+                "nodes": sorted(mode.graph().nodes),
+            })
+        installed.append(entry)
+
+    ctx.write_json("survey.json", {"packages": installed})
+    lines = ["Existing packages and what they offer:", ""]
+    for entry in installed:
+        lines.append(f"- {entry['package']}: {entry.get('description', '')}")
+        for mode in entry.get("modes", ()):
+            if "problem" in mode:
+                lines.append(f"    {mode['name']} (unusable: {mode['problem']})")
+                continue
+            lines.append(
+                f"    {mode['id']}: knobs {mode['knobs']}; nodes {mode['nodes']}"
+            )
+    return {"survey": "\n".join(lines), "existing": [e["package"] for e in installed]}
+
+
+def review_design(ctx: Any) -> str:
+    """Gate: check the intended graph before any code is written.
+
+    Catching a bad design here is far cheaper than catching bad code at `emit`, and
+    it needs no new machinery: it is the same validator the loop uses, applied to
+    the design's declared nodes and knobs rather than to a built graph. Calls are not
+    resolved, because the package that will define them does not exist yet.
+    """
+    raw = ctx.read_text("strategy.json")
+    attempts_allowed = int(ctx.knob("design_attempts", 2))
+    problems = _review(raw)
+    used = int(ctx.facts.get("design_attempts_used", 0)) + 1
+    report = "\n".join(f"- {problem}" for problem in problems)
+    ctx.write_text("strategy-review.txt", report or "ok\n")
+    ctx.set_fact("design_review", report or "(the intended design is coherent)")
+    if not problems:
+        return "proceed"
+    if used >= attempts_allowed:
+        raise ValueError(
+            f"the design is still not coherent after {used} attempt(s):\n{report}"
+        )
+    ctx.set_fact("design_attempts_used", used)
+    return "reloop"
+
+
+def _review(raw: str) -> list[str]:
+    from refactory_dsh.nn import Graph, Issue, Knob, validate
+
+    try:
+        payload = json.loads(raw[raw.index("{"): raw.rindex("}") + 1])
+    except (ValueError, json.JSONDecodeError) as exc:
+        return [f"the strategy answer is not a JSON object: {exc}"]
+
+    problems: list[str] = []
+    considered = payload.get("considered") or []
+    if len(considered) < 2:
+        problems.append(
+            f"only {len(considered)} approach was considered; a choice needs at least two"
+        )
+    for field in ("chosen", "why", "score"):
+        if not str(payload.get(field) or "").strip():
+            problems.append(f"the strategy says nothing about {field!r}")
+
+    existing = set(ctx_existing())
+    closest = str(payload.get("closest_existing") or "none")
+    if closest != "none" and closest not in existing:
+        problems.append(
+            f"closest_existing names {closest!r}, which is not an installed mode; "
+            f"known: {sorted(existing)}"
+        )
+
+    knobs: dict[str, Knob] = {}
+    for entry in payload.get("knobs") or ():
+        try:
+            knobs[str(entry["name"])] = Knob.from_spec({
+                "default": entry.get("default"),
+                "kind": entry.get("kind", "float"),
+                "lo": entry.get("lo"),
+                "hi": entry.get("hi"),
+                "enum": entry.get("enum") or [],
+                "frozen": entry.get("frozen", False),
+                "description": entry.get("description", ""),
+            })
+        except Exception as exc:
+            problems.append(f"knob {entry.get('name')!r} is not valid: {exc}")
+    if not knobs:
+        problems.append("the strategy declares no knobs, so there is nothing to optimize")
+
+    try:
+        graph = Graph.from_state({
+            "start": str(payload.get("start") or ""),
+            "nodes": {str(n["id"]): n for n in payload.get("nodes") or ()},
+            "edges": list(payload.get("edges") or ()),
+        })
+    except Exception as exc:
+        return problems + [f"the declared graph does not build: {exc}"]
+
+    for issue in validate(
+        graph, {name: knob.default for name, knob in knobs.items()},
+        declared_knobs=knobs, resolve_calls=False,
+    ):
+        problems.append(str(issue))
+    return problems
+
+
+def ctx_existing() -> list[str]:
+    """The installed mode ids, for a design to be compared against."""
+    ids: list[str] = []
+    for name in registry.discover_names(Path.cwd()):
+        try:
+            package = registry.load(name, Path.cwd())
+        except PackageError:
+            continue
+        ids.extend(package.ids())
+    return ids
+
+
 def materialise(ctx: Any) -> dict[str, Any]:
     """Turn the emit agent's answer into a package directory."""
     answer = ctx.read_text("emit.txt")

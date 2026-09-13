@@ -103,6 +103,50 @@ def good_files(name: str) -> dict[str, str]:
     }
 
 
+def strategy_answer(name: str) -> str:
+    """A coherent strategy answer, in the shape create-mode's review gate checks."""
+    import json
+
+    ops = f"refactory_packages.{name}.ops"
+    return json.dumps({
+        "considered": [
+            {"approach": "count up one at a time", "why_not": ""},
+            {"approach": "compute the answer directly", "why_not": "nothing to iterate"},
+        ],
+        "chosen": "count up one at a time",
+        "why": "it is the simplest thing that has a state to watch",
+        "will_not": ["threads", "a second package"],
+        "closest_existing": "circle_packing/adaptive",
+        "knobs": [
+            {"name": "target", "kind": "int", "default": 3, "lo": 1, "hi": 9,
+             "description": "where to stop"},
+        ],
+        "nodes": [
+            {"id": "start", "kind": "op", "call": f"{ops}:start",
+             "writes": ["state.json"], "produces": ["value"], "knobs": ["target"]},
+            {"id": "step", "kind": "op", "call": f"{ops}:step",
+             "reads": ["state.json"], "writes": ["state.json"], "produces": ["value"]},
+            {"id": "check", "kind": "gate", "evaluator": f"{ops}:check",
+             "reads": ["state.json"], "produces": ["done"], "max_iterations": 20},
+            {"id": "finish", "kind": "op", "call": f"{ops}:finish",
+             "reads": ["state.json"], "writes": ["best.json"], "produces": ["best"]},
+        ],
+        "edges": [
+            {"source": "start", "target": "step", "condition": None},
+            {"source": "step", "target": "check", "condition": None},
+            {"source": "check", "target": "step", "condition": "retry"},
+            {"source": "check", "target": "finish", "condition": "proceed"},
+        ],
+        "start": "start",
+        "score": "the fact 'best', produced by finish",
+    })
+
+
+def create_answers(name: str, files: dict[str, str]) -> list[str]:
+    """The three answers create-mode now needs: strategy, design, emit."""
+    return [strategy_answer(name), "a design", render(files)]
+
+
 def render(files: dict[str, str]) -> str:
     """The emit agent's answer format: `===FILE: name===` blocks."""
     return "\n".join(f"===FILE: {name}===\n{body}" for name, body in files.items()) + "\n"

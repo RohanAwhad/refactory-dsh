@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from refactory_dsh import registry
+from refactory_dsh.create_ops import STRATEGY_SCHEMA
 from refactory_dsh.nn import Graph, Knob, Mode, Node, RunResult
 
 OPS = "refactory_dsh.create_ops"
@@ -47,6 +48,11 @@ class CreateMode(Mode):
                 description="how many times the emit step may be retried with the "
                             "validator's reasons",
             ),
+            "design_attempts": Knob(
+                2, "int", lo=1, hi=5,
+                description="how many times the strategy step may be retried when the "
+                            "intended graph does not hold together",
+            ),
         }
 
     def build(self) -> Graph:
@@ -58,19 +64,52 @@ class CreateMode(Mode):
             notes="read the brief and publish it to the prompts",
         ))
         graph.add(Node(
+            "survey", "op", call=f"{OPS}:survey",
+            produces=("survey", "existing"),
+            notes="enumerate what already exists, before anything is invented",
+        ))
+        graph.add(Node(
+            "strategy", "agent",
+            prompt_template=(
+                "You are choosing an approach for a package of modes.\n\n"
+                "Package name: {{name}}\n"
+                "Brief: {{brief}}\n\n"
+                "## What already exists\n{{survey}}\n\n"
+                "## Reference package\n{{reference}}\n\n"
+                "## What went wrong last time\n{{design_review}}\n\n"
+                "Decide the approach before any code is written: consider at least two, "
+                "say why the one you chose wins, say what it will not do, name the "
+                "existing mode it is closest to, and describe the graph you intend to "
+                "write.\n\n" + STRATEGY_SCHEMA
+            ),
+            reads=("brief.json", "survey.json", "strategy-review.txt"),
+            writes=("strategy.json",),
+            produces=("strategy",),
+            notes="decide the approach and declare the intended graph",
+        ))
+        graph.add(Node(
+            "review", "gate", evaluator=f"{OPS}:review_design",
+            reads=("strategy.json",),
+            writes=("strategy-review.txt",),
+            produces=("design_review", "design_attempts_used"),
+            knobs=("design_attempts",),
+            max_iterations=8,
+            notes="check the intended graph before any code exists",
+        ))
+        graph.add(Node(
             "design", "agent",
             prompt_template=(
                 "You are designing a package of modes for a workflow harness.\n\n"
                 "Package name: {{name}}\n"
                 "Brief: {{brief}}\n\n"
-                "Read the API below and design the package: the operations, the node "
-                "graph, the knobs, and what score() reads. Say what each node does, "
-                "what it reads and writes, and which knob it consumes. Be concrete "
+                "Read the API below and write the design for the package: every "
+                "operation, every node, every knob, and what score() reads. Be concrete "
                 "and complete — the next step writes the code from your design alone.\n\n"
+                "## The approach that was chosen\n{{strategy}}\n\n"
                 "## API\n{{api}}\n\n"
                 "## Reference package\n{{reference}}\n"
             ),
-            reads=("brief.json",),
+            reads=("brief.json", "strategy.json"),
             writes=("design.md",),
             produces=("design",),
             notes="plan the package before any code is written",
@@ -131,7 +170,11 @@ class CreateMode(Mode):
             notes="summarise what was created",
         ))
 
-        graph.connect("prepare", "design")
+        graph.connect("prepare", "survey")
+        graph.connect("survey", "strategy")
+        graph.connect("strategy", "review")
+        graph.connect("review", "strategy", condition="reloop")
+        graph.connect("review", "design", condition="proceed")
         graph.connect("design", "emit")
         graph.connect("emit", "materialise")
         graph.connect("materialise", "validate")

@@ -21,7 +21,7 @@ import pytest
 from refactory_dsh import nn, registry
 from refactory_dsh.create import CreateConfig, create
 from refactory_dsh.loop import Loop, LoopConfig
-from tests_support import FakeModel, good_files, render
+from tests_support import FakeModel, create_answers, good_files, render
 
 CREATED = "example_pack"
 TARGET = "circle_packing/adaptive"
@@ -43,7 +43,7 @@ def _config(root: Path, **overrides: object) -> LoopConfig:
 
 # ── half one: a brief becomes a working package ────────────────────────────
 def test_a_brief_becomes_a_registered_package_that_scores(tmp_path):
-    model = FakeModel(["a design", render(good_files(CREATED))])
+    model = FakeModel(create_answers(CREATED, good_files(CREATED)))
     result = create(
         CreateConfig(name=CREATED, brief="count to a target", workdir=tmp_path / "create"),
         client=model,
@@ -57,7 +57,7 @@ def test_a_brief_becomes_a_registered_package_that_scores(tmp_path):
 def test_the_created_mode_validates_with_all_its_calls_resolved(tmp_path):
     create(
         CreateConfig(name=CREATED, brief="count", workdir=tmp_path / "create"),
-        client=FakeModel(["a design", render(good_files(CREATED))]),
+        client=FakeModel(create_answers(CREATED, good_files(CREATED))),
     )
     _package, mode_class = registry.resolve(Path("."), f"{CREATED}/counter")
     mode = mode_class()
@@ -146,7 +146,7 @@ def test_the_created_package_can_be_optimized_too(tmp_path):
     """The full chain: a brief, a package, and then a search over it."""
     create(
         CreateConfig(name=CREATED, brief="count", workdir=tmp_path / "create"),
-        client=FakeModel(["a design", render(good_files(CREATED))]),
+        client=FakeModel(create_answers(CREATED, good_files(CREATED))),
     )
     report = _optimize(f"{CREATED}/counter", tmp_path / "runs")
     assert report["best_score"] >= report["seed_score"]
