@@ -249,7 +249,14 @@ def load_fresh(name: str) -> Package:
 
 
 def check_package(name: str) -> list[str]:
-    """Everything wrong with a staged package, as a list of reasons."""
+    """Everything wrong with a staged package, as a list of reasons.
+
+    A generated package is **never imported here**. It is parsed, and then the
+    structural check runs in a subprocess, because loading a package is executing
+    it and the model's code has no business running in the driver.
+    """
+    from refactory_dsh import sandbox
+
     registry.install_workspace(Path.cwd())
     root = registry.workspace_root(Path.cwd()) / name
     problems: list[str] = []
@@ -258,6 +265,20 @@ def check_package(name: str) -> list[str]:
     for required in REQUIRED_FILES:
         if not (root / required).exists():
             problems.append(f"{required} is missing; a package needs one")
+    if problems:
+        return problems
+
+    problems.extend(sandbox.ast_check(name, Path.cwd()))
+    if any("does not parse" in problem for problem in problems):
+        # Nothing further can be learned from a file that is not valid Python.
+        return problems
+
+    # Both checks, not the first that fires: the retry prompt is more useful the
+    # more of the truth it carries, and the two catch different things.
+    checked = sandbox.verify_sandboxed(name, project=Path.cwd())
+    problems.extend(checked.payload.get("problems") or [])
+    if not checked.ok and not problems:
+        return [checked.problem() or "the structural check could not be run"]
     if problems:
         return problems
 
@@ -321,22 +342,24 @@ def smoke(ctx: Any) -> dict[str, Any]:
         package = load_fresh(name)
     except PackageError as exc:
         raise ValueError(f"the package could not be loaded: {exc}") from exc
-    mode_class = package.modes[0]
     workdir = ctx.workdir / "smoke"
-    mode = mode_class()
-    result = mode.evaluate(workdir, model=ctx.model)
-    if not result.exit_ok:
-        raise ValueError(f"the new mode did not finish a run: {result.error}")
+    # Sandboxed: the smoke run is a real execution of code a model wrote.
+    from refactory_dsh import sandbox
+
+    result = sandbox.smoke(package.ids()[0], workdir, project=Path.cwd())
+    if not result.ok:
+        raise ValueError(f"the new mode did not finish a run: {result.problem()}")
+    score = float(result.payload.get("score") or 0.0)
     ctx.write_json(
         "smoke.json",
         {
             "mode": package.ids()[0],
-            "score": result.score,
-            "iterations": result.iterations,
-            "duration_s": result.duration_s,
+            "score": score,
+            "iterations": result.payload.get("iterations"),
+            "sandboxed": True,
         },
     )
-    return {"smoke_score": float(result.score), "smoke_ok": True}
+    return {"smoke_score": score, "smoke_ok": True}
 
 
 def write_result(ctx: Any) -> dict[str, Any]:

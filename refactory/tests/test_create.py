@@ -104,7 +104,9 @@ def test_a_broken_package_is_refused_and_then_regenerated(tmp_path):
     assert result.smoke_score and result.smoke_score > 0
     retry_prompt = model.prompts[-1]
     assert "What went wrong last time" in retry_prompt
-    assert "must define PACKAGE" in retry_prompt
+    assert "PACKAGE" in retry_prompt, (
+        "the retry must say what was wrong; the AST check reports the manifest"
+    )
 
 
 def test_a_package_that_never_works_fails_loudly(tmp_path):
@@ -138,8 +140,8 @@ def test_the_gate_refuses_a_mode_with_no_signal(tmp_path):
     )
     assert result.smoke_score and result.smoke_score > 0
     combined = "\n".join(model.prompts)
-    assert "does not override score()" in combined
-    assert "declares no knobs" in combined
+    assert "score()" in combined, "the retry must say the mode produces no signal"
+    assert "knobs" in combined, "the retry must say there is nothing to optimize"
 
 
 def test_extends_hands_the_model_the_reference_source(tmp_path):

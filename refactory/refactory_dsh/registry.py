@@ -117,6 +117,10 @@ def load(name: str, project: Path | None = None) -> Package:
     judged by the module object the previous attempt left behind.
     """
     if project is not None:
+        # A workspace package is only importable once the workspace is on the
+        # distribution's path, and this is the one entry point that must not assume
+        # a caller did it: a subprocess calling `load` directly is a real caller.
+        install_workspace(Path(project))
         _evict_workspace(name, Path(project))
     try:
         module = importlib.import_module(f"{ROOT_PACKAGE}.{name}")
