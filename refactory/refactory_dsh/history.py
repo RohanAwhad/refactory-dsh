@@ -20,6 +20,18 @@ from typing import Any
 #: The file every complete run writes, and the marker of a readable run.
 REPORT = "report.json"
 
+#: The run directory's layout version. Bumped when a field is added, renamed or
+#: removed, so a reader fails loudly instead of reading an older report as if it
+#: were current. The state dict already works this way; this is the same rule.
+RUN_VERSION = 1
+
+#: Where a run records its own version.
+RUN_FILE = "run.json"
+
+
+class RunVersionError(ValueError):
+    """A run directory was written by a different layout."""
+
 #: How many candidates a summary keeps, so a prior cannot become a payload.
 DEFAULT_LIMIT = 40
 
@@ -66,10 +78,11 @@ class RunArchive:
 
 
 def read_run(path: Path, *, limit: int = DEFAULT_LIMIT) -> RunArchive:
-    """Read one run directory. Raises when there is nothing to read."""
+    """Read one run directory. Raises when there is nothing readable there."""
     path = Path(path)
     if not path.is_dir():
         raise FileNotFoundError(f"{path} is not a run directory")
+    _check_version(path)
 
     report_path = path / REPORT
     if report_path.exists():
@@ -83,6 +96,31 @@ def read_run(path: Path, *, limit: int = DEFAULT_LIMIT) -> RunArchive:
     if not candidates:
         raise FileNotFoundError(f"{path} holds no report and no candidate runs")
     return RunArchive(path=path, candidates=tuple(candidates), truncated=len(candidates) >= limit)
+
+
+def _check_version(path: Path) -> None:
+    """Refuse a run written by a different layout, rather than half-read it.
+
+    A directory with no ``run.json`` predates versioning, so its layout is unknown
+    and reading it would be a guess.
+    """
+    version_file = path / RUN_FILE
+    if not version_file.exists():
+        if (path / REPORT).exists() or (path / "runs").is_dir():
+            raise RunVersionError(
+                f"{path} has no {RUN_FILE}, so it was written before runs were "
+                "versioned and its layout cannot be assumed"
+            )
+        return
+    try:
+        payload = json.loads(version_file.read_text())
+    except json.JSONDecodeError as exc:
+        raise RunVersionError(f"{version_file} is not readable: {exc}") from exc
+    version = payload.get("version") if isinstance(payload, dict) else None
+    if version != RUN_VERSION:
+        raise RunVersionError(
+            f"{path} was written by layout version {version!r}, not {RUN_VERSION}"
+        )
 
 
 def _from_report(path: Path, report: dict[str, Any], *, limit: int) -> RunArchive:
@@ -145,7 +183,9 @@ def find_runs(root: Path, *, limit: int = 3, exclude: Path | None = None) -> lis
     for _mtime, path in found[:limit]:
         try:
             archives.append(read_run(path))
-        except FileNotFoundError:
+        except (FileNotFoundError, RunVersionError):
+            # A run we cannot read is not a prior we can use, and is not an error:
+            # an older layout is expected to be sitting next to a newer one.
             continue
     return archives
 

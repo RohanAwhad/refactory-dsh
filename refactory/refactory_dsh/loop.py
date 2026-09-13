@@ -44,6 +44,10 @@ from refactory_dsh.optim import create as create_optimizer
 from refactory_dsh.optim.base import summarise_reasons
 
 
+#: The append-only record of everything a run did. Resume replays it.
+JOURNAL = "journal.jsonl"
+
+
 class LoopError(RuntimeError):
     """The run cannot proceed. Always names what is wrong with the mode."""
 
@@ -76,6 +80,10 @@ class LoopConfig:
     #: Where a ``global``-retention memory lives. Injected so a test can put it
     #: somewhere temporary instead of the home directory.
     memory_global_root: Path | None = None
+    #: Carry on from the journal in the run directory instead of starting over.
+    #: A run reproduces what an uninterrupted one would have done exactly when its
+    #: optimizer is deterministic, which is stated rather than assumed.
+    resume: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -141,6 +149,7 @@ class Loop:
         self.proposals: dict[str, dict[str, Any]] = {}
         self.epoch = 0
         self.generation = 0
+        self._epoch_open = False
         self.evaluations = 0
         self.bound = ""
         self.loss: dict[str, Any] = {}
@@ -183,9 +192,26 @@ class Loop:
         (self.root / "config.json").write_text(
             json.dumps({"mode": self.mode_id, **self.config.to_dict()}, indent=2, default=str)
         )
+        resumed = self._replay_if_asked()
+        (self.root / run_history.RUN_FILE).write_text(
+            json.dumps(
+                {
+                    "version": run_history.RUN_VERSION,
+                    "mode": self.mode_id,
+                    "resumed": resumed,
+                    "journal": JOURNAL,
+                },
+                indent=2,
+            )
+        )
+        if resumed:
+            self._write_state()
+            return
 
+        self._journal("start", mode=self.mode_id, config=self.config.to_dict())
         seed = Candidate.from_state(seed_state)
         self.population = [seed]
+        self._journal_candidate(seed)
         self._seed_population(seed)
         self._write_state()
 
@@ -205,12 +231,13 @@ class Loop:
         sampler = RandomOptimizer(seed=self.config.seed)
         edits = self._exploration_edits(seed, wanted)
         insertable = [node.to_state() for node in self.mode.insertable()]
+        rng = random.Random(f"{self.config.seed}:sweep")
         while len(edits) < wanted:
             edit = nn_edits.random_edit(
                 seed.state,
                 preset=self.config.edit_preset,
                 insertable=insertable,
-                rng=sampler._rng,  # noqa: SLF001 - one stream for the whole sweep
+                rng=rng,
             )
             if edit is None:
                 break
@@ -223,6 +250,7 @@ class Loop:
             )
             if isinstance(outcome, Candidate):
                 self.population.append(outcome)
+                self._journal_candidate(outcome)
                 self.proposals.setdefault(outcome.id, {
                     "id": outcome.id,
                     "parent": outcome.parent,
@@ -287,6 +315,16 @@ class Loop:
         candidate.model_calls = result.model_calls
         candidate.evaluated = True
         self.evaluations += 1
+        self._journal(
+            "score",
+            id=candidate.id,
+            score=candidate.score,
+            exit_ok=candidate.exit_ok,
+            error=candidate.error,
+            duration_s=candidate.duration_s,
+            model_calls=candidate.model_calls,
+            facts=candidate.facts,
+        )
         (workdir / "candidate.json").write_text(
             json.dumps(
                 {
@@ -329,6 +367,7 @@ class Loop:
             "run_failures": [c.id for c in self.population if c.evaluated and not c.exit_ok],
         }
         self._write("loss.json", self.loss)
+        self._journal("loss", **self.loss)
         return self.loss
 
     # ── backward ───────────────────────────────────────────────────────────
@@ -441,7 +480,15 @@ class Loop:
             seen=self._tried(),
         )
         self.rejections.extend(rejections)
+        for rejection in rejections:
+            self._journal(
+                "rejection",
+                attempt=rejection.attempt,
+                edit=rejection.edit,
+                reasons=rejection.reasons,
+            )
         for candidate in candidates:
+            self._journal_candidate(candidate)
             self.proposals.setdefault(candidate.id, {
                 "id": candidate.id,
                 "parent": candidate.parent,
@@ -512,13 +559,18 @@ class Loop:
             self.population.append(candidate)
             added.append(candidate)
         self.generation += 1
+        self._journal("step", generation=self.generation)
         self._write_state()
         return added
 
     # ── scheduler ──────────────────────────────────────────────────────────
     def scheduler(self, *, evaluated: int = 0, proposed: int = 0) -> bool:
-        """Close the epoch, and say whether there is another."""
-        self.epoch += 1
+        """Close the epoch, and say whether there is another.
+
+        The epoch is opened by the loop, not here: a resume has to know which
+        iteration it is in, and an epoch that is only counted once it is finished
+        cannot say that.
+        """
         batch = [c for c in self._evaluated() if c.score is not None]
         scores = [c.score for c in batch if c.exit_ok and c.score is not None]
         summary = EpochSummary(
@@ -544,16 +596,33 @@ class Loop:
         return True
 
     # ── the loop ───────────────────────────────────────────────────────────
+    def epoch_step(self) -> bool:
+        """One iteration, and whether there is another.
+
+        The epoch is opened here and closed by the scheduler, and both are journaled.
+        A run that died inside an iteration therefore resumes *into* it rather than
+        opening it again, which would count the same epoch twice.
+        """
+        if not self._epoch_open:
+            self.epoch += 1
+            self._journal("epoch_open", epoch=self.epoch)
+            self._epoch_open = True
+        evaluated = self.forward()
+        self.loss_step()
+        self.backward()
+        candidates, rejections = self.optimizer_step()
+        self.step(candidates)
+        another = self.scheduler(
+            evaluated=evaluated, proposed=len(candidates) + len(rejections)
+        )
+        self._epoch_open = False
+        self._journal("epoch_end", epoch=self.epoch)
+        return another
+
     def run(self) -> dict[str, Any]:
         self.init()
-        while True:
-            evaluated = self.forward()
-            self.loss_step()
-            self.backward()
-            candidates, rejections = self.optimizer_step()
-            self.step(candidates)
-            if not self.scheduler(evaluated=evaluated, proposed=len(candidates) + len(rejections)):
-                break
+        while self.epoch_step():
+            continue
         return self.report()
 
     # ── report ─────────────────────────────────────────────────────────────
@@ -812,6 +881,122 @@ class Loop:
 
     def _history_truncated(self) -> bool:
         return sum(1 for c in self.population if c.evaluated) > self.config.history_limit
+
+    # ── the journal, and resume ────────────────────────────────────────────
+    def _journal(self, event: str, **payload: Any) -> None:
+        """Append one event. The journal is the run's durable state.
+
+        Append-only and replayed rather than snapshotted: a snapshot of the
+        population has to be kept consistent with the counters, and the old glue's
+        rehydrate did exactly that and produced real bugs. One log means one source
+        of truth, and the same one the report already reads.
+        """
+        self.root.mkdir(parents=True, exist_ok=True)
+        with (self.root / JOURNAL).open("a") as handle:
+            handle.write(json.dumps({"event": event, **payload}, default=str) + "\n")
+
+    def _journal_candidate(self, candidate: Candidate) -> None:
+        self._journal(
+            "candidate",
+            id=candidate.id,
+            parent=candidate.parent,
+            edits=candidate.edits,
+            state=candidate.state,
+        )
+
+    def _replay_if_asked(self) -> bool:
+        """Rebuild the run from its journal, if there is one and resume was asked for."""
+        journal = self.root / JOURNAL
+        if not self.config.resume:
+            if journal.exists():
+                journal.unlink()
+            return False
+        if not journal.exists():
+            raise LoopError(
+                f"resume was asked for but {journal} does not exist, so there is "
+                "nothing to carry on from"
+            )
+        self._replay(journal)
+        return True
+
+    def _replay(self, journal: Path) -> None:
+        """Rebuild the population, the counters and the refusals from the log."""
+        by_id: dict[str, Candidate] = {}
+        order: list[str] = []
+        for line in journal.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                # A half-written last line is what a crash looks like. Stopping at
+                # it is the point of an append-only log.
+                break
+            event = record.get("event")
+            if event == "candidate":
+                candidate = Candidate.from_state(
+                    record["state"],
+                    parent=record.get("parent"),
+                    edits=record.get("edits") or (),
+                )
+                if candidate.id not in by_id:
+                    by_id[candidate.id] = candidate
+                    order.append(candidate.id)
+            elif event == "score":
+                candidate = by_id.get(record.get("id"))
+                if candidate is None:
+                    continue
+                candidate.score = record.get("score")
+                candidate.exit_ok = bool(record.get("exit_ok", True))
+                candidate.error = record.get("error")
+                candidate.duration_s = float(record.get("duration_s") or 0.0)
+                candidate.model_calls = int(record.get("model_calls") or 0)
+                candidate.facts = dict(record.get("facts") or {})
+                candidate.evaluated = True
+            elif event == "rejection":
+                self.rejections.append(
+                    Rejection(
+                        attempt=int(record.get("attempt") or 0),
+                        edit=dict(record.get("edit") or {}),
+                        reasons=list(record.get("reasons") or []),
+                    )
+                )
+            elif event == "epoch":
+                self.epoch = int(record.get("epoch") or self.epoch)
+            elif event == "epoch_open":
+                self.epoch = int(record.get("epoch") or self.epoch)
+                self._epoch_open = True
+            elif event == "epoch_end":
+                self.epoch = int(record.get("epoch") or self.epoch)
+                self._epoch_open = False
+            elif event == "step":
+                # The generation is what the proposal stream is derived from, so it
+                # is journaled rather than inferred: guessing it makes a resumed run
+                # propose something else.
+                self.generation = int(record.get("generation") or self.generation)
+            elif event == "loss":
+                self.loss = {
+                    key: value
+                    for key, value in record.items()
+                    if key != "event"
+                }
+
+        if not order:
+            raise LoopError(f"{journal} holds no candidate, so there is nothing to resume")
+        self.population = [by_id[node_id] for node_id in order]
+        self.evaluations = sum(1 for c in self.population if c.evaluated)
+        self.proposals = {
+            candidate.id: {
+                "id": candidate.id,
+                "parent": candidate.parent,
+                "edits": candidate.edits,
+                "rationale": "replayed from the journal",
+                "prediction": "",
+                "confidence": 0.0,
+                "origin": "seed_population" if candidate.parent else "seed_population",
+            }
+            for candidate in self.population
+        }
 
     # ── persistence ────────────────────────────────────────────────────────
     def _write(self, name: str, payload: Any) -> Path:

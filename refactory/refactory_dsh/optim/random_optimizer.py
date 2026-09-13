@@ -27,15 +27,26 @@ class RandomOptimizer(Optimizer):
 
     name = "random"
 
-    def __init__(self, *, k: int = 3, seed: int | None = None) -> None:
+    def __init__(self, *, k: int = 3, seed: int = 0) -> None:
         super().__init__(k=k)
-        self._rng = random.Random(seed)
+        self.seed = seed
+
+    def rng(self, ctx: ProposalContext, n: int) -> random.Random:
+        """A stream derived from the seed and the generation, not carried forward.
+
+        Derived rather than accumulated so a proposal sequence is a pure function of
+        the run's configuration and how far it has got. That is what lets a run be
+        resumed and reproduce what an uninterrupted run would have done, and it costs
+        nothing: a carried stream has no value beyond being reproducible.
+        """
+        return random.Random(f"{self.seed}:{ctx.generation}:{ctx.epoch}:{n}")
 
     def propose(
         self, ctx: ProposalContext, n: int, parents: Sequence[Candidate]
     ) -> list[Proposal]:
         if not parents:
             return []
+        rng = self.rng(ctx, n)
         proposals: list[Proposal] = []
         for index in range(max(1, n)):
             parent = parents[index % len(parents)]
@@ -43,7 +54,7 @@ class RandomOptimizer(Optimizer):
                 parent.state,
                 preset=ctx.preset,
                 insertable=ctx.insertable,
-                rng=self._rng,
+                rng=rng,
             )
             if edit is None:
                 continue
