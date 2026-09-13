@@ -1,8 +1,10 @@
 {
   "name": "outer-loop",
   "nodes": {
-    "seed": {
-      "id": "seed",
+    "init": {
+      "id": "init",
+      "_type": "FnNode",
+      "blocking": true,
       "reads": [],
       "writes": [
         ".factory/outer_loop/config.json",
@@ -10,82 +12,149 @@
         ".factory/outer_loop/archive/",
         ".factory/outer_loop/state.json"
       ],
-      "blocking": true,
-      "command": "python -m refactory_dsh.ops.outer_loop calibrate",
-      "callable_name": null,
-      "notes": "Seed generation 0 from the base workflow via SwarmEngine.seed (the unmodified seed + novelty-filtered mutations), and persist population/archive/state.",
-      "_type": "FnNode"
+      "command": "python -m refactory_dsh.ops.outer_loop init",
+      "notes": "Initialise the parameters: build the starting population."
     },
-    "evolve": {
-      "id": "evolve",
+    "forward": {
+      "id": "forward",
+      "_type": "FnNode",
+      "blocking": true,
       "reads": [
-        ".factory/outer_loop/population/",
-        ".factory/outer_loop/archive/",
-        ".factory/outer_loop/state.json"
+        ".factory/outer_loop/population/"
       ],
       "writes": [
         ".factory/outer_loop/population/",
-        ".factory/outer_loop/archive/",
-        ".factory/outer_loop/state.json",
-        ".factory/outer_loop/events.jsonl"
+        ".factory/outer_loop/graph_state.json",
+        ".factory/outer_loop/traces/"
       ],
-      "blocking": true,
-      "command": "python -m refactory_dsh.ops.outer_loop evolve",
-      "callable_name": null,
-      "notes": "Advance exactly one generation: SwarmEngine.evolve_generation runs evaluate (inner loop) → contrastive reflection → tournament selection → 8-operator mutation → archive placement, then persists the advanced generation.",
-      "_type": "FnNode"
+      "command": "python -m refactory_dsh.ops.outer_loop forward",
+      "notes": "Run the mode once per candidate in the mini-batch."
     },
-    "gate_converge": {
-      "id": "gate_converge",
+    "loss": {
+      "id": "loss",
+      "_type": "FnNode",
+      "blocking": true,
+      "reads": [
+        ".factory/outer_loop/traces/"
+      ],
+      "writes": [
+        ".factory/outer_loop/loss.json"
+      ],
+      "command": "python -m refactory_dsh.ops.outer_loop loss",
+      "notes": "Turn the batch's runs into a number."
+    },
+    "backward": {
+      "id": "backward",
+      "_type": "FnNode",
+      "blocking": true,
+      "reads": [
+        ".factory/outer_loop/population/",
+        ".factory/outer_loop/loss.json"
+      ],
+      "writes": [
+        ".factory/outer_loop/proposal-request.md",
+        ".factory/outer_loop/gradient.json"
+      ],
+      "command": "python -m refactory_dsh.ops.outer_loop backward",
+      "notes": "Compute the gradient from the traces and write the request."
+    },
+    "optimizer": {
+      "id": "optimizer",
+      "_type": "AgentNode",
+      "blocking": true,
+      "role": "ceo",
+      "reads": [
+        ".factory/outer_loop/proposal-request.md",
+        ".factory/outer_loop/gradient.json"
+      ],
+      "writes": [
+        ".factory/outer_loop/proposals.json"
+      ],
+      "prompt_template": "You are the optimizer. You decide the next update to the mode's parameters.\n\n1. Read `.factory/outer_loop/proposal-request.md`. It carries the recent candidates\n   with links to their full trace summaries, the gradient, and the parameters you\n   may move (each with its kind, bounds and whether it is expandable).\n2. Read any trace summary you need for detail. Do not guess at numbers you can read.\n3. Write `.factory/outer_loop/proposals.json`:\n\n{\"diagnosis\": \"<what the evidence shows is limiting the loss>\",\n \"proposals\": [{\"knob\": \"<parameter>\", \"value\": \"<new value>\",\n                \"rationale\": \"<why, citing the evidence>\",\n                \"prediction\": \"<expected effect on the loss>\", \"confidence\": 0.0}]}\n\nRules:\n- Few well-argued changes, not many guesses. Vary which parameter you move.\n- A `topology` parameter takes the name of a structural operation, not a number.\n- If a parameter is saturated, push it past its bounds only when it is expandable.\n- Your prediction is recorded and later checked against the outcome, so state what\n  you expect and how you could be wrong.\n- If the evidence justifies no change, write a diagnosis and an empty proposal list\n  rather than guessing."
+    },
+    "step": {
+      "id": "step",
+      "_type": "FnNode",
+      "blocking": true,
+      "reads": [
+        ".factory/outer_loop/proposals.json"
+      ],
+      "writes": [
+        ".factory/outer_loop/population/",
+        ".factory/outer_loop/graph_state.json"
+      ],
+      "command": "python -m refactory_dsh.ops.outer_loop step",
+      "notes": "Apply the update: validate the proposals, then evaluate them."
+    },
+    "scheduler": {
+      "id": "scheduler",
+      "_type": "GateNode",
+      "blocking": true,
       "reads": [
         ".factory/outer_loop/state.json",
+        ".factory/outer_loop/graph_state.json"
+      ],
+      "writes": [],
+      "evaluator_type": "fn",
+      "evaluator_command": "python -m refactory_dsh.ops.outer_loop scheduler",
+      "max_iterations": 500
+    },
+    "report": {
+      "id": "report",
+      "_type": "FnNode",
+      "blocking": true,
+      "reads": [
         ".factory/outer_loop/archive/"
       ],
-      "writes": [],
-      "blocking": true,
-      "evaluator_type": "fn",
-      "evaluator_role": null,
-      "evaluator_command": "python -m refactory_dsh.ops.outer_loop check_converge",
-      "gate_prompt": "",
-      "max_iterations": null,
-      "_type": "GateNode"
-    },
-    "promote": {
-      "id": "promote",
-      "reads": [
-        ".factory/outer_loop/archive/",
-        ".factory/outer_loop/state.json"
+      "writes": [
+        ".factory/outer_loop/report.md"
       ],
-      "writes": [],
-      "blocking": true,
-      "command": "python -m refactory_dsh.ops.outer_loop status",
-      "callable_name": null,
-      "notes": "The search has converged. The status output reports the best individual (id, score, MAP-Elites features) and archive size for promotion to a permanent mode.",
-      "_type": "FnNode"
+      "command": "python -m refactory_dsh.ops.outer_loop report",
+      "notes": "The visibility surface."
     }
   },
   "edges": [
     {
-      "source": "seed",
-      "target": "evolve",
+      "source": "init",
+      "target": "forward",
       "condition": null
     },
     {
-      "source": "evolve",
-      "target": "gate_converge",
+      "source": "forward",
+      "target": "loss",
       "condition": null
     },
     {
-      "source": "gate_converge",
-      "target": "evolve",
+      "source": "loss",
+      "target": "backward",
+      "condition": null
+    },
+    {
+      "source": "backward",
+      "target": "optimizer",
+      "condition": null
+    },
+    {
+      "source": "optimizer",
+      "target": "step",
+      "condition": null
+    },
+    {
+      "source": "step",
+      "target": "scheduler",
+      "condition": null
+    },
+    {
+      "source": "scheduler",
+      "target": "forward",
       "condition": "reloop"
     },
     {
-      "source": "gate_converge",
-      "target": "promote",
+      "source": "scheduler",
+      "target": "report",
       "condition": "proceed"
     }
   ],
-  "start_node": "seed",
+  "start_node": "init",
   "terminal": true
 }

@@ -259,8 +259,15 @@ def build_config() -> SwarmConfig:
     (no DesignerAgent LLM calls); the eight operators are driven by
     `WeightedRandomStrategy` with refactory's shipped weights."""
     settings = steering.load(Path.cwd())
-    budget = int(os.environ.get("REFACTORY_BUDGET", "40"))
-    population = int(os.environ.get("REFACTORY_POPULATION", "8"))
+    # An epoch is one pass and a mini-batch is what it evaluates, which is the
+    # vocabulary the rest of the loop uses. The population defaults to the batch
+    # size, and the budget to epochs x batch, so the trap where the starting
+    # population consumed everything and no generated candidate was ever tried
+    # cannot arise from the defaults.
+    epochs = int(os.environ.get("REFACTORY_EPOCHS", "5"))
+    batch_size = int(os.environ.get("REFACTORY_BATCH_SIZE", "2"))
+    population = int(os.environ.get("REFACTORY_POPULATION", str(batch_size)))
+    budget = int(os.environ.get("REFACTORY_BUDGET", str(max(epochs * batch_size, population + 1))))
     if budget <= population:
         # Every evaluation goes on the starting population, so the search can
         # propose all it likes and never try any of it -- while still reporting a
@@ -268,6 +275,7 @@ def build_config() -> SwarmConfig:
         print(json.dumps({
             "warning": "budget_starves_offspring",
             "budget": budget, "population": population,
+            "epochs": epochs, "batch_size": batch_size,
             "detail": "the budget is consumed evaluating the starting population, "
                       "so no generated candidate can be evaluated; set "
                       "REFACTORY_BUDGET above REFACTORY_POPULATION",
@@ -446,7 +454,28 @@ def evolve() -> None:
 
 
 def check_converge() -> None:
-    """Deterministic gate: report PROCEED once the swarm has terminated."""
+    """Scheduler: end the epoch, then report PROCEED or RELOOP.
+
+    An epoch is one pass over a mini-batch. The epoch counter advances here, so
+    the boundary is a recorded fact rather than something inferred from the
+    generation counter, and a run that exhausts its epochs stops for a reason the
+    report can state.
+    """
+    state = _graph_state()
+    epochs = int(os.environ.get("REFACTORY_EPOCHS", "5"))
+    epoch = int(state.get("epoch", 0)) + 1
+    state["epoch"] = epoch
+    _save_graph_state(state)
+    if epoch >= epochs:
+        print("PROCEED")
+        print(json.dumps({"scheduler": "epochs_exhausted", "epoch": epoch, "epochs": epochs}),
+              file=sys.stderr)
+        return
+    _check_converge_engine()
+
+
+def _check_converge_engine() -> None:
+    """The swarm's own termination test, used inside the epoch budget."""
     config = build_config()
     population = Population.load(POP_DIR)
     engine = build_engine(config, _pick_evaluator(), project_dir=Path.cwd())
@@ -525,6 +554,76 @@ def _live_engine():
     return config, population, engine
 
 
+
+# ── PyTorch-shaped loop ────────────────────────────────────────────────────
+# The loop is an optimization loop, so it is named like one:
+#   init      - initialise the parameters (build the starting population)
+#   forward   - run the mode once per candidate in the batch
+#   loss      - turn those runs into a number
+#   backward  - compute the gradient from the traces
+#   optimizer - the agent that decides the update
+#   step      - apply it
+#   scheduler - decide whether the epoch is over
+#   report    - the visibility surface
+# `forward` and `loss` are separate because a forward pass produces artifacts and
+# the loss turns them into the signal the rest of the loop consumes; fusing them
+# is what left the gradient implicit in the first place.
+
+BATCH = OUTER if False else ROOT  # batch bookkeeping lives with the run state
+
+
+def loss() -> None:
+    """Read the batch's scores and write the loss the rest of the loop consumes."""
+    state = _graph_state()
+    traces = _batch_traces(state)
+    scores = [
+        (t.get("outcome") or {}).get("score")
+        for t in traces
+        if isinstance((t.get("outcome") or {}).get("score"), (int, float))
+    ]
+    best = max(scores) if scores else None
+    mean = (sum(scores) / len(scores)) if scores else None
+    previous = state.get("best_loss")
+    payload = {
+        "epoch": state.get("epoch", 0),
+        "batch": len(traces),
+        "scores": scores,
+        "mean": mean,
+        "best": best,
+        "best_ever": max([s for s in [previous, best] if isinstance(s, (int, float))] or [0.0])
+        if previous is not None or best is not None
+        else None,
+        "improved": bool(
+            isinstance(best, (int, float)) and isinstance(previous, (int, float)) and best > previous
+        ),
+    }
+    (ROOT / "loss.json").write_text(json.dumps(payload, indent=2, default=str))
+    state["best_loss"] = payload["best_ever"]
+    _save_graph_state(state)
+    print(json.dumps({"step": "loss", **{k: payload[k] for k in ("epoch", "batch", "best", "best_ever", "improved")}}))
+
+
+def _batch_traces(state: dict) -> list[dict]:
+    """The traces produced since the last epoch boundary."""
+    from refactory_dsh.trace import TRACES_DIR, INDEX  # noqa: F401 - layout owner
+
+    since = float(state.get("batch_since", 0.0))
+    traces = Path(".factory") / "outer_loop" / "traces"
+    if not traces.is_dir():
+        return []
+    out: list[dict] = []
+    for path in sorted(traces.glob("*.json")):
+        if path.stem == "index" or path.stat().st_mtime < since:
+            continue
+        try:
+            loaded = json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        if isinstance(loaded, dict):
+            out.append(loaded)
+    return out
+
+
 def _append_rejections(rejections: list[dict]) -> None:
     """Persist refusals so the visibility surface can explain them.
 
@@ -551,6 +650,10 @@ def evaluate() -> None:
     config, population, engine = _live_engine()
     state = _graph_state()
     already = set(state.get("evaluated", []))
+    # Everything traced from here on belongs to this mini-batch; `loss` reads the
+    # batch by mtime rather than by trying to track ids across processes.
+    state["batch_since"] = time.time()
+    _save_graph_state(state)
     count = engine.evaluate_population(
         population, str(Path.cwd()), list(config.training_instances), skip_ids=already
     )
@@ -662,6 +765,11 @@ _COMMANDS = {
     "calibrate": calibrate, "evaluate": evaluate, "reflect": reflect,
     "apply": apply, "evolve": evolve, "check_converge": check_converge,
     "status": status, "run": run, "report": report_cmd,
+    # PyTorch-shaped names for the same steps, so the loop reads as an
+    # optimization loop: init / forward / loss / backward / optimizer / step /
+    # scheduler / report.
+    "init": calibrate, "forward": evaluate, "loss": loss,
+    "backward": reflect, "step": apply, "scheduler": check_converge,
 }
 
 
