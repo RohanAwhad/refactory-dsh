@@ -50,5 +50,9 @@ refactory/**/__pycache__/
 
 # Run artifacts: per-mode outer/inner-loop state, traces and reports.
 refactory/workdirs/
+
+# Where generated packages and a project's run state land. A run writes here, so it
+# must not be a reason the checkout is dirty.
+.factory/
 refactory/**/*.egg-info/
 refactory/**/*.pyc
