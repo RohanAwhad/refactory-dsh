@@ -49,7 +49,9 @@
       "title": "Run durability: artifact schema version, and resume from an append-only log",
       "why": "A crash loses the run, and unversioned artifacts make an old report read as current.",
       "verify": "pytest refactory/tests/test_loop.py -q",
-      "status": "todo"
+      "status": "done",
+      "commit": "334ae38113",
+      "evidence": "213 passed. tests/test_durability.py is new (13 tests): run.json records the layout version; a different version is refused; a run predating versioning is refused rather than guessed; an unreadable sibling is skipped as a prior; the journal records start/candidate/score/epoch_open/epoch_end; resume reproduces an uninterrupted run exactly (best score, evaluations, epochs completed and the whole leaderboard) from three crash points -- before any epoch, between epochs, and from the middle of one; resume does not re-evaluate a scored candidate; a torn final line is ignored; the epoch is not counted twice. Reproduce: pytest refactory/tests/test_durability.py -q"
     },
     {
       "id": "dsh",
