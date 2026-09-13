@@ -20,7 +20,7 @@
     {
       "id": "batch",
       "title": "epochs + batch_size settings; budget trap impossible by construction",
-      "status": "doing"
+      "status": "done"
     },
     {
       "id": "runtest",
@@ -30,27 +30,27 @@
     {
       "id": "pkg",
       "title": "Package registration: identity <package>/<mode>, registry keyed on full path",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "pkgcli",
       "title": "CLI verbs: mode list/import/add/remove/enable/disable",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "register",
       "title": "create-v2 registers what it creates under a package",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "byname",
       "title": "Select the inner mode by name (seed_workflow); REFACTORY_TARGET_GRAPH becomes an override",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "realtest",
       "title": "Runtime test: real-mode outer loop selected by package-qualified name",
-      "status": "todo"
+      "status": "done"
     }
   ]
 }
