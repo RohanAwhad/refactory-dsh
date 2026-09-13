@@ -325,3 +325,46 @@ def test_an_unknown_optimizer_name_is_refused():
     with pytest.raises(ValueError, match="unknown optimizer"):
         optim.create("nonsense")
     assert optim.names() == ["autoresearch", "random"]
+
+
+# ── the model client the optimizer is handed in production ─────────────────
+def test_the_model_client_reports_a_timeout_instead_of_hanging(monkeypatch):
+    import subprocess
+
+    from refactory_dsh.model import DshModelClient
+
+    def explode(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd="dsh", timeout=1)
+
+    monkeypatch.setattr(subprocess, "run", explode)
+    with pytest.raises(RuntimeError, match="timed out"):
+        DshModelClient(timeout_s=1).complete("hello")
+
+
+def test_the_model_client_reports_a_failed_run(monkeypatch):
+    import subprocess
+
+    from refactory_dsh.model import DshModelClient
+
+    class Failed:
+        returncode = 3
+        stdout = ""
+        stderr = "no credentials"
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: Failed())
+    with pytest.raises(RuntimeError, match="exit 3"):
+        DshModelClient().complete("hello")
+
+
+def test_the_model_client_returns_stdout(monkeypatch):
+    import subprocess
+
+    from refactory_dsh.model import DshModelClient
+
+    class Ok:
+        returncode = 0
+        stdout = '{"proposals": []}\n'
+        stderr = ""
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: Ok())
+    assert DshModelClient().complete("hello") == '{"proposals": []}\n'
