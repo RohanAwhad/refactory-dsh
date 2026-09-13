@@ -198,7 +198,7 @@ def create(config: CreateConfig, client: Any = None) -> CreateResult:
         raise CreateError(f"creating {config.name!r} failed: {run.error}")
 
     name = str(run.facts.get("name") or config.name)
-    package = registry.load(name)
+    package = registry.load(name, Path.cwd())
     (workdir / "create.json").write_text(
         json.dumps(
             {"package": name, "smoke_score": run.facts.get("smoke_score"),
@@ -210,7 +210,7 @@ def create(config: CreateConfig, client: Any = None) -> CreateResult:
     return CreateResult(
         package=name,
         mode=package.ids()[0],
-        path=registry.packages_root() / name,
+        path=registry.where(name, Path.cwd()) or registry.workspace_root(Path.cwd()) / name,
         files=list(run.facts.get("files") or []),
         smoke_score=run.facts.get("smoke_score"),
         iterations=run.iterations,

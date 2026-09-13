@@ -22,8 +22,8 @@ NAME = "created_pkg"
 
 @pytest.fixture(autouse=True)
 def _clean_package():
-    """A created package is real: leave the tree as it was found."""
-    root = registry.packages_root() / NAME
+    """A created package is real: leave the workspace as it was found."""
+    root = registry.workspace_root(Path(".")) / NAME
     shutil.rmtree(root, ignore_errors=True)
     yield
     shutil.rmtree(root, ignore_errors=True)
@@ -72,6 +72,9 @@ def test_a_good_answer_creates_registers_and_smoke_scores(tmp_path):
     assert result.smoke_score and result.smoke_score > 0
     assert f"{NAME}/counter" in registry.render_catalogue(Path("."))
     assert (result.path / "mode.py").exists()
+    assert result.path.resolve().is_relative_to(
+        registry.workspace_root(Path(".")).resolve()
+    ), "a generated package must not be written into the source tree"
 
 
 def test_the_created_mode_runs_and_scores(tmp_path):

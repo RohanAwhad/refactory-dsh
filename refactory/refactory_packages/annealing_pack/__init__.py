@@ -15,4 +15,8 @@ PACKAGE = Package(
     description="Hill-climb a greedy circle packing by accepting non-worsening single-circle moves.",
     modes=(Anneal,),
     ops=("refactory_packages.annealing_pack.ops",),
+    # Declared, because this package imports circle_packing.ops for RADII and
+    # score_centers. Without the declaration, removing circle_packing would leave a
+    # package that fails at import time and nothing would have warned anyone.
+    requires=("circle_packing",),
 )

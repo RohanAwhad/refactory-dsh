@@ -119,7 +119,7 @@ def _reference(extends: str) -> str:
     if not extends:
         return "(no reference package was requested; design from the brief)"
     package_name = extends.split("/", 1)[0]
-    root = registry.packages_root() / package_name
+    root = registry.where(package_name, Path.cwd()) or registry.packages_root() / package_name
     if not root.is_dir():
         return f"(the requested reference package {package_name!r} does not exist)"
     blocks = [
@@ -139,7 +139,9 @@ def materialise(ctx: Any) -> dict[str, Any]:
             "nothing to write"
         )
     name = str(ctx.facts["name"])
-    root = registry.packages_root() / name
+    # The workspace, not the install tree: a run must not write generated code into
+    # the checkout, and the workspace is also the boundary a sandbox needs.
+    root = registry.workspace_root(Path.cwd()) / name
     if root.exists():
         shutil.rmtree(root)
     root.mkdir(parents=True)
@@ -151,6 +153,22 @@ def materialise(ctx: Any) -> dict[str, Any]:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content)
         written.append(relative)
+    # What the writer records about where this came from, which outranks anything a
+    # generated manifest claims about itself.
+    (root / ".origin.json").write_text(
+        json.dumps(
+            {
+                "origin": "create-mode",
+                "ref": "",
+                "trust": "generated",
+                "at": __import__("datetime").datetime.now(
+                    __import__("datetime").timezone.utc
+                ).isoformat(timespec="seconds"),
+            },
+            indent=2,
+        )
+    )
+    registry.install_workspace(Path.cwd())
     ctx.write_json(f"{STAGING}/manifest.json", {"package": name, "files": sorted(written)})
     return {"package_path": str(root), "files": sorted(written)}
 
@@ -232,7 +250,8 @@ def load_fresh(name: str) -> Package:
 
 def check_package(name: str) -> list[str]:
     """Everything wrong with a staged package, as a list of reasons."""
-    root = registry.packages_root() / name
+    registry.install_workspace(Path.cwd())
+    root = registry.workspace_root(Path.cwd()) / name
     problems: list[str] = []
     if not root.is_dir():
         return [f"no directory at {root}"]
@@ -286,8 +305,9 @@ def _check_mode(mode_class: type) -> list[str]:
 def register(ctx: Any) -> dict[str, Any]:
     """Confirm the registry now sees the package under its own name."""
     name = str(ctx.facts["name"])
+    registry.install_workspace(Path.cwd())
     importlib.invalidate_caches()
-    if name not in registry.discover_names():
+    if name not in registry.discover_names(Path.cwd()):
         raise ValueError(f"the registry does not list a package named {name!r}")
     package = load_fresh(name)
     ctx.write_json("registered.json", package.describe())

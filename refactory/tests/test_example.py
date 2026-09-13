@@ -29,7 +29,7 @@ TARGET = "circle_packing/adaptive"
 
 @pytest.fixture(autouse=True)
 def _clean_created():
-    root = registry.packages_root() / CREATED
+    root = registry.workspace_root(Path(".")) / CREATED
     shutil.rmtree(root, ignore_errors=True)
     yield
     shutil.rmtree(root, ignore_errors=True)

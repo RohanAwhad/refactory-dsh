@@ -57,6 +57,10 @@ def split(identifier: str) -> tuple[str, str]:
     return package, name
 
 
+#: Who vouches for a package, and therefore how it may be run.
+TRUST_TIERS = ("trusted", "generated")
+
+
 @dataclass(frozen=True)
 class Package:
     """A named collection of modes, plus the operation modules they call."""
@@ -67,6 +71,15 @@ class Package:
     modes: tuple[type["Mode"], ...] = ()
     ops: tuple[str, ...] = ()
     extends: str = ""
+    #: Other packages this one imports from. Declared so `remove` can refuse to
+    #: break a dependent, instead of leaving a package that fails at import time.
+    requires: tuple[str, ...] = ()
+    #: `trusted` ships and was reviewed; `generated` was written by a model this
+    #: run. The tier decides how it may be executed, and it is recorded rather than
+    #: inferred -- a directory name is not a trust decision.
+    trust: str = "trusted"
+    #: Where it came from, for a package that was imported.
+    origin: str = ""
 
     def __post_init__(self) -> None:
         _check(self.name, "package")
@@ -83,6 +96,12 @@ class Package:
             seen.add(name)
         if self.extends:
             _check(self.extends, "extended package")
+        for requirement in self.requires:
+            _check(requirement, "required package")
+        if self.trust not in TRUST_TIERS:
+            raise PackageError(
+                f"{self.name}: unknown trust tier {self.trust!r}; known: {list(TRUST_TIERS)}"
+            )
 
     def ids(self) -> list[str]:
         return sorted(mode_id(self.name, mode.name) for mode in self.modes)
@@ -100,6 +119,9 @@ class Package:
             "description": self.description,
             "version": self.version,
             "extends": self.extends,
+            "requires": list(self.requires),
+            "trust": self.trust,
+            "origin": self.origin,
             "modes": [
                 {
                     "id": mode_id(self.name, mode.name),
