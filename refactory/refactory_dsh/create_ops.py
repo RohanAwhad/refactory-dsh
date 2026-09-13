@@ -103,15 +103,46 @@ def prepare(ctx: Any) -> dict[str, Any]:
         raise ValueError("create-mode needs a package name in its task, e.g. {'name': 'my_pkg'}")
     brief = str(task.get("brief") or "").strip()
     extends = str(task.get("extends") or "").strip()
-    ctx.write_json("brief.json", {"name": name, "brief": brief, "extends": extends})
+    revision = str(task.get("mode") or "").strip()
+    intent = str(task.get("intent") or "Make a new package of modes.").strip()
+    reference = _revision_source(revision) if revision else _reference(extends)
+    ctx.write_json("brief.json", {
+        "name": name, "brief": brief, "extends": extends, "mode": revision,
+    })
     return {
         "name": name,
         "brief": brief,
         "extends": extends,
+        "revision_of": revision,
+        "intent": intent,
         "validation": "(no validation has run yet)",
+        "design_review": "(no design has been reviewed yet)",
         "api": API,
-        "reference": _reference(extends),
+        "reference": reference,
     }
+
+
+def _revision_source(identifier: str) -> str:
+    """The source of the mode being revised, so a revision starts from it."""
+    try:
+        package, mode_class = registry.resolve(Path.cwd(), identifier)
+    except PackageError as exc:
+        raise ValueError(f"cannot revise {identifier!r}: {exc}") from exc
+    root = registry.where(package.name, Path.cwd())
+    if root is None:
+        raise ValueError(f"cannot find the source of {identifier!r}")
+    blocks = [
+        f"# --- {path.name} ---\n{path.read_text()}"
+        for path in sorted(root.glob("*.py"))
+    ]
+    ours = root / "modes" / f"{mode_class.name}.py"
+    if ours.exists():
+        blocks.append(f"# --- modes/{ours.name} (the mode being revised) ---\n{ours.read_text()}")
+    return (
+        f"This is a revision of `{identifier}`. Keep everything the brief does not ask "
+        "to change, and say in the design what you changed and why.\n\n"
+        + "\n\n".join(blocks)
+    )
 
 
 def _reference(extends: str) -> str:

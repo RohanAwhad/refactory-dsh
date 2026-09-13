@@ -35,10 +35,16 @@ class CreateMode(Mode):
 
     Unscored on purpose: its run is judged by whether the package it produced
     imports, validates and smoke-scores, which the graph itself checks.
+
+    ``intent`` is what the run is *for*, and it is a class attribute because a
+    revision is this same graph with a different brief: survey, choose, review,
+    design, emit, validate. Subclassing to change the intent is cheaper and truer
+    than a second copy of the graph.
     """
 
     name = "create-mode"
     description = "design, emit and validate a whole package from a brief"
+    intent = "Make a new package of modes."
 
     @classmethod
     def declare(cls) -> dict[str, Knob]:
@@ -60,7 +66,8 @@ class CreateMode(Mode):
         graph.add(Node(
             "prepare", "op", call=f"{OPS}:prepare",
             writes=("brief.json",),
-            produces=("name", "brief", "extends", "validation", "api", "reference"),
+            produces=("name", "brief", "extends", "revision_of", "intent", "validation",
+                      "design_review", "api", "reference"),
             notes="read the brief and publish it to the prompts",
         ))
         graph.add(Node(
@@ -71,7 +78,7 @@ class CreateMode(Mode):
         graph.add(Node(
             "strategy", "agent",
             prompt_template=(
-                "You are choosing an approach for a package of modes.\n\n"
+                "{{intent}}\n\n"
                 "Package name: {{name}}\n"
                 "Brief: {{brief}}\n\n"
                 "## What already exists\n{{survey}}\n\n"
@@ -99,7 +106,7 @@ class CreateMode(Mode):
         graph.add(Node(
             "design", "agent",
             prompt_template=(
-                "You are designing a package of modes for a workflow harness.\n\n"
+                "{{intent}}\n\n"
                 "Package name: {{name}}\n"
                 "Brief: {{brief}}\n\n"
                 "Read the API below and write the design for the package: every "

@@ -148,7 +148,14 @@ def ast_check(name: str, project: Path | None = None) -> list[str]:
 
 # ── execution under limits ─────────────────────────────────────────────────
 def scrub(env: dict[str, str] | None = None) -> dict[str, str]:
-    """The environment a sandboxed run sees: an allowlist, with secrets dropped."""
+    """The environment a sandboxed run sees: an allowlist, with secrets dropped.
+
+    The project's own `python` is put on the PATH: a brief's check runs in a
+    subprocess with none of the caller's environment, and "run the tests" means the
+    interpreter that has the project installed.
+    """
+    from refactory_dsh.paths import venv_bin
+
     source = dict(os.environ if env is None else env)
     out: dict[str, str] = {}
     for name in _ALLOWED_ENV:
@@ -157,6 +164,10 @@ def scrub(env: dict[str, str] | None = None) -> dict[str, str]:
         if any(marker in name.upper() for marker in _SECRET_MARKERS):
             continue
         out[name] = source[name]
+    bindir = str(venv_bin())
+    existing = out.get("PATH", "")
+    out["PATH"] = f"{bindir}{os.pathsep}{existing}" if existing else bindir
+    out.setdefault("VIRTUAL_ENV", str(Path(bindir).parent))
     return out
 
 
@@ -246,6 +257,50 @@ def run_sandboxed(
     return SandboxResult(
         ok=result.returncode == 0,
         payload=payload,
+        returncode=result.returncode,
+        stdout=result.stdout,
+        stderr=result.stderr,
+    )
+
+
+def run_command(
+    command: str,
+    *,
+    workdir: Path,
+    timeout_s: int = DEFAULT_TIMEOUT_S,
+    memory_mb: int = DEFAULT_MEMORY_MB,
+    cpu_s: int = DEFAULT_CPU_S,
+    file_mb: int = DEFAULT_FILE_MB,
+    env: dict[str, str] | None = None,
+) -> SandboxResult:
+    """Run a shell command under the same containment as a code snippet.
+
+    A command is what a brief declares as its check ("run the tests", "build it"),
+    and it is arbitrary, so it gets the same limits and the same scrubbed
+    environment as anything else we did not write.
+    """
+    workdir = Path(workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+    child_env = scrub(env)
+    child_env["HOME"] = str(workdir)
+    kwargs: dict[str, Any] = {}
+    if sys.platform != "win32":
+        kwargs["preexec_fn"] = _limits(memory_mb, cpu_s, file_mb)
+    try:
+        result = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            cwd=str(workdir),
+            env=child_env,
+            timeout=timeout_s,
+            **kwargs,
+        )
+    except subprocess.TimeoutExpired:
+        return SandboxResult(ok=False, timed_out=True, stderr="timed out")
+    return SandboxResult(
+        ok=result.returncode == 0,
         returncode=result.returncode,
         stdout=result.stdout,
         stderr=result.stderr,
