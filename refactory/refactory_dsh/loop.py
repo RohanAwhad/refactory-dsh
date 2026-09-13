@@ -42,6 +42,7 @@ from refactory_dsh.optim import (
 )
 from refactory_dsh.optim import create as create_optimizer
 from refactory_dsh.optim.base import summarise_reasons
+from refactory_dsh.outerloop import OuterLoop, Run
 
 
 #: The append-only record of everything a run did. Resume replays it.
@@ -109,8 +110,14 @@ class EpochSummary:
     structural_accepted: int
 
 
-class Loop:
-    """Drive the eight steps over one mode."""
+class Loop(OuterLoop):
+    """The default outer loop: the eight steps over one mode.
+
+    Every step a different strategy would change is a method here, so a strategy
+    subclasses this and overrides one of them rather than copying the loop.
+    """
+
+    name = "default"
 
     def __init__(
         self,
@@ -528,20 +535,22 @@ class Loop:
         }
 
     # ── optimizer ──────────────────────────────────────────────────────────
-    def optimizer_step(self) -> tuple[list[Candidate], list[Rejection]]:
-        parents = self.leaderboard(self.config.elite)
+    def optimizer_step(
+        self, run: Run | None = None
+    ) -> tuple[list[Candidate], list[Rejection]]:
+        """Propose a batch and turn it into candidates, through the overridable steps.
+
+        Going through ``propose`` and ``install`` rather than straight to the
+        optimizer is what lets a strategy change one of them and keep the other.
+        """
+        run = run or Run(loop=self)
+        parents = self.select_parents(self.config.elite)
         if not parents:
             return [], []
-        ctx = self._context()
-        candidates, rejections = self.optimizer.propose_valid(
-            ctx,
-            self.config.batch_size,
-            parents=parents,
-            invariants=self.invariants,
-            preset=self.config.edit_preset,
-            seen=self._tried(),
-        )
-        self.rejections.extend(rejections)
+        before = len(self.rejections)
+        proposals = self.propose(run, parents, self.batch_size(run))
+        candidates = self.install(run, proposals, parents)
+        rejections = self.rejections[before:]
         for rejection in rejections:
             self._journal(
                 "rejection",
@@ -596,7 +605,9 @@ class Loop:
                 )
 
     # ── step ───────────────────────────────────────────────────────────────
-    def step(self, candidates: Sequence[Candidate]) -> list[Candidate]:
+    def step(
+        self, candidates: Sequence[Candidate], run: Run | None = None
+    ) -> list[Candidate]:
         """Add offspring that are genuinely new points in the search."""
         known = {candidate.id for candidate in self.population}
         added: list[Candidate] = []
@@ -658,7 +669,85 @@ class Loop:
         return True
 
     # ── the loop ───────────────────────────────────────────────────────────
-    def epoch_step(self) -> bool:
+    # ── the steps a strategy may override ──────────────────────────────────
+    def select_parents(self, n: int, *, by: str = "score") -> list[Candidate]:
+        """The candidates a proposal is made against. Overridable, not fixed.
+
+        Falls back to the population when nothing has been scored yet: a strategy
+        that asks for parents before the first epoch must get the seed, not an empty
+        list, or the only way to write a strategy is to know the order of the loop.
+        """
+        chosen = self.leaderboard(n)
+        if chosen:
+            return chosen
+        return self.population[:n]
+
+    def propose(self, run: Run, parents: Sequence[Candidate], n: int) -> list[Proposal]:
+        """One round of proposals. The default delegates to the optimizer."""
+        return self.optimizer.propose(self._context(), n, parents)
+
+    def batch_size(self, run: Run) -> int:
+        return int(self.config.batch_size)
+
+    def install(
+        self, run: Run, proposals: Sequence[Proposal], parents: Sequence[Candidate]
+    ) -> list[Candidate]:
+        """Turn proposals into candidates, asking again with the reasons.
+
+        This is the validating loop the whole design rests on: apply, refuse with a
+        coded reason, feed the reasons back, and only ever hand a candidate to
+        evaluation. Overriding it is how a strategy changes how many times it asks.
+        """
+        accepted: list[Candidate] = []
+        wanted = self.batch_size(run)
+        for _attempt in range(1, max(1, self.config.attempts) + 1):
+            if len(accepted) >= wanted:
+                break
+            before = len(self.rejections)
+            for proposal in proposals:
+                if len(accepted) >= wanted:
+                    break
+                parent = next((p for p in parents if p.id == proposal.parent), parents[0])
+                outcome = run.attempt(proposal, parent)
+                if isinstance(outcome, Candidate):
+                    accepted.append(outcome)
+            if len(accepted) >= wanted or len(self.rejections) == before:
+                break
+            proposals = self.propose(run, parents, wanted - len(accepted))
+            if not proposals:
+                break
+        return accepted
+
+    def strategy(self, run: Run) -> None:
+        """The default control flow: repeated epochs, each one step of the loop.
+
+        `should_stop` is consulted first so a strategy can end for a reason of its
+        own -- a plateau, a convergence -- without replacing the loop.
+        """
+        while True:
+            reason = self.should_stop(run)
+            if reason:
+                run.stop(reason)
+                return
+            if not self.epoch_step(run):
+                return
+
+    def should_stop(self, run: Run) -> str | None:
+        """A reason to stop before the bound, or ``None``. The bound is the default."""
+        return run.stopped
+
+    def accepts(self, run: Run, candidate: Candidate) -> bool:
+        """Whether a validated candidate is kept. A loser can still be archived."""
+        return True
+
+    def update(self, run: Run, candidate: Candidate) -> None:
+        """Record a kept candidate. This is where an archive lives."""
+        self.archive.add(candidate) if hasattr(self, "archive") else None
+
+    def on_epoch_end(self, run: Run) -> None:
+        """Called once per iteration, after the scheduler."""
+
+    def epoch_step(self, run: Run | None = None) -> bool:
         """One iteration, and whether there is another.
 
         The epoch is opened here and closed by the scheduler, and both are journaled.
@@ -672,20 +761,17 @@ class Loop:
         evaluated = self.forward()
         self.loss_step()
         self.backward()
-        candidates, rejections = self.optimizer_step()
-        self.step(candidates)
+        candidates, rejections = self.optimizer_step(run)
+        kept = self.step([c for c in candidates if self.accepts(run, c)], run=run)
+        for candidate in kept:
+            self.update(run, candidate)
         another = self.scheduler(
             evaluated=evaluated, proposed=len(candidates) + len(rejections)
         )
+        self.on_epoch_end(run)
         self._epoch_open = False
         self._journal("epoch_end", epoch=self.epoch)
         return another
-
-    def run(self) -> dict[str, Any]:
-        self.init()
-        while self.epoch_step():
-            continue
-        return self.report()
 
     # ── report ─────────────────────────────────────────────────────────────
     def leaderboard(self, limit: int | None = None) -> list[Candidate]:
@@ -933,6 +1019,24 @@ class Loop:
             and not self._reachable(name, spec)
         )
 
+    def state_dict(self) -> dict[str, Any]:
+        """The search's own state: where it is, and what it is searching.
+
+        Distinct from a mode's `state_dict`, which is the thing being searched. A
+        strategy that wants to inspect the search gets this.
+        """
+        return {
+            "mode": self.mode_id,
+            "epoch": self.epoch,
+            "generation": self.generation,
+            "evaluations": self.evaluations,
+            "bound": self.bound,
+            "evaluator": self.config.evaluator,
+            "optimizer": self.optimizer.name,
+            "seed": self.mode.state_dict(),
+            "population": [candidate.describe() for candidate in self.population],
+        }
+
     def _tried(self) -> list[str]:
         """Every state id that exists, so a duplicate can be refused."""
         return sorted(candidate.id for candidate in self.population)
@@ -1150,6 +1254,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--epochs", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--optimizer", default="autoresearch", choices=["autoresearch", "random"])
+    from refactory_dsh import strategies
+
+    parser.add_argument(
+        "--strategy", default="default", choices=strategies.names(),
+        help="which outer loop drives the search; the default is the harness's own",
+    )
     parser.add_argument(
         "--evaluator", default="walker", choices=["walker", "dsh"],
         help="which runtime runs a candidate: walker (fast, for search) or dsh "
@@ -1184,7 +1294,9 @@ def main(argv: list[str] | None = None) -> int:
         runs_root=Path(args.runs_root),
     )
     try:
-        loop = Loop(args.mode, config, project=Path(args.project), model=model)
+        loop = strategies.create(
+            args.strategy, args.mode, config, project=Path(args.project), model=model
+        )
         report = loop.run()
     except LoopError as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
