@@ -1,56 +1,127 @@
 {
-  "objective": "Python-first modes and an optimizer loop: a mode is a class, its architecture and parameters are a state dict, and optimizers propose validated typed edits",
-  "rule": "Do not stop while any item below is not 'done'. test_work_complete.py fails otherwise.",
+  "objective": "Implement and test every open issue in refactory-dsh, in ranked order, verified against the circle_packing + annealing_pack running example",
+  "rule": "Do not stop while any item below is not 'done'. test_work_complete.py fails otherwise, and it requires every item to name its issue, its verification command, and (once done) the evidence observed.",
+  "ordered_by": "correctness first, then the runtime, then the API, then independent tracks, then the generators, then the future work",
   "items": [
     {
-      "id": "nnlib",
-      "title": "nn library: Knob, Graph, Mode, state_dict round-trip, strict load, validator",
-      "status": "done"
+      "id": "history",
+      "issue": 19,
+      "title": "History access, and refuse a proposal that reproduces an existing state (E-duplicate)",
+      "why": "A real bug: duplicates are silently dropped by step(), so batch slots are lost and the run overstates what it tried. Also the prerequisite for the OuterLoop run handle.",
+      "verify": "pytest refactory/tests/test_optim.py refactory/tests/test_loop.py -q",
+      "status": "todo"
     },
     {
-      "id": "edits",
-      "title": "Edit algebra: nine primitives, eight macros as compositions, naive (never repairs)",
-      "status": "done"
+      "id": "strknob",
+      "issue": 16,
+      "title": "str knobs are invisible to the random optimizer and to init's sweep",
+      "why": "Closes the 'declared = optimizable' guarantee, which is the rule the whole seam rests on.",
+      "verify": "pytest refactory/tests/test_nn.py refactory/tests/test_optim.py refactory/tests/test_loop.py -q",
+      "status": "todo"
     },
     {
-      "id": "executor",
-      "title": "Executor: runs a built graph in process, bounds gates, enforces declarations",
-      "status": "done"
+      "id": "integrity",
+      "issue": 25,
+      "title": "Path-aware evaluation integrity, and the validator's rules stated in the optimizer prompt",
+      "why": "The metric guard is weaker than designed (graph-wide, not path-aware), and every run wastes attempts rediscovering V1-V10.",
+      "verify": "pytest refactory/tests/test_nn.py refactory/tests/test_optim.py -q",
+      "status": "todo"
     },
     {
-      "id": "packages",
-      "title": "Packages own modes: <package>/<name>, discovery, enable/disable, catalogue, no package named by the library",
-      "status": "done"
+      "id": "authoring",
+      "issue": 24,
+      "title": "Mode authoring surface: declared memory with retention, ports, declared surface",
+      "why": "Cross-run priors need somewhere declared to live; the GUI needs to know what a mode publishes.",
+      "verify": "pytest refactory/tests/test_nn.py refactory/tests/test_registry.py -q",
+      "status": "todo"
     },
     {
-      "id": "circlemode",
-      "title": "circle_packing ported from the JSON fast mode; seed 0.875, knob and structural wins measured",
-      "status": "done"
+      "id": "durability",
+      "issue": 27,
+      "title": "Run durability: artifact schema version, and resume from an append-only log",
+      "why": "A crash loses the run, and unversioned artifacts make an old report read as current.",
+      "verify": "pytest refactory/tests/test_loop.py -q",
+      "status": "todo"
     },
     {
-      "id": "optim",
-      "title": "Optimizers with the internal propose/validate/regenerate loop; refusals carry codes and are fed back",
-      "status": "done"
+      "id": "dsh",
+      "issue": 21,
+      "title": "Lower the mode state dict to refactory's IR and run it on DSH",
+      "why": "The stated target: DSH is the runtime, the Python walker is a debug runtime.",
+      "verify": "pytest refactory/tests/test_lowering.py refactory/tests/test_equivalence.py -q",
+      "status": "todo"
     },
     {
-      "id": "loop",
-      "title": "The eight-step loop with a bound it reports, a parameter sweep to start, and a gradient that names untried values",
-      "status": "done"
+      "id": "seams",
+      "issue": 20,
+      "title": "Two extension points (Optimizer, OuterLoop) plus all 13 SRF strategies ported",
+      "why": "The search research surface. The abstraction is proven by the ports, not by tests of the abstraction.",
+      "verify": "pytest refactory/tests/test_outerloop.py refactory/tests/test_strategies.py -q",
+      "status": "todo"
     },
     {
-      "id": "createmode",
-      "title": "create-mode: a brief in, a validated, registered, smoke-scoring package out",
-      "status": "done"
+      "id": "pkg",
+      "issue": 14,
+      "title": "Package lifecycle: import, add, remove, enable/disable; workspace root; provenance and trust",
+      "why": "A regression against the deleted glue, and generated packages currently land in the source tree.",
+      "verify": "pytest refactory/tests/test_registry.py -q",
+      "status": "todo"
     },
     {
-      "id": "realruns",
-      "title": "Real model runs: create-mode produced annealing_pack (smoke 1.075); the loop took circle_packing 0.875 -> 1.08 with a structural win and annealing_pack 1.075 -> 1.41",
-      "status": "done"
+      "id": "sandbox",
+      "issue": 23,
+      "title": "Generated packages execute as trusted code",
+      "why": "create-mode imports and runs model-written Python with no isolation; the old system sandboxed candidates.",
+      "verify": "pytest refactory/tests/test_sandbox.py -q",
+      "status": "todo"
     },
     {
-      "id": "deletions",
-      "title": "JSON-authoring path removed: ops/, scaffold, devgen, knobs, report, trace, steering, packages.py, gen_presets, graphs/",
-      "status": "done"
+      "id": "signals",
+      "issue": 26,
+      "title": "Optimizer-facing signals: author priors, refusal findings, block signals, no-op as convergence",
+      "why": "Makes the search better; none of it makes it correct, which is why it follows the correctness work.",
+      "verify": "pytest refactory/tests/test_optim.py refactory/tests/test_loop.py -q",
+      "status": "todo"
+    },
+    {
+      "id": "gui",
+      "issue": 17,
+      "title": "Run and visualise the outer loop from the GUI, with the loop staying Pythonic",
+      "why": "A user must be able to start a run and read what came out without a terminal.",
+      "verify": "pytest refactory/tests/test_gui_loop.py -q",
+      "status": "todo"
+    },
+    {
+      "id": "create",
+      "issue": 12,
+      "title": "create-mode: survey, strategy, design review, then emit",
+      "why": "It is a stub next to create-v2: no research, no strategy, no design review.",
+      "verify": "pytest refactory/tests/test_create.py -q",
+      "status": "todo"
+    },
+    {
+      "id": "design2",
+      "issue": 22,
+      "title": "design-v2: the third meta-mode, emitting software rather than a package",
+      "why": "A named deliverable of the original product with no replacement.",
+      "verify": "pytest refactory/tests/test_design.py -q",
+      "status": "todo"
+    },
+    {
+      "id": "edit",
+      "issue": 13,
+      "title": "Edit an existing mode from a brief, with provenance and a before/after score",
+      "why": "The honest middle path between creating from scratch and hoping a random edit lands.",
+      "verify": "pytest refactory/tests/test_edit.py -q",
+      "status": "todo"
+    },
+    {
+      "id": "loopasmode",
+      "issue": 18,
+      "title": "Stretch: express the outer loop as a refactory mode",
+      "why": "Future work, but the OuterLoop surface is chosen so this is a lowering rather than a rewrite.",
+      "verify": "pytest refactory/tests/test_loop_as_mode.py -q",
+      "status": "todo"
     }
   ]
 }
