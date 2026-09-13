@@ -127,7 +127,9 @@
       "title": "design-v2: the third meta-mode, emitting software rather than a package",
       "why": "A named deliverable of the original product with no replacement.",
       "verify": "pytest refactory/tests/test_design.py -q",
-      "status": "todo"
+      "status": "done",
+      "commit": "bfdabc56bb",
+      "evidence": "379 passed. tests/test_edit_design.py: the design graph is a different shape (no register, no smoke); its state validates with all calls resolved; designing needs a check and refuses without one; the artifact lands beside the workspace, not in it; the check gate proceeds when the artifact runs and reloops with what the check said when it does not; the check runs without the real credentials; a full run with a fake model produces a checked artifact; a design that never passes fails loudly. A real run designed a wordcount tool: one file, its declared check passed, 6 graph steps, 70s. Reproduce: pytest refactory/tests/test_edit_design.py -q"
     },
     {
       "id": "edit",
@@ -135,7 +137,9 @@
       "title": "Edit an existing mode from a brief, with provenance and a before/after score",
       "why": "The honest middle path between creating from scratch and hoping a random edit lands.",
       "verify": "pytest refactory/tests/test_edit.py -q",
-      "status": "todo"
+      "status": "done",
+      "commit": "bfdabc56bb",
+      "evidence": "379 passed. tests/test_edit_design.py (17 tests): EditMode is the create graph with a different intent; prepare hands the model the source being revised and records revision_of; a revision needs a mode; a revision produces a package and reports before and after scores; provenance records what it came from; a regression is refused by default and allowed with allow_regression; a revision of a mode that does not run is refused. A real run revised circle_packing/adaptive to add a stall-restart: 0.875 -> 0.99, regressed false, three files. Reproduce: pytest refactory/tests/test_edit_design.py -q"
     },
     {
       "id": "loopasmode",
