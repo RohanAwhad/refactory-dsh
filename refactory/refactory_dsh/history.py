@@ -28,6 +28,10 @@ RUN_VERSION = 1
 #: Where a run records its own version.
 RUN_FILE = "run.json"
 
+#: The append-only event log a run is replayed from, and the only place a
+#: candidate's whole state is written down.
+JOURNAL = "journal.jsonl"
+
 
 class RunVersionError(ValueError):
     """A run directory was written by a different layout."""

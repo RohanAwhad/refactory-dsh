@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from refactory_dsh import history as run_history
+from refactory_dsh import observe as progress_file
 from refactory_dsh.memory import MemoryStore
 from refactory_dsh import registry
 from refactory_dsh.nn import Knob, PackageError
@@ -44,9 +45,8 @@ from refactory_dsh.optim import create as create_optimizer
 from refactory_dsh.optim.base import summarise_reasons
 from refactory_dsh.outerloop import OuterLoop, Run
 
-
 #: The append-only record of everything a run did. Resume replays it.
-JOURNAL = "journal.jsonl"
+JOURNAL = run_history.JOURNAL
 
 
 class LoopError(RuntimeError):
@@ -90,6 +90,10 @@ class LoopConfig:
     #: A run reproduces what an uninterrupted one would have done exactly when its
     #: optimizer is deterministic, which is stated rather than assumed.
     resume: bool = False
+    #: Write ``progress.jsonl`` as the run goes. Off for a run nobody is watching:
+    #: the file is written per candidate, not per epoch, so it is the one artifact
+    #: whose cost scales with the batch.
+    progress: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -225,6 +229,7 @@ class Loop(OuterLoop):
         )
         if resumed:
             self._write_state()
+            self._progress("init", resumed=True, population=len(self.population))
             return
 
         self._journal("start", mode=self.mode_id, config=self.config.to_dict())
@@ -233,6 +238,14 @@ class Loop(OuterLoop):
         self._journal_candidate(seed)
         self._seed_population(seed)
         self._write_state()
+        self._progress(
+            "init",
+            resumed=False,
+            population=len(self.population),
+            epochs=self.config.epochs,
+            batch_size=self.config.batch_size,
+            optimizer=self.optimizer.name,
+        )
 
     def _seed_population(self, seed: Candidate) -> None:
         """Fill the starting batch with neighbours of the seed.
@@ -304,10 +317,20 @@ class Loop(OuterLoop):
     def forward(self) -> int:
         """Evaluate every candidate in the batch that has not run yet."""
         batch = [candidate for candidate in self.population if not candidate.evaluated]
-        for candidate in batch:
+        for index, candidate in enumerate(batch):
             if self.evaluations >= self.config.max_evaluations:
                 break
             self._evaluate(candidate)
+            self._progress(
+                "forward",
+                candidate=candidate.id,
+                index=index,
+                of=len(batch),
+                score=candidate.score,
+                exit_ok=candidate.exit_ok,
+                error=candidate.error,
+                duration_s=candidate.duration_s,
+            )
         return len(batch)
 
     def _evaluate_on_dsh(self, candidate: Candidate, mode: Any, workdir: Path) -> None:
@@ -439,6 +462,7 @@ class Loop(OuterLoop):
         }
         self._write("loss.json", self.loss)
         self._journal("loss", **self.loss)
+        self._progress("loss", **self.loss)
         return self.loss
 
     # ── backward ───────────────────────────────────────────────────────────
@@ -457,6 +481,11 @@ class Loop(OuterLoop):
             "leaderboard": [c.describe() for c in self.leaderboard(8)],
         }
         self._write("gradient.json", self.gradient)
+        self._progress(
+            "backward",
+            knobs=len(self.gradient["knob_attribution"]),
+            failures=len(self.gradient["run_failures"]),
+        )
         return self.gradient
 
     def _knob_attribution(self, evaluated: Sequence[Candidate]) -> dict[str, Any]:
@@ -647,6 +676,13 @@ class Loop(OuterLoop):
             })
         self._write_analysis()
         self._append_rejections(rejections)
+        self._progress(
+            "optimizer",
+            proposed=len(proposals),
+            accepted=len(candidates),
+            refused=len(rejections),
+            children=[c.id for c in candidates],
+        )
         return candidates, rejections
 
     def _write_analysis(self) -> None:
@@ -715,6 +751,7 @@ class Loop(OuterLoop):
             refusal_pressure=round(self._refusal_pressure, 6),
         )
         self._write_state()
+        self._progress("step", added=len(added), population=len(self.population))
         return added
 
     # ── scheduler ──────────────────────────────────────────────────────────
@@ -743,11 +780,18 @@ class Loop(OuterLoop):
 
         if self.epoch >= self.config.epochs:
             self.bound = "epochs"
-            return False
-        if self.evaluations >= self.config.max_evaluations:
+        elif self.evaluations >= self.config.max_evaluations:
             self.bound = "evaluations"
-            return False
-        return True
+        self._progress(
+            "scheduler",
+            epoch=self.epoch,
+            best=summary.best,
+            mean=summary.mean,
+            improved=summary.improved,
+            bound=self.bound,
+            another=not self.bound,
+        )
+        return not self.bound
 
     # ── the loop ───────────────────────────────────────────────────────────
     # ── the steps a strategy may override ──────────────────────────────────
@@ -917,6 +961,13 @@ class Loop(OuterLoop):
         }
         self._write("report.json", payload)
         self._write_text("report.md", self._render_report(payload))
+        self._write("manifest.json", progress_file.artifact_manifest(self.root))
+        self._progress(
+            "report",
+            best_score=payload["best_score"],
+            evaluations=self.evaluations,
+            bound=self.bound,
+        )
         return payload
 
     def _lineage(self, candidate: Candidate | None) -> list[dict[str, Any]]:
@@ -1282,6 +1333,28 @@ class Loop(OuterLoop):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
         return path
+
+    def _progress(self, step: str, **fields: Any) -> None:
+        """One line of "where the run is", readable while it is still running.
+
+        The journal already records everything, but it is replayed rather than
+        tailed and a step is only interesting once you know which one it was. This
+        is the same facts at the granularity a reader watches: one line per
+        candidate evaluated, not one per epoch, because an epoch can be an hour.
+        """
+        if not self.config.progress:
+            return
+        self.root.mkdir(parents=True, exist_ok=True)
+        record = {
+            "step": step,
+            "epoch": self.epoch,
+            "generation": self.generation,
+            "evaluations": self.evaluations,
+            "time": round(time.time(), 3),
+            **fields,
+        }
+        with (self.root / progress_file.PROGRESS).open("a") as handle:
+            handle.write(json.dumps(record, default=str) + "\n")
 
     def _write_state(self) -> None:
         self._write(
