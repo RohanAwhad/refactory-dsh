@@ -79,7 +79,9 @@
       "title": "Package lifecycle: import, add, remove, enable/disable; workspace root; provenance and trust",
       "why": "A regression against the deleted glue, and generated packages currently land in the source tree.",
       "verify": "pytest refactory/tests/test_registry.py -q",
-      "status": "todo"
+      "status": "done",
+      "commit": "5023ed4b80",
+      "evidence": "315 passed. tests/test_package_lifecycle.py is new (27 tests): the workspace is not the install tree; a workspace package is discovered, is importable by its normal path, and is reported by the catalogue with where it lives; a name in both roots is refused; add copies, records provenance and trust, refuses a clash, renames with --as, refuses a non-package; import takes a path or refuses a non-path; remove deletes a workspace package, refuses an installed one as read-only, refuses to break a dependent and allows --force; verify reports a missing requirement and a mode whose call does not resolve, and is clean for every installed package; the CLI verbs add, remove, verify, smoke, enable, disable all work and a refusal is a message not a traceback; generated packages are marked. create-mode now writes into the workspace, and annealing_pack declares requires=('circle_packing',). Reproduce: pytest refactory/tests/test_package_lifecycle.py -q"
     },
     {
       "id": "sandbox",
