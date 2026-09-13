@@ -1,0 +1,214 @@
+"""Lower a mode state to refactory's IR, so DSH can run it.
+
+The IR is the seam. A mode's state dict stays the optimizer's write surface; the
+IR is what runs. Building real `factory.workflow` objects rather than emitting JSON
+by hand means pydantic validates the result, so an IR that lowers is an IR that
+loads.
+
+Node mapping:
+
+======================  ==================================================
+`op`                    `FnNode` running ``python -m refactory_dsh.run <call>``
+`agent`                 `AgentNode`, which DSH runs as a subagent
+`gate`                  `GateNode(evaluator_type="fn")`, verdict = last stdout line
+======================  ==================================================
+
+The runner is told its own node through the spine's `DSH_WORKFLOW_NODE`, and the
+knobs through the command environment, so a node command knows nothing about the
+graph that invoked it.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+from factory.workflow.primitives import AgentNode, AgentRole, Edge, FnNode, GateNode, Workflow
+
+from refactory_dsh.nn import Graph, Knob
+
+#: How a node names the operation it runs. Resolved by the runtime, so no package
+#: is named here and no absolute path is baked in: `--python-bin` supplies the PATH.
+RUNNER = "python -m refactory_dsh.run"
+
+#: The environment variable the knobs travel in.
+KNOBS_ENV = "REFACTORY_KNOBS"
+
+#: The graph file the science bundle loads, one per mode.
+SUFFIX = ".graph.json"
+
+#: Where the run's node declarations are left for the runner.
+#:
+#: `DSH_WORKFLOW_NODE` carries `{id, type, command, reads, writes}` -- the IR has no
+#: representation for the facts a node produces, because the IR's nodes do not have
+#: facts. So the declarations the IR cannot carry are written into the run directory,
+#: and the runner reads them there. Without this the runner could not enforce the
+#: produces check, and a node that lies about its facts would go unnoticed on the
+#: DSH path while being caught on the walker.
+DECLARATIONS = ".refactory/declarations.json"
+
+
+def node_declarations(state: dict[str, Any]) -> dict[str, dict[str, list[str]]]:
+    """Every node's declared reads, writes and facts, keyed by node id."""
+    graph = Graph.from_state(state.get("graph") or {})
+    return {
+        node_id: {
+            "reads": sorted(node.reads),
+            "writes": sorted(node.writes),
+            "produces": sorted(node.produces),
+        }
+        for node_id, node in graph.nodes.items()
+    }
+
+
+def write_declarations(state: dict[str, Any], workdir: Path) -> Path:
+    """Leave the declarations where the runner will look for them."""
+    path = Path(workdir) / DECLARATIONS
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(node_declarations(state), indent=2, default=str))
+    return path
+
+
+def read_declarations(workdir: Path) -> dict[str, dict[str, list[str]]]:
+    path = Path(workdir) / DECLARATIONS
+    if not path.exists():
+        return {}
+    try:
+        loaded = json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+class LoweringError(ValueError):
+    """A state cannot be expressed in the IR, and saying why is more useful than a traceback."""
+
+
+def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "") -> Workflow:
+    """The refactory `Workflow` for a mode state."""
+    graph = Graph.from_state(state.get("graph") or {})
+    nodes: dict[str, Any] = {}
+    for node_id in sorted(graph.nodes):
+        node = graph.nodes[node_id]
+        common = {
+            "id": node.id,
+            "reads": set(node.reads),
+            "writes": set(node.writes),
+            "blocking": node.blocking,
+        }
+        if node.kind == "op":
+            nodes[node_id] = FnNode(
+                **common,
+                command=f"{RUNNER} {node.call}",
+                notes=node.notes,
+            )
+        elif node.kind == "gate":
+            nodes[node_id] = GateNode(
+                **common,
+                evaluator_type="fn",
+                evaluator_command=f"{RUNNER} {node.evaluator}",
+                max_iterations=node.max_iterations,
+            )
+        else:
+            try:
+                role = AgentRole(node.role)
+            except ValueError as exc:
+                known = ", ".join(member.value for member in AgentRole)
+                raise LoweringError(
+                    f"agent node {node.id!r} declares role {node.role!r}, which the IR "
+                    f"does not have; known roles: {known}"
+                ) from exc
+            nodes[node_id] = AgentNode(
+                **common,
+                role=role,
+                prompt_template=node.prompt_template,
+                tools=list(node.tools),
+                max_iterations=node.max_iterations,
+            )
+
+    edges = [
+        Edge(source=edge.source, target=edge.target, condition=edge.condition)
+        for edge in sorted(graph.edges, key=lambda e: e.key())
+    ]
+    return Workflow(
+        name=name or "mode",
+        nodes=nodes,
+        edges=edges,
+        start_node=graph.start,
+        terminal=True,
+        knob_values=_ir_knobs(state.get("knobs") or {}),
+        knob_specs={
+            knob_name: dict(entry.get("spec") or {})
+            for knob_name, entry in (state.get("knobs") or {}).items()
+        },
+    )
+
+
+def _ir_knobs(knobs: dict[str, Any]) -> dict[str, str | float]:
+    """The knob values as the IR records them.
+
+    The IR's field is ``str | float`` and pydantic is strict, so a bool or an int
+    has to be projected. The authoritative transport is the JSON in the command
+    environment, which keeps the types; this is the IR's own record of the run.
+    """
+    out: dict[str, str | float] = {}
+    for knob_name, entry in knobs.items():
+        value = entry.get("value")
+        if isinstance(value, bool):
+            out[knob_name] = 1.0 if value else 0.0
+        elif isinstance(value, (int, float)):
+            out[knob_name] = float(value)
+        else:
+            out[knob_name] = str(value)
+    return out
+
+
+def knob_environment(state: dict[str, Any], *, extra: dict[str, str] | None = None) -> dict[str, str]:
+    """The environment a node command runs under: the knobs, and whatever else."""
+    values = {name: entry.get("value") for name, entry in (state.get("knobs") or {}).items()}
+    env = {KNOBS_ENV: json.dumps(values, default=str)}
+    env.update(extra or {})
+    return env
+
+
+def validate_ir(workflow: Workflow) -> list[str]:
+    """refactory's own validation of a lowered graph.
+
+    A second opinion on purpose: the spine refuses a graph its walk cannot follow,
+    and this is the language's own check. A state that passes our validator and
+    fails this one is a lowering bug, not a bad candidate.
+    """
+    return list(workflow.validate_graph())
+
+
+def write_mode_graph(
+    state: dict[str, Any], out_dir: Path, *, name: str, description: str = ""
+) -> tuple[Path, Workflow]:
+    """Write ``<out_dir>/<name>.graph.json`` the way the science bundle loads it."""
+    workflow = to_workflow(state, name=name, description=description)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"{name}{SUFFIX}"
+    path.write_text(json.dumps(workflow.to_dict(), indent=2, default=str))
+    return path, workflow
+
+
+def node_manifest(state: dict[str, Any], node_id: str) -> dict[str, Any]:
+    """What a node command is told about itself, mirroring `DSH_WORKFLOW_NODE`."""
+    graph = Graph.from_state(state.get("graph") or {})
+    node = graph.nodes[node_id]
+    return {
+        "id": node.id,
+        "type": {"op": "FnNode", "agent": "AgentNode", "gate": "GateNode"}[node.kind],
+        "command": node.call or node.evaluator,
+        "reads": sorted(node.reads),
+        "writes": sorted(node.writes),
+    }
+
+
+def knob_specs(state: dict[str, Any]) -> dict[str, Knob]:
+    return {
+        name: Knob.from_spec(dict(entry.get("spec") or {}))
+        for name, entry in (state.get("knobs") or {}).items()
+    }

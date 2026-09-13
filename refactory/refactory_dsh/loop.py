@@ -80,6 +80,11 @@ class LoopConfig:
     #: Where a ``global``-retention memory lives. Injected so a test can put it
     #: somewhere temporary instead of the home directory.
     memory_global_root: Path | None = None
+    #: Which runtime runs a candidate: "walker" (fast, for search) or "dsh" (the
+    #: runtime that ships). Both score identically; the equivalence tests keep it so.
+    evaluator: str = "walker"
+    #: Wall-clock ceiling for one inner run when the evaluator is DSH.
+    dsh_timeout_s: int = 900
     #: Carry on from the journal in the run directory instead of starting over.
     #: A run reproduces what an uninterrupted one would have done exactly when its
     #: optimizer is deterministic, which is stated rather than assumed.
@@ -167,6 +172,11 @@ class Loop:
             raise LoopError(
                 f"the seed state of {self.mode_id} is not runnable; "
                 f"first problem: {issues[0]}"
+            )
+        if self.config.evaluator not in ("walker", "dsh"):
+            raise LoopError(
+                f"unknown evaluator {self.config.evaluator!r}; known: walker, dsh. "
+                "The walker is the debug runtime, DSH is the runtime that ships."
             )
         unreachable = self.unreachable_knobs()
         if unreachable:
@@ -291,9 +301,61 @@ class Loop:
             self._evaluate(candidate)
         return len(batch)
 
+    def _evaluate_on_dsh(self, candidate: Candidate, mode: Any, workdir: Path) -> None:
+        """One forward pass on the runtime that ships, scored by the mode."""
+        from refactory_dsh.dsh_runtime import evaluate_on_dsh
+
+        result = evaluate_on_dsh(
+            mode, candidate.state, workdir, timeout_s=self.config.dsh_timeout_s
+        )
+        candidate.score = result.score
+        candidate.mean_score = result.score
+        candidate.facts = _trim(result.facts)
+        candidate.exit_ok = result.exit_ok
+        candidate.error = result.error
+        candidate.duration_s = result.duration_s
+        candidate.model_calls = result.model_calls
+        candidate.evaluated = True
+        self.evaluations += 1
+        self._journal(
+            "score",
+            id=candidate.id,
+            score=candidate.score,
+            exit_ok=candidate.exit_ok,
+            error=candidate.error,
+            duration_s=candidate.duration_s,
+            model_calls=candidate.model_calls,
+            facts=candidate.facts,
+        )
+        self._write_candidate(candidate, workdir)
+
+    def _write_candidate(self, candidate: Candidate, workdir: Path) -> None:
+        workdir.mkdir(parents=True, exist_ok=True)
+        (workdir / "candidate.json").write_text(
+            json.dumps(
+                {
+                    "id": candidate.id,
+                    "parent": candidate.parent,
+                    "score": candidate.score,
+                    "exit_ok": candidate.exit_ok,
+                    "error": candidate.error,
+                    "duration_s": candidate.duration_s,
+                    "edits": candidate.edits,
+                    "facts": candidate.facts,
+                    "model_calls": candidate.model_calls,
+                    "ports": {},
+                },
+                indent=2,
+                default=str,
+            )
+        )
+
     def _evaluate(self, candidate: Candidate) -> None:
         workdir = self.root / "runs" / candidate.id
         mode = self.mode_class(state=candidate.state)
+        if self.config.evaluator == "dsh":
+            self._evaluate_on_dsh(candidate, mode, workdir)
+            return
         # One store per inner run: a `run`-retention memory is scoped to this run
         # and no other, which is the enforcement of that policy.
         store = MemoryStore(
@@ -646,6 +708,7 @@ class Loop:
             "epochs_completed": self.epoch,
             "batch_size": self.config.batch_size,
             "optimizer": self.optimizer.name,
+            "evaluator": self.config.evaluator,
             "evaluations": self.evaluations,
             "population": len(self.population),
             "best": best.describe() if best else None,
@@ -1087,6 +1150,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--epochs", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--optimizer", default="autoresearch", choices=["autoresearch", "random"])
+    parser.add_argument(
+        "--evaluator", default="walker", choices=["walker", "dsh"],
+        help="which runtime runs a candidate: walker (fast, for search) or dsh "
+             "(the runtime that ships)",
+    )
     parser.add_argument("--preset", default="broad", help="which edits the optimizer may use")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--elite", type=int, default=3, help="how many parents to propose against")
@@ -1107,6 +1175,7 @@ def main(argv: list[str] | None = None) -> int:
         epochs=args.epochs,
         batch_size=args.batch_size,
         optimizer=args.optimizer,
+        evaluator=args.evaluator,
         edit_preset=args.preset,
         seed=args.seed,
         elite=args.elite,
@@ -1125,6 +1194,7 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "mode": report["mode"],
                 "optimizer": report["optimizer"],
+                "evaluator": loop.config.evaluator,
                 "bound": report["bound"],
                 "evaluations": report["evaluations"],
                 "seed_score": report["seed_score"],
