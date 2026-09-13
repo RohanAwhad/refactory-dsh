@@ -1,0 +1,296 @@
+"""A mode: a Python class whose architecture and parameters are serializable.
+
+The class plays the role ``nn.Module`` plays: it declares the parameters, builds
+the structure, and scores a run. The state dict plays the role ``state_dict``
+plays, with one deliberate difference — it carries the architecture as well as
+the parameters, because the outer loop searches architecture too. The validator
+in :mod:`refactory_dsh.nn.validate` is what replaces the structural guarantee
+``load_state_dict(strict=True)`` gets for free in PyTorch.
+
+Authority after genesis is the state, not the class. ``build()`` is how an author
+constructs the starting architecture; from then on the optimizer edits that
+architecture as data, and an edit is applied to the state dict rather than by
+re-running ``build()``. A knob is therefore consumed by a node at run time, never
+read by ``build()`` to choose structure; the validator refuses a knob no node
+consumes, so the two mechanisms cannot be confused.
+
+``score()`` and ``invariants()`` are methods. They are never part of the state,
+so no proposal can reach them: protecting the score is structural, not defensive.
+"""
+
+from __future__ import annotations
+
+import copy
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, ClassVar, Mapping
+
+from .graph import Graph, GraphError, Node
+from .knob import Knob, KnobError
+from .validate import Invariant
+
+#: Bumped when the state layout changes incompatibly.
+STATE_VERSION = 1
+
+_TOP_LEVEL = frozenset({"version", "graph", "knobs"})
+_KNOB_ENTRY = frozenset({"value", "spec"})
+
+
+class StateError(ValueError):
+    """A state dict is not a valid state for this mode."""
+
+
+@dataclass
+class RunResult:
+    """What one inner run produced: the facts, the score, and how the run went."""
+
+    facts: dict[str, Any] = field(default_factory=dict)
+    iterations: int = 0
+    duration_s: float = 0.0
+    exit_ok: bool = True
+    error: str | None = None
+    workdir: Path | None = None
+    score: float = 0.0
+    #: How many model calls the run made, so an inserted agent node's cost is a
+    #: reported number rather than something a reader has to infer from wall clock.
+    model_calls: int = 0
+
+
+class _Values:
+    """Attribute access to a mode's current parameter values."""
+
+    def __init__(self, values: Mapping[str, Any]) -> None:
+        object.__setattr__(self, "_values", values)
+
+    def __getattr__(self, name: str) -> Any:
+        values = object.__getattribute__(self, "_values")
+        if name not in values:
+            known = ", ".join(sorted(values)) or "none"
+            raise AttributeError(f"no knob {name!r}; declared knobs: {known}")
+        return values[name]
+
+    def __getitem__(self, name: str) -> Any:
+        return getattr(self, name)
+
+
+class Mode:
+    """Base class for a mode. Subclasses declare knobs, build, score."""
+
+    name: ClassVar[str] = ""
+    description: ClassVar[str] = ""
+
+    def __init__(self, state: dict[str, Any] | None = None) -> None:
+        if state is None:
+            self._knobs = self._declared_entries()
+            self._graph_state = self.build().to_state()
+        else:
+            self._knobs: dict[str, dict[str, Any]] = {}
+            self._graph_state: dict[str, Any] = {}
+            self.load_state_dict(state)
+
+    # ── the author's surface ───────────────────────────────────────────────
+    @classmethod
+    def declare(cls) -> dict[str, Knob]:
+        """The parameters this mode exposes. Override to declare knobs."""
+        return {}
+
+    def build(self) -> Graph:
+        """Construct the starting architecture. Pure: no I/O, no randomness."""
+        raise NotImplementedError(f"{type(self).__name__} does not implement build()")
+
+    def score(self, run: RunResult) -> float:
+        """Turn one run into the number the outer loop maximizes.
+
+        The default means "unscored": a mode that does not override this produces
+        no signal, and the loop reports that rather than searching a constant.
+        """
+        return 0.0
+
+    def invariants(self) -> tuple[Invariant, ...]:
+        """Mode-declared rules the validator checks on every candidate."""
+        return ()
+
+    def edit_policy(self) -> str:
+        """Which edit preset the outer loop may use on this mode."""
+        return "broad"
+
+    def insertable(self) -> tuple[Node, ...]:
+        """Nodes a structural edit may insert into this mode.
+
+        Declaring these is what makes random structural search possible at all:
+        without a candidate block the optimizer has nothing legal to add, and
+        inventing one would mean inserting an op that does not exist.
+        """
+        return ()
+
+    # ── parameters ─────────────────────────────────────────────────────────
+    def _declared_entries(self) -> dict[str, dict[str, Any]]:
+        return {
+            name: {"value": knob.default, "spec": knob.spec()}
+            for name, knob in self.declare().items()
+        }
+
+    @property
+    def k(self) -> _Values:
+        """Current parameter values, by name: ``self.k.grid``."""
+        return _Values(self.values())
+
+    def values(self) -> dict[str, Any]:
+        return {name: entry["value"] for name, entry in self._knobs.items()}
+
+    def parameters(self) -> dict[str, Knob]:
+        """The write surface: what an optimizer is allowed to move."""
+        return {name: Knob.from_spec(entry["spec"]) for name, entry in self._knobs.items()}
+
+    def knob(self, name: str) -> Knob:
+        try:
+            return Knob.from_spec(self._knobs[name]["spec"])
+        except KeyError as exc:
+            raise KnobError(f"no knob {name!r} on {type(self).__name__}") from exc
+
+    def knob_names(self) -> list[str]:
+        return sorted(self._knobs)
+
+    def is_scored(self) -> bool:
+        """Whether this mode overrides :meth:`score`."""
+        return type(self).score is not Mode.score
+
+    # ── structure ──────────────────────────────────────────────────────────
+    def graph(self) -> Graph:
+        """The architecture as a runnable graph."""
+        return Graph.from_state(self._graph_state)
+
+    # ── running ────────────────────────────────────────────────────────────
+    def run(
+        self,
+        workdir: Path,
+        *,
+        model: Any = None,
+        task: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> RunResult:
+        """Execute the built graph once: this is the forward pass."""
+        from .executor import execute
+
+        return execute(
+            self.graph(), Path(workdir), knobs=self.values(),
+            model=model, task=task, **kwargs,
+        )
+
+    def evaluate(
+        self,
+        workdir: Path,
+        *,
+        model: Any = None,
+        task: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> RunResult:
+        """Run once and put :meth:`score` on the result.
+
+        A run that did not complete is left at score 0 with its error recorded, so
+        "ran and scored badly" and "never ran" stay distinguishable. A ``score()``
+        that raises is a failed run too, rather than a crash of the loop.
+        """
+        result = self.run(workdir, model=model, task=task, **kwargs)
+        if not result.exit_ok:
+            return result
+        try:
+            result.score = float(self.score(result))
+        except Exception as exc:
+            result.exit_ok = False
+            result.error = f"score() raised {type(exc).__name__}: {exc}"
+        return result
+
+    # ── state ──────────────────────────────────────────────────────────────
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "version": STATE_VERSION,
+            "graph": copy.deepcopy(self._graph_state),
+            "knobs": copy.deepcopy(self._knobs),
+        }
+
+    def load_state_dict(self, state: Mapping[str, Any], *, strict: bool = True) -> None:
+        """Adopt ``state``. With ``strict``, anything unexpected is an error.
+
+        Strictness is the detector for "the optimizer wrote something it should
+        not have": an unknown node field, an unknown knob, an unknown entry key
+        and an out-of-bounds value all fail here rather than quietly running.
+        """
+        if not isinstance(state, Mapping):
+            raise StateError(f"a state dict must be a mapping, got {type(state).__name__}")
+        unknown = sorted(set(state) - _TOP_LEVEL)
+        if unknown and strict:
+            raise StateError(f"unknown state dict field(s): {unknown}")
+        version = state.get("version")
+        if version != STATE_VERSION:
+            raise StateError(
+                f"state version {version!r} is not {STATE_VERSION}; "
+                "this state was written by a different layout"
+            )
+        if "graph" not in state:
+            raise StateError("a state dict needs a 'graph'")
+
+        try:
+            graph = Graph.from_state(state["graph"])
+        except GraphError as exc:
+            raise StateError(f"the graph is not readable: {exc}") from exc
+
+        knobs: dict[str, dict[str, Any]] = {}
+        for name, entry in (state.get("knobs") or {}).items():
+            if not isinstance(entry, Mapping) or "spec" not in entry:
+                raise StateError(f"knob {name!r} needs a 'value' and a 'spec'")
+            extra = sorted(set(entry) - _KNOB_ENTRY)
+            if extra and strict:
+                raise StateError(f"knob {name!r} has unknown field(s): {extra}")
+            knob = Knob.from_spec(dict(entry["spec"]))
+            try:
+                value = knob.coerce(entry.get("value", knob.default))
+            except KnobError as exc:
+                raise StateError(f"knob {name!r}: {exc}") from exc
+            knobs[name] = {"value": value, "spec": knob.spec()}
+
+        self._graph_state = graph.to_state()
+        self._knobs = knobs
+
+    def clone(self) -> "Mode":
+        """A fresh instance holding a copy of this state."""
+        return type(self)(state=copy.deepcopy(self.state_dict()))
+
+    def describe(self) -> dict[str, Any]:
+        """A summary for the optimizer's prompt: surface, structure, score."""
+        graph = self.graph()
+        return {
+            "mode": type(self).__name__,
+            "knobs": {
+                name: {
+                    "value": entry["value"],
+                    "kind": entry["spec"].get("kind"),
+                    "bounds": (
+                        entry["spec"].get("enum")
+                        or [entry["spec"].get("lo"), entry["spec"].get("hi")]
+                    ),
+                    "frozen": entry["spec"].get("frozen", False),
+                    "description": entry["spec"].get("description", ""),
+                }
+                for name, entry in sorted(self._knobs.items())
+            },
+            "nodes": [
+                {
+                    "id": node.id,
+                    "kind": node.kind,
+                    "call": node.call or node.evaluator,
+                    "knobs": list(node.knobs),
+                    "notes": node.notes,
+                }
+                for node in (graph.nodes[nid] for nid in sorted(graph.nodes))
+            ],
+            "edges": [
+                {
+                    "source": edge.source,
+                    "target": edge.target,
+                    "condition": edge.condition,
+                }
+                for edge in sorted(graph.edges, key=lambda e: e.key())
+            ],
+            "scored": self.is_scored(),
+        }

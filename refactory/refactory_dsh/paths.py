@@ -1,14 +1,9 @@
-"""Path resolution for refactory-dsh — the single self-contained repo.
+"""Path resolution for refactory-dsh.
 
-This file lives at ``<repo>/refactory/refactory_dsh/paths.py``. The repo is a
-DSH fork: the DSH source sits at the repo root, the glue at ``refactory/``, and
-the vendored dependencies (refactory + SRF) at ``vendor/``. Nothing else in the
-repo hardcodes an absolute path; everything asks here, with environment
-overrides for non-default layouts.
-
-- ``REFACTORY_DSH_HOME`` — override the repo root (defaults to this repo).
-- ``DSH_ROOT`` / ``SRF_GRAPHS`` / ``VENV_BIN`` / ``NODE_BIN`` — per-dependency
-  overrides when a dependency lives elsewhere.
+This file lives at ``<repo>/refactory/refactory_dsh/paths.py``. The repo holds the
+DSH fork at the root and the glue at ``refactory/``. Nothing else hardcodes an
+absolute path; everything asks here, with environment overrides for non-default
+layouts.
 """
 
 from __future__ import annotations
@@ -25,45 +20,15 @@ _GLUE_DIR = _PKG_DIR.parent
 REPO_ROOT = _GLUE_DIR.parent
 
 
-def deps_root() -> Path:
-    """The vendored dependency root (holds ``remote-factory`` + ``srf``)."""
-    env = os.environ.get("REFACTORY_DSH_HOME")
-    return Path(env).expanduser() if env else REPO_ROOT
-
-
-def vendor_root() -> Path:
-    """The glue's ``vendor/`` directory holding the git submodules."""
-    return _GLUE_DIR / "vendor"
-
-
 def dsh_root() -> Path:
-    """The DSH checkout that runs the workflow spine + science CLI (this repo)."""
+    """The DSH checkout that runs the headless model client."""
     return Path(os.environ.get("DSH_ROOT") or REPO_ROOT)
-
-
-def venv_bin() -> Path:
-    """The self-contained venv whose python has refactory_dsh + factory + srf."""
-    return Path(os.environ.get("VENV_BIN") or REPO_ROOT / ".venv" / "bin")
-
-
-def python() -> Path:
-    return venv_bin() / "python"
-
-
-def srf_graphs() -> Path:
-    """The directory of committed SRF ``<mode>.graph.json`` files (submodule)."""
-    return Path(os.environ.get("SRF_GRAPHS") or vendor_root() / "srf" / "graphs")
-
-
-def factory_root() -> Path:
-    """The refactory checkout (the language; a git submodule)."""
-    return vendor_root() / "remote-factory"
 
 
 def node_bin() -> str:
     """The Node binary that runs DSH. Resolves to an absolute path so it works
-    even under a preset's restricted command PATH. Order: ``NODE_BIN`` override,
-    the nvm Node 22 install the launcher exports (DSH needs ^22.19), the current
+    even under a restricted command PATH. Order: ``NODE_BIN`` override, the nvm
+    Node 22 install the launcher exports (DSH needs ^22.19), the current
     ``PATH``, then a bare ``node``."""
     env = os.environ.get("NODE_BIN")
     if env:
@@ -77,11 +42,10 @@ def node_bin() -> str:
     return "node"
 
 
-def refactory_dsh_pkg() -> Path:
-    """This package's directory (for PYTHONPATH when not pip-installed)."""
-    return _PKG_DIR
+def venv_bin() -> Path:
+    """The venv whose python has refactory_dsh and the packages installed."""
+    return Path(os.environ.get("VENV_BIN") or REPO_ROOT / ".venv" / "bin")
 
 
-def workdir_base() -> Path:
-    """The per-mode work directories live under the glue directory."""
-    return _GLUE_DIR / "workdirs"
+def python() -> Path:
+    return venv_bin() / "python"

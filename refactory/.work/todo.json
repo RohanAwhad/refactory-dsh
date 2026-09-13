@@ -1,55 +1,55 @@
 {
-  "objective": "Outer loop working cleanly like a PyTorch optimization loop",
+  "objective": "Python-first modes and an optimizer loop: a mode is a class, its architecture and parameters are a state dict, and optimizers propose validated typed edits",
   "rule": "Do not stop while any item below is not 'done'. test_work_complete.py fails otherwise.",
   "items": [
     {
-      "id": "optknobs",
-      "title": "Op-declared knobs + derived surface",
+      "id": "nnlib",
+      "title": "nn library: Knob, Graph, Mode, state_dict round-trip, strict load, validator",
       "status": "done"
     },
     {
-      "id": "knobpin",
-      "title": "Pin the surface at creation; refuse empty; drift check",
+      "id": "edits",
+      "title": "Edit algebra: nine primitives, eight macros as compositions, naive (never repairs)",
       "status": "done"
     },
     {
-      "id": "vocab",
-      "title": "PyTorch vocabulary: init/forward/loss/backward/optimizer/scheduler/report",
+      "id": "executor",
+      "title": "Executor: runs a built graph in process, bounds gates, enforces declarations",
       "status": "done"
     },
     {
-      "id": "batch",
-      "title": "epochs + batch_size settings; budget trap impossible by construction",
+      "id": "packages",
+      "title": "Packages own modes: <package>/<name>, discovery, enable/disable, catalogue, no package named by the library",
       "status": "done"
     },
     {
-      "id": "runtest",
-      "title": "Runtime test: drive the renamed loop on circle_packing_fast",
+      "id": "circlemode",
+      "title": "circle_packing ported from the JSON fast mode; seed 0.875, knob and structural wins measured",
       "status": "done"
     },
     {
-      "id": "pkg",
-      "title": "Package registration: identity <package>/<mode>, registry keyed on full path",
+      "id": "optim",
+      "title": "Optimizers with the internal propose/validate/regenerate loop; refusals carry codes and are fed back",
       "status": "done"
     },
     {
-      "id": "pkgcli",
-      "title": "CLI verbs: mode list/import/add/remove/enable/disable",
+      "id": "loop",
+      "title": "The eight-step loop with a bound it reports, a parameter sweep to start, and a gradient that names untried values",
       "status": "done"
     },
     {
-      "id": "register",
-      "title": "create-v2 registers what it creates under a package",
+      "id": "createmode",
+      "title": "create-mode: a brief in, a validated, registered, smoke-scoring package out",
       "status": "done"
     },
     {
-      "id": "byname",
-      "title": "Select the inner mode by name (seed_workflow); REFACTORY_TARGET_GRAPH becomes an override",
+      "id": "realruns",
+      "title": "Real model runs: create-mode produced annealing_pack (smoke 1.075); the loop took circle_packing 0.875 -> 1.08 with a structural win and annealing_pack 1.075 -> 1.41",
       "status": "done"
     },
     {
-      "id": "realtest",
-      "title": "Runtime test: real-mode outer loop selected by package-qualified name",
+      "id": "deletions",
+      "title": "JSON-authoring path removed: ops/, scaffold, devgen, knobs, report, trace, steering, packages.py, gen_presets, graphs/",
       "status": "done"
     }
   ]

@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
 
 import pytest
+
+# Ops declared by a mode are resolved by module name at run time, so the test ops
+# have to be importable by name rather than only by path.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # PROMPT_MUTATE and expandable-KNOB_MUTATE shell out to `claude` by default.
 # For the fast, deterministic harness we point that at /bin/true (empty output),

@@ -4,9 +4,9 @@
 # The repo is a DSH fork: the DSH source sits at the repo root, the glue at
 # `refactory/`, and the vendored dependencies (refactory + SRF) are git
 # submodules under `refactory/vendor/`. This script sets up the Node side
-# (pnpm) and the Python side (uv venv + uv pip editable installs) and
-# regenerates the three agent presets, so `./refactory-dsh` then boots DSH with
-# create-v2 / outer-loop / design-v2.
+# (pnpm) and the Python side (uv venv + uv pip editable install), so
+# `python -m refactory_dsh.registry` lists the packages of modes and
+# `python -m refactory_dsh.loop` optimizes one.
 #
 #   git clone <repo> --recurse-submodules
 #   ./install.sh
@@ -50,22 +50,12 @@ if [ ! -x "$VENV/bin/python" ]; then
 fi
 PY="$VENV/bin/python"
 
-# 4. Python deps: the glue + the minimal semantics deps the vendored
-#    refactory (`factory.workflow`/`factory.outer_loop`) and SRF ops need.
-#    (No refactory/SRF runtime deps — fastapi/uvicorn/mcp/anthropic — because
-#    that runtime is retired; DSH is the runtime.)
-uv pip install --python "$PY" -q \
-  'pydantic>=2' 'PyYAML>=6' 'structlog>=24' 'networkx>=3.6' 'filelock>=3'
+# 4. Python deps: the glue and the packages of modes it discovers.
+uv pip install --python "$PY" -q 'structlog>=24'
 uv pip install --python "$PY" -q -e "$GLUE"
 
-# 5. editable install of the vendored refactory + SRF with `--no-deps` so their
-#    package metadata exists (importlib.metadata.version('remote-factory') etc.)
-#    while their imports resolve through the editable link and the minimal deps
-#    above — no heavy runtime deps are pulled.
-uv pip install --python "$PY" -q -e "$VENDOR/remote-factory" --no-deps
-uv pip install --python "$PY" -q -e "$VENDOR/srf" --no-deps
-
-# 6. regenerate the three agent presets + rewritten graphs.
-"$PY" "$GLUE/gen_presets.py"
+# 5. the modes the registry lists and the loop runs.
+echo "  packages installed:"
+"$PY" -m refactory_dsh.registry list || true
 
 echo "  done. run:  $HERE/refactory-dsh --port 3081 --no-open"

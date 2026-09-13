@@ -1,0 +1,832 @@
+"""The edit algebra: every structural change is typed data.
+
+An edit is a JSON object naming an operation, and applying it produces a new
+state. Two properties make this the write surface the outer loop can be trusted
+with:
+
+**Closed and enumerable.** Nine primitives are the algebra. Every macro is a
+literal composition of them, so a macro cannot express anything the primitives
+cannot, and the set of reachable edits is enumerable and reviewable.
+
+**Naive.** No operator repairs, auto-fixes, or maintains an invariant as it
+edits. ``remove_node`` deletes the node and its edges and leaves the hole; the
+validator then reports the hole. Repair is what makes a search dishonest: if a
+proposal is fixed up before it runs, the score belongs to something the optimizer
+never proposed.
+
+A macro whose precondition does not hold is refused with a reason, and the state
+is untouched. A macro that applies but produces a broken graph is a validation
+failure. Those are two different messages, and both are fed back to the optimizer.
+"""
+
+from __future__ import annotations
+
+import copy
+import random
+from dataclasses import dataclass
+from typing import Any, Callable, Iterable, Mapping, Sequence
+
+from .graph import Edge, Graph, GraphError, Node
+
+State = dict[str, Any]
+
+
+class EditError(ValueError):
+    """An edit cannot be applied to this state. The state is left untouched.
+
+    ``code`` groups refusals so a run can report which rule refused what. A
+    histogram of prose is noise; a histogram of rules is the gradient on the edit
+    catalogue itself.
+    """
+
+    def __init__(self, message: str, code: str = "E-shape") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+@dataclass(frozen=True)
+class EditSpec:
+    """One operation in the catalogue."""
+
+    name: str
+    kind: str
+    description: str
+    fields: tuple[str, ...]
+    macro: bool = False
+    precondition: Callable[[dict, State], str | None] | None = None
+    expand: Callable[[dict, State], list[dict]] | None = None
+    apply: Callable[[State, dict], State] | None = None
+
+
+_PRIMITIVES: dict[str, EditSpec] = {}
+_MACROS: dict[str, EditSpec] = {}
+
+#: Named subsets. ``broad`` is the default: the whole catalogue.
+PRESETS: dict[str, tuple[str, ...]] = {
+    "broad": (),  # filled in below with every registered name
+    "structure": (),  # filled in below with primitives + macros
+    "conservative": ("set_knob", "insert_after", "insert_before", "wrap"),
+    "knob_only": ("set_knob", "add_knob", "remove_knob"),
+}
+
+
+def _primitive(name: str, kind: str, description: str, fields: Sequence[str],
+               fn: Callable[[State, dict], State]) -> None:
+    _PRIMITIVES[name] = EditSpec(name, kind, description, tuple(fields), apply=fn)
+
+
+def _macro(name: str, description: str, fields: Sequence[str],
+           precondition: Callable[[dict, State], str | None],
+           expand: Callable[[dict, State], list[dict]]) -> None:
+    _MACROS[name] = EditSpec(name, "topology", description, tuple(fields),
+                             macro=True, precondition=precondition, expand=expand)
+
+
+# ── state helpers ──────────────────────────────────────────────────────────
+def _graph(state: Mapping[str, Any]) -> Graph:
+    try:
+        return Graph.from_state(state["graph"])
+    except (KeyError, GraphError) as exc:
+        raise EditError(f"state is not readable: {exc}", code="E-state") from exc
+
+
+def _finish(state: Mapping[str, Any], graph: Graph) -> State:
+    out = dict(state)
+    out["graph"] = graph.to_state()
+    out["knobs"] = copy.deepcopy(dict(state.get("knobs") or {}))
+    return out
+
+
+def _require(graph: Graph, node_id: Any) -> Node:
+    if not isinstance(node_id, str) or node_id not in graph.nodes:
+        known = ", ".join(sorted(graph.nodes)) or "none"
+        raise EditError(f"no node {node_id!r}; existing nodes: {known}", code="E-node")
+    return graph.nodes[node_id]
+
+
+def _drop(graph: Graph, edge: Edge) -> None:
+    graph.edges = [e for e in graph.edges if e.key() != edge.key()]
+
+
+def _sole_out_edge(graph: Graph, node_id: str) -> Edge | None:
+    """The one out-edge a splice may rewrite, or ``None`` for a terminal.
+
+    Raises when the node's out-edges leave the choice ambiguous, because picking
+    one would be the operator deciding something the optimizer did not say.
+    """
+    out = graph.out_edges(node_id)
+    if not out:
+        return None
+    if len(out) > 1:
+        raise EditError(
+            f"node {node_id!r} has {len(out)} out-edges, so 'after' does not say "
+            "which one to splice; use add_edge/remove_edge for an explicit rewrite"
+        )
+    return out[0]
+
+
+def _dependency_violation(graph: Graph, first: str, second: str) -> str | None:
+    """Reason a node may not run immediately before another it feeds."""
+    produced = set(graph.nodes[first].writes)
+    consumed = set(graph.nodes[second].reads)
+    shared = sorted(produced & consumed)
+    if shared:
+        return (
+            f"data dependency: {second!r} reads {shared}, which only {first!r} "
+            "produces, so the two cannot be swapped"
+        )
+    return None
+
+
+# ── primitives ─────────────────────────────────────────────────────────────
+def _position(position: Any) -> tuple[str, Any]:
+    if not isinstance(position, dict) or len(position) != 1:
+        raise EditError(
+            "a position must be exactly one of {'after': id}, {'before': id}, "
+            "{'start': true}, {'terminal': true} or {'detached': true}"
+        )
+    (kind, value), = position.items()
+    if kind not in ("after", "before", "start", "terminal", "detached"):
+        raise EditError(f"unknown position {kind!r}")
+    return kind, value
+
+
+def _add_node(state: State, edit: dict) -> State:
+    node_state = edit.get("node")
+    if not isinstance(node_state, dict):
+        raise EditError("add_node needs a 'node' object")
+    try:
+        node = Node.from_state(node_state)
+    except GraphError as exc:
+        raise EditError(str(exc)) from exc
+    kind, value = _position(edit.get("position"))
+    graph = _graph(state)
+    if node.id in graph.nodes:
+        raise EditError(f"node {node.id!r} already exists")
+
+    if kind == "start":
+        previous = graph.start
+        graph.add(node)
+        graph.start = node.id
+        if previous:
+            graph.connect(node.id, previous)
+    elif kind == "detached":
+        # No edges at all. The validator reports the node as unreachable until a
+        # later step of the same macro wires it, which is what makes a multi-step
+        # rewrite expressible without the operator inventing a temporary edge.
+        graph.add(node)
+    elif kind == "terminal":
+        terminals = graph.terminals()
+        graph.add(node)
+        for terminal in terminals:
+            graph.connect(terminal, node.id)
+    elif kind == "after":
+        target = _require(graph, value)
+        edge = _sole_out_edge(graph, target.id)
+        graph.add(node)
+        if edge is not None:
+            _drop(graph, edge)
+            graph.connect(target.id, node.id)
+            graph.connect(node.id, edge.target, edge.condition)
+        else:
+            graph.connect(target.id, node.id)
+    else:  # before
+        target = _require(graph, value)
+        incoming = list(graph.in_edges(target.id))
+        graph.add(node)
+        for edge in incoming:
+            _drop(graph, edge)
+            graph.connect(edge.source, node.id, edge.condition)
+        graph.connect(node.id, target.id)
+        if graph.start == target.id:
+            graph.start = node.id
+    return _finish(state, graph)
+
+
+def _remove_node(state: State, edit: dict) -> State:
+    graph = _graph(state)
+    target = _require(graph, edit.get("id"))
+    del graph.nodes[target.id]
+    graph.edges = [e for e in graph.edges if target.id not in (e.source, e.target)]
+    if graph.start == target.id:
+        # Left empty on purpose: the validator reports the missing start rather
+        # than this operator choosing a successor to promote.
+        graph.start = ""
+    return _finish(state, graph)
+
+
+def _replace_node(state: State, edit: dict) -> State:
+    node_state = edit.get("node")
+    if not isinstance(node_state, dict):
+        raise EditError("replace_node needs a 'node' object")
+    graph = _graph(state)
+    target = _require(graph, edit.get("id"))
+    try:
+        replacement = Node.from_state(node_state)
+    except GraphError as exc:
+        raise EditError(str(exc)) from exc
+    if replacement.id != target.id:
+        raise EditError(
+            f"replace_node keeps the node id; got {replacement.id!r} for {target.id!r}"
+        )
+    graph.nodes[target.id] = replacement
+    return _finish(state, graph)
+
+
+def _set_node_field(state: State, edit: dict) -> State:
+    graph = _graph(state)
+    target = _require(graph, edit.get("id"))
+    field_name = edit.get("field")
+    try:
+        graph.nodes[target.id] = target.with_field(field_name, edit.get("value"))
+    except GraphError as exc:
+        raise EditError(str(exc)) from exc
+    return _finish(state, graph)
+
+
+def _add_edge(state: State, edit: dict) -> State:
+    graph = _graph(state)
+    source = _require(graph, edit.get("source"))
+    target = _require(graph, edit.get("target"))
+    try:
+        graph.connect(source.id, target.id, edit.get("condition"))
+    except GraphError as exc:
+        raise EditError(str(exc)) from exc
+    return _finish(state, graph)
+
+
+def _remove_edge(state: State, edit: dict) -> State:
+    graph = _graph(state)
+    source = _require(graph, edit.get("source"))
+    target = _require(graph, edit.get("target"))
+    condition = edit.get("condition", None)
+    matches = [
+        e
+        for e in graph.edges
+        if e.source == source.id
+        and e.target == target.id
+        and ("condition" not in edit or e.condition == condition)
+    ]
+    if not matches:
+        raise EditError(f"no edge {source.id!r} -> {target.id!r} to remove", code="E-edge")
+    for edge in matches:
+        _drop(graph, edge)
+    return _finish(state, graph)
+
+
+def _set_knob(state: State, edit: dict) -> State:
+    from .knob import Knob, KnobError
+
+    name = edit.get("name")
+    entries = dict(state.get("knobs") or {})
+    if not isinstance(name, str) or name not in entries:
+        known = ", ".join(sorted(entries)) or "none"
+        raise EditError(f"no knob {name!r}; declared knobs: {known}", code="E-knob")
+    knob = Knob.from_spec(entries[name]["spec"])
+    if knob.frozen:
+        raise EditError(f"knob {name!r} is frozen and cannot be moved", code="E-knob")
+    try:
+        value = knob.coerce(edit.get("value"))
+    except KnobError as exc:
+        raise EditError(f"knob {name!r}: {exc}", code="E-knob") from exc
+    out = _finish(state, _graph(state))
+    out["knobs"][name]["value"] = value
+    return out
+
+
+def _add_knob(state: State, edit: dict) -> State:
+    from .knob import Knob, KnobError
+
+    name = edit.get("name")
+    if not isinstance(name, str) or not name:
+        raise EditError("add_knob needs a 'name'", code="E-knob")
+    entries = dict(state.get("knobs") or {})
+    if name in entries:
+        raise EditError(f"knob {name!r} already exists", code="E-knob")
+    try:
+        knob = Knob.from_spec(dict(edit.get("spec") or {}))
+    except (KnobError, KeyError, TypeError) as exc:
+        raise EditError(f"knob {name!r}: {exc}", code="E-knob") from exc
+    out = _finish(state, _graph(state))
+    out["knobs"][name] = {"value": knob.default, "spec": knob.spec()}
+    return out
+
+
+def _remove_knob(state: State, edit: dict) -> State:
+    name = edit.get("name")
+    entries = dict(state.get("knobs") or {})
+    if not isinstance(name, str) or name not in entries:
+        raise EditError(f"no knob {name!r} to remove", code="E-knob")
+    out = _finish(state, _graph(state))
+    del out["knobs"][name]
+    return out
+
+
+_primitive(
+    "add_node", "node",
+    "Add a node. 'position' is {after|before: id}, {start: true}, {terminal: true} "
+    "or {detached: true} to add it without edges.",
+    ("node", "position"), _add_node,
+)
+_primitive(
+    "remove_node", "node",
+    "Delete a node and every edge touching it. Leaves the hole for the validator to report.",
+    ("id",), _remove_node,
+)
+_primitive(
+    "replace_node", "node",
+    "Replace a node's whole definition, keeping its id and its edges.",
+    ("id", "node"), _replace_node,
+)
+_primitive(
+    "set_node_field", "node",
+    "Set one field of a node, e.g. 'call', 'notes', 'max_iterations', 'knobs'.",
+    ("id", "field", "value"), _set_node_field,
+)
+_primitive(
+    "add_edge", "edge",
+    "Add an edge. A 'condition' makes it a gate verdict.",
+    ("source", "target", "condition"), _add_edge,
+)
+_primitive(
+    "remove_edge", "edge",
+    "Remove the edge between two nodes, optionally only one condition.",
+    ("source", "target", "condition"), _remove_edge,
+)
+_primitive(
+    "set_knob", "knob",
+    "Set a parameter value. Refused for a frozen knob or a value outside its bounds.",
+    ("name", "value"), _set_knob,
+)
+_primitive(
+    "add_knob", "knob",
+    "Declare a new parameter. A node must consume it or the validator refuses the state.",
+    ("name", "spec"), _add_knob,
+)
+_primitive(
+    "remove_knob", "knob",
+    "Remove a parameter. Any node still consuming it becomes a validation failure.",
+    ("name",), _remove_knob,
+)
+
+
+# ── macros ─────────────────────────────────────────────────────────────────
+def _pre_insert_after(edit: dict, state: State) -> str | None:
+    graph = _graph(state)
+    target = graph.nodes.get(edit.get("target"))
+    if target is None:
+        return f"no node {edit.get('target')!r} to insert after"
+    if target.kind == "gate" and graph.out_edges(target.id):
+        return (
+            f"{target.id!r} is a gate whose out-edges carry verdicts; 'after' does "
+            "not say which verdict to splice onto"
+        )
+    try:
+        _sole_out_edge(graph, target.id)
+    except EditError as exc:
+        return str(exc)
+    return None
+
+
+def _expand_insert_after(edit: dict, _state: State) -> list[dict]:
+    return [{"op": "add_node", "node": edit["node"], "position": {"after": edit["target"]}}]
+
+
+def _pre_insert_before(edit: dict, state: State) -> str | None:
+    graph = _graph(state)
+    if edit.get("target") not in graph.nodes:
+        return f"no node {edit.get('target')!r} to insert before"
+    return None
+
+
+def _expand_insert_before(edit: dict, _state: State) -> list[dict]:
+    return [{"op": "add_node", "node": edit["node"], "position": {"before": edit["target"]}}]
+
+
+def _pre_wrap(edit: dict, state: State) -> str | None:
+    graph = _graph(state)
+    target = graph.nodes.get(edit.get("target"))
+    if target is None:
+        return f"no node {edit.get('target')!r} to wrap"
+    out = graph.out_edges(target.id)
+    if not out:
+        return f"{target.id!r} has no out-edge, so wrapping it would enclose nothing"
+    node = edit.get("node")
+    if len(out) > 1 and (not isinstance(node, dict) or node.get("kind") != "gate"):
+        return (
+            f"{target.id!r} emits {len(out)} verdicts, so only a gate can take them "
+            "over; the replacement node must declare kind 'gate'"
+        )
+    return None
+
+
+def _expand_wrap(edit: dict, state: State) -> list[dict]:
+    graph = _graph(state)
+    target = edit["target"]
+    node = dict(edit["node"])
+    out = graph.out_edges(target)
+    steps: list[dict] = [
+        {"op": "add_node", "node": node, "position": {"detached": True}}
+    ]
+    for edge in out:
+        steps.append({"op": "remove_edge", "source": edge.source, "target": edge.target,
+                      "condition": edge.condition})
+    # The replacement takes over the exact verdicts the target emitted, so it is
+    # wired with the same conditions rather than a fresh label.
+    for edge in out:
+        steps.append({"op": "add_edge", "source": target, "target": node["id"],
+                      "condition": edge.condition})
+        steps.append({"op": "add_edge", "source": node["id"], "target": edge.target,
+                      "condition": edge.condition})
+    return steps
+
+
+def _pre_bypass(edit: dict, state: State) -> str | None:
+    graph = _graph(state)
+    target = graph.nodes.get(edit.get("target"))
+    if target is None:
+        return f"no node {edit.get('target')!r} to bypass"
+    if target.id == graph.start:
+        return (
+            f"{target.id!r} is the start node; bypassing it would leave the graph "
+            "with no entry, so it cannot be removed this way"
+        )
+    incoming = graph.in_edges(target.id)
+    outgoing = graph.out_edges(target.id)
+    if not incoming:
+        return f"{target.id!r} has no predecessor to reconnect from"
+    if not outgoing:
+        return f"{target.id!r} has no successor to reconnect to"
+    overlapping = sorted(
+        {e.source for e in incoming} & {e.target for e in outgoing}
+    )
+    if overlapping:
+        return (
+            f"{target.id!r} sits inside a loop: {overlapping} leads back to it, so "
+            "reconnecting predecessors to successors would make that node feed "
+            "itself"
+        )
+    return None
+
+
+def _expand_bypass(edit: dict, state: State) -> list[dict]:
+    graph = _graph(state)
+    target = edit["target"]
+    steps: list[dict] = []
+    for incoming in graph.in_edges(target):
+        for outgoing in graph.out_edges(target):
+            if incoming.source == target or outgoing.target == target:
+                continue
+            steps.append({"op": "add_edge", "source": incoming.source,
+                          "target": outgoing.target, "condition": incoming.condition})
+    steps.append({"op": "remove_node", "id": target})
+    return steps
+
+
+def _pre_duplicate(edit: dict, state: State) -> str | None:
+    graph = _graph(state)
+    if edit.get("target") not in graph.nodes:
+        return f"no node {edit.get('target')!r} to duplicate"
+    return None
+
+
+def _expand_duplicate(edit: dict, state: State) -> list[dict]:
+    graph = _graph(state)
+    source = graph.nodes[edit["target"]]
+    node = source.to_state()
+    node["id"] = str(edit.get("new_id") or _fresh_id(graph, f"{source.id}_copy"))
+    return [{"op": "add_node", "node": node, "position": {"after": source.id}}]
+
+
+def _pre_split(edit: dict, state: State) -> str | None:
+    graph = _graph(state)
+    if edit.get("target") not in graph.nodes:
+        return f"no node {edit.get('target')!r} to split"
+    into = edit.get("into")
+    if not isinstance(into, list) or len(into) != 2:
+        return "'into' must be exactly two node objects"
+    return None
+
+
+def _expand_split(edit: dict, state: State) -> list[dict]:
+    first, second = edit["into"]
+    return [
+        {"op": "add_node", "node": first, "position": {"after": edit["target"]}},
+        {"op": "add_node", "node": second, "position": {"after": first["id"]}},
+    ]
+
+
+def _pre_reorder(edit: dict, state: State) -> str | None:
+    graph = _graph(state)
+    first = graph.nodes.get(edit.get("first"))
+    second = graph.nodes.get(edit.get("second"))
+    if first is None or second is None:
+        return f"reorder needs two existing nodes; got {edit.get('first')!r}, {edit.get('second')!r}"
+    edge = graph.out_edges(first.id)
+    if len(edge) != 1 or edge[0].target != second.id or edge[0].condition is not None:
+        return f"{first.id!r} does not unconditionally lead only to {second!r}"
+    return _dependency_violation(graph, first.id, second.id)
+
+
+def _expand_reorder(edit: dict, state: State) -> list[dict]:
+    graph = _graph(state)
+    first, second = edit["first"], edit["second"]
+    steps: list[dict] = [{"op": "remove_edge", "source": first, "target": second}]
+    for edge in graph.out_edges(second):
+        steps.append({"op": "remove_edge", "source": second, "target": edge.target,
+                      "condition": edge.condition})
+    steps.append({"op": "add_edge", "source": second, "target": first, "condition": None})
+    for edge in graph.out_edges(second):
+        steps.append({"op": "add_edge", "source": first, "target": edge.target,
+                      "condition": edge.condition})
+    return steps
+
+
+def _pre_loop(edit: dict, state: State) -> str | None:
+    graph = _graph(state)
+    target = graph.nodes.get(edit.get("target"))
+    if target is None:
+        return f"no node {edit.get('target')!r} to loop over"
+    if not graph.out_edges(target.id):
+        return f"{target.id!r} has no out-edge, so there is nothing to loop back from"
+    try:
+        _sole_out_edge(graph, target.id)
+    except EditError as exc:
+        return str(exc)
+    return None
+
+
+def _expand_loop(edit: dict, state: State) -> list[dict]:
+    graph = _graph(state)
+    target = edit["target"]
+    gate = dict(edit["gate"])
+    successor = _sole_out_edge(graph, target)
+    steps: list[dict] = [
+        {"op": "add_node", "node": gate, "position": {"detached": True}}
+    ]
+    if successor is not None:
+        steps.append({"op": "remove_edge", "source": successor.source,
+                      "target": successor.target, "condition": successor.condition})
+    steps.append({"op": "add_edge", "source": target, "target": gate["id"], "condition": None})
+    steps.append({"op": "add_edge", "source": gate["id"], "target": target, "condition": "retry"})
+    if successor is not None:
+        steps.append({"op": "add_edge", "source": gate["id"], "target": successor.target,
+                      "condition": "proceed"})
+    return steps
+
+
+def _fresh_id(graph: Graph, base: str) -> str:
+    if base not in graph.nodes:
+        return base
+    for n in range(2, 1000):
+        candidate = f"{base}{n}"
+        if candidate not in graph.nodes:
+            return candidate
+    raise EditError(f"cannot find a free id based on {base!r}")
+
+
+_macro("insert_after", "Splice a new node onto the out-edge of an existing node.",
+       ("target", "node"), _pre_insert_after, _expand_insert_after)
+_macro("insert_before", "Splice a new node in front of an existing node.",
+       ("target", "node"), _pre_insert_before, _expand_insert_before)
+_macro("wrap", "Put a new node on every out-edge of an existing node, so it sees "
+       "the same verdicts (an observer, a verifier, a retry wrapper).",
+       ("target", "node"), _pre_wrap, _expand_wrap)
+_macro("bypass", "Remove a node and reconnect each predecessor to each successor.",
+       ("target",), _pre_bypass, _expand_bypass)
+_macro("duplicate", "Insert a copy of a node directly after it.",
+       ("target", "new_id"), _pre_duplicate, _expand_duplicate)
+_macro("split", "Replace one step with two consecutive steps.",
+       ("target", "into"), _pre_split, _expand_split)
+_macro("reorder", "Swap two adjacent steps. Refused when the first produces what "
+       "the second reads.",
+       ("first", "second"), _pre_reorder, _expand_reorder)
+_macro("loop", "Wrap a step in a gate that can send control back to it, so the step "
+       "gains a retry.",
+       ("target", "gate"), _pre_loop, _expand_loop)
+
+
+PRESETS["broad"] = tuple(sorted(list(_PRIMITIVES) + list(_MACROS)))
+PRESETS["structure"] = PRESETS["broad"]
+
+
+# ── public surface ─────────────────────────────────────────────────────────
+def _specs() -> dict[str, EditSpec]:
+    return {**_PRIMITIVES, **_MACROS}
+
+
+def names() -> list[str]:
+    return sorted(_specs())
+
+
+def enabled(preset: str = "broad") -> list[str]:
+    """The operations a preset allows. An unknown preset is an error."""
+    if preset not in PRESETS:
+        raise EditError(f"unknown edit preset {preset!r}; known: {sorted(PRESETS)}", code="E-preset")
+    chosen = PRESETS[preset]
+    return sorted(chosen if chosen else _specs())
+
+
+def catalogue(preset: str = "broad") -> list[dict[str, Any]]:
+    """The enabled operations, described for an optimizer's prompt."""
+    specs = _specs()
+    return [
+        {
+            "op": name,
+            "kind": specs[name].kind,
+            "macro": specs[name].macro,
+            "fields": list(specs[name].fields),
+            "description": specs[name].description,
+        }
+        for name in enabled(preset)
+    ]
+
+
+def is_macro(name: str) -> bool:
+    return name in _MACROS
+
+
+def precheck(edit: dict, state: Mapping[str, Any]) -> str | None:
+    """The reason ``edit`` cannot be applied, or ``None``.
+
+    Separate from :func:`apply` so an optimizer can explain a refusal without
+    building a state it will throw away.
+    """
+    if not isinstance(edit, dict):
+        return f"an edit must be an object, got {type(edit).__name__}"
+    name = edit.get("op")
+    spec = _specs().get(name)
+    if spec is None:
+        return f"unknown edit {name!r}; known: {names()}"
+    if spec.macro and spec.precondition is not None:
+        try:
+            return spec.precondition(edit, dict(state))
+        except EditError as exc:
+            return str(exc)
+    return None
+
+
+def apply(edit: dict, state: Mapping[str, Any]) -> State:
+    """Apply ``edit`` and return a new state, leaving ``state`` untouched."""
+    if not isinstance(edit, dict):
+        raise EditError(f"an edit must be an object, got {type(edit).__name__}", code="E-op")
+    name = edit.get("op")
+    spec = _specs().get(name)
+    if spec is None:
+        raise EditError(f"unknown edit {name!r}; known: {names()}", code="E-op")
+    if spec.macro:
+        reason = precheck(edit, state)
+        if reason:
+            raise EditError(reason, code="E-precondition")
+        assert spec.expand is not None
+        out = dict(state)
+        for step in spec.expand(edit, dict(state)):
+            out = apply(step, out)
+        return out
+    assert spec.apply is not None
+    return spec.apply(dict(state), edit)
+
+
+def apply_many(edits: Iterable[dict], state: Mapping[str, Any]) -> State:
+    out = dict(state)
+    for edit in edits:
+        out = apply(edit, out)
+    return out
+
+
+# ── random sampling, for the random optimizer ──────────────────────────────
+def random_edit(
+    state: Mapping[str, Any],
+    *,
+    preset: str = "broad",
+    insertable: Sequence[Any] = (),
+    rng: random.Random | None = None,
+) -> dict | None:
+    """A random edit from the enabled set, or ``None`` if none can be built.
+
+    Structural edits need something to insert, so a mode that wants them declares
+    an insertable catalogue (``Node`` objects or their states). Without one, only
+    the parameter edits are reachable, and this says so by returning ``None``
+    rather than by inventing a node.
+    """
+    rng = rng or random
+    graph = _graph(state)
+    entries = dict(state.get("knobs") or {})
+    templates = [
+        node.to_state() if hasattr(node, "to_state") else dict(node) for node in insertable
+    ]
+    movable = [
+        name
+        for name, entry in entries.items()
+        if not entry["spec"].get("frozen", False)
+    ]
+    node_ids = sorted(graph.nodes)
+    choices = enabled(preset)
+
+    for _ in range(40):
+        op = rng.choice(choices)
+        edit: dict | None
+        if op == "set_knob":
+            if not movable:
+                continue
+            name = rng.choice(movable)
+            from .knob import Knob
+
+            knob = Knob.from_spec(entries[name]["spec"])
+            value = _random_value(knob, rng)
+            if value is None:
+                continue
+            edit = {"op": "set_knob", "name": name, "value": value}
+        elif op in ("add_knob", "remove_knob"):
+            continue  # parameter-set surgery needs a named knob; not sampled
+        elif op in ("insert_after", "insert_before", "wrap"):
+            if not templates or not node_ids:
+                continue
+            target = rng.choice(node_ids)
+            node = dict(rng.choice(templates))
+            node["id"] = _fresh_id(graph, str(node.get("id") or "step"))
+            edit = {"op": op, "target": target, "node": node}
+        elif op == "bypass":
+            candidates = [n for n in node_ids if n != graph.start]
+            if not candidates:
+                continue
+            edit = {"op": "bypass", "target": rng.choice(candidates)}
+        elif op == "duplicate":
+            if not node_ids:
+                continue
+            edit = {"op": "duplicate", "target": rng.choice(node_ids)}
+        elif op == "split":
+            if len(templates) < 2 or not node_ids:
+                continue
+            first, second = rng.sample(templates, 2)
+            first = dict(first, id=_fresh_id(graph, str(first.get("id") or "step")))
+            second = dict(second, id=_fresh_id(graph, str(second.get("id") or "step")))
+            edit = {"op": "split", "target": rng.choice(node_ids), "into": [first, second]}
+        elif op == "reorder":
+            pairs = [(e.source, e.target) for e in graph.edges if e.condition is None]
+            if not pairs:
+                continue
+            first, second = rng.choice(pairs)
+            edit = {"op": "reorder", "first": first, "second": second}
+        elif op == "loop":
+            gates = [n for n in templates if n.get("kind") == "gate"]
+            if not gates or not node_ids:
+                continue
+            gate = dict(rng.choice(gates))
+            gate["id"] = _fresh_id(graph, str(gate.get("id") or "retry_gate"))
+            edit = {"op": "loop", "target": rng.choice(node_ids), "gate": gate}
+        elif op == "add_node":
+            if not templates:
+                continue
+            node = dict(rng.choice(templates))
+            node["id"] = _fresh_id(graph, str(node.get("id") or "step"))
+            edit = {"op": "add_node", "node": node,
+                    "position": {"after": rng.choice(node_ids)} if node_ids else {"start": True}}
+        elif op == "remove_node":
+            candidates = [n for n in node_ids if n != graph.start]
+            if not candidates:
+                continue
+            edit = {"op": "remove_node", "id": rng.choice(candidates)}
+        elif op in ("add_edge", "remove_edge"):
+            if not graph.edges:
+                continue
+            edge = rng.choice(graph.edges)
+            edit = {"op": op, "source": edge.source, "target": edge.target,
+                    "condition": edge.condition}
+        elif op == "set_node_field":
+            if not node_ids:
+                continue
+            edit = {"op": "set_node_field", "id": rng.choice(node_ids),
+                    "field": "max_iterations", "value": rng.choice([2, 3, 5])}
+        elif op == "replace_node":
+            if not templates or not node_ids:
+                continue
+            target = rng.choice(node_ids)
+            node = dict(rng.choice(templates))
+            node["id"] = target
+            edit = {"op": "replace_node", "id": target, "node": node}
+        else:  # pragma: no cover - the catalogue is closed
+            continue
+
+        if precheck(edit, state) is None:
+            return edit
+    return None
+
+
+def _random_value(knob: Any, rng: random.Random) -> Any:
+    """A value in a knob's range that is not its current default."""
+    if knob.kind == "enum":
+        options = [m for m in knob.enum if m != knob.default]
+        return rng.choice(options) if options else None
+    if knob.kind == "bool":
+        return not knob.default
+    if knob.kind == "str":
+        return None
+    lo = knob.lo if knob.lo is not None else 0
+    hi = knob.hi if knob.hi is not None else (lo + 10)
+    if knob.kind == "int":
+        options = [v for v in range(int(lo), int(hi) + 1) if v != knob.default]
+    else:
+        options = [round(lo + (hi - lo) * rng.random(), 4)]
+        options = [v for v in options if v != knob.default]
+    return rng.choice(options) if options else None
