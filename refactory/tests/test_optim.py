@@ -368,3 +368,31 @@ def test_the_model_client_returns_stdout(monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: Ok())
     assert DshModelClient().complete("hello") == '{"proposals": []}\n'
+
+
+def test_a_no_op_edit_is_refused_rather_than_re_evaluated():
+    """Setting a knob to the value it already holds must not cost a batch slot."""
+    mode = _mode()
+    seed = mode.state_dict()
+    currently = seed["knobs"]["order"]["value"]
+    parents = [Candidate.from_state(seed)]
+    optimizer = ScriptedOptimizer(
+        [{"op": "set_knob", "name": "order", "value": currently}], k=1
+    )
+    candidates, rejections = optimizer.propose_valid(
+        _context(mode), 1, parents=parents, invariants=mode.invariants()
+    )
+    assert candidates == []
+    assert rejections[0].codes() == ["E-noop"]
+    assert "identical to its parent" in rejections[0].reasons[0]
+
+
+def test_a_real_change_is_still_accepted():
+    """The no-op guard must not refuse a knob move that actually moves."""
+    mode = _mode()
+    parents = [Candidate.from_state(mode.state_dict())]
+    optimizer = ScriptedOptimizer([{"op": "set_knob", "name": "order", "value": "asc"}], k=1)
+    candidates, rejections = optimizer.propose_valid(
+        _context(mode), 1, parents=parents, invariants=mode.invariants()
+    )
+    assert len(candidates) == 1 and not rejections

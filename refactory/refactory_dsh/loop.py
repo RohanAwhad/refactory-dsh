@@ -197,7 +197,7 @@ class Loop:
             )
             if isinstance(outcome, Candidate):
                 self.population.append(outcome)
-                self.proposals[outcome.id] = {
+                self.proposals.setdefault(outcome.id, {
                     "id": outcome.id,
                     "parent": outcome.parent,
                     "edits": outcome.edits,
@@ -205,7 +205,7 @@ class Loop:
                     "prediction": "",
                     "confidence": 0.0,
                     "origin": "seed_population",
-                }
+                })
             else:
                 self.rejections.append(Rejection(1, edit, outcome))
 
@@ -401,7 +401,7 @@ class Loop:
         )
         self.rejections.extend(rejections)
         for candidate in candidates:
-            self.proposals[candidate.id] = {
+            self.proposals.setdefault(candidate.id, {
                 "id": candidate.id,
                 "parent": candidate.parent,
                 "edits": candidate.edits[-1:],
@@ -410,7 +410,7 @@ class Loop:
                 "confidence": 0.0,
                 "origin": "optimizer",
                 "diagnosis": getattr(self.optimizer, "last_diagnosis", ""),
-            }
+            })
         self._write_analysis()
         self._append_rejections(rejections)
         return candidates, rejections

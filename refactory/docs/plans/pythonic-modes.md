@@ -234,6 +234,17 @@ proceed → register (fn) → smoke (fn) → done}`
 - `smoke` runs the mode once and refuses to register a mode that cannot score.
 - `extends: <package>/<mode>` subclasses an existing mode's class.
 
+**The one mode outside a package, deliberately.** `CreateMode` is a `Mode`
+subclass defined in the library, so it is the single exception to "no mode exists
+outside a package". It is the tool rather than a search target: nobody optimizes
+it, and listing it in the catalogue beside the modes a user might run would be
+wrong. The alternative — registering it under a `refactory` package — would mean
+loosening
+`tests/test_registry.py::test_every_installed_package_mode_validates`, which
+asserts that every package mode is scored and exposes knobs. That assertion is
+worth more than the tidiness of the rule, so the exception stands and is recorded
+here rather than hidden.
+
 ## 13. Deletions
 
 The JSON-authoring path is replaced, not supported alongside the new one. Removed

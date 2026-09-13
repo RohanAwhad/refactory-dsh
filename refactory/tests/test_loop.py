@@ -329,3 +329,29 @@ def test_rejections_are_persisted_as_a_stream(tmp_path):
             row = json.loads(line)
             assert row["reasons"]
             assert row["codes"]
+
+
+def test_a_proposal_record_is_never_overwritten_by_a_later_candidate(tmp_path):
+    """Every recorded proposal names a parent that is not itself."""
+    loop = Loop(MODE, _config(tmp_path), project=Path("."))
+    report = loop.run()
+    for row in report["proposal_outcomes"]:
+        assert row["parent"] != row["id"], (
+            f"{row['id']} was recorded as its own parent, so a later candidate "
+            "overwrote an earlier record"
+        )
+
+
+def test_the_best_candidates_edits_match_its_lineage(tmp_path):
+    loop = Loop(MODE, _config(tmp_path), project=Path("."))
+    report = loop.run()
+    lineage = report["lineage"]
+    if lineage:
+        best = lineage[-1]
+        recorded = next(
+            (r for r in report["proposal_outcomes"] if r["id"] == best["id"]), None
+        )
+        if recorded is not None:
+            assert recorded["edits"] == best["edits"][-len(recorded["edits"]):] or (
+                recorded["edits"] == best["edits"]
+            ), "the proposal record disagrees with the lineage it belongs to"

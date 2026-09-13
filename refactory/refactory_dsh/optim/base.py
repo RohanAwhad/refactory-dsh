@@ -367,6 +367,16 @@ class Optimizer:
         except Exception as exc:  # an operator bug is reported, not swallowed
             return [f"E-internal: {type(exc).__name__}: {exc}"]
 
+        if candidate_id(state) == parent.id:
+            # The edit is legal and changes nothing: setting a knob to the value it
+            # already holds, or re-adding a node that is already there. Accepting it
+            # would spend a batch slot re-evaluating a point already scored, and the
+            # search would look productive while making no progress.
+            return [
+                f"E-noop: {proposal.edit.get('op')} leaves the state identical to its "
+                "parent, so it would re-evaluate a candidate already scored"
+            ]
+
         issues = validate_state(state, invariants=invariants, resolve_calls=resolve_calls)
         if issues:
             return [str(issue) for issue in issues]
