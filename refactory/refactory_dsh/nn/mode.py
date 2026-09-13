@@ -128,6 +128,24 @@ class Mode:
         """
         return ()
 
+    def guidance(self) -> str:
+        """Free text for the optimizer, for what the surface cannot say.
+
+        A knob's description says what a knob *is*; this says what is worth doing.
+        The traces eventually show that structure rarely helps on a pipeline and
+        that one knob is the lever, but only after a batch has been spent finding
+        out. The author already knows.
+        """
+        return ""
+
+    def preferred_edits(self) -> tuple[str, ...]:
+        """Edit operations worth trying first, if the author has an opinion.
+
+        A prior, not a restriction: an optimizer is free to use anything in the
+        catalogue, and a sampler uses these to weight its choice.
+        """
+        return ()
+
     def memory(self) -> tuple[Memory, ...]:
         """Namespaces this mode may remember, each with a retention policy.
 
@@ -343,5 +361,7 @@ class Mode:
             ],
             "ports": list(self._ports),
             "memory": list(self._memory),
+            "guidance": self.guidance(),
+            "preferred_edits": list(self.preferred_edits()),
             "scored": self.is_scored(),
         }

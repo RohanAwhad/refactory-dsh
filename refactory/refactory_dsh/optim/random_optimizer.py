@@ -47,21 +47,44 @@ class RandomOptimizer(Optimizer):
         if not parents:
             return []
         rng = self.rng(ctx, n)
+        preferred = [name for name in ctx.preferred_edits if name in set(nn_edits.enabled(ctx.preset))]
         proposals: list[Proposal] = []
         for index in range(max(1, n)):
             parent = parents[index % len(parents)]
-            edit = nn_edits.random_edit(
-                parent.state,
-                preset=ctx.preset,
-                insertable=ctx.insertable,
-                rng=rng,
-            )
+            edit = None
+            if preferred and index % 2 == 0:
+                # Every other proposal goes to what the author suggested. A prior,
+                # not a restriction: the sampler still covers the catalogue.
+                edit = self._preferred_edit(rng.choice(preferred), parent, ctx, rng)
+            if edit is None:
+                edit = nn_edits.random_edit(
+                    parent.state,
+                    preset=ctx.preset,
+                    insertable=ctx.insertable,
+                    rng=rng,
+                )
             if edit is None:
                 continue
             proposals.append(
                 Proposal(edit=edit, parent=parent.id, rationale="sampled at random")
             )
         return proposals
+
+
+    def _preferred_edit(
+        self, op: str, parent: Candidate, ctx: ProposalContext, rng: random.Random
+    ) -> dict[str, Any] | None:
+        """A random edit restricted to one operation, or ``None`` if none fits."""
+        for _ in range(20):
+            edit = nn_edits.random_edit(
+                parent.state,
+                preset="broad",
+                insertable=ctx.insertable,
+                rng=rng,
+            )
+            if edit is not None and edit.get("op") == op:
+                return edit
+        return None
 
 
 class AutoresearchOptimizer(Optimizer):

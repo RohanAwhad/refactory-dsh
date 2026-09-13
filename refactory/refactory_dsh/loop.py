@@ -164,6 +164,8 @@ class Loop(OuterLoop):
         self._epoch_open = False
         self.evaluations = 0
         self.bound = ""
+        self.attempts_used: list[int] = []
+        self._refusal_pressure = 0.0
         self.loss: dict[str, Any] = {}
         self.gradient: dict[str, Any] = {}
         self.epochs: list[EpochSummary] = []
@@ -492,6 +494,79 @@ class Loop(OuterLoop):
             return []
         return [member for member in knob.enum if str(member) not in tried]
 
+    def _efficiency(self) -> dict[str, Any]:
+        """How many attempts it took per candidate that could actually run."""
+        proposed = len(self.proposals)
+        attempts = sum(self.attempts_used)
+        return {
+            "rounds": attempts,
+            "batches": len(self.attempts_used),
+            "effective_k": sorted(set(self.attempts_used)),
+            "candidates": proposed,
+            "attempts_per_candidate": (
+                round(attempts / proposed, 3) if proposed else None
+            ),
+            "why": "k starts at the configured attempts and rises by one when the "
+                   "previous batch was refused more than it was accepted, because "
+                   "that is the signal that the optimizer is close to something "
+                   "legal rather than out of ideas",
+        }
+
+    def _dominant_refusal(self) -> dict[str, Any]:
+        """The commonest refusal, and what it says about the catalogue.
+
+        A rule that refuses most of what the optimizer proposes is a finding about
+        the ops it was offered, not about the optimizer. Counting the codes and
+        stopping there leaves that unsaid.
+        """
+        counts = self._rejection_codes()
+        if not counts:
+            return {"code": None, "count": 0, "share": 0.0, "finding": ""}
+        code, count = max(counts.items(), key=lambda item: item[1])
+        total = sum(counts.values())
+        share = round(count / total, 3)
+        finding = ""
+        if share >= 0.5 and code.startswith("E-"):
+            finding = (
+                f"{share:.0%} of refusals were {code}. That is a statement about the "
+                "operations the optimizer was offered, not about the optimizer: the "
+                "catalogue asks for something these proposals cannot satisfy, so the "
+                "field descriptions or the preconditions are the thing to fix."
+            )
+        elif share >= 0.5 and code.startswith("V"):
+            finding = (
+                f"{share:.0%} of refusals were {code}. The optimizer is proposing edits "
+                "that break a rule it does not have to guess at -- the rules are in its "
+                "prompt -- so either the mode's graph invites that edit or the rule needs "
+                "stating more plainly."
+            )
+        return {"code": code, "count": count, "share": share, "finding": finding}
+
+    def _convergence(self) -> dict[str, Any]:
+        """Whether the optimizer has run out of ideas within the surface it sees.
+
+        A no-op or a duplicate means the same thing: every edit it can think of
+        lands on a point that is already the case. That is a convergence symptom,
+        not one more refusal.
+        """
+        counts = self._rejection_codes()
+        spent = {code: counts.get(code, 0) for code in ("E-noop", "E-duplicate")}
+        total = sum(spent.values())
+        if not total:
+            return {"reason": None, "detail": ""}
+        accepted = sum(1 for c in self.population if c.edits)
+        if total > accepted:
+            return {
+                "reason": "surface_exhausted",
+                "detail": (
+                    f"{total} proposal(s) landed on a state that already exists and "
+                    f"{accepted} produced something new, so the optimizer is out of "
+                    "ideas within the surface it can see; the surface needs widening, "
+                    "not more attempts"
+                ),
+            }
+        return {"reason": None, "detail": "", "noops": total}
+
     def _cost(self) -> dict[str, Any]:
         durations = [c.duration_s for c in self._evaluated()]
         if not durations:
@@ -632,7 +707,13 @@ class Loop(OuterLoop):
             self.population.append(candidate)
             added.append(candidate)
         self.generation += 1
-        self._journal("step", generation=self.generation)
+        self._journal(
+            "step",
+            generation=self.generation,
+            # Journaled, not derived: the adaptive k depends on it, so a resumed
+            # run that guessed it would propose something else.
+            refusal_pressure=round(self._refusal_pressure, 6),
+        )
         self._write_state()
         return added
 
@@ -700,7 +781,14 @@ class Loop(OuterLoop):
         """
         accepted: list[Candidate] = []
         wanted = self.batch_size(run)
-        for _attempt in range(1, max(1, self.config.attempts) + 1):
+        # `k` adapts: one more round when the last batch was refused more than it was
+        # accepted, because that is the signal that the optimizer is close to
+        # something legal rather than out of ideas.
+        cap = max(1, self.config.attempts) + (1 if self._refusal_pressure >= 0.5 else 0)
+        rounds = 0
+        before_all = len(self.rejections)
+        for _attempt in range(1, cap + 1):
+            rounds += 1
             if len(accepted) >= wanted:
                 break
             before = len(self.rejections)
@@ -716,6 +804,9 @@ class Loop(OuterLoop):
             proposals = self.propose(run, parents, wanted - len(accepted))
             if not proposals:
                 break
+        refused = len(self.rejections) - before_all
+        self._refusal_pressure = refused / max(1, refused + len(accepted))
+        self.attempts_used.append(rounds)
         return accepted
 
     def strategy(self, run: Run) -> None:
@@ -813,6 +904,9 @@ class Loop(OuterLoop):
             "ports": self.mode.describe()["ports"],
             "memory": self.mode.describe()["memory"],
             "cost": self._cost(),
+            "efficiency": self._efficiency(),
+            "dominant_refusal": self._dominant_refusal(),
+            "convergence": self._convergence(),
             "knob_coverage": {
                 "unreachable": self.unreachable_knobs(),
                 "detail": "declared and movable, but the selected optimizer cannot "
@@ -895,6 +989,19 @@ class Loop(OuterLoop):
                 [[c["id"], c.get("score"), json.dumps(c.get("edits"), default=str)]
                  for c in payload["structural_wins"]],
             ),
+            "",
+            "## Why proposals were refused",
+            "",
+            payload["dominant_refusal"]["finding"] or "_No dominant refusal._",
+            "",
+            "## Did the search run out of ideas?",
+            "",
+            payload["convergence"]["detail"] or "_No: proposals were still producing "
+            "new points._",
+            "",
+            f"Attempts per candidate that could run: "
+            f"{payload['efficiency']['attempts_per_candidate']} "
+            f"(effective k {payload['efficiency']['effective_k']}).",
             "",
             "## Refusals by rule",
             "",
@@ -1141,6 +1248,7 @@ class Loop(OuterLoop):
                 # is journaled rather than inferred: guessing it makes a resumed run
                 # propose something else.
                 self.generation = int(record.get("generation") or self.generation)
+                self._refusal_pressure = float(record.get("refusal_pressure") or 0.0)
             elif event == "loss":
                 self.loss = {
                     key: value

@@ -126,10 +126,28 @@ def test_state_is_canonical():
 
 
 def test_state_carries_no_scoring_surface():
-    """D4: nothing an optimizer can write can reach score() or invariants()."""
-    encoded = json.dumps(_state(), sort_keys=True)
-    assert "score" not in encoded
-    assert "invariant" not in encoded
+    """D4: nothing an optimizer can write can reach score() or invariants().
+
+    Checked structurally rather than as a substring: a node field named
+    `score_effect` says whether a node can change the number, which is the opposite
+    of exposing the number.
+    """
+    state = _state()
+
+    def keys(node: object) -> set[str]:
+        if isinstance(node, dict):
+            found = set(node)
+            for value in node.values():
+                found |= keys(value)
+            return found
+        if isinstance(node, list):
+            return {k for item in node for k in keys(item)}
+        return set()
+
+    found = keys(state)
+    assert "score" not in found, "the state exposes a score"
+    assert "invariants" not in found, "the state exposes the invariants"
+    assert "score()" not in json.dumps(state, sort_keys=True)
 
 
 def test_default_score_means_unscored():

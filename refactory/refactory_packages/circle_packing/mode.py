@@ -143,6 +143,23 @@ class CirclePacking(nn.Mode):
         """The metric must be produced by the pipeline the candidate actually runs."""
         return (nn.fact_produced("best_score"),)
 
+    def guidance(self) -> str:
+        """What the traces show only after a batch has been spent finding out.
+
+        The generator is deterministic, so the ladder re-evaluates one answer and
+        the budget knob alone changes nothing; the score moves by changing what the
+        generator is asked for and by giving the search a way to vary its sample.
+        """
+        return (
+            "This pipeline's generator is deterministic, so raising `budget` alone "
+            "re-evaluates the same candidate. The score moves on `order` and `grid`, "
+            "and on adding a step that varies the sample -- the `restart_on_stall` "
+            "block. `acceptance_mode` and `selector` move it little."
+        )
+
+    def preferred_edits(self) -> tuple[str, ...]:
+        return ("set_knob", "insert_after")
+
     def insertable(self) -> tuple[nn.Node, ...]:
         """Blocks a structural edit may add to this pipeline.
 
@@ -168,6 +185,7 @@ class CirclePacking(nn.Mode):
             ),
             nn.Node(
                 "critic", "agent",
+                score_effect="none",
                 prompt_template=(
                     "The search is working on a circle-packing instance with "
                     "{{circles}} circles. The current candidate is {{candidate_id}} "

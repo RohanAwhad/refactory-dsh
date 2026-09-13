@@ -31,6 +31,7 @@ _NODE_FIELDS = frozenset(
         "max_iterations",
         "notes",
         "blocking",
+        "score_effect",
     }
 )
 
@@ -66,6 +67,11 @@ class Node:
     max_iterations: int = 1
     notes: str = ""
     blocking: bool = True
+    #: Whether inserting this node can change the score. ``affects`` is the
+    #: default; ``none`` says the node is advisory, which is worth stating because
+    #: a block that cannot change the number is otherwise indistinguishable from
+    #: one that can, and an optimizer given both as equals will try the useless one.
+    score_effect: str = "affects"
 
     def __post_init__(self) -> None:
         if self.kind not in NODE_KINDS:
@@ -80,6 +86,11 @@ class Node:
             raise GraphError(f"agent node {self.id!r} declares no prompt_template")
         if self.max_iterations < 1:
             raise GraphError(f"node {self.id!r}: max_iterations must be >= 1")
+        if self.score_effect not in ("affects", "none"):
+            raise GraphError(
+                f"node {self.id!r}: unknown score_effect {self.score_effect!r}; "
+                "known: affects, none"
+            )
 
     def to_state(self) -> dict[str, Any]:
         return {
@@ -97,6 +108,7 @@ class Node:
             "max_iterations": self.max_iterations,
             "notes": self.notes,
             "blocking": self.blocking,
+            "score_effect": self.score_effect,
         }
 
     @classmethod
@@ -121,6 +133,7 @@ class Node:
             max_iterations=int(state.get("max_iterations", 1)),
             notes=str(state.get("notes", "")),
             blocking=bool(state.get("blocking", True)),
+            score_effect=str(state.get("score_effect", "affects")),
         )
 
     def with_field(self, field_name: str, value: Any) -> "Node":

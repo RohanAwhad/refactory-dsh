@@ -195,6 +195,9 @@ class ProposalContext:
     history_truncated: bool = False
     #: Summaries of previous runs, so a strategy can carry a prior across runs.
     prior_runs: list[dict[str, Any]] = field(default_factory=list)
+    #: What the author says is worth doing, which the traces would only show later.
+    guidance: str = ""
+    preferred_edits: list[str] = field(default_factory=list)
     #: Knobs the operator has frozen for this run, on top of the ones the mode
     #: itself declares frozen. Freezing is a property of the run, not of the mode,
     #: so it cannot be edited into the definition by a candidate.
@@ -224,6 +227,19 @@ class ProposalContext:
             "Edges:",
             _table(["source", "target", "condition"],
                    [[e["source"], e["target"], e.get("condition")] for e in self.edges]),
+            "",
+            "## What the author says is worth doing",
+            self.guidance or "(the mode's author offered no guidance)",
+            (
+                "Operations the author suggests trying first: "
+                + ", ".join(f"`{name}`" for name in self.preferred_edits)
+                if self.preferred_edits
+                else ""
+            ),
+            "",
+            "`score_effect: none` on a block means inserting it cannot change the "
+            "score. It is available and it may be worth having, but it is not a way "
+            "to improve the number.",
             "",
             "## The rules a proposal must satisfy",
             "A proposal that breaks one of these is refused before anything runs, so it "
@@ -483,6 +499,12 @@ class Optimizer:
             return [
                 f"E-frozen: knob {proposal.edit.get('name')!r} is frozen for this run"
             ]
+        # An operation that is not in the catalogue is not a failed precondition: the
+        # two are told apart because they point at different fixes, and calling every
+        # refusal a precondition failure hides which one the catalogue is causing.
+        op = proposal.edit.get("op")
+        if op not in nn_edits.names():
+            return [f"E-op: unknown edit {op!r}; known: {nn_edits.names()}"]
         reason = nn_edits.precheck(proposal.edit, parent.state)
         if reason:
             return [f"E-precondition: {reason}"]
