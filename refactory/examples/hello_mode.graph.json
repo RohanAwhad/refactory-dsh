@@ -1,0 +1,21 @@
+{
+  "name": "hello_mode",
+  "nodes": {
+    "write": {
+      "id": "write", "_type": "FnNode", "blocking": true,
+      "command": "python -m srf.ops.run srf.ops.common.sandbox:run_eval",
+      "reads": ["task.yaml"], "writes": ["candidate.py", "score.json"]
+    },
+    "judge": {
+      "id": "judge", "_type": "GateNode", "blocking": true,
+      "evaluator_type": "fn",
+      "evaluator_command": "python -m srf.ops.gepa.acceptance:accept_or_reject",
+      "reads": ["score.json"], "writes": [], "max_iterations": 10
+    }
+  },
+  "edges": [
+    {"source": "write", "target": "judge", "condition": null}
+  ],
+  "start_node": "write",
+  "terminal": true
+}

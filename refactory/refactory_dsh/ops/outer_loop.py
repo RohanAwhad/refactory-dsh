@@ -235,19 +235,16 @@ def _pick_evaluator():
 # ── Config / engine construction ───────────────────────────────────────────
 
 def fitness_weights(settings: dict) -> dict:
-    """Composite-fitness weights, from steering when set.
+    """Fitness weights, from steering when set. Default: the task metric alone.
 
-    The default is the shipped weighting, so a run that does not steer is
-    unchanged. Setting ``{"benchmark": 1.0}`` searches on the task metric alone,
-    which is what a benchmark run usually wants: the default adds a constant
-    share for hygiene, cost and complexity regardless of task performance.
+    The previous default blended in hygiene, cost and complexity, which gave every
+    candidate a fixed bonus unrelated to how the task went and let a mode trade
+    task performance for the cost term. Those terms are now opt-in.
     """
     raw = settings.get("fitness_weights")
     if not isinstance(raw, dict) or not raw:
-        return {
-            "benchmark": 0.6, "hygiene": 0.2, "cost": 0.1, "complexity": 0.1
-        }
-    out = {"benchmark": 0.6, "hygiene": 0.2, "cost": 0.1, "complexity": 0.1}
+        return {"benchmark": 1.0, "hygiene": 0.0, "cost": 0.0, "complexity": 0.0}
+    out = {"benchmark": 1.0, "hygiene": 0.0, "cost": 0.0, "complexity": 0.0}
     for key, value in raw.items():
         if isinstance(value, (int, float)) and value >= 0:
             out[str(key)] = float(value)
