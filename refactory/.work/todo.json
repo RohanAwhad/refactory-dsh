@@ -19,7 +19,9 @@
       "title": "str knobs are invisible to the random optimizer and to init's sweep",
       "why": "Closes the 'declared = optimizable' guarantee, which is the rule the whole seam rests on.",
       "verify": "pytest refactory/tests/test_nn.py refactory/tests/test_optim.py refactory/tests/test_loop.py -q",
-      "status": "todo"
+      "status": "done",
+      "commit": "67f44631b0",
+      "evidence": "185 passed. tests/test_str_knobs.py is new (12 tests): an open str knob is sampled by textual mutation and never returns the current value; a str knob with declared values picks one of them; every kind (int, float, bool, str, enum) returns a sample; values validation rejects a non-str kind; the spec round-trips values; the random optimizer proposes string knobs across 40 seeds; the starting sweep includes them; a narrow optimizer is warned about by name at init and reported in knob_coverage; describe() names values and range separately and no longer has an overloaded bounds. A real run on circle_packing/adaptive reports knob_coverage.unreachable == [] and leaves the example test green. Reproduce: pytest refactory/tests/test_str_knobs.py refactory/tests/test_example.py -q"
     },
     {
       "id": "integrity",
