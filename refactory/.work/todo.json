@@ -99,7 +99,9 @@
       "title": "Optimizer-facing signals: author priors, refusal findings, block signals, no-op as convergence",
       "why": "Makes the search better; none of it makes it correct, which is why it follows the correctness work.",
       "verify": "pytest refactory/tests/test_optim.py refactory/tests/test_loop.py -q",
-      "status": "todo"
+      "status": "done",
+      "commit": "b30c8bac40",
+      "evidence": "348 passed. tests/test_signals.py is new (13 tests): the mode states guidance and preferred edits and the prompt carries both; a mode with none says so rather than showing nothing; the sampler proposes the preferred operations and still covers the catalogue; an advisory block declares score_effect=none, an unknown tier is refused, and it travels in the state; a dominant refusal is reported as a finding about the catalogue and appears in report.md; a clean run invents no finding; running out of ideas is reported as surface_exhausted with the detail in markdown; a productive run reports no convergence; the report carries attempts per candidate and why that k; and k rises past the configured value on a refusal-heavy batch. A real autoresearch run echoed the guidance in its diagnosis and reached 1.08 with zero refusals. Reproduce: pytest refactory/tests/test_signals.py -q"
     },
     {
       "id": "gui",
