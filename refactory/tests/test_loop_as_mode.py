@@ -233,3 +233,95 @@ def test_the_run_resumes_from_its_own_journal(tmp_path):
     assert events.count("epoch_end") == 2
     assert events.count("step") == 2
     assert "bound" in events
+
+
+# ── the other runtime ──────────────────────────────────────────────────────
+# The walker is the debug runtime; DSH is the runtime that ships. A graph that
+# only the walker accepts is a graph that does not ship, so the loop's own graph
+# is lowered and offered to the spine's validator here, and driven end to end by
+# the integration test beside this file's unit tests.
+
+
+def test_the_runtime_that_ships_accepts_the_lowered_loop(tmp_path):
+    """The spine's own validator, not just refactory's."""
+    import subprocess
+
+    from refactory_dsh import lowering
+    from refactory_dsh.paths import REPO_ROOT, node_bin
+
+    state = registry.resolve(Path("."), MODE)[1]().state_dict()
+    path, _workflow = lowering.write_mode_graph(state, tmp_path / "graphs", name="loop")
+    spine = REPO_ROOT / "packages" / "workflow" / "workflow-spine" / "src" / "spine.ts"
+    script = (
+        "import { readFileSync } from 'node:fs';"
+        f"import {{ validateGraph }} from {spine.as_uri()!r};"
+        f"const g = JSON.parse(readFileSync({str(path)!r}, 'utf8'));"
+        "const issues = validateGraph(g as never);"
+        "console.log(JSON.stringify(issues));"
+    )
+    result = subprocess.run(
+        [str(node_bin()), "--import", "tsx/esm", "-e", script],
+        capture_output=True, text=True, cwd=str(REPO_ROOT), timeout=180,
+    )
+    assert result.returncode == 0, result.stderr[-1000:]
+    assert json.loads(result.stdout.strip().splitlines()[-1]) == []
+
+
+def test_the_lowered_loop_keeps_the_loop_back_edge(tmp_path):
+    """Lowering must not flatten the cycle: a loop without its edge is a pipeline."""
+    from refactory_dsh import lowering
+
+    state = registry.resolve(Path("."), MODE)[1]().state_dict()
+    path, _workflow = lowering.write_mode_graph(state, tmp_path / "graphs", name="loop")
+    written = json.loads(Path(path).read_text())
+    edges = {(edge["source"], edge["target"], edge.get("condition") or "") for edge in written["edges"]}
+    assert ("again", "forward", "again") in edges
+    assert ("again", "report", "done") in edges
+    assert written["start_node"] == "init"
+
+
+@pytest.mark.integration
+def test_it_runs_end_to_end_on_the_runtime_that_ships(tmp_path):
+    """The same graph, driven by DSH's spine rather than by the walker.
+
+    Nine nodes, the gate routing `done` to the report, and the same best score —
+    on the only runtime a deployment has. Marked integration because it spawns a
+    real session: `pytest --run-integration`.
+    """
+    import subprocess
+
+    from refactory_dsh import lowering
+    from refactory_dsh.paths import REPO_ROOT, node_bin, venv_bin
+    from refactory_dsh.run import FACTS
+
+    state = registry.resolve(Path("."), MODE)[1]().state_dict()
+    graphs = tmp_path / "graphs"
+    work = tmp_path / "work"
+    work.mkdir(parents=True, exist_ok=True)
+    lowering.write_mode_graph(state, graphs, name="loop")
+    lowering.write_declarations(state, work)
+    knobs = {name: entry["value"] for name, entry in state["knobs"].items()}
+    knobs["project"] = str(Path(".").resolve())
+    knobs["epochs"] = 2
+    knobs["batch_size"] = 2
+    knobs["max_evaluations"] = 4
+
+    result = subprocess.run(
+        [
+            str(node_bin()), "--import", "tsx/esm", "apps/cli/src/bin.ts",
+            "--profile", "science", "run",
+            "--mode", "loop",
+            "--task", "Call wf_next repeatedly until it reports done. Do nothing else.",
+            "--budget", "1", "--graphs", str(graphs), "--workdir", str(work),
+            "--python-bin", str(venv_bin()), "--knobs", json.dumps(knobs),
+        ],
+        capture_output=True, text=True, cwd=str(REPO_ROOT), timeout=900,
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    facts = json.loads((work / FACTS).read_text())
+    assert facts["bound"] == "epochs"
+    assert facts["best"] > 0
+    # The number the runtime reported is the number the walker reports for the
+    # same seed, which is what makes the two runtimes interchangeable.
+    _package, walked = _run(tmp_path / "walk", epochs=2, batch_size=2, max_evaluations=4)
+    assert facts["best"] == walked.facts["best"]

@@ -35,6 +35,7 @@
 | `@deepseek-ai/dsh-schedule` | `schedule_create`、`schedule_delete`、`schedule_list` | `ctx.tools`、`ctx.sessions`、Session 持久化、未来创建的 live 根 Agent | `tool/call`、`schedule/change create or delete`、`tool/result` | - | 仅在选择启用的 Schedule 插件加载后创建的 live 根 Agent scope 内注册。版本 1 接受 after_seconds、显式绝对 at 和有界固定速率 every_seconds，并披露 session-local 交付；管理读取与变更必须通过共享的 Session 持久化 barrier。 |
 | `@deepseek-ai/dsh-tool-lsp` | `lsp` | `ctx.tools`、`ctx.lsp`、`ctx.systemPrompt` | `tool/call`、`tool/result` | - | lsp 工具将提供方选择和语言服务器子进程置于 ctx.lsp 之后，因此其模型可见 schema 在更换提供方时保持稳定。运行时要求已注册提供方，例如 `@deepseek-ai/dsh-lsp-stdio`；如果没有提供方，查询会返回结构化 `LSP_UNAVAILABLE` 错误，而不会改变 schema。 |
 | `@deepseek-ai/dsh-tool-ralph` | `ralph` | `ctx.tools`、`ctx.workflowEngine`、`ctx.subagents`、`ctx.systemPrompt`、`a calling Agent (exec.agent parents every fresh round)` | `tool/call`、`tool/result`、`workflow and child session events during execution` | - | 固定的前台工作流会在每个 Round 启动一个全新的结构化子级；模型只能选择不可变目标和可选的 Round 上限。 |
+| `@deepseek-ai/dsh-tool-refactory` | `refactory` | `ctx.tools`、`ctx.subprocess`、`ctx.systemPrompt`、`安装了 refactory_dsh、可通过所配置解释器路径访问的 python` | `tool/call`、`tool/result` | - | 每个控制台动词对应一个动作；每个动作都返回控制台的 JSON，结果通过 `output.presentationMeta` 投影该 JSON 供浏览器卡片使用。启动一次运行会派生一个比调用存活更久的进程，因此会话结束后运行仍会继续。 |
 | `@deepseek-ai/dsh-tool-skill` | `skill` | `ctx.tools`、`ctx.agents`、`ctx.skills` | `tool/call`、`tool/result`、`user/message replacement catalogs via agent.inject()` | - | - |
 | `@deepseek-ai/dsh-tool-session-query` | `session_event_read`、`session_event_search`、`session_event_trace`、`session_search`、`session_trace` | `ctx.tools`、`ctx.systemPrompt`、`ctx.sessionQuery`、`a calling Agent for workspace authority` | `tool/call`、`tool/result` | - | 这 5 个只读工具会隐藏提供方游标，并根据不可变的调用 agent 会话为每个结果授权。该包需要选择启用；需要强制截止时间或限制行内输出的组合还会挂载通用超时或 spill 策略。 |
 | `@deepseek-ai/dsh-tool-subagent` | `list_subagent_models`、`subagent` | `ctx.tools`、`ctx.subagents`、`ctx.systemPrompt`、`用于模型发现和所选路由校验的 ctx.llm` | `tool/call`、`tool/result`、`child session events through the chosen provider` | `subagent`、`subagent_fork` | 注册的委派工具名称取决于加载时 `toolName` 配置（默认为 `subagent`）；上述默认 schema 关闭模型选择，而发现 schema 则展示为已启用 Session 中可用的固定配套工具。Web preset 会在每个新顶层 Session 创建时读取插件页偏好，并为其子 Session 保留该决定；`subagent_fork` 始终使用固定路由。每个实例通过 `modelSelectionSettings`、`backgroundMode` 与 `enableRunInBackground` 独立控制是否读取模型选择设置及其后台行为。 |
@@ -1277,6 +1278,84 @@ lsp 工具将提供方选择和语言服务器子进程置于 ctx.lsp 之后，�
 来源：[`packages/workflow/tool-ralph/src/index.ts`](../packages/workflow/tool-ralph/src/index.ts)
 
 固定的前台工作流会在每个 Round 启动一个全新的结构化子级；模型只能选择不可变目标和可选的 Round 上限。
+
+<a id="deepseek-aidsh-tool-refactory"></a>
+
+## `@deepseek-ai/dsh-tool-refactory`
+
+### `refactory`
+
+驱动并读取一次 refactory 外层循环运行：该优化器循环为某个 mode 提出改动、评估这些改动，并保留能提高分数的部分。用它来启动一次运行、在运行进行中观察它，并读取它的产物。
+
+动作：modes（列出可以启动的 mode 及其参数。）runs（列出运行根目录下的运行，最新的在前。）start（在独立进程中启动一次运行；返回可用于观察它的 run id。）status（运行当前所处的位置，以及从某个偏移量之后的事件。）artifacts（运行在磁盘上留下的产物，可选返回内容。）leaderboard（该运行的候选项按分数排序，每个候选项附有与其父项的差异。）candidate（单个候选项，以及它相对来源父项的改动。）stop（请求停止一次运行。）
+
+循环在独立进程中运行，因此调用返回之后、甚至会话结束之后，运行仍会继续；用 "status" 动作配合 "after" 偏移量观察它。优先使用此工具，而不是在 shell 中运行循环：它就是 Web 视图所渲染的同一个控制台，而在 shell 中启动的运行除非位于运行根目录之下，否则不会出现在视图中。
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "description": "The verb. modes: List the modes a run can be started from, with their parameters. runs: List runs under the run root, newest first. start: Start a run in its own process; returns the run id to watch it with. status: Where a run is, and the events since an offset. artifacts: What a run left on disk, optionally with contents. leaderboard: The run's candidates by score, each with its diff against its parent. candidate: One candidate, with what it changed against the parent it came from. stop: Ask a run to stop.",
+      "enum": [
+        "modes",
+        "runs",
+        "start",
+        "status",
+        "artifacts",
+        "leaderboard",
+        "candidate",
+        "stop"
+      ]
+    },
+    "mode": {
+      "type": "string",
+      "description": "Mode to run, as <package>/<name>. Required by action \"start\"."
+    },
+    "run": {
+      "type": "string",
+      "description": "The run id or absolute run directory. Required by status, artifacts, leaderboard, candidate, stop."
+    },
+    "runId": {
+      "type": "string",
+      "description": "Run id to claim, for action \"start\" (default: derived from the mode and the time)."
+    },
+    "candidate": {
+      "type": "string",
+      "description": "Candidate id to read. Required by action \"candidate\"."
+    },
+    "after": {
+      "type": "integer",
+      "description": "For action \"status\": only return events after this many progress lines, so a poll reads what is new."
+    },
+    "contents": {
+      "type": "boolean",
+      "description": "For action \"artifacts\": include each artifact's contents."
+    },
+    "limit": {
+      "type": "integer",
+      "description": "For action \"runs\"/\"leaderboard\": how many rows to return."
+    },
+    "runsRoot": {
+      "type": "string",
+      "description": "Directory holding the runs (default: <repoRoot>/.factory/loop)."
+    },
+    "settings": {
+      "type": "object",
+      "description": "Run settings for action \"start\": epochs, batch_size, optimizer, strategy, evaluator, seed, elite, attempts, preset, max_evaluations. Passed through as console flags.",
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "action"
+  ]
+}
+```
+
+来源：[`packages/refactory/tool-refactory/src/index.ts`](../packages/refactory/tool-refactory/src/index.ts)
+
+每个控制台动词对应一个动作；每个动作都返回控制台的 JSON，结果通过 `output.presentationMeta` 投影该 JSON 供浏览器卡片使用。启动一次运行会派生一个比调用存活更久的进程，因此会话结束后运行仍会继续。
 
 <a id="deepseek-aidsh-tool-skill"></a>
 

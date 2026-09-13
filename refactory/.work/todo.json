@@ -109,7 +109,9 @@
       "title": "Run and visualise the outer loop from the GUI, with the loop staying Pythonic",
       "why": "A user must be able to start a run and read what came out without a terminal.",
       "verify": "pytest refactory/tests/test_gui_loop.py -q",
-      "status": "todo"
+      "status": "done",
+      "commit": "99096779f9",
+      "evidence": "29 passed (tests/test_gui_loop.py) + 22 (tests/test_observe.py) + 20 host tool tests + 5 that run the real loop + 20 client card tests. The loop stays a Python process: observe.py writes progress.jsonl (one line per candidate evaluated, not per epoch), diffs a candidate against its parent, and writes manifest.json; console.py is the catalogue + start/watch/stop + artifacts/leaderboard/candidate surface, exported as JSON over a CLI. On the DSH side the `refactory` tool runs that console through the subprocess capability (one action per verb) and projects the payload through output.presentationMeta, and ui-tool registers a tool.call.toolview row under the wire name so the Web view renders the run: state, best score, the progress tail, the leaderboard with each candidate's diff, artifacts. Mounted in the shipped CEO preset. Verified by actually running it: a real headless DSH session with a real model called the tool for `modes`, then started a run, polled status until finished, and read the leaderboard and artifacts (run circle_packing-adaptive-20260913-194618, 6 candidates, best 0.875, 9 artifacts, 18 progress lines on disk). The four presets that drove the deleted refactory_dsh.ops.* modules (create-v2, design-v2, outer-loop, outer-loop-decomposed) were removed; the CEO preset's description no longer names them."
     },
     {
       "id": "create",
