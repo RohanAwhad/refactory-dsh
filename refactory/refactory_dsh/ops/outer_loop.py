@@ -47,7 +47,7 @@ from factory.outer_loop.population import MAPElitesArchive, Population
 from factory.outer_loop.similarity import NoveltyFilter, compute_features
 from factory.workflow.primitives import Workflow
 
-from refactory_dsh import knobs, report, steering, trace
+from refactory_dsh import knobs, packages, report, steering, trace
 from refactory_dsh.model import DshModelClient
 from refactory_dsh.paths import dsh_root, node_bin, python, srf_graphs, venv_bin
 from refactory_dsh.trace import FileTraceSource
@@ -309,7 +309,7 @@ def build_engine(config: SwarmConfig, evaluator_fn, project_dir: Path | None = N
     """
     # Refuse to search a mode with nothing to optimize, and report a surface that
     # has shrunk since the mode was created.
-    knobs.require_surface(Path(os.environ.get("REFACTORY_TARGET_GRAPH", str(DEFAULT_TARGET))))
+    knobs.require_surface(resolve_mode(Path(project_dir) if project_dir else None))
     evaluator = SwarmEvaluator(config, evaluator_fn=evaluator_fn, project_dir=project_dir)
     novelty = NoveltyFilter(min_edit_distance=3)
     settings = steering.load(Path(project_dir or Path.cwd()))
@@ -347,10 +347,28 @@ def build_engine(config: SwarmConfig, evaluator_fn, project_dir: Path | None = N
     )
 
 
+def resolve_mode(project_dir: Path | None = None) -> Path:
+    """The inner mode to optimize, by package-qualified name or by path.
+
+    ``REFACTORY_MODE`` names a registered mode, which is how a mode created here
+    is normally selected: a name the catalogue can resolve, not a path someone has
+    to remember. ``REFACTORY_TARGET_GRAPH`` remains as a developer override for a
+    graph that is not registered.
+    """
+    name = os.environ.get("REFACTORY_MODE", "").strip()
+    if name:
+        project = Path(project_dir or Path.cwd())
+        resolved = packages.resolve(project, name)
+        if resolved is None:
+            available = ", ".join(packages.enabled_ids(project)) or "none registered"
+            raise SystemExit(f"unknown or disabled mode {name!r}; available: {available}")
+        return Path(resolved)
+    return Path(os.environ.get("REFACTORY_TARGET_GRAPH", str(DEFAULT_TARGET)))
+
+
 def load_base_workflow() -> Workflow:
-    """Load the seed workflow (default: SRF's gepa mode) from its graph.json."""
-    path = Path(os.environ.get("REFACTORY_TARGET_GRAPH", str(DEFAULT_TARGET)))
-    return Workflow.from_dict(json.loads(path.read_text()))
+    """Load the seed workflow from the selected mode's graph."""
+    return Workflow.from_dict(json.loads(resolve_mode().read_text()))
 
 
 # ── Persistent state for the interactive (per-generation) graph ───────────

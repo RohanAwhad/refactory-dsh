@@ -28,6 +28,25 @@ from pathlib import Path
 
 CANDIDATE = Path("candidate.py")
 
+#: Knobs this op reads from SRF_KNOBS (see factory.workflow.opt_knobs).
+KNOBS = {
+    "grid": {
+        "kind": "threshold",
+        "default": 10,
+        "bounds": [4, 8, 12, 16, 24],
+        "expandable": True,
+        "expansion_hint": "a finer packing grid places more circles but scans more positions",
+        "description": "packing grid resolution per axis",
+    },
+    "order": {
+        "kind": "prompt",
+        "default": "desc",
+        "bounds": ["desc", "asc"],
+        "expandable": False,
+        "description": "whether the largest or smallest circles are placed first",
+    },
+}
+
 _TEMPLATE = '''"""Generated circle-packing candidate (deterministic)."""
 import math
 
