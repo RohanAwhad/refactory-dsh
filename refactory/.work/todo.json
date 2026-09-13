@@ -1,0 +1,56 @@
+{
+  "objective": "Outer loop working cleanly like a PyTorch optimization loop",
+  "rule": "Do not stop while any item below is not 'done'. test_work_complete.py fails otherwise.",
+  "items": [
+    {
+      "id": "optknobs",
+      "title": "Op-declared knobs + derived surface",
+      "status": "done"
+    },
+    {
+      "id": "knobpin",
+      "title": "Pin the surface at creation; refuse empty; drift check",
+      "status": "done"
+    },
+    {
+      "id": "vocab",
+      "title": "PyTorch vocabulary: init/forward/loss/backward/optimizer/scheduler/report",
+      "status": "done"
+    },
+    {
+      "id": "batch",
+      "title": "epochs + batch_size settings; budget trap impossible by construction",
+      "status": "doing"
+    },
+    {
+      "id": "runtest",
+      "title": "Runtime test: drive the renamed loop on circle_packing_fast",
+      "status": "done"
+    },
+    {
+      "id": "pkg",
+      "title": "Package registration: identity <package>/<mode>, registry keyed on full path",
+      "status": "todo"
+    },
+    {
+      "id": "pkgcli",
+      "title": "CLI verbs: mode list/import/add/remove/enable/disable",
+      "status": "todo"
+    },
+    {
+      "id": "register",
+      "title": "create-v2 registers what it creates under a package",
+      "status": "todo"
+    },
+    {
+      "id": "byname",
+      "title": "Select the inner mode by name (seed_workflow); REFACTORY_TARGET_GRAPH becomes an override",
+      "status": "todo"
+    },
+    {
+      "id": "realtest",
+      "title": "Runtime test: real-mode outer loop selected by package-qualified name",
+      "status": "todo"
+    }
+  ]
+}
