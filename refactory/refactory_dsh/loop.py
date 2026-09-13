@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import random
 import statistics
+import sys
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -152,6 +153,20 @@ class Loop:
             raise LoopError(
                 f"the seed state of {self.mode_id} is not runnable; "
                 f"first problem: {issues[0]}"
+            )
+        unreachable = self.unreachable_knobs()
+        if unreachable:
+            # Loud, because the failure is silent: the run reports full batches over
+            # a surface smaller than the mode declared.
+            print(
+                json.dumps({
+                    "warning": "optimizer_cannot_reach_some_knobs",
+                    "optimizer": self.optimizer.name,
+                    "knobs": unreachable,
+                    "detail": "declared and movable, but this optimizer cannot produce "
+                              "a different value for them",
+                }),
+                file=sys.stderr,
             )
         if not self.mode.is_scored():
             raise LoopError(
@@ -559,6 +574,11 @@ class Loop:
             "rejection_reasons": [r for rej in self.rejections for r in rej.reasons][:40],
             "knob_attribution": self.gradient.get("knob_attribution", {}),
             "cost": self._cost(),
+            "knob_coverage": {
+                "unreachable": self.unreachable_knobs(),
+                "detail": "declared and movable, but the selected optimizer cannot "
+                          "produce a different value for it",
+            },
             "proposal_outcomes": self._proposal_outcomes(),
             "epochs_summary": [asdict(summary) for summary in self.epochs],
         }
@@ -695,7 +715,10 @@ class Loop:
             mode_name=self.mode_id,
             best_score=(board[0].score if board else None),
             mean_score=self.loss.get("mean"),
-            knobs=[{"name": name, **spec} for name, spec in described["knobs"].items()],
+            knobs=[
+                {"name": name, **spec, "reachable": self._reachable(name, spec)}
+                for name, spec in described["knobs"].items()
+            ],
             nodes=described["nodes"],
             edges=described["edges"],
             leaderboard=[c.describe() for c in board],
@@ -713,6 +736,28 @@ class Loop:
                 reason for rejection in self.rejections[-8:] for reason in rejection.reasons
             ],
             preset=self.config.edit_preset,
+        )
+
+    def _reachable(self, name: str, spec: dict[str, Any]) -> bool:
+        """Whether the selected optimizer can move this knob at all."""
+        knob = Knob.from_spec(self.mode.state_dict()["knobs"][name]["spec"])
+        if knob.frozen or name in self.config.frozen:
+            return False
+        return self.optimizer.can_move(knob, spec.get("value"))
+
+    def unreachable_knobs(self) -> list[str]:
+        """Movable knobs the selected optimizer cannot move, named.
+
+        Reported rather than tolerated: a search over four of five declared knobs
+        looks exactly like a search over five.
+        """
+        described = self.mode.describe()["knobs"]
+        return sorted(
+            name
+            for name, spec in described.items()
+            if not spec.get("frozen")
+            and name not in self.config.frozen
+            and not self._reachable(name, spec)
         )
 
     def _tried(self) -> list[str]:
@@ -751,24 +796,12 @@ class Loop:
 
 
 def _other_value(knob: Knob, current: Any, rng: random.Random) -> Any:
-    """A value a knob accepts that is not the one it currently holds."""
-    if knob.kind == "enum":
-        options = [member for member in knob.enum if member != current]
-        return rng.choice(options) if options else None
-    if knob.kind == "bool":
-        return not bool(current)
-    if knob.kind == "str":
-        return None
-    low = knob.lo if knob.lo is not None else 0
-    high = knob.hi if knob.hi is not None else low + 10
-    if knob.kind == "int":
-        options = [value for value in range(int(low), int(high) + 1) if value != current]
-    else:
-        options = [
-            round(low + (high - low) * rng.random(), 6) for _ in range(8)
-        ]
-        options = [value for value in options if value != current]
-    return rng.choice(options) if options else None
+    """A value a knob accepts that is not the one it currently holds.
+
+    One sampler for the whole system, so the starting sweep and the random
+    optimizer agree about what is reachable.
+    """
+    return knob.sample(rng, current)
 
 
 def _yield(accepted: int, refused: int) -> str:

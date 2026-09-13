@@ -21,6 +21,7 @@ from typing import Any, Iterable, Sequence
 
 from refactory_dsh.nn import edits as nn_edits
 from refactory_dsh.nn import validate_state
+from refactory_dsh.nn.knob import Knob
 from refactory_dsh.nn.validate import Invariant
 
 
@@ -164,9 +165,11 @@ class ProposalContext:
             f"Batch mean: {self.mean_score}.",
             "",
             "## Parameters you may move",
-            _table(["name", "value", "kind", "bounds", "frozen", "description"],
-                   [[k["name"], k["value"], k["kind"], k["bounds"], k["frozen"],
-                     k.get("description", "")] for k in self.knobs]),
+            _table(["name", "value", "kind", "values", "range", "frozen", "reachable",
+                    "description"],
+                   [[k["name"], k["value"], k["kind"], k.get("values"), k.get("range"),
+                     k["frozen"], k.get("reachable", True), k.get("description", "")]
+                    for k in self.knobs]),
             "",
             "## The pipeline you may edit",
             "Nodes:",
@@ -304,6 +307,19 @@ class Optimizer:
         self.k = max(1, int(k))
         self.rejections: list[Rejection] = []
         self.last_diagnosis: str = ""
+
+    # ── what this optimizer can reach ──────────────────────────────────────
+    def can_move(self, knob: Knob, current: Any) -> bool:
+        """Whether this optimizer can produce a different value for ``knob``.
+
+        A run reports the knobs its optimizer cannot reach, because the failure to
+        avoid is a search that looks like it covers the declared surface and does
+        not. Override to declare a narrower capability than the kinds allow.
+        """
+        if knob.kind == "float":
+            low, high = knob.range()
+            return (high if high is not None else 0.0) > (low if low is not None else 0.0)
+        return bool(knob.alternatives(current))
 
     # ── the part a subclass writes ─────────────────────────────────────────
     def propose(

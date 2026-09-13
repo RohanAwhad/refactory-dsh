@@ -733,7 +733,7 @@ def random_edit(
             from .knob import Knob
 
             knob = Knob.from_spec(entries[name]["spec"])
-            value = _random_value(knob, rng)
+            value = _random_value(knob, rng, entries[name]["value"])
             if value is None:
                 continue
             edit = {"op": "set_knob", "name": name, "value": value}
@@ -813,20 +813,10 @@ def random_edit(
     return None
 
 
-def _random_value(knob: Any, rng: random.Random) -> Any:
-    """A value in a knob's range that is not its current default."""
-    if knob.kind == "enum":
-        options = [m for m in knob.enum if m != knob.default]
-        return rng.choice(options) if options else None
-    if knob.kind == "bool":
-        return not knob.default
-    if knob.kind == "str":
-        return None
-    lo = knob.lo if knob.lo is not None else 0
-    hi = knob.hi if knob.hi is not None else (lo + 10)
-    if knob.kind == "int":
-        options = [v for v in range(int(lo), int(hi) + 1) if v != knob.default]
-    else:
-        options = [round(lo + (hi - lo) * rng.random(), 4)]
-        options = [v for v in options if v != knob.default]
-    return rng.choice(options) if options else None
+def _random_value(knob: Any, rng: random.Random, current: Any = None) -> Any:
+    """An acceptable value other than the one the knob currently holds.
+
+    Every kind is movable, including an open ``str`` knob: a prompt a sampler
+    cannot reach is a prompt the random optimizer silently cannot search.
+    """
+    return knob.sample(rng, knob.default if current is None else current)

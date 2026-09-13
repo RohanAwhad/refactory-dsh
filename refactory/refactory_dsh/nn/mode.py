@@ -259,21 +259,24 @@ class Mode:
     def describe(self) -> dict[str, Any]:
         """A summary for the optimizer's prompt: surface, structure, score."""
         graph = self.graph()
+        knobs: dict[str, dict[str, Any]] = {}
+        for name, entry in sorted(self._knobs.items()):
+            knob = Knob.from_spec(entry["spec"])
+            low, high = knob.range()
+            knobs[name] = {
+                "value": entry["value"],
+                "kind": knob.kind,
+                # Named separately: an enum has members, a str knob may declare
+                # values, and a numeric knob is a range. One overloaded "bounds"
+                # field made an optimizer author guess which they were looking at.
+                "values": list(knob.accepted()),
+                "range": [low, high],
+                "frozen": knob.frozen,
+                "description": knob.description,
+            }
         return {
             "mode": type(self).__name__,
-            "knobs": {
-                name: {
-                    "value": entry["value"],
-                    "kind": entry["spec"].get("kind"),
-                    "bounds": (
-                        entry["spec"].get("enum")
-                        or [entry["spec"].get("lo"), entry["spec"].get("hi")]
-                    ),
-                    "frozen": entry["spec"].get("frozen", False),
-                    "description": entry["spec"].get("description", ""),
-                }
-                for name, entry in sorted(self._knobs.items())
-            },
+            "knobs": knobs,
             "nodes": [
                 {
                     "id": node.id,
