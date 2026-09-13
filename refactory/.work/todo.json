@@ -29,7 +29,9 @@
       "title": "Path-aware evaluation integrity, and the validator's rules stated in the optimizer prompt",
       "why": "The metric guard is weaker than designed (graph-wide, not path-aware), and every run wastes attempts rediscovering V1-V10.",
       "verify": "pytest refactory/tests/test_nn.py refactory/tests/test_optim.py -q",
-      "status": "todo"
+      "status": "done",
+      "commit": "ce0d9f7df0",
+      "evidence": "218 passed. tests/test_integrity.py is new (12 tests): on_path_nodes excludes a region that cannot reach a terminal; a producer off every path no longer satisfies fact_produced (and V3 does not fire, so it fails on the path); a producer on a path satisfies it; a read satisfied only off-path is refused as V6; the running example's seed still validates. The rules reach the optimizer: a test asserts every code the validator emits appears in RULES and vice versa (AST-parsed, both directions), and that the prompt states V4-V10. summarise_reasons is tested to put the mode-declared rule first and to state the collapsed count. A real autoresearch run used the new prompt: 0 refusals, and its diagnosis cited a previous run's result. Reproduce: pytest refactory/tests/test_integrity.py -q"
     },
     {
       "id": "authoring",
@@ -37,7 +39,9 @@
       "title": "Mode authoring surface: declared memory with retention, ports, declared surface",
       "why": "Cross-run priors need somewhere declared to live; the GUI needs to know what a mode publishes.",
       "verify": "pytest refactory/tests/test_nn.py refactory/tests/test_registry.py -q",
-      "status": "todo"
+      "status": "done",
+      "commit": "ce0d9f7df0",
+      "evidence": "218 passed. tests/test_declarations.py is new (17 tests): memory namespace/kind/retention validation, port validation, spec round trips, a run-scoped memory is invisible to another run while a project-scoped one is visible, forget_run_scoped names what it dropped and is quiet the second time, a project memory survives it, kinds cannot be misused, an undeclared namespace is refused, a map keeps keys. V11 refuses a declared port no node on a path writes and accepts one that is written; ports and memory travel in the state and round trip; the report names both and the run records which ports it produced. Reproduce: pytest refactory/tests/test_declarations.py -q"
     },
     {
       "id": "durability",
