@@ -69,7 +69,9 @@
       "title": "Two extension points (Optimizer, OuterLoop) plus all 13 SRF strategies ported",
       "why": "The search research surface. The abstraction is proven by the ports, not by tests of the abstraction.",
       "verify": "pytest refactory/tests/test_outerloop.py refactory/tests/test_strategies.py -q",
-      "status": "todo"
+      "status": "done",
+      "commit": "6300846fb7",
+      "evidence": "288 passed, 6 skipped. tests/test_outerloop.py (13) covers the seam: a type-1 proposer plugs into the default loop and improves the mode; Run exposes every primitive; evaluating past the budget is refused; attempt spends nothing while evaluate spends one; a strategy can override parent selection, how often it asks, acceptance, archiving and stopping; and a custom control flow cannot get an invalid edit evaluated. tests/test_strategies.py (24) tests each of the 13 ports on its defining behaviour, asserts the port count, and covers registration. A real run of --strategy reflective --optimizer autoresearch logged mutate/mutate/merge and took circle_packing 0.875 -> 1.04. Reproduce: pytest refactory/tests/test_outerloop.py refactory/tests/test_strategies.py -q"
     },
     {
       "id": "pkg",
