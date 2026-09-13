@@ -147,7 +147,9 @@
       "title": "Stretch: express the outer loop as a refactory mode",
       "why": "Future work, but the OuterLoop surface is chosen so this is a lowering rather than a rewrite.",
       "verify": "pytest refactory/tests/test_loop_as_mode.py -q",
-      "status": "todo"
+      "status": "done",
+      "commit": "1d6f4606f4",
+      "evidence": "18 passed. refactory_packages/loop_mode expresses the loop as a graph: init -> forward -> loss -> backward -> optimizer -> step -> scheduler, a gate that loops back to forward or leaves for report. Each node op rehydrates the run from its journal, so a node may run in its own process. The tests assert the graph IS the loop rather than a copy of it: on the same seed and settings it reaches the same best score (0.875) and the same evaluation count as Loop itself, honours both bounds (epochs and max_evaluations), writes the same run directory, and declares ports the run actually writes. score() reads the inner run's best score, so the mode is scorable and an outer loop can search the loop's own knobs (epochs, batch_size, optimizer, elite, attempts, max_evaluations) - the tower closes. Loop gained open_epoch/close_epoch (the nodes that bracket an epoch are not the method that used to), LoopConfig.from_dict, write_pending/read_pending for the propose/install hand-off across processes, and journals `bound` so the report states it durably. Found while building it: `resume=False` on each step deleted the journal between two nodes of the loop's own run."
     }
   ]
 }
