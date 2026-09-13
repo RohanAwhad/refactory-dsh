@@ -9,7 +9,9 @@
       "title": "History access, and refuse a proposal that reproduces an existing state (E-duplicate)",
       "why": "A real bug: duplicates are silently dropped by step(), so batch slots are lost and the run overstates what it tried. Also the prerequisite for the OuterLoop run handle.",
       "verify": "pytest refactory/tests/test_optim.py refactory/tests/test_loop.py -q",
-      "status": "todo"
+      "status": "done",
+      "commit": "4f8b0ee606",
+      "evidence": "173 passed. tests/test_history.py is new (12 tests): read_run from report.json, the per-candidate fallback for a run with no report, truncation reported, find_runs newest-first and excluding the current run, the context's history/tried/prior_runs, and the prompt carrying both new sections. E-duplicate is refused at the optimizer layer (test_optim.py, 4 new tests) and asserted never to reach step()'s defensive path (attempt == 0), so the slot is refused at the right layer. A real random-optimizer run on circle_packing/adaptive left coded refusals in rejections.jsonl with no lost slot. Reproduce: pytest refactory/tests/test_history.py refactory/tests/test_optim.py -q"
     },
     {
       "id": "strknob",
