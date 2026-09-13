@@ -59,7 +59,9 @@
       "title": "Lower the mode state dict to refactory's IR and run it on DSH",
       "why": "The stated target: DSH is the runtime, the Python walker is a debug runtime.",
       "verify": "pytest refactory/tests/test_lowering.py refactory/tests/test_equivalence.py -q",
-      "status": "todo"
+      "status": "done",
+      "commit": "dfeeec0431",
+      "evidence": "256 passed, 6 skipped. tests/test_lowering.py (16) + tests/test_runner.py (12) + tests/test_equivalence.py (6, marked integration). The equivalence suite passes in full with --run-integration (62s): the spine's own validateGraph accepts the lowered ir; a mode scores the same on DSH as with the walker; the facts match field by field (circles, seed_score, best_score, spent); a node that lies about its facts is refused on the DSH path; and a one-epoch loop with --evaluator dsh reaches the same best score as the walker. Reproduce: pytest refactory/tests/test_equivalence.py -q --run-integration"
     },
     {
       "id": "seams",
