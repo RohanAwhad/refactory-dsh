@@ -61,6 +61,7 @@ class RunContext:
         facts: dict[str, Any] | None = None,
         model: ModelClient | None = None,
         task: dict[str, Any] | None = None,
+        memory: Any = None,
         enforce_writes: bool = True,
     ) -> None:
         self.workdir = Path(workdir)
@@ -69,6 +70,8 @@ class RunContext:
         self.facts: dict[str, Any] = dict(facts or {})
         self.model = model
         self.task: dict[str, Any] = dict(task or {})
+        #: The mode's declared memory, for an op that has something to remember.
+        self.memory = memory
         self.enforce_writes = enforce_writes
         self.iteration = 0
         self.node_id = ""
@@ -303,6 +306,7 @@ def execute(
     facts: dict[str, Any] | None = None,
     model: ModelClient | None = None,
     task: dict[str, Any] | None = None,
+    memory: Any = None,
     enforce_writes: bool = True,
     max_steps: int = 2000,
 ) -> RunResult:
@@ -313,6 +317,7 @@ def execute(
         facts=facts,
         model=model,
         task=task,
+        memory=memory,
         enforce_writes=enforce_writes,
     )
     return Executor(graph, ctx, max_steps=max_steps).run()

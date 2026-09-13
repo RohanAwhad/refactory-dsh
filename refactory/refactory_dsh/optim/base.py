@@ -25,6 +25,51 @@ from refactory_dsh.nn.knob import Knob
 from refactory_dsh.nn.validate import Invariant
 
 
+#: How the refusal summary is built. A list truncated by count drops whatever came
+#: last, and what comes last is often the one reason that explains *why* an edit was
+#: wrong rather than which edges it broke.
+REASON_LIMIT = 12
+REASONS_PER_CODE = 2
+
+
+def reason_code(reason: str) -> str:
+    """The rule a refusal names, from the `CODE [node]: message` form."""
+    return reason.split(" ", 1)[0].rstrip(":") or "?"
+
+
+def summarise_reasons(
+    reasons: Sequence[str], *, limit: int = REASON_LIMIT, per_code: int = REASONS_PER_CODE
+) -> list[str]:
+    """The refusals, grouped by rule, with the ones that explain intent first.
+
+    One removal can produce a dozen mechanical V6 complaints and one invariant
+    violation. Ordered by arrival, the invariant is the one that gets cut. Ordered by
+    rule -- intent first, then universal rules, then edit refusals -- every rule keeps
+    a representative and the count is stated rather than implied.
+    """
+    grouped: dict[str, list[str]] = {}
+    for reason in reasons:
+        grouped.setdefault(reason_code(reason), []).append(reason)
+    out: list[str] = []
+    for code in sorted(grouped, key=_reason_priority):
+        entries = grouped[code]
+        out.extend(entries[:per_code])
+        if len(entries) > per_code:
+            out.append(f"({len(entries) - per_code} more {code} refusal(s) of the same kind)")
+        if len(out) >= limit:
+            break
+    return out[:limit]
+
+
+def _reason_priority(code: str) -> tuple[int, str]:
+    """Mode-declared rules first: they are the only ones that state intent."""
+    if code.startswith("I:"):
+        return (0, code)
+    if code.startswith("V"):
+        return (1, code)
+    return (2, code)
+
+
 def candidate_id(state: dict[str, Any]) -> str:
     """A stable id for a state, so two candidates that are the same state agree.
 
@@ -180,6 +225,12 @@ class ProposalContext:
             _table(["source", "target", "condition"],
                    [[e["source"], e["target"], e.get("condition")] for e in self.edges]),
             "",
+            "## The rules a proposal must satisfy",
+            "A proposal that breaks one of these is refused before anything runs, so it "
+            "costs nothing but the answer. They are the same rules the validator "
+            "enforces, generated from it.",
+            _rules_text(),
+            "",
             "## The operations you may use",
             _table(["op", "kind", "macro", "fields", "description"],
                    [[c["op"], c["kind"], c["macro"], c["fields"], c["description"]]
@@ -273,6 +324,12 @@ Rules:
 """
 
 
+def _rules_text() -> str:
+    from refactory_dsh.nn.validate import rules_text
+
+    return rules_text()
+
+
 def _flatten(rows: Sequence[dict[str, Any]]) -> list[tuple[str, Any]]:
     out: list[tuple[str, Any]] = []
     for row in rows:
@@ -359,7 +416,9 @@ class Optimizer:
             if len(accepted) >= n:
                 break
             round_ctx = replace(
-                ctx, rejections=[*ctx.rejections, *feedback[-12:]], preset=preset
+                ctx,
+                rejections=[*ctx.rejections, *summarise_reasons(feedback)],
+                preset=preset,
             )
             try:
                 proposals = self.propose(round_ctx, n - len(accepted), parents) or []

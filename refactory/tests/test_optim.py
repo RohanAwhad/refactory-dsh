@@ -163,7 +163,9 @@ def test_the_loop_feeds_refusal_reasons_back():
     )
     assert optimizer.feedback_seen[0] == []
     assert optimizer.feedback_seen[1], "the second attempt got no feedback"
-    assert "best_score" in optimizer.feedback_seen[1][0]
+    assert any("best_score" in reason for reason in optimizer.feedback_seen[1]), (
+        f"the metric-integrity refusal must reach the retry: {optimizer.feedback_seen[1]}"
+    )
 
 
 def test_the_loop_stops_as_soon_as_enough_candidates_are_valid():
@@ -294,7 +296,7 @@ def test_the_autoresearch_prompt_lists_the_refusals_on_a_retry():
     assert candidates
     assert len(rejections) == 1
     assert "Why your last proposals were refused" in model.prompts[1]
-    assert "best_score" in model.prompts[1]
+    assert "best_score" in model.prompts[1], "the refusal reason never reached the retry"
 
 
 def test_a_model_that_returns_nothing_is_a_failed_round_not_a_crash():

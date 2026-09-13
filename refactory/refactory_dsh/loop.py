@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from refactory_dsh import history as run_history
+from refactory_dsh.memory import MemoryStore
 from refactory_dsh import registry
 from refactory_dsh.nn import Knob, PackageError
 from refactory_dsh.nn import edits as nn_edits
@@ -40,6 +41,7 @@ from refactory_dsh.optim import (
     RandomOptimizer,
 )
 from refactory_dsh.optim import create as create_optimizer
+from refactory_dsh.optim.base import summarise_reasons
 
 
 class LoopError(RuntimeError):
@@ -71,6 +73,9 @@ class LoopConfig:
     history_limit: int = 200
     #: How many previous runs to summarise as a prior.
     prior_runs: int = 3
+    #: Where a ``global``-retention memory lives. Injected so a test can put it
+    #: somewhere temporary instead of the home directory.
+    memory_global_root: Path | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -261,9 +266,17 @@ class Loop:
     def _evaluate(self, candidate: Candidate) -> None:
         workdir = self.root / "runs" / candidate.id
         mode = self.mode_class(state=candidate.state)
+        # One store per inner run: a `run`-retention memory is scoped to this run
+        # and no other, which is the enforcement of that policy.
+        store = MemoryStore(
+            mode.memory_declarations(),
+            run_root=workdir,
+            project_root=self.project / ".factory",
+            global_root=self.config.memory_global_root,
+        )
         started = time.time()
         result = mode.evaluate(
-            workdir, model=self.model, max_steps=self.config.max_steps
+            workdir, model=self.model, memory=store, max_steps=self.config.max_steps
         )
         candidate.score = result.score
         candidate.mean_score = result.score
@@ -286,6 +299,12 @@ class Loop:
                     "edits": candidate.edits,
                     "facts": candidate.facts,
                     "model_calls": candidate.model_calls,
+                    # What the run published, against what the mode declared: a port
+                    # that is missing is a promise the mode did not keep.
+                    "ports": {
+                        port.name: (workdir / port.path).exists()
+                        for port in mode.port_declarations()
+                    },
                 },
                 indent=2,
                 default=str,
@@ -573,6 +592,8 @@ class Loop:
             "rejection_codes": self._rejection_codes(),
             "rejection_reasons": [r for rej in self.rejections for r in rej.reasons][:40],
             "knob_attribution": self.gradient.get("knob_attribution", {}),
+            "ports": self.mode.describe()["ports"],
+            "memory": self.mode.describe()["memory"],
             "cost": self._cost(),
             "knob_coverage": {
                 "unreachable": self.unreachable_knobs(),
@@ -674,6 +695,22 @@ class Loop:
             f"candidate(s) from {payload['structural']['structural_refusals']} "
             f"refusal(s) — {payload['structural']['structural_yield']}.",
             "",
+            "## What the mode publishes",
+            "",
+            _md_table(
+                ["port", "path", "media type", "description"],
+                [[p["name"], p["path"], p["media_type"], p.get("description", "")]
+                 for p in payload["ports"]],
+            ),
+            "",
+            "## What the mode may remember",
+            "",
+            _md_table(
+                ["namespace", "kind", "retention", "description"],
+                [[m["namespace"], m["kind"], m["retention"], m.get("description", "")]
+                 for m in payload["memory"]],
+            ),
+            "",
             "## Inner runs",
             "",
             f"{payload['evaluations']} candidate(s) evaluated, total inner wall clock "
@@ -732,9 +769,13 @@ class Loop:
             catalogue=nn_edits.catalogue(self.config.edit_preset),
             insertable=[node.to_state() for node in self.mode.insertable()],
             frozen=list(self.config.frozen),
-            rejections=[
-                reason for rejection in self.rejections[-8:] for reason in rejection.reasons
-            ],
+            rejections=summarise_reasons(
+                [
+                    reason
+                    for rejection in self.rejections[-8:]
+                    for reason in rejection.reasons
+                ]
+            ),
             preset=self.config.edit_preset,
         )
 

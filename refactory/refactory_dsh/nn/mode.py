@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Mapping
 
+from .declarations import Memory, Port
 from .graph import Graph, GraphError, Node
 from .knob import Knob, KnobError
 from .validate import Invariant
@@ -32,7 +33,7 @@ from .validate import Invariant
 #: Bumped when the state layout changes incompatibly.
 STATE_VERSION = 1
 
-_TOP_LEVEL = frozenset({"version", "graph", "knobs"})
+_TOP_LEVEL = frozenset({"version", "graph", "knobs", "ports", "memory"})
 _KNOB_ENTRY = frozenset({"value", "spec"})
 
 
@@ -82,9 +83,13 @@ class Mode:
     def __init__(self, state: dict[str, Any] | None = None) -> None:
         if state is None:
             self._knobs = self._declared_entries()
+            self._ports = [port.to_state() for port in self.ports()]
+            self._memory = [declared.to_state() for declared in self.memory()]
             self._graph_state = self.build().to_state()
         else:
             self._knobs: dict[str, dict[str, Any]] = {}
+            self._ports: list[dict[str, Any]] = []
+            self._memory: list[dict[str, Any]] = []
             self._graph_state: dict[str, Any] = {}
             self.load_state_dict(state)
 
@@ -120,6 +125,25 @@ class Mode:
         Declaring these is what makes random structural search possible at all:
         without a candidate block the optimizer has nothing legal to add, and
         inventing one would mean inserting an op that does not exist.
+        """
+        return ()
+
+    def memory(self) -> tuple[Memory, ...]:
+        """Namespaces this mode may remember, each with a retention policy.
+
+        Declared rather than implicit: a cross-run prior needs a named place to
+        live and a stated life, or it becomes a private convention somebody
+        invented. ``run`` is scoped to one inner run, ``project`` to the project,
+        ``global`` across projects.
+        """
+        return ()
+
+    def ports(self) -> tuple[Port, ...]:
+        """What this mode publishes, so a reader knows what a run produced.
+
+        A port names an artifact and its media type. Without one, a run's outputs
+        are inferred from file writes, which is not the same as saying what the run
+        produced -- and it is what a GUI and a downstream mode read.
         """
         return ()
 
@@ -167,6 +191,7 @@ class Mode:
         *,
         model: Any = None,
         task: Mapping[str, Any] | None = None,
+        memory: Any = None,
         **kwargs: Any,
     ) -> RunResult:
         """Execute the built graph once: this is the forward pass."""
@@ -174,7 +199,7 @@ class Mode:
 
         return execute(
             self.graph(), Path(workdir), knobs=self.values(),
-            model=model, task=task, **kwargs,
+            model=model, task=task, memory=memory, **kwargs,
         )
 
     def evaluate(
@@ -183,6 +208,7 @@ class Mode:
         *,
         model: Any = None,
         task: Mapping[str, Any] | None = None,
+        memory: Any = None,
         **kwargs: Any,
     ) -> RunResult:
         """Run once and put :meth:`score` on the result.
@@ -191,7 +217,7 @@ class Mode:
         "ran and scored badly" and "never ran" stay distinguishable. A ``score()``
         that raises is a failed run too, rather than a crash of the loop.
         """
-        result = self.run(workdir, model=model, task=task, **kwargs)
+        result = self.run(workdir, model=model, task=task, memory=memory, **kwargs)
         if not result.exit_ok:
             return result
         try:
@@ -202,11 +228,27 @@ class Mode:
         return result
 
     # ── state ──────────────────────────────────────────────────────────────
+    def port_declarations(self) -> tuple[Port, ...]:
+        """The ports as they stand, from the state."""
+        return tuple(Port.from_state(entry) for entry in self._ports)
+
+    def memory_declarations(self) -> tuple[Memory, ...]:
+        """The memory namespaces as they stand, from the state."""
+        return tuple(Memory.from_state(entry) for entry in self._memory)
+
     def state_dict(self) -> dict[str, Any]:
+        """The whole state: architecture, parameters, and the declared surface.
+
+        ``ports`` and ``memory`` travel with it because a run has to act on them --
+        a port says what to publish, a memory says what may be kept and for how
+        long -- and because the validator checks the ports against the graph.
+        """
         return {
             "version": STATE_VERSION,
             "graph": copy.deepcopy(self._graph_state),
             "knobs": copy.deepcopy(self._knobs),
+            "ports": copy.deepcopy(self._ports),
+            "memory": copy.deepcopy(self._memory),
         }
 
     def load_state_dict(self, state: Mapping[str, Any], *, strict: bool = True) -> None:
@@ -249,6 +291,10 @@ class Mode:
                 raise StateError(f"knob {name!r}: {exc}") from exc
             knobs[name] = {"value": value, "spec": knob.spec()}
 
+        self._ports = [Port.from_state(entry).to_state() for entry in state.get("ports") or ()]
+        self._memory = [
+            Memory.from_state(entry).to_state() for entry in state.get("memory") or ()
+        ]
         self._graph_state = graph.to_state()
         self._knobs = knobs
 
@@ -295,5 +341,7 @@ class Mode:
                 }
                 for edge in sorted(graph.edges, key=lambda e: e.key())
             ],
+            "ports": list(self._ports),
+            "memory": list(self._memory),
             "scored": self.is_scored(),
         }

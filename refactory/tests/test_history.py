@@ -168,13 +168,14 @@ def test_no_batch_slot_is_silently_lost(tmp_path):
         "a candidate reached step() that the optimizer's loop should have refused, "
         "which means the slot was lost one layer too late"
     )
-    # and the report agrees
+    # and every refusal names a rule: a validator rule, or an edit refusal
+    from refactory_dsh.nn import RULES
+
     report = loop.report()
-    codes = set(report["rejection_codes"])
-    assert codes <= {"E-duplicate", "E-noop", "E-precondition", "E-frozen", "E-shape",
-                     "E-node", "E-edge", "E-knob", "E-op", "E-state", "E-preset",
-                     "E-internal", "V2", "V5", "V6", "V7", "V10", "V1", "V3", "V4",
-                     "V8", "V9"}, codes
+    for code in report["rejection_codes"]:
+        assert code in RULES or code.startswith(("I:", "E-")), (
+            f"{code} is not a documented rule, so its count is not actionable"
+        )
 
 
 def test_a_strategy_that_proposes_only_duplicates_makes_no_progress_and_says_so(tmp_path):

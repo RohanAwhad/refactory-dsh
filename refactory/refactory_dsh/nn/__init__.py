@@ -23,16 +23,21 @@ every structural change is typed data validated before it costs anything.
 from __future__ import annotations
 
 from . import edits, resolve
+from .declarations import DeclarationError, Memory, Port
 from .executor import ExecutionError, Executor, ModelClient, RunContext, Step, execute
 from .graph import Edge, Graph, GraphError, Node
 from .knob import KINDS, Knob, KnobError
 from .mode import STATE_VERSION, Mode, RunResult, StateError
 from .package import Package, PackageError, mode_id, split
 from .validate import (
+    RULES,
     Invariant,
     Issue,
     declared_knobs,
     fact_produced,
+    on_path_nodes,
+    produced_on_path,
+    rules_text,
     validate,
     validate_state,
 )
@@ -40,6 +45,7 @@ from .validate import (
 __all__ = [
     "KINDS",
     "STATE_VERSION",
+    "DeclarationError",
     "Edge",
     "ExecutionError",
     "Executor",
@@ -49,10 +55,13 @@ __all__ = [
     "Issue",
     "Knob",
     "KnobError",
+    "Memory",
     "Mode",
     "ModelClient",
     "Node",
+    "RULES",
     "Package",
+    "Port",
     "PackageError",
     "RunContext",
     "RunResult",
@@ -63,6 +72,9 @@ __all__ = [
     "execute",
     "fact_produced",
     "mode_id",
+    "on_path_nodes",
+    "produced_on_path",
+    "rules_text",
     "resolve",
     "split",
     "validate",

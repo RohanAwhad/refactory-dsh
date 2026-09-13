@@ -22,6 +22,37 @@ from .knob import Knob, KnobError
 from .resolve import ResolutionError, resolve
 
 
+#: One line per rule, so the prompt and the code cannot drift apart.
+#:
+#: The optimizer is told these up front. Telling it only when it breaks one costs an
+#: attempt per rule, which is the difference between learning the shape of a legal
+#: edit and rediscovering it. A test asserts this table and the codes the validator
+#: can actually emit are the same set, in both directions.
+RULES: dict[str, str] = {
+    "V0": "the state must be readable: it needs a graph, and the graph must parse",
+    "V1": "the graph must name a start node, and it must exist",
+    "V2": "every node must be reachable from the start node",
+    "V3": "the graph must have a terminal (a node with no out-edge)",
+    "V4": "a non-gate node has at most one out-edge, and it carries no verdict",
+    "V5": "a gate has at least two out-edges, each with a condition, and no "
+          "unconditional out-edge",
+    "V6": "every file a node reads must be written by a node on a path from the "
+          "start node to a terminal",
+    "V7": "every knob a node consumes must be declared, and every declared knob "
+          "must be consumed by some node",
+    "V8": "every call and evaluator must resolve to a real callable",
+    "V9": "every knob value must be of the declared kind and within its bounds",
+    "V10": "every cycle must pass through a gate, so the run is bounded",
+    "V11": "every declared port must be a file some node on a path writes",
+    "I:": "the mode's own invariant, stated in Mode.invariants()",
+}
+
+
+def rules_text() -> str:
+    """The rules, as the optimizer prompt shows them."""
+    return "\n".join(f"- `{code}` — {text}" for code, text in RULES.items())
+
+
 @dataclass(frozen=True)
 class Issue:
     """One reason a state was refused."""
@@ -48,6 +79,41 @@ class Invariant:
     name: str
     description: str
     check: Callable[[Graph, Mapping[str, Any]], str | None]
+
+
+def on_path_nodes(graph: Graph) -> set[str]:
+    """Nodes that lie on some ``start -> terminal`` path.
+
+    A producer sitting off every path the run can take does not make a fact
+    available, so a check that counts it is weaker than the promise it makes. This
+    is a static approximation: nothing here can know which verdicts a gate will
+    actually return, only which paths exist.
+    """
+    from_start = graph.reachable()
+    reverse: dict[str, list[str]] = {}
+    for edge in graph.edges:
+        reverse.setdefault(edge.target, []).append(edge.source)
+
+    reaches_terminal: set[str] = set()
+    stack = list(graph.terminals())
+    while stack:
+        node_id = stack.pop()
+        if node_id in reaches_terminal:
+            continue
+        reaches_terminal.add(node_id)
+        stack.extend(reverse.get(node_id, ()))
+    return from_start & reaches_terminal
+
+
+def produced_on_path(graph: Graph) -> set[str]:
+    """Every write and fact produced by a node on a ``start -> terminal`` path."""
+    on_path = on_path_nodes(graph)
+    return {
+        name
+        for node_id, node in graph.nodes.items()
+        if node_id in on_path
+        for name in (*node.writes, *node.produces)
+    }
 
 
 def _cycle_without_gate(graph: Graph) -> list[str] | None:
@@ -87,6 +153,7 @@ def validate(
     declared_knobs: Mapping[str, Knob],
     invariants: tuple[Invariant, ...] = (),
     resolve_calls: bool = True,
+    ports: tuple[Any, ...] = (),
 ) -> list[Issue]:
     """Every reason ``(graph, values)`` is not a runnable, scoreable mode."""
     issues: list[Issue] = []
@@ -154,15 +221,16 @@ def validate(
                 )
             )
 
-    # V6 every read is produced by some node.
-    produced = {name for node in graph.nodes.values() for name in node.writes}
+    # V6 every read is produced by a node on a path the run can take.
+    produced = produced_on_path(graph)
     for node_id in sorted(graph.nodes):
         for name in graph.nodes[node_id].reads:
             if name not in produced:
                 issues.append(
                     Issue(
                         "V6",
-                        f"reads {name!r}, which no node produces",
+                        f"reads {name!r}, which no node on a path from "
+                        f"{graph.start!r} to a terminal produces",
                         node=node_id,
                     )
                 )
@@ -229,6 +297,22 @@ def validate(
             )
         )
 
+    # V11 every declared port is a file the run actually produces.
+    if ports:
+        produced = produced_on_path(graph)
+        for port in ports:
+            path = getattr(port, "path", None) or (port or {}).get("path", "")
+            if path and path not in produced:
+                issues.append(
+                    Issue(
+                        "V11",
+                        f"declares the port {path!r}, which no node on a path from "
+                        f"{graph.start!r} to a terminal writes, so the port would be "
+                        "empty",
+                        knob=getattr(port, "name", None),
+                    )
+                )
+
     # Mode-declared invariants.
     for invariant in invariants:
         try:
@@ -270,17 +354,29 @@ def validate_state(
         return [Issue("V0", f"the state has no {exc.args[0]!r}")]
     except Exception as exc:  # a malformed graph is an issue, not a crash
         return [Issue("V0", f"the graph is not readable: {exc}")]
+    from .declarations import Port
+
+    ports: list[Port] = []
+    for entry in state.get("ports") or ():
+        try:
+            ports.append(Port.from_state(dict(entry)))
+        except Exception:  # a malformed port is itself a problem, reported below
+            continue
     return validate(
         graph,
         {name: entry["value"] for name, entry in (state.get("knobs") or {}).items()},
         declared_knobs=declared_knobs(state),
         invariants=invariants,
         resolve_calls=resolve_calls,
+        ports=tuple(ports),
     )
 
 
 def fact_produced(*facts: str) -> Invariant:
     """An invariant requiring the graph to produce the facts ``score()`` reads.
+
+    Path-aware: the producer has to lie on a ``start -> terminal`` path, not merely
+    exist somewhere in the graph.
 
     This is the metric-integrity rule, and it is the one that makes removing work
     a legitimate edit rather than a cheat: a candidate may drop any node it likes,
@@ -290,12 +386,20 @@ def fact_produced(*facts: str) -> Invariant:
     wanted = tuple(facts)
 
     def check(graph: Graph, _values: Mapping[str, Any]) -> str | None:
-        produced = {name for node in graph.nodes.values() for name in node.produces}
+        on_path = on_path_nodes(graph)
+        produced = {
+            name
+            for node_id, node in graph.nodes.items()
+            if node_id in on_path
+            for name in node.produces
+        }
         missing = [name for name in wanted if name not in produced]
         if missing:
             return (
-                f"the score reads {missing}, which no node produces, so the "
-                "number would not describe this mode's run"
+                f"the score reads {missing}, which no node on a path from "
+                f"{graph.start!r} to a terminal produces, so the number would not "
+                "describe this mode's run; a producer that sits off every path the "
+                "run can take does not count"
             )
         return None
 
