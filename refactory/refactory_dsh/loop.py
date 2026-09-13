@@ -17,6 +17,7 @@ refused by the optimizer's loop with a reason, and that reason is reported.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import random
 import statistics
@@ -47,6 +48,10 @@ from refactory_dsh.outerloop import OuterLoop, Run
 
 #: The append-only record of everything a run did. Resume replays it.
 JOURNAL = run_history.JOURNAL
+
+
+#: The offspring a proposal node found, waiting for the node that installs them.
+PENDING = "pending.json"
 
 
 class LoopError(RuntimeError):
@@ -99,6 +104,29 @@ class LoopConfig:
         data = asdict(self)
         data["runs_root"] = str(self.runs_root)
         return data
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "LoopConfig":
+        """Rebuild a configuration from one a run wrote.
+
+        Json turned the tuple fields into lists and the path into a string. Both
+        are restored here rather than at each reader, so one place knows what the
+        on-disk form of a config is.
+        """
+        known = {field.name for field in dataclasses.fields(cls)}
+        restored: dict[str, Any] = {}
+        for key, value in data.items():
+            if key not in known:
+                continue
+            if key == "runs_root":
+                restored[key] = Path(value)
+            elif key == "frozen":
+                restored[key] = tuple(value or ())
+            elif key == "memory_global_root":
+                restored[key] = Path(value) if value else None
+            else:
+                restored[key] = value
+        return cls(**restored)
 
 
 @dataclass
@@ -782,6 +810,10 @@ class Loop(OuterLoop):
             self.bound = "epochs"
         elif self.evaluations >= self.config.max_evaluations:
             self.bound = "evaluations"
+        if self.bound:
+            # Journaled, not derived: the report states what bound the run, and a
+            # run whose steps are separate processes reads that from the log.
+            self._journal("bound", bound=self.bound)
         self._progress(
             "scheduler",
             epoch=self.epoch,
@@ -882,6 +914,25 @@ class Loop(OuterLoop):
     def on_epoch_end(self, run: Run) -> None:
         """Called once per iteration, after the scheduler."""
 
+    def open_epoch(self) -> None:
+        """Open the epoch the following steps belong to. Idempotent.
+
+        Public because the eight steps are also the nodes of a graph: an executor
+        that runs one node per process has to open the epoch in the node that
+        begins it, and reaching for the flag would make the graph depend on private
+        state instead of on this method.
+        """
+        if self._epoch_open:
+            return
+        self.epoch += 1
+        self._journal("epoch_open", epoch=self.epoch)
+        self._epoch_open = True
+
+    def close_epoch(self) -> None:
+        """Close the epoch, so the next step opens the next one."""
+        self._epoch_open = False
+        self._journal("epoch_end", epoch=self.epoch)
+
     def epoch_step(self, run: Run | None = None) -> bool:
         """One iteration, and whether there is another.
 
@@ -889,10 +940,7 @@ class Loop(OuterLoop):
         A run that died inside an iteration therefore resumes *into* it rather than
         opening it again, which would count the same epoch twice.
         """
-        if not self._epoch_open:
-            self.epoch += 1
-            self._journal("epoch_open", epoch=self.epoch)
-            self._epoch_open = True
+        self.open_epoch()
         evaluated = self.forward()
         self.loss_step()
         self.backward()
@@ -904,8 +952,7 @@ class Loop(OuterLoop):
             evaluated=evaluated, proposed=len(candidates) + len(rejections)
         )
         self.on_epoch_end(run)
-        self._epoch_open = False
-        self._journal("epoch_end", epoch=self.epoch)
+        self.close_epoch()
         return another
 
     # ── report ─────────────────────────────────────────────────────────────
@@ -1207,6 +1254,44 @@ class Loop(OuterLoop):
     def _history_truncated(self) -> bool:
         return sum(1 for c in self.population if c.evaluated) > self.config.history_limit
 
+    # ── handing state between processes ────────────────────────────────────
+    def write_pending(self, candidates: Sequence[Candidate]) -> Path:
+        """Write the offspring one step produced, for the step that installs them.
+
+        A graph node that proposes and a graph node that installs are two
+        processes, so what the first found has to be written down. That is a cost
+        of expressing the loop as a graph; the alternative is one node that does
+        both, which hides the seam rather than removing it.
+        """
+        return self._write(
+            PENDING,
+            [
+                {
+                    "id": candidate.id,
+                    "parent": candidate.parent,
+                    "edits": candidate.edits,
+                    "state": candidate.state,
+                }
+                for candidate in candidates
+            ],
+        )
+
+    def read_pending(self) -> list[Candidate]:
+        """The offspring the proposal node left, as candidates again."""
+        path = self.root / PENDING
+        if not path.exists():
+            return []
+        return [
+            Candidate.from_state(
+                record["state"], parent=record.get("parent"), edits=record.get("edits") or ()
+            )
+            for record in json.loads(path.read_text())
+        ]
+
+    def config_from_root(self) -> "LoopConfig":
+        """This run's own configuration, as the run directory recorded it."""
+        return LoopConfig.from_dict(json.loads((self.root / "config.json").read_text()))
+
     # ── the journal, and resume ────────────────────────────────────────────
     def _journal(self, event: str, **payload: Any) -> None:
         """Append one event. The journal is the run's durable state.
@@ -1300,6 +1385,8 @@ class Loop(OuterLoop):
                 # propose something else.
                 self.generation = int(record.get("generation") or self.generation)
                 self._refusal_pressure = float(record.get("refusal_pressure") or 0.0)
+            elif event == "bound":
+                self.bound = str(record.get("bound") or self.bound)
             elif event == "loss":
                 self.loss = {
                     key: value

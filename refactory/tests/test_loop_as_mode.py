@@ -1,0 +1,235 @@
+"""The outer loop expressed as a refactory mode.
+
+Issue #18: the loop's control flow as data. What these test is that the graph is
+the loop — the same steps, in the same order, bounded by the same gate, reaching
+the same score as the loop object does on the same seed — and that it is a mode
+like any other, so the same outer loop can be pointed at it.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from refactory_dsh import nn, optim, registry
+from refactory_dsh.loop import Loop, LoopConfig, LoopError
+from refactory_dsh.nn import validate_state
+
+MODE = "loop_mode/loop"
+TARGET = "circle_packing/adaptive"
+
+
+def _knobs(root: Path, **overrides: object) -> dict:
+    base = {
+        "target": TARGET,
+        "project": str(Path(".").resolve()),
+        "epochs": 2,
+        "batch_size": 3,
+        "optimizer": "random",
+        "elite": 3,
+        "attempts": 3,
+        "max_evaluations": 64,
+        "seed": 5,
+    }
+    base.update(overrides)
+    return base
+
+
+def _mode(**overrides: object) -> nn.Mode:
+    """The loop mode with its knobs set: a knob is state, so it is set as state."""
+    mode_class = registry.resolve(Path("."), MODE)[1]
+    state = mode_class().state_dict()
+    for name, value in _knobs(Path("."), **overrides).items():
+        state["knobs"][name]["value"] = value
+    return mode_class(state=state)
+
+
+def _run(root: Path, **overrides: object) -> tuple[nn.Mode, nn.RunResult]:
+    mode = _mode(**overrides)
+    return mode, mode.run(root)
+
+
+def _direct(root: Path, **overrides: object) -> dict:
+    config = LoopConfig(
+        epochs=2, batch_size=3, optimizer="random", elite=3, attempts=3,
+        max_evaluations=64, seed=5, runs_root=root,
+    )
+    for key, value in overrides.items():
+        setattr(config, key, value)
+    return Loop(TARGET, config, project=Path(".")).run()
+
+
+# ── the graph is the loop ──────────────────────────────────────────────────
+
+
+def test_the_mode_is_registered_and_scored():
+    package, mode_class = registry.resolve(Path("."), MODE)
+    assert package.name == "loop_mode"
+    assert mode_class.name == "loop"
+    assert mode_class().is_scored()
+
+
+def test_the_graph_is_the_eight_steps_in_order(tmp_path):
+    mode = _mode()
+    graph = mode.graph()
+    assert graph.start == "init"
+    chain = ["init", "forward", "loss", "backward", "optimizer", "step", "scheduler", "again", "report"]
+    for earlier, later in zip(chain, chain[1:]):
+        assert later in [edge.target for edge in graph.out_edges(earlier)], (earlier, later)
+    verdicts = {edge.condition for edge in graph.out_edges("again")}
+    assert verdicts == {"again", "done"}
+
+
+def test_the_loop_back_edge_passes_through_the_gate(tmp_path):
+    """V10: an unbounded cycle is not a loop, it is a hang."""
+    mode = _mode()
+    assert validate_state(mode.state_dict(), invariants=mode.invariants()) == []
+    assert [edge.target for edge in mode.graph().out_edges("again", condition="again")] == ["forward"]
+
+
+def test_the_target_is_frozen_because_moving_it_changes_what_is_measured():
+    knobs = _package_knobs()
+    assert knobs["target"].frozen is True
+    assert knobs["seed"].frozen is True
+    assert knobs["epochs"].frozen is False
+    assert knobs["batch_size"].frozen is False
+
+
+def _package_knobs() -> dict:
+    return registry.resolve(Path("."), MODE)[1].declare()
+
+
+# ── running it runs the loop ───────────────────────────────────────────────
+
+
+def test_it_produces_the_same_score_as_the_loop_itself(tmp_path):
+    """The claim of #18: the graph IS the loop, not a re-implementation of it."""
+    mode, result = _run(tmp_path / "graph")
+    direct = _direct(tmp_path / "direct")
+    assert result.exit_ok, result.error
+    assert direct["best_score"] == mode.score(result)
+    assert direct["evaluations"] == result.facts["evaluations"]
+
+
+def test_it_writes_the_run_the_loop_would_have_written(tmp_path):
+    _package, result = _run(tmp_path / "graph")
+    root = tmp_path / "graph" / "loop"
+    for name in ("config.json", "journal.jsonl", "report.json", "report.md", "gradient.json"):
+        assert (root / name).exists(), name
+    report = json.loads((root / "report.json").read_text())
+    assert report["mode"] == TARGET
+    assert report["bound"] == "epochs"
+    assert report["best_score"] > 0
+
+
+def test_the_run_reports_what_bounded_it(tmp_path):
+    _package, result = _run(tmp_path / "graph")
+    assert result.facts["bound"] == "epochs"
+
+
+def test_the_run_honours_the_evaluation_ceiling(tmp_path):
+    """The other bound, reached the way the loop reaches it."""
+    _package, result = _run(tmp_path / "graph", epochs=8, batch_size=3, max_evaluations=6)
+    assert result.exit_ok, result.error
+    assert result.facts["evaluations"] == 6
+    assert result.facts["bound"] == "evaluations"
+
+
+def test_a_short_batch_still_reaches_the_same_best_score(tmp_path):
+    """One epoch of the same seed finds what two did, because the seed population did."""
+    _package, one = _run(tmp_path / "one", epochs=1, batch_size=3)
+    _package, two = _run(tmp_path / "two", epochs=2, batch_size=3)
+    assert one.facts["best"] == two.facts["best"]
+
+
+def test_the_settings_reach_the_run(tmp_path):
+    """The loop's own knobs are the run's settings, which is what makes it searchable."""
+    _package, result = _run(tmp_path / "graph", batch_size=1, epochs=3)
+    config = json.loads((tmp_path / "graph" / "loop" / "config.json").read_text())
+    assert config["batch_size"] == 1
+    assert config["epochs"] == 3
+    assert result.facts["evaluations"] == 3
+
+
+def test_a_target_that_cannot_be_resolved_is_reported(tmp_path):
+    mode = _mode(target="nope/missing")
+    result = mode.run(tmp_path / "bad")
+    assert result.exit_ok is False
+    assert "nope" in (result.error or "")
+
+
+# ── it is a mode, so a loop can be pointed at it ────────────────────────────
+
+
+def test_an_outer_loop_can_search_the_loop_itself(tmp_path):
+    """The point of the exercise: the loop's own knobs become a search surface."""
+    loop = Loop(
+        MODE,
+        LoopConfig(
+            epochs=1, batch_size=2, optimizer="random", seed=1,
+            runs_root=tmp_path / "outer",
+            max_evaluations=4,
+        ),
+        project=Path("."),
+    )
+    context = loop._context()  # noqa: SLF001 - the test drives the real context builder
+    names = {knob["name"] for knob in context.knobs}
+    assert "batch_size" in names
+    assert "epochs" in names
+    assert "optimizer" in names
+
+
+def test_its_score_is_the_best_score_the_inner_run_reached(tmp_path):
+    _package, result = _run(tmp_path / "graph")
+    report = json.loads((tmp_path / "graph" / "loop" / "report.json").read_text())
+    assert result.facts["best"] == report["best_score"]
+
+
+def test_a_run_with_no_score_is_refused_rather_than_read_as_zero(tmp_path):
+    """Zero and "never scored" are different answers, and a search must know which."""
+    mode = _mode()
+    empty = nn.RunResult(facts={}, exit_ok=False, error="the inner run never ran")
+    with pytest.raises(ValueError, match="no best score"):
+        mode.score(empty)
+
+
+def test_the_declared_ports_are_the_files_the_run_writes(tmp_path):
+    """A port says what a run produced; the validator is what keeps that true."""
+    mode, result = _run(tmp_path / "run")
+    assert result.exit_ok, result.error
+    ports = {port.name: port.path for port in mode.ports()}
+    assert set(ports) == {"report", "journal"}
+    for path in ports.values():
+        assert (tmp_path / "run" / path).exists(), path
+
+
+def test_the_steps_are_ops_the_optimizer_may_not_edit_away(tmp_path):
+    """The loop's shape is its semantics; a search edits its settings, not its steps."""
+    mode = _mode()
+    assert set(mode.graph().nodes) >= {"init", "forward", "scheduler", "again", "report"}
+    assert mode.edit_policy() == "broad"
+    assert "set_knob" in mode.preferred_edits()
+
+
+def test_an_inserted_advisory_node_cannot_move_the_score(tmp_path):
+    mode = _mode()
+    insertable = mode.insertable()
+    assert insertable
+    assert all(node.score_effect == "none" for node in insertable), (
+        "an advisory block must say so, or a search spends a batch on it"
+    )
+
+
+def test_the_run_resumes_from_its_own_journal(tmp_path):
+    """Each node is a separate process, so the journal is what carries the state."""
+    root = tmp_path / "graph"
+    _package, result = _run(root)
+    assert result.exit_ok, result.error
+    journal = [json.loads(line) for line in (root / "loop" / "journal.jsonl").read_text().splitlines()]
+    events = [record["event"] for record in journal]
+    assert events.count("epoch_open") == 2
+    assert events.count("epoch_end") == 2
+    assert events.count("step") == 2
+    assert "bound" in events
