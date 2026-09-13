@@ -89,7 +89,9 @@
       "title": "Generated packages execute as trusted code",
       "why": "create-mode imports and runs model-written Python with no isolation; the old system sandboxed candidates.",
       "verify": "pytest refactory/tests/test_sandbox.py -q",
-      "status": "todo"
+      "status": "done",
+      "commit": "c50989bafc",
+      "evidence": "335 passed. tests/test_sandbox.py is new (20 tests): a well-formed package passes the AST check; it catches a file that does not parse, a missing manifest, a mode with no score(), and a call to eval(); it does not execute anything (a package that raises on import still passes); the environment is an allowlist with secrets dropped and a test asserts the real DEEPSEEK_API_KEY is not visible to a sandboxed run; HOME is redirected; a run past its time limit is killed; a sandboxed run returns its JSON payload; the sandboxed verification reports a broken mode and imports out of process; a sandboxed smoke scores a real mode; promotion is explicit and recorded. create-mode now validates by AST plus a subprocess, never importing what it generated, and its smoke run is sandboxed. Reproduce: pytest refactory/tests/test_sandbox.py -q"
     },
     {
       "id": "signals",
