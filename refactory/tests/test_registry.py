@@ -28,7 +28,13 @@ def test_every_installed_package_mode_validates():
                 mode.state_dict(), invariants=mode.invariants(), resolve_calls=True
             )
             assert issues == [], f"{identifier}: {[str(i) for i in issues]}"
-            assert mode.is_scored(), f"{identifier} produces no signal"
+            # Scored, or deliberately unscored with a stated reason. Refusing the
+            # second would rule out a mode whose subject is producing something
+            # rather than maximising a number — the meta-modes — and accepting it
+            # silently is how a mode that produces no signal goes unnoticed.
+            assert mode.is_scored() or mode.unscored_reason, (
+                f"{identifier} produces no signal and does not say why"
+            )
             assert mode.parameters(), f"{identifier} exposes no knob"
 
 

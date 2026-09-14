@@ -26,8 +26,9 @@ class DesignMode(Mode):
     passes the check the brief declared.
     """
 
-    name = "design-mode"
+    name = "design"
     description = "design, emit and check a software artifact from a brief"
+    unscored_reason = "it is judged by whether the artifact passes the check its brief declared"
 
     @classmethod
     def declare(cls) -> dict[str, Knob]:

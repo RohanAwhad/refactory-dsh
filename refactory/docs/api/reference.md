@@ -350,6 +350,7 @@ Discover, list and resolve packages of modes.
 | function | `is_enabled` | `(project: 'Path', name: 'str') -> 'bool'` |
 | function | `load` | `(name: 'str', project: 'Path \| None' = None) -> 'Package'` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
+| function | `missing_tools` | `(name: 'str', project: 'Path \| None' = None) -> 'list[str]'` |
 | function | `packages_root` | `() -> 'Path'` |
 | function | `provenance` | `(name: 'str', project: 'Path \| None' = None) -> 'dict[str, Any]'` |
 | function | `remove` | `(project: 'Path', name: 'str', *, force: 'bool' = False) -> 'Path'` |
@@ -357,6 +358,8 @@ Discover, list and resolve packages of modes.
 | function | `resolve` | `(project: 'Path', identifier: 'str') -> 'tuple[Package, type]'` |
 | function | `set_enabled` | `(project: 'Path', name: 'str', enabled: 'bool') -> 'None'` |
 | function | `smoke` | `(project: 'Path', identifier: 'str') -> 'dict[str, Any]'` |
+| function | `tool_report` | `(project: 'Path \| None' = None, name: 'str \| None' = None) -> 'dict[str, list[dict[str, Any]]]'` |
+| function | `tools` | `(name: 'str', project: 'Path \| None' = None)` |
 | function | `verify` | `(project: 'Path', name: 'str \| None' = None) -> 'dict[str, list[str]]'` |
 | function | `where` | `(name: 'str', project: 'Path \| None' = None) -> 'Path \| None'` |
 | function | `workspace_root` | `(project: 'Path') -> 'Path'` |
@@ -372,15 +375,55 @@ Discover, list and resolve packages of modes.
 - **`installed_names`** — Package directories on disk, enabled or not.
 - **`load`** — Import one package and return its manifest, with its provenance applied.
 - **`main`** — ``python -m refactory_dsh.registry list | show <mode>``.
+- **`missing_tools`** — The names of required tools this machine does not have, for a listing.
 - **`packages_root`** — The directory holding every package.
 - **`provenance`** — Where a package came from, as the writer recorded it.
 - **`remove`** — Delete a workspace package, refusing to break a dependent.
 - **`render_catalogue`** — The grouped listing a user sees.
 - **`resolve`** — The package and mode class for ``<package>/<name>``.
 - **`smoke`** — Run one mode once, so a package can be checked rather than merely imported.
+- **`tool_report`** — Every declared tool of every package, with its status on this machine.
+- **`tools`** — The tools a package declares, read without importing it.
 - **`verify`** — Import every mode of a package and say what is wrong with it.
 - **`where`** — Which root a package lives in, or ``None`` if it is not there.
 - **`workspace_root`** — The writable package root for a project.
+
+
+<a id="refactory_dsh-toolchain"></a>
+
+## `refactory_dsh.toolchain`
+
+What a package needs that is not Python, and how the absence reads.
+
+| kind | name | signature |
+|---|---|---|
+| class | `Tool` | `(name: 'str', kind: 'str' = 'binary', probe: 'str' = '', install: 'str' = '', why: 'str' = '', version_args: 'tuple[str, ...]' = (), optional: 'bool' = False) -> None` |
+| class | `ToolDeclError` | `` |
+| class | `ToolMissing` | `` |
+| class | `ToolStatus` | `(tool: 'Tool', present: 'bool', detail: 'str' = '', version: 'str' = '') -> None` |
+| class | `ToolchainError` | `` |
+| function | `absent` | `(statuses: 'Iterable[ToolStatus]') -> 'list[ToolStatus]'` |
+| function | `check` | `(tools: 'Iterable[Tool]') -> 'list[ToolStatus]'` |
+| function | `import_tool` | `(package: 'str', name: 'str', project: 'Path \| None' = None) -> 'Any'` |
+| function | `preflight` | `(package: 'str', project: 'Path \| None' = None) -> 'list[ToolStatus]'` |
+| function | `probe` | `(tool: 'Tool') -> 'ToolStatus'` |
+| function | `read_tools` | `(package: 'str', project: 'Path \| None' = None) -> 'tuple[Tool, ...]'` |
+| function | `report` | `(package: 'str', project: 'Path \| None' = None) -> 'list[ToolStatus]'` |
+| function | `require` | `(package: 'str', name: 'str', project: 'Path \| None' = None) -> 'ToolStatus'` |
+
+- **`Tool`** — One thing a package needs that is not a Python callable.
+- **`ToolDeclError`** — A package's ``tools.py`` is not a readable declaration.
+- **`ToolMissing`** — A tool a package declared is not present on this machine.
+- **`ToolStatus`** — Whether one declared tool is present, and what was found.
+- **`ToolchainError`** — A tool declaration is malformed, or a declared tool is not usable here.
+- **`absent`** — The ones this machine does not have.
+- **`check`** — Probe every declared tool, present or not.
+- **`import_tool`** — The module a ``python`` tool declares, imported, or the missing-tool error.
+- **`preflight`** — Every required tool a package declares, or the error listing what is missing.
+- **`probe`** — Whether one declared tool is usable here, and what was found.
+- **`read_tools`** — What a package declares it needs. Empty when it declares nothing.
+- **`report`** — Every tool a package declares, with its status on this machine.
+- **`require`** — One tool a node is about to use, or :class:`ToolMissing` naming the fix.
 
 
 <a id="refactory_dsh-sandbox"></a>

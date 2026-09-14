@@ -80,6 +80,17 @@ class Mode:
     name: ClassVar[str] = ""
     description: ClassVar[str] = ""
 
+    #: Why this mode is deliberately unscored, or empty when it is scored.
+    #:
+    #: A mode with no ``score()`` produces no signal, so the outer loop cannot
+    #: search it and a created package containing one is refused. That is the right
+    #: default. But some modes are *about* producing something rather than about
+    #: maximising a number — a mode that writes a package is judged by whether the
+    #: package works — and those are unscored on purpose. Saying so here turns an
+    #: inference ("it happens not to override score") into a declaration the
+    #: registry, the sandbox and a reader can all check.
+    unscored_reason: ClassVar[str] = ""
+
     def __init__(self, state: dict[str, Any] | None = None) -> None:
         if state is None:
             self._knobs = self._declared_entries()

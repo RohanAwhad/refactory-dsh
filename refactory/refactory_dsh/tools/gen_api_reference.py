@@ -39,6 +39,7 @@ MODULES: tuple[str, ...] = (
     "refactory_dsh.history",
     "refactory_dsh.lowering",
     "refactory_dsh.registry",
+    "refactory_dsh.toolchain",
     "refactory_dsh.sandbox",
     "refactory_dsh.create",
     "refactory_dsh.edit",

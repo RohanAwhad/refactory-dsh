@@ -42,8 +42,9 @@ class CreateMode(Mode):
     than a second copy of the graph.
     """
 
-    name = "create-mode"
+    name = "create"
     description = "design, emit and validate a whole package from a brief"
+    unscored_reason = "it is judged by whether the package it produced imports, validates and smoke-scores"
     intent = "Make a new package of modes."
 
     @classmethod
@@ -72,6 +73,12 @@ class CreateMode(Mode):
         ))
         graph.add(Node(
             "survey", "op", call=f"{OPS}:survey",
+            # `strategy` reads `survey.json`, and the declaration is what says so.
+            # It was missing, and nothing caught it because the executor skips the
+            # write check for a node that declares no writes: the run worked and the
+            # validator had never seen this graph. Putting the mode in a package is
+            # what surfaced both.
+            writes=("survey.json",),
             produces=("survey", "existing"),
             notes="enumerate what already exists, before anything is invented",
         ))

@@ -26,7 +26,7 @@ from refactory_dsh.create import CreateConfig, CreateError, CreateMode, CreateRe
 class EditMode(CreateMode):
     """Revise an existing mode rather than invent a new one."""
 
-    name = "edit-mode"
+    name = "edit"
     description = "revise an existing mode from a brief, and check it did not regress"
     intent = (
         "Revise an existing mode. The reference below is its current source: keep "

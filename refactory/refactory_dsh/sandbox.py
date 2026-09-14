@@ -365,7 +365,7 @@ def verify_sandboxed(
         "    except Exception as exc:\n"
         "        problems.append(f'{identifier}: cannot be constructed: {exc}')\n"
         "        continue\n"
-        "    if not mode.is_scored():\n"
+        "    if not mode.is_scored() and not getattr(mode, 'unscored_reason', ''):\n"
         "        problems.append(f'{identifier} does not override score(), so it produces no signal')\n"
         "    if not mode.parameters():\n"
         "        problems.append(f'{identifier} declares no knobs, so there is nothing to optimize')\n"

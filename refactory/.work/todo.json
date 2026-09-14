@@ -245,7 +245,10 @@
       "title": "create-v2 and design-v2 as modes in the default package",
       "why": "The original product had three meta-modes. We have create (a mode), edit (a mode), loop, and design (a mode) \u2014 but they are separate entry points, not a package. They belong in one default package, which may need exceptions the mode contract does not otherwise allow.",
       "verify": "pytest refactory/tests/test_meta_package.py -q",
-      "status": "todo"
+      "status": "done",
+      "commit": "(pending)",
+      "observed": "10 passed (test_meta_package.py), 529 passed overall",
+      "evidence": "Done as `refactory_packages/meta_pack` with modes `create`, `edit`, `design`. The `-mode` suffix was dropped: `Package` validates mode names against `^[a-z][a-z0-9_]*$` and refused `create-mode`, and relaxing that rule to allow a tautological suffix would let every future name carry punctuation. Two latent bugs surfaced the moment the modes were validated as modes rather than merely run as entry points: (1) `CreateMode`'s `survey` node wrote `survey.json` without declaring it, and the executor SKIPS the write check for a node that declares no writes, so the graph had never passed V6 \u2014 the declaration is now there and a test holds it; (2) a package whose modes are unscored on purpose was indistinguishable from one whose author forgot, so `Mode.unscored_reason` makes the exception a declaration, the registry test accepts a stated reason and still refuses silence, the sandbox check does the same for created packages, and the loop still refuses an unscored mode as a search target. The package docstring states all three exceptions (unscored, library ops, needs a model)."
     },
     {
       "id": "math-pack",

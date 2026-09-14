@@ -310,4 +310,9 @@ newcomer's first reading a description of the wrong system.
 
 - [API reference](api/index.md) — every public module and symbol.
 - [Tutorials](tutorials/index.md) — the running example, built up.
+- [Packing a tool that is not Python](packing-tools.md) — how a package declares a
+  toolchain it cannot import, how that requirement is checked before a run spends
+  budget, and how its absence is reported.
 - [Contributing](contributing.md) — for a coding agent or a person changing this.
+- [Hardening](hardening.md) — what an adversarial audit of the finished work found,
+  and what holds each fix in place.
