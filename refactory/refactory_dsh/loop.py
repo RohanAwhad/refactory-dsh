@@ -424,8 +424,12 @@ class Loop(OuterLoop):
         if self.config.evaluator == "dsh":
             self._evaluate_on_dsh(candidate, mode, workdir)
             return
-        # One store per inner run: a `run`-retention memory is scoped to this run
-        # and no other, which is the enforcement of that policy.
+        # One store per inner run, and its `run`-retention namespaces are deleted
+        # when it ends. The roots already keep candidates apart; forgetting is
+        # what makes the policy true of the *same* candidate evaluated twice. A
+        # resumed run re-evaluates candidates, and a run-scoped memory left on disk
+        # would be read the second time, so the resumed run would not be the run it
+        # resumed.
         store = MemoryStore(
             mode.memory_declarations(),
             run_root=workdir,
@@ -433,9 +437,14 @@ class Loop(OuterLoop):
             global_root=self.config.memory_global_root,
         )
         started = time.time()
-        result = mode.evaluate(
-            workdir, model=self.model, memory=store, max_steps=self.config.max_steps
-        )
+        try:
+            result = mode.evaluate(
+                workdir, model=self.model, memory=store, max_steps=self.config.max_steps
+            )
+        finally:
+            # Also on a crash or a stop: a namespace that outlives the run it was
+            # scoped to is the bug, however the run ended.
+            store.forget_run_scoped()
         candidate.score = result.score
         candidate.mean_score = result.score
         candidate.facts = _trim(result.facts)

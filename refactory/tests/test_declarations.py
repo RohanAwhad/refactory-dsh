@@ -13,6 +13,7 @@ import pytest
 
 from refactory_dsh import nn
 from refactory_dsh.memory import MemoryStore
+from refactory_dsh.nn import Memory
 from refactory_dsh.memory import MemoryError_ as MemoryFailure
 from refactory_dsh.loop import Loop, LoopConfig
 
@@ -194,3 +195,96 @@ def test_an_inner_run_records_which_ports_it_produced(tmp_path):
 def test_the_validator_rules_cover_the_new_port_rule():
     assert "V11" in nn.RULES
     assert "port" in nn.RULES["V11"]
+
+
+# ── retention is behaviour, not a declaration ──────────────────────────────
+#
+# Issue #24 declared three retention policies and enforced none of them:
+# `MemoryStore.forget_run_scoped` existed and was called nowhere, so a `run`-
+# scoped namespace accumulated exactly like a project one. And memory did not
+# cross to DSH at all — the lowering dropped it and the node runner built the
+# context without a store — so a mode that keeps a cross-run prior worked in the
+# walker and quietly kept nothing on the runtime that ships.
+
+
+def test_a_run_scoped_memory_is_gone_when_the_inner_run_ends(tmp_path):
+    """The policy's whole content: it dies with the run it was scoped to."""
+    declaration = Memory("scratch", kind="log", retention="run")
+    store = MemoryStore([declaration], run_root=tmp_path / "runs" / "abc")
+    store.append("scratch", {"tried": 1})
+    assert store.path("scratch").exists(), "the write did not land"
+
+    forgotten = store.forget_run_scoped()
+    assert forgotten == ["scratch"], forgotten
+    assert not store.path("scratch").exists(), (
+        "a run-scoped memory survived the run, so it is not run-scoped"
+    )
+
+
+def test_forgetting_leaves_project_and_global_memory_alone(tmp_path):
+    declarations = [
+        Memory("per_run", retention="run"),
+        Memory("per_project", retention="project"),
+        Memory("everywhere", retention="global"),
+    ]
+    store = MemoryStore(
+        declarations,
+        run_root=tmp_path / "run",
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+    )
+    for namespace in ("per_run", "per_project", "everywhere"):
+        store.append(namespace, {"seen": namespace})
+
+    assert store.forget_run_scoped() == ["per_run"]
+    assert not store.path("per_run").exists()
+    for survivor in ("per_project", "everywhere"):
+        assert store.path(survivor).exists(), f"{survivor} was forgotten too"
+
+
+def test_the_loop_forgets_run_scoped_memory_after_every_candidate(tmp_path):
+    """The enforcement point. Without it a resumed run reads its own leftovers."""
+    import inspect
+    from refactory_dsh.loop import Loop
+
+    source = inspect.getsource(Loop._evaluate)
+    assert "forget_run_scoped" in source, (
+        "the inner run ends without applying the run-retention policy"
+    )
+    assert "finally" in source, (
+        "it must be applied when the run crashes or is stopped, not only on success"
+    )
+
+
+def test_memory_declarations_travel_to_the_runtime_that_ships(tmp_path):
+    """A mode's declared memory must survive the lowering, or DSH silently lacks it."""
+    from refactory_dsh import lowering
+
+    state = {
+        "version": 1,
+        "graph": {"start": "a", "nodes": {"a": {"id": "a", "kind": "op", "call": "m:f",
+                  "reads": [], "writes": [], "produces": [], "knobs": [],
+                  "evaluator": "", "prompt_template": "", "role": "ceo", "tools": [],
+                  "max_iterations": 1, "notes": "", "blocking": True,
+                  "score_effect": "affects"}}, "edges": []},
+        "knobs": {},
+        "ports": [],
+        "memory": [{"namespace": "priors", "kind": "log", "retention": "project",
+                    "description": "what previous runs found"}],
+    }
+    lowering.write_declarations(state, tmp_path)
+    read_back = lowering.read_memory_declarations(tmp_path)
+    assert [m.namespace for m in read_back] == ["priors"], (
+        "the lowering dropped the mode's memory, so DSH would run without it"
+    )
+    assert read_back[0].retention == "project"
+
+
+def test_the_node_runner_builds_a_store_from_those_declarations(tmp_path):
+    """Declaring it is not enough; the runtime has to hand it to the op."""
+    import inspect
+    from refactory_dsh import run as runner
+
+    assert "_memory_store" in inspect.getsource(runner), (
+        "the node runner builds no memory store, so ops see None on DSH"
+    )

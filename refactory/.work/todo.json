@@ -217,7 +217,10 @@
       "title": "retention='run' memory is declared but never discarded",
       "why": "`MemoryStore.forget_run_scoped` exists and is called nowhere. So a run-scoped namespace accumulates exactly like a project one, and the retention policy is a declaration rather than behaviour. The issue's own argument is that run vs project vs global 'is the difference between a memory that dies with the run and one that accumulates'.",
       "verify": "pytest refactory/tests/test_declarations.py -q",
-      "status": "todo"
+      "status": "done",
+      "commit": "(pending)",
+      "observed": "22 passed (test_declarations.py)",
+      "evidence": "Two gaps, both fixed. (1) `MemoryStore.forget_run_scoped` existed with a docstring saying `Called when the run ends` and nothing called it, so a run-scoped namespace accumulated like a project one \u2014 and on RESUME a re-evaluated candidate would read its own leftovers, making a resumed run differ from the one it resumed. `Loop._evaluate` now forgets in a `finally`, so a crash or a stop applies the policy too. (2) Found while fixing it: **memory did not cross to DSH at all**. The lowering dropped it and the node runner built its context without a store, so a mode declaring a cross-run prior worked in the walker and silently kept nothing on the runtime that ships \u2014 a difference between the runtimes that nothing reported, because the example declares no memory. `write_declarations` now carries the declarations beside the facts, `read_memory_declarations` reads them back, and `run.py` builds the store. Six new tests hold both properties."
     },
     {
       "id": "revision-state",

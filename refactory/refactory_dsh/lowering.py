@@ -48,6 +48,9 @@ SUFFIX = ".graph.json"
 #: DSH path while being caught on the walker.
 DECLARATIONS = ".refactory/declarations.json"
 
+#: The key the mode's declared memory travels under, beside the node declarations.
+MEMORY_KEY = "memory"
+
 
 def node_declarations(state: dict[str, Any]) -> dict[str, dict[str, list[str]]]:
     """Every node's declared reads, writes and facts, keyed by node id."""
@@ -63,10 +66,23 @@ def node_declarations(state: dict[str, Any]) -> dict[str, dict[str, list[str]]]:
 
 
 def write_declarations(state: dict[str, Any], workdir: Path) -> Path:
-    """Leave the declarations where the runner will look for them."""
+    """Leave the declarations where the runner will look for them.
+
+    Two things a node needs that the IR cannot carry: the facts it produces, and
+    the memory its mode declares. Both travel beside the graph, keyed by node id
+    for the first and under ``memory`` for the second.
+
+    Memory has to travel, not be re-derived: the runner builds the store an op
+    receives, and a store built from nothing is how a mode that keeps a cross-run
+    prior works in the walker and silently does nothing on DSH.
+    """
     path = Path(workdir) / DECLARATIONS
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(node_declarations(state), indent=2, default=str))
+    payload: dict[str, Any] = node_declarations(state)
+    declared = state.get("memory") or []
+    if declared:
+        payload[MEMORY_KEY] = declared
+    path.write_text(json.dumps(payload, indent=2, default=str))
     return path
 
 
@@ -79,6 +95,18 @@ def read_declarations(workdir: Path) -> dict[str, dict[str, list[str]]]:
     except json.JSONDecodeError:
         return {}
     return loaded if isinstance(loaded, dict) else {}
+
+
+def read_memory_declarations(workdir: Path) -> list[Any]:
+    """The mode's memory declarations, as the runner reads them back."""
+    from refactory_dsh.nn import Memory
+
+    loaded = read_declarations(workdir).get(MEMORY_KEY) or []
+    out: list[Any] = []
+    for entry in loaded:
+        if isinstance(entry, dict):
+            out.append(Memory.from_state(entry))
+    return out
 
 
 class LoweringError(ValueError):

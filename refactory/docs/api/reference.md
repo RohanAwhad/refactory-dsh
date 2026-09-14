@@ -312,6 +312,7 @@ Lower a mode state to refactory's IR, so DSH can run it.
 | function | `node_declarations` | `(state: 'dict[str, Any]') -> 'dict[str, dict[str, list[str]]]'` |
 | function | `node_manifest` | `(state: 'dict[str, Any]', node_id: 'str') -> 'dict[str, Any]'` |
 | function | `read_declarations` | `(workdir: 'Path') -> 'dict[str, dict[str, list[str]]]'` |
+| function | `read_memory_declarations` | `(workdir: 'Path') -> 'list[Any]'` |
 | function | `to_workflow` | `(state: 'dict[str, Any]', *, name: 'str' = '', description: 'str' = '') -> 'Workflow'` |
 | function | `validate_ir` | `(workflow: 'Workflow') -> 'list[str]'` |
 | function | `write_declarations` | `(state: 'dict[str, Any]', workdir: 'Path') -> 'Path'` |
@@ -321,6 +322,7 @@ Lower a mode state to refactory's IR, so DSH can run it.
 - **`knob_environment`** — The environment a node command runs under: the knobs, and whatever else.
 - **`node_declarations`** — Every node's declared reads, writes and facts, keyed by node id.
 - **`node_manifest`** — What a node command is told about itself, mirroring `DSH_WORKFLOW_NODE`.
+- **`read_memory_declarations`** — The mode's memory declarations, as the runner reads them back.
 - **`to_workflow`** — The refactory `Workflow` for a mode state.
 - **`validate_ir`** — refactory's own validation of a lowered graph.
 - **`write_declarations`** — Leave the declarations where the runner will look for them.
@@ -392,6 +394,7 @@ Running code we did not write.
 | class | `SandboxError` | `` |
 | class | `SandboxResult` | `(ok: 'bool', payload: 'dict[str, Any]' = <factory>, returncode: 'int' = 0, stdout: 'str' = '', stderr: 'str' = '', timed_out: 'bool' = False) -> None` |
 | function | `ast_check` | `(name: 'str', project: 'Path \| None' = None) -> 'list[str]'` |
+| function | `describe_package` | `(name: 'str', *, project: 'Path \| None' = None, **kwargs: 'Any') -> 'SandboxResult'` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
 | function | `promote` | `(project: 'Path', name: 'str', *, note: 'str' = '') -> 'dict[str, Any]'` |
 | function | `run_command` | `(command: 'str', *, workdir: 'Path', timeout_s: 'int' = 180, memory_mb: 'int' = 2048, cpu_s: 'int' = 120, file_mb: 'int' = 64, env: 'dict[str, str] \| None' = None) -> 'SandboxResult'` |
@@ -403,13 +406,14 @@ Running code we did not write.
 - **`SandboxError`** — A sandboxed run could not be carried out.
 - **`SandboxResult`** — What a sandboxed run produced.
 - **`ast_check`** — Everything wrong with a package that can be seen without importing it.
+- **`describe_package`** — A package's manifest and mode ids, read without importing it here.
 - **`main`** — ``python -m refactory_dsh.sandbox --ast <pkg> | --smoke <pkg>/<mode>``.
 - **`promote`** — Mark a package trusted, explicitly, and record who did it.
 - **`run_command`** — Run a shell command under the same containment as a code snippet.
 - **`run_sandboxed`** — Run a snippet in a subprocess with limits, from the workspace, scrubbed.
 - **`scrub`** — The environment a sandboxed run sees: an allowlist, with secrets dropped.
 - **`smoke`** — Run one mode once, in a sandbox, and report what it scored.
-- **`verify_sandboxed`** — Import a package and validate every mode, without importing it here.
+- **`verify_sandboxed`** — Everything wrong with a package, checked without importing it here.
 
 
 <a id="refactory_dsh-create"></a>

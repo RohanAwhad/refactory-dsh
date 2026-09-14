@@ -75,6 +75,29 @@ def _read_facts(workdir: Path) -> dict[str, Any]:
     return loaded if isinstance(loaded, dict) else {}
 
 
+def _memory_store(directory: Path) -> Any:
+    """The memory store for one node's run, or ``None`` when nothing is declared.
+
+    Roots follow the walker: this run's own directory for ``run`` retention, the
+    project's ``.factory`` for ``project``, and the configured global root — so a
+    mode that declares a prior gets it on both runtimes rather than on one.
+    """
+    from refactory_dsh.lowering import read_memory_declarations
+    from refactory_dsh.memory import MemoryStore
+
+    declared = read_memory_declarations(directory)
+    if not declared:
+        return None
+    project = Path(os.environ.get("REFACTORY_PROJECT") or Path.cwd())
+    global_root = os.environ.get("REFACTORY_MEMORY_HOME")
+    return MemoryStore(
+        declared,
+        run_root=directory,
+        project_root=project / ".factory",
+        global_root=Path(global_root) if global_root else None,
+    )
+
+
 def declarations(workdir: Path, node_id: str) -> dict[str, list[str]]:
     """What the node declared: from the run directory, falling back to the manifest.
 
@@ -127,6 +150,11 @@ def run_node(
         knobs=_knobs(),
         facts=_read_facts(directory),
         task={"node": node_id, "type": manifest.get("type", "")},
+        # The store an op receives, built from the mode's own declarations. Without
+        # this a mode that keeps a cross-run prior works in the walker and quietly
+        # keeps nothing here, which is a difference between the two runtimes that
+        # nothing would report.
+        memory=_memory_store(directory),
     )
     ctx.node_id = node_id
     ctx._declared = tuple(declared["writes"])  # noqa: SLF001 - the runner owns the context
