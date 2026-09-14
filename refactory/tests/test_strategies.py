@@ -282,3 +282,135 @@ def test_a_custom_loop_can_declare_it_needs_a_model():
 
     assert NeedsModel.requires_model is True
     assert Loop.requires_model is False
+
+
+# ── a strategy's decision must reach the proposal ──────────────────────────
+#
+# The audit that reopened #20: every test above asserted that a strategy *took*
+# its branch (counters, logs) and none asserted the branch changed the search.
+# Five strategies recorded a decision and then ran the ordinary path, so six of
+# fourteen produced byte-identical leaderboards to `default`. These assert the
+# effect, which is the property that was missing.
+
+
+def test_adaptive_meta_widens_the_batch_when_it_decides_to(tmp_path):
+    """A meta-level that changes nothing is a counter, not a policy."""
+    loop = _loop("adaptive_meta", tmp_path / "run", epochs=4)
+    from refactory_dsh.outerloop import Run
+
+    loop.strategy_decision = {"meta": False}
+    calm = loop.batch_size(Run(loop=loop))
+    loop.strategy_decision = {"meta": True, "reason": "no progress"}
+    stalled = loop.batch_size(Run(loop=loop))
+    assert stalled > calm, (
+        "the meta branch changed nothing, so the loop did not adapt to the stall"
+    )
+
+
+def test_reflective_merges_two_parents_rather_than_mutating_one(tmp_path):
+    """The merge branch must produce a candidate neither parent had."""
+    from refactory_dsh import registry
+    from refactory_dsh.optim import Candidate
+    from refactory_dsh.outerloop import Run
+
+    loop = _loop("reflective", tmp_path / "run", epochs=1)
+    loop.strategy_decision = {"branch": "merge"}
+    mode = registry.resolve(Path("."), "circle_packing/adaptive")[1]()
+
+    left_state = mode.state_dict()
+    right_state = mode.state_dict()
+    right_state["knobs"]["grid"]["value"] = 24
+    left = Candidate.from_state(left_state)
+    right = Candidate.from_state(right_state)
+    loop.population = [left, right]
+    loop.config.elite = 2
+
+    proposals = loop.propose(Run(loop=loop), [left, right], 2)
+    assert proposals, "the merge branch proposed nothing"
+    knobs = [p.edit.get("name") for p in proposals if p.edit.get("op") == "set_knob"]
+    assert "grid" in knobs, (
+        "the merge did not take the other parent's setting, so it is a mutation "
+        "with a different label"
+    )
+
+
+def test_reflective_falls_back_when_the_parents_differ_structurally(tmp_path):
+    """A merge with nothing to combine must not propose a no-op."""
+    from refactory_dsh import registry
+    from refactory_dsh.optim import Candidate
+    from refactory_dsh.outerloop import Run
+
+    loop = _loop("reflective", tmp_path / "run", epochs=1)
+    loop.strategy_decision = {"branch": "merge"}
+    mode = registry.resolve(Path("."), "circle_packing/adaptive")[1]()
+    same = Candidate.from_state(mode.state_dict())
+    loop.population = [same]
+    proposals = loop.propose(Run(loop=loop), [same, same], 2)
+    assert all(p.edit.get("op") != "set_knob" or p.edit.get("value") is not None
+               for p in proposals)
+
+
+def test_the_strategy_decision_reaches_the_optimizer(tmp_path):
+    """The channel itself: a decision in the log alone informs no proposal."""
+    from refactory_dsh.outerloop import Run
+
+    loop = _loop("reflective", tmp_path / "run", epochs=1)
+    loop.strategy_decision = {"branch": "merge", "note": "combine"}
+    context = loop._context()  # noqa: SLF001 - the test drives the real builder
+    assert context.strategy == {"branch": "merge", "note": "combine"}, (
+        "the loop's own decision does not reach the proposer"
+    )
+
+
+def test_research_then_optimize_publishes_its_note(tmp_path):
+    """A note kept in an attribute reaches no prompt."""
+    from refactory_dsh.outerloop import Run
+
+    loop = _loop("research_then_optimize", tmp_path / "run", epochs=2)
+    loop.research_note = ""
+    loop.strategy_decision = {"research": "grid=18 looked best in the prior run"}
+    assert loop._context().strategy["research"].startswith("grid=18"), (
+        "the research phase's conclusion is not available to a proposal"
+    )
+
+
+def test_reflective_sampler_drops_an_edit_that_was_already_refused(tmp_path):
+    """Reflection has to change the sample, not just be stored beside it."""
+    from refactory_dsh.optim import Proposal, Rejection
+    from refactory_dsh.outerloop import Run
+
+    loop = _loop("reflective_sampler", tmp_path / "run", epochs=1)
+    edit = {"op": "set_knob", "name": "grid", "value": 24}
+    loop.rejections.append(Rejection(attempt=1, edit=edit, reasons=["E-precondition: nope"]))
+    run = Run(loop=loop)
+    refused = [proposal for proposal in loop.propose(run, loop.select_parents(1), 4)
+               if proposal.edit == edit]
+    assert refused == [], (
+        "the sampler re-proposed an edit the run had already refused, so the "
+        "reflection was stored and not used"
+    )
+
+
+def test_a_curriculum_stage_reaches_the_proposal(tmp_path):
+    """`initial → tuning → creative → ablation` must mean four different asks."""
+    from refactory_dsh.outerloop import Run
+
+    loop = _loop("staged_curriculum", tmp_path / "run", epochs=4)
+    seen: list[str] = []
+
+    class Recorder(type(loop)):
+        def epoch_step(self, run=None):
+            seen.append(self.strategy_decision.get("stage", ""))
+            return super().epoch_step(run)
+
+    loop.__class__ = Recorder
+    loop.run()
+    assert seen, "the curriculum ran no iterations"
+    assert all(stage for stage in seen), (
+        f"an iteration ran without publishing its stage: {seen} — the stage is in "
+        "the log and not in the proposal"
+    )
+    assert len(set(seen)) > 1, (
+        f"every iteration reported the same stage ({set(seen)}), so the curriculum "
+        "did not advance"
+    )

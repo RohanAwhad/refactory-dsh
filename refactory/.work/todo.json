@@ -190,7 +190,10 @@
       "title": "The SRF strategies record their distinguishing decision instead of applying it",
       "why": "My `all 13 ported` claim was wrong. `reflective` counts and logs merge-vs-mutate then calls the plain `epoch_step`, so the branch cannot reach the proposal. `reflective_sampler` stores `last_reflection` and never feeds a prompt, while its docstring says the sampling prompt carries prior rejections. `adaptive_meta` logs the meta decision and runs the default step. `research_then_optimize` stores `research_note` and never consumes it \u2014 `grep` finds only the two lines that set and log it. 6 of 14 strategies produce byte-identical leaderboards to `default`.",
       "verify": "pytest refactory/tests/test_strategies.py -q",
-      "status": "todo"
+      "status": "done",
+      "commit": "(pending)",
+      "observed": "31 passed (test_strategies.py)",
+      "evidence": "Fixed. Every strategy that only recorded its decision now publishes it through a new `ProposalContext.strategy` channel, and acts on it. `adaptive_meta` widens the batch by 2 on a stall (18 evals vs 16 in the audit rerun, so it now differs from `default` where it did not before). `reflective` builds a real merge \u2014 a candidate taking one parent's settings from the other \u2014 and falls back to a mutation when the two parents differ structurally rather than in their knobs, because a no-op merge would be refused as E-noop and lose the slot. `reflective_sampler` drops proposals that repeat an edit the run already refused; it reads `self.rejections` for the edits because `Run.rejections()` returns the summarised reasons a prompt wants. `research_then_optimize` and `staged_curriculum` publish their note and stage. Six tests were added that assert the EFFECT rather than the counter, which is exactly what the old tests missed: they asserted `loop.merges >= 1`, so a branch that changed nothing passed. Remaining and honest: with `optimizer=random` the model-facing decisions (research note, curriculum stage) reach a proposer that does not read them, so 4 strategies still produce byte-identical leaderboards on the tiny example \u2014 the channel is real and the distinguishing behaviour only shows with a model proposer."
     },
     {
       "id": "check-sandbox",

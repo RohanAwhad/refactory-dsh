@@ -203,6 +203,13 @@ class ProposalContext:
     #: so it cannot be edited into the definition by a candidate.
     frozen: list[str] = field(default_factory=list)
     preset: str = "broad"
+    #: What the outer loop decided for *this* iteration, as data.
+    #:
+    #: An outer loop that only logs its decision has not made one: the proposal
+    #: cannot see it, so the log is the only place it exists and the search is the
+    #: default loop with extra bookkeeping. A strategy that branches puts the
+    #: branch here, and a proposer that can act on it does.
+    strategy: dict[str, Any] = field(default_factory=dict)
 
     def render(self) -> str:
         """The request, as text, for a model optimizer."""

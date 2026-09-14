@@ -16,6 +16,7 @@ Counterpart names are provisional and deliberately recognisable.
 
 from __future__ import annotations
 
+import json
 import random
 from dataclasses import dataclass, field
 from typing import Any, Sequence
@@ -320,23 +321,64 @@ class Reflective(Loop):
         return len(self.select_parents(3)) >= 3 and (self.merges + self.mutations) % 3 == 2
 
     def epoch_step(self, run: Run | None = None, *, branch: str = "mutate") -> bool:
+        """Record the branch **and publish it**, so the proposal can act on it.
+
+        Counting the branch is not making the decision: a merge that produces the
+        same proposals as a mutation is a mutation with a counter. The branch goes
+        into the proposal context, and :meth:`propose` reads it.
+        """
         if branch == "merge":
             self.merges += 1
         else:
             self.mutations += 1
         run = run or Run(loop=self)
+        self.strategy_decision = {"branch": branch}
         run.log(f"branch={branch}")
         return super().epoch_step(run)
 
-    def select_parents(self, n: int, *, by: str = "score") -> list[Candidate]:
-        return super().select_parents(n)
+    def propose(
+        self, run: Run, parents: Sequence[Candidate], n: int
+    ) -> list[Proposal]:
+        """On a merge, take a candidate whose knobs come from two parents.
+
+        This is what GEPA's merge branch means, and it is the difference between a
+        merge and a mutation: a mutation moves one parent's values, a merge takes
+        one parent's structure and another's settings. Without this the branch is
+        indistinguishable from the mutation it was chosen over.
+        """
+        if self.strategy_decision.get("branch") != "merge" or len(parents) < 2:
+            return super().propose(run, parents, n)
+        left, right = parents[0], parents[1]
+        edits = [
+            {"op": "set_knob", "name": name, "value": entry["value"]}
+            for name, entry in sorted((right.state.get("knobs") or {}).items())
+            if name in (left.state.get("knobs") or {})
+            and (left.state["knobs"][name] or {}).get("value") != entry.get("value")
+        ]
+        if not edits:
+            # Nothing to combine: the two parents differ structurally, not in their
+            # settings. Fall back rather than propose an edit that changes nothing,
+            # which the harness would refuse as `E-noop` and the batch slot would be
+            # lost to a branch that could not do its job.
+            return super().propose(run, parents, n)
+        return [
+            Proposal(
+                edit=edits[index % len(edits)],
+                rationale=f"merge {left.id} with {right.id}",
+                parent=left.id,
+            )
+            for index in range(max(1, n))
+        ]
 
 
 class ReflectiveSampler(Loop):
     """SRF `shinka`: reflection inside sampling.
 
-    The sampling prompt carries prior rejections, so a proposal is informed by what
-    has already been refused rather than only by what has already worked.
+    Every proposer already receives the recent refusals: the loop puts a summary
+    of them in `ProposalContext.rejections`, so "the prompt carries prior
+    rejections" is the base behaviour and not this strategy's distinction. What
+    this adds is acting on them — a proposal that repeats a refused edit is
+    dropped before it is attempted, rather than refused a second time.
     """
 
     name = "reflective_sampler"
@@ -344,9 +386,24 @@ class ReflectiveSampler(Loop):
 
     def propose(self, run: Run, parents: Sequence[Candidate], n: int) -> list[Proposal]:
         proposals = super().propose(run, parents, n)
-        refused = run.rejections()
-        self.last_reflection = refused
-        return proposals
+        # `Run.rejections()` is the summarised *reasons*, which is what a prompt
+        # wants; the edits themselves live on the loop, which is what this needs.
+        refused = self.rejections
+        self.last_reflection = run.rejections()
+        # The refusals this run has already paid for, as comparable edits. An
+        # attempt that failed once fails again for the same reason, so re-proposing
+        # it spends a batch slot to learn what the run already knows.
+        seen = {
+            json.dumps(rejection.edit, sort_keys=True, default=str)
+            for rejection in refused
+        }
+        kept = [
+            proposal
+            for proposal in proposals
+            if json.dumps(proposal.edit, sort_keys=True, default=str) not in seen
+        ]
+        self.reflected_away = len(proposals) - len(kept)
+        return kept or proposals
 
 
 class AdaptiveMeta(Loop):
@@ -373,9 +430,24 @@ class AdaptiveMeta(Loop):
             meta = self._meta_now(run)
             if meta:
                 self.meta_taken += 1
+            # A meta-level that only logs has not adapted to anything. On a stall
+            # the loop widens its own batch: the evidence says the current width is
+            # not producing contrast, and asking for the same width again is the
+            # definition of not adapting.
+            self.strategy_decision = ({"meta": True, "reason": "no progress since the last epoch"}
+                                      if meta else {"meta": False})
             run.log(f"meta={meta}")
             if not self.epoch_step(run):
                 run.stop("epochs")
+
+    def batch_size(self, run: Run) -> int:
+        """Widen on a stall, so the meta decision costs and buys something.
+
+        Two more candidates is a real budget decision, which is the point: a
+        meta-level that changes nothing is a counter, not a policy.
+        """
+        base = super().batch_size(run)
+        return base + 2 if self.strategy_decision.get("meta") else base
 
     def _meta_now(self, run: Run) -> bool:
         """Fire the meta branch when progress has stalled."""
@@ -423,9 +495,22 @@ class StagedCurriculum(Loop):
     per_stage = 2
 
     def strategy(self, run: Run) -> None:
+        """Run each stage in order, and **publish which stage is running**.
+
+        A stage is an instruction to the proposer — "initial", "tuning",
+        "creative", "ablation" are four different things to ask for. Logging the
+        name and running the ordinary step makes the curriculum a schedule with no
+        content: every stage proposes the same way, so the stages differ only in
+        the log that says they happened.
+        """
         self.stages_done = []
-        for stage in self.stages:
+        for index, stage in enumerate(self.stages):
             self.stages_done.append(stage)
+            self.strategy_decision = {
+                "stage": stage,
+                "stage_index": index,
+                "stages": list(self.stages),
+            }
             run.log(f"stage={stage}")
             for _ in range(self.per_stage):
                 if not self.epoch_step(run):
@@ -453,6 +538,9 @@ class ResearchThenOptimize(Loop):
 
     def strategy(self, run: Run) -> None:
         self.research_note = self._research(run)
+        # Published, not merely kept: a note in an attribute reaches no prompt and
+        # so informs no proposal. This is what puts it in front of a proposer.
+        self.strategy_decision = {"research": self.research_note}
         run.log(f"research={self.research_note!r}")
         if not self.epoch_step(run):
             run.stop("epochs")

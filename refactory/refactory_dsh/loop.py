@@ -208,6 +208,11 @@ class Loop(OuterLoop):
         self._refusal_pressure = 0.0
         self.loss: dict[str, Any] = {}
         self.gradient: dict[str, Any] = {}
+        #: What the outer loop decided this iteration, read by `_context()`. A
+        #: plain `Loop` decides nothing beyond the bound; a strategy that branches
+        #: writes what it chose here, so the choice reaches the proposal instead of
+        #: only the log.
+        self.strategy_decision: dict[str, Any] = {}
         self.epochs: list[EpochSummary] = []
 
     # ── init ───────────────────────────────────────────────────────────────
@@ -1217,6 +1222,7 @@ class Loop(OuterLoop):
                 ]
             ),
             preset=self.config.edit_preset,
+            strategy=dict(self.strategy_decision),
         )
 
     def _reachable(self, name: str, spec: dict[str, Any]) -> bool:
