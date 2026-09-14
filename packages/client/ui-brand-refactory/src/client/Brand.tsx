@@ -1,4 +1,3 @@
-import type { HeroBrandMarkOwnerProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { SidebarBrandMarkOwnerProps } from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import { REFACTORY_LOGO } from './logo.ts'
 
@@ -39,32 +38,22 @@ export function RefactoryBrandName() {
 }
 
 /**
- * The brand mark for the blank-session hero.
+ * The brand mark for the blank-session hero: deliberately nothing.
  *
- * The hero lays the mark out in a **34px grid column** beside a headline that is
- * the wordmark itself (`hero.headline` is "re:factory"), so a 5.26:1 lockup
- * rendered at the requested height overruns its column and runs into that
- * headline. This fills the requested **square** by cropping the lockup instead —
- * the slot's contract is a square edge, and the name is already on screen beside
- * it, so repeating it would be the collision this fixes.
- * @param props - host-supplied mark presentation.
- * @param props.size - requested square edge in px; the host always supplies it.
- * @param props.className - host class carrying the surrounding mark geometry.
+ * The hero lays the slot out in a **34px grid column** whose next column is the
+ * headline, and `hero.headline` is the wordmark itself — "re:factory". The asset
+ * is a 5.26:1 lockup, so rendering it at the requested height overruns the column
+ * and lands on that headline; cropping it into the square shows a fragment of the
+ * wordmark, which is not a mark either. The name is already on screen, so this
+ * claims the slot and renders nothing, which is the only option that cannot
+ * collide.
+ *
+ * **This is a holding fix, not a design.** Making the hero carry a real re:factory
+ * mark needs a square glyph asset, or a change to the hero's grid in
+ * `ui-conversation`; neither belongs in the brand package. See
+ * `packages/client/ui-brand-refactory/GUI-HANDOFF.md`.
+ * @returns an empty node holding the slot, so the harness's own whale stays out.
  */
-export function RefactoryHeroMark({ size, className }: HeroBrandMarkOwnerProps) {
-  return (
-    <img
-      src={REFACTORY_LOGO}
-      alt=""
-      aria-hidden="true"
-      className={className}
-      style={{
-        display: 'block',
-        width: size,
-        height: size,
-        objectFit: 'cover',
-        objectPosition: 'left center',
-      }}
-    />
-  )
+export function RefactoryHeroMark() {
+  return <span aria-hidden="true" />
 }

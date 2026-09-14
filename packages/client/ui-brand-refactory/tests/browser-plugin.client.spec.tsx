@@ -74,18 +74,18 @@ describe('re:factory browser-brand plugin', () => {
    * beside either one is the same word twice, colliding. The components now
    * render the name once; see the "brand renders a name once" suite below.
    */
-  it('renders the logo asset as the mark and the hero glyph', () => {
+  it('renders the lockup as the sidebar mark and nothing in the hero', () => {
     const mark = render(<RefactoryBrandMark size={34} />)
     expect(mark.container.querySelector('img')?.getAttribute('src')).toContain('data:image/png')
     expect(mark.container.querySelector('img')?.getAttribute('height')).toBe('34')
     mark.unmount()
 
-    const hero = render(<RefactoryHeroMark size={30} />)
-    const glyph = hero.container.querySelector('img') as HTMLImageElement
-    // Sized through the style box, not the attributes: the crop needs both
-    // dimensions fixed plus object-fit, which attributes cannot express.
-    expect(glyph.style.width).toBe('30px')
-    expect(glyph.style.height).toBe('30px')
+    // The hero reserves a 34px column and its next column is the wordmark, so
+    // any visible mark here is the collision. It claims the slot and draws
+    // nothing; see the hero test below.
+    const hero = render(<RefactoryHeroMark />)
+    expect(hero.container.querySelector('img')).toBeNull()
+    expect(hero.container.textContent).toBe('')
     hero.unmount()
 
     expect(render(<RefactoryBrandName />).container.textContent).toBe('')
@@ -120,20 +120,25 @@ describe('the brand renders a name once', () => {
     expect(img.getAttribute('height')).toBe('24')
   })
 
-  it('fits the hero mark to the requested square instead of the lockup aspect ratio', () => {
-    const { container } = render(<RefactoryHeroMark size={34} className="fish" />)
-    const img = container.querySelector('img') as HTMLImageElement
-    // The hero's grid column is 34px; a 5.26:1 lockup at height 34 is ~179px wide
-    // and runs into the "re:factory" headline beside it.
-    expect(img.style.width).toBe('34px')
-    expect(img.style.height).toBe('34px')
-    expect(img.className).toBe('fish')
+  it('draws nothing in the hero, so nothing can collide with the headline', () => {
+    // The hero's grid column is 34px and its next column is `hero.headline`,
+    // which is "re:factory". A 5.26:1 lockup at height 34 is ~179px wide, and a
+    // square crop of it is a fragment of the wordmark.
+    const { container } = render(<RefactoryHeroMark />)
+    expect(container.querySelector('img')).toBeNull()
+    expect(container.querySelector('svg')).toBeNull()
+    expect(container.textContent).toBe('')
+    // Still an element, so the slot is claimed and the harness's own whale does
+    // not reappear beside the re:factory headline.
+    expect(container.firstElementChild).not.toBeNull()
+    expect(container.firstElementChild?.getAttribute('aria-hidden')).toBe('true')
   })
 
-  it('takes no accessible name in the hero, where the headline already carries it', () => {
-    const { container } = render(<RefactoryHeroMark size={34} />)
-    const img = container.querySelector('img') as HTMLImageElement
-    expect(img.getAttribute('alt')).toBe('')
-    expect(img.getAttribute('aria-hidden')).toBe('true')
+  it('keeps the hero slot claimed by the plugin', async () => {
+    const before = await bench()
+    const fiber = before.ctx.plugin({ inject: [...inject], apply })
+    await fiber.await()
+    // Claiming the mark slot is what suppresses the fallback whale.
+    expect(before.slots.entries('conversation.hero.brand.mark')).toHaveLength(1)
   })
 })
