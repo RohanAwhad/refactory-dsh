@@ -11,7 +11,8 @@
       "verify": "pytest refactory/tests/test_optim.py refactory/tests/test_loop.py -q",
       "status": "done",
       "commit": "4f8b0ee606",
-      "evidence": "173 passed. tests/test_history.py is new (12 tests): read_run from report.json, the per-candidate fallback for a run with no report, truncation reported, find_runs newest-first and excluding the current run, the context's history/tried/prior_runs, and the prompt carrying both new sections. E-duplicate is refused at the optimizer layer (test_optim.py, 4 new tests) and asserted never to reach step()'s defensive path (attempt == 0), so the slot is refused at the right layer. A real random-optimizer run on circle_packing/adaptive left coded refusals in rejections.jsonl with no lost slot. Reproduce: pytest refactory/tests/test_history.py refactory/tests/test_optim.py -q"
+      "evidence": "173 passed. tests/test_history.py is new (12 tests): read_run from report.json, the per-candidate fallback for a run with no report, truncation reported, find_runs newest-first and excluding the current run, the context's history/tried/prior_runs, and the prompt carrying both new sections. E-duplicate is refused at the optimizer layer (test_optim.py, 4 new tests) and asserted never to reach step()'s defensive path (attempt == 0), so the slot is refused at the right layer. A real random-optimizer run on circle_packing/adaptive left coded refusals in rejections.jsonl with no lost slot. Reproduce: pytest refactory/tests/test_history.py refactory/tests/test_optim.py -q",
+      "observed": "53 passed in 4.22s"
     },
     {
       "id": "strknob",
@@ -21,7 +22,8 @@
       "verify": "pytest refactory/tests/test_nn.py refactory/tests/test_optim.py refactory/tests/test_loop.py -q",
       "status": "done",
       "commit": "67f44631b0",
-      "evidence": "185 passed. tests/test_str_knobs.py is new (12 tests): an open str knob is sampled by textual mutation and never returns the current value; a str knob with declared values picks one of them; every kind (int, float, bool, str, enum) returns a sample; values validation rejects a non-str kind; the spec round-trips values; the random optimizer proposes string knobs across 40 seeds; the starting sweep includes them; a narrow optimizer is warned about by name at init and reported in knob_coverage; describe() names values and range separately and no longer has an overloaded bounds. A real run on circle_packing/adaptive reports knob_coverage.unreachable == [] and leaves the example test green. Reproduce: pytest refactory/tests/test_str_knobs.py refactory/tests/test_example.py -q"
+      "evidence": "185 passed. tests/test_str_knobs.py is new (12 tests): an open str knob is sampled by textual mutation and never returns the current value; a str knob with declared values picks one of them; every kind (int, float, bool, str, enum) returns a sample; values validation rejects a non-str kind; the spec round-trips values; the random optimizer proposes string knobs across 40 seeds; the starting sweep includes them; a narrow optimizer is warned about by name at init and reported in knob_coverage; describe() names values and range separately and no longer has an overloaded bounds. A real run on circle_packing/adaptive reports knob_coverage.unreachable == [] and leaves the example test green. Reproduce: pytest refactory/tests/test_str_knobs.py refactory/tests/test_example.py -q",
+      "observed": "92 passed in 5.37s"
     },
     {
       "id": "integrity",
@@ -31,7 +33,8 @@
       "verify": "pytest refactory/tests/test_nn.py refactory/tests/test_optim.py -q",
       "status": "done",
       "commit": "ce0d9f7df0",
-      "evidence": "218 passed. tests/test_integrity.py is new (12 tests): on_path_nodes excludes a region that cannot reach a terminal; a producer off every path no longer satisfies fact_produced (and V3 does not fire, so it fails on the path); a producer on a path satisfies it; a read satisfied only off-path is refused as V6; the running example's seed still validates. The rules reach the optimizer: a test asserts every code the validator emits appears in RULES and vice versa (AST-parsed, both directions), and that the prompt states V4-V10. summarise_reasons is tested to put the mode-declared rule first and to state the collapsed count. A real autoresearch run used the new prompt: 0 refusals, and its diagnosis cited a previous run's result. Reproduce: pytest refactory/tests/test_integrity.py -q"
+      "evidence": "218 passed. tests/test_integrity.py is new (12 tests): on_path_nodes excludes a region that cannot reach a terminal; a producer off every path no longer satisfies fact_produced (and V3 does not fire, so it fails on the path); a producer on a path satisfies it; a read satisfied only off-path is refused as V6; the running example's seed still validates. The rules reach the optimizer: a test asserts every code the validator emits appears in RULES and vice versa (AST-parsed, both directions), and that the prompt states V4-V10. summarise_reasons is tested to put the mode-declared rule first and to state the collapsed count. A real autoresearch run used the new prompt: 0 refusals, and its diagnosis cited a previous run's result. Reproduce: pytest refactory/tests/test_integrity.py -q",
+      "observed": "70 passed in 1.19s"
     },
     {
       "id": "authoring",
@@ -41,7 +44,8 @@
       "verify": "pytest refactory/tests/test_nn.py refactory/tests/test_registry.py -q",
       "status": "done",
       "commit": "ce0d9f7df0",
-      "evidence": "218 passed. tests/test_declarations.py is new (17 tests): memory namespace/kind/retention validation, port validation, spec round trips, a run-scoped memory is invisible to another run while a project-scoped one is visible, forget_run_scoped names what it dropped and is quiet the second time, a project memory survives it, kinds cannot be misused, an undeclared namespace is refused, a map keeps keys. V11 refuses a declared port no node on a path writes and accepts one that is written; ports and memory travel in the state and round trip; the report names both and the run records which ports it produced. Reproduce: pytest refactory/tests/test_declarations.py -q"
+      "evidence": "218 passed. tests/test_declarations.py is new (17 tests): memory namespace/kind/retention validation, port validation, spec round trips, a run-scoped memory is invisible to another run while a project-scoped one is visible, forget_run_scoped names what it dropped and is quiet the second time, a project memory survives it, kinds cannot be misused, an undeclared namespace is refused, a map keeps keys. V11 refuses a declared port no node on a path writes and accepts one that is written; ports and memory travel in the state and round trip; the report names both and the run records which ports it produced. Reproduce: pytest refactory/tests/test_declarations.py -q",
+      "observed": "56 passed in 1.81s"
     },
     {
       "id": "durability",
@@ -51,17 +55,20 @@
       "verify": "pytest refactory/tests/test_loop.py -q",
       "status": "done",
       "commit": "334ae38113",
-      "evidence": "213 passed. tests/test_durability.py is new (13 tests): run.json records the layout version; a different version is refused; a run predating versioning is refused rather than guessed; an unreadable sibling is skipped as a prior; the journal records start/candidate/score/epoch_open/epoch_end; resume reproduces an uninterrupted run exactly (best score, evaluations, epochs completed and the whole leaderboard) from three crash points -- before any epoch, between epochs, and from the middle of one; resume does not re-evaluate a scored candidate; a torn final line is ignored; the epoch is not counted twice. Reproduce: pytest refactory/tests/test_durability.py -q"
+      "evidence": "213 passed. tests/test_durability.py is new (13 tests): run.json records the layout version; a different version is refused; a run predating versioning is refused rather than guessed; an unreadable sibling is skipped as a prior; the journal records start/candidate/score/epoch_open/epoch_end; resume reproduces an uninterrupted run exactly (best score, evaluations, epochs completed and the whole leaderboard) from three crash points -- before any epoch, between epochs, and from the middle of one; resume does not re-evaluate a scored candidate; a torn final line is ignored; the epoch is not counted twice. Reproduce: pytest refactory/tests/test_durability.py -q",
+      "observed": "22 passed in 4.49s"
     },
     {
       "id": "dsh",
       "issue": 21,
       "title": "Lower the mode state dict to refactory's IR and run it on DSH",
       "why": "The stated target: DSH is the runtime, the Python walker is a debug runtime.",
-      "verify": "pytest refactory/tests/test_lowering.py refactory/tests/test_equivalence.py -q",
+      "verify": "pytest refactory/tests/test_lowering.py refactory/tests/test_equivalence.py -q --run-integration",
       "status": "done",
       "commit": "dfeeec0431",
-      "evidence": "256 passed, 6 skipped. tests/test_lowering.py (16) + tests/test_runner.py (12) + tests/test_equivalence.py (6, marked integration). The equivalence suite passes in full with --run-integration (62s): the spine's own validateGraph accepts the lowered ir; a mode scores the same on DSH as with the walker; the facts match field by field (circles, seed_score, best_score, spent); a node that lies about its facts is refused on the DSH path; and a one-epoch loop with --evaluator dsh reaches the same best score as the walker. Reproduce: pytest refactory/tests/test_equivalence.py -q --run-integration"
+      "evidence": "256 passed, 6 skipped. tests/test_lowering.py (16) + tests/test_runner.py (12) + tests/test_equivalence.py (6, marked integration). The equivalence suite passes in full with --run-integration (62s): the spine's own validateGraph accepts the lowered ir; a mode scores the same on DSH as with the walker; the facts match field by field (circles, seed_score, best_score, spent); a node that lies about its facts is refused on the DSH path; and a one-epoch loop with --evaluator dsh reaches the same best score as the walker. Reproduce: pytest refactory/tests/test_equivalence.py -q --run-integration",
+      "verify_note": "the equivalence suite is what proves the lowered mode runs on DSH",
+      "observed": "21 passed in 63.46s (0:01:03)"
     },
     {
       "id": "seams",
@@ -71,7 +78,8 @@
       "verify": "pytest refactory/tests/test_outerloop.py refactory/tests/test_strategies.py -q",
       "status": "done",
       "commit": "6300846fb7",
-      "evidence": "288 passed, 6 skipped. tests/test_outerloop.py (13) covers the seam: a type-1 proposer plugs into the default loop and improves the mode; Run exposes every primitive; evaluating past the budget is refused; attempt spends nothing while evaluate spends one; a strategy can override parent selection, how often it asks, acceptance, archiving and stopping; and a custom control flow cannot get an invalid edit evaluated. tests/test_strategies.py (24) tests each of the 13 ports on its defining behaviour, asserts the port count, and covers registration. A real run of --strategy reflective --optimizer autoresearch logged mutate/mutate/merge and took circle_packing 0.875 -> 1.04. Reproduce: pytest refactory/tests/test_outerloop.py refactory/tests/test_strategies.py -q"
+      "evidence": "288 passed, 6 skipped. tests/test_outerloop.py (13) covers the seam: a type-1 proposer plugs into the default loop and improves the mode; Run exposes every primitive; evaluating past the budget is refused; attempt spends nothing while evaluate spends one; a strategy can override parent selection, how often it asks, acceptance, archiving and stopping; and a custom control flow cannot get an invalid edit evaluated. tests/test_strategies.py (24) tests each of the 13 ports on its defining behaviour, asserts the port count, and covers registration. A real run of --strategy reflective --optimizer autoresearch logged mutate/mutate/merge and took circle_packing 0.875 -> 1.04. Reproduce: pytest refactory/tests/test_outerloop.py refactory/tests/test_strategies.py -q",
+      "observed": "37 passed in 1.90s"
     },
     {
       "id": "pkg",
@@ -81,7 +89,8 @@
       "verify": "pytest refactory/tests/test_registry.py -q",
       "status": "done",
       "commit": "5023ed4b80",
-      "evidence": "315 passed. tests/test_package_lifecycle.py is new (27 tests): the workspace is not the install tree; a workspace package is discovered, is importable by its normal path, and is reported by the catalogue with where it lives; a name in both roots is refused; add copies, records provenance and trust, refuses a clash, renames with --as, refuses a non-package; import takes a path or refuses a non-path; remove deletes a workspace package, refuses an installed one as read-only, refuses to break a dependent and allows --force; verify reports a missing requirement and a mode whose call does not resolve, and is clean for every installed package; the CLI verbs add, remove, verify, smoke, enable, disable all work and a refusal is a message not a traceback; generated packages are marked. create-mode now writes into the workspace, and annealing_pack declares requires=('circle_packing',). Reproduce: pytest refactory/tests/test_package_lifecycle.py -q"
+      "evidence": "315 passed. tests/test_package_lifecycle.py is new (27 tests): the workspace is not the install tree; a workspace package is discovered, is importable by its normal path, and is reported by the catalogue with where it lives; a name in both roots is refused; add copies, records provenance and trust, refuses a clash, renames with --as, refuses a non-package; import takes a path or refuses a non-path; remove deletes a workspace package, refuses an installed one as read-only, refuses to break a dependent and allows --force; verify reports a missing requirement and a mode whose call does not resolve, and is clean for every installed package; the CLI verbs add, remove, verify, smoke, enable, disable all work and a refusal is a message not a traceback; generated packages are marked. create-mode now writes into the workspace, and annealing_pack declares requires=('circle_packing',). Reproduce: pytest refactory/tests/test_package_lifecycle.py -q",
+      "observed": "17 passed in 0.16s"
     },
     {
       "id": "sandbox",
@@ -91,7 +100,8 @@
       "verify": "pytest refactory/tests/test_sandbox.py -q",
       "status": "done",
       "commit": "c50989bafc",
-      "evidence": "335 passed. tests/test_sandbox.py is new (20 tests): a well-formed package passes the AST check; it catches a file that does not parse, a missing manifest, a mode with no score(), and a call to eval(); it does not execute anything (a package that raises on import still passes); the environment is an allowlist with secrets dropped and a test asserts the real DEEPSEEK_API_KEY is not visible to a sandboxed run; HOME is redirected; a run past its time limit is killed; a sandboxed run returns its JSON payload; the sandboxed verification reports a broken mode and imports out of process; a sandboxed smoke scores a real mode; promotion is explicit and recorded. create-mode now validates by AST plus a subprocess, never importing what it generated, and its smoke run is sandboxed. Reproduce: pytest refactory/tests/test_sandbox.py -q"
+      "evidence": "335 passed. tests/test_sandbox.py is new (20 tests): a well-formed package passes the AST check; it catches a file that does not parse, a missing manifest, a mode with no score(), and a call to eval(); it does not execute anything (a package that raises on import still passes); the environment is an allowlist with secrets dropped and a test asserts the real DEEPSEEK_API_KEY is not visible to a sandboxed run; HOME is redirected; a run past its time limit is killed; a sandboxed run returns its JSON payload; the sandboxed verification reports a broken mode and imports out of process; a sandboxed smoke scores a real mode; promotion is explicit and recorded. create-mode now validates by AST plus a subprocess, never importing what it generated, and its smoke run is sandboxed. Reproduce: pytest refactory/tests/test_sandbox.py -q",
+      "observed": "20 passed in 2.38s"
     },
     {
       "id": "signals",
@@ -101,7 +111,8 @@
       "verify": "pytest refactory/tests/test_optim.py refactory/tests/test_loop.py -q",
       "status": "done",
       "commit": "b30c8bac40",
-      "evidence": "348 passed. tests/test_signals.py is new (13 tests): the mode states guidance and preferred edits and the prompt carries both; a mode with none says so rather than showing nothing; the sampler proposes the preferred operations and still covers the catalogue; an advisory block declares score_effect=none, an unknown tier is refused, and it travels in the state; a dominant refusal is reported as a finding about the catalogue and appears in report.md; a clean run invents no finding; running out of ideas is reported as surface_exhausted with the detail in markdown; a productive run reports no convergence; the report carries attempts per candidate and why that k; and k rises past the configured value on a refusal-heavy batch. A real autoresearch run echoed the guidance in its diagnosis and reached 1.08 with zero refusals. Reproduce: pytest refactory/tests/test_signals.py -q"
+      "evidence": "348 passed. tests/test_signals.py is new (13 tests): the mode states guidance and preferred edits and the prompt carries both; a mode with none says so rather than showing nothing; the sampler proposes the preferred operations and still covers the catalogue; an advisory block declares score_effect=none, an unknown tier is refused, and it travels in the state; a dominant refusal is reported as a finding about the catalogue and appears in report.md; a clean run invents no finding; running out of ideas is reported as surface_exhausted with the detail in markdown; a productive run reports no convergence; the report carries attempts per candidate and why that k; and k rises past the configured value on a refusal-heavy batch. A real autoresearch run echoed the guidance in its diagnosis and reached 1.08 with zero refusals. Reproduce: pytest refactory/tests/test_signals.py -q",
+      "observed": "53 passed in 4.28s"
     },
     {
       "id": "gui",
@@ -111,7 +122,8 @@
       "verify": "pytest refactory/tests/test_gui_loop.py -q",
       "status": "done",
       "commit": "99096779f9",
-      "evidence": "29 passed (tests/test_gui_loop.py) + 22 (tests/test_observe.py) + 20 host tool tests + 5 that run the real loop + 20 client card tests. The loop stays a Python process: observe.py writes progress.jsonl (one line per candidate evaluated, not per epoch), diffs a candidate against its parent, and writes manifest.json; console.py is the catalogue + start/watch/stop + artifacts/leaderboard/candidate surface, exported as JSON over a CLI. On the DSH side the `refactory` tool runs that console through the subprocess capability (one action per verb) and projects the payload through output.presentationMeta, and ui-tool registers a tool.call.toolview row under the wire name so the Web view renders the run: state, best score, the progress tail, the leaderboard with each candidate's diff, artifacts. Mounted in the shipped CEO preset. Verified by actually running it: a real headless DSH session with a real model called the tool for `modes`, then started a run, polled status until finished, and read the leaderboard and artifacts (run circle_packing-adaptive-20260913-194618, 6 candidates, best 0.875, 9 artifacts, 18 progress lines on disk). The four presets that drove the deleted refactory_dsh.ops.* modules (create-v2, design-v2, outer-loop, outer-loop-decomposed) were removed; the CEO preset's description no longer names them."
+      "evidence": "29 passed (tests/test_gui_loop.py) + 22 (tests/test_observe.py) + 20 host tool tests + 5 that run the real loop + 20 client card tests. The loop stays a Python process: observe.py writes progress.jsonl (one line per candidate evaluated, not per epoch), diffs a candidate against its parent, and writes manifest.json; console.py is the catalogue + start/watch/stop + artifacts/leaderboard/candidate surface, exported as JSON over a CLI. On the DSH side the `refactory` tool runs that console through the subprocess capability (one action per verb) and projects the payload through output.presentationMeta, and ui-tool registers a tool.call.toolview row under the wire name so the Web view renders the run: state, best score, the progress tail, the leaderboard with each candidate's diff, artifacts. Mounted in the shipped CEO preset. Verified by actually running it: a real headless DSH session with a real model called the tool for `modes`, then started a run, polled status until finished, and read the leaderboard and artifacts (run circle_packing-adaptive-20260913-194618, 6 candidates, best 0.875, 9 artifacts, 18 progress lines on disk). The four presets that drove the deleted refactory_dsh.ops.* modules (create-v2, design-v2, outer-loop, outer-loop-decomposed) were removed; the CEO preset's description no longer names them.",
+      "observed": "31 passed in 3.45s"
     },
     {
       "id": "create",
@@ -121,37 +133,51 @@
       "verify": "pytest refactory/tests/test_create.py -q",
       "status": "done",
       "commit": "68ee7632f9",
-      "evidence": "362 passed. tests/test_create.py gains 14 tests: the survey names what already exists (both installed modes appear); the strategy prompt carries the survey, the JSON schema and the gate-vs-op distinction; the design prompt carries the chosen approach; a coherent design passes review; review refuses a single-approach choice, a missing chosen/why/score, a closest_existing that is not installed, a design with no knobs, a declared graph that does not hold together (V2), a gate declared with a call instead of an evaluator, and an answer that is not JSON; review accepts 'none'; the gate reloops then fails loudly with its reasons; a bad design is retried with its reasons in the retry prompt. A real create run considered three approaches and named annealing_pack/anneal as closest, passed review, and produced phase_pack/countup smoke-scoring 5.0. Reproduce: pytest refactory/tests/test_create.py -q"
+      "evidence": "362 passed. tests/test_create.py gains 14 tests: the survey names what already exists (both installed modes appear); the strategy prompt carries the survey, the JSON schema and the gate-vs-op distinction; the design prompt carries the chosen approach; a coherent design passes review; review refuses a single-approach choice, a missing chosen/why/score, a closest_existing that is not installed, a design with no knobs, a declared graph that does not hold together (V2), a gate declared with a call instead of an evaluator, and an answer that is not JSON; review accepts 'none'; the gate reloops then fails loudly with its reasons; a bad design is retried with its reasons in the retry prompt. A real create run considered three approaches and named annealing_pack/anneal as closest, passed review, and produced phase_pack/countup smoke-scoring 5.0. Reproduce: pytest refactory/tests/test_create.py -q",
+      "observed": "24 passed in 1.60s"
     },
     {
       "id": "design2",
       "issue": 22,
       "title": "design-v2: the third meta-mode, emitting software rather than a package",
       "why": "A named deliverable of the original product with no replacement.",
-      "verify": "pytest refactory/tests/test_design.py -q",
+      "verify": "pytest refactory/tests/test_edit_design.py -q",
       "status": "done",
       "commit": "bfdabc56bb",
-      "evidence": "379 passed. tests/test_edit_design.py: the design graph is a different shape (no register, no smoke); its state validates with all calls resolved; designing needs a check and refuses without one; the artifact lands beside the workspace, not in it; the check gate proceeds when the artifact runs and reloops with what the check said when it does not; the check runs without the real credentials; a full run with a fake model produces a checked artifact; a design that never passes fails loudly. A real run designed a wordcount tool: one file, its declared check passed, 6 graph steps, 70s. Reproduce: pytest refactory/tests/test_edit_design.py -q"
+      "evidence": "379 passed. tests/test_edit_design.py: the design graph is a different shape (no register, no smoke); its state validates with all calls resolved; designing needs a check and refuses without one; the artifact lands beside the workspace, not in it; the check gate proceeds when the artifact runs and reloops with what the check said when it does not; the check runs without the real credentials; a full run with a fake model produces a checked artifact; a design that never passes fails loudly. A real run designed a wordcount tool: one file, its declared check passed, 6 graph steps, 70s. Reproduce: pytest refactory/tests/test_edit_design.py -q",
+      "verify_note": "the recorded path `test_design.py` does not exist; edit and design share one file",
+      "observed": "17 passed in 1.17s"
     },
     {
       "id": "edit",
       "issue": 13,
       "title": "Edit an existing mode from a brief, with provenance and a before/after score",
       "why": "The honest middle path between creating from scratch and hoping a random edit lands.",
-      "verify": "pytest refactory/tests/test_edit.py -q",
+      "verify": "pytest refactory/tests/test_edit_design.py -q",
       "status": "done",
       "commit": "bfdabc56bb",
-      "evidence": "379 passed. tests/test_edit_design.py (17 tests): EditMode is the create graph with a different intent; prepare hands the model the source being revised and records revision_of; a revision needs a mode; a revision produces a package and reports before and after scores; provenance records what it came from; a regression is refused by default and allowed with allow_regression; a revision of a mode that does not run is refused. A real run revised circle_packing/adaptive to add a stall-restart: 0.875 -> 0.99, regressed false, three files. Reproduce: pytest refactory/tests/test_edit_design.py -q"
+      "evidence": "379 passed. tests/test_edit_design.py (17 tests): EditMode is the create graph with a different intent; prepare hands the model the source being revised and records revision_of; a revision needs a mode; a revision produces a package and reports before and after scores; provenance records what it came from; a regression is refused by default and allowed with allow_regression; a revision of a mode that does not run is refused. A real run revised circle_packing/adaptive to add a stall-restart: 0.875 -> 0.99, regressed false, three files. Reproduce: pytest refactory/tests/test_edit_design.py -q",
+      "verify_note": "the recorded path `test_edit.py` does not exist; edit and design share one file",
+      "observed": "17 passed in 1.12s"
     },
     {
       "id": "loopasmode",
       "issue": 18,
       "title": "Stretch: express the outer loop as a refactory mode",
       "why": "Future work, but the OuterLoop surface is chosen so this is a lowering rather than a rewrite.",
-      "verify": "pytest refactory/tests/test_loop_as_mode.py -q",
+      "verify": "pytest refactory/tests/test_loop_as_mode.py -q --run-integration",
       "status": "done",
       "commit": "1d6f4606f4",
-      "evidence": "18 passed. refactory_packages/loop_mode expresses the loop as a graph: init -> forward -> loss -> backward -> optimizer -> step -> scheduler, a gate that loops back to forward or leaves for report. Each node op rehydrates the run from its journal, so a node may run in its own process. The tests assert the graph IS the loop rather than a copy of it: on the same seed and settings it reaches the same best score (0.875) and the same evaluation count as Loop itself, honours both bounds (epochs and max_evaluations), writes the same run directory, and declares ports the run actually writes. score() reads the inner run's best score, so the mode is scorable and an outer loop can search the loop's own knobs (epochs, batch_size, optimizer, elite, attempts, max_evaluations) - the tower closes. Loop gained open_epoch/close_epoch (the nodes that bracket an epoch are not the method that used to), LoopConfig.from_dict, write_pending/read_pending for the propose/install hand-off across processes, and journals `bound` so the report states it durably. Found while building it: `resume=False` on each step deleted the journal between two nodes of the loop's own run."
+      "evidence": "18 passed. refactory_packages/loop_mode expresses the loop as a graph: init -> forward -> loss -> backward -> optimizer -> step -> scheduler, a gate that loops back to forward or leaves for report. Each node op rehydrates the run from its journal, so a node may run in its own process. The tests assert the graph IS the loop rather than a copy of it: on the same seed and settings it reaches the same best score (0.875) and the same evaluation count as Loop itself, honours both bounds (epochs and max_evaluations), writes the same run directory, and declares ports the run actually writes. score() reads the inner run's best score, so the mode is scorable and an outer loop can search the loop's own knobs (epochs, batch_size, optimizer, elite, attempts, max_evaluations) - the tower closes. Loop gained open_epoch/close_epoch (the nodes that bracket an epoch are not the method that used to), LoopConfig.from_dict, write_pending/read_pending for the propose/install hand-off across processes, and journals `bound` so the report states it durably. Found while building it: `resume=False` on each step deleted the journal between two nodes of the loop's own run.",
+      "verify_note": "the loop-as-mode's end-to-end proof is its DSH run, which is integration-marked",
+      "observed": "21 passed in 15.22s"
     }
-  ]
+  ],
+  "verification": {
+    "checked": "2026-09-14",
+    "method": "each item's recorded `verify` command was executed from the repo root",
+    "commands": 15,
+    "result": "all pass",
+    "note": "two recorded paths were wrong and are corrected here: test_edit.py and test_design.py never existed (edit and design share test_edit_design.py). The loop-as-mode and lowering items now run with --run-integration, because their proof is a real DSH run."
+  }
 }

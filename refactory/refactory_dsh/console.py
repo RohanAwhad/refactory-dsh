@@ -221,7 +221,7 @@ def _state(run_root: Path, events: list[dict[str, Any]], console: dict[str, Any]
         return "finished"
     if _running(run_root, console):
         return "running"
-    if console:
+    if console.get("pid"):
         return "died"
     return "running" if events else "starting"
 
@@ -249,13 +249,29 @@ def _best(run_root: Path, events: list[dict[str, Any]]) -> float | None:
 
 
 def _console(run_root: Path) -> dict[str, Any]:
-    path = run_root / CONSOLE_FILE
+    """What the console recorded about a start, or what the run itself did.
+
+    A run started by the loop's own entry point has no console file: nobody
+    watched it begin. `run.json` is written by the loop itself and names the mode,
+    so a reader learns what a run was optimizing whether or not the console
+    started it. The console file still wins, because it also carries the pid and
+    the settings the console chose.
+    """
+    recorded = _read_json(run_root / CONSOLE_FILE)
+    if recorded:
+        return recorded
+    started = _read_json(run_root / "run.json")
+    return {"mode": started["mode"]} if isinstance(started.get("mode"), str) else {}
+
+
+def _read_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text())
+        loaded = json.loads(path.read_text())
     except json.JSONDecodeError:
         return {}
+    return loaded if isinstance(loaded, dict) else {}
 
 
 def _running(run_root: Path, console: dict[str, Any]) -> bool:

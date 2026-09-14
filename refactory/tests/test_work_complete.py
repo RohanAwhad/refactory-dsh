@@ -49,6 +49,28 @@ def test_every_item_names_the_command_that_verifies_it() -> None:
         )
 
 
+def test_every_verify_command_names_files_that_exist() -> None:
+    """A recorded command that cannot run is not evidence.
+
+    Two items named `test_edit.py` and `test_design.py`, which never existed —
+    the tests live in `test_edit_design.py`. Nothing caught it, because the gate
+    only required the field to be non-empty. Reading the paths back is what makes
+    "the command that verifies it" a claim about this repository.
+    """
+    # The recorded commands are relative to the repository root, which holds
+    # `refactory/`; TODO lives at `<repo>/refactory/.work/todo.json`.
+    root = TODO.parent.parent.parent
+    for item in _items():
+        words = item["verify"].split()
+        assert words[0] == "pytest", f"{item['id']}: verify must be a pytest command"
+        paths = [word for word in words[1:] if not word.startswith("-") and "/" in word]
+        assert paths, f"{item['id']}: verify names no test file"
+        for path in paths:
+            assert (root / path).exists(), (
+                f"{item['id']}: verify names {path}, which does not exist"
+            )
+
+
 def test_a_done_item_records_the_evidence_and_the_commit() -> None:
     """Done means a command was run and its result was seen."""
     for item in _items():

@@ -109,16 +109,40 @@ def test_the_console_records_enough_to_reopen_the_run_later(tmp_path):
     assert console.status(run)["mode"] == MODE
 
 
-def test_status_reports_progress_before_the_run_has_finished(tmp_path):
-    run = _start(tmp_path, epochs=1, batch_size=4)
-    deadline = time.time() + 60
-    while time.time() < deadline:
-        state = console.status(run)
-        if state["counters"]["evaluations"]:
-            break
-        time.sleep(0.1)
-    assert state["counters"]["evaluations"] >= 1
+def test_status_reports_progress_while_a_run_is_unfinished(tmp_path):
+    """A reader must see a run that has started and not finished.
+
+    Driven by hand rather than by racing a subprocess: the run here is advanced
+    one phase, so "unfinished" is a fact of the setup instead of a hope about
+    timing. The subprocess path is what the start/watch tests below cover.
+    """
+    from refactory_dsh.loop import Loop, LoopConfig
+
+    root = tmp_path / "run"
+    loop = Loop(
+        MODE,
+        LoopConfig(epochs=1, batch_size=4, optimizer="random", seed=3, runs_root=root),
+        project=Path("."),
+    )
+    loop.init()
+    state = console.status(root)
     assert state["state"] == "running"
+    assert state["finished"] is False
+    assert state["mode"] == MODE
+
+    loop.forward()
+    advanced = console.status(root)
+    assert advanced["counters"]["evaluations"] >= 1
+    assert advanced["state"] == "running"
+    assert any(record["step"] == "forward" for record in advanced["events"])
+
+
+def test_a_started_run_is_watchable_from_the_first_poll(tmp_path):
+    """The console file is written before the loop's first artifact exists."""
+    run = _start(tmp_path, epochs=1, batch_size=4)
+    first = console.status(run)
+    assert first["mode"] == MODE
+    assert first["state"] in {"starting", "running"}
     _wait(run)
 
 
@@ -306,3 +330,34 @@ def test_every_verb_the_gui_needs_exists(verb):
     from refactory_dsh.console import _parser
 
     assert verb in _parser()._subparsers._group_actions[0].choices  # type: ignore[attr-defined]
+
+
+def test_the_console_reads_a_run_it_did_not_start(tmp_path):
+    """A run started by the loop's own entry point is still readable.
+
+    The console file records a start the console performed; `run.json` is written
+    by the loop and names the mode, so a reader is not blind to a run somebody
+    else began.
+    """
+    from refactory_dsh.loop import Loop, LoopConfig
+
+    root = tmp_path / "byhand"
+    loop = Loop(
+        MODE,
+        LoopConfig(epochs=1, batch_size=2, optimizer="random", seed=3, runs_root=root),
+        project=Path("."),
+    )
+    loop.init()
+    assert not (root / console.CONSOLE_FILE).exists()
+    state = console.status(root)
+    assert state["mode"] == MODE
+    assert state["state"] == "running"
+    assert state["running"] is False
+
+    loop.forward()
+    loop.loss_step()
+    loop.backward()
+    loop.report()
+    finished = console.status(root)
+    assert finished["finished"] is True
+    assert finished["best_score"] is not None
