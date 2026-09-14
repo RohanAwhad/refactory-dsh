@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
-# refactory-dsh — launch DSH with the refactory meta-modes.
+# refactory-dsh — launch DSH with the refactory tooling.
 #
-# Starts the DSH web GUI. Pick a mode (preset) in the UI:
-#   create-v2  → create a new mode
-#   outer-loop → optimize an existing mode (MAP-Elites)
-#   design-v2  → design software
+# Starts the DSH web GUI on the fork's own source. The default preset is `ceo`,
+# which carries the `refactory` tool: from the conversation you can list the modes
+# a checkout can run, start an outer-loop run, watch it while it is in flight, and
+# read its leaderboard, candidate diffs, and artifacts.
+#
+# The meta-modes are Python entry points, not presets:
+#   python -m refactory_dsh.create   create a mode
+#   python -m refactory_dsh.edit     revise a mode from a brief
+#   python -m refactory_dsh.design   design software
 #
 # This repo is a self-contained DSH fork: the launcher lives at its root and the
 # DSH source is the repo itself, so no path hop is needed.

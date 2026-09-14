@@ -67,17 +67,73 @@ describe('re:factory browser-brand plugin', () => {
     for (const hole of HOLES) expect(after.slots.entries(hole)).toHaveLength(1)
   })
 
-  it('renders the logo as the mark/hero and text as the name', () => {
+  /**
+   * Superseded: this used to assert a text name beside the lockup. The asset is
+   * the upstream lockup, which already reads "refactory", and the hero renders
+   * its mark in a 34px column beside a headline that is the wordmark — so a name
+   * beside either one is the same word twice, colliding. The components now
+   * render the name once; see the "brand renders a name once" suite below.
+   */
+  it('renders the logo asset as the mark and the hero glyph', () => {
     const mark = render(<RefactoryBrandMark size={34} />)
     expect(mark.container.querySelector('img')?.getAttribute('src')).toContain('data:image/png')
     expect(mark.container.querySelector('img')?.getAttribute('height')).toBe('34')
     mark.unmount()
 
     const hero = render(<RefactoryHeroMark size={30} />)
-    expect(hero.container.querySelector('img')?.getAttribute('height')).toBe('30')
+    const glyph = hero.container.querySelector('img') as HTMLImageElement
+    // Sized through the style box, not the attributes: the crop needs both
+    // dimensions fixed plus object-fit, which attributes cannot express.
+    expect(glyph.style.width).toBe('30px')
+    expect(glyph.style.height).toBe('30px')
     hero.unmount()
 
-    const name = render(<RefactoryBrandName />)
-    expect(name.container.textContent).toBe('refactory')
+    expect(render(<RefactoryBrandName />).container.textContent).toBe('')
+  })
+})
+
+describe('the brand renders a name once', () => {
+  /**
+   * The asset is the upstream lockup: glyph and wordmark on one 400x76 canvas,
+   * so it already reads "refactory". The sidebar renders the mark and the name
+   * side by side, and the hero renders the mark in a 34px column beside a
+   * headline that is the wordmark itself. Both slots therefore collide with the
+   * name when either component repeats it.
+   */
+  it('renders the sidebar lockup with no second copy of the name', () => {
+    const { container } = render(
+      <>
+        <RefactoryBrandMark size={24} />
+        <RefactoryBrandName />
+      </>,
+    )
+    const img = container.querySelector('img')
+    expect(img?.getAttribute('alt')).toBe('re:factory')
+    // The name slot holds the slot without adding visible text beside the lockup.
+    expect(container.textContent).toBe('')
+  })
+
+  it('bounds the sidebar lockup so it cannot overrun its row', () => {
+    const { container } = render(<RefactoryBrandMark size={24} />)
+    const img = container.querySelector('img') as HTMLImageElement
+    expect(img.style.maxWidth).toBe('100%')
+    expect(img.getAttribute('height')).toBe('24')
+  })
+
+  it('fits the hero mark to the requested square instead of the lockup aspect ratio', () => {
+    const { container } = render(<RefactoryHeroMark size={34} className="fish" />)
+    const img = container.querySelector('img') as HTMLImageElement
+    // The hero's grid column is 34px; a 5.26:1 lockup at height 34 is ~179px wide
+    // and runs into the "re:factory" headline beside it.
+    expect(img.style.width).toBe('34px')
+    expect(img.style.height).toBe('34px')
+    expect(img.className).toBe('fish')
+  })
+
+  it('takes no accessible name in the hero, where the headline already carries it', () => {
+    const { container } = render(<RefactoryHeroMark size={34} />)
+    const img = container.querySelector('img') as HTMLImageElement
+    expect(img.getAttribute('alt')).toBe('')
+    expect(img.getAttribute('aria-hidden')).toBe('true')
   })
 })

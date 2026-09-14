@@ -1,0 +1,299 @@
+# The refactory system, as built
+
+Audience: someone who has to change this code, and needs to know what the pieces
+are and why they are shaped that way. Every claim here was produced by running the
+code; the commands are in the text so you can re-run them.
+
+This describes the system that exists now. It replaces an earlier one built on
+`refactory_dsh.ops.scaffold` and `refactory_dsh.ops.outer_loop`, which are gone.
+The requirements that earlier system failed to meet are recorded at the end, under
+[Why it looks like this](#why-it-looks-like-this).
+
+---
+
+## 1. The one-sentence version
+
+A **mode** is a Python class whose architecture and parameters are serializable
+data, and the **outer loop** is a program that searches over those data for a
+better one. The vocabulary is PyTorch's, deliberately.
+
+## 2. The PyTorch mapping
+
+| PyTorch | here | where |
+|---|---|---|
+| `nn.Module` | `Mode` | `refactory_dsh/nn/mode.py` |
+| `nn.Parameter` | `Knob` | `refactory_dsh/nn/knob.py` |
+| `state_dict()` | `Mode.state_dict()` | `mode.py` |
+| `load_state_dict()` | `Mode.load_state_dict()`, strict | `mode.py` |
+| `torch.optim` | `Optimizer` | `refactory_dsh/optim/` |
+| forward pass | `Mode.run()` | `mode.py` |
+| loss | `Loop.loss_step()` | `refactory_dsh/loop.py` |
+| backward pass | `Loop.backward()` | `loop.py` |
+| `optimizer.step()` | `Loop.step()` | `loop.py` |
+| training loop | `Loop` | `loop.py` |
+| `torch.save` | `history.read_run` / the journal | `history.py`, `loop.py` |
+
+**One deliberate divergence.** In PyTorch a state dict is parameters only; the
+class is the architecture. Here the state dict carries **architecture as well as
+parameters** — `{version, graph, knobs, ports, memory}` — because the outer loop
+searches structure too. The consequence is stated once and matters everywhere:
+
+> After genesis, the **state** is the authority, not the class.
+> `Mode.build()` runs once, to produce the starting state; from then on the
+> optimizer edits the state as data and never re-runs `build()`.
+
+A knob is therefore consumed by a node at run time and is never read by `build()`
+to choose structure. The validator refuses a knob that no node consumes (`V7`), so
+the two mechanisms cannot be confused.
+
+`score()` and `invariants()` are **methods**, and are not in the state. No
+proposal can reach them. That protection is structural, not defensive.
+
+## 3. The state model
+
+```python
+state = {
+  "version": 1,
+  "graph":   {"start": "task_input", "nodes": {...}, "edges": [...]},
+  "knobs":   {"grid": {"value": 10, "spec": {...}}},
+  "ports":   [...],   # what the run publishes
+  "memory":  [...],   # named namespaces, each with a retention policy
+}
+```
+
+Serialize/parse is **canonical**: nodes sorted by id, edges by
+`(source, target, condition)`. That is what makes `build() -> state -> build()` an
+identity rather than an approximation — `refactory_dsh/nn/graph.py`.
+
+The layer below a `Mode` is refactory's own language — `Graph`, `Node`, `Edge`,
+`Workflow.to_dict()`. The graph is *data*: an optimizer edits this, never Python
+source, which is what makes a candidate revertible, diffable and exactly validatable.
+
+## 4. The validator
+
+`refactory_dsh/nn/validate.py`. A candidate is judged *before* anything runs, so
+an invalid proposal costs no evaluation budget. The codes are published to the
+optimizer's prompt via `rules_text()`.
+
+| code | rule |
+|---|---|
+| `V0` | the state must be readable: it needs a graph, and the graph must parse |
+| `V1` | the graph must name a start node, and it must exist |
+| `V2` | every node must be reachable from the start node |
+| `V3` | the graph must have a terminal (a node with no out-edge) |
+| `V4` | a non-gate node has at most one out-edge, and it carries no verdict |
+| `V5` | a gate has at least two out-edges, each with a condition, and no unconditional one |
+| `V6` | every file a node reads must be written by a node on a path from start to a terminal |
+| `V7` | every knob a node consumes must be declared, and every declared knob must be consumed |
+| `V8` | every call and evaluator must resolve to a real callable |
+| `V9` | every knob value must be of the declared kind and within its bounds |
+| `V10` | every cycle must pass through a gate, so the run is bounded |
+| `V11` | every declared port must be a file some node on a path writes |
+| `I:` | the mode's own rule, stated in `Mode.invariants()` |
+
+Two properties of the implementation are themselves tested:
+
+- The `RULES` table and the codes the code actually emits are the **same set, in
+  both directions** — an AST test, so a new rule cannot be added without
+  publishing it (`refactory/tests/test_integrity.py`).
+- `on_path_nodes` is what `V6` and `V11` are computed against, so a node that is
+  unreachable neither satisfies a read nor validates a port.
+
+The validator is **naive on purpose**: it rejects, it never repairs. Repairing
+hides the edit that caused the problem.
+
+## 5. The edit algebra
+
+`refactory_dsh/nn/edits.py`. Edits are typed data, applied to a state:
+
+- **17 operations**: `add_node`, `remove_node`, `replace_node`, `set_node_field`,
+  `add_edge`, `remove_edge`, `set_knob`, `add_knob`, `remove_knob`, `insert_after`,
+  `insert_before`, `wrap`, `bypass`, `duplicate`, `split`, `reorder`, `loop`.
+- The first nine are primitives; the rest are **macros** — literal compositions of
+  primitives, so a macro cannot express anything a sequence of primitives could not.
+- **4 presets** declare which operations a run may use: `broad` (17),
+  `structure` (17), `conservative` (4), `knob_only` (3).
+
+```bash
+python -c "from refactory_dsh.nn import edits as E; print(E.names())"
+```
+
+## 6. The optimizers, and the two extension points
+
+There are two kinds of thing that can drive a search, and they are separate on
+purpose (`refactory_dsh/outerloop.py`):
+
+- **`Optimizer`** — proposes. `propose()` returns `Proposal`s; the harness
+  validates and evaluates them. It cannot run anything, so it cannot waste budget.
+  Two ship: `random`, `autoresearch` (which asks a model).
+- **`OuterLoop`** — owns the search. `run()` is `init -> Run -> strategy ->
+  report`, and every step a strategy would change (`select_parents`, `propose`,
+  `batch_size`, `accepts`, `update`, `should_stop`, `on_epoch_end`) is a method to
+  override rather than code to copy.
+
+`Run` is what a strategy is handed: `attempt` (apply a typed edit and validate it,
+microseconds, no budget) and `evaluate` (one inner run, one unit of budget). The
+API makes it impossible to blur those two.
+
+**All 13 SRF ports ship as strategies** (`refactory_dsh/strategies.py`), plus
+`default`:
+
+```bash
+python -c "import refactory_dsh.strategies as S; print(len(S.names()), S.names())"
+# 14 -> adaptive_meta, archive_loop, autoscientists, best_of_n, default,
+#       evolutionary_archive, hill_climb, islands, reflective, reflective_sampler,
+#       research_then_optimize, staged_curriculum, staged_v1, tree_search
+```
+
+## 7. The loop
+
+`refactory_dsh/loop.py`. The eight steps are named like a training loop, and they
+are also the nodes of `loop_mode/loop` (see §9), which is what lets a further loop
+search the loop.
+
+| step | signature | what it does |
+|---|---|---|
+| `init` | `() -> None` | seed the population, refuse a target that cannot run |
+| `forward` | `() -> int` | evaluate the batch; the only step that spends budget |
+| `loss_step` | `() -> dict` | turn the batch into one number |
+| `backward` | `() -> dict` | read the traces into the gradient |
+| `optimizer_step` | `(run=None) -> (candidates, rejections)` | propose, validated before anything runs |
+| `step` | `(candidates, run=None) -> list` | install offspring that are genuinely new points |
+| `scheduler` | `(*, evaluated=0, proposed=0) -> bool` | close the epoch, say what bound the run |
+| `report` | `() -> dict` | the visibility surface |
+
+A candidate is a state dict plus its lineage. Evaluating one is a forward pass:
+materialize the mode from the state, execute its graph, score the run. An invalid
+candidate never reaches `forward` at all — it is refused with a reason, and the
+reason is reported (`summarise_reasons`, `I:` first).
+
+Confirmed by running the running example:
+
+```bash
+cd refactory && ../.venv/bin/python -m refactory_dsh.loop circle_packing/adaptive \
+  --epochs 2 --batch-size 4 --optimizer random --seed 5 --runs-root /tmp/walk
+```
+
+seed `0.875` → best `0.955`, bound `epochs`, 8 inner runs, 1 structural win
+(`set_knob grid=18` + `duplicate accept`), and refusals across
+`V2 V3 V4 V5 V6 V7 V10`, `I:fact_produced`, `E-shape` — none of which cost a run.
+
+## 8. Durability, and what a run leaves
+
+A run is a **directory**, because a reader should not need a service to read it.
+`refactory_dsh/history.py`, `observe.py`.
+
+- `journal.jsonl` — every event, append-only. This is the run's durable state, and
+  the **only** place a candidate's whole state is written down. Resume replays it
+  (`Loop(config.resume=True)`).
+- `run.json` — the layout version. A reader fails loudly on a foreign layout
+  rather than half-reading it (`RunVersionError`, `RUN_VERSION`).
+- `report.json` / `report.md` — the visibility surface.
+- `gradient.json`, `loss.json`, `state.json`, `config.json`.
+- `progress.jsonl` — one line per candidate evaluated, not per epoch, so a reader
+  can tail a run that is still going.
+- `manifest.json` — what to render and as what; `rejections.jsonl`.
+- `runs/<candidate-id>/candidate.json` — per-candidate measurement.
+
+The exception worth knowing: `report.json`'s `best` is a `describe()` — id, parent,
+score, edits — and carries **no state dict**. To get a candidate's architecture you
+read the journal. That is a known gap; see §11.
+
+## 9. The two runtimes, and the tower
+
+- The **walker** (`refactory_dsh/nn/executor.py`) is a debug runtime: it executes a
+  graph in-process.
+- **DSH** is the runtime that ships. `refactory_dsh/lowering.py` lowers a mode
+  state to refactory's IR and writes `<mode>.graph.json` for the science bundle,
+  which mounts `workflow-spine` and runs each node.
+
+A debug runtime that disagrees with the real one is worse than none, so
+`refactory/tests/test_equivalence.py` runs the same mode both ways and compares.
+
+```bash
+.venv/bin/python -m pytest refactory/tests/test_equivalence.py -q --run-integration
+# 6 passed
+```
+
+**The tower.** `refactory_packages/loop_mode` expresses the loop itself as a mode:
+eight step-nodes, a gate that loops back to `forward` or leaves for `report`, and
+`score()` reading the best score the inner run reached. Because it is scorable, a
+further loop can search the loop's own settings. It reaches the same best score and
+evaluation count as `Loop` on the same seed, and runs end to end on DSH:
+
+```bash
+.venv/bin/python -m pytest refactory/tests/test_loop_as_mode.py -q --run-integration
+# 21 passed
+```
+
+## 10. The meta-modes
+
+Three modes whose *output* is a mode or an artifact. All three produce something
+**new** and never mutate their input.
+
+| entry point | input | output |
+|---|---|---|
+| `python -m refactory_dsh.create` | a brief | a package: `__init__.py`, `mode.py`, `ops.py` |
+| `python -m refactory_dsh.edit` | a brief + an existing mode | a revised package, recording `revision_of` |
+| `python -m refactory_dsh.design` | a brief | a checked software artifact |
+
+They are Python entry points rather than DSH presets, because they write Python and
+a `graph.json`, which a workflow graph cannot carry. `create` runs
+survey → strategy → design review → emit → materialise → validate → register →
+smoke; the review gate refuses a thin design (one approach, no knobs, a graph that
+does not hold together) and reloops with its reasons.
+
+## 11. Known gaps
+
+Recorded here rather than in a backlog, because each one is a place the system
+promises more than it delivers.
+
+- **The winner is not addressable.** A run records what the best candidate *scored*,
+  not the state that scored it; you have to read `journal.jsonl`. There is no
+  supported way to take a winner and run it again. The plumbing exists
+  (`Mode(state=...)`, `lowering.write_mode_graph`) — reloading the winner from the
+  journal reproduces its score exactly — but no command does it.
+- **`loop_mode/loop` is expressible, not yet used.** Nothing has run a search over
+  the loop's own knobs.
+- **Two suites are load-flaky.** `packages/boot/app-boot/tests/hmr-config.spec.ts`
+  and `user-patches.spec.ts` poll file watchers with 20s and 10s deadlines and fail
+  under full-suite contention while passing standalone; `hmr-config` is not in
+  `processBoundTests` while its sibling `app-boot.spec.ts` is.
+
+## Why it looks like this
+
+The system this replaced failed in ways worth remembering, and the shape above is
+the response to them. These are the findings that survived the rewrite:
+
+- **The gradient was severed and everything downstream was blind.** The optimizer
+  was not given what the run had learned. The response is that `backward()`
+  produces a gradient that is an explicit part of the API, `knob_attribution`
+  includes **untried** values (a value that failed and a value nobody tried are
+  different facts), and the report says what the optimizer actually received.
+- **Knobs that lie.** A declared parameter nothing consumed looked like a search
+  axis and was not. The response is `V7`, and `unreachable_knobs()` reported as a
+  warning naming the lens it is invisible through.
+- **Mutation operators that destroy the graph.** Some rewrites produced structures
+  that could not run, and a repair pass hid it. The response is that macros are
+  literal compositions of primitives, the validator is naive and refuses rather
+  than repairs, and every candidate is validated *before* it costs a run.
+- **Visibility defects that made the surface lie.** Structural wins counted failed
+  runs; duplicates silently vanished, so a batch tried fewer points than it
+  claimed. The response is `E-duplicate` refused at the optimizer layer
+  (`attempt == 0` asserted), `structural_wins` requiring `exit_ok`, and the
+  progress/report split.
+- **Requirements the run owner raised** while using the deleted system: artifacts
+  invisible in the GUI; a created mode with no identity or home; created modes not
+  runnable from where they land; nothing registered by name. Those are what
+  `#14` (package lifecycle and registry), `#17` (the GUI), and the `ports`/
+  `manifest` surface answer.
+
+The two handoff notes those findings were extracted from
+(`refactory/docs/learnings/`) described the deleted system's mechanics and were
+removed once this section absorbed what was still true.
+
+## Where to go next
+
+- [API reference](api/README.md) — every public module and symbol.
+- [Tutorials](tutorials/README.md) — the running example, built up.
+- [Contributing](contributing.md) — for a coding agent or a person changing this.
