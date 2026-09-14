@@ -33,7 +33,7 @@ refactory 组承载 refactory 外循环运行的 DeepSeek Harness 一侧：该�
 <a id="related-documentation"></a>
 ## 相关文档
 
-- [Pythonic 模式与外循环优化器](../../refactory/docs/plans/pythonic-modes.md)——循环的各个步骤、编辑代数与验收关卡；`refactory/` 项目自己的 `README.md` 记录其安装路径与启动器。
+- [构建完成的 refactory 系统](../../refactory/docs/architecture.md)——循环的各个步骤、状态模型、校验器规则与编辑代数。[决策记录](../../refactory/docs/plans/pythonic-modes.md) 说明它为何是这个形状；`refactory/` 项目自己的 `README.md` 记录其安装路径与启动器。
 - [生成的工具目录](../../docs/tool-catalog.zh.md)——模型所接收工具的全量参考，由其源码生成。
 - [ceo preset](../preset/agent-presets/presets/ceo/agent.cordis.yml)——挂载 `tool-refactory` 的那一行。
 

@@ -33,7 +33,7 @@ Every package under `packages/refactory/` is mounted into a composition; the gro
 <a id="related-documentation"></a>
 ## Related documentation
 
-- [Pythonic modes and the optimizer loop](../../refactory/docs/plans/pythonic-modes.md) — the loop's steps, edit algebra, and acceptance gates; the `refactory/` project's own `README.md` holds its install path and launcher.
+- [The refactory system, as built](../../refactory/docs/architecture.md) — the loop's steps, the state model, the validator's rules, and the edit algebra. [Decisions](../../refactory/docs/plans/pythonic-modes.md) records why it is shaped that way; the `refactory/` project's own `README.md` holds its install path and launcher.
 - [Generated tool catalog](../../docs/tool-catalog.md) — the exhaustive reference for the tools the model receives, generated from their source.
 - [ceo preset](../preset/agent-presets/presets/ceo/agent.cordis.yml) — the row that mounts `tool-refactory`.
 

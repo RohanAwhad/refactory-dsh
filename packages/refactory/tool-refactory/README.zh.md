@@ -102,7 +102,7 @@ console 每次调用打印一份 JSON 文档。工具返回 `{ action, data }`�
 
 ### 外循环
 
-循环的八个步骤借用了 PyTorch 的命名：`init` 从模式构建创世状态，`forward` 执行并给每个未评估的候选打分，`loss` 聚合该批次，`backward` 记录梯度事实，`optimizer` 提出由校验器接受或拒绝的编辑，`step` 把接受的编辑施加到其父代上，`scheduler` 决定是否再跑一个 epoch，`report` 写出排行榜与直方图。每个候选都要先通过校验，才可能消耗一次内层运行。完整约定——包括编辑代数与校验器的不变式——见 [Pythonic 模式计划](../../../refactory/docs/plans/pythonic-modes.md)。
+循环的八个步骤借用了 PyTorch 的命名：`init` 从模式构建创世状态，`forward` 执行并给每个未评估的候选打分，`loss` 聚合该批次，`backward` 记录梯度事实，`optimizer` 提出由校验器接受或拒绝的编辑，`step` 把接受的编辑施加到其父代上，`scheduler` 决定是否再跑一个 epoch，`report` 写出排行榜与直方图。每个候选都要先通过校验，才可能消耗一次内层运行。完整约定——包括编辑代数与校验器的不变式——见[架构总览](../../../refactory/docs/architecture.md)；[决策记录](../../../refactory/docs/plans/pythonic-modes.md) 说明它为何是这个形状。
 
 ### 源码地图
 
@@ -122,7 +122,7 @@ console 每次调用打印一份 JSON 文档。工具返回 `{ action, data }`�
 
 当包级约定不够用时阅读以下页面。它们从本工具所驱动的 Python 循环，走到它所调用的能力，再到它满足的工具约定。
 
-- [Pythonic 模式与外循环优化器](../../../refactory/docs/plans/pythonic-modes.md)——循环的步骤、编辑代数与验收关卡；`refactory/` 项目自己的 `README.md` 是其入口。
+- [构建完成的 refactory 系统](../../../refactory/docs/architecture.md)——循环的步骤、状态模型、校验器规则与编辑代数。[决策记录](../../../refactory/docs/plans/pythonic-modes.md) 说明它为何是这个形状；`refactory/` 项目自己的 `README.md` 是其入口。
 - [refactory 组映射](../README.zh.md)——同级组页面及其包表格。
 - [Subprocess 能力](../../subprocess/subprocess/README.zh.md)——本包用来生成 console 的 `ctx.subprocess` 服务。
 - [添加工具的 cookbook](../../../docs/cookbook/adding-a-tool.zh.md)——工具注册、呈现与 Model Experience 约定。

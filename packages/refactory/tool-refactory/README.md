@@ -102,7 +102,7 @@ A run is a directory of files, and the console reads it rather than a service. `
 
 ### The outer loop
 
-The loop names its eight steps after PyTorch: `init` builds the genesis state from the mode, `forward` executes and scores each unevaluated candidate, `loss` aggregates the batch, `backward` records gradient facts, `optimizer` proposes edits that the validator accepts or refuses, `step` applies the accepted edits to their parents, `scheduler` decides whether another epoch runs, and `report` writes the leaderboard and the histograms. Every candidate is validated before it can cost an inner run. The full contract, including the edit algebra and the validator's invariants, lives in [the Pythonic-modes plan](../../../refactory/docs/plans/pythonic-modes.md).
+The loop names its eight steps after PyTorch: `init` builds the genesis state from the mode, `forward` executes and scores each unevaluated candidate, `loss` aggregates the batch, `backward` records gradient facts, `optimizer` proposes edits that the validator accepts or refuses, `step` applies the accepted edits to their parents, `scheduler` decides whether another epoch runs, and `report` writes the leaderboard and the histograms. Every candidate is validated before it can cost an inner run. The full contract, including the edit algebra and the validator's invariants, lives in [the architecture overview](../../../refactory/docs/architecture.md); [Decisions](../../../refactory/docs/plans/pythonic-modes.md) records why it is shaped that way.
 
 ### Source map
 
@@ -122,7 +122,7 @@ The loop names its eight steps after PyTorch: `init` builds the genesis state fr
 
 Read these pages when the package-level contract is not enough. They move from the Python loop this tool drives, to the capability it calls, to the tool contract it satisfies.
 
-- [Pythonic modes and the optimizer loop](../../../refactory/docs/plans/pythonic-modes.md) — the loop's steps, edit algebra, and acceptance gates; the `refactory/` project's own `README.md` is its entry point.
+- [The refactory system, as built](../../../refactory/docs/architecture.md) — the loop's steps, the state model, the validator's rules, and the edit algebra. [Decisions](../../../refactory/docs/plans/pythonic-modes.md) records why it is shaped that way; the `refactory/` project's own `README.md` is its entry point.
 - [refactory group map](../README.md) — the sibling group page and its package table.
 - [Subprocess capability](../../subprocess/subprocess/README.md) — the `ctx.subprocess` service this package spawns the console through.
 - [Adding a tool cookbook](../../../docs/cookbook/adding-a-tool.md) — the tool registration, presentation, and Model Experience contract.

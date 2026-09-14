@@ -265,6 +265,17 @@ promises more than it delivers.
 The system this replaced failed in ways worth remembering, and the shape above is
 the response to them. These are the findings that survived the rewrite:
 
+- **A search has to be given something *informative*, not merely something
+  *valid*.** The first real run was correct in every structural sense and useless
+  as a search: the starting population was sampled across the whole edit
+  catalogue, so `set_knob` — three of the operations — was drowned by structural
+  edits, and epoch one evaluated candidates that differed only in structure and
+  all scored the same. A validator can only reject what is invalid; it cannot make
+  a batch worth learning from. The response is that `init` **sweeps** instead of
+  sampling: one candidate per movable knob, each at a value the default is not, so
+  the first epoch produces a gradient with contrast in it. The same distinction is
+  why `knob_attribution` carries `untried` — a value that failed and a value
+  nobody tried are different facts.
 - **The gradient was severed and everything downstream was blind.** The optimizer
   was not given what the run had learned. The response is that `backward()`
   produces a gradient that is an explicit part of the API, `knob_attribution`
