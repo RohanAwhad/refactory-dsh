@@ -228,20 +228,38 @@ evaluation count as `Loop` on the same seed, and runs end to end on DSH:
 
 ## 10. The meta-modes
 
-Three modes whose *output* is a mode or an artifact. All three produce something
-**new** and never mutate their input.
+Three modes whose *output* is a mode or an artifact, in the package `meta_pack`.
+All three produce something **new** and never mutate their input.
 
-| entry point | input | output |
-|---|---|---|
-| `python -m refactory_dsh.create` | a brief | a package: `__init__.py`, `mode.py`, `ops.py` |
-| `python -m refactory_dsh.edit` | a brief + an existing mode | a revised package, recording `revision_of` |
-| `python -m refactory_dsh.design` | a brief | a checked software artifact |
+| mode | also an entry point | input | output |
+|---|---|---|---|
+| `meta_pack/create` | `python -m refactory_dsh.create` | a brief | a package: `__init__.py`, `mode.py`, `ops.py` |
+| `meta_pack/edit` | `python -m refactory_dsh.edit` | a brief + an existing mode | a revised package, recording `revision_of` **and the state it came from** |
+| `meta_pack/design` | `python -m refactory_dsh.design` | a brief | a checked software artifact |
 
-They are Python entry points rather than DSH presets, because they write Python and
-a `graph.json`, which a workflow graph cannot carry. `create` runs
-survey → strategy → design review → emit → materialise → validate → register →
-smoke; the review gate refuses a thin design (one approach, no knobs, a graph that
-does not hold together) and reloops with its reasons.
+They are discovered and validated like any other mode, and they are also entry
+points because a creation is a thing you run once from a shell as often as from a
+loop. `create` runs survey → strategy → design review → emit → materialise →
+validate → register → smoke; the review gate refuses a thin design (one approach,
+no knobs, a graph that does not hold together) and reloops with its reasons.
+
+### The exceptions this package needs
+
+`meta_pack` is where the mode contract is deliberately stretched, and each stretch
+is a declaration rather than a special case in the library:
+
+- **Unscored, on purpose.** `create` and `design` do not override `score()`, because
+  a creation is judged by whether what it produced works. Because `is_scored()` is
+  derived, an unscored mode would otherwise be indistinguishable from one whose
+  author forgot, so a mode says why with `Mode.unscored_reason`. The registry and
+  the sandbox accept a stated reason and still refuse silence, and the outer loop
+  still refuses such a mode as a search target — you cannot hill-climb on "did it
+  work".
+- **Their ops live in the library.** `create_ops` and `design_ops` ship with
+  `refactory_dsh`, because a mode that writes a package needs the validator and the
+  registry. A package may name any importable ops module.
+- **They need a model.** No knob makes them run without one, so a run with no client
+  fails at the first agent node rather than producing nothing.
 
 ## 11. Known gaps
 
