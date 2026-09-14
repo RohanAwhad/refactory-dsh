@@ -178,6 +178,24 @@
     "method": "each item's recorded `verify` command was executed from the repo root",
     "commands": 15,
     "result": "all pass",
-    "note": "two recorded paths were wrong and are corrected here: test_edit.py and test_design.py never existed (edit and design share test_edit_design.py). The loop-as-mode and lowering items now run with --run-integration, because their proof is a real DSH run."
+    "note": "two recorded paths were wrong and are corrected here: test_edit.py and test_design.py never existed (edit and design share test_edit_design.py). The loop-as-mode and lowering items now run with --run-integration, because their proof is a real DSH run.",
+    "closing_run": {
+      "command": "python -m refactory_dsh.loop circle_packing/adaptive --epochs 1 --batch-size 3 --optimizer autoresearch --seed 5 --runs-root /tmp/goal-proof",
+      "result": {
+        "bound": "epochs",
+        "evaluations": 3,
+        "seed_score": 0.875,
+        "best_score": 0.875,
+        "rejection_codes": {},
+        "accepted_op_mix": {
+          "set_knob": 8
+        }
+      },
+      "model_evidence": "The run is model-backed, not a fallback: analysis/generation-0.md holds the proposer's own reasoning, and it cites a prior run's history (/tmp/strat-cli, best 1.04, order=asc) as grounds for the edits it made. That single artifact exercises the history access (#19), the gradient and guidance reaching the prompt (#26), and the reasoning optimizer behind the Optimizer seam (#20)."
+    },
+    "example_runs": [
+      "circle_packing/adaptive: 0.875 seed, loop reaches 1.08 in the example gate",
+      "annealing_pack/anneal: real run, seed 1.075, bound epochs, 2 evaluations"
+    ]
   }
 }
