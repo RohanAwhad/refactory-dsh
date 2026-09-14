@@ -23,7 +23,20 @@ const REPO = join(import.meta.dirname, '..', '..', '..', '..')
 /** One run root for the whole file, removed when it ends. */
 const ROOT = mkdtempSync(join(tmpdir(), 'refactory-tool-'))
 
-afterAll(() => { rmSync(ROOT, { recursive: true, force: true }) })
+afterAll(() => {
+  // A run started here is a separate process that keeps writing into ROOT, so
+  // removing the directory can lose a race with it. Retrying is the fix that
+  // belongs here; the alternative is a test that fails on timing.
+  for (let attempt = 0; attempt < 20; attempt++) {
+    try {
+      rmSync(ROOT, { recursive: true, force: true })
+      return
+    } catch {
+      // Still being written to. Wait and try again.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100)
+    }
+  }
+})
 
 async function setup() {
   const ctx = new Context()
@@ -153,6 +166,18 @@ describe('the refactory tool against the real loop', () => {
     }
     expect(midFlight, 'the run finished before any poll could see it in flight').toBeDefined()
     expect(midFlight!.counters.evaluations).toBeGreaterThan(0)
+
+    // Leave nothing running: this test deliberately catches the run mid-flight,
+    // so without this the loop would keep writing into a directory the file
+    // removes when it ends.
+    let stopped = false
+    const stopDeadline = Date.now() + 60_000
+    while (!stopped && Date.now() < stopDeadline) {
+      const stop = payload(await call(ctx, { action: 'stop', run: started.root })).data as { stopped: boolean }
+      stopped = stop.stopped
+      if (!stopped) await new Promise(resolve => setTimeout(resolve, 200))
+    }
+    expect(stopped, 'the run would not stop, so it outlives this test').toBe(true)
   }, 180_000)
 
   it('reports an unknown run as the console\'s own refusal', async () => {
