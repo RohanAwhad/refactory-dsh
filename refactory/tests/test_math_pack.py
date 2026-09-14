@@ -21,6 +21,7 @@ from __future__ import annotations
 import dataclasses
 import importlib.util
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -37,8 +38,18 @@ HAS_LEAN = shutil.which("lean") is not None
 ROOT = Path(__file__).resolve().parent.parent.parent
 HAS_SYMPY = importlib.util.find_spec("sympy") is not None
 
+#: mathlib is a multi-gigabyte checkout, so a machine either has it or does not,
+#: and it announces which by the variable its own lakefile uses.
+HAS_MATHLIB = bool(os.environ.get("MATHLIB_PATH")) and Path(
+    os.environ.get("MATHLIB_PATH", "")
+).is_dir()
+
 needs_lean = pytest.mark.skipif(
     not HAS_LEAN, reason="the Lean 4 proof checker 'lean' is not on the PATH"
+)
+needs_mathlib = pytest.mark.skipif(
+    not (HAS_LEAN and HAS_MATHLIB),
+    reason="mathlib is not installed (set MATHLIB_PATH to a built mathlib4 checkout)",
 )
 needs_sympy = pytest.mark.skipif(
     not HAS_SYMPY, reason="the sympy module is not importable by this interpreter"
@@ -569,3 +580,69 @@ def test_the_registry_reports_the_toolchain_over_its_command_line(capsys, tmp_pa
     payload = json.loads(capsys.readouterr().out)
     assert {entry["name"] for entry in payload["lean_pack"]} == {"lean", "lake", "mathlib"}
     assert payload["sympy_pack"][0]["present"] is HAS_SYMPY
+
+
+# ── the mathlib problem ────────────────────────────────────────────────────
+def test_the_mathlib_statement_parses_the_way_this_mathlib_reads_it():
+    """A syntax regression guard that needs neither Lean nor mathlib.
+
+    The statement first read `∑ i in Finset.range n, ...`, which is the form most
+    introductions show and which this Mathlib rejects: Lean reads `∑ i` as a binder
+    and reports `unexpected token 'in'; expected ','`. Every test that used a stub
+    passed, so nothing noticed until the statement was run through the real
+    checker. This pins the form that does parse, so it cannot drift back.
+    """
+    problem = lean_problems.by_library("mathlib")
+    assert "∈" in problem.statement, (
+        "the mathlib statement must use the `∑ i ∈ s, f` form; the `in` form does "
+        "not parse against this Mathlib"
+    )
+    assert " in Finset" not in problem.statement, (
+        "the `in` binder notation is back, and it does not parse"
+    )
+    assert "BigOperators" in problem.preamble, (
+        "the summation notation is not opened by the preamble"
+    )
+    source = lean_problems.statement_source(problem)
+    assert "theorem" in source and "sorry" in source, (
+        "the statement file must declare the theorem and leave it open"
+    )
+
+
+def test_the_timeout_default_survives_importing_a_large_library():
+    """A timeout that abandons the checker reads exactly like a refuted theorem.
+
+    At 60s the mathlib problem scored 0.0 on a machine where the theorem is
+    provable and the proof took 22s warm, because the first invocation pays for
+    importing the library. The default has to clear that cost.
+    """
+    mode = _resolve_mode("lean_pack/prover")
+    timeout = mode.state_dict()["knobs"]["timeout_s"]
+    assert timeout["value"] >= 180, (
+        f"the default timeout is {timeout['value']}s, which is under the cost of "
+        "importing mathlib once"
+    )
+
+
+@needs_mathlib
+def test_the_mathlib_problem_is_checked_by_the_real_proof_checker(tmp_path):
+    """The path that had never run, run for real.
+
+    Both defects this covers were invisible without mathlib installed: the
+    statement did not parse, and the timeout abandoned the checker before it
+    answered. A stub cannot find either, because a stub accepts whatever it is
+    handed and returns immediately.
+    """
+    result = _resolve_mode("lean_pack/prover", library="mathlib").evaluate(tmp_path / "run")
+    assert result.exit_ok, result.error
+    assert result.facts["statement_ok"] == 1, "the statement did not elaborate"
+    assert result.facts["verified"] == 1, "the proof was not accepted by mathlib"
+
+    written = json.loads((tmp_path / "run" / "result.json").read_text())
+    assert written["library"] == "mathlib"
+    assert written["verified"] is True, written["output"]
+    assert written["used_sorry"] is False
+    assert "sorryAx" not in (written["output"] or ""), written["output"]
+    assert written["checker_version"], (
+        "the record does not name the compiler that decided"
+    )

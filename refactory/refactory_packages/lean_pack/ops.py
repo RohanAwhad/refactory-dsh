@@ -144,6 +144,27 @@ def check_toolchain(ctx: Any) -> dict[str, Any]:
     return {"lean_version": lean.version or "unknown"}
 
 
+def _project_toolchain(workdir: Path, timeout_s: int) -> str:
+    """The version of the toolchain that will check this project, once it exists.
+
+    Not the same fact as ``check_toolchain``'s ``lean_version``, and the difference
+    is not academic. That one probes ``lean`` on the PATH. A project that requires
+    mathlib gets a ``lean-toolchain`` from the dependency, so ``lake env lean`` runs
+    a *different* compiler than the one on the PATH -- on this machine 4.34.0-rc2
+    from mathlib against 4.33.1 on the PATH. A record that names the PATH version
+    names a compiler that did not decide anything.
+    """
+    command = [*_checker_command(), "--version"]
+    try:
+        completed = subprocess.run(
+            command, cwd=str(workdir), capture_output=True, text=True, timeout=timeout_s
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return f"unknown ({type(exc).__name__})"
+    text = f"{completed.stdout or ''}{completed.stderr or ''}".strip()
+    return text.splitlines()[0] if text else "unknown"
+
+
 def scaffold_project(ctx: Any) -> dict[str, Any]:
     """Write the project and check the statement on its own.
 
@@ -159,8 +180,14 @@ def scaffold_project(ctx: Any) -> dict[str, Any]:
     ctx.write_text(LAKEFILE, _lakefile(problem, library))
     ctx.write_text(STATEMENT, problems.statement_source(problem))
     checked = _run_checker(ctx.path(PROJECT), "Problem.lean", timeout_s)
-    ctx.write_json(STATEMENT_CHECK, {**checked, "ok": checked["exit_code"] == 0})
-    return {"statement_ok": 1 if checked["exit_code"] == 0 else 0}
+    # Asked here because this is the first moment the project exists, and the whole
+    # point of the record is to name the checker that decided.
+    version = _project_toolchain(ctx.path(PROJECT), timeout_s)
+    ctx.write_json(
+        STATEMENT_CHECK,
+        {**checked, "ok": checked["exit_code"] == 0, "checker_version": version},
+    )
+    return {"statement_ok": 1 if checked["exit_code"] == 0 else 0, "checker_version": version}
 
 
 def write_solution(ctx: Any) -> dict[str, Any]:
@@ -220,11 +247,15 @@ def finish(ctx: Any) -> dict[str, Any]:
     """Close the run and publish what the checker decided."""
     problem = ctx.read_json(PROBLEM_FILE, {}) or {}
     verify = ctx.read_json(VERIFY_FILE, {}) or {}
+    statement = ctx.read_json(STATEMENT_CHECK, {}) or {}
     verified = bool(verify.get("verified"))
     ctx.write_json(RESULT_FILE, {
         "problem": problem.get("name"),
         "library": problem.get("library"),
         "statement": problem.get("statement"),
+        # The compiler that decided, which is the project's and not necessarily the
+        # one on the PATH.
+        "checker_version": statement.get("checker_version"),
         "verified": verified,
         "attempts": int(verify.get("attempt", 0)),
         "strategy": verify.get("strategy"),

@@ -136,14 +136,21 @@ microseconds, no budget) and `evaluate` (one inner run, one unit of budget). The
 API makes it impossible to blur those two.
 
 **All 13 SRF ports ship as strategies** (`refactory_dsh/strategies.py`), plus
-`default`:
+`default` — and SRF's own optimizer, which lives in `srf/lab/` rather than among its
+modes and is counted separately:
 
 ```bash
 python -c "import refactory_dsh.strategies as S; print(len(S.names()), S.names())"
-# 14 -> adaptive_meta, archive_loop, autoscientists, best_of_n, default,
-#       evolutionary_archive, hill_climb, islands, reflective, reflective_sampler,
-#       research_then_optimize, staged_curriculum, staged_v1, tree_search
+# 15 -> adaptive_meta, archive_loop, autoscientists, best_of_n, default,
+#       evolutionary_archive, hill_climb, islands, map_elites, reflective,
+#       reflective_sampler, research_then_optimize, staged_curriculum, staged_v1,
+#       tree_search
 ```
+
+`SRF_PORT_COUNT` counts the modes and `SRF_LAB_PORT_COUNT` counts the lab optimizer, so
+neither can be dropped while the other is added. `map_elites` is the one to know about:
+it keeps a champion per cell of a feature grid instead of one best candidate, which is
+the only strategy here whose selection can return something that is not the best.
 
 ## 7. The loop
 

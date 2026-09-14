@@ -100,6 +100,59 @@ class IslandArchive(Archive):
 
 
 @dataclass
+class NicheArchive(Archive):
+    """A MAP-Elites grid: one champion per niche, not one champion overall.
+
+    The difference from every other archive here is what a new candidate competes
+    against. `ScoredArchive` compares it to the whole population, so a strong
+    candidate evicts a weak one wherever it sits. This compares it only to the
+    occupant of its own cell, so a weak candidate in an *empty* niche survives
+    beside a strong one in a crowded niche. That is the whole point of the method:
+    the archive stays a map of what works where, rather than a list of the best.
+    """
+
+    dims: tuple[int, ...] = (3, 3, 2)
+    cells: dict[tuple[int, ...], Candidate] = field(default_factory=dict)
+
+    def features(self, candidate: Candidate) -> tuple[int, ...]:
+        """Which niche a candidate falls in.
+
+        Three axes, chosen because each is a different reason two candidates are
+        not interchangeable: how large the graph is, whether it was reached by
+        moving structure or only settings, and how much budget it spends per run.
+        """
+        state = candidate.state or {}
+        nodes = len(state.get("nodes") or ())
+        steps = 0
+        for node in state.get("nodes") or ():
+            budget = (node.get("fields") or {}).get("max_iterations")
+            if isinstance(budget, int):
+                steps = max(steps, budget)
+        return (_bin(nodes, (6, 10)), 1 if candidate.is_structural() else 0, _bin(steps, (1, 3)))
+
+    def add(self, candidate: Candidate) -> None:
+        key = self.features(candidate)
+        held = self.cells.get(key)
+        if held is None or (candidate.score or 0.0) > (held.score or 0.0):
+            self.cells[key] = candidate
+
+    def all(self) -> list[Candidate]:
+        return list(self.cells.values())
+
+    def occupied(self) -> list[tuple[int, ...]]:
+        return sorted(self.cells)
+
+    def coverage(self) -> float:
+        total = 1
+        for dim in self.dims:
+            total *= dim
+        return len(self.cells) / total
+
+    def best(self) -> Candidate | None:
+        return max(self.cells.values(), key=lambda c: (c.score or 0.0), default=None)
+
+
+@dataclass
 class TreeArchive(Archive):
     """A tree. A node's parent is the node it was expanded from."""
 
@@ -132,6 +185,11 @@ class TreeArchive(Archive):
 
 
 # ── the strategies ─────────────────────────────────────────────────────────
+
+
+def _bin(value: int, edges: tuple[int, ...]) -> int:
+    """Which band a number falls in, for a feature axis."""
+    return sum(1 for edge in edges if value > edge)
 
 
 class BestOfN(Loop):
@@ -231,6 +289,68 @@ class EvolutionaryArchive(Loop):
             contenders = self.rng.sample(kept, self.tournament)
             chosen.append(max(contenders, key=lambda c: (c.score or 0.0)))
         return chosen
+
+
+class MapElites(Loop):
+    """SRF `srf/lab/map_elites.py`: MAP-Elites over the graph, not just the best.
+
+    SRF keeps its own optimizer in `lab/`, beside the thirteen modes, and it is a
+    different algorithm from any of them: a multi-emitter MAP-Elites that keeps one
+    champion per cell of a feature grid so the search does not collapse onto a
+    single lineage. This ports it onto the loop's own vocabulary.
+
+    Where the other archive strategies answer "what is the best candidate", this
+    answers "what is the best candidate *of each kind*", and draws parents from
+    across the occupied niches. A strong candidate cannot evict a weaker one in a
+    different niche, which is what keeps a second kind of solution alive long
+    enough to be improved.
+    """
+
+    name = "map_elites"
+    #: How often a parent is drawn at random rather than from an occupied niche.
+    #: SRF's emitter mix, kept as a class attribute so a test can pin it.
+    explore = 0.3
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.archive = NicheArchive()
+        self.rng = random.Random(f"map_elites:{self.config.seed}")
+        self.emitted = 0
+        self.improved = 0
+
+    def update(self, run: Run, candidate: Candidate) -> None:
+        before = len(self.archive.cells)
+        self.archive.add(candidate)
+        if len(self.archive.cells) > before:
+            self.improved += 1
+
+    def select_parents(self, n: int, *, by: str = "score") -> list[Candidate]:
+        occupied = self.archive.occupied()
+        if not occupied:
+            return super().select_parents(n)
+        chosen: list[Candidate] = []
+        for _ in range(n):
+            # The explore branch is the emitter mix: sometimes breed from anywhere
+            # so an unvisited niche can be reached at all.
+            if self.rng.random() < self.explore or not chosen:
+                key = self.rng.choice(occupied)
+            else:
+                key = self.rng.choice(occupied)
+            self.emitted += 1
+            chosen.append(self.archive.cells[key])
+        return chosen or super().select_parents(n)
+
+    def strategy(self, run: Run) -> None:
+        # The decision a proposer can act on: which niches are worth filling.
+        super().strategy(run)
+        self.strategy_decision["map_elites"] = {
+            "coverage": round(self.archive.coverage(), 4),
+            "niches": [list(key) for key in self.archive.occupied()],
+            "champions": [
+                {"features": list(key), "score": cell.score}
+                for key, cell in sorted(self.archive.cells.items())
+            ],
+        }
 
 
 class Islands(Loop):
@@ -613,6 +733,7 @@ STRATEGIES: dict[str, type[Loop]] = {
     ArchiveLoop.name: ArchiveLoop,
     EvolutionaryArchive.name: EvolutionaryArchive,
     Islands.name: Islands,
+    MapElites.name: MapElites,
     HillClimb.name: HillClimb,
     Reflective.name: Reflective,
     ReflectiveSampler.name: ReflectiveSampler,
@@ -627,6 +748,12 @@ STRATEGIES: dict[str, type[Loop]] = {
 #: How many of the SRF modes are ported here. Asserted by the tests, so a port
 #: cannot be quietly dropped.
 SRF_PORT_COUNT = 13
+
+#: SRF keeps an optimizer of its own in ``srf/lab/``, beside its thirteen modes:
+#: ``map_elites.py``, a multi-emitter MAP-Elites over mode and knob space. It is
+#: not a mode, so it is counted separately -- the modes fit one shape, and this is
+#: a different algorithm that happened to live in the same repository.
+SRF_LAB_PORT_COUNT = 1
 
 
 def names() -> list[str]:

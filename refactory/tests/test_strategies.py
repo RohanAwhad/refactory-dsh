@@ -30,9 +30,22 @@ def _loop(name: str, root: Path, **overrides: object) -> Loop:
 
 # ── the registry ───────────────────────────────────────────────────────────
 def test_every_srf_strategy_is_ported():
-    assert len(strategies.names()) - 1 == strategies.SRF_PORT_COUNT, (
-        f"expected {strategies.SRF_PORT_COUNT} ports plus `default`, got "
+    """Every SRF mode, and the lab optimizer SRF keeps beside them.
+
+    The two are counted separately because they are different algorithms: the
+    thirteen modes each fit the same shape, and `map_elites` is an optimizer that
+    happened to live in the same repository. A single total would let one be
+    dropped as long as something else was added.
+    """
+    expected = strategies.SRF_PORT_COUNT + strategies.SRF_LAB_PORT_COUNT
+    assert len(strategies.names()) - 1 == expected, (
+        f"expected {strategies.SRF_PORT_COUNT} mode ports plus "
+        f"{strategies.SRF_LAB_PORT_COUNT} lab port plus `default`, got "
         f"{strategies.names()}"
+    )
+    assert "map_elites" in strategies.names(), (
+        "SRF's own optimizer is vendored but not ported, which is the gap this "
+        "count is here to keep shut"
     )
 
 
@@ -413,4 +426,95 @@ def test_a_curriculum_stage_reaches_the_proposal(tmp_path):
     assert len(set(seen)) > 1, (
         f"every iteration reported the same stage ({set(seen)}), so the curriculum "
         "did not advance"
+    )
+
+
+def test_map_elites_keeps_a_weak_candidate_beside_a_strong_one(tmp_path):
+    """The property that makes it MAP-Elites rather than an archive.
+
+    A worse candidate is refused when it lands in a niche that already has a
+    champion, and kept when its niche is empty. An archive that compared every
+    candidate to the whole population would drop it in both cases, which is the
+    behaviour this strategy exists to differ from.
+    """
+    from refactory_dsh import registry
+    from refactory_dsh.optim import Candidate
+
+    loop = _loop("map_elites", tmp_path / "run", epochs=1)
+    mode = registry.resolve(Path("."), "circle_packing/adaptive")[1]()
+
+    strong = Candidate.from_state(mode.state_dict())
+    strong.score = 0.9
+    loop.archive.add(strong)
+    key = loop.archive.features(strong)
+    assert loop.archive.cells[key] is strong
+
+    crowded = Candidate.from_state(mode.state_dict())
+    crowded.score = 0.1
+    loop.archive.add(crowded)
+    assert loop.archive.cells[key] is strong, (
+        "a weaker candidate in an occupied niche displaced its champion"
+    )
+
+    # An empty niche has no champion to beat, so anything can occupy it. The
+    # structural axis is the cheapest one to move.
+    elsewhere = Candidate.from_state(mode.state_dict())
+    elsewhere.edits = [{"op": "add_node"}]
+    elsewhere.score = 0.05
+    assert loop.archive.features(elsewhere) != key, "the probe must land in another niche"
+    loop.archive.add(elsewhere)
+    assert loop.archive.cells[loop.archive.features(elsewhere)] is elsewhere, (
+        "a candidate in an empty niche was dropped for being weak, so the search "
+        "keeps only the best frontier and the map never fills"
+    )
+    assert len(loop.archive.all()) == 2
+
+
+def test_map_elites_draws_parents_across_niches(tmp_path):
+    """Selection has to use the map, or the grid is bookkeeping."""
+    from refactory_dsh import registry
+    from refactory_dsh.optim import Candidate
+
+    loop = _loop("map_elites", tmp_path / "run", epochs=1)
+    mode = registry.resolve(Path("."), "circle_packing/adaptive")[1]()
+
+    for index, edits in enumerate(([], [{"op": "add_node"}], [{"op": "remove_node"}])):
+        candidate = Candidate.from_state(mode.state_dict())
+        candidate.edits = edits
+        candidate.score = 0.1 * index  # the best is the FIRST one added
+        loop.archive.add(candidate)
+
+    niches = loop.archive.occupied()
+    assert len(niches) >= 2, f"the fixtures did not fill more than one niche: {niches}"
+
+    seen = {loop.archive.features(parent) for parent in loop.select_parents(40)}
+    assert len(seen) >= 2, (
+        f"every parent came from one niche ({seen}), so selection ignores the map"
+    )
+    scores = [parent.score for parent in loop.select_parents(40)]
+    assert min(scores) < max(scores), (
+        "selection only ever returned the single best candidate, which is the "
+        "behaviour of every other strategy here"
+    )
+
+
+def test_map_elites_publishes_its_coverage_to_the_proposer(tmp_path):
+    """The niche map is the decision a model proposer could act on."""
+    from refactory_dsh import registry
+    from refactory_dsh.optim import Candidate
+    from refactory_dsh.outerloop import Run
+
+    loop = _loop("map_elites", tmp_path / "run", epochs=1)
+    mode = registry.resolve(Path("."), "circle_packing/adaptive")[1]()
+    candidate = Candidate.from_state(mode.state_dict())
+    candidate.score = 0.5
+    loop.archive.add(candidate)
+
+    loop.strategy(Run(loop=loop))
+    published = loop.strategy_decision.get("map_elites")
+    assert published, "the strategy published nothing about the map"
+    assert published["coverage"] > 0.0
+    assert published["niches"], "the occupied niches are not reported"
+    assert loop._context().strategy["map_elites"]["coverage"] == published["coverage"], (
+        "the map is not reaching the proposer"
     )

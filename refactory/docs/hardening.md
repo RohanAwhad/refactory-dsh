@@ -329,6 +329,88 @@ were run, because CI has no Lean and this checkout now does.
 
 ---
 
+## 8. Two defects mathlib found, and the optimizer SRF ships that we did not run
+
+Closing #30 left two things unverified and one thing unported. All three are the same
+kind of gap: a claim that was true of the tests and not yet true of the code.
+
+### `mathlib` was installed, and the problem it exists for did not run
+
+The package declared mathlib, the tool probe reported it, and the mathlib problem had
+**never been executed** — the tests skipped with a reason naming the missing path. So
+mathlib was installed: a `mathlib4` checkout, `lake exe cache get`, 7.4 GB. The
+problem then scored **0.0**, and the reason had nothing to do with mathlib.
+
+**Defect one: the statement did not parse.**
+
+```lean
+theorem sum_odd_eq_sq (n : Nat) : ∑ i in Finset.range n, (2 * i + 1) = n ^ 2 := by
+```
+
+```text
+error: unexpected token 'in'; expected ','
+```
+
+`∑ i in s, f i` is the form most introductions show. This Mathlib does not accept it:
+Lean reads `∑ i` as an ordinary binder and then wants a comma. The form that compiles
+is `∑ i ∈ s, f i`, alongside the explicit `s.sum (fun i => ...)`, which was checked
+side by side in one file to be certain which of them was wrong.
+
+Worth being exact about why nothing caught it. Every test of this mode used a **stub
+checker**, and a stub accepts whatever it is handed. A syntax error in the statement
+is invisible to a test that never parses the statement.
+
+**Defect two: the timeout abandoned the checker, and a timeout reads like a refutation.**
+
+`timeout_s` defaulted to 60s. The first invocation against mathlib pays for importing
+the library, which took longer than 60s cold; the same proof then took 22s warm. So
+the run reported `verified: false` for a theorem that is provable, on a machine where
+it was about to be proved. The default is now 180s, with the reason recorded at the
+knob: a fact that costs a run its score must clear the cost of starting.
+
+**A third thing, found while reading the record it produced.** The run's
+`lean_version` fact came from probing `lean` on the PATH, and the project's checker is
+not that compiler: a project requiring mathlib takes a `lean-toolchain` from the
+dependency, so `lake env lean` ran **4.34.0-rc2** while the PATH had **4.33.1**. The
+record named a compiler that decided nothing. `scaffold_project` now asks the checker
+in the project directory once, right after the project exists, and `result.json`
+carries `checker_version` — the compiler that actually decided.
+
+**Held by.** Three tests: one pins the `∈` form and the `BigOperators` preamble with
+neither Lean nor mathlib installed, so the syntax cannot drift back; one pins the
+timeout default against the cost of a large import; one runs the real problem and
+requires `statement_ok == 1`, `verified == true`, no `sorryAx`, and a
+`checker_version` in the durable record. The first two are ungated — they are the
+regression guards. The third is gated on `MATHLIB_PATH` and **ran**, not skipped.
+
+### SRF's own optimizer was vendored and never used
+
+`srf/lab/map_elites.py` is not one of SRF's thirteen modes; it is an optimizer SRF
+keeps beside them — a multi-emitter MAP-Elites over mode and knob space, whose
+distinguishing property is that it keeps **one champion per cell of a feature grid**
+rather than one best candidate overall. Nothing in this repository referenced it. The
+thirteen modes were ported and this was not, so the count of "SRF ports" was complete
+against a list that omitted it.
+
+Ported as the `map_elites` strategy, on the loop's own vocabulary: features are graph
+size, whether the candidate was reached by moving structure or only settings, and the
+step budget it spends; the archive refuses a weaker candidate in an occupied niche and
+accepts one in an empty niche; selection draws parents from across occupied niches.
+
+The count is now two constants rather than one — `SRF_PORT_COUNT = 13` for the modes
+and `SRF_LAB_PORT_COUNT = 1` for the lab optimizer — because a single total would let
+one be dropped as long as something else was added. The test asserts both, and asserts
+`map_elites` is present by name.
+
+**Held by.** Three effect tests, on the standard §3 set: a weak candidate in an
+occupied niche does not displace its champion but the same candidate in an empty niche
+is kept; selection returns parents from more than one niche and with more than one
+score, which is the behaviour no other strategy here has; and the niche map reaches the
+proposer through `ProposalContext.strategy`. Plus a real loop: `circle_packing/adaptive`
+under `--strategy map_elites`, seed 0.875 → 1.275.
+
+---
+
 ## Two probes that came back clean
 
 Recorded because the point of an audit is accuracy in both directions.
@@ -352,6 +434,13 @@ Recorded because the point of an audit is accuracy in both directions.
 - Listing a generated package still imports it (§1).
 - The reflective/curriculum differences need a model proposer to show (§3).
 - `post_checks` and fork/join are unused (§5).
-- mathlib is not installed, so the mathlib problem and its `[[require]] path` are
-  untested (§7). The core-library problem ran against the real checker.
 - The GUI is not audited here at all; see `GUI-HANDOFF.md` at the repository root.
+
+Two things that were on this list have moved off it, which is the point of keeping it:
+
+- **mathlib is no longer untested.** It was installed and the mathlib problem ran, and
+  doing so found two defects that no stub could have found (§8). The mathlib tests are
+  gated on `MATHLIB_PATH`: they run where mathlib is present and skip with the reason
+  where it is not, so a CI machine without it is honest rather than green by omission.
+- **SRF's own optimizer is no longer unused.** `map_elites` is ported, counted
+  separately from the thirteen modes, and asserted by name (§8).

@@ -52,7 +52,13 @@ class Prover(nn.Mode):
                 description="how many strategies the retry gate may try before giving up",
             ),
             "timeout_s": nn.Knob(
-                60, "int", lo=10, hi=300,
+                180, "int", lo=10, hi=600,
+                # 180 rather than 60 because the first invocation against mathlib
+                # pays for importing the library, which takes longer than any proof
+                # that follows it. At 60 the mathlib problem scored 0.0 on a machine
+                # where the theorem is provable and the proof took 22s warm: the
+                # checker was abandoned while it was still loading, and a timeout is
+                # reported the same way as a refuted theorem.
                 description="how long one Lean invocation may take before it is abandoned",
             ),
         }
@@ -78,7 +84,7 @@ class Prover(nn.Mode):
             "scaffold", "op", call=f"{OPS}:scaffold_project",
             reads=("problem.json",),
             writes=("project", "statement_check.json"),
-            produces=("statement_ok",),
+            produces=("statement_ok", "checker_version"),
             knobs=("library", "timeout_s"),
             notes="write the lakefile and the statement, then check the statement alone",
         ))

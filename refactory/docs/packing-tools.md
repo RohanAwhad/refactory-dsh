@@ -216,9 +216,22 @@ a real claim about a proof search.
 The package ships two problems deliberately. `three_consecutive_sum` needs nothing
 but the Lean prelude, so the package runs on a machine with a toolchain and no
 library, and it is what the tests exercise. `sum_odd_eq_sq` states
-`∑ i in Finset.range n, (2 * i + 1) = n ^ 2`, which needs `Finset` and `ring` and
+`∑ i ∈ Finset.range n, (2 * i + 1) = n ^ 2`, which needs `Finset` and `ring` and
 therefore needs mathlib — the problem that shows why the requirement is declared at
 all. `MATHLIB_PATH` is what selects a checkout, and nothing downloads one.
+
+Write `∑ i ∈ s, f i`, not `∑ i in s, f i`. The `in` form is what most introductions
+show and this Mathlib rejects it — Lean reads `∑ i` as an ordinary binder and reports
+`unexpected token 'in'; expected ','`. The package shipped the `in` form until mathlib
+was installed and the problem was actually run; every test before that used a stub
+checker, and a stub does not parse the statement it is handed.
+
+Two more things mathlib teaches a package that declares it, both recorded in
+`refactory/docs/hardening.md` §8: the first invocation pays for importing the library,
+so a timeout tuned to a core problem abandons the checker and reports a provable
+theorem as unproved; and the project takes its `lean-toolchain` from the dependency, so
+`lake env lean` may be a different compiler than `lean` on the PATH — which is why
+`result.json` records `checker_version` from the project rather than the PATH.
 
 ## The sympy mode, beside it
 

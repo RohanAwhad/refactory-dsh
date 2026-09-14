@@ -219,6 +219,8 @@ The SRF strategies, as outer loops.
 | class | `HillClimb` | `(*args: 'Any', **kwargs: 'Any') -> 'None'` |
 | class | `IslandArchive` | `(count: 'int' = 3, members: 'dict[int, list[Candidate]]' = <factory>) -> None` |
 | class | `Islands` | `(*args: 'Any', **kwargs: 'Any') -> 'None'` |
+| class | `MapElites` | `(*args: 'Any', **kwargs: 'Any') -> 'None'` |
+| class | `NicheArchive` | `(dims: 'tuple[int, ...]' = (3, 3, 2), cells: 'dict[tuple[int, ...], Candidate]' = <factory>) -> None` |
 | class | `Reflective` | `(*args: 'Any', **kwargs: 'Any') -> 'None'` |
 | class | `ReflectiveSampler` | `(mode_id: 'str', config: 'LoopConfig \| None' = None, *, project: 'Path \| None' = None, model: 'Any' = None, optimizer: 'Optimizer \| None' = None) -> 'None'` |
 | class | `ResearchThenOptimize` | `(mode_id: 'str', config: 'LoopConfig \| None' = None, *, project: 'Path \| None' = None, model: 'Any' = None, optimizer: 'Optimizer \| None' = None) -> 'None'` |
@@ -242,6 +244,8 @@ The SRF strategies, as outer loops.
 - **`HillClimb`** — SRF `karpathy`: one candidate per iteration, from the best so far.
 - **`IslandArchive`** — Several sub-populations. A candidate is only ever selected from its own.
 - **`Islands`** — SRF `openevolve`: an island model. Selection never crosses islands.
+- **`MapElites`** — SRF `srf/lab/map_elites.py`: MAP-Elites over the graph, not just the best.
+- **`NicheArchive`** — A MAP-Elites grid: one champion per niche, not one champion overall.
 - **`Reflective`** — SRF `gepa`: reflective evolution, with a merge branch.
 - **`ReflectiveSampler`** — SRF `shinka`: reflection inside sampling.
 - **`ResearchThenOptimize`** — SRF `autoresearch`: a pre-phase, then the loop.

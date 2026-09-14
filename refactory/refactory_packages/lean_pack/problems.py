@@ -119,8 +119,13 @@ SUM_ODD = Problem(
     name="sum_odd_eq_sq",
     library="mathlib",
     summary="the sum of the first n odd numbers is n squared",
-    preamble="import Mathlib",
-    statement="(n : Nat) : ∑ i in Finset.range n, (2 * i + 1) = n ^ 2",
+    preamble="import Mathlib\nopen scoped BigOperators",
+    # `∑ i ∈ s, f i`, not `∑ i in s, f i`. The `in` form is the notation most
+    # introductions show and it does not parse against this Mathlib: Lean reads the
+    # binder as `∑ i, ...` and then reports `unexpected token 'in'; expected ','`.
+    # Found by running the statement through the real checker, which is the only
+    # thing that could find it -- every unit test used a stub.
+    statement="(n : Nat) : ∑ i ∈ Finset.range n, (2 * i + 1) = n ^ 2",
     proofs=(
         ("omega", "  omega"),
         (
