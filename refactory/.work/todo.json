@@ -231,7 +231,10 @@
       "title": "A revision records the mode it came from, not the state it came from",
       "why": "The issue asks for provenance of `what it was edited from, at which state`. `_revision_source` hands the model the source files, but the output records only `revision_of: <mode id>`. You cannot reproduce or diff a revision against the exact state it was derived from.",
       "verify": "pytest refactory/tests/test_edit_design.py -q",
-      "status": "todo"
+      "status": "done",
+      "commit": "(pending)",
+      "observed": "18 passed (test_edit_design.py)",
+      "evidence": "Fixed. `_revision_source` handed the model the source *files*, which already worked, but the recorded provenance was `revision_of: <mode id>` alone. A mode is not fixed \u2014 the outer loop edits it \u2014 so that names a class which may have changed since, and the revision could not be reproduced or diffed against what it actually started from. `edit()` now resolves the source mode once, records its whole `revision_of_state` plus a `revision_of_digest` (the same `candidate_id` the loop uses, so a revision and a candidate that are the same state agree), and returns the digest to the caller. The test asserts the recorded state is a full state dict, that the digest matches the result, and that it identifies the state it was taken from."
     },
     {
       "id": "meta-modes",

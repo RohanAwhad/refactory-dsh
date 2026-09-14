@@ -252,3 +252,34 @@ def test_a_design_that_never_passes_its_check_fails_loudly():
     )
     assert result.exit_ok is False
     assert "does not pass its check" in (result.error or "")
+
+
+def test_a_revision_records_the_state_it_came_from(tmp_path):
+    """Provenance is the state, not only the name of a class that may have moved.
+
+    A mode is not fixed: the outer loop edits it. "Revised from
+    `circle_packing/adaptive`" therefore names a class that may have changed since,
+    and a revision recorded that way cannot be reproduced or diffed against what it
+    actually started from.
+    """
+    result = edit_module.edit(
+        EditConfig(name=NAME, mode="circle_packing/adaptive",
+                   brief="restart on a stall", workdir=tmp_path / "run"),
+        client=FakeModel(_answers()),
+    )
+    assert result["revision_of"] == "circle_packing/adaptive"
+    assert result["revision_of_digest"], "no digest of the state that was revised"
+
+    recorded = json.loads(
+        (registry.workspace_root(Path(".")) / NAME / registry.ORIGIN).read_text()
+    )
+    state = recorded["revision_of_state"]
+    assert sorted(state) == sorted(
+        registry.resolve(Path("."), "circle_packing/adaptive")[1]().state_dict()
+    )
+    assert recorded["revision_of_digest"] == result["revision_of_digest"]
+
+    # The digest identifies the state it was recorded from.
+    from refactory_dsh.optim.base import candidate_id
+
+    assert recorded["revision_of_digest"] == candidate_id(state)

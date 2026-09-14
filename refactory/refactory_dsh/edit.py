@@ -58,6 +58,17 @@ def _smoke(identifier: str, project: Path) -> dict[str, Any]:
     }
 
 
+def _digest(state: dict[str, Any]) -> str:
+    """A short, stable name for one state, so two revisions can be compared.
+
+    The same digest the candidate identity uses, so a revision and a candidate
+    that are the same state agree about it.
+    """
+    from refactory_dsh.optim.base import candidate_id
+
+    return candidate_id(state)
+
+
 def edit(config: EditConfig, client: Any = None) -> dict[str, Any]:
     """Revise a mode and report the before and after scores.
 
@@ -70,6 +81,11 @@ def edit(config: EditConfig, client: Any = None) -> dict[str, Any]:
             "a revision needs the mode to revise, e.g. --mode circle_packing/adaptive"
         )
     project = Path.cwd()
+    # Resolved once, here: the state being revised is read from the mode as it is
+    # now, and it is recorded below so the revision can be reproduced against the
+    # exact state it started from rather than against "whatever that mode was".
+    _package, source_class = registry.resolve(project, config.mode)
+    source_mode = source_class()
     before = _smoke(config.mode, project)
     if not before["exit_ok"]:
         raise CreateError(
@@ -115,11 +131,20 @@ def edit(config: EditConfig, client: Any = None) -> dict[str, Any]:
             f"{before['score']}; pass --allow-regression if that is intended"
         )
 
-    # Provenance, so the revision says what it came from and what it scored.
+    # Provenance: what it came from, **at which state**, and what it scored.
+    #
+    # The state, not only the identifier. A mode is not a fixed thing — the outer
+    # loop edits it — so "revised from circle_packing/adaptive" names a class that
+    # may have changed since. Recording the state makes the revision reproducible,
+    # lets the two be diffed, and is the only way to tell later whether the
+    # revision was made against the current baseline or an older one.
+    source_state = source_mode.state_dict()
     origin = registry.workspace_root(project) / name / registry.ORIGIN
     recorded = json.loads(origin.read_text()) if origin.exists() else {}
     recorded.update({
         "revision_of": config.mode,
+        "revision_of_state": source_state,
+        "revision_of_digest": _digest(source_state),
         "before_score": before["score"],
         "after_score": after["score"],
         "brief": config.brief,
@@ -130,6 +155,7 @@ def edit(config: EditConfig, client: Any = None) -> dict[str, Any]:
         "package": name,
         "mode": f"{name}/{registry.load(name, project).modes[0].name}",
         "revision_of": config.mode,
+        "revision_of_digest": _digest(source_state),
         "before_score": before["score"],
         "after_score": after["score"],
         "regressed": regressed,

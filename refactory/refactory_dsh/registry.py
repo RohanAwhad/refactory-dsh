@@ -298,6 +298,11 @@ def render_catalogue(project: Path) -> str:
         marks = [] if package.trust == "trusted" else [package.trust]
         if not is_enabled(Path(project), name):
             marks.append("disabled")
+        # A declared tool this machine lacks is the one thing worth saying in a
+        # listing: it is why a mode that is otherwise fine will not run here.
+        needed = missing_tools(name, Path(project))
+        if needed:
+            marks.append("needs " + ", ".join(needed))
         suffix = f"  [{', '.join(marks)}]" if marks else ""
         lines.append(f"{name}/  {package.description}{suffix}")
         for mode in sorted(package.modes, key=lambda m: m.name):
@@ -440,8 +445,68 @@ def remove(project: Path, name: str, *, force: bool = False) -> Path:
     return target
 
 
+# ── what a package needs that is not Python ────────────────────────────────
+def tools(name: str, project: Path | None = None):
+    """The tools a package declares, read without importing it.
+
+    Delegated to :mod:`refactory_dsh.toolchain`, which owns the declaration. The
+    registry is the reader here because it is the thing users already ask "what is
+    this package?" of, and because the answer has to be available for a package
+    that does not import -- the case a missing tool creates.
+    """
+    from refactory_dsh import toolchain
+
+    return toolchain.read_tools(name, project)
+
+
+def tool_report(
+    project: Path | None = None, name: str | None = None
+) -> dict[str, list[dict[str, Any]]]:
+    """Every declared tool of every package, with its status on this machine.
+
+    Separate from :func:`verify` on purpose. A missing tool is a fact about the
+    machine, not a defect of the package: the package is correct, listable and
+    runnable-in-principle, and reporting it as a verification failure would make
+    "this checkout has no Lean" indistinguishable from "this package is broken".
+    A *malformed declaration* is a package defect, and that one does appear in
+    ``verify``.
+    """
+    from refactory_dsh import toolchain
+
+    project = Path(project) if project is not None else None
+    report: dict[str, list[dict[str, Any]]] = {}
+    for package_name in ([name] if name else discover_names(project)):
+        try:
+            report[package_name] = [
+                status.to_dict() for status in toolchain.report(package_name, project)
+            ]
+        except toolchain.ToolDeclError as exc:
+            report[package_name] = [{"name": "", "error": str(exc)}]
+    return report
+
+
+def missing_tools(name: str, project: Path | None = None) -> list[str]:
+    """The names of required tools this machine does not have, for a listing."""
+    from refactory_dsh import toolchain
+
+    try:
+        return [
+            status.name
+            for status in (status for status in toolchain.report(name, project))
+            if not status.present and not status.tool.optional
+        ]
+    except toolchain.ToolchainError:
+        return []
+
+
 def verify(project: Path, name: str | None = None) -> dict[str, list[str]]:
-    """Import every mode of a package and say what is wrong with it."""
+    """Import every mode of a package and say what is wrong with it.
+
+    A tool that is *absent* is not a finding here; see :func:`tool_report`. A
+    tool *declaration* that cannot be read is, because that is a defect of the
+    package rather than of the machine it landed on.
+    """
+    from refactory_dsh import toolchain
     from refactory_dsh.nn import validate_state
 
     project = Path(project)
@@ -449,9 +514,13 @@ def verify(project: Path, name: str | None = None) -> dict[str, list[str]]:
     for package_name in ([name] if name else discover_names(project)):
         problems: list[str] = []
         try:
+            toolchain.read_tools(package_name, project)
+        except toolchain.ToolDeclError as exc:
+            problems.append(str(exc))
+        try:
             package = load(package_name, project)
         except PackageError as exc:
-            findings[package_name] = [str(exc)]
+            findings[package_name] = problems + [str(exc)]
             continue
         for required in package.requires:
             if where(required, project) is None:
@@ -485,6 +554,7 @@ def describe_mode(project: Path, identifier: str) -> dict[str, Any]:
     described["package"] = package.name
     described["id"] = identifier
     described["readme"] = package.description
+    described["tools"] = tool_report(Path(project), package.name)[package.name]
     return described
 
 
@@ -499,7 +569,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "verb",
-        choices=["list", "show", "verify", "smoke", "add", "import", "remove",
+        choices=["list", "show", "verify", "smoke", "tools", "add", "import", "remove",
                  "enable", "disable"],
         nargs="?", default="list",
     )
@@ -534,6 +604,16 @@ def main(argv: list[str] | None = None) -> int:
             findings = verify(project, args.target or None)
             print(json.dumps(findings, indent=2, default=str))
             return 1 if any(findings.values()) else 0
+        if args.verb == "tools":
+            report = tool_report(project, args.target or None)
+            print(json.dumps(report, indent=2, default=str))
+            unusable = [
+                entry
+                for entries in report.values()
+                for entry in entries
+                if entry.get("error") or (entry.get("present") is False and not entry.get("optional"))
+            ]
+            return 1 if unusable else 0
         if args.verb == "smoke":
             if not args.target:
                 return fail("'smoke' needs a <package>/<name> mode")
