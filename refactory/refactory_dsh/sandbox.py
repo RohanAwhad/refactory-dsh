@@ -204,6 +204,24 @@ def _limits(memory_mb: int, cpu_s: int, file_mb: int):  # pragma: no cover - pos
     return apply
 
 
+def _apply_forwarded(child_env: dict[str, str], forwarded: dict[str, str] | None) -> None:
+    """Add the environment a declared tool needs, after containment is set.
+
+    Applied last because it exists to *undo* one effect of containment: ``HOME`` is
+    rewritten to the working directory, and a per-user toolchain manager -- elan,
+    rustup, pyenv, nvm -- finds its installation through ``HOME``. Only a package's
+    own declaration, read by the driver, reaches here.
+
+    The secret filter still applies. A declaration is our own code, but the rule
+    "no secret enters a sandbox" is not worth making an exception to for a tool,
+    and a tool that needed a credential to *run* would be a different design.
+    """
+    for name, value in (forwarded or {}).items():
+        if any(marker in name.upper() for marker in _SECRET_MARKERS):
+            continue
+        child_env[name] = value
+
+
 def run_sandboxed(
     code: str,
     *,
@@ -213,6 +231,7 @@ def run_sandboxed(
     cpu_s: int = DEFAULT_CPU_S,
     file_mb: int = DEFAULT_FILE_MB,
     env: dict[str, str] | None = None,
+    forwarded: dict[str, str] | None = None,
 ) -> SandboxResult:
     """Run a snippet in a subprocess with limits, from the workspace, scrubbed.
 
@@ -225,6 +244,7 @@ def run_sandboxed(
     child_env = scrub(env)
     child_env["HOME"] = str(workdir)
     child_env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent)
+    _apply_forwarded(child_env, forwarded)
     kwargs: dict[str, Any] = {}
     if sys.platform != "win32":
         kwargs["preexec_fn"] = _limits(memory_mb, cpu_s, file_mb)
@@ -308,7 +328,14 @@ def run_command(
 
 
 def smoke(identifier: str, workdir: Path, *, project: Path | None = None, **kwargs: Any) -> SandboxResult:
-    """Run one mode once, in a sandbox, and report what it scored."""
+    """Run one mode once, in a sandbox, and report what it scored.
+
+    The package's declared tools have their environment forwarded, so a mode whose
+    checker is a per-user toolchain finds it here exactly as it does unsandboxed.
+    Without that, this path and the walker disagree about the same mode on the same
+    machine -- which is how the Lean mode came to score 1.0 one way and 0.0 the
+    other.
+    """
     project = Path(project or Path.cwd())
     code = (
         "import json\n"
@@ -319,7 +346,12 @@ def smoke(identifier: str, workdir: Path, *, project: Path | None = None, **kwar
         "print(json.dumps({'exit_ok': result.exit_ok, 'error': result.error,"
         " 'score': result.score, 'iterations': result.iterations}))\n"
     )
-    return run_sandboxed(code, workdir=Path(workdir), env=dict(os.environ), **kwargs)
+    from refactory_dsh import toolchain
+
+    forwarded = toolchain.tool_env(identifier.split("/", 1)[0], project)
+    return run_sandboxed(
+        code, workdir=Path(workdir), env=dict(os.environ), forwarded=forwarded, **kwargs
+    )
 
 
 def verify_sandboxed(

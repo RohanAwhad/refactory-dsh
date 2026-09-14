@@ -259,6 +259,76 @@ when the two disagree, so the reference is checked rather than trusted.
 
 ---
 
+## 7. The sandbox made an installed toolchain unreachable (#30)
+
+Found by installing the tool and running the path, which is the only way it could be
+found. Every Lean test in the repository **skipped** on this machine, with a reason
+naming the missing binary — an honest skip, and one that hid a bug, because the
+skipped tests were the only thing that would have executed the checker.
+
+**What happened.** Lean 4.33.1 was installed. `registry smoke lean_pack/prover`
+returned **score 1.0**: a real proof, accepted by the real checker, in one attempt.
+`sandbox.smoke lean_pack/prover` returned **score 0.0** with `exit_code 1` and:
+
+```text
+error: no default toolchain configured. run `elan default stable` to install
+```
+
+Same mode, same machine, same theorem, two answers.
+
+**The cause.** `run_sandboxed` sets `HOME` to the run's working directory. That is
+correct containment — code we did not write should not read a user's dotfiles — but
+elan finds its toolchains through `HOME`, so the sandbox pointed the checker at
+`<workdir>/.elan`, which is empty. Proven by isolating the variable: `lake env lean`
+on a trivial file succeeds with the real `HOME` and fails with `HOME=<workdir>`, and
+in the failing case it *creates* `<workdir>/.elan/settings.toml` as a side effect.
+
+This is not a Lean bug. rustup, pyenv, nvm, gvm and sdkman all locate themselves
+through `HOME`, so containment alone breaks every per-user toolchain manager, and the
+failure is a wrong statement about the machine: "no default toolchain configured" on a
+machine where the toolchain is installed and working.
+
+**The fix, in the declaration.** The manifest already existed to answer "can this
+package run here"; it now also carries what the tool needs *at run time*. `Tool`
+gains `env`, a tuple of `(name, value)` pairs, and `toolchain.tool_env(package)`
+collects them from the package's **present** tools. `sandbox.smoke` forwards them into
+the run. `lean_pack` declares `ELAN_HOME`.
+
+Three properties make it hold rather than paper over:
+
+| property | why it is the right shape |
+|---|---|
+| the value is resolved where the declaration is read | package code cannot compute it — by the time an op runs, `HOME` is the working directory |
+| absent tools contribute nothing | forwarding for a tool that is not installed adds environment a run cannot use |
+| applied *after* containment, and still secret-filtered | `HOME` stays the working directory, and a declaration cannot smuggle a credential in |
+
+**Held by.** Four tests. One drives the mechanism on a synthetic package, so it holds
+on a machine without Lean. One asserts the same probe sees **no** `ELAN_HOME` without
+forwarding — the half that makes the first mean something. One asserts the secret
+filter still applies to a declaration. One runs `sandbox.smoke` on the real mode with
+the real checker. Every one of them was checked against the unfixed code: disabling
+forwarding reproduces `score 0.0` and the elan message, so none passes vacuously.
+
+**A test that had to change, and why that is the finding rather than a nuisance.**
+`test_a_declared_tool_that_is_missing_names_the_fix_when_required` asserted that
+`preflight("lean_pack")` raises `ToolMissing`. It passed on a bare machine and failed
+the moment the declared tool was actually installed — it had quietly asserted that
+Lean is *not* here. It now asserts the conditional truth, and the mechanism is tested
+against a synthetic absent tool. `test_the_lean_declaration_names_the_toolchain_home`
+is machine-dependent by design and carries `@needs_lean`.
+
+**Verified, finally.** The Lean path had never run. It has now: `verified: true`,
+`attempts: 1`, strategy `omega`, `exit_code 0`, and the axiom audit reports
+`[propext, Quot.sound]` — no `sorryAx`, so the `#print axioms` check that separates a
+proof from a `sorry` is exercising real output rather than a stub's. The suite runs
+**562 passed, 7 skipped with Lean** and **558 passed, 11 skipped without it**; both
+were run, because CI has no Lean and this checkout now does.
+
+**Still unverified.** mathlib is not installed, so the mathlib problem and its
+`[[require]] path` remain untested. The core-library problem is the one that ran.
+
+---
+
 ## Two probes that came back clean
 
 Recorded because the point of an audit is accuracy in both directions.
@@ -282,4 +352,6 @@ Recorded because the point of an audit is accuracy in both directions.
 - Listing a generated package still imports it (§1).
 - The reflective/curriculum differences need a model proposer to show (§3).
 - `post_checks` and fork/join are unused (§5).
+- mathlib is not installed, so the mathlib problem and its `[[require]] path` are
+  untested (§7). The core-library problem ran against the real checker.
 - The GUI is not audited here at all; see `GUI-HANDOFF.md` at the repository root.

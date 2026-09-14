@@ -397,7 +397,7 @@ What a package needs that is not Python, and how the absence reads.
 
 | kind | name | signature |
 |---|---|---|
-| class | `Tool` | `(name: 'str', kind: 'str' = 'binary', probe: 'str' = '', install: 'str' = '', why: 'str' = '', version_args: 'tuple[str, ...]' = (), optional: 'bool' = False) -> None` |
+| class | `Tool` | `(name: 'str', kind: 'str' = 'binary', probe: 'str' = '', install: 'str' = '', why: 'str' = '', version_args: 'tuple[str, ...]' = (), optional: 'bool' = False, env: 'tuple[tuple[str, str], ...]' = ()) -> None` |
 | class | `ToolDeclError` | `` |
 | class | `ToolMissing` | `` |
 | class | `ToolStatus` | `(tool: 'Tool', present: 'bool', detail: 'str' = '', version: 'str' = '') -> None` |
@@ -410,6 +410,7 @@ What a package needs that is not Python, and how the absence reads.
 | function | `read_tools` | `(package: 'str', project: 'Path \| None' = None) -> 'tuple[Tool, ...]'` |
 | function | `report` | `(package: 'str', project: 'Path \| None' = None) -> 'list[ToolStatus]'` |
 | function | `require` | `(package: 'str', name: 'str', project: 'Path \| None' = None) -> 'ToolStatus'` |
+| function | `tool_env` | `(package: 'str', project: 'Path \| None' = None) -> 'dict[str, str]'` |
 
 - **`Tool`** — One thing a package needs that is not a Python callable.
 - **`ToolDeclError`** — A package's ``tools.py`` is not a readable declaration.
@@ -424,6 +425,7 @@ What a package needs that is not Python, and how the absence reads.
 - **`read_tools`** — What a package declares it needs. Empty when it declares nothing.
 - **`report`** — Every tool a package declares, with its status on this machine.
 - **`require`** — One tool a node is about to use, or :class:`ToolMissing` naming the fix.
+- **`tool_env`** — The environment a package's *present* tools need, for a run elsewhere.
 
 
 <a id="refactory_dsh-sandbox"></a>
@@ -441,7 +443,7 @@ Running code we did not write.
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
 | function | `promote` | `(project: 'Path', name: 'str', *, note: 'str' = '') -> 'dict[str, Any]'` |
 | function | `run_command` | `(command: 'str', *, workdir: 'Path', timeout_s: 'int' = 180, memory_mb: 'int' = 2048, cpu_s: 'int' = 120, file_mb: 'int' = 64, env: 'dict[str, str] \| None' = None) -> 'SandboxResult'` |
-| function | `run_sandboxed` | `(code: 'str', *, workdir: 'Path', timeout_s: 'int' = 180, memory_mb: 'int' = 2048, cpu_s: 'int' = 120, file_mb: 'int' = 64, env: 'dict[str, str] \| None' = None) -> 'SandboxResult'` |
+| function | `run_sandboxed` | `(code: 'str', *, workdir: 'Path', timeout_s: 'int' = 180, memory_mb: 'int' = 2048, cpu_s: 'int' = 120, file_mb: 'int' = 64, env: 'dict[str, str] \| None' = None, forwarded: 'dict[str, str] \| None' = None) -> 'SandboxResult'` |
 | function | `scrub` | `(env: 'dict[str, str] \| None' = None) -> 'dict[str, str]'` |
 | function | `smoke` | `(identifier: 'str', workdir: 'Path', *, project: 'Path \| None' = None, **kwargs: 'Any') -> 'SandboxResult'` |
 | function | `usage` | `() -> 'str'` |

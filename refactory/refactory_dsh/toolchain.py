@@ -53,6 +53,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -70,6 +71,9 @@ TOOL_KINDS = ("binary", "python", "path")
 #: How long a version probe may take. A tool that hangs is a tool this machine
 #: cannot use, and the check must not be able to hang a run either.
 PROBE_TIMEOUT_S = 20
+
+#: An environment variable name, for a declaration's ``env``.
+_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class ToolchainError(ValueError):
@@ -109,6 +113,11 @@ class Tool:
     #: is then a reported fact rather than a reason to refuse the package, which is
     #: what keeps a mathlib-only mode from making the core-library modes unusable.
     optional: bool = False
+    #: Environment the tool needs *at run time*, as ``(name, value)`` pairs. Read
+    #: here, where the real environment is visible, and forwarded into a sandboxed
+    #: run, which is somewhere else entirely -- see :func:`tool_env`. A tuple of
+    #: pairs rather than a mapping so the declaration stays hashable.
+    env: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         if not self.name or not self.name.replace("_", "").replace("-", "").isalnum():
@@ -131,6 +140,12 @@ class Tool:
                 f"tool {self.name!r} declares no 'why'; the failure message has to say "
                 "what the tool is for"
             )
+        for variable, _ in self.env:
+            if not _ENV_NAME.match(variable):
+                raise ToolDeclError(
+                    f"tool {self.name!r} declares env {variable!r}, which is not an "
+                    "environment variable name"
+                )
 
     def resolved(self) -> str:
         """The probe with ``~`` and ``$VARS`` expanded, for a ``path`` tool."""
@@ -144,6 +159,7 @@ class Tool:
             "install": self.install,
             "why": self.why,
             "optional": self.optional,
+            "env": [variable for variable, _ in self.env],
         }
 
 
@@ -378,3 +394,29 @@ def preflight(package: str, project: Path | None = None) -> list[ToolStatus]:
 def report(package: str, project: Path | None = None) -> list[ToolStatus]:
     """Every tool a package declares, with its status on this machine."""
     return check(read_tools(package, project))
+
+
+def tool_env(package: str, project: Path | None = None) -> dict[str, str]:
+    """The environment a package's *present* tools need, for a run elsewhere.
+
+    A sandboxed run is contained by rewriting ``HOME`` to its own working
+    directory, which is the right default: code we did not write should not read a
+    user's dotfiles. But every per-user toolchain manager finds its installation
+    *through* ``HOME`` -- ``elan`` reads ``$HOME/.elan``, and so do rustup, pyenv
+    and nvm -- so containment alone makes a tool that is installed unreachable, and
+    the run fails claiming there is no toolchain. That was Lean: the same mode
+    scored 1.0 straight through and 0.0 under the sandbox, on one machine.
+
+    The value is resolved **here**, in the process that reads the declaration and
+    can see the real environment, then carried to the sandbox. A declaration cannot
+    compute it itself: by the time package code runs, ``HOME`` is already the
+    working directory.
+
+    Absent tools contribute nothing -- forwarding for a tool that is not installed
+    would only add environment a run cannot use.
+    """
+    forwarded: dict[str, str] = {}
+    for status in check(read_tools(package, project)):
+        if status.present:
+            forwarded.update(dict(status.tool.env))
+    return forwarded

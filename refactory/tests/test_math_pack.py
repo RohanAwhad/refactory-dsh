@@ -32,6 +32,9 @@ from refactory_packages.lean_pack import ops as lean_ops
 from refactory_packages.lean_pack import problems as lean_problems
 
 HAS_LEAN = shutil.which("lean") is not None
+
+#: The checkout root, which is also the project a package is read from.
+ROOT = Path(__file__).resolve().parent.parent.parent
 HAS_SYMPY = importlib.util.find_spec("sympy") is not None
 
 needs_lean = pytest.mark.skipif(
@@ -338,6 +341,130 @@ def test_the_core_problem_is_checked_by_the_real_proof_checker(tmp_path):
     assert result.facts["verified"] == 1, written["output"]
     assert written["used_sorry"] is False, "a `sorry` is not a proof"
     assert (tmp_path / "run" / "project" / "Problem.lean").exists()
+
+
+def test_a_declared_tools_environment_is_carried_to_a_sandboxed_run(tmp_path):
+    """A per-user toolchain is found through ``HOME``; a sandbox rewrites ``HOME``.
+
+    Containment and reachability pull in opposite directions here, and containment
+    alone silently wins: the tool is installed, works from a shell, and reports
+    itself absent under the sandbox. The declaration is where the fix belongs,
+    because it is the one place that knows which variable the tool needs.
+
+    The declaration is synthetic so that this holds on a machine without Lean --
+    the mechanism is what is under test, not one particular toolchain.
+    """
+    from refactory_dsh import sandbox
+
+    present = shutil.which("sh")
+    if present is None:  # pragma: no cover - posix only, as the sandbox is
+        pytest.skip("no 'sh' on PATH to declare as a present tool")
+    _workspace_package(
+        tmp_path,
+        "env_pack",
+        "PACKAGE = None\n",
+        "from refactory_dsh.toolchain import Tool\n"
+        "TOOLS = (\n"
+        "    Tool(name='shell', kind='binary', probe='sh', install='apt-get install sh',\n"
+        "         why='running the thing', env=(('ELAN_HOME', '/declared/toolchain'),)),\n"
+        "    Tool(name='gone', kind='binary', probe='no-such-binary-xyz',\n"
+        "         install='apt-get install gone', why='the absent one',\n"
+        "         env=(('ABSENT_TOOL_HOME', '/declared/absent'),)),\n"
+        ")\n",
+    )
+    forwarded = toolchain.tool_env("env_pack", tmp_path)
+
+    assert forwarded.get("ELAN_HOME") == "/declared/toolchain", (
+        "a present tool's declared environment must be collected"
+    )
+    assert "ABSENT_TOOL_HOME" not in forwarded, (
+        "an absent tool contributes nothing: forwarding for a tool that is not "
+        "installed would only add environment a run cannot use"
+    )
+
+    probe = sandbox.run_sandboxed(
+        "import json, os\nprint(json.dumps({'home': os.environ.get('HOME'),"
+        " 'elan': os.environ.get('ELAN_HOME')}))\n",
+        workdir=tmp_path / "run",
+        forwarded=forwarded,
+    )
+    assert probe.ok, probe.problem()
+    assert probe.payload["elan"] == "/declared/toolchain", "forwarded env did not arrive"
+    assert probe.payload["home"] == str(tmp_path / "run"), (
+        "containment must still rewrite HOME; forwarding adds to it, it does not replace it"
+    )
+
+
+@needs_lean
+def test_the_lean_declaration_names_the_toolchain_home():
+    """The real declaration, checked on a machine that has the toolchain.
+
+    The value is resolved where the declaration is read, so it is a real path and
+    not the sandbox's own working directory.
+    """
+    forwarded = toolchain.tool_env("lean_pack", ROOT)
+    assert forwarded.get("ELAN_HOME"), (
+        "lean_pack must declare the variable elan finds its toolchains through, or "
+        "the mode works from a shell and fails under the sandbox"
+    )
+    assert Path(forwarded["ELAN_HOME"]).is_dir(), forwarded["ELAN_HOME"]
+
+
+
+def test_containment_alone_would_have_lost_it(tmp_path):
+    """The half of the previous test that makes it mean something.
+
+    Without forwarding, the same sandboxed probe sees no ``ELAN_HOME`` at all --
+    which is the state the Lean mode was in when it scored 0.0 under the sandbox
+    and 1.0 straight through.
+    """
+    from refactory_dsh import sandbox
+
+    probe = sandbox.run_sandboxed(
+        "import json, os\nprint(json.dumps({'elan': os.environ.get('ELAN_HOME')}))\n",
+        workdir=tmp_path / "run",
+    )
+    assert probe.ok, probe.problem()
+    assert probe.payload["elan"] is None, (
+        "a scrubbed run must not see the caller's toolchain home unless a package "
+        "declared it needs it"
+    )
+
+
+def test_a_secret_is_not_forwarded_by_a_declaration(tmp_path):
+    """The secret filter is not waived for declarations."""
+    from refactory_dsh import sandbox
+
+    probe = sandbox.run_sandboxed(
+        "import json, os\nprint(json.dumps({'seen': os.environ.get('AWS_SECRET_KEY')}))\n",
+        workdir=tmp_path / "run",
+        forwarded={"AWS_SECRET_KEY": "hunter2"},
+    )
+    assert probe.ok, probe.problem()
+    assert probe.payload["seen"] is None, "a declaration must not smuggle a secret in"
+
+
+@needs_lean
+def test_the_lean_mode_works_under_the_sandbox(tmp_path):
+    """The shipped path, on a machine that has Lean. This is the regression.
+
+    The mode scored 1.0 through the walker and 0.0 under ``sandbox.smoke`` on the
+    same machine, because the sandbox rewrote ``HOME`` and elan keeps its
+    toolchains under it. Two paths disagreeing about one mode is the defect; this
+    asserts the sandboxed path, because that is the one that ships.
+    """
+    from refactory_dsh import sandbox
+
+    result = sandbox.smoke("lean_pack/prover", tmp_path / "run", project=ROOT)
+    assert result.ok, result.problem()
+    assert result.payload["exit_ok"], result.payload
+    assert result.payload["score"] > 0.0, (
+        "the Lean mode scored nothing under the sandbox; its declared environment "
+        f"is not reaching the checker: {result.payload}"
+    )
+    written = json.loads((tmp_path / "run" / "result.json").read_text())
+    assert written["verified"] is True, written["output"]
+    assert written["used_sorry"] is False
 
 
 @needs_lean

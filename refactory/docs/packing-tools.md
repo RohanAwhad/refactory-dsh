@@ -276,6 +276,59 @@ something that is not a Python callable, declare it:
    refusal with a reason the report carries.
 6. Declare the tools *optional* when only some modes need them. A required tool a
    mode does not use makes every other mode in the package unrunnable for no reason.
+7. Declare `env` for a tool that is found through the environment. See below — it is
+   the difference between a tool that works from a shell and the same tool under the
+   sandbox, and the failure is silent.
+
+### The environment a tool needs at run time
+
+A tool that is present is not yet a tool that is *reachable*. A sandboxed run is
+contained by rewriting `HOME` to its own working directory, which is right — code
+nobody reviewed should not read a user's dotfiles — but every per-user toolchain
+manager finds its installation through `HOME`. `elan` reads `$HOME/.elan`; rustup,
+pyenv, nvm, gvm and sdkman all do the same. Containment alone therefore makes an
+installed tool unreachable, and the run reports the tool absent on a machine that has
+it:
+
+```text
+error: no default toolchain configured. run `elan default stable` to install
+```
+
+That message is not about the package, and it is not about the machine. It is about
+where the run happened.
+
+Declare what the tool needs:
+
+```python
+Tool(
+    name="lean",
+    kind="binary",
+    probe="lean",
+    install=ELAN,
+    why="the proof checker that decides whether a candidate solution is a proof",
+    env=(("ELAN_HOME", os.environ.get("ELAN_HOME") or str(Path.home() / ".elan")),),
+)
+```
+
+`tool_env(package)` collects the pairs from the package's **present** tools, and
+`sandbox.smoke` forwards them into the run. Two properties are worth stating:
+
+- **The value is resolved where the declaration is read**, in the driver, which can
+  still see the real environment. Package code cannot compute it: by the time an op
+  runs under a sandbox, `HOME` is already the working directory, so `Path.home()`
+  there answers a question about the sandbox rather than about the machine.
+- **`env` is applied after containment, and does not weaken it.** `HOME` is still the
+  working directory; forwarding adds variables rather than restoring the caller's
+  environment. The secret filter still applies, so a declaration cannot smuggle a
+  credential into a sandbox — a tool that needed one to *run* would be a different
+  design, not an exception to this one.
+
+The worked example is Lean, and it is worth knowing how it fails, because it fails
+quietly. `lean_pack/prover` scored **1.0 through the walker and 0.0 through
+`sandbox.smoke`** on one machine: the same mode, the same theorem, the same toolchain.
+The walker has the real `HOME`; the sandbox does not. Registering the mode and
+smoking it are different code paths, so this is exactly the class of defect a single
+path's tests cannot see.
 
 The toolchain is checked by `registry verify`, `registry tools`, and the tests in
 `refactory/tests/test_math_pack.py`; the tests that need Lean skip with the name of the

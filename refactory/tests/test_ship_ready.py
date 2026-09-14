@@ -184,8 +184,21 @@ def test_a_missing_tool_is_reported_with_what_to_install():
 
 
 def test_a_declared_tool_that_is_missing_names_the_fix_when_required():
+    """Refusal is conditional on the machine, so the assertion has to be too.
+
+    Written first as "preflight('lean_pack') raises", which quietly asserted that
+    Lean is not installed here. It passes on a bare machine and fails the moment
+    somebody installs the toolchain the package declares -- a test that the fix for
+    the bug it guards would break.
+    """
     from refactory_dsh import toolchain
 
+    statuses = {status.name: status for status in toolchain.report("lean_pack")}
+    lean = statuses["lean"]
+    if lean.present:
+        # Present: the required tools pass preflight and nothing is refused.
+        assert [s.name for s in toolchain.preflight("lean_pack")]
+        return
     with pytest.raises(toolchain.ToolMissing) as refused:
         toolchain.preflight("lean_pack")
     message = str(refused.value)
@@ -193,6 +206,30 @@ def test_a_declared_tool_that_is_missing_names_the_fix_when_required():
     assert "install" in message.lower() or "curl" in message.lower(), (
         f"the failure does not name what to do about it: {message}"
     )
+
+
+def test_a_missing_required_tool_refuses_the_run_and_names_the_fix(tmp_path):
+    """The mechanism, on a synthetic tool, so it holds whether or not Lean is here.
+
+    A package that cannot run without a tool must refuse before spending budget,
+    and the refusal has to carry the install command. Asserting that against the
+    real Lean declaration makes the test a fact about the machine; this makes it a
+    fact about the mechanism.
+    """
+    from refactory_dsh import registry, toolchain
+
+    package = registry.workspace_root(tmp_path) / "ghost_pack"
+    package.mkdir(parents=True, exist_ok=True)
+    (package / "__init__.py").write_text("PACKAGE = None\n")
+    (package / "tools.py").write_text(
+        "from refactory_dsh.toolchain import Tool\n"
+        "TOOLS = (Tool(name='ghost', kind='binary', probe='no-such-binary-xyz',\n"
+        "              install='apt-get install ghost', why='doing the thing'),)\n"
+    )
+    with pytest.raises(toolchain.ToolMissing) as refused:
+        toolchain.preflight("ghost_pack", tmp_path)
+    message = str(refused.value)
+    assert "ghost" in message and "apt-get install ghost" in message, message
 
 
 def test_a_package_that_needs_nothing_still_loads_without_the_toolchain():
