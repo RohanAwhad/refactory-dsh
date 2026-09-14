@@ -1,0 +1,79 @@
+# refactory-dsh
+
+[English](README.md) | 中文
+
+模式就是 Python 类。它们的架构与参数构成一份可序列化的状态字典。优化器针对该状态提出带类型的更新，每个提案在被允许消耗一次内层运行之前都会先通过校验。
+
+这套设计刻意遵循 PyTorch，因为这一类比正是承重部分：模式是 `nn.Module`，它的 `state_dict()` 同时携带参数*与*架构，knob 是 `nn.Parameter`，优化器则是 `torch.optim.Optimizer`，只能写入模式声明为可写的内容。`score()` 与模式的不变量都是方法，因此任何提案都无法触及它们。
+
+- **DSH** 是运行时与模型客户端（本仓库是 DSH 的一个 fork）。
+- **`refactory/refactory_dsh/nn/`** 是库：模式、图、knob、编辑代数、校验器、执行器。
+- **`refactory/refactory_dsh/optim/`** 是优化器层。
+- **`refactory/refactory_packages/`** 存放模式包。库本身不认识任何具体的包名；它只负责发现、列出并导入它们。
+
+## 目录结构
+
+```
+apps/                       DSH apps (CLI)
+packages/                   DSH packages (workflow-spine, science, brand, …)
+refactory/                  the glue
+  refactory_dsh/nn/           the mode library (torch.nn analogue)
+  refactory_dsh/optim/        the optimizers (torch.optim analogue)
+  refactory_dsh/loop.py       init → forward → loss → backward → optimizer → step
+                              → scheduler → report
+  refactory_dsh/registry.py   package discovery, enable/disable, catalogue
+  refactory_dsh/create.py     create-mode: a package from a brief
+  refactory_packages/<pkg>/   the packages of modes (torchvision analogue)
+  docs/plans/pythonic-modes.md  the design and its acceptance gates
+  vendor/remote-factory/      refactory (git submodule)
+  vendor/srf/                 SRF (git submodule)
+install.sh                  one-command install
+refactory-dsh               the launcher (opens DSH web)
+```
+
+## 安装
+
+```bash
+git clone <repo> --recurse-submodules
+./install.sh
+```
+
+## 运行
+
+列出各个包及其拥有的模式：
+
+```bash
+.venv/bin/python -m refactory_dsh.registry list
+.venv/bin/python -m refactory_dsh.registry show circle_packing/adaptive
+```
+
+优化一个模式。`autoresearch` 读取 trace 并向模型询问下一次编辑；`random` 从编辑目录中采样。两者运行的都是同一个带校验的循环，因此一个无法运行的提案只会消耗 token，而不会消耗预算。
+
+```bash
+.venv/bin/python -m refactory_dsh.loop circle_packing/adaptive \
+    --epochs 2 --batch-size 4 --optimizer autoresearch
+
+# what came out of it
+cat .factory/loop/report.md
+```
+
+根据一段简述创建模式包。设计与生成是模型步骤；gate 则是确定性的——包会被导入、其图会被构建、它命名的每个调用都会被解析，并且在注册之前它会先被运行一次。
+
+```bash
+.venv/bin/python -m refactory_dsh.create \
+    --name my_pkg \
+    --brief "what the package should do" \
+    --extends circle_packing/adaptive
+```
+
+## 测试
+
+```bash
+.venv/bin/python -m pytest refactory/tests -q
+```
+
+`tests/test_registry.py::test_every_installed_package_mode_validates` 断言的是这个库对并非由它编写的包所能做出的最强陈述：每个已安装包的每个模式都能构建出一张图，且该图在所有调用都被解析的情况下通过校验。
+
+## 尚未接线
+
+过去用于驱动 JSON 图的那些 DSH agent preset 已不再重新生成，因为创建与优化如今都是 Python 入口点。把它们重新接到 `refactory_dsh.create` 与 `refactory_dsh.loop` 上以供 GUI 使用，是下一项工作；参见 `docs/plans/pythonic-modes.md`。

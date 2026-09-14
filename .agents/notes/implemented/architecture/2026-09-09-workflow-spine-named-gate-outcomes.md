@@ -2,6 +2,8 @@
 
 Status: implemented
 
+English | [中文](2026-09-09-workflow-spine-named-gate-outcomes.zh.md)
+
 ## Problem
 
 The spine consumed refactory's `Workflow.to_dict()` but executed only part of that vocabulary, in three ways that made real graphs unwalkable.

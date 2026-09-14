@@ -1,27 +1,28 @@
 # re:factory
 
-A **self-contained single repo** that turns refactory's graph semantics into a
-running product: refactory defines the workflow, DSH executes it.
+English | [中文](README.zh.md)
+
+A **self-contained single repo** that turns refactory's graph semantics into a running product: refactory defines the workflow, DSH executes it.
 
 ```
 refactory (the language)  →  graph.json  →  DSH (the runtime)
    Workflow.to_dict()                        workflow-spine + CEO + subagents
 ```
 
-- **refactory** (`refactory/vendor/remote-factory`) is the *language* — typed nodes,
-  `Verdict`, `OptKnob`s — plus the outer-loop optimizer (`SwarmEngine`, 8-operator MAP-Elites).
-- **SRF** (`refactory/vendor/srf`) is the first package of science modes (gepa, best_of_n, …)
-  and tasks (circle_packing, …).
-- **DSH** is this repo — an upstream-forked DeepSeek Harness with the workflow-spine,
-  the science runner, and the re:factory brand.
+- **refactory** (`refactory/vendor/remote-factory`) is the *language* — typed nodes, `Verdict`, `OptKnob`s — plus the outer-loop optimizer (`SwarmEngine`, 8-operator MAP-Elites).
+- **SRF** (`refactory/vendor/srf`) is the first package of science modes (gepa, best_of_n, …) and tasks (circle_packing, …).
+- **DSH** is this repo — an upstream-forked DeepSeek Harness with the workflow-spine, the science runner, and the re:factory brand.
 
-Three **meta-modes** ship as DSH presets:
+Three **meta-modes** ship as refactory modes, and one DSH preset carries the loop:
 
 | Mode | What it does |
 |---|---|
-| **create-v2** | create a new mode (a `graph.json`) |
-| **outer-loop** | optimize an existing mode via MAP-Elites |
-| **design-v2** | design software (research → strategy → build → review) |
+| `python -m refactory_dsh.create` | create a new mode: a package of Python plus a `graph.json` |
+| `python -m refactory_dsh.edit` | revise an existing mode from a stated intent |
+| `python -m refactory_dsh.design` | design software (research → strategy → build → review) |
+| **ceo** preset (`refactory` tool) | run and read an outer-loop run from the Web view |
+
+The three meta-modes are Python entry points rather than presets: they write Python and a `graph.json`, which is not something a workflow graph can carry. The loop itself is a mode too — `loop_mode/loop` is its eight steps as a graph.
 
 ---
 
@@ -46,17 +47,16 @@ cd <this-repo>
 
 1. `git submodule update --init --recursive` — pulls refactory + SRF
 2. `pnpm install` + `pnpm run build` — the DSH workspace and its client/host bundles
-3. `uv venv .venv --seed` — a self-contained venv (pip kept for the create-v2 mode)
+3. `uv venv .venv --seed` — a self-contained venv (pip kept for the mode-creation entry points)
 4. `uv pip install` the glue + the minimal semantics deps (pydantic, structlog, networkx, pyyaml, filelock)
 5. `uv pip install -e … --no-deps` links `factory` (refactory) and `srf` into the venv
-6. regenerates the three agent presets + their `graph.json`
+6. writes the Python mode packages and the `graph.json` files the science runner loads
 
-No absolute paths are baked in — everything resolves from the repo root
-(`refactory/refactory_dsh/paths.py`), with `REFACTORY_DSH_HOME` / `DSH_ROOT` /
-`SRF_GRAPHS` / `VENV_BIN` / `NODE_BIN` overrides if you use a non-default layout.
+No absolute paths are baked in — everything resolves from the repo root (`refactory/refactory_dsh/paths.py`), with `REFACTORY_DSH_HOME` / `DSH_ROOT` / `SRF_GRAPHS` / `VENV_BIN` / `NODE_BIN` overrides if you use a non-default layout.
 
 ---
 
+<a id="run"></a> <a id="run-from-source"></a>
 ## Run
 
 ### Interactive (the product)
@@ -65,9 +65,7 @@ No absolute paths are baked in — everything resolves from the repo root
 ./refactory-dsh --port 3081 --no-open
 ```
 
-Open the printed URL, then pick **create-v2**, **outer-loop**, or **design-v2**
-as the agent preset. The CEO drives the graph through `wf_*` tools; you steer at
-the gates.
+Open the printed URL. The default preset is **ceo**, which carries the `refactory` tool: list the modes a checkout can run, start an outer-loop run, watch it while it is in flight, and read its leaderboard, candidate diffs, and artifacts — all from the conversation. For a refactory *graph*, the `wf_*` tools drive it node by node and you steer at the gates.
 
 ### Headless science runner
 
@@ -78,18 +76,11 @@ node --import tsx/esm apps/cli/src/bin.ts --profile science run \
   --budget 1
 ```
 
-prints `{"best_score": …}` and the session log. `--graphs` and `--python-bin`
-default to the checkout's own `.venv/bin` and `refactory/vendor/srf/graphs`, so a
-fresh clone needs neither flag. Pick the CEO model with `--provider` (e.g.
-`deepseek-official`, `openai`, `anthropic` — the pi-ai routes resolve keys from
-`settings.yaml` + `.env`).
+prints `{"best_score": …}` and the session log. `--graphs` and `--python-bin` default to the checkout's own `.venv/bin` and `refactory/vendor/srf/graphs`, so a fresh clone needs neither flag. Pick the CEO model with `--provider` (e.g. `deepseek-official`, `openai`, `anthropic` — the pi-ai routes resolve keys from `settings.yaml` + `.env`).
 
 ### SRF: the reference package of modes
 
-**SRF is the shipped example of how to build a *package of modes* on refactory.**
-It is not part of the runtime — it is a template you copy. Each mode is one
-`graph.json` (refactory `Workflow.to_dict()`) plus the Python ops its `FnNode`s
-call, all inside one package:
+**SRF is the shipped example of how to build a *package of modes* on refactory.** It is not part of the runtime — it is a template you copy. Each mode is one `graph.json` (refactory `Workflow.to_dict()`) plus the Python ops its `FnNode`s call, all inside one package:
 
 ```
 srf/
@@ -98,18 +89,12 @@ srf/
   srf/tasks/…                  # benchmark tasks (circle_packing, …)
 ```
 
-To add your own mode you only touch that package: write a `graph.json`, implement
-its ops, drop it in `graphs/`, and it runs under the same `--profile science`
-runner — no change to DSH. That is the whole refactory→DSH contract: the language
-defines the graph, the runtime executes it, and a mode package supplies the
-domain logic in between.
+To add your own mode you only touch that package: write a `graph.json`, implement its ops, drop it in `graphs/`, and it runs under the same `--profile science` runner — no change to DSH. That is the whole refactory→DSH contract: the language defines the graph, the runtime executes it, and a mode package supplies the domain logic in between.
 
 ### End-to-end example: create a mode, then optimize it
 
-1. Run **create-v2** with the intent *"create a basic inner loop for circle packing"*.
-   It emits `.factory/modes/circle_packing_loop.graph.json`.
-2. Run **outer-loop** with `REFACTORY_TARGET_GRAPH` pointing at that file; it
-   mutates the mode's knobs/topology and reports the best score.
+1. `python -m refactory_dsh.create` with the intent *"a basic inner loop for circle packing"*. It writes a package under `.factory/packages/`, which the registry finds on the next run.
+2. Start an outer-loop run on it — from the Web view through the `refactory` tool, or `python -m refactory_dsh.loop <package>/<mode>`. It proposes edits, evaluates them, keeps what improves the score, and reports the best score it reached.
 
 ---
 
@@ -155,26 +140,18 @@ pnpm run test:gui
 
 ### Rebasing on upstream DSH
 
-This repo is a **fork of `deepseek-ai/deepseek-harness`** on branch
-`feature/workflow-spine`. Our changes are isolated deltas so they re-apply after
-a rebase:
+This repo is a **fork of `deepseek-ai/deepseek-harness`** on branch `feature/workflow-spine`. Our changes are isolated deltas so they re-apply after a rebase:
 
 - new packages/files (e.g. `packages/client/ui-brand-refactory`, `refactory/`)
 - one-line wiring edits (`cordis.patch.yml` rows, `tsconfig` references, `paths` mappings)
 - two locale strings (`hero.headline`)
 
-`refactory` + `srf` are git **submodules** (your own repos), so they rebase/update
-independently.
+`refactory` + `srf` are git **submodules** (your own repos), so they rebase/update independently.
 
 ---
 
 ## Known limitations
 
-- **`trimul` (GPU task) needs `numpy`** — not in the minimal semantics deps; the
-  math tasks (`circle_packing`, `autocorrelation_inequality`) don't need it.
-  Its tests `importorskip("numpy")`, so the suite passes without it.
-- The logo is an inlined downscale of `remote-factory/docs/assets/refactory_logo.png`;
-  refresh it in `packages/client/ui-brand-refactory/src/client/logo.ts` if upstream changes.
-- Ships as **repo + `install.sh`**, not a single binary — bundling Node + Python
-  runtimes into one per-platform executable was considered and deferred; the
-  repo is already self-contained and installable.
+- **`trimul` (GPU task) needs `numpy`** — not in the minimal semantics deps; the math tasks (`circle_packing`, `autocorrelation_inequality`) don't need it. Its tests `importorskip("numpy")`, so the suite passes without it.
+- The logo is an inlined downscale of `remote-factory/docs/assets/refactory_logo.png`; refresh it in `packages/client/ui-brand-refactory/src/client/logo.ts` if upstream changes.
+- Ships as **repo + `install.sh`**, not a single binary — bundling Node + Python runtimes into one per-platform executable was considered and deferred; the repo is already self-contained and installable.

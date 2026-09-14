@@ -1,19 +1,38 @@
+---
+description: "The interactive workflow runner: a per-session spine plus the wf_* tools that walk a refactory workflow graph node by node, for users and maintainers of CEO-driven workflow runs."
+kind: "package-reference"
+---
+
 # `@deepseek-ai/dsh-workflow-spine`
 
-The interactive, drift-free workflow runner. It turns a refactory workflow
-graph (the JSON from `Workflow.to_dict()`) into a live, steerable run the
-driving agent walks step by step — without the agent ever choosing what to do
-next.
+English | [中文](README.zh.md)
 
+## Summary
+
+This package turns a refactory workflow graph (the JSON from `Workflow.to_dict()`) into a live, steerable run that the driving agent walks step by step without ever choosing what to do next. A per-session `Spine` owns the position ("what is next"), gate routing, iteration caps, fork/join barriers, director expansion, and graph edits, and exposes that state through the `wf_*` tools. The spine refuses to hand over the next node until the current one is complete, so a run cannot skip, reorder, or bypass a checkpoint. Deterministic nodes — `FnNode` and `Study` commands and `fn` gate evaluators — can run in-process when `executeCommands` is on and a `shell` executor is mounted. The main costs are that the graph must validate at load and that the CEO's own coding tools are denied, so node work happens inside the subagents it spawns.
+
+## Table of Contents
+
+- [Why](#why)
+- [Tools](#tools)
+- [Config](#config)
+- [Upstream vocabulary](#upstream-vocabulary)
+- [Deterministic nodes](#deterministic-nodes)
+- [Node → DSH mapping](#node-dsh-mapping)
+- [Model Experience](#model-experience)
+- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [Dev Note](#dev-note)
+
+-----
+
+<a id="why"></a>
 ## Why
 
-The headless `workflow` tool runs a script top-to-bottom and returns. It cannot
-pause for the user or change the graph mid-run. The interactive runner fills
-that gap: a per-session `Spine` owns the position ("what is next"), gate
-routing, iteration caps, fork/join barriers, director expansion, and graph
-edits. The agent only fills content at each node, so it cannot skip, reorder,
-or bypass a checkpoint.
+The headless `workflow` tool runs a script top-to-bottom and returns. It cannot pause for the user or change the graph mid-run. The interactive runner fills that gap: a per-session `Spine` owns the position ("what is next"), gate routing, iteration caps, fork/join barriers, director expansion, and graph edits. The agent only fills content at each node, so it cannot skip, reorder, or bypass a checkpoint.
 
+-----
+
+<a id="tools"></a>
 ## Tools (default prefix `wf`)
 
 | Tool | Purpose |
@@ -25,11 +44,11 @@ or bypass a checkpoint.
 | `wf_expand(director, entries)` | Hot-plug a director's N child agents from its plan. |
 | `wf_state` | Full live state (cursor, completed, skipped, verdicts, log). |
 
-The loop the agent follows: `wf_next` → do exactly that node (spawn a subagent
-for an `AgentNode`) → `wf_done` / `wf_verdict` / `wf_expand`. The spine refuses
-to hand over the next node until the current one is complete, so the structure
-cannot drift.
+The loop the agent follows: `wf_next` → do exactly that node (spawn a subagent for an `AgentNode`) → `wf_done` / `wf_verdict` / `wf_expand`. The spine refuses to hand over the next node until the current one is complete, so the structure cannot drift.
 
+-----
+
+<a id="config"></a>
 ## Config
 
 ```yaml
@@ -45,43 +64,29 @@ cannot drift.
     commandTimeoutMs: 600000
 ```
 
-`graph` field names match refactory (`start_node`, `nodes`, `edges`,
-`prompt_template`, `evaluator_type`, `gate_prompt`, `writes`, `reads`,
-`expand`), so a `graph.json` file loads as-is. `validateGraph` rejects a graph
-whose structure the walk cannot follow — an unresolvable `start_node`, a dangling
-edge, a node with two unconditional edges, two edges carrying one gate verdict,
-an unknown node type, or a node the walk can never reach — so a bad graph fails
-at load rather than stalling a run.
+`graph` field names match refactory (`start_node`, `nodes`, `edges`, `prompt_template`, `evaluator_type`, `gate_prompt`, `writes`, `reads`, `expand`), so a `graph.json` file loads as-is. `validateGraph` rejects a graph whose structure the walk cannot follow — an unresolvable `start_node`, a dangling edge, a node with two unconditional edges, two edges carrying one gate verdict, an unknown node type, or a node the walk can never reach — so a bad graph fails at load rather than stalling a run.
 
-An edge `condition` is a label, not an enum. `proceed` exits along the edge,
-`reloop` rewinds, `halt` stops, and any other label is a forward outcome the gate
-itself names (`draft`, `merge`, …), matched case-insensitively. `maxIterations`
-caps a reloop only when the gate declares no `max_iterations` of its own.
+An edge `condition` is a label, not an enum. `proceed` exits along the edge, `reloop` rewinds, `halt` stops, and any other label is a forward outcome the gate itself names (`draft`, `merge`, …), matched case-insensitively. `maxIterations` caps a reloop only when the gate declares no `max_iterations` of its own.
 
+-----
+
+<a id="upstream-vocabulary"></a>
 ## Upstream vocabulary
 
-`@deepseek-ai/dsh-workflow-spine` is one consumer of refactory's `Workflow` IR;
-the [named-gate-outcomes Agent Note](../../../.agents/notes/implemented/architecture/2026-09-09-workflow-spine-named-gate-outcomes.md)
-owns the vocabulary decision and its verified coverage.
+`@deepseek-ai/dsh-workflow-spine` is one consumer of refactory's `Workflow` IR; the [named-gate-outcomes Agent Note](../../../.agents/notes/implemented/architecture/2026-09-09-workflow-spine-named-gate-outcomes.md) owns the vocabulary decision and its verified coverage.
 
+-----
+
+<a id="deterministic-nodes"></a>
 ## Deterministic nodes
 
-With `executeCommands: true` and a `shell` executor mounted, the plugin runs a
-node itself when the graph gives it a command: an `FnNode`/`Study` with a
-`command`, or a `GateNode` whose `evaluator_type` is `fn`. `wf_next` runs those,
-routes the gate by the **last non-empty stdout line** (lowercased, matching how
-edge conditions compare), and reports only the nodes a model must do. With no
-shell mounted, or with execution off, every node is handed to the driver as
-before.
+With `executeCommands: true` and a `shell` executor mounted, the plugin runs a node itself when the graph gives it a command: an `FnNode`/`Study` with a `command`, or a `GateNode` whose `evaluator_type` is `fn`. `wf_next` runs those, routes the gate by the **last non-empty stdout line** (lowercased, matching how edge conditions compare), and reports only the nodes a model must do. With no shell mounted, or with execution off, every node is handed to the driver as before.
 
-A node command is generic — it knows nothing about the graph that invoked it — so
-the plugin hands it its own declaration as JSON under `DSH_WORKFLOW_NODE`:
-`{ id, type, command, reads, writes }`. A command that exits nonzero, times out,
-is aborted, or (for a gate) prints no verdict **fails the node**: `wf_next`
-returns `{ status: 'failed', node, exit_code, error, stdout, stderr }` and the
-cursor does not move, because a step that did not happen must not look like one
-that did.
+A node command is generic — it knows nothing about the graph that invoked it — so the plugin hands it its own declaration as JSON under `DSH_WORKFLOW_NODE`: `{ id, type, command, reads, writes }`. A command that exits nonzero, times out, is aborted, or (for a gate) prints no verdict **fails the node**: `wf_next` returns `{ status: 'failed', node, exit_code, error, stdout, stderr }` and the cursor does not move, because a step that did not happen must not look like one that did.
 
+-----
+
+<a id="node-dsh-mapping"></a>
 ## Node → DSH mapping
 
 | refactory node | spine behavior |
@@ -95,19 +100,46 @@ that did.
 | Named gate condition | `wf_verdict(gate, "draft")` advances along the matching edge. |
 | RELOOP edge | `wf_verdict(reloop, feedback)` rewinds, capped by the gate's `max_iterations` or `maxIterations`. |
 
+-----
+
+<a id="model-experience"></a>
+## Model Experience
+
+### The `wf_*` tools and the CEO prompt section
+
+#### What the model sees
+
+The plugin registers one tool per verb — `wf_next`, `wf_done`, `wf_verdict`, `wf_edit`, `wf_expand`, and `wf_state` — each with a description and a parameter schema. `wf_next` returns the node view of the node due now, carrying that node's `prompt_template`, `reads`, and `writes`, and, for a gate, the `verdicts` the gate accepts. A registered prompt section (first-party order `TOOL_WORKFLOW`) tells the CEO that the `wf_*` tools are the only way to advance, and the `ceoDeny` guard removes the coding and external tools from the CEO's own scope at `agent/created`, so the CEO sees the `wf_*` tools, delegation, and read-only tools while the subagents it spawns keep the full set.
+
+#### Token effect
+
+Constant per request when the graph and tools are fixed: six tool definitions plus one prompt section, independent of graph size. Node content reaches the model only through the tool results the CEO reads, so a node's `prompt_template` and a command's stdout cost tokens once, when that node is due.
+
+#### KV Cache effect
+
+The tool block and the prompt section are fixed for the life of a run and sit in the cached request prefix. A node view that names a different node changes only the message suffix after that prefix, so provider cache reuse for the prefix is preserved when the tool set and configuration do not change.
+
 ## Known Limitations and Deferred Work
 
-- `SubgraphForkNode` / `SelectionNode` are advanced through with an `unsupported`
-  marker; both need an isolated-worktree sub-executor no current graph declares.
-- `LLMNode` is executed as a one-shot agent node: the driving agent makes the
-  call. Nothing enforces the declared `model`, `temperature`, or tool set.
-- A reloop collapses the cursor onto its target, discarding any other active
-  position, so a reloop gate reached with a fork in flight drops the other
-  branches. Graph authors must place reloop gates where the cursor is single.
-- The `afters` barrier is one stack, so a fork nested inside a fork branch makes
-  the inner barrier fire on the outer join.
-- The graph is inlined via `config.graph`; loading a `graphPath` at apply time
-  (via the `fs` seam) is not yet implemented.
-- The "force the loop" guidance is a registered prompt section; the structural
-  enforcement (the spine only advances on a reported completion) is the
-  drift-proof guarantee, and the section only asks the agent to cooperate.
+<a id="known-limitations-and-deferred-work"></a>
+
+These limits define the current spine. They are current package constraints, not a graph-authoring backlog.
+
+- `SubgraphForkNode` / `SelectionNode` are advanced through with an `unsupported` marker; both need an isolated-worktree sub-executor no current graph declares.
+- `LLMNode` is executed as a one-shot agent node: the driving agent makes the call. Nothing enforces the declared `model`, `temperature`, or tool set.
+- A reloop collapses the cursor onto its target, discarding any other active position, so a reloop gate reached with a fork in flight drops the other branches. Graph authors must place reloop gates where the cursor is single.
+- The `afters` barrier is one stack, so a fork nested inside a fork branch makes the inner barrier fire on the outer join.
+- The graph is inlined via `config.graph`; loading a `graphPath` at apply time (via the `fs` seam) is not yet implemented.
+- The "force the loop" guidance is a registered prompt section; the structural enforcement (the spine only advances on a reported completion) is the drift-proof guarantee, and the section only asks the agent to cooperate.
+
+<a id="dev-note"></a>
+### Dev Note
+
+<details>
+<summary>Working context for maintainers — click to expand</summary>
+
+None.
+
+</details>
+
+**Runtime invariant:** No runtime invariant companion is published because the spine's cursor, gate verdicts, and iteration counters are read only through the `wf_*` tools the plugin registers on the session's fiber.

@@ -68,17 +68,15 @@ type Verb = keyof typeof VERBS
 /** The verbs that address an existing run. */
 const RUN_SCOPED: readonly Verb[] = ['status', 'artifacts', 'leaderboard', 'candidate', 'stop']
 
+// One physical line per paragraph: the description reaches the tool catalog
+// verbatim, and a paragraph broken across source lines is a paragraph the
+// markdown wrapper has to reject.
 const DESCRIPTION = [
-  'Drive and read a refactory outer-loop run: the optimizer loop that proposes edits to a mode,',
-  'evaluates them, and keeps what improves the score. Use it to start a run, watch it while it is',
-  'in flight, and read what it produced.',
+  'Drive and read a refactory outer-loop run: the optimizer loop that proposes edits to a mode, evaluates them, and keeps what improves the score. Use it to start a run, watch it while it is in flight, and read what it produced.',
   '',
   `Actions: ${Object.entries(VERBS).map(([verb, help]) => `${verb} (${help})`).join(' ')}`,
   '',
-  'The loop runs in its own process, so a run continues after the call returns and after the',
-  'session ends; watch it with action "status" and an "after" offset. Prefer this tool over',
-  'running the loop in a shell: it is the same console the Web view renders, and a run started',
-  'in a shell will not appear in the view unless it lives under the run root.',
+  'The loop runs in its own process, so a run continues after the call returns and after the session ends; watch it with action "status" and an "after" offset. Prefer this tool over running the loop in a shell: it is the same console the Web view renders, and a run started in a shell will not appear in the view unless it lives under the run root.',
 ].join('\n')
 
 /** Input the tool accepts, after the registry's schema check. */

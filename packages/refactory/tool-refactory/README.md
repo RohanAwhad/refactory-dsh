@@ -111,6 +111,8 @@ The loop names its eight steps after PyTorch: `init` builds the genesis state fr
 | [`src/index.ts`](src/index.ts) | Plugin entry: the `Config` schema, the eight verbs, the prompt section, the tool registration, and the model-facing summary renderer |
 | [`src/console.ts`](src/console.ts) | The process boundary: argv assembly, spawn, JSON decode, and refusal reporting |
 
+**Runtime invariant:** No runtime invariant companion is published because the package holds no durable state of its own: a call spawns one console process, returns its JSON, and the run it may have started lives in the run directory the loop owns. Every relationship an invariant could assert is either the platform's (a child process exits) or the loop's (a journal replays to the same population).
+
 </details>
 
 -----

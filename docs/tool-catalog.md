@@ -1279,16 +1279,11 @@ A fixed foreground workflow starts one fresh structured child per round; the mod
 
 ### `refactory`
 
-Drive and read a refactory outer-loop run: the optimizer loop that proposes edits to a mode,
-evaluates them, and keeps what improves the score. Use it to start a run, watch it while it is
-in flight, and read what it produced.
+Drive and read a refactory outer-loop run: the optimizer loop that proposes edits to a mode, evaluates them, and keeps what improves the score. Use it to start a run, watch it while it is in flight, and read what it produced.
 
 Actions: modes (List the modes a run can be started from, with their parameters.) runs (List runs under the run root, newest first.) start (Start a run in its own process; returns the run id to watch it with.) status (Where a run is, and the events since an offset.) artifacts (What a run left on disk, optionally with contents.) leaderboard (The run's candidates by score, each with its diff against its parent.) candidate (One candidate, with what it changed against the parent it came from.) stop (Ask a run to stop.)
 
-The loop runs in its own process, so a run continues after the call returns and after the
-session ends; watch it with action "status" and an "after" offset. Prefer this tool over
-running the loop in a shell: it is the same console the Web view renders, and a run started
-in a shell will not appear in the view unless it lives under the run root.
+The loop runs in its own process, so a run continues after the call returns and after the session ends; watch it with action "status" and an "after" offset. Prefer this tool over running the loop in a shell: it is the same console the Web view renders, and a run started in a shell will not appear in the view unless it lives under the run root.
 
 ```json
 {
