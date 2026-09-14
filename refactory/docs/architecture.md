@@ -288,9 +288,12 @@ the response to them. These are the findings that survived the rewrite:
   `#14` (package lifecycle and registry), `#17` (the GUI), and the `ports`/
   `manifest` surface answer.
 
-The two handoff notes those findings were extracted from
-(`refactory/docs/learnings/`) described the deleted system's mechanics and were
-removed once this section absorbed what was still true.
+The two handoff notes those findings were extracted from lived in
+`refactory/docs/learnings/`. They were 933 lines describing the mechanics of the
+replaced system — module paths, presets, and run directories that no longer exist
+— so they were removed once this section had absorbed what was still true: the
+requirements they raised, and the lessons above. Keeping them would have made a
+newcomer's first reading a description of the wrong system.
 
 ## Where to go next
 

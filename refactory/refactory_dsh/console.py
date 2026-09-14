@@ -33,7 +33,7 @@ from refactory_dsh import registry
 from refactory_dsh.history import find_runs
 from refactory_dsh.loop import Loop, LoopConfig, LoopError
 from refactory_dsh.nn import PackageError
-from refactory_dsh.paths import REPO_ROOT
+from refactory_dsh.paths import project_root
 
 #: What the console records about a run it started.
 CONSOLE_FILE = "console.json"
@@ -74,7 +74,7 @@ def catalogue(*, project: Path | None = None) -> list[dict[str, Any]]:
     with the reason rather than silently omitted, because "the mode I want is
     missing from the list" is otherwise indistinguishable from a typo.
     """
-    project = Path(project or REPO_ROOT)
+    project = Path(project or project_root())
     grouped = registry.catalogue(project)
     found: list[dict[str, Any]] = []
     for package_name, modes in grouped.items():
@@ -134,7 +134,7 @@ def start(
     does not, and a run that died with its window would be a run nobody could
     start and walk away from.
     """
-    project = Path(project or REPO_ROOT)
+    project = Path(project or project_root())
     runs_root = Path(runs_root) if runs_root else project / RUNS_ROOT
     run_id = run_id or _run_id(mode)
     root = runs_root / run_id
@@ -412,7 +412,7 @@ def runs(
     reader that already bounds them; unfinished ones are found by the console file
     that a start writes before the loop's first artifact exists.
     """
-    project = Path(project or REPO_ROOT)
+    project = Path(project or project_root())
     root = Path(runs_root) if runs_root else project / RUNS_ROOT
     out: list[dict[str, Any]] = []
     for archive in find_runs(root, limit=limit):
@@ -503,7 +503,7 @@ def _root_for(args: argparse.Namespace, project: Path) -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    project = Path(args.project) if args.project else REPO_ROOT
+    project = Path(args.project) if args.project else project_root()
     try:
         if args.verb == "modes":
             payload: Any = catalogue(project=project)

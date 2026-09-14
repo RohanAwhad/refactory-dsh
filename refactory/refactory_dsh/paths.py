@@ -25,6 +25,21 @@ def dsh_root() -> Path:
     return Path(os.environ.get("DSH_ROOT") or REPO_ROOT)
 
 
+def project_root() -> Path:
+    """The project a command resolves packages against.
+
+    One answer for every entry point, because the alternative is what happened
+    before there was one: the console defaulted to the repo root, the loop and
+    registry CLIs defaulted to the working directory, and the authoring commands
+    took ``Path.cwd()``. A package created through one of them was therefore
+    invisible to the next, and which one you got depended on where you stood.
+
+    ``REFACTORY_PROJECT`` overrides it for a checkout that keeps its packages
+    somewhere else.
+    """
+    return Path(os.environ.get("REFACTORY_PROJECT") or REPO_ROOT)
+
+
 def node_bin() -> str:
     """The Node binary that runs DSH. Resolves to an absolute path so it works
     even under a restricted command PATH. Order: ``NODE_BIN`` override, the nvm

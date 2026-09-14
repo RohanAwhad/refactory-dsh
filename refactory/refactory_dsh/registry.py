@@ -15,6 +15,7 @@ from typing import Any
 import structlog
 
 from refactory_dsh.nn.package import Package, PackageError, mode_id, split
+from refactory_dsh.paths import project_root
 
 log = structlog.get_logger()
 
@@ -503,7 +504,7 @@ def main(argv: list[str] | None = None) -> int:
         nargs="?", default="list",
     )
     parser.add_argument("target", nargs="?", help="a <package>/<name> mode, or a package")
-    parser.add_argument("--project", default=".")
+    parser.add_argument("--project", default=str(project_root()))
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--as", dest="as_name", default="", help="rename on add or import")
     parser.add_argument("--ref", default="", help="a git ref, for import")

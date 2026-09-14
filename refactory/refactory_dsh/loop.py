@@ -45,6 +45,7 @@ from refactory_dsh.optim import (
 from refactory_dsh.optim import create as create_optimizer
 from refactory_dsh.optim.base import summarise_reasons
 from refactory_dsh.outerloop import OuterLoop, Run
+from refactory_dsh.paths import project_root
 
 #: The append-only record of everything a run did. Resume replays it.
 JOURNAL = run_history.JOURNAL
@@ -131,6 +132,13 @@ class LoopConfig:
 
 @dataclass
 class EpochSummary:
+    """One epoch, as the report and the scheduler describe it.
+
+    Kept as a record rather than recomputed from the population: what an epoch
+    did is a fact about that epoch, and the population at the end of a run can no
+    longer answer how many candidates a middle epoch proposed.
+    """
+
     epoch: int
     evaluated: int
     best: float | None
@@ -1539,7 +1547,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-evaluations", type=int, default=64)
     parser.add_argument("--attempts", type=int, default=3, help="retries per batch after a refusal")
     parser.add_argument("--runs-root", default=".factory/loop")
-    parser.add_argument("--project", default=".")
+    parser.add_argument("--project", default=str(project_root()))
     parser.add_argument("--model", default="", help="model name for the reasoning optimizer")
     args = parser.parse_args(argv)
 

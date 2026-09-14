@@ -647,10 +647,18 @@ def is_macro(name: str) -> bool:
 
 
 def precheck(edit: dict, state: Mapping[str, Any]) -> str | None:
-    """The reason ``edit`` cannot be applied, or ``None``.
+    """The reason ``edit`` cannot be applied, for the checks that need no state.
 
-    Separate from :func:`apply` so an optimizer can explain a refusal without
-    building a state it will throw away.
+    **Not a dry run.** This consults the edit's own shape and, for a macro, that
+    macro's declared precondition; a primitive is checked no further, so a
+    ``set_knob`` on an undeclared knob — and a ``remove_node`` of the start node —
+    pass here and are refused by :func:`apply`, which raises :class:`EditError`
+    carrying the code. :meth:`~refactory_dsh.optim.base.Optimizer.attempt` is the
+    pattern that turns that into a refusal reason.
+
+    The narrow scope is the point: a caller that wants a verdict without building
+    a state it will throw away gets one cheaply, and the authority for whether an
+    edit is applicable stays in one place.
     """
     if not isinstance(edit, dict):
         return f"an edit must be an object, got {type(edit).__name__}"

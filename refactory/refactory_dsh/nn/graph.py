@@ -147,6 +147,13 @@ class Node:
 
 @dataclass(frozen=True)
 class Edge:
+    """One connection between two nodes, and the verdict that selects it.
+
+    ``condition`` is the gate verdict this edge answers: ``None`` on the out-edge
+    of a non-gate node, and a label on each out-edge of a gate. It is a label
+    rather than an enum because a gate names its own outcomes.
+    """
+
     source: str
     target: str
     condition: str | None = None
