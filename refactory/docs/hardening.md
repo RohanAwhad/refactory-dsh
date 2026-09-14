@@ -208,6 +208,57 @@ fidelity fix, and is not done.
 
 ---
 
+## 6. The documented commands, run as written (#31)
+
+Ship readiness is not a feeling about the code; it is the claim that a person who has
+never seen this repository can install it, follow the docs, and get the promised
+result. That claim is testable, so it is a test: `tests/test_ship_ready.py` reads the
+shipped documents, extracts every command line from their `bash` blocks, and runs it.
+
+The gate checks four things, and each one found something:
+
+| check | what it would catch |
+|---|---|
+| every `python -m refactory_dsh.X` a doc names imports | a tutorial pointing at a deleted module |
+| every module's `--help` accepts the flags the doc shows | a flag renamed in code but not in the prose |
+| the README links the architecture and the tutorials | a stranger with nowhere to go next |
+| the docs the README promises exist on disk | a link to a file that was moved |
+
+**The bug it found.** `python -m refactory_dsh.sandbox --help` printed its usage line
+to **stderr** and exited **2**. Two things were wrong with that, and the second is the
+worse one: a reader who asks for help is told they made an error, and a program that
+captures stdout — which is how the doc gate itself reads a help page — saw nothing at
+all. So the flag table was empty and the gate could not check the sandbox CLI, which
+is where an unknown flag had to be caught by hand.
+
+**The fix.** `sandbox.main` gained `usage()`, which is the one string both paths
+print, and an explicit branch: `-h`/`--help` prints it to **stdout** and returns
+**0**. The two cases that are genuinely misuse keep their old behaviour, because they
+are a different decision and were already deliberate:
+
+| invocation | stream | status | why |
+|---|---|---|---|
+| `-h`, `--help` | stdout | 0 | a question, answered |
+| no arguments | stderr | 2 | nothing was asked for; `test_the_sandbox_cli_needs_an_instruction` pins this |
+| an unknown flag | stderr | 2 | not a command |
+
+**Held by.** A test that runs `--help` against `sandbox`, `loop` and `console` and
+requires both a zero status and non-empty stdout. It is not vacuous: the pre-fix
+behaviour (status 2, empty stdout) fails exactly that assertion, which was run both
+ways when the fix was made.
+
+**The second finding was in the README, not the code.** It described the layout but
+never linked `docs/architecture.md` or `docs/tutorials/`, so the entry point a
+stranger actually opens did not lead anywhere. Both READMEs now carry a Documentation
+table — architecture, tutorials, API, tool packing, hardening, contributing — and the
+pair stays line-aligned (`pnpm run verify-translation-pairing`).
+
+**Also regenerated.** `docs/api/reference.md` is generated from the code and had
+drifted from it; the new `usage()` export made that visible. `test_docs_api.py` fails
+when the two disagree, so the reference is checked rather than trusted.
+
+---
+
 ## Two probes that came back clean
 
 Recorded because the point of an audit is accuracy in both directions.

@@ -147,9 +147,9 @@ def check_identity(ctx: Any) -> dict[str, Any]:
     identity = Identity.from_state(catalogue[attempted])
     symbol_n = sympy.Symbol("n", integer=True, nonnegative=True)
     symbol_k = sympy.Symbol("k", integer=True)
-    derived = sympy.simplify(
-        sympy.summation(sympy.sympify(identity.summand, locals={"k": symbol_k}), (symbol_k, 1, symbol_n))
-    )
+    derived = sympy.simplify(sympy.summation(
+        sympy.sympify(identity.summand, locals={"k": symbol_k}), (symbol_k, 1, symbol_n)
+    ))
 
     route_name = str(ctx.knob("route", "simplify"))
     reduce_residual = _routes(sympy)[route_name]

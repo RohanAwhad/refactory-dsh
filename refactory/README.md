@@ -24,6 +24,9 @@ refactory/                  the glue
   refactory_dsh/registry.py   package discovery, enable/disable, catalogue
   refactory_dsh/create.py     create-mode: a package from a brief
   refactory_packages/<pkg>/   the packages of modes (torchvision analogue)
+  docs/architecture.md        the system as built, and why it looks like that
+  docs/tutorials/             five walkthroughs, run against this checkout
+  docs/packing-tools.md       packing a tool that is not Python, such as Lean
   docs/plans/pythonic-modes.md  the design and its acceptance gates
   vendor/remote-factory/      refactory (git submodule)
   vendor/srf/                 SRF (git submodule)

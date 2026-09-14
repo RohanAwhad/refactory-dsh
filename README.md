@@ -98,6 +98,21 @@ To add your own mode you only touch that package: write a `graph.json`, implemen
 
 ---
 
+## Documentation
+
+Start with [refactory/docs/architecture.md](refactory/docs/architecture.md) for how the pieces fit, then work through the [tutorials](refactory/docs/tutorials/index.md), which go from writing a mode to driving it from the Web GUI.
+
+| Document | What it answers |
+| --- | --- |
+| [architecture.md](refactory/docs/architecture.md) | What the layers are and which one owns a behaviour |
+| [tutorials/](refactory/docs/tutorials/index.md) | How do I do the next thing, in order |
+| [api/](refactory/docs/api/index.md) | What every public name is for |
+| [packing-tools.md](refactory/docs/packing-tools.md) | How a mode declares a tool it needs installed |
+| [hardening.md](refactory/docs/hardening.md) | Which guarantees are enforced, and by what |
+| [contributing.md](refactory/docs/contributing.md) | How to change this repo |
+
+---
+
 ## Layout
 
 ```

@@ -444,6 +444,7 @@ Running code we did not write.
 | function | `run_sandboxed` | `(code: 'str', *, workdir: 'Path', timeout_s: 'int' = 180, memory_mb: 'int' = 2048, cpu_s: 'int' = 120, file_mb: 'int' = 64, env: 'dict[str, str] \| None' = None) -> 'SandboxResult'` |
 | function | `scrub` | `(env: 'dict[str, str] \| None' = None) -> 'dict[str, str]'` |
 | function | `smoke` | `(identifier: 'str', workdir: 'Path', *, project: 'Path \| None' = None, **kwargs: 'Any') -> 'SandboxResult'` |
+| function | `usage` | `() -> 'str'` |
 | function | `verify_sandboxed` | `(name: 'str', *, project: 'Path \| None' = None, **kwargs: 'Any') -> 'SandboxResult'` |
 
 - **`SandboxError`** — A sandboxed run could not be carried out.
@@ -456,6 +457,7 @@ Running code we did not write.
 - **`run_sandboxed`** — Run a snippet in a subprocess with limits, from the workspace, scrubbed.
 - **`scrub`** — The environment a sandboxed run sees: an allowlist, with secrets dropped.
 - **`smoke`** — Run one mode once, in a sandbox, and report what it scored.
+- **`usage`** — The one usage line, printed both for ``--help`` and for misuse.
 - **`verify_sandboxed`** — Everything wrong with a package, checked without importing it here.
 
 

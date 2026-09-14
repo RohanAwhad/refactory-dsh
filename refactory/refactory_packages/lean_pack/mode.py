@@ -41,7 +41,7 @@ class Prover(nn.Mode):
         return {
             "library": nn.Knob(
                 "core", "enum", enum=problems.LIBRARIES,
-                description="which library the theorem needs; the core problem runs without mathlib",
+                description="which library the theorem needs; core runs without mathlib",
             ),
             "strategy": nn.Knob(
                 "omega", "enum", enum=problems.STRATEGIES,
@@ -145,7 +145,7 @@ class Prover(nn.Mode):
             name="result",
             path="result.json",
             media_type="application/json",
-            description="the checker's verdict, the strategy that produced it, and Lean's output",
+            description="the checker's verdict, the strategy, and Lean's output",
         ),)
 
     def guidance(self) -> str:

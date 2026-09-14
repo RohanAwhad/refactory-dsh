@@ -289,9 +289,8 @@ def _probe_python(tool: Tool) -> ToolStatus:
         return ToolStatus(
             tool, False, f"found but not importable ({type(exc).__name__}: {exc})"
         )
-    return ToolStatus(
-        tool, True, f"importable as {tool.probe!r}", str(getattr(module, "__version__", "") or "")
-    )
+    version = str(getattr(module, "__version__", "") or "")
+    return ToolStatus(tool, True, f"importable as {tool.probe!r}", version)
 
 
 def _probe_path(tool: Tool) -> ToolStatus:

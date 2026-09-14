@@ -98,6 +98,21 @@ srf/
 
 ---
 
+## 文档
+
+先读 [refactory/docs/architecture.md](refactory/docs/architecture.md) 了解各部分如何组合，然后按顺序过一遍[教程](refactory/docs/tutorials/index.md)：从编写一个 mode 一直到在 Web GUI 中驱动它。
+
+| 文档 | 回答的问题 |
+| --- | --- |
+| [architecture.md](refactory/docs/architecture.md) | 有哪些层，某个行为归哪一层负责 |
+| [tutorials/](refactory/docs/tutorials/index.md) | 下一步该怎么做，按顺序 |
+| [api/](refactory/docs/api/index.md) | 每个公开名称的用途 |
+| [packing-tools.md](refactory/docs/packing-tools.md) | mode 如何声明它需要安装的工具 |
+| [hardening.md](refactory/docs/hardening.md) | 哪些保证被强制执行，由谁执行 |
+| [contributing.md](refactory/docs/contributing.md) | 如何修改本仓库 |
+
+---
+
 ## 目录结构
 
 ```

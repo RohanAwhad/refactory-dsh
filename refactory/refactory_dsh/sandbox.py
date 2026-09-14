@@ -422,6 +422,14 @@ def promote(project: Path, name: str, *, note: str = "") -> dict[str, Any]:
     return recorded
 
 
+def usage() -> str:
+    """The one usage line, printed both for ``--help`` and for misuse."""
+    return (
+        "usage: python -m refactory_dsh.sandbox "
+        "--ast <package> | --verify <package> | --smoke <package>/<mode>"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """``python -m refactory_dsh.sandbox --ast <pkg> | --smoke <pkg>/<mode>``.
 
@@ -431,6 +439,12 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     project = Path.cwd()
     workdir = Path(os.environ.get("REFACTORY_WORKDIR") or project)
+    if argv[:1] in (["-h"], ["--help"]):
+        # Asking for help is not a failure: usage goes to stdout and the exit
+        # status is 0, so a person or a doc checker can read it. A bare
+        # invocation with no instruction is still misuse: usage on stderr, 2.
+        print(usage())
+        return 0
     try:
         if argv[:1] == ["--ast"] and len(argv) == 2:
             problems = ast_check(argv[1], project)
@@ -450,11 +464,7 @@ def main(argv: list[str] | None = None) -> int:
     except SandboxError as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
         return 2
-    print(
-        "usage: python -m refactory_dsh.sandbox --ast <package> | "
-        "--verify <package> | --smoke <package>/<mode>",
-        file=sys.stderr,
-    )
+    print(usage(), file=sys.stderr)
     return 2
 
 
