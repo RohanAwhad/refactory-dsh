@@ -264,6 +264,19 @@ the change; `test_a_recorded_commit_is_one_git_actually_knows` now runs `git cat
 -e` on every one, and all 23 done items resolve. Verified both ways: planting a
 made-up hash fails the gate, and removing it passes.
 
+**The install itself was run, not inferred.** `./install.sh` is the one command a
+stranger executes, and everything above only proves the commands *after* it work. It
+was run against this checkout: submodules, `pnpm install --frozen-lockfile`,
+`pnpm run build`, the venv, the editable installs, and the registry listing all
+completed with status 0. The build was then checked for the damage a build can do —
+`git status` is clean, the Python suite is unchanged, the DSH-side specs pass, and the
+doc gates pass — because "it exited 0" and "it left the tree working" are different
+claims and only the second one matters.
+
+**What this still does not prove.** It is not a clean clone: the submodules were
+already initialised and the venv already existed, so the script's fresh-clone branches
+were not exercised. A machine with neither was not available here.
+
 ---
 
 ## 7. The sandbox made an installed toolchain unreachable (#30)
