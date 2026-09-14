@@ -106,4 +106,4 @@ model-facing summary for anything it does not know.
 - The tool's payload is the contract: the card, a shell, and any future reader all
   read the same JSON.
 
-Back to the [tutorial index](README.md).
+Back to the [tutorial index](index.md).

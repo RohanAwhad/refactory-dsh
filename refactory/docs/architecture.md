@@ -297,6 +297,6 @@ newcomer's first reading a description of the wrong system.
 
 ## Where to go next
 
-- [API reference](api/README.md) — every public module and symbol.
-- [Tutorials](tutorials/README.md) — the running example, built up.
+- [API reference](api/index.md) — every public module and symbol.
+- [Tutorials](tutorials/index.md) — the running example, built up.
 - [Contributing](contributing.md) — for a coding agent or a person changing this.

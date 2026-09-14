@@ -84,7 +84,7 @@ def test_every_doc_link_resolves():
 
 def test_the_tutorial_index_lists_every_tutorial():
     """The index and the directory agree, so a new tutorial cannot be orphaned."""
-    index = (DOCS / "tutorials" / "README.md").read_text()
+    index = (DOCS / "tutorials" / "index.md").read_text()
     linked = set(re.findall(r"\]\((\d\d-[\w-]+\.md)\)", index))
     on_disk = {path.name for path in (DOCS / "tutorials").glob("[0-9][0-9]-*.md")}
     assert linked == on_disk, (
