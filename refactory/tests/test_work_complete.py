@@ -22,6 +22,10 @@ import pytest
 
 TODO = Path(__file__).resolve().parent.parent / ".work" / "todo.json"
 
+#: The test runners a verify command may use. `pytest` covers the Python side;
+#: `pnpm`/`vitest` cover the DSH side, which is where GUI work verifies.
+RUNNERS = frozenset({"pytest", "pnpm", "vitest", "npx"})
+
 
 def _items() -> list[dict]:
     return json.loads(TODO.read_text())["items"]
@@ -31,7 +35,7 @@ def test_the_work_list_exists_and_is_well_formed() -> None:
     items = _items()
     assert items, "the work list is empty; that is not the same as finished"
     for item in items:
-        assert item["status"] in {"todo", "doing", "done"}, item
+        assert item["status"] in {"todo", "doing", "done", "deferred"}, item
         assert item["title"], item
 
 
@@ -62,8 +66,16 @@ def test_every_verify_command_names_files_that_exist() -> None:
     root = TODO.parent.parent.parent
     for item in _items():
         words = item["verify"].split()
-        assert words[0] == "pytest", f"{item['id']}: verify must be a pytest command"
-        paths = [word for word in words[1:] if not word.startswith("-") and "/" in word]
+        # A GUI item verifies with vitest, a Python item with pytest. What matters
+        # is that the runner is one of them and that the files it names exist.
+        assert words[0] in RUNNERS, (
+            f"{item['id']}: verify must run {sorted(RUNNERS)}, not {words[0]!r}"
+        )
+        paths = [
+            word
+            for word in words[1:]
+            if not word.startswith("-") and "/" in word and "." in word.rsplit("/", 1)[-1]
+        ]
         assert paths, f"{item['id']}: verify names no test file"
         for path in paths:
             assert (root / path).exists(), (
@@ -84,8 +96,29 @@ def test_a_done_item_records_the_evidence_and_the_commit() -> None:
         )
 
 
+def test_a_deferred_item_says_why_and_where_it_went() -> None:
+    """`deferred` is not a way to stop working; it is a hand-off.
+
+    Work that cannot be finished in this session — it needs a capability the
+    session does not have — has to leave a reason and a destination, or
+    deferring becomes a quieter way to abandon something.
+    """
+    for item in _items():
+        if item["status"] != "deferred":
+            continue
+        assert item.get("deferred_reason", "").strip(), (
+            f"{item['id']} is deferred with no reason"
+        )
+        assert item.get("deferred_to", "").strip(), (
+            f"{item['id']} is deferred with nowhere to go: name the issue or session "
+            "that will pick it up"
+        )
+
+
 def test_every_tracked_item_is_done() -> None:
-    outstanding = [i for i in _items() if i["status"] != "done"]
+    outstanding = [
+        item for item in _items() if item["status"] not in {"done", "deferred"}
+    ]
     if outstanding:
         detail = "\n".join(
             f"  [{i['status']:5s}] #{i['issue']} {i['id']}: {i['title']}"
