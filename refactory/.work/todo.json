@@ -191,7 +191,7 @@
       "why": "My `all 13 ported` claim was wrong. `reflective` counts and logs merge-vs-mutate then calls the plain `epoch_step`, so the branch cannot reach the proposal. `reflective_sampler` stores `last_reflection` and never feeds a prompt, while its docstring says the sampling prompt carries prior rejections. `adaptive_meta` logs the meta decision and runs the default step. `research_then_optimize` stores `research_note` and never consumes it — `grep` finds only the two lines that set and log it. 6 of 14 strategies produce byte-identical leaderboards to `default`.",
       "verify": "pytest refactory/tests/test_strategies.py -q",
       "status": "done",
-      "commit": "(pending)",
+      "commit": "37e3546a9c",
       "observed": "31 passed (test_strategies.py)",
       "evidence": "Fixed. Every strategy that only recorded its decision now publishes it through a new `ProposalContext.strategy` channel, and acts on it. `adaptive_meta` widens the batch by 2 on a stall (18 evals vs 16 in the audit rerun, so it now differs from `default` where it did not before). `reflective` builds a real merge — a candidate taking one parent's settings from the other — and falls back to a mutation when the two parents differ structurally rather than in their knobs, because a no-op merge would be refused as E-noop and lose the slot. `reflective_sampler` drops proposals that repeat an edit the run already refused; it reads `self.rejections` for the edits because `Run.rejections()` returns the summarised reasons a prompt wants. `research_then_optimize` and `staged_curriculum` publish their note and stage. Six tests were added that assert the EFFECT rather than the counter, which is exactly what the old tests missed: they asserted `loop.merges >= 1`, so a branch that changed nothing passed. Remaining and honest: with `optimizer=random` the model-facing decisions (research note, curriculum stage) reach a proposer that does not read them, so 4 strategies still produce byte-identical leaderboards on the tiny example — the channel is real and the distinguishing behaviour only shows with a model proposer."
     },
@@ -202,7 +202,7 @@
       "why": "Its docstring says `A generated package is never imported here` and the code ends with `load_fresh(name)` -> `importlib.import_module`, then imports every declared ops module and constructs every mode. Only the *structural* check is sandboxed; the semantic half executes untrusted code with full access, which is the whole point of the issue.",
       "verify": "pytest refactory/tests/test_create.py refactory/tests/test_sandbox.py -q",
       "status": "done",
-      "commit": "(pending)",
+      "commit": "59a28b71fa",
       "observed": "26 passed (test_create.py), 20 passed (test_sandbox.py)",
       "evidence": "Fixed. `check_package` no longer imports the package at all: the whole semantic check — package name, ops modules, every mode's construction, its score, its knobs, every validator rule — moved into `sandbox.verify_sandboxed`'s subprocess. `register` and `smoke` needed the manifest to name what was registered and which mode to run, and were loading the package to get it; both now use the new `sandbox.describe_package`, which reads it out of process. The two orphaned in-process helpers (`load_fresh`, `_check_mode`) are deleted, so there is no longer a function that loads a generated package in the driver. Proven by two new tests in test_create.py that spy on importlib.import_module for the package's module prefix and assert the driver imported nothing while check_package and describe_package ran to a clean result."
     },
@@ -213,7 +213,7 @@
       "why": "The issue says explicitly: do not invent a command string, `FnNode.callable_name` already exists; adopt `AgentNode.post_checks`; adopt Fork/Join. The lowering emits `command: 'python -m refactory_dsh.run <mod>:<fn>'` with `callable_name: None`, and `callable_name`/`post_checks` appear zero times in lowering.py. It runs, but through a convention of our own rather than the seam that was asked for.",
       "verify": "pytest refactory/tests/test_lowering.py -q",
       "status": "done",
-      "commit": "(pending)",
+      "commit": "78ff4e8fb5",
       "observed": "17 passed (test_lowering.py), 6 passed (test_equivalence.py --run-integration)",
       "evidence": "Fixed, with a correction to the issue. `callable_name` IS a real `FnNode` field — `factory/workflow/primitives.py:159`, and `factory/workflow/parity.py` round-trips it — so the issue was right that the lowering dropped something. But DSH's spine does not model it: `packages/workflow/workflow-spine/src/types.ts` has `command`, `evaluator_type` and `evaluator_command`, and `callable_name` appears nowhere in the spine's source, which executes the command. So the issue's `do not invent a command string` would have produced a graph whose nodes never run. The lowering now emits **both**: `callable_name` so the IR stays faithful to refactory's language and its tooling can read it, and `command` because that is what the runtime we ship executes. Verified: the lowered graph carries both fields, every declared callable resolves, and the DSH equivalence suite still passes 6. `AgentNode.post_checks` and Fork/Join remain unadopted and are recorded as such rather than silently skipped."
     },
@@ -224,7 +224,7 @@
       "why": "`MemoryStore.forget_run_scoped` exists and is called nowhere. So a run-scoped namespace accumulates exactly like a project one, and the retention policy is a declaration rather than behaviour. The issue's own argument is that run vs project vs global 'is the difference between a memory that dies with the run and one that accumulates'.",
       "verify": "pytest refactory/tests/test_declarations.py -q",
       "status": "done",
-      "commit": "(pending)",
+      "commit": "ddf1fed5ac",
       "observed": "22 passed (test_declarations.py)",
       "evidence": "Two gaps, both fixed. (1) `MemoryStore.forget_run_scoped` existed with a docstring saying `Called when the run ends` and nothing called it, so a run-scoped namespace accumulated like a project one — and on RESUME a re-evaluated candidate would read its own leftovers, making a resumed run differ from the one it resumed. `Loop._evaluate` now forgets in a `finally`, so a crash or a stop applies the policy too. (2) Found while fixing it: **memory did not cross to DSH at all**. The lowering dropped it and the node runner built its context without a store, so a mode declaring a cross-run prior worked in the walker and silently kept nothing on the runtime that ships — a difference between the runtimes that nothing reported, because the example declares no memory. `write_declarations` now carries the declarations beside the facts, `read_memory_declarations` reads them back, and `run.py` builds the store. Six new tests hold both properties."
     },
@@ -235,7 +235,7 @@
       "why": "The issue asks for provenance of `what it was edited from, at which state`. `_revision_source` hands the model the source files, but the output records only `revision_of: <mode id>`. You cannot reproduce or diff a revision against the exact state it was derived from.",
       "verify": "pytest refactory/tests/test_edit_design.py -q",
       "status": "done",
-      "commit": "(pending)",
+      "commit": "943d9d6f5b",
       "observed": "18 passed (test_edit_design.py)",
       "evidence": "Fixed. `_revision_source` handed the model the source *files*, which already worked, but the recorded provenance was `revision_of: <mode id>` alone. A mode is not fixed — the outer loop edits it — so that names a class which may have changed since, and the revision could not be reproduced or diffed against what it actually started from. `edit()` now resolves the source mode once, records its whole `revision_of_state` plus a `revision_of_digest` (the same `candidate_id` the loop uses, so a revision and a candidate that are the same state agree), and returns the digest to the caller. The test asserts the recorded state is a full state dict, that the digest matches the result, and that it identifies the state it was taken from."
     },
@@ -246,7 +246,7 @@
       "why": "The original product had three meta-modes. We have create (a mode), edit (a mode), loop, and design (a mode) — but they are separate entry points, not a package. They belong in one default package, which may need exceptions the mode contract does not otherwise allow.",
       "verify": "pytest refactory/tests/test_meta_package.py -q",
       "status": "done",
-      "commit": "(pending)",
+      "commit": "72fa042719",
       "observed": "10 passed (test_meta_package.py), 529 passed overall",
       "evidence": "Done as `refactory_packages/meta_pack` with modes `create`, `edit`, `design`. The `-mode` suffix was dropped: `Package` validates mode names against `^[a-z][a-z0-9_]*$` and refused `create-mode`, and relaxing that rule to allow a tautological suffix would let every future name carry punctuation. Two latent bugs surfaced the moment the modes were validated as modes rather than merely run as entry points: (1) `CreateMode`'s `survey` node wrote `survey.json` without declaring it, and the executor SKIPS the write check for a node that declares no writes, so the graph had never passed V6 — the declaration is now there and a test holds it; (2) a package whose modes are unscored on purpose was indistinguishable from one whose author forgot, so `Mode.unscored_reason` makes the exception a declaration, the registry test accepts a stated reason and still refuses silence, the sandbox check does the same for created packages, and the loop still refuses an unscored mode as a search target. The package docstring states all three exceptions (unscored, library ops, needs a model)."
     },

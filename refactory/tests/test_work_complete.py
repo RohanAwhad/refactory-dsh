@@ -16,11 +16,15 @@ from meaning "nearly done, described optimistically".
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
 
 TODO = Path(__file__).resolve().parent.parent / ".work" / "todo.json"
+
+#: The checkout, which is where `git cat-file` has to run to resolve a commit.
+REPO = Path(__file__).resolve().parent.parent.parent
 
 #: The test runners a verify command may use. `pytest` covers the Python side;
 #: `pnpm`/`vitest` cover the DSH side, which is where GUI work verifies.
@@ -94,6 +98,34 @@ def test_a_done_item_records_the_evidence_and_the_commit() -> None:
         assert item.get("commit", "").strip(), (
             f"{item['id']} is marked done with no commit recording the change"
         )
+
+
+def test_a_recorded_commit_is_one_git_actually_knows() -> None:
+    """A placeholder in the commit field is a done item nobody can check.
+
+    `commit: "(pending)"` satisfies a test that asks for a non-empty string, so six
+    closed items carried one and the field proved nothing. The point of recording a
+    commit is that a reader can go and look at the change, which requires the hash to
+    resolve. `git cat-file -e` is what makes that a fact rather than a promise.
+    """
+    unknown: list[str] = []
+    for item in _items():
+        recorded = item.get("commit", "")
+        if item["status"] != "done" or not recorded:
+            continue
+        # `git log --format=%h` may abbreviate to fewer characters than the 40-char
+        # object name, so ask git whether the object exists rather than matching a
+        # length.
+        exists = subprocess.run(
+            ["git", "cat-file", "-e", recorded],
+            cwd=REPO, capture_output=True,
+        ).returncode == 0
+        if not exists:
+            unknown.append(f"{item['id']} -> {recorded!r}")
+    assert not unknown, (
+        "these items are marked done with a commit git cannot resolve, so the change "
+        f"they claim cannot be read: {unknown}"
+    )
 
 
 def test_a_deferred_item_says_why_and_where_it_went() -> None:

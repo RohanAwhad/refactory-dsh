@@ -257,6 +257,13 @@ pair stays line-aligned (`pnpm run verify-translation-pairing`).
 drifted from it; the new `usage()` export made that visible. `test_docs_api.py` fails
 when the two disagree, so the reference is checked rather than trusted.
 
+**And the tracker's own commit field was not checked.** The gate asked a done item for
+a non-empty `commit`, which `"(pending)"` satisfies, so six closed items carried one
+and the field proved nothing. A recorded commit exists so a reader can go and look at
+the change; `test_a_recorded_commit_is_one_git_actually_knows` now runs `git cat-file
+-e` on every one, and all 23 done items resolve. Verified both ways: planting a
+made-up hash fails the gate, and removing it passes.
+
 ---
 
 ## 7. The sandbox made an installed toolchain unreachable (#30)
