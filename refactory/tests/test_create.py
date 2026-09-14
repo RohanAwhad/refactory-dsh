@@ -14,6 +14,7 @@ import pytest
 from refactory_dsh import create as create_module
 from refactory_dsh import registry
 from refactory_dsh.create import CreateConfig, CreateError, CreateMode
+from refactory_dsh import create_ops, sandbox
 from refactory_dsh.create_ops import parse_files
 from tests_support import (
     FakeModel,
@@ -311,3 +312,100 @@ def test_a_bad_design_is_retried_with_its_reasons(tmp_path):
     assert "at least two" in model.prompts[1], (
         "the strategy retry must be told what was wrong with the design"
     )
+
+
+# ── a generated package is never loaded in this process ────────────────────
+#
+# Issue #23: create-mode writes Python, and deciding whether it is usable means
+# loading it — which means executing model-written code. The rule is that the
+# *driver* never does. These hold it, because the failure is silent: an import
+# that succeeds looks exactly like a package that was never imported.
+
+
+def _valid_package(name: str) -> dict[str, str]:
+    """A minimal package that passes every check, so a failure is about loading."""
+    ops = f"refactory_packages.{name}.ops"
+    return {
+        "__init__.py": (
+            "from refactory_dsh.nn import Package\n"
+            "from .mode import Counter\n\n"
+            f"PACKAGE = Package(name={name!r}, modes=(Counter,), ops=({ops!r},))\n"
+        ),
+        "ops.py": (
+            "def start(ctx):\n"
+            "    ctx.write_json('state.json', {'value': 0})\n"
+            "    return {'value': 0}\n\n"
+            "def finish(ctx):\n"
+            "    ctx.write_json('best.json', {'best': ctx.knob('target', 3)})\n"
+            "    return {'best': ctx.knob('target', 3)}\n"
+        ),
+        "mode.py": (
+            "from refactory_dsh import nn\n"
+            f"OPS = {ops!r}\n\n"
+            "class Counter(nn.Mode):\n"
+            "    name = 'counter'\n"
+            "    @classmethod\n"
+            "    def declare(cls):\n"
+            "        return {'target': nn.Knob(3, 'int', lo=1, hi=9)}\n"
+            "    def build(self):\n"
+            "        g = nn.Graph()\n"
+            "        g.add(nn.Node('start', 'op', call=OPS + ':start',"
+            " writes=('state.json',), produces=('value',), knobs=('target',)))\n"
+            "        g.add(nn.Node('finish', 'op', call=OPS + ':finish',"
+            " writes=('best.json',), produces=('best',)))\n"
+            "        g.connect('start', 'finish')\n"
+            "        return g\n"
+            "    def score(self, run):\n"
+            "        return float(run.facts['best'])\n"
+        ),
+    }
+
+
+def _stage(tmp_path: Path, name: str, files: dict[str, str]) -> None:
+    from refactory_dsh import registry
+
+    root = registry.workspace_root(tmp_path) / name
+    root.mkdir(parents=True, exist_ok=True)
+    for filename, body in files.items():
+        (root / filename).write_text(body)
+    registry.install_workspace(tmp_path)
+
+
+def _record_package_imports(monkeypatch, name: str) -> list[str]:
+    """Every import of this package, from anywhere in this process."""
+    import importlib
+    from refactory_dsh import registry
+
+    module_name = f"{registry.ROOT_PACKAGE}.{name}"
+    imported: list[str] = []
+    real = importlib.import_module
+
+    def recording(target: str, *args, **kwargs):
+        if target == module_name or target.startswith(module_name + "."):
+            imported.append(target)
+        return real(target, *args, **kwargs)
+
+    monkeypatch.setattr(importlib, "import_module", recording)
+    return imported
+
+
+def test_check_package_never_imports_the_package_it_checks(tmp_path, monkeypatch):
+    """The whole point of #23: the check must not run model code in the driver."""
+    _stage(tmp_path, "spied_pkg", _valid_package("spied_pkg"))
+    monkeypatch.chdir(tmp_path)
+    imported = _record_package_imports(monkeypatch, "spied_pkg")
+    problems = create_ops.check_package("spied_pkg")
+    assert problems == [], problems
+    assert imported == [], (
+        f"check_package imported the generated package in this process: {imported}"
+    )
+
+
+def test_reading_a_package_manifest_does_not_import_it(tmp_path, monkeypatch):
+    """`register` and `smoke` need the mode ids, not the module in this process."""
+    _stage(tmp_path, "manifest_pkg", _valid_package("manifest_pkg"))
+    imported = _record_package_imports(monkeypatch, "manifest_pkg")
+    described = sandbox.describe_package("manifest_pkg", project=tmp_path)
+    assert described.ok, described.stderr
+    assert described.payload["ids"], "the manifest names no mode"
+    assert imported == [], f"describe_package imported it here: {imported}"

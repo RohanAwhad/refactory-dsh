@@ -325,20 +325,39 @@ def smoke(identifier: str, workdir: Path, *, project: Path | None = None, **kwar
 def verify_sandboxed(
     name: str, *, project: Path | None = None, **kwargs: Any
 ) -> SandboxResult:
-    """Import a package and validate every mode, without importing it here.
+    """Everything wrong with a package, checked without importing it here.
 
-    The structural check needs the package loaded, and loading is execution. Doing
-    it in a subprocess is what keeps a generated package out of the driver process
-    while still answering whether it is a usable mode.
+    The check needs the package loaded, and loading **is** execution. So the whole
+    check runs in a subprocess: the package name, its ops modules, every mode's
+    construction, its score and its knobs, and every validator rule. This is the
+    only place a generated package is loaded, and it is loaded somewhere that
+    cannot reach the driver's filesystem, environment, or imports.
+
+    Answers in one call what would otherwise be three: there is no read-only way
+    to ask whether model-written code is a usable mode.
     """
     project = Path(project or Path.cwd())
     code = (
         "import json\n"
+        "import importlib\n"
         "from pathlib import Path\n"
         "from refactory_dsh import registry\n"
         "from refactory_dsh.nn import validate_state\n"
         "problems = []\n"
         f"package = registry.load({name!r}, Path({str(project)!r}))\n"
+        f"expected = {name!r}\n"
+        # Concatenation, not a nested f-string: `{name!r}` inside one would insert
+        # the quotes too and break the enclosing literal.
+        "if package.name != expected:\n"
+        "    problems.append('PACKAGE.name is ' + repr(package.name) + ', not ' + repr(expected))\n"
+        "if not package.modes:\n"
+        "    problems.append('PACKAGE.modes is empty; a package with no mode cannot be run')\n"
+        "for ops_module in package.ops:\n"
+        "    try:\n"
+        "        importlib.import_module(ops_module)\n"
+        "    except Exception as exc:\n"
+        "        problems.append(f'the declared ops module {ops_module!r} does not import:"
+        " {type(exc).__name__}: {exc}')\n"
         "for mode_class in package.modes:\n"
         "    identifier = f'{package.name}/{mode_class.name}'\n"
         "    try:\n"
@@ -354,6 +373,26 @@ def verify_sandboxed(
         " resolve_calls=True):\n"
         "        problems.append(f'{identifier}: {issue}')\n"
         "print(json.dumps({'problems': problems}))\n"
+    )
+    return run_sandboxed(code, workdir=project, env=dict(os.environ), **kwargs)
+
+
+def describe_package(name: str, *, project: Path | None = None, **kwargs: Any) -> SandboxResult:
+    """A package's manifest and mode ids, read without importing it here.
+
+    Reading ``PACKAGE`` means importing the module that declares it, and for a
+    generated package that is the model's code. So the read happens where the
+    check happens. A caller that only wants to *name* what a package contains — to
+    report what was registered, or to choose a mode to smoke — should not have to
+    run the package in the driver to find out.
+    """
+    project = Path(project or Path.cwd())
+    code = (
+        "import json\n"
+        "from pathlib import Path\n"
+        "from refactory_dsh import registry\n"
+        f"package = registry.load({name!r}, Path({str(project)!r}))\n"
+        "print(json.dumps({'describe': package.describe(), 'ids': package.ids()}))\n"
     )
     return run_sandboxed(code, workdir=project, env=dict(os.environ), **kwargs)
 

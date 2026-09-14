@@ -183,6 +183,73 @@
       "deferred_reason": "Every acceptance criterion is visual: a picker with the right entries, a card that names the strategy, a refusal message on screen. This session's model accepts no image input (read_image refuses it), so it cannot see whether a change worked \u2014 the previous hero fix was reasoned from CSS and did not take.",
       "deferred_to": "https://github.com/akashgit/refactory-dsh/issues/28 \u2014 a session running a vision-capable model",
       "evidence": "Investigated and recorded, not implemented. GUI-HANDOFF.md carries the three rendering/workspace defects found in the same browser session. Verified as already working: all 13 SRF ports plus `default` ship in strategies.py and are selectable through the tool's settings.strategy (confirmed with --strategy reflective); the registry CLI has 9 verbs including add/import/remove/enable/disable. Verified as missing: the `refactory` tool's 8 actions contain no package management, and create/edit/design have no preset and no tool action."
+    },
+    {
+      "id": "strat-effect",
+      "issue": 20,
+      "title": "The SRF strategies record their distinguishing decision instead of applying it",
+      "why": "My `all 13 ported` claim was wrong. `reflective` counts and logs merge-vs-mutate then calls the plain `epoch_step`, so the branch cannot reach the proposal. `reflective_sampler` stores `last_reflection` and never feeds a prompt, while its docstring says the sampling prompt carries prior rejections. `adaptive_meta` logs the meta decision and runs the default step. `research_then_optimize` stores `research_note` and never consumes it \u2014 `grep` finds only the two lines that set and log it. 6 of 14 strategies produce byte-identical leaderboards to `default`.",
+      "verify": "pytest refactory/tests/test_strategies.py -q",
+      "status": "todo"
+    },
+    {
+      "id": "check-sandbox",
+      "issue": 23,
+      "title": "check_package imports model-written code in the driver process",
+      "why": "Its docstring says `A generated package is never imported here` and the code ends with `load_fresh(name)` -> `importlib.import_module`, then imports every declared ops module and constructs every mode. Only the *structural* check is sandboxed; the semantic half executes untrusted code with full access, which is the whole point of the issue.",
+      "verify": "pytest refactory/tests/test_create.py refactory/tests/test_sandbox.py -q",
+      "status": "done",
+      "commit": "(pending)",
+      "observed": "26 passed (test_create.py), 20 passed (test_sandbox.py)",
+      "evidence": "Fixed. `check_package` no longer imports the package at all: the whole semantic check \u2014 package name, ops modules, every mode's construction, its score, its knobs, every validator rule \u2014 moved into `sandbox.verify_sandboxed`'s subprocess. `register` and `smoke` needed the manifest to name what was registered and which mode to run, and were loading the package to get it; both now use the new `sandbox.describe_package`, which reads it out of process. The two orphaned in-process helpers (`load_fresh`, `_check_mode`) are deleted, so there is no longer a function that loads a generated package in the driver. Proven by two new tests in test_create.py that spy on importlib.import_module for the package's module prefix and assert the driver imported nothing while check_package and describe_package ran to a clean result."
+    },
+    {
+      "id": "ir-fidelity",
+      "issue": 21,
+      "title": "The lowering invents a command string instead of using refactory's callable_name",
+      "why": "The issue says explicitly: do not invent a command string, `FnNode.callable_name` already exists; adopt `AgentNode.post_checks`; adopt Fork/Join. The lowering emits `command: 'python -m refactory_dsh.run <mod>:<fn>'` with `callable_name: None`, and `callable_name`/`post_checks` appear zero times in lowering.py. It runs, but through a convention of our own rather than the seam that was asked for.",
+      "verify": "pytest refactory/tests/test_lowering.py -q",
+      "status": "todo"
+    },
+    {
+      "id": "memory-retention",
+      "issue": 24,
+      "title": "retention='run' memory is declared but never discarded",
+      "why": "`MemoryStore.forget_run_scoped` exists and is called nowhere. So a run-scoped namespace accumulates exactly like a project one, and the retention policy is a declaration rather than behaviour. The issue's own argument is that run vs project vs global 'is the difference between a memory that dies with the run and one that accumulates'.",
+      "verify": "pytest refactory/tests/test_declarations.py -q",
+      "status": "todo"
+    },
+    {
+      "id": "revision-state",
+      "issue": 13,
+      "title": "A revision records the mode it came from, not the state it came from",
+      "why": "The issue asks for provenance of `what it was edited from, at which state`. `_revision_source` hands the model the source files, but the output records only `revision_of: <mode id>`. You cannot reproduce or diff a revision against the exact state it was derived from.",
+      "verify": "pytest refactory/tests/test_edit_design.py -q",
+      "status": "todo"
+    },
+    {
+      "id": "meta-modes",
+      "issue": 29,
+      "title": "create-v2 and design-v2 as modes in the default package",
+      "why": "The original product had three meta-modes. We have create (a mode), edit (a mode), loop, and design (a mode) \u2014 but they are separate entry points, not a package. They belong in one default package, which may need exceptions the mode contract does not otherwise allow.",
+      "verify": "pytest refactory/tests/test_meta_package.py -q",
+      "status": "todo"
+    },
+    {
+      "id": "math-pack",
+      "issue": 30,
+      "title": "A package of modes for frontier mathematics that packs non-Pythonic tools",
+      "why": "Not every tool a mode needs is Python. Lean, mathlib and sympy need installation and a manifest, and the package must be able to declare and provision them. This is the test of whether a package can carry its tools.",
+      "verify": "pytest refactory/tests/test_math_pack.py -q",
+      "status": "todo"
+    },
+    {
+      "id": "ship-ready",
+      "issue": 31,
+      "title": "Ship readiness: a person who has never seen this can install, run and extend it",
+      "why": "Everything so far is legible to us. Shipping means a stranger can follow the docs from a clean clone, run the example, create a mode, pack a tool, and know what failed when it does.",
+      "verify": "pytest refactory/tests/test_ship_ready.py -q",
+      "status": "todo"
     }
   ],
   "verification": {

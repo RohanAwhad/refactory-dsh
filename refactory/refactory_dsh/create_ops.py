@@ -433,40 +433,26 @@ def _evict(module_name: str) -> None:
         del sys.modules[cached]
 
 
-def load_fresh(name: str) -> Package:
-    """Import a package from disk as it is now."""
-    module_name = f"{registry.ROOT_PACKAGE}.{name}"
-    _evict(module_name)
-    importlib.invalidate_caches()
-    try:
-        module = importlib.import_module(module_name)
-    except Exception as exc:
-        raise PackageError(
-            f"importing {module_name} failed: {type(exc).__name__}: {exc}"
-        ) from exc
-    package = getattr(module, "PACKAGE", None)
-    if not isinstance(package, Package):
-        raise PackageError(
-            f"{module_name} must define PACKAGE = Package(name={name!r}, modes=(...)) "
-            "at module level"
-        )
-    return package
-
-
 def check_package(name: str) -> list[str]:
     """Everything wrong with a staged package, as a list of reasons.
 
-    A generated package is **never imported here**. It is parsed, and then the
-    structural check runs in a subprocess, because loading a package is executing
-    it and the model's code has no business running in the driver.
+    A generated package is **never imported here**. It is parsed, and then every
+    semantic check — the name, the ops modules, each mode's construction, its score
+    and its knobs, every validator rule — runs in a subprocess, because loading a
+    package is executing it and the model's code has no business running in the
+    driver. See :func:`refactory_dsh.sandbox.verify_sandboxed`.
+
+    The two checks are both run rather than the first that fires: the retry prompt
+    is more useful the more of the truth it carries, and parsing and semantics
+    catch different things.
     """
     from refactory_dsh import sandbox
 
     registry.install_workspace(Path.cwd())
     root = registry.workspace_root(Path.cwd()) / name
-    problems: list[str] = []
     if not root.is_dir():
         return [f"no directory at {root}"]
+    problems: list[str] = []
     for required in REQUIRED_FILES:
         if not (root / required).exists():
             problems.append(f"{required} is missing; a package needs one")
@@ -478,53 +464,10 @@ def check_package(name: str) -> list[str]:
         # Nothing further can be learned from a file that is not valid Python.
         return problems
 
-    # Both checks, not the first that fires: the retry prompt is more useful the
-    # more of the truth it carries, and the two catch different things.
     checked = sandbox.verify_sandboxed(name, project=Path.cwd())
     problems.extend(checked.payload.get("problems") or [])
     if not checked.ok and not problems:
         return [checked.problem() or "the structural check could not be run"]
-    if problems:
-        return problems
-
-    try:
-        package = load_fresh(name)
-    except PackageError as exc:
-        return [str(exc)]
-
-    if package.name != name:
-        problems.append(f"PACKAGE.name is {package.name!r}, not {name!r}")
-    if not package.modes:
-        problems.append("PACKAGE.modes is empty; a package with no mode cannot be run")
-
-    for ops_module in package.ops:
-        try:
-            _evict(ops_module)
-            importlib.import_module(ops_module)
-        except Exception as exc:
-            problems.append(
-                f"the declared ops module {ops_module!r} does not import: "
-                f"{type(exc).__name__}: {exc}"
-            )
-
-    for mode_class in package.modes:
-        problems.extend(_check_mode(mode_class))
-    return problems
-
-
-def _check_mode(mode_class: type) -> list[str]:
-    label = f"mode {getattr(mode_class, 'name', mode_class.__name__)!r}"
-    try:
-        mode = mode_class()
-    except Exception as exc:
-        return [f"{label} cannot be constructed: {type(exc).__name__}: {exc}"]
-    problems: list[str] = []
-    if not getattr(mode, "is_scored", lambda: False)():
-        problems.append(f"{label} does not override score(), so it produces no signal")
-    if not mode.parameters():
-        problems.append(f"{label} declares no knobs, so there is nothing to optimize")
-    issues = validate_state(mode.state_dict(), invariants=mode.invariants(), resolve_calls=True)
-    problems.extend(f"{label}: {issue}" for issue in issues)
     return problems
 
 
@@ -535,30 +478,39 @@ def register(ctx: Any) -> dict[str, Any]:
     importlib.invalidate_caches()
     if name not in registry.discover_names(Path.cwd()):
         raise ValueError(f"the registry does not list a package named {name!r}")
-    package = load_fresh(name)
-    ctx.write_json("registered.json", package.describe())
-    return {"registered": ", ".join(package.ids())}
+    # Read the manifest where it is safe to load it. Reporting what was registered
+    # must not run the package in the driver's process to find out.
+    from refactory_dsh import sandbox
+
+    described = sandbox.describe_package(name, project=Path.cwd())
+    if not described.ok:
+        raise ValueError(
+            f"the package is registered but not readable: {described.problem()}"
+        )
+    ctx.write_json("registered.json", described.payload["describe"])
+    return {"registered": ", ".join(described.payload["ids"])}
 
 
 def smoke(ctx: Any) -> dict[str, Any]:
     """Run the new mode once. A mode that cannot score is not a deliverable."""
     name = str(ctx.facts["name"])
-    try:
-        package = load_fresh(name)
-    except PackageError as exc:
-        raise ValueError(f"the package could not be loaded: {exc}") from exc
     workdir = ctx.workdir / "smoke"
-    # Sandboxed: the smoke run is a real execution of code a model wrote.
+    # Sandboxed: the smoke run is a real execution of code a model wrote, and even
+    # reading which mode to run is done out of process.
     from refactory_dsh import sandbox
 
-    result = sandbox.smoke(package.ids()[0], workdir, project=Path.cwd())
+    described = sandbox.describe_package(name, project=Path.cwd())
+    if not described.ok:
+        raise ValueError(f"the package could not be read: {described.problem()}")
+    identifier = described.payload["ids"][0]
+    result = sandbox.smoke(identifier, workdir, project=Path.cwd())
     if not result.ok:
         raise ValueError(f"the new mode did not finish a run: {result.problem()}")
     score = float(result.payload.get("score") or 0.0)
     ctx.write_json(
         "smoke.json",
         {
-            "mode": package.ids()[0],
+            "mode": identifier,
             "score": score,
             "iterations": result.payload.get("iterations"),
             "sandboxed": True,
