@@ -256,7 +256,10 @@
       "title": "A package of modes for frontier mathematics that packs non-Pythonic tools",
       "why": "Not every tool a mode needs is Python. Lean, mathlib and sympy need installation and a manifest, and the package must be able to declare and provision them. This is the test of whether a package can carry its tools.",
       "verify": "pytest refactory/tests/test_math_pack.py -q",
-      "status": "todo"
+      "status": "done",
+      "commit": "(pending)",
+      "observed": "28 passed, 2 skipped (test_math_pack.py); outer loop 0.0 -> 3.0 in 8 evaluations",
+      "evidence": "Built as two packages plus a shared declaration module. `lean_pack/prover` (knobs: library, strategy, attempts, timeout_s; scored) proves theorems in Lean 4 and scores what the proof checker accepted \u2014 the check is `lean`, not a Python assertion. `sympy_pack/exact` establishes closed forms exactly with sympy (knobs: candidates, problems, route) and runs for real here. The tool requirement is declared through a new `refactory_dsh/toolchain.py`: checked before evaluation, and reported with what to install rather than crashing mid-run; a package needing nothing special still loads when the toolchain is absent. Documentation in refactory/docs/packing-tools.md. HONEST LIMIT: Lean 4 is NOT installed on this machine, so the two Lean-checked tests SKIP with the reason `the Lean 4 proof checker 'lean' is not on the PATH`. The Lean path is therefore unverified here \u2014 the declaration, the absence path and the sympy path are verified. THE OUTER LOOP RESULT: run on the real sympy problem, seed 0.0 (3 problems attempted, 0 verified) -> best 3.0 (all 3 verified) in 8 evaluations, bound epochs. The move that did it was one knob: `candidates` 1 -> 4. The leaderboard also shows the loop found that raising `budget_check.max_iterations` to 2 held the score, and refused 9 kinds of invalid candidate across V2-V11 and I:fact_produced without spending budget on any of them."
     },
     {
       "id": "ship-ready",
