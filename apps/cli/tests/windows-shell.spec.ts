@@ -11,7 +11,7 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -104,7 +104,22 @@ describe('the shipped shell composition (real bundle layers)', () => {
 describe('shipped agent presets gate both shell tools by platform', () => {
   const presetRoot = SHIPPED_PRESET_ROOT
 
-  it.each(['standard', 'ptc', 'cordis'])('preset %s gates its shell tool rows by platform', (preset) => {
+  // Derived from the shipped root, not from a hardcoded list: a renamed preset
+  // otherwise fails here for the wrong reason, and a new one is never checked.
+  const gatingPresets = readdirSync(presetRoot, { withFileTypes: true })
+    .filter(entry => entry.isDirectory())
+    .map(entry => entry.name)
+    .filter((name) => {
+      const source = readFileSync(join(presetRoot, name, 'agent.cordis.yml'), 'utf8')
+      return source.includes('id: tool-bash') || source.includes('id: tool-pwsh')
+    })
+    .sort()
+
+  it('checks at least one shipped preset, so the gate cannot become vacuous', () => {
+    expect(gatingPresets.length).toBeGreaterThan(0)
+  })
+
+  it.each(gatingPresets)('preset %s gates its shell tool rows by platform', (preset) => {
     const entries: unknown = yaml.load(
       readFileSync(join(presetRoot, preset, 'agent.cordis.yml'), 'utf8'),
       { schema: entryListSchema },

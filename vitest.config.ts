@@ -153,6 +153,9 @@ const processBoundTests = [
   'packages/llm/llm-pi-ai/tests/adapter.spec.ts',
   'packages/boot/app-boot/tests/app-boot.spec.ts',
   'packages/workflow/workflow-worker-thread/tests/session.spec.ts',
+  // Spawns a real python process per call and waits on the loop it starts, so
+  // the timing it asserts is wall-clock, not scheduling.
+  'packages/refactory/tool-refactory/tests/console-live.spec.ts',
 ]
 
 export default defineConfig({
