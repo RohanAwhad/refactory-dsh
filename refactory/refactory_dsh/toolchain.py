@@ -319,12 +319,11 @@ def absent(statuses: Iterable[ToolStatus]) -> list[ToolStatus]:
 
 def _absent_message(package: str, statuses: list[ToolStatus]) -> str:
     sentences = [
-        f"{package} declares the tool {status.name!r} ({status.tool.why}); "
-        f"it is {status.detail}, and the fix is: {status.tool.install}"
+        f"the package {package} declares the tool {status.name!r} ({status.tool.why}), "
+        f"and it is {status.detail}; the fix is: {status.tool.install}"
         for status in statuses
     ]
-    head, *rest = sentences
-    return ". ".join([head[0].upper() + head[1:], *rest]) + "."
+    return " ".join(sentences)
 
 
 def require(package: str, name: str, project: Path | None = None) -> ToolStatus:

@@ -128,6 +128,15 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
         if node.kind == "op":
             nodes[node_id] = FnNode(
                 **common,
+                # Both fields, and both for a reason. `callable_name` is
+                # refactory's own way of naming what an `FnNode` runs
+                # (`factory/workflow/primitives.py`), and it is what makes the IR
+                # legible to refactory's tooling. DSH's spine does not model it —
+                # its `WorkflowNode` has `command` and nothing else — so a graph
+                # carrying only `callable_name` would be a node that never runs.
+                # Emitting both keeps the IR faithful to the language it is written
+                # in and still executable by the runtime we ship.
+                callable_name=node.call,
                 command=f"{RUNNER} {node.call}",
                 notes=node.notes,
             )

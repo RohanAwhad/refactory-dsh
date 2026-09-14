@@ -147,3 +147,51 @@ def test_a_seed_state_with_no_ports_lowers_without_them():
     state = _state()
     assert state["ports"] == []
     assert lowering.to_workflow(state, name=MODE).name == MODE
+
+
+# ── fidelity to refactory's IR ─────────────────────────────────────────────
+#
+# Issue #21 said not to invent a command string, because `FnNode.callable_name`
+# already exists. It does exist — in refactory's own `FnNode`
+# (`factory/workflow/primitives.py`). What the issue did not know is that DSH's
+# spine does not model it: its `WorkflowNode` has `command` and no
+# `callable_name`, and it executes the command. So a graph carrying only
+# `callable_name` is a graph whose nodes never run. Both fields, and these hold it.
+
+
+def test_an_op_node_names_its_callable_as_well_as_its_command(tmp_path):
+    """The IR keeps the language's own field; the runtime keeps the one it reads."""
+    from pathlib import Path as _Path
+    from refactory_dsh import registry
+
+    mode = registry.resolve(_Path("."), "circle_packing/adaptive")[1]()
+    path, _workflow = lowering.write_mode_graph(
+        mode.state_dict(), tmp_path, name="circle_packing"
+    )
+    written = json.loads(path.read_text())
+    ops = [node for node in written["nodes"].values() if node["_type"] == "FnNode"]
+    assert ops, "the mode lowered to no op nodes"
+    for node in ops:
+        assert node.get("callable_name"), (
+            f"FnNode {node['id']} drops refactory's own way of naming what it runs"
+        )
+        assert node.get("command"), (
+            f"FnNode {node['id']} has no command, and DSH's spine executes the "
+            "command — this node would never run"
+        )
+
+
+def test_every_declared_callable_resolves(tmp_path):
+    """`callable_name` is a claim a reader will try to import."""
+    from pathlib import Path as _Path
+    from refactory_dsh import registry
+    from refactory_dsh.nn.resolve import resolve as resolve_target
+
+    mode = registry.resolve(_Path("."), "circle_packing/adaptive")[1]()
+    path, _workflow = lowering.write_mode_graph(
+        mode.state_dict(), tmp_path, name="circle_packing"
+    )
+    for node in json.loads(path.read_text())["nodes"].values():
+        target = node.get("callable_name")
+        if target:
+            assert callable(resolve_target(target)), f"{target} does not resolve"
