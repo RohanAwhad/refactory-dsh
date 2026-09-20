@@ -79,6 +79,12 @@ class LoopConfig:
     attempts: int = 3
     #: Knobs the operator freezes for this run, whatever the candidate says.
     frozen: tuple[str, ...] = ()
+    #: What this run is *for*, as the person asking put it. Seeded into the run's
+    #: intent ledger, which every agent node in an interactive run reads. Empty means
+    #: nobody said, and the ledger is left alone rather than filled with a default --
+    #: that default is BUG-05, and a ledger holding one is a ledger a fidelity check
+    #: cannot check. See :mod:`refactory_dsh.steering`.
+    intent: str = ""
     #: How many evaluated candidates the optimizer is shown. Bounded on purpose:
     #: an unbounded history in a prompt is how a search stops thinking.
     history_limit: int = 200
@@ -225,6 +231,26 @@ class Loop(OuterLoop):
         self.epochs: list[EpochSummary] = []
 
     # ── init ───────────────────────────────────────────────────────────────
+    def _seed_ledger(self) -> None:
+        """Write the run's intent ledger, when somebody said what the run is for.
+
+        Nothing is written when ``intent`` is empty: a ledger holding a default is one
+        a fidelity check cannot check, which is BUG-05, and a run nobody steered needs
+        no ledger rather than an empty one that looks like a statement. Refuses a
+        placeholder here rather than at the gate, because the person who typed it is
+        the one who can fix it.
+        """
+        if not self.config.intent.strip():
+            return
+        from refactory_dsh.steering import Ledger
+
+        ledger = Ledger(self.root)
+        if ledger.exists():
+            # A resumed run keeps what it was already told, including anything said
+            # since. Re-seeding would put a second origin in the ledger.
+            return
+        Ledger.seed(self.root, self.config.intent)
+
     def init(self) -> None:
         """Seed the population and refuse to search a mode that cannot be run."""
         seed_state = self.mode.state_dict()
@@ -260,6 +286,7 @@ class Loop(OuterLoop):
         (self.root / "config.json").write_text(
             json.dumps({"mode": self.mode_id, **self.config.to_dict()}, indent=2, default=str)
         )
+        self._seed_ledger()
         resumed = self._replay_if_asked()
         (self.root / run_history.RUN_FILE).write_text(
             json.dumps(
@@ -1584,6 +1611,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-evaluations", type=int, default=64)
     parser.add_argument("--attempts", type=int, default=3, help="retries per batch after a refusal")
     parser.add_argument("--runs-root", default=".factory/loop")
+    parser.add_argument(
+        "--intent", default="",
+        help="what this run is for, in the asker's words; seeds the run's intent "
+             "ledger, which every agent node of an interactive run reads",
+    )
     parser.add_argument("--project", default=str(project_root()))
     parser.add_argument("--model", default="", help="model name for the reasoning optimizer")
     args = parser.parse_args(argv)
@@ -1605,6 +1637,7 @@ def main(argv: list[str] | None = None) -> int:
         max_evaluations=args.max_evaluations,
         attempts=args.attempts,
         runs_root=Path(args.runs_root),
+        intent=args.intent,
     )
     try:
         loop = strategies.create(

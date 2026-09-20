@@ -265,6 +265,27 @@ Adopt a run's winner as a mode of its own.
 - **`best`** — The winner: the highest-scoring candidate whose state the run recorded.
 
 
+<a id="refactory_dsh-steering"></a>
+
+## `refactory_dsh.steering`
+
+Steering a run while *using* it: the intent ledger, and the transform that adds it.
+
+| kind | name | signature |
+|---|---|---|
+| class | `Ledger` | `(root: 'Path') -> 'None'` |
+| class | `SteeringError` | `` |
+| function | `annotate` | `(workflow: 'Any', ledger: 'Ledger') -> 'Any'` |
+| function | `fidelity` | `(ledger: 'Ledger') -> 'list[str]'` |
+| function | `interactive` | `(state: 'dict[str, Any]', workdir: 'Path', *, request: 'str' = '', name: 'str' = '', description: 'str' = '') -> 'tuple[Any, Ledger]'` |
+
+- **`Ledger`** — The run's record of what was asked for, and everything said since.
+- **`SteeringError`** — The steering layer cannot be built or trusted. Always names what is wrong.
+- **`annotate`** — Fold the ledger into every agent node. A no-op when the ledger is empty.
+- **`fidelity`** — What is wrong with a ledger a run is about to be judged against.
+- **`interactive`** — Lower a mode for a person to *use*, with the steering layer attached.
+
+
 <a id="refactory_dsh-strategies"></a>
 
 ## `refactory_dsh.strategies`
@@ -316,7 +337,7 @@ The optimizer loop, named like one.
 |---|---|---|
 | class | `EpochSummary` | `(epoch: 'int', evaluated: 'int', best: 'float \| None', mean: 'float \| None', improved: 'bool', proposed: 'int', accepted: 'int', rejected: 'int', structural_accepted: 'int') -> None` |
 | class | `Loop` | `(mode_id: 'str', config: 'LoopConfig \| None' = None, *, project: 'Path \| None' = None, model: 'Any' = None, optimizer: 'Optimizer \| None' = None) -> 'None'` |
-| class | `LoopConfig` | `(epochs: 'int' = 2, batch_size: 'int' = 4, optimizer: 'str' = 'autoresearch', edit_preset: 'str' = 'broad', seed: 'int' = 0, elite: 'int' = 3, max_evaluations: 'int' = 64, runs_root: 'Path' = PosixPath('.factory/loop'), max_steps: 'int' = 2000, attempts: 'int' = 3, frozen: 'tuple[str, ...]' = (), history_limit: 'int' = 200, prior_runs: 'int' = 3, memory_global_root: 'Path \| None' = None, evaluator: 'str' = 'walker', dsh_timeout_s: 'int' = 900, resume: 'bool' = False, progress: 'bool' = True) -> None` |
+| class | `LoopConfig` | `(epochs: 'int' = 2, batch_size: 'int' = 4, optimizer: 'str' = 'autoresearch', edit_preset: 'str' = 'broad', seed: 'int' = 0, elite: 'int' = 3, max_evaluations: 'int' = 64, runs_root: 'Path' = PosixPath('.factory/loop'), max_steps: 'int' = 2000, attempts: 'int' = 3, frozen: 'tuple[str, ...]' = (), intent: 'str' = '', history_limit: 'int' = 200, prior_runs: 'int' = 3, memory_global_root: 'Path \| None' = None, evaluator: 'str' = 'walker', dsh_timeout_s: 'int' = 900, resume: 'bool' = False, progress: 'bool' = True) -> None` |
 | class | `LoopError` | `` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
 | function | `run` | `(mode_id: 'str', *, config: 'LoopConfig \| None' = None, project: 'Path \| None' = None, model: 'Any' = None) -> 'dict[str, Any]'` |

@@ -349,6 +349,33 @@ def candidate(run_root: Path, candidate_id: str) -> dict[str, Any]:
     return {**diff, "rendered": observe.render_diff(diff["diff"]), **record}
 
 
+def _steer(
+    run_root: Path, *, seed: str | None = None, note: str | None = None, kind: str = "info"
+) -> dict[str, Any]:
+    """Read the ledger, and optionally add to it.
+
+    Steering is context, not structure: this writes what the person said and nothing
+    else. The graph of the running mode is untouched -- that is the outer loop's job,
+    and conflating the two is how a run stops being accountable for what it was asked
+    to do.
+    """
+    from refactory_dsh.steering import Ledger, fidelity
+
+    ledger = Ledger(run_root)
+    if seed is not None:
+        Ledger.seed(run_root, seed)
+    if note is not None:
+        ledger.note(kind, note)
+    return {
+        "run": str(run_root),
+        "ledger": str(ledger.path),
+        "exists": ledger.exists(),
+        "entries": ledger.entries(),
+        "constraints": ledger.constraints(),
+        "problems": fidelity(ledger),
+    }
+
+
 def _best_payload(run_root: Path, *, keep_state: bool) -> dict[str, Any]:
     """The winner, and the state that scored it.
 
@@ -504,6 +531,16 @@ def _parser() -> argparse.ArgumentParser:
     one = add(sub.add_parser("candidate", help="one candidate and its diff"))
     one.add_argument("candidate")
 
+    steer = add(
+        sub.add_parser("steer", help="what this run is for, and what has been said since")
+    )
+    steer.add_argument("--seed", default=None, help="the request this run is for")
+    steer.add_argument("--note", default=None, help="something said while it runs")
+    steer.add_argument(
+        "--kind", default="info", choices=["info", "correction", "constraint"],
+        help="a constraint must be respected; the others are context",
+    )
+
     champion = add(
         sub.add_parser("best", help="the winner, with the state that scored it")
     )
@@ -556,6 +593,11 @@ def main(argv: list[str] | None = None) -> int:
             payload = leaderboard(_root_for(args, project), limit=args.limit)
         elif args.verb == "candidate":
             payload = candidate(_root_for(args, project), args.candidate)
+        elif args.verb == "steer":
+            payload = _steer(
+                _root_for(args, project),
+                seed=args.seed, note=args.note, kind=args.kind,
+            )
         elif args.verb == "best":
             payload = _best_payload(_root_for(args, project), keep_state=args.state)
         elif args.verb == "adopt":

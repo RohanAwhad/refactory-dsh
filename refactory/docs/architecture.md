@@ -317,7 +317,49 @@ is a declaration rather than a special case in the library:
 - **They need a model.** No knob makes them run without one, so a run with no client
   fails at the first agent node rather than producing nothing.
 
-## 11. Known gaps
+## 11. Steering a run you are using
+
+Two ways to change a run, and they are different acts on different things:
+
+| | what changes | whose job |
+|---|---|---|
+| **structure** | the mode's graph and knobs | the outer loop, and a result is adopted as a new mode |
+| **steering** | what the agents know | the person, while *using* the mode |
+
+**The graph does not change when you steer.** That is what steering means during use:
+you add context, correct something, or forbid something, and the run accounts for it.
+
+The carrier is the **intent ledger** — an append-only, timestamped file in the run
+directory, seeded from `--intent` and appended to while the run goes:
+
+```bash
+python -m refactory_dsh.loop circle_packing/adaptive --intent "make it better, no new deps"
+python -m refactory_dsh.console steer --run <run> --note "no numpy" --kind constraint
+python -m refactory_dsh.console steer --run <run>          # read it back
+```
+
+Three kinds, because they are not the same act: `info` (context), `correction`
+(something is wrong), `constraint` (must be respected, not merely known).
+
+**How it reaches the agents.** `steering.annotate` folds the ledger into **every**
+`AgentNode`'s prompt template of the lowered workflow. Every node, not one the author
+remembered to wire, so a mode author cannot be the thing that makes steering work —
+which is also why this is a transform over the IR and not a field on `nn.Node`. Modes
+stay Pythonic and unchanged, and `to_workflow` knows nothing about any of it.
+
+**It is inert when unused.** An empty ledger renders the empty string and `annotate`
+returns the workflow it was given. A run nobody steered is the run it would have been,
+which is what lets the interactive and headless paths be compared at all.
+
+**The fidelity gate checks the precondition, not the output.** It reports a ledger that
+is missing, empty, or holding the placeholder. Whether the *work* is traceable to the
+intent needs a model to read it; whether there was an intent to trace it to does not —
+and that half is the one that was broken. `2026-09-12-create-v2-run.md` records BUG-05:
+`REFACTORY_INTENT` never arrived, so the previous system's ledger held the literal
+`"Build something useful."` and its gate, having nothing to check against, reported a
+pass. `Ledger.seed` refuses that string rather than accepting it.
+
+## 12. Known gaps
 
 Recorded here rather than in a backlog, because each one is a place the system
 promises more than it delivers.
