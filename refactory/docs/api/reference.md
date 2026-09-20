@@ -182,6 +182,29 @@ Optimizers: the ``torch.optim`` of the harness world.
 - **`create`** — Build an optimizer by name, failing loud on an unknown one.
 
 
+<a id="refactory_dsh-optim-policies"></a>
+
+## `refactory_dsh.optim.policies`
+
+Optimizers whose distinguishing choice is *which parent* to breed from.
+
+| kind | name | signature |
+|---|---|---|
+| class | `ArchiveSelector` | `(*, k: 'int' = 3, seed: 'int' = 0, limit: 'int' = 12) -> 'None'` |
+| class | `EvolutionarySelector` | `(*, k: 'int' = 3, seed: 'int' = 0, tournament: 'int' = 3) -> 'None'` |
+| class | `HillClimbSelector` | `(*, k: 'int' = 3, seed: 'int' = 0) -> 'None'` |
+| class | `IslandsSelector` | `(*, k: 'int' = 3, seed: 'int' = 0, count: 'int' = 3) -> 'None'` |
+| class | `MapElitesSelector` | `(*, k: 'int' = 3, seed: 'int' = 0, explore: 'float' = 0.3) -> 'None'` |
+| class | `ParentSelector` | `(*, k: 'int' = 3, seed: 'int' = 0) -> 'None'` |
+
+- **`ArchiveSelector`** — SRF `scs`: breed from the best of everything seen, not just this epoch.
+- **`EvolutionarySelector`** — SRF `evox`: a tournament, so a weaker member can still breed.
+- **`HillClimbSelector`** — SRF `karpathy`: one candidate per round, from the best so far.
+- **`IslandsSelector`** — SRF `openevolve`: sub-populations whose lineages never cross.
+- **`MapElitesSelector`** — SRF's own optimizer (`srf/lab/map_elites.py`): a champion per niche.
+- **`ParentSelector`** — An optimizer that chooses parents by a policy, then samples an edit for each.
+
+
 <a id="refactory_dsh-outerloop"></a>
 
 ## `refactory_dsh.outerloop`
@@ -252,20 +275,12 @@ The SRF strategies, as outer loops.
 |---|---|---|
 | class | `AdaptiveMeta` | `(*args: 'Any', **kwargs: 'Any') -> 'None'` |
 | class | `Archive` | `()` |
-| class | `ArchiveLoop` | `(*args: 'Any', **kwargs: 'Any') -> 'None'` |
 | class | `Autoscientists` | `(mode_id: 'str', config: 'LoopConfig \| None' = None, *, project: 'Path \| None' = None, model: 'Any' = None, optimizer: 'Optimizer \| None' = None) -> 'None'` |
 | class | `BestOfN` | `(mode_id: 'str', config: 'LoopConfig \| None' = None, *, project: 'Path \| None' = None, model: 'Any' = None, optimizer: 'Optimizer \| None' = None) -> 'None'` |
-| class | `EvolutionaryArchive` | `(*args: 'Any', **kwargs: 'Any') -> 'None'` |
 | class | `FlatArchive` | `(members: 'list[Candidate]' = <factory>) -> None` |
-| class | `HillClimb` | `(*args: 'Any', **kwargs: 'Any') -> 'None'` |
-| class | `IslandArchive` | `(count: 'int' = 3, members: 'dict[int, list[Candidate]]' = <factory>) -> None` |
-| class | `Islands` | `(*args: 'Any', **kwargs: 'Any') -> 'None'` |
-| class | `MapElites` | `(*args: 'Any', **kwargs: 'Any') -> 'None'` |
-| class | `NicheArchive` | `(dims: 'tuple[int, ...]' = (3, 3, 2), cells: 'dict[tuple[int, ...], Candidate]' = <factory>) -> None` |
 | class | `Reflective` | `(*args: 'Any', **kwargs: 'Any') -> 'None'` |
 | class | `ReflectiveSampler` | `(mode_id: 'str', config: 'LoopConfig \| None' = None, *, project: 'Path \| None' = None, model: 'Any' = None, optimizer: 'Optimizer \| None' = None) -> 'None'` |
 | class | `ResearchThenOptimize` | `(mode_id: 'str', config: 'LoopConfig \| None' = None, *, project: 'Path \| None' = None, model: 'Any' = None, optimizer: 'Optimizer \| None' = None) -> 'None'` |
-| class | `ScoredArchive` | `(limit: 'int' = 8, members: 'list[Candidate]' = <factory>) -> None` |
 | class | `StagedCurriculum` | `(mode_id: 'str', config: 'LoopConfig \| None' = None, *, project: 'Path \| None' = None, model: 'Any' = None, optimizer: 'Optimizer \| None' = None) -> 'None'` |
 | class | `StagedV1` | `(mode_id: 'str', config: 'LoopConfig \| None' = None, *, project: 'Path \| None' = None, model: 'Any' = None, optimizer: 'Optimizer \| None' = None) -> 'None'` |
 | class | `TreeArchive` | `(members: 'list[Candidate]' = <factory>, parents: 'dict[str, str]' = <factory>, children: 'dict[str, list[str]]' = <factory>) -> None` |
@@ -277,20 +292,12 @@ The SRF strategies, as outer loops.
 
 - **`AdaptiveMeta`** — SRF `adaevolve`: an adaptive meta-level.
 - **`Archive`** — A set of candidates a strategy keeps, and how it picks from them.
-- **`ArchiveLoop`** — SRF `scs`: `sample → build_prompt → generate → eval → archive_update`.
 - **`Autoscientists`** — SRF `autoscientists`: `Fork(N scientists) → Join → merge`.
 - **`BestOfN`** — SRF `best_of_n`: `Fork(N samples) → Join → select_best`.
-- **`EvolutionaryArchive`** — SRF `evox`: an evolutionary archive with tournament selection.
 - **`FlatArchive`** — Keeps everything. The default loop's behaviour.
-- **`HillClimb`** — SRF `karpathy`: one candidate per iteration, from the best so far.
-- **`IslandArchive`** — Several sub-populations. A candidate is only ever selected from its own.
-- **`Islands`** — SRF `openevolve`: an island model. Selection never crosses islands.
-- **`MapElites`** — SRF `srf/lab/map_elites.py`: MAP-Elites over the graph, not just the best.
-- **`NicheArchive`** — A MAP-Elites grid: one champion per niche, not one champion overall.
 - **`Reflective`** — SRF `gepa`: reflective evolution, with a merge branch.
 - **`ReflectiveSampler`** — SRF `shinka`: reflection inside sampling.
 - **`ResearchThenOptimize`** — SRF `autoresearch`: a pre-phase, then the loop.
-- **`ScoredArchive`** — Keeps the best ``limit`` seen, so an archive is not the same as a population.
 - **`StagedCurriculum`** — SRF `ai_sci_v2`: a staged curriculum, not a loop.
 - **`StagedV1`** — SRF `ai_sci_v1`: the earlier staged variant.
 - **`TreeArchive`** — A tree. A node's parent is the node it was expanded from.

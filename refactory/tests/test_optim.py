@@ -326,7 +326,12 @@ def test_json_extraction(text, expected):
 def test_an_unknown_optimizer_name_is_refused():
     with pytest.raises(ValueError, match="unknown optimizer"):
         optim.create("nonsense")
-    assert optim.names() == ["autoresearch", "random"]
+
+    # The two that predate the bucket split, and the five search policies that used
+    # to be loops. Asserted by membership rather than by equality so a new optimizer
+    # is an addition rather than a test failure -- but the split itself is asserted
+    # in `test_strategies.py`, where a port going missing is the thing to catch.
+    assert {"random", "autoresearch"} <= set(optim.names())
 
 
 # ── the model client the optimizer is handed in production ─────────────────

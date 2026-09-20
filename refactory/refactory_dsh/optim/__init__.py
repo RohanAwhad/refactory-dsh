@@ -19,11 +19,23 @@ from .base import (
     candidate_id,
 )
 from .random_optimizer import AutoresearchOptimizer, RandomOptimizer, extract_json
+from .policies import (
+    ArchiveSelector,
+    EvolutionarySelector,
+    HillClimbSelector,
+    IslandsSelector,
+    MapElitesSelector,
+)
 
 #: The optimizers the loop can select by name.
 REGISTRY: dict[str, type[Optimizer]] = {
     RandomOptimizer.name: RandomOptimizer,
     AutoresearchOptimizer.name: AutoresearchOptimizer,
+    ArchiveSelector.name: ArchiveSelector,
+    EvolutionarySelector.name: EvolutionarySelector,
+    IslandsSelector.name: IslandsSelector,
+    HillClimbSelector.name: HillClimbSelector,
+    MapElitesSelector.name: MapElitesSelector,
 }
 
 

@@ -680,7 +680,16 @@ class Loop(OuterLoop):
         optimizer is what lets a strategy change one of them and keep the other.
         """
         run = run or Run(loop=self)
-        parents = self.select_parents(self.config.elite)
+        # The pair a proposer is handed, and why it is the whole population rather
+        # than the elite: `describe()` carries a score and the edits that produced
+        # it, not the state, so a candidate the loop does not hand over cannot be
+        # bred from. Passing only the elite made parent selection impossible inside
+        # an optimizer, which is why every SRF method that selects parents had to be
+        # a loop instead. Selection is part of "how to search", so the optimizer gets
+        # the pool and chooses from it (issue #32).
+        parents = [candidate for candidate in self.population if candidate.evaluated]
+        if not parents:
+            parents = self.select_parents(self.config.elite)
         if not parents:
             return [], []
         before = len(self.rejections)
@@ -1215,6 +1224,7 @@ class Loop(OuterLoop):
             leaderboard=[c.describe() for c in board],
             history=self._history(),
             tried=self._tried(),
+            elite=int(self.config.elite),
             history_truncated=self._history_truncated(),
             prior_runs=run_history.prior_summaries(
                 self.root.parent, limit=self.config.prior_runs, exclude=self.root
@@ -1553,9 +1563,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("mode", help="the mode to optimize, as <package>/<name>")
     parser.add_argument("--epochs", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument("--optimizer", default="autoresearch", choices=["autoresearch", "random"])
-    from refactory_dsh import strategies
+    from refactory_dsh import optim, strategies
 
+    # The registry is the list of what can be selected. Hardcoding it here is how
+    # the two buckets drifted apart in the first place: five optimizers could be
+    # registered and still not be reachable from the command line.
+    parser.add_argument("--optimizer", default="autoresearch", choices=optim.names())
     parser.add_argument(
         "--strategy", default="default", choices=strategies.names(),
         help="which outer loop drives the search; the default is the harness's own",

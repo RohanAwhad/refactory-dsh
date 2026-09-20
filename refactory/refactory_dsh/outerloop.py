@@ -3,15 +3,22 @@
 There are two kinds of thing people write here, and they need different seams.
 
 **Type 1 — a proposer.** Subclasses :class:`Optimizer` and implements ``propose``.
-It only proposes edits. Most research ideas live here: sample from a different
-distribution, ask a better prompt, bias toward untried values. It works with any
-outer loop that calls ``propose``.
+It is handed the run's gradient and the **evaluated population**, chooses parents if
+it has a policy about that, and returns typed edits. It cannot run anything, so it
+cannot spend budget. A proposer works with any outer loop that calls ``propose``.
+
+Choosing a parent is part of this, and that is a correction: until issue #32 the
+loop passed only the elite, and ``Candidate.describe()`` carries no state, so a
+policy that needed a wider pool -- islands, a niche grid, a tournament over an
+archive -- could not be written here and had to be an outer loop instead. Five SRF
+methods were loops for that reason and only that reason. See
+:mod:`refactory_dsh.optim.policies`.
 
 **Type 2 — an outer loop.** Subclasses :class:`OuterLoop` and overrides its
 methods. Some strategies are not "propose better", they are a different control
-flow: a switch inside an iteration, a fork with no loop at all, a staged curriculum,
-an island model. No number of policy hooks on a fixed loop can express those,
-because they disagree about what an iteration *is*.
+flow: a switch inside an iteration, a fork with no loop at all, a staged curriculum.
+No number of policy hooks on a fixed loop can express those, because they disagree
+about what an iteration *is*.
 
 The two guarantees hold for both, and neither can be overridden:
 

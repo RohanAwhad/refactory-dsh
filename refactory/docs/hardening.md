@@ -412,22 +412,57 @@ rather than one best candidate overall. Nothing in this repository referenced it
 thirteen modes were ported and this was not, so the count of "SRF ports" was complete
 against a list that omitted it.
 
-Ported as the `map_elites` strategy, on the loop's own vocabulary: features are graph
-size, whether the candidate was reached by moving structure or only settings, and the
-step budget it spends; the archive refuses a weaker candidate in an occupied niche and
-accepts one in an empty niche; selection draws parents from across occupied niches.
+Ported on the loop's own vocabulary: features are graph size, whether the candidate
+was reached by moving structure or only settings, and the step budget it spends; the
+archive refuses a weaker candidate in an occupied niche and accepts one in an empty
+niche; selection draws parents from across occupied niches.
 
-The count is now two constants rather than one — `SRF_PORT_COUNT = 13` for the modes
-and `SRF_LAB_PORT_COUNT = 1` for the lab optimizer — because a single total would let
-one be dropped as long as something else was added. The test asserts both, and asserts
-`map_elites` is present by name.
+**It was put in the wrong bucket, and the count papered over it.** It was added as a
+fifteenth `OuterLoop`, and `SRF_LAB_PORT_COUNT = 1` existed to make the totals add up
+around that placement. MAP-Elites is a search policy, not a control flow.
 
-**Held by.** Three effect tests, on the standard §3 set: a weak candidate in an
-occupied niche does not displace its champion but the same candidate in an empty niche
-is kept; selection returns parents from more than one niche and with more than one
-score, which is the behaviour no other strategy here has; and the niche map reaches the
-proposer through `ProposalContext.strategy`. Plus a real loop: `circle_packing/adaptive`
-under `--strategy map_elites`, seed 0.875 → 1.275.
+### The two buckets were not what the code said
+
+`outerloop.py` says *"most research ideas live here [in the proposer]"*. The registry
+disagreed: every SRF-derived name was an `OuterLoop`, and the `Optimizer` registry
+held two hand-written entries and no port at all.
+
+The cause was structural, and finding it is what made the fix possible. `Loop`
+handed a proposer `select_parents(self.config.elite)` — the top few — and
+`Candidate.describe()` carries a score and the edits that produced it but **not the
+state**. A proposer therefore saw only the elite's states. Island selection, a niche
+grid and a tournament over an archive all need candidates the loop was not handing
+over, so those five could not have been proposers however they were filed.
+
+**So the contract changed, not the filing.** The loop hands over the evaluated
+population and the optimizer selects; `ProposalContext.elite` carries the count an
+optimizer with no parent policy should take, so widening the pool does not silently
+change what the existing two propose. Four of SRF's thirteen modes — `scs`, `evox`,
+`openevolve`, `karpathy` — moved to `optim/policies.py` as proposers, and
+`map_elites` joined them there.
+
+**The split is asserted** rather than described: `13 - len(SRF_OPTIMIZER_PORTS)` is
+the loop count, every optimizer port must be in the optimizer registry, no name may
+be in both buckets, and every registered name must be one or the other.
+
+**Two defects came out of doing it**, both found by the new tests rather than by
+reasoning:
+
+- `MapElitesSelector.features` read `state["nodes"]`, and the nodes are at
+  `state["graph"]["nodes"]`. `.get` returns `None` rather than raising, so every
+  candidate landed in one cell — a niche grid that is a single bucket and looks like
+  it is working. Caught by a test that aims at a known-empty niche.
+- `island_of` derived the island from `hash(candidate.id)`, and Python salts string
+  hashing per process, so the same candidate sat in a different island on a resumed
+  run than it did when it was evaluated. Inherited from the original `IslandArchive`;
+  invisible until a run is resumed or a test is run twice. It uses a digest now.
+
+**Held by.** `test_optimizer_policies.py` — one test per policy, each naming the
+difference that is the reason it exists, plus the two defect regressions and a test
+that the loop still hands over the population. On the standard §3 standard, an
+optimizer with no parent policy is asserted to breed from the elite *by id*, because
+that ordering is what the loop used before and getting it subtly wrong changed the
+search enough to lose a refusal a layer early.
 
 ---
 

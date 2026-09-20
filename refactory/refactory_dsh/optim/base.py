@@ -192,6 +192,11 @@ class ProposalContext:
     #: The state ids that already exist, so a proposal recreating one can be refused
     #: instead of silently consuming a batch slot.
     tried: list[str] = field(default_factory=list)
+    #: How many parents the loop would have offered before the population was handed
+    #: over. An optimizer that has no parent policy of its own selects this many and
+    #: behaves as it did; one that has a policy ignores it and chooses from the pool.
+    #: Without it, widening the pool silently changes every existing optimizer.
+    elite: int = 3
     history_truncated: bool = False
     #: Summaries of previous runs, so a strategy can carry a prior across runs.
     prior_runs: list[dict[str, Any]] = field(default_factory=list)

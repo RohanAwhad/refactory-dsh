@@ -17,6 +17,28 @@ from refactory_dsh.nn import edits as nn_edits
 from .base import Candidate, Optimizer, Proposal, ProposalContext
 
 
+def _elite(parents: Sequence[Candidate], ctx: ProposalContext) -> Sequence[Candidate]:
+    """The top ``ctx.elite``: exactly what the loop passed before the pool widened.
+
+    The loop hands a proposer the whole evaluated population now, so a policy-based
+    optimizer can select for itself. An optimizer with no policy of its own still
+    wants the elite, and this reproduces `Loop.leaderboard` rather than approximating
+    it: the same filter (a candidate with no score is not a parent), the same
+    ordering (score descending, **id as the tie-break**), and the same fallback when
+    nothing has scored yet. Getting any of those subtly wrong changes which parents
+    are bred from, which changes the search, which is how a duplicate stopped being
+    refused one layer earlier than it should have been.
+    """
+    ranked = sorted(
+        (candidate for candidate in parents if candidate.score is not None),
+        key=lambda candidate: (-(candidate.score or 0.0), candidate.id),
+    )
+    if not ranked:
+        # `Loop.select_parents` falls back to the population, in its own order.
+        return list(parents)[: max(1, ctx.elite)]
+    return ranked[: max(1, ctx.elite)]
+
+
 class RandomOptimizer(Optimizer):
     """Sample edits uniformly from the enabled catalogue.
 
@@ -46,6 +68,11 @@ class RandomOptimizer(Optimizer):
     ) -> list[Proposal]:
         if not parents:
             return []
+        # `parents` is the evaluated population since issue #32, so that a policy-based
+        # optimizer can select from it. This one has no parent policy: it takes the
+        # elite the loop used to hand it, which keeps its proposals what they always
+        # were and stops widening the pool from silently changing every run.
+        parents = _elite(parents, ctx)
         rng = self.rng(ctx, n)
         preferred = [name for name in ctx.preferred_edits if name in set(nn_edits.enabled(ctx.preset))]
         proposals: list[Proposal] = []

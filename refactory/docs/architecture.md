@@ -158,22 +158,33 @@ edit to `loop.py`, because that is what a seam is for.
 microseconds, no budget) and `evaluate` (one inner run, one unit of budget). The
 API makes it impossible to blur those two.
 
-**All 13 SRF ports ship as strategies** (`refactory_dsh/strategies.py`), plus
-`default` — and SRF's own optimizer, which lives in `srf/lab/` rather than among its
-modes and is counted separately:
+**SRF's thirteen modes split across both buckets**, and the split is asserted so a
+port cannot go missing or be filed wrongly:
 
 ```bash
-python -c "import refactory_dsh.strategies as S; print(len(S.names()), S.names())"
-# 15 -> adaptive_meta, archive_loop, autoscientists, best_of_n, default,
-#       evolutionary_archive, hill_climb, islands, map_elites, reflective,
-#       reflective_sampler, research_then_optimize, staged_curriculum, staged_v1,
-#       tree_search
+python -c "import refactory_dsh.strategies as S, refactory_dsh.optim as O; \
+print('loops  ', S.names()); print('propose', O.names())"
+# loops   ['adaptive_meta', 'autoscientists', 'best_of_n', 'default', 'reflective',
+#          'reflective_sampler', 'research_then_optimize', 'staged_curriculum',
+#          'staged_v1', 'tree_search']
+# propose ['archive', 'autoresearch', 'evolutionary', 'hill_climb', 'islands',
+#          'map_elites', 'random']
 ```
 
-`SRF_PORT_COUNT` counts the modes and `SRF_LAB_PORT_COUNT` counts the lab optimizer, so
-neither can be dropped while the other is added. `map_elites` is the one to know about:
-it keeps a champion per cell of a feature grid instead of one best candidate, which is
-the only strategy here whose selection can return something that is not the best.
+Four of the thirteen are **optimizers** — `scs`, `evox`, `openevolve` and `karpathy`
+— plus `map_elites`, which lives in `srf/lab/` rather than among the modes and is
+counted by `SRF_LAB_PORT_COUNT`. The other nine are outer loops. `SRF_PORT_COUNT` is
+the total, so `13 - len(SRF_OPTIMIZER_PORTS)` is the loop count rather than a number
+kept in step by hand.
+
+They were all loops until issue #32, and the cause was the contract rather than the
+filing: `Loop.optimizer_step` passed a proposer only the elite, and
+`Candidate.describe()` carries a score and the edits that produced it but **not the
+state**. A policy that needs a wider pool — islands, a niche grid, a tournament over
+an archive — could not be written as a proposer. The loop hands over the evaluated
+population now and the optimizer selects, which is why `ProposalContext` carries
+`elite`: an optimizer with no parent policy of its own takes that many, so widening
+the pool does not silently change what it proposes.
 
 ## 7. The loop
 
