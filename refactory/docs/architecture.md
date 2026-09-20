@@ -256,6 +256,21 @@ evaluation count as `Loop` on the same seed, and runs end to end on DSH:
 # 21 passed
 ```
 
+**And it has been searched.** `batch_size` is a real lever on the inner result —
+deterministic on seed 0, a wider batch reaches a better inner score — so a run over
+the tower has something to find:
+
+```bash
+.venv/bin/python -m refactory_dsh.loop loop_mode/loop --epochs 1 --batch-size 3 \
+  --optimizer random --seed 0 --runs-root /tmp/tower
+# seed 0.875 -> best 1.04, by `set_knob batch_size 4 -> 8`
+```
+
+That is D14's claim demonstrated rather than described: the loop's own settings are a
+search surface, and searching them moved the inner result. `test_loop_as_mode.py`
+runs the search and asserts the lever, because the test that stood here asserted only
+that the knobs were *visible* — expressiveness, not use.
+
 ## 10. The meta-modes
 
 Three modes whose *output* is a mode or an artifact, in the package `meta_pack`.
@@ -301,8 +316,6 @@ promises more than it delivers.
   supported way to take a winner and run it again. The plumbing exists
   (`Mode(state=...)`, `lowering.write_mode_graph`) — reloading the winner from the
   journal reproduces its score exactly — but no command does it.
-- **`loop_mode/loop` is expressible, not yet used.** Nothing has run a search over
-  the loop's own knobs.
 - **Two suites are load-flaky.** `packages/boot/app-boot/tests/hmr-config.spec.ts`
   and `user-patches.spec.ts` poll file watchers with 20s and 10s deadlines and fail
   under full-suite contention while passing standalone; `hmr-config` is not in

@@ -164,21 +164,51 @@ def test_a_target_that_cannot_be_resolved_is_reported(tmp_path):
 
 
 def test_an_outer_loop_can_search_the_loop_itself(tmp_path):
-    """The point of the exercise: the loop's own knobs become a search surface."""
+    """The point of the exercise: the loop's own knobs become a search surface.
+
+    This used to assert only that `batch_size`, `epochs` and `optimizer` are
+    *visible* in the context, which is expressiveness -- that the settings are
+    reachable, not that anything reached them. `architecture.md` §11 recorded the
+    difference for as long as it stood: "expressible, not yet used". So this runs
+    the search, which is the claim D14 actually makes.
+    """
     loop = Loop(
         MODE,
         LoopConfig(
-            epochs=1, batch_size=2, optimizer="random", seed=1,
+            epochs=1, batch_size=3, optimizer="random", seed=0,
             runs_root=tmp_path / "outer",
-            max_evaluations=4,
+            max_evaluations=6,
         ),
         project=Path("."),
     )
-    context = loop._context()  # noqa: SLF001 - the test drives the real context builder
+    report = loop.run()
+
+    assert report["evaluations"] >= 1, "the outer loop evaluated nothing"
+    assert report["leaderboard"], "the search over the tower produced no leaderboard"
+    assert report["best_score"] is not None
+    assert report["best_score"] >= report["seed_score"], (
+        "searching the loop's own settings made the inner result worse"
+    )
+    # The knobs the search may move are the loop's own, not the inner mode's.
+    context = loop._context()  # noqa: SLF001 - the test drives the real builder
     names = {knob["name"] for knob in context.knobs}
-    assert "batch_size" in names
-    assert "epochs" in names
-    assert "optimizer" in names
+    assert {"batch_size", "epochs", "optimizer"} <= names
+
+
+def test_the_loops_own_knobs_are_a_real_lever(tmp_path):
+    """A search needs a surface that moves, not merely one that exists.
+
+    Deterministic on seed 0, so this is a fact about the tower rather than a lucky
+    draw: the same inner loop with a wider batch reaches a better inner result.
+    Without this, the outer run above could not have improved anything -- and a
+    search over a surface that cannot move would still "pass" its own test.
+    """
+    _package, small = _run(tmp_path / "small", batch_size=4, max_evaluations=16)
+    _package, large = _run(tmp_path / "large", batch_size=8, max_evaluations=16)
+    assert large.facts["best"] > small.facts["best"], (
+        "the loop's own batch_size does not move the inner result, so searching the "
+        f"loop has nothing to find: 4 -> {small.facts['best']}, 8 -> {large.facts['best']}"
+    )
 
 
 def test_its_score_is_the_best_score_the_inner_run_reached(tmp_path):

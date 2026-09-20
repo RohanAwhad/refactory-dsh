@@ -327,7 +327,10 @@
       "title": "Use the tower: nothing has ever searched loop_mode/loop's own knobs",
       "why": "D14 says the loop is itself a mode so a further loop can search the loop. It is expressible and unused, so the claim it was built to make has never been demonstrated.",
       "verify": "pytest refactory/tests/test_loop_as_mode.py -q",
-      "status": "todo"
+      "status": "done",
+      "commit": "PENDING",
+      "observed": "21 passed + 1 skipped (test_loop_as_mode.py); tower run seed 0.875 -> best 1.04",
+      "evidence": "D14's claim demonstrated rather than described. Ran a real outer loop over loop_mode/loop: seed 0.875 -> best 1.04 in 3 evaluations, the winning edit being `set_knob batch_size 4 -> 8`. architecture.md section 11 recorded 'expressible, not yet used' and no longer does; section 9 now carries the command and the result. The test that stood here asserted only that batch_size, epochs and optimizer are VISIBLE in the context -- expressiveness, not use -- so it was strengthened to run the search and assert the leaderboard, and a second test pins the lever deterministically on seed 0 (batch_size 4 -> inner best 0.875, 8 -> 1.04). Without the lever test a search over a surface that cannot move would still pass its own test."
     },
     {
       "id": "loud-model-failure",
