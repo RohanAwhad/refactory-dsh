@@ -72,7 +72,7 @@ def run_on_dsh(
 
     command = [
         str(node_bin()), "--import", "tsx/esm", "apps/cli/src/bin.ts",
-        "--profile", "science", "run",
+        "--profile", "graph", "run",
         "--mode", name,
         "--task", TASK,
         "--budget", "1",

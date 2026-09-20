@@ -44,7 +44,7 @@ Two details worth knowing:
 The `science` profile mounts the spine, so one command drives the whole graph:
 
 ```bash
-node --import tsx/esm apps/cli/src/bin.ts --profile science run \
+node --import tsx/esm apps/cli/src/bin.ts --profile graph run \
   --mode circle_packing \
   --task "Call wf_next repeatedly until it reports done. Do nothing else." \
   --budget 1 \

@@ -1,9 +1,9 @@
 /**
- * The interactive science runner: boots one CEO Agent over the spine, drives it
+ * The interactive graph runner: boots one CEO Agent over the spine, drives it
  * to quiescence (the CEO walks `wf_next → wf_done/wf_verdict`, spawning
  * subagents for content nodes and letting the spine auto-run deterministic
  * nodes), flushes its Session, and reports the best score plus the session log.
- * @module @deepseek-ai/dsh-science
+ * @module @deepseek-ai/dsh-graph
  */
 
 import { randomUUID } from 'node:crypto'
@@ -17,14 +17,14 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { Session, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
-import { SCIENCE_STARTUP_SERVICE, STATE_FILES } from './startup.ts'
-import type { ScienceStartupValues } from './startup.ts'
+import { GRAPH_STARTUP_SERVICE, STATE_FILES } from './startup.ts'
+import type { GraphStartupValues } from './startup.ts'
 
 /** Stable Cordis plugin name. */
-export const name = 'science-runner'
+export const name = 'graph-runner'
 
 /** Core services required before the CEO turn can start. */
-export const inject = ['agentDefaultModel', 'agents', 'sessions', SCIENCE_STARTUP_SERVICE]
+export const inject = ['agentDefaultModel', 'agents', 'sessions', GRAPH_STARTUP_SERVICE]
 
 /** The best score recorded by the mode's ops, or 0 when nothing was accepted. */
 function bestScore(workdir: string, mode: string): number {
@@ -70,7 +70,7 @@ interface DefaultModelLike {
 }
 
 async function run(ctx: Context, io: Io): Promise<void> {
-  const startup = ctx.get(SCIENCE_STARTUP_SERVICE) as ScienceStartupValues | undefined
+  const startup = ctx.get(GRAPH_STARTUP_SERVICE) as GraphStartupValues | undefined
   await ctx.get('loader')?.await()
   const agents = ctx.get('agents')
   const defaultModel = ctx.get('agentDefaultModel') as DefaultModelLike | undefined
@@ -117,13 +117,13 @@ async function run(ctx: Context, io: Io): Promise<void> {
 
 /**
  * Mount the interactive runner. The spine row (in the patch) hands this app the
- * same graph + env it runs the CEO against, through {@link SCIENCE_STARTUP_SERVICE}.
+ * same graph + env it runs the CEO against, through {@link GRAPH_STARTUP_SERVICE}.
  * @param ctx - plugin context carrying core services and the launcher exit request.
  */
 export function apply(ctx: Context): void {
   const exit = ctx.get('appExit')
   if (exit === undefined) {
-    throw new Error('science-runner: the launcher must provide ctx.appExit before the tree mounts')
+    throw new Error('graph-runner: the launcher must provide ctx.appExit before the tree mounts')
   }
   const io = { stdout: process.stdout, stderr: process.stderr, exit }
   void run(ctx, io).catch((error: unknown) => {

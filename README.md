@@ -70,7 +70,7 @@ Open the printed URL. The default preset is **ceo**, which carries the `refactor
 ### Headless science runner
 
 ```bash
-node --import tsx/esm apps/cli/src/bin.ts --profile science run \
+node --import tsx/esm apps/cli/src/bin.ts --profile graph run \
   --mode gepa \
   --task circle_packing \
   --budget 1

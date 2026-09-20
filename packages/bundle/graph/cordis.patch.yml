@@ -1,10 +1,15 @@
-# The dsh-science bundle patch: the interactive scientific-research runner.
+# The dsh-graph bundle patch: drives one CEO Agent over a refactory mode graph.
+#
+# `science` names a *package of modes* in refactory (SRF), not a runtime, so this
+# profile is named for what it does rather than for what the first modes happened
+# to be about.
 # It stacks over dsh-base (which supplies shell, subagent, tools, and the LLM
 # providers), adds the command-line provider and the workflow spine, and mounts
-# the science runner that drives one CEO Agent to quiescence.
+# the runner that drives one CEO Agent to quiescence.
 #
 # The spine row reads its graph, work directory, and command environment from
-# the `scienceStartup` service, so `--mode/--task/--budget` select the run.
+# the `graphStartup` service, so `--mode/--task/--budget` select the run.
+# (The service keeps its name: it is an internal id, not a runtime.)
 
 - id: system-prompt
   config:
@@ -20,19 +25,19 @@
     - id: code-runtime
       name: '@deepseek-ai/dsh-code-runtime-worker-thread'
 
-    - id: science-startup
-      name: '@deepseek-ai/dsh-science/src/startup'
+    - id: graph-startup
+      name: '@deepseek-ai/dsh-graph/src/startup'
 
     - id: workflow-spine
       name: '@deepseek-ai/dsh-workflow-spine'
-      inject: [scienceStartup]
+      inject: [graphStartup]
       config:
-        graph: !!js ctx.scienceStartup.graph
+        graph: !!js ctx.graphStartup.graph
         toolPrefix: wf
         maxIterations: 500
         executeCommands: true
-        workdir: !!js ctx.scienceStartup.workdir
-        commandEnv: !!js ctx.scienceStartup.commandEnv
+        workdir: !!js ctx.graphStartup.workdir
+        commandEnv: !!js ctx.graphStartup.commandEnv
         commandTimeoutMs: 3600000
         ceoDeny:
           - bash
@@ -47,6 +52,6 @@
           - workflow
           - read_image
 
-    - id: science-runner
-      name: '@deepseek-ai/dsh-science/src/index'
-      inject: [scienceStartup]
+    - id: graph-runner
+      name: '@deepseek-ai/dsh-graph/src/index'
+      inject: [graphStartup]

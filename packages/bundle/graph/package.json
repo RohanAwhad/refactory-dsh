@@ -1,6 +1,6 @@
 {
-  "name": "@deepseek-ai/dsh-science",
-  "description": "The dsh science bundle: an interactive CEO-driven runner for scientific-research workflow graphs over dsh-base",
+  "name": "@deepseek-ai/dsh-graph",
+  "description": "The dsh graph bundle: drives one CEO Agent over a refactory mode graph, for the outer loop and for a person using a mode",
   "version": "0.1.3-alpha.2",
   "publishConfig": {
     "access": "public"
@@ -8,7 +8,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/deepseek-ai/deepseek-harness.git",
-    "directory": "packages/bundle/science"
+    "directory": "packages/bundle/graph"
   },
   "type": "module",
   "main": "lib/index.js",

@@ -47,7 +47,7 @@ def _run_on_dsh(state: dict, tmp_path: Path, *, knobs: dict, timeout: int = 600)
     result = subprocess.run(
         [
             str(node_bin()), "--import", "tsx/esm", "apps/cli/src/bin.ts",
-            "--profile", "science", "run",
+            "--profile", "graph", "run",
             "--mode", "circle_packing",
             "--task", TASK,
             "--budget", "1",

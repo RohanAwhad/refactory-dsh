@@ -1,10 +1,10 @@
 /**
- * The science app's command-line provider: it parses `--mode/--task/--budget`
+ * The graph app's command-line provider: it parses `--mode/--task/--budget`
  * (and `--provider/--model/--graphs/--workdir`), loads the mode's committed
- * `graph.json`, and publishes {@link SCIENCE_STARTUP_SERVICE}. The workflow-spine
+ * `graph.json`, and publishes {@link GRAPH_STARTUP_SERVICE}. The workflow-spine
  * row and the runner both read from that service, so a run is parameterised by
  * the command line rather than baked into a profile.
- * @module @deepseek-ai/dsh-science/startup
+ * @module @deepseek-ai/dsh-graph/startup
  */
 
 import { readFileSync, existsSync, mkdirSync } from 'node:fs'
@@ -15,13 +15,13 @@ import type { Context } from '@deepseek-ai/cordis'
 import { parseCmdline } from '@deepseek-ai/dsh-cmdline'
 
 /** Stable Cordis plugin name. */
-export const name = 'science-startup'
+export const name = 'graph-startup'
 
 /** Services required before the run can be resolved. */
 export const inject = ['cmdlineArgs']
 
 /** Service provided by this plugin and injected by the runner and spine row. */
-export const SCIENCE_STARTUP_SERVICE = 'scienceStartup'
+export const GRAPH_STARTUP_SERVICE = 'graphStartup'
 
 /** The mode's state file, used by the runner to report the best score. */
 const STATE_FILES: Record<string, string> = {
@@ -42,7 +42,7 @@ const STATE_FILES: Record<string, string> = {
 
 /** Resolve a dependency path from an explicit env override, else relative to
  * `REFACTORY_DSH_HOME` (the repo root), else relative to the checkout the CLI
- * runs from. Keeps the science bundle self-contained instead of baking an
+ * runs from. Keeps the bundle self-contained instead of baking an
  * absolute machine path: a fresh clone's `.venv` and vendored SRF graphs are
  * found without the pre-consolidation `~/dsh/refactory-dsh` layout. */
 function resolveDep(override: string | undefined, homeRelative: string, fallback: string): string {
@@ -56,7 +56,7 @@ const DEFAULT_GRAPHS_DIR = resolveDep(process.env.SRF_GRAPHS, 'refactory/vendor/
 const DEFAULT_VENV_BIN = resolveDep(process.env.VENV_BIN, '.venv/bin', join(process.cwd(), '.venv/bin'))
 
 /** Everything the run needs, resolved once from the command line. */
-export interface ScienceStartupValues {
+export interface GraphStartupValues {
   /** The CEO driving prompt. */
   task: string
   /** The mode's graph, exactly refactory's `Workflow.to_dict()` output. */
@@ -77,10 +77,10 @@ export interface ScienceStartupValues {
   model: string | undefined
 }
 
-function scienceCommand(): Command {
+function graphCommand(): Command {
   return new Command()
-    .name('dsh --profile science')
-    .description('Drive one scientific-research workflow graph through the spine.')
+    .name('dsh --profile graph')
+    .description('Drive a refactory mode graph through the spine, with one CEO Agent.')
     .helpOption('-h, --help', 'show this help')
     .argument('[command]', 'the subcommand; "run" drives the graph to completion', 'run')
     .requiredOption('-m, --mode <mode>', 'the SRF mode (e.g. gepa, best_of_n)')
@@ -94,7 +94,7 @@ function scienceCommand(): Command {
     .option('--knobs <json>', 'JSON object of OptKnob overrides (e.g. {"temperature":0.5})', '{}')
     .addHelpText('after', `
 Examples:
-  dsh --profile science run --mode gepa --task circle_packing --budget 20
+  dsh --profile graph run --mode gepa --task circle_packing --budget 20
 `)
 }
 
@@ -113,7 +113,7 @@ function loadGraph(mode: string, graphsDir: string): unknown {
  * @param ctx - plugin context carrying the command line.
  */
 export function apply(ctx: Context): void {
-  const program = scienceCommand()
+  const program = graphCommand()
   program.action(() => {
     const options = program.opts()
     const mode = String(options.mode)
@@ -136,7 +136,7 @@ export function apply(ctx: Context): void {
       PATH: `${pythonBin}:${process.env.PATH ?? ''}`,
     }
 
-    ctx.provide(SCIENCE_STARTUP_SERVICE, {
+    ctx.provide(GRAPH_STARTUP_SERVICE, {
       task: 'Drive the workflow graph to completion. Call wf_next first and after every wf_done/wf_verdict. '
         + 'For each AgentNode or LLMNode, spawn a subagent and give it a tight brief: it must write ONLY '
         + 'the exact files in that node\'s `writes` list (reading only its `reads`), then stop and return '
@@ -152,7 +152,7 @@ export function apply(ctx: Context): void {
       budget,
       provider: options.provider === undefined ? undefined : String(options.provider),
       model: options.model === undefined ? undefined : String(options.model),
-    } satisfies ScienceStartupValues)
+    } satisfies GraphStartupValues)
   })
   parseCmdline(ctx, program)
 }

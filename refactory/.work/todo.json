@@ -300,7 +300,10 @@
       "title": "science is a package of modes, not a runtime: retire --profile science",
       "why": "Two runners only: the walker (headless) and DSH (interactive, with the CEO layer). --profile science is a third thing from the previous system, and science is meant to name a package of modes and nothing else.",
       "verify": "pytest refactory/tests/test_evaluators.py -q",
-      "status": "todo"
+      "status": "done",
+      "commit": "PENDING",
+      "observed": "633 passed with --run-integration; the renamed profile boots and agrees with the walker (28 passed across test_equivalence + test_loop_as_mode)",
+      "evidence": "RENAMED THE BUNDLE so `science` names only a package of modes, which is what it was always supposed to be: packages/bundle/science -> packages/bundle/graph, @deepseek-ai/dsh-science -> @deepseek-ai/dsh-graph, and --profile science -> --profile graph. The rename is total, not cosmetic: the package manifest, the TS path mapping in tsconfig.base.json, the project reference in tsconfig.host.json, apps/cli's dependency, the bundle's own cordis.patch.yml, the internal plugin and service ids (science-runner -> graph-runner, science-startup -> graph-startup, scienceStartup -> graphStartup, SCIENCE_STARTUP_SERVICE -> GRAPH_STARTUP_SERVICE, ScienceStartupValues -> GraphStartupValues), the three call sites (dsh_runtime.py and the two DSH test files), the persona wording, and every document that told a reader to run --profile science. Both READMEs of the bundle are rewritten and the bilingual pair re-recorded; zero mentions of 'science' remain in the bundle. A FINDING WORTH KNOWING, found by running it rather than by reading: a profile is MACHINE STATE, created by `dsh plugin --profile <name> add <package>`, not derived from the bundle name -- so ~/.dsh/profiles/science stayed behind and `--profile graph` stopped with 'profile \"graph\" does not exist' until the new one was added. The bundle README already documents that one-time step for whichever name is current, so the operational model is unchanged, but any machine or CI that runs a mode on DSH needs it once. HONEST LIMIT: the old ~/.dsh/profiles/science is left in place rather than removed; it is the reader's machine, and deleting a profile is a destructive step to take with them, not for us."
     },
     {
       "id": "steering",

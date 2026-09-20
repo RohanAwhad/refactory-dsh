@@ -339,7 +339,7 @@ def test_it_runs_end_to_end_on_the_runtime_that_ships(tmp_path):
     result = subprocess.run(
         [
             str(node_bin()), "--import", "tsx/esm", "apps/cli/src/bin.ts",
-            "--profile", "science", "run",
+            "--profile", "graph", "run",
             "--mode", "loop",
             "--task", "Call wf_next repeatedly until it reports done. Do nothing else.",
             "--budget", "1", "--graphs", str(graphs), "--workdir", str(work),
