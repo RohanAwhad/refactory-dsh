@@ -316,7 +316,10 @@
       "title": "D15's adopting loop was never built, so a run's winner is unreachable",
       "why": "D15 says create, edit, design and an adopting loop all produce something new. Three exist; the adopting loop does not. A run records what the best candidate scored, not the state that scored it.",
       "verify": "pytest refactory/tests/test_adoption.py -q",
-      "status": "todo"
+      "status": "done",
+      "commit": "PENDING",
+      "observed": "9 passed (test_adoption.py); adopted sympy_pack/exact's winner reproduced 3.0 exactly, source digest unchanged",
+      "evidence": "refactory_dsh/adopt.py: best(run) reads the winner's FULL STATE from journal.jsonl -- the only artifact that carries a state; report.json carries the score, state.json's population carries the edits, and console candidate returns a diff, so none of them can be run. adopt(run, as_name=) writes a NEW package whose mode subclasses the searched class with the winning state pinned, so the ops, the knobs and the score() are the same code and only the state differs -- which is what makes the comparison against the baseline meaningful. It refuses to overwrite an existing package and records provenance (adopted_from, run, candidate, score, edits) in .adopted.json. Console gains `best` (state opt-in via --state) and `adopt --as NAME`. VERIFIED on the real run at .factory/repro: best returns candidate 8f7ef8f4648c scoring 3.0, and `registry smoke adopted_exact/exact` scores 3.0 -- the adopted artifact reproduces the winner. Nine tests, including D15's property: adopting leaves the source package byte-identical and the run byte-identical. Non-vacuous: planting a real write into the source package fails the byte-identical test, and removing it passes."
     },
     {
       "id": "tower",

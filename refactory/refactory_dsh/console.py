@@ -349,6 +349,23 @@ def candidate(run_root: Path, candidate_id: str) -> dict[str, Any]:
     return {**diff, "rendered": observe.render_diff(diff["diff"]), **record}
 
 
+def _best_payload(run_root: Path, *, keep_state: bool) -> dict[str, Any]:
+    """The winner, and the state that scored it.
+
+    The state is what makes a winner usable and it is the field `leaderboard` and
+    `candidate` do not have: one gives a score, the other a diff, and neither can
+    be run. It is large, so it is opt-in — but it is available without reading
+    `journal.jsonl` by hand, which was the only way before.
+    """
+    from refactory_dsh.adopt import best
+
+    winner = best(run_root)
+    if not keep_state:
+        winner = {key: value for key, value in winner.items() if key != "state"}
+        winner["state_available"] = "pass --state"
+    return winner
+
+
 def _measured(run_root: Path, candidate_id: str) -> dict[str, Any]:
     """What the run directory recorded about the candidate's evaluation."""
     path = run_root / "runs" / candidate_id / "candidate.json"
@@ -487,6 +504,16 @@ def _parser() -> argparse.ArgumentParser:
     one = add(sub.add_parser("candidate", help="one candidate and its diff"))
     one.add_argument("candidate")
 
+    champion = add(
+        sub.add_parser("best", help="the winner, with the state that scored it")
+    )
+    champion.add_argument("--state", action="store_true", help="include the full state")
+
+    take = add(
+        sub.add_parser("adopt", help="write the winner as a new package, input untouched")
+    )
+    take.add_argument("--as", dest="as_name", required=True, help="the new package name")
+
     add(sub.add_parser("stop", help="ask a run to stop"))
     return parser
 
@@ -529,6 +556,14 @@ def main(argv: list[str] | None = None) -> int:
             payload = leaderboard(_root_for(args, project), limit=args.limit)
         elif args.verb == "candidate":
             payload = candidate(_root_for(args, project), args.candidate)
+        elif args.verb == "best":
+            payload = _best_payload(_root_for(args, project), keep_state=args.state)
+        elif args.verb == "adopt":
+            from refactory_dsh.adopt import adopt as adopt_winner
+
+            payload = adopt_winner(
+                _root_for(args, project), as_name=args.as_name, project=project
+            )
         elif args.verb == "stop":
             payload = stop(_root_for(args, project))
         else:  # pragma: no cover - argparse rejects an unknown verb first

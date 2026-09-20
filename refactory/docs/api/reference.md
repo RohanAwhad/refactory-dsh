@@ -225,6 +225,23 @@ How a mode is run to get the score the loop learns from.
 - **`register`** — Add an evaluator without editing the library.
 
 
+<a id="refactory_dsh-adopt"></a>
+
+## `refactory_dsh.adopt`
+
+Adopt a run's winner as a mode of its own.
+
+| kind | name | signature |
+|---|---|---|
+| class | `AdoptionError` | `` |
+| function | `adopt` | `(run_root: 'Path', *, as_name: 'str', project: 'Path \| None' = None, mode: 'str' = '') -> 'dict[str, Any]'` |
+| function | `best` | `(run_root: 'Path') -> 'dict[str, Any]'` |
+
+- **`AdoptionError`** — A winner cannot be adopted. Always names what is wrong.
+- **`adopt`** — Write the winner as a new package, and leave both inputs untouched.
+- **`best`** — The winner: the highest-scoring candidate whose state the run recorded.
+
+
 <a id="refactory_dsh-strategies"></a>
 
 ## `refactory_dsh.strategies`
