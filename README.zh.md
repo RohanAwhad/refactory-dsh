@@ -80,16 +80,17 @@ node --import tsx/esm apps/cli/src/bin.ts --profile science run \
 
 ### SRF：模式包的参考实现
 
-**SRF 是随仓库交付的示例，展示如何基于 refactory 构建一个*模式包*。** 它不属于运行时——它是一份供你复制的模板。每个模式是一个 `graph.json`（refactory 的 `Workflow.to_dict()`），外加其 `FnNode` 调用的 Python op，全部放在同一个包内：
+**一个模式是 `refactory_packages/<package>/` 里的 Python 类**，`circle_packing` 就是现成的例子：
 
 ```
-srf/
-  graphs/gepa.graph.json       # a mode: nodes + edges + knobs
-  srf/ops/gepa/…               # the ops that FnNode commands run
-  srf/tasks/…                  # benchmark tasks (circle_packing, …)
+circle_packing/
+  __init__.py             PACKAGE = Package(name=…, modes=(…,), ops=(…,))
+  mode.py                 class Adaptive(nn.Mode): knobs, build(), score()
+  ops.py                  the functions its nodes call
+  tools.py                only when the mode needs something the machine must have
 ```
 
-要添加自己的模式，你只需改动那个包：写一个 `graph.json`，实现它的 op，放进 `graphs/`，它就会在同一个 `--profile science` runner 下运行——无需修改 DSH。这就是完整的 refactory→DSH 约定：语言定义图，运行时执行图，而模式包提供介于两者之间的领域逻辑。
+SRF 以 vendor 形式放在 `refactory/vendor/srf`，**不属于运行时**：它的十三个模式已移植为 `refactory_dsh/strategies.py` 里的外层循环策略。要添加自己的模式，你只需改动自己的包——它会被 lower 成 refactory 的 IR，由 DSH 执行，DSH 侧无需任何改动。
 
 ### 端到端示例：创建一个模式，再优化它
 
@@ -119,25 +120,20 @@ srf/
 apps/                    DSH apps (CLI, web)
 packages/                DSH packages (workflow-spine, science, ui-brand-refactory, …)
 refactory/               the glue
-  refactory_dsh/           ops (outer_loop, scaffold) + path resolution
-  graphs/                  create_v2 / outer_loop / design_v2 graph.json
-  presets/                 the shipped CEO preset skeleton
+  refactory_dsh/           the mode library, the loop, the optimizers, the evaluators
+  refactory_packages/      the packages of modes (circle_packing, sympy_pack, …)
+  docs/                    architecture, tutorials, tool packing, hardening
   vendor/remote-factory/   refactory (git submodule)
   vendor/srf/              SRF (git submodule)
-  gen_presets.py           regenerates the 3 agent presets
 install.sh               one-command install
 refactory-dsh            the launcher
 ```
 
+一个模式是 `refactory_packages/<package>/` 里的 Python 类，而不是 `graph.json`：决策记录见 [refactory/docs/plans/pythonic-modes.md](refactory/docs/plans/pythonic-modes.md)。
+
 ---
 
 ## 开发
-
-### 编辑图之后重新生成 preset
-
-```bash
-.venv/bin/python refactory/gen_presets.py
-```
 
 ### 测试
 

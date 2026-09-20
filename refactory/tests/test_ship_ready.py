@@ -274,3 +274,91 @@ def test_every_document_the_readme_links_opens():
         assert (ROOT / target).exists(), (
             f"README.md links {target}, which does not exist"
         )
+
+
+#: Paths that appear in a shipped document but are not part of the repo, and why.
+#: An entry here is a claim that the path is not the reader's to find; anything else
+#: that does not resolve is a document lying about the tree.
+_NOT_REPO_PATHS = (
+    # Written at run time by the loop, the hooks, or a mode.
+    ".factory/",
+    ".venv/",
+    "~",
+    "/tmp",
+    # References to the other repositories this one vendors or forks.
+    "remote-factory/",
+    "srf/",
+    # Illustrative fragments, not paths into this checkout.
+    "<this-repo>",
+    "refactory_packages/<package>",
+    "packages/",
+    "apps/",
+    "vendor/",
+)
+
+
+def _documented_paths(text: str) -> set[str]:
+    """Path-shaped tokens a reader could be expected to find on disk.
+
+    Two forms, and only these two, because they are the ones that describe the
+    repository rather than an example inside it:
+
+    - the **layout block** — the fenced block under a `## Layout` heading, where
+      every entry is relative to the repository root;
+    - a **script the reader is told to run** — `python <path>.py`, as opposed to a
+      module they import, which `test_every_module_a_document_names_is_runnable`
+      already covers.
+
+    Everything else is a false positive waiting to happen. A `mode.py` inside an
+    example block describes a file in `refactory_packages/<pkg>/`, not at the root,
+    and a check that cannot tell the difference is a check somebody deletes.
+    """
+    found: set[str] = set()
+
+    after = text.split("## Layout", 1)
+    if len(after) == 2:
+        block = re.search(r"```[a-zA-Z0-9]*\n(.*?)```", after[1], re.DOTALL)
+        if block:
+            parent = ""
+            for line in block.group(1).splitlines():
+                # `name<2+ spaces>description`. An indented entry belongs to the
+                # top-level entry above it -- `refactory/` then `vendor/srf/` means
+                # `refactory/vendor/srf`, and reading it as a root path reports a
+                # directory that was never claimed to exist.
+                match = re.match(r"^(\s*)([\w./-]+)\s{2,}\S", line)
+                if not match or "`" in match.group(2):
+                    continue
+                indent, token = match.group(1), match.group(2).rstrip("/")
+                if indent:
+                    found.add(f"{parent}/{token}" if parent else token)
+                else:
+                    parent = token
+                    found.add(token)
+
+    for match in re.finditer(r"(?:python3?|\.venv/bin/python)\s+([\w./-]+\.py)", text):
+        found.add(match.group(1))
+    return found
+
+
+@pytest.mark.parametrize("document", SHIPPED_DOCS, ids=lambda p: p.name)
+def test_every_path_a_document_names_exists(document):
+    """A path in a document is an instruction, and instructions have to resolve.
+
+    `test_every_module_a_document_names_is_runnable` covers `python -m pkg.mod`,
+    and `--help` covers a flag. Neither covers `python refactory/gen_presets.py`
+    nor a name in a layout block, and both forms were in the README long after the
+    files were deleted: `graphs/`, `presets/` and `gen_presets.py`, removed when a
+    mode became a Python class. A stranger following the README hit a missing file
+    on their first command after installing.
+    """
+    text = document.read_text()
+    missing: list[str] = []
+    for token in sorted(_documented_paths(text)):
+        if any(token.startswith(skip) or skip in token for skip in _NOT_REPO_PATHS):
+            continue
+        if not (ROOT / token).exists() and not (document.parent / token).exists():
+            missing.append(token)
+    assert not missing, (
+        f"{document.name} tells the reader about {missing}, which do not exist. "
+        "Either the path is wrong or the document is describing a tree that is gone."
+    )

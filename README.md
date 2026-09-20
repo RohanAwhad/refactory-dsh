@@ -80,16 +80,17 @@ prints `{"best_score": …}` and the session log. `--graphs` and `--python-bin` 
 
 ### SRF: the reference package of modes
 
-**SRF is the shipped example of how to build a *package of modes* on refactory.** It is not part of the runtime — it is a template you copy. Each mode is one `graph.json` (refactory `Workflow.to_dict()`) plus the Python ops its `FnNode`s call, all inside one package:
+**A mode is a Python class inside `refactory_packages/<package>/`**, and `circle_packing` is the running example:
 
 ```
-srf/
-  graphs/gepa.graph.json       # a mode: nodes + edges + knobs
-  srf/ops/gepa/…               # the ops that FnNode commands run
-  srf/tasks/…                  # benchmark tasks (circle_packing, …)
+circle_packing/
+  __init__.py             PACKAGE = Package(name=…, modes=(…,), ops=(…,))
+  mode.py                 class Adaptive(nn.Mode): knobs, build(), score()
+  ops.py                  the functions its nodes call
+  tools.py                only when the mode needs something the machine must have
 ```
 
-To add your own mode you only touch that package: write a `graph.json`, implement its ops, drop it in `graphs/`, and it runs under the same `--profile science` runner — no change to DSH. That is the whole refactory→DSH contract: the language defines the graph, the runtime executes it, and a mode package supplies the domain logic in between.
+SRF is vendored at `refactory/vendor/srf` and is **not part of the runtime**: its thirteen modes are ported as outer-loop strategies in `refactory_dsh/strategies.py`. To add your own mode you touch only your package — it is lowered to refactory's IR and DSH runs it, with no change on the DSH side.
 
 ### End-to-end example: create a mode, then optimize it
 
@@ -119,25 +120,20 @@ Start with [refactory/docs/architecture.md](refactory/docs/architecture.md) for 
 apps/                    DSH apps (CLI, web)
 packages/                DSH packages (workflow-spine, science, ui-brand-refactory, …)
 refactory/               the glue
-  refactory_dsh/           ops (outer_loop, scaffold) + path resolution
-  graphs/                  create_v2 / outer_loop / design_v2 graph.json
-  presets/                 the shipped CEO preset skeleton
+  refactory_dsh/           the mode library, the loop, the optimizers, the evaluators
+  refactory_packages/      the packages of modes (circle_packing, sympy_pack, …)
+  docs/                    architecture, tutorials, tool packing, hardening
   vendor/remote-factory/   refactory (git submodule)
   vendor/srf/              SRF (git submodule)
-  gen_presets.py           regenerates the 3 agent presets
 install.sh               one-command install
 refactory-dsh            the launcher
 ```
 
+A mode is a Python class in `refactory_packages/<package>/`, not a `graph.json`: the decision record is [refactory/docs/plans/pythonic-modes.md](refactory/docs/plans/pythonic-modes.md).
+
 ---
 
 ## Development
-
-### Regenerate the presets after editing a graph
-
-```bash
-.venv/bin/python refactory/gen_presets.py
-```
 
 ### Tests
 
