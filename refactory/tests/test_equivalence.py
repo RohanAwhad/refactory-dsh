@@ -208,9 +208,11 @@ def test_the_loop_can_use_dsh_as_its_evaluator(tmp_path):
 
 
 def test_the_loop_refuses_an_unknown_evaluator(tmp_path):
-    from refactory_dsh.loop import Loop, LoopConfig, LoopError
+    """The registry is the one authority, and it fails at construction."""
+    from refactory_dsh.evaluators import EvaluatorError
+    from refactory_dsh.loop import Loop, LoopConfig
 
-    with pytest.raises(LoopError, match="unknown evaluator"):
+    with pytest.raises(EvaluatorError, match="unknown evaluator"):
         Loop(
             MODE,
             LoopConfig(epochs=1, batch_size=2, optimizer="random", runs_root=tmp_path,

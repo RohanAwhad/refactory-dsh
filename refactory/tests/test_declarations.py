@@ -243,11 +243,18 @@ def test_forgetting_leaves_project_and_global_memory_alone(tmp_path):
 
 
 def test_the_loop_forgets_run_scoped_memory_after_every_candidate(tmp_path):
-    """The enforcement point. Without it a resumed run reads its own leftovers."""
-    import inspect
-    from refactory_dsh.loop import Loop
+    """The enforcement point. Without it a resumed run reads its own leftovers.
 
-    source = inspect.getsource(Loop._evaluate)
+    The call moved when the evaluator became a seam: running a mode is what an
+    evaluator does now, so the point where an inner run *ends* is
+    ``WalkerEvaluator.evaluate``. The property is unchanged, and asserting it
+    against the class that ends the run keeps the test pointed at the enforcement
+    point rather than at whichever function used to hold it.
+    """
+    import inspect
+    from refactory_dsh.evaluators import WalkerEvaluator
+
+    source = inspect.getsource(WalkerEvaluator.evaluate)
     assert "forget_run_scoped" in source, (
         "the inner run ends without applying the run-retention policy"
     )

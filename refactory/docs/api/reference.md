@@ -201,6 +201,30 @@ The two extension points: what proposes, and what runs the search.
 - **`run_strategy`** — Run an outer loop and return its report, with the bound it stopped for.
 
 
+<a id="refactory_dsh-evaluators"></a>
+
+## `refactory_dsh.evaluators`
+
+How a mode is run to get the score the loop learns from.
+
+| kind | name | signature |
+|---|---|---|
+| class | `DshEvaluator` | `(*, timeout_s: 'int \| None' = None) -> 'None'` |
+| class | `Evaluator` | `()` |
+| class | `EvaluatorError` | `` |
+| class | `WalkerEvaluator` | `(*, model: 'Any' = None, project: 'Path \| None' = None, memory_global_root: 'Path \| None' = None, max_steps: 'int' = 1000) -> 'None'` |
+| function | `create` | `(name: 'str', *, config: 'Any', model: 'Any' = None, project: 'Path \| None' = None) -> 'Evaluator'` |
+| function | `names` | `() -> 'list[str]'` |
+| function | `register` | `(name: 'str', cls: 'type[Evaluator]') -> 'None'` |
+
+- **`DshEvaluator`** — Lower the state to IR and run it on DSH. The runtime that ships.
+- **`Evaluator`** — One way to run a mode, and the score the loop reads off the result.
+- **`EvaluatorError`** — An evaluator cannot be built. Always names what is wrong.
+- **`WalkerEvaluator`** — Run the graph in this process. The fast one, and the default.
+- **`create`** — Build an evaluator by name, failing loud on an unknown one.
+- **`register`** — Add an evaluator without editing the library.
+
+
 <a id="refactory_dsh-strategies"></a>
 
 ## `refactory_dsh.strategies`

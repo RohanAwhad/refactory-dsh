@@ -27,11 +27,19 @@ better one. The vocabulary is PyTorch's, deliberately.
 | `load_state_dict()` | `Mode.load_state_dict()`, strict | `mode.py` |
 | `torch.optim` | `Optimizer` | `refactory_dsh/optim/` |
 | forward pass | `Mode.run()` | `mode.py` |
-| loss | `Loop.loss_step()` | `refactory_dsh/loop.py` |
+| **loss / cost function** | **`Evaluator`** | `refactory_dsh/evaluators.py` |
+| loss value | `Loop.loss_step()` | `refactory_dsh/loop.py` |
 | backward pass | `Loop.backward()` | `loop.py` |
 | `optimizer.step()` | `Loop.step()` | `loop.py` |
 | training loop | `Loop` | `loop.py` |
 | `torch.save` | `history.read_run` / the journal | `history.py`, `loop.py` |
+
+**Three extension points, all seams.** `Optimizer` proposes and cannot run
+anything; `OuterLoop` owns the search; `Evaluator` answers the one question the
+loop's loss is built on — *given a mode and a state, run it and tell me what it
+scored*. Each is a base class with a registry, so a new one is a new class and not
+a new branch. The evaluator was a string compared against a literal inside
+`Loop._evaluate` until issue #34.
 
 **One deliberate divergence.** In PyTorch a state dict is parameters only; the
 class is the architecture. Here the state dict carries **architecture as well as
@@ -118,10 +126,10 @@ hides the edit that caused the problem.
 python -c "from refactory_dsh.nn import edits as E; print(E.names())"
 ```
 
-## 6. The optimizers, and the two extension points
+## 6. The extension points
 
-There are two kinds of thing that can drive a search, and they are separate on
-purpose (`refactory_dsh/outerloop.py`):
+There are three kinds of thing that can be plugged into a run, and they are separate
+on purpose:
 
 - **`Optimizer`** — proposes. `propose()` returns `Proposal`s; the harness
   validates and evaluates them. It cannot run anything, so it cannot waste budget.
@@ -130,6 +138,21 @@ purpose (`refactory_dsh/outerloop.py`):
   report`, and every step a strategy would change (`select_parents`, `propose`,
   `batch_size`, `accepts`, `update`, `should_stop`, `on_epoch_end`) is a method to
   override rather than code to copy.
+- **`Evaluator`** — runs a mode and reports what it scored: the loop's loss. Two
+  ship. `walker` runs the graph in this process and is the fast one a search needs;
+  `dsh` lowers the state to IR and runs it on the runtime that ships, at the cost of
+  a process boot per candidate. `out_of_process` says which is which without
+  matching on a name.
+
+```bash
+python -c "from refactory_dsh import evaluators as E; print(E.names())"
+# ['dsh', 'walker']
+```
+
+All three take the same shape: a base class, a `REGISTRY` keyed by `name`, a
+`create(name, ...)` that fails loud on an unknown one, and a `register()` for a new
+implementation. `tests/test_evaluators.py` asserts that a third evaluator needs no
+edit to `loop.py`, because that is what a seam is for.
 
 `Run` is what a strategy is handed: `attempt` (apply a typed edit and validate it,
 microseconds, no budget) and `evaluate` (one inner run, one unit of budget). The

@@ -29,7 +29,7 @@ from typing import Any, Sequence
 
 from refactory_dsh import history as run_history
 from refactory_dsh import observe as progress_file
-from refactory_dsh.memory import MemoryStore
+from refactory_dsh.evaluators import create as create_evaluator
 from refactory_dsh import registry
 from refactory_dsh.nn import Knob, PackageError
 from refactory_dsh.nn import edits as nn_edits
@@ -196,6 +196,15 @@ class Loop(OuterLoop):
                 self.config.optimizer, seed=self.config.seed, k=self.config.attempts
             )
 
+        # How a candidate is run, and therefore how it is scored. Built here from
+        # this loop's own settings rather than switched on inside `_evaluate`, so a
+        # third evaluator is a new class in `evaluators.py` and not a new branch.
+        self.evaluator = create_evaluator(
+            self.config.evaluator,
+            config=self.config,
+            model=model,
+            project=self.project,
+        )
         self.population: list[Candidate] = []
         self.rejections: list[Rejection] = []
         self.proposals: dict[str, dict[str, Any]] = {}
@@ -226,11 +235,6 @@ class Loop(OuterLoop):
             raise LoopError(
                 f"the seed state of {self.mode_id} is not runnable; "
                 f"first problem: {issues[0]}"
-            )
-        if self.config.evaluator not in ("walker", "dsh"):
-            raise LoopError(
-                f"unknown evaluator {self.config.evaluator!r}; known: walker, dsh. "
-                "The walker is the debug runtime, DSH is the runtime that ships."
             )
         unreachable = self.unreachable_knobs()
         if unreachable:
@@ -374,13 +378,17 @@ class Loop(OuterLoop):
             )
         return len(batch)
 
-    def _evaluate_on_dsh(self, candidate: Candidate, mode: Any, workdir: Path) -> None:
-        """One forward pass on the runtime that ships, scored by the mode."""
-        from refactory_dsh.dsh_runtime import evaluate_on_dsh
+    def _evaluate(self, candidate: Candidate) -> None:
+        """Run one candidate through the evaluator, and record what it scored.
 
-        result = evaluate_on_dsh(
-            mode, candidate.state, workdir, timeout_s=self.config.dsh_timeout_s
-        )
+        This is the loop's forward pass and the evaluator is its loss: what the
+        candidate scored is whatever the evaluator says it scored. Which evaluator
+        ran it is not this method's business -- see :mod:`refactory_dsh.evaluators`
+        for the two that ship and what makes them agree.
+        """
+        workdir = self.root / "runs" / candidate.id
+        mode = self.mode_class(state=candidate.state)
+        result = self.evaluator.evaluate(mode, candidate.state, workdir)
         candidate.score = result.score
         candidate.mean_score = result.score
         candidate.facts = _trim(result.facts)
@@ -400,9 +408,11 @@ class Loop(OuterLoop):
             model_calls=candidate.model_calls,
             facts=candidate.facts,
         )
-        self._write_candidate(candidate, workdir)
+        self._write_candidate(candidate, workdir, mode=mode)
 
-    def _write_candidate(self, candidate: Candidate, workdir: Path) -> None:
+    def _write_candidate(
+        self, candidate: Candidate, workdir: Path, *, mode: Any = None
+    ) -> None:
         workdir.mkdir(parents=True, exist_ok=True)
         (workdir / "candidate.json").write_text(
             json.dumps(
@@ -416,76 +426,13 @@ class Loop(OuterLoop):
                     "edits": candidate.edits,
                     "facts": candidate.facts,
                     "model_calls": candidate.model_calls,
-                    "ports": {},
-                },
-                indent=2,
-                default=str,
-            )
-        )
-
-    def _evaluate(self, candidate: Candidate) -> None:
-        workdir = self.root / "runs" / candidate.id
-        mode = self.mode_class(state=candidate.state)
-        if self.config.evaluator == "dsh":
-            self._evaluate_on_dsh(candidate, mode, workdir)
-            return
-        # One store per inner run, and its `run`-retention namespaces are deleted
-        # when it ends. The roots already keep candidates apart; forgetting is
-        # what makes the policy true of the *same* candidate evaluated twice. A
-        # resumed run re-evaluates candidates, and a run-scoped memory left on disk
-        # would be read the second time, so the resumed run would not be the run it
-        # resumed.
-        store = MemoryStore(
-            mode.memory_declarations(),
-            run_root=workdir,
-            project_root=self.project / ".factory",
-            global_root=self.config.memory_global_root,
-        )
-        started = time.time()
-        try:
-            result = mode.evaluate(
-                workdir, model=self.model, memory=store, max_steps=self.config.max_steps
-            )
-        finally:
-            # Also on a crash or a stop: a namespace that outlives the run it was
-            # scoped to is the bug, however the run ended.
-            store.forget_run_scoped()
-        candidate.score = result.score
-        candidate.mean_score = result.score
-        candidate.facts = _trim(result.facts)
-        candidate.exit_ok = result.exit_ok
-        candidate.error = result.error
-        candidate.duration_s = round(time.time() - started, 4)
-        candidate.model_calls = result.model_calls
-        candidate.evaluated = True
-        self.evaluations += 1
-        self._journal(
-            "score",
-            id=candidate.id,
-            score=candidate.score,
-            exit_ok=candidate.exit_ok,
-            error=candidate.error,
-            duration_s=candidate.duration_s,
-            model_calls=candidate.model_calls,
-            facts=candidate.facts,
-        )
-        (workdir / "candidate.json").write_text(
-            json.dumps(
-                {
-                    "id": candidate.id,
-                    "parent": candidate.parent,
-                    "score": candidate.score,
-                    "exit_ok": candidate.exit_ok,
-                    "error": candidate.error,
-                    "duration_s": candidate.duration_s,
-                    "edits": candidate.edits,
-                    "facts": candidate.facts,
-                    "model_calls": candidate.model_calls,
                     # What the run published, against what the mode declared: a port
-                    # that is missing is a promise the mode did not keep.
+                    # that is missing is a promise the mode did not keep. Written for
+                    # every candidate whichever evaluator ran it, because a reader
+                    # comparing two runs should not have to know how they were run.
                     "ports": {
                         port.name: (workdir / port.path).exists()
-                        for port in mode.port_declarations()
+                        for port in (mode.port_declarations() if mode is not None else ())
                     },
                 },
                 indent=2,
