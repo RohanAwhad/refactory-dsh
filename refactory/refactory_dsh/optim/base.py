@@ -387,6 +387,15 @@ class Optimizer:
         self.k = max(1, int(k))
         self.rejections: list[Rejection] = []
         self.last_diagnosis: str = ""
+        #: Every round that failed to propose, with the reason. A failure here is
+        #: not a crash -- a run should survive a model that is down -- but it is
+        #: also not a search result, and the difference between "the model did not
+        #: answer" and "the model answered and nothing improved" is the difference
+        #: between a claim about the machine and a claim about the mode.
+        self.proposal_failures: list[str] = []
+        #: Rounds that were asked for a proposal, however they ended. Paired with
+        #: ``proposal_failures`` to tell a wholly-failed run from a partly-failed one.
+        self.proposal_rounds: int = 0
 
     # ── what this optimizer can reach ──────────────────────────────────────
     def can_move(self, knob: Knob, current: Any) -> bool:
@@ -444,9 +453,12 @@ class Optimizer:
                 preset=preset,
             )
             try:
+                self.proposal_rounds += 1
                 proposals = self.propose(round_ctx, n - len(accepted), parents) or []
             except Exception as exc:  # a failed optimizer round is not a crash
-                feedback = [f"{self.name} could not propose: {type(exc).__name__}: {exc}"]
+                detail = f"{type(exc).__name__}: {exc}"
+                self.proposal_failures.append(detail)
+                feedback = [f"{self.name} could not propose: {detail}"]
                 continue
             if not proposals:
                 if feedback:

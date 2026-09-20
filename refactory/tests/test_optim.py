@@ -448,3 +448,87 @@ def test_a_new_state_is_not_refused_as_a_duplicate():
         seen=[parent.id],
     )
     assert len(candidates) == 1 and not rejections
+
+
+# ── a proposer that is down is not a search result ─────────────────────────
+#
+# Filed as "a failed model call looks like a search that found nothing". Probing
+# it showed the opposite defect and a worse one: `propose_valid` -- the path with
+# the retry loop and the exception guard -- is called only by tests, and the loop
+# goes through `Loop.propose` straight to `optimizer.propose`. So a model failure
+# did not hide; it crashed the run, taking the report and every evaluation with
+# it. These assert the behaviour a person actually needs: the run survives, and it
+# says the proposer never answered.
+
+
+class _DeadClient:
+    """A model that cannot be reached, which is the first failure anyone hits."""
+
+    def __init__(self, message: str = "401 unauthorized") -> None:
+        self.message = message
+
+    def complete(self, prompt: str, *, system: str = "") -> str:
+        raise RuntimeError(self.message)
+
+
+def test_a_run_survives_a_proposer_that_cannot_be_reached(tmp_path):
+    from refactory_dsh.loop import Loop, LoopConfig
+
+    loop = Loop(
+        "circle_packing/adaptive",
+        LoopConfig(epochs=1, batch_size=2, seed=5, optimizer="autoresearch",
+                   runs_root=tmp_path / "run"),
+        project=Path("."),
+        model=_DeadClient(),
+    )
+    report = loop.run()  # must not raise
+
+    proposer = report["proposer"]
+    assert proposer["failure_count"] >= 1, "the failure was not recorded"
+    assert proposer["all_failed"] is True
+    assert proposer["optimizer"] == "autoresearch"
+
+
+def test_the_report_says_the_proposer_never_answered(tmp_path):
+    """The distinction that matters: the machine failed, or the mode did not move."""
+    from refactory_dsh.loop import Loop, LoopConfig
+
+    root = tmp_path / "run"
+    Loop(
+        "circle_packing/adaptive",
+        LoopConfig(epochs=1, batch_size=2, seed=5, optimizer="autoresearch",
+                   runs_root=root),
+        project=Path("."),
+        model=_DeadClient(),
+    ).run()
+
+    text = (root / "report.md").read_text()
+    assert "Did the proposer answer?" in text, (
+        "the report does not mention the proposer, so a run where the model was "
+        "unreachable reads as a run that found nothing"
+    )
+    assert "not a search result" in text
+    written = (root / "report.json").read_text()
+    assert "401 unauthorized" in written, (
+        "the reason the proposer failed is not in the report, so a reader cannot "
+        "tell a dead key from a wrong model name"
+    )
+
+
+def test_a_run_whose_proposer_answered_does_not_claim_a_failure(tmp_path):
+    """The other half: the finding must be absent when nothing failed."""
+    from refactory_dsh.loop import Loop, LoopConfig
+
+    root = tmp_path / "run"
+    report = Loop(
+        "circle_packing/adaptive",
+        LoopConfig(epochs=1, batch_size=2, seed=5, optimizer="random", runs_root=root),
+        project=Path("."),
+    ).run()
+
+    assert report["proposer"]["failure_count"] == 0
+    assert report["proposer"]["all_failed"] is False
+    assert report["proposer"]["finding"] == ""
+    assert "Did the proposer answer?" not in (root / "report.md").read_text(), (
+        "a healthy run is claiming its proposer failed"
+    )

@@ -282,6 +282,60 @@
       "commit": "3f1dda355e",
       "observed": "34 passed (test_strategies.py); real loop circle_packing/adaptive seed 0.875 -> 1.275",
       "evidence": "Ported as the `map_elites` strategy on the loop's own vocabulary. MAP-Elites keeps one champion per cell of a feature grid rather than one best candidate overall, so a weak candidate in an empty niche survives beside a strong one in a crowded niche and selection can return something that is not the best -- which no other strategy here does. Features: graph size, structural-vs-settings move, and step budget. NicheArchive refuses a weaker candidate in an occupied niche and accepts one in an empty one. The count is now two constants, SRF_PORT_COUNT=13 and SRF_LAB_PORT_COUNT=1, because a single total would let one be dropped as long as something else was added; the registry test asserts both and asserts `map_elites` by name. Three effect tests on the section-3 standard (weak-in-occupied-niche does not displace the champion; weak-in-empty-niche is kept; selection spans more than one niche and more than one score; the niche map reaches the proposer via ProposalContext.strategy), plus a real loop run from the CLI. Documented in refactory/docs/hardening.md section 8 and refactory/docs/architecture.md section 6."
+    },
+    {
+      "id": "evaluator-seam",
+      "issue": 34,
+      "title": "The evaluator is not an abstraction: the loop's loss is a string and an if-branch",
+      "why": "Two of the loop's three extension points had a base class and a registry; the third -- how a mode is run to get the score the loop learns from -- was a string compared against a literal. There was nowhere to put a third evaluator, and a third is what an interactive run needs.",
+      "verify": "pytest refactory/tests/test_evaluators.py -q",
+      "status": "done",
+      "commit": "9e1d800ffc",
+      "observed": "8 passed (test_evaluators.py), incl. the DSH equivalence case; 584 passed with --run-integration",
+      "evidence": "refactory_dsh/evaluators.py: Evaluator (name/evaluate/from_settings), WalkerEvaluator (runs in-process, owns the run-retention forget), DshEvaluator (lowers and runs on DSH), REGISTRY, names(), create() that fails loud, register(). Loop._evaluate no longer branches: it calls self.evaluator and assigns the candidate once. Both paths already returned RunResult so no result type was added, and the duplicate candidate.json writer is gone -- every candidate records its ports now, whichever evaluator ran it. Removed a validate() check that could never fire because create() raises first. Tests assert the seam, not the implementations: a third evaluator is registered and used with no edit to loop.py, and _evaluate does not branch on the name. Both verified against the code they replaced -- restoring the old hardcoded dispatch fails both, removing it passes."
+    },
+    {
+      "id": "science-package",
+      "issue": 39,
+      "title": "science is a package of modes, not a runtime: retire --profile science",
+      "why": "Two runners only: the walker (headless) and DSH (interactive, with the CEO layer). --profile science is a third thing from the previous system, and science is meant to name a package of modes and nothing else.",
+      "verify": "pytest refactory/tests/test_evaluators.py -q",
+      "status": "todo"
+    },
+    {
+      "id": "steering",
+      "issue": 36,
+      "title": "Steering a run while using it: user gates and the intent ledger",
+      "why": "A person using a mode can change context but not structure; the outer loop owns structure. Today a run cannot pause and ask, and nothing records what the person said. The previous system had a User Intent Ledger and we threw it away, along with the gate that checked fidelity.",
+      "verify": "pytest refactory/tests/test_steering.py -q",
+      "status": "todo"
+    },
+    {
+      "id": "adoption",
+      "issue": 35,
+      "title": "D15's adopting loop was never built, so a run's winner is unreachable",
+      "why": "D15 says create, edit, design and an adopting loop all produce something new. Three exist; the adopting loop does not. A run records what the best candidate scored, not the state that scored it.",
+      "verify": "pytest refactory/tests/test_adoption.py -q",
+      "status": "todo"
+    },
+    {
+      "id": "tower",
+      "issue": 37,
+      "title": "Use the tower: nothing has ever searched loop_mode/loop's own knobs",
+      "why": "D14 says the loop is itself a mode so a further loop can search the loop. It is expressible and unused, so the claim it was built to make has never been demonstrated.",
+      "verify": "pytest refactory/tests/test_loop_as_mode.py -q",
+      "status": "todo"
+    },
+    {
+      "id": "loud-model-failure",
+      "issue": 38,
+      "title": "A failed model call looks like a search that found nothing",
+      "why": "A dead key, a quota, or a wrong model name all present as a run that scored nothing -- a claim about the mode rather than about the model. It is the first failure a person hits with their own key.",
+      "verify": "pytest refactory/tests/test_optim.py -q",
+      "status": "done",
+      "commit": "PENDING",
+      "observed": "34 passed (test_optim.py), 3 of them new",
+      "evidence": "PROBED, AND THE ISSUE'S PREMISE WAS WRONG. I filed #38 from a comment in optim/base.py rather than from behaviour, guessing that a failed model call was caught and continued. Checking the call path showed Optimizer.propose_valid -- the method holding both the k-round retry loop and the except-Exception guard -- is called ONLY BY TESTS. The loop's default path is Loop.optimizer_step -> Loop.propose -> optimizer.propose, unguarded, and model.py's docstring claiming failures become 'a generation with no proposals' described a path the loop never reaches. So a failing model did not hide: it raised out of loop.run(), dying before report() and losing every evaluation already paid for. That is worse than the issue claimed, and the correction is posted on the issue. FIXED by guarding the loop's own propose path: the round is recorded in Optimizer.proposal_failures and counted in proposal_rounds, and returns no proposals rather than raising. The report now carries a proposer block (rounds, failures, failure_count, all_failed, finding) and renders a 'Did the proposer answer?' section only when something failed -- a run where every round failed says it is not a search result. Three tests: the run survives a dead client; the report names the failure and the reason; and a healthy run does not claim one, so the finding cannot become noise. model.py's docstring is corrected."
     }
   ],
   "verification": {

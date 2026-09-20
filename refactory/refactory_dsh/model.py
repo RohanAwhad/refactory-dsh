@@ -35,9 +35,14 @@ class DshModelClient:
     def complete(self, prompt: str, *, system: str = "") -> str:
         """Return the model's answer to ``prompt``.
 
-        Raises ``RuntimeError`` on a non-zero exit or timeout so the caller can
-        decide whether a failed proposal is fatal; the optimizers treat it as a
-        generation with no proposals, which is safe.
+        Raises ``RuntimeError`` on a non-zero exit or timeout. The loop survives
+        that and records it: a failed round contributes no proposals and lands in
+        ``Optimizer.proposal_failures``, so a run whose proposer never answered
+        says so in its report instead of looking like a search that found nothing.
+        Raising is what makes the failure the caller's to handle -- this is the
+        only place a dead key, a wrong model name and an exhausted quota, which all
+        present as "the score did not move", are distinguishable from a mode that
+        simply has no better version.
         """
         task = f"{system}\n\n{prompt}" if system else prompt
         cmd = [

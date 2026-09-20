@@ -538,6 +538,41 @@ class Loop(OuterLoop):
                    "legal rather than out of ideas",
         }
 
+    def _proposer_health(self) -> dict[str, Any]:
+        """Whether the proposer answered at all, said where a reader will see it.
+
+        A failed round is caught and the run continues, which is right: a model
+        that is down should not kill a run. But the run then looks exactly like one
+        where the model answered and had nothing useful, because both end with a
+        score that did not move and no rejections. That reads as a finding about
+        the mode when it is a fact about the machine, so the count is reported and
+        a run that never got an answer says so in one line.
+        """
+        failures = list(getattr(self.optimizer, "proposal_failures", []))
+        rounds = int(getattr(self.optimizer, "proposal_rounds", 0))
+        all_failed = bool(rounds) and len(failures) >= rounds
+        if all_failed:
+            finding = (
+                f"every one of the {rounds} proposal round(s) failed, so this run is "
+                "not a search result: nothing was proposed, and the score did not "
+                "move because the proposer never answered."
+            )
+        elif failures:
+            finding = (
+                f"{len(failures)} of {rounds} proposal round(s) failed; the rest "
+                "were proposed and evaluated normally."
+            )
+        else:
+            finding = ""
+        return {
+            "optimizer": self.optimizer.name,
+            "rounds": rounds,
+            "failures": failures[:5],
+            "failure_count": len(failures),
+            "all_failed": all_failed,
+            "finding": finding,
+        }
+
     def _dominant_refusal(self) -> dict[str, Any]:
         """The commonest refusal, and what it says about the catalogue.
 
@@ -809,8 +844,24 @@ class Loop(OuterLoop):
         return self.population[:n]
 
     def propose(self, run: Run, parents: Sequence[Candidate], n: int) -> list[Proposal]:
-        """One round of proposals. The default delegates to the optimizer."""
-        return self.optimizer.propose(self._context(), n, parents)
+        """One round of proposals. The default delegates to the optimizer.
+
+        A failed round is survived and recorded rather than raised. The run is the
+        only place the evaluations so far are reported, so letting a model
+        exception escape loses the whole run to a fact about the machine -- and a
+        run that ends with no report looks, from outside, exactly like one that
+        never started. What was refused and why is the optimizer's business;
+        whether the optimizer answered at all is the loop's, and it is recorded in
+        ``Optimizer.proposal_failures`` so the report can say which happened.
+        """
+        self.optimizer.proposal_rounds += 1
+        try:
+            return self.optimizer.propose(self._context(), n, parents)
+        except Exception as exc:  # a proposer that is down is not a crash
+            detail = f"{type(exc).__name__}: {exc}"
+            self.optimizer.proposal_failures.append(detail)
+            run.log(f"{self.optimizer.name} could not propose: {detail}")
+            return []
 
     def batch_size(self, run: Run) -> int:
         return int(self.config.batch_size)
@@ -974,6 +1025,7 @@ class Loop(OuterLoop):
             },
             "proposal_outcomes": self._proposal_outcomes(),
             "epochs_summary": [asdict(summary) for summary in self.epochs],
+            "proposer": self._proposer_health(),
         }
         self._write("report.json", payload)
         self._write_text("report.md", self._render_report(payload))
@@ -1061,6 +1113,16 @@ class Loop(OuterLoop):
             "",
             payload["dominant_refusal"]["finding"] or "_No dominant refusal._",
             "",
+            *(
+                [
+                    "## Did the proposer answer?",
+                    "",
+                    payload["proposer"]["finding"],
+                    "",
+                ]
+                if payload["proposer"]["failure_count"]
+                else []
+            ),
             "## Did the search run out of ideas?",
             "",
             payload["convergence"]["detail"] or "_No: proposals were still producing "
