@@ -1610,7 +1610,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--elite", type=int, default=3, help="how many parents to propose against")
     parser.add_argument("--max-evaluations", type=int, default=64)
     parser.add_argument("--attempts", type=int, default=3, help="retries per batch after a refusal")
-    parser.add_argument("--runs-root", default=".factory/loop")
+    parser.add_argument(
+        "--runs-root",
+        default=".factory/loop",
+        help=(
+            "the run directory to write, read back with `console --run <this path>`; "
+            "the console's --runs-root is a parent of runs, not this"
+        ),
+    )
     parser.add_argument(
         "--intent", default="",
         help="what this run is for, in the asker's words; seeds the run's intent "

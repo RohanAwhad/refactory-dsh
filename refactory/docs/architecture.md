@@ -224,6 +224,11 @@ seed `0.875` → best `0.955`, bound `epochs`, 8 inner runs, 1 structural win
 A run is a **directory**, because a reader should not need a service to read it.
 `refactory_dsh/history.py`, `observe.py`.
 
+The loop's `--runs-root` names that directory. The console's `--runs-root` names a
+**parent** of run directories, because `console start` gives every run a
+subdirectory; to read a run the loop wrote directly, pass `console --run <the
+directory>`.
+
 - `journal.jsonl` — every event, append-only. This is the run's durable state, and
   the **only** place a candidate's whole state is written down. Resume replays it
   (`Loop(config.resume=True)`).

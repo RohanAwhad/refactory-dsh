@@ -497,7 +497,14 @@ def _parser() -> argparse.ArgumentParser:
         the verb would reject the obvious call.
         """
         parser.add_argument("--project", default=None, help="repository root (default: found)")
-        parser.add_argument("--runs-root", default=None, help="where runs live")
+        parser.add_argument(
+            "--runs-root",
+            default=None,
+            help=(
+                "the directory runs live under, one subdirectory per run; this is "
+                "not the loop's --runs-root, which is the run directory itself"
+            ),
+        )
         parser.add_argument("--run", default=None, help="a run directory or run id")
         return parser
 
