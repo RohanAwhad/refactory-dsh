@@ -129,6 +129,34 @@ def test_the_command_line_prints_a_verdict_as_its_last_line(tmp_path):
     assert lines[-1] == "reloop", f"the verdict must be the last line: {result.stdout!r}"
 
 
+def test_a_node_in_a_workspace_package_runs_in_its_own_process(tmp_path):
+    """A package created into `.factory/packages` must run on the DSH path.
+
+    The driver makes a workspace package importable by extending
+    ``refactory_packages.__path__`` in its own process. A node command is a new
+    process, so unless the same root is applied there the import fails and the
+    node exits nonzero — which is how a created mode came to score nothing on DSH
+    while scoring normally under the walker.
+    """
+    package = tmp_path / ".factory" / "packages" / "probe_pack"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+    (package / "ops.py").write_text(
+        "def noop(ctx):\n"
+        "    ctx.write_json('probe.json', {'ok': True})\n"
+        "    return {'ok': True}\n"
+    )
+    workdir = tmp_path / "work"
+    _declare(workdir, "noop", writes=["probe.json"], produces=["ok"])
+    env = {**_env(workdir, "noop"), "REFACTORY_PROJECT": str(tmp_path)}
+    result = subprocess.run(
+        [_python(), "-m", "refactory_dsh.run", "refactory_packages.probe_pack.ops:noop"],
+        env=env, capture_output=True, text=True, cwd=str(workdir),
+    )
+    assert result.returncode == 0, result.stderr
+    assert (workdir / "probe.json").exists()
+
+
 def test_the_command_line_refuses_a_bad_target(tmp_path):
     result = subprocess.run(
         [_python(), "-m", "refactory_dsh.run", "not-a-target"],

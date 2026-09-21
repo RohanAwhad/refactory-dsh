@@ -64,7 +64,11 @@ def run_on_dsh(
 
     from refactory_dsh import dsh_profile
 
-    workdir = Path(workdir)
+    # DSH's session header requires an absolute cwd, and a run root spelled
+    # relatively (the CLI's default) would otherwise fail every candidate with
+    # "session header cwd must be an absolute path". Resolved here, at the one
+    # boundary that hands the path to DSH.
+    workdir = Path(workdir).resolve()
     workdir.mkdir(parents=True, exist_ok=True)
     problem = dsh_profile.requirement()
     if problem is not None:
@@ -98,7 +102,10 @@ def run_on_dsh(
         "--graphs", str(graphs),
         "--workdir", str(workdir),
         "--python-bin", str(venv_bin()),
-        "--knobs", json.dumps(lowering.knob_environment(state)[lowering.KNOBS_ENV]),
+        # The knob environment is already the JSON string `--knobs` wants; dumping
+        # it again makes the node runner read a string where it needs an object,
+        # and every node falls back to its op's default.
+        "--knobs", lowering.knob_environment(state)[lowering.KNOBS_ENV],
     ]
     started = time.time()
     try:

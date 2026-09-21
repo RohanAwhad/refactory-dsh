@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from refactory_dsh import dsh_profile
+from refactory_dsh import dsh_profile, registry
 from refactory_dsh.dsh_runtime import run_on_dsh
 from refactory_dsh.paths import REPO_ROOT
 
@@ -67,6 +67,65 @@ def test_a_blank_dsh_home_falls_back_to_the_default(monkeypatch):
     """Whitespace-only is unset, not a directory named ' '."""
     monkeypatch.setenv("DSH_HOME", "   ")
     assert dsh_profile.dsh_home() == Path.home() / ".dsh"
+
+
+def test_run_on_dsh_hands_the_runner_an_absolute_workdir(tmp_path, monkeypatch):
+    """DSH refuses a relative session cwd, so the adapter must not pass one on.
+
+    The CLI's default run root is relative, which is how a whole `dsh`-evaluated
+    run came to fail every candidate with "session header cwd must be an absolute
+    path" while the same state scored under the walker.
+    """
+    state = registry.resolve(REPO_ROOT, "circle_packing/adaptive")[1]().state_dict()
+    home = tmp_path / "home"
+    _profile(home, "graph", ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
+    monkeypatch.setenv("DSH_HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    seen: dict[str, list[str]] = {}
+
+    class _Result:
+        returncode = 1
+        stdout = ""
+        stderr = "dsh: session header cwd must be an absolute path"
+
+    def _capture(command, **kwargs):  # noqa: ANN001, ANN003 - the runner's own call
+        seen["command"] = command
+        return _Result()
+
+    monkeypatch.setattr("refactory_dsh.dsh_runtime.subprocess.run", _capture)
+    run_on_dsh(state, Path("relative/run"), name="probe")
+    argv = seen["command"]
+    workdir = argv[argv.index("--workdir") + 1]
+    assert Path(workdir).is_absolute(), f"DSH refuses a relative cwd: {workdir!r}"
+
+
+def test_run_on_dsh_hands_the_runner_the_knob_values_once(tmp_path, monkeypatch):
+    """`--knobs` is the knobs JSON, not a JSON string that contains it.
+
+    Double-encoding it makes the node runner fall back to each op's default, so
+    DSH runs a different program than the candidate the loop scored.
+    """
+    state = registry.resolve(REPO_ROOT, "circle_packing/adaptive")[1]().state_dict()
+    home = tmp_path / "home"
+    _profile(home, "graph", ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
+    monkeypatch.setenv("DSH_HOME", str(home))
+    seen: dict[str, list[str]] = {}
+
+    class _Result:
+        returncode = 1
+        stdout = ""
+        stderr = "probe"
+
+    def _capture(command, **kwargs):  # noqa: ANN001, ANN003 - the runner's own call
+        seen["command"] = command
+        return _Result()
+
+    monkeypatch.setattr("refactory_dsh.dsh_runtime.subprocess.run", _capture)
+    run_on_dsh(state, tmp_path / "run", name="probe")
+    argv = seen["command"]
+    knobs = json.loads(argv[argv.index("--knobs") + 1])
+    assert isinstance(knobs, dict), f"--knobs must carry the values, got {knobs!r}"
+    assert knobs == {key: entry["value"] for key, entry in state["knobs"].items()}
 
 
 def test_run_on_dsh_refuses_before_spawning_when_the_profile_is_absent(

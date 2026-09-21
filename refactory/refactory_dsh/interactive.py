@@ -16,7 +16,6 @@ the mode: the graph is the author's, plus what the person said.
 
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
 from pathlib import Path
@@ -81,9 +80,10 @@ def command(identifier: str, *, workdir: Path, graphs: Path, name: str) -> list[
         "--graphs", str(graphs),
         "--workdir", str(workdir),
         "--python-bin", str(venv_bin()),
-        "--knobs", json.dumps(lowering.knob_environment(
+        # Already the JSON string `--knobs` wants; see `run_on_dsh`.
+        "--knobs", lowering.knob_environment(
             registry.resolve(Path("."), identifier)[1]().state_dict()
-        )[lowering.KNOBS_ENV]),
+        )[lowering.KNOBS_ENV],
     ]
 
 

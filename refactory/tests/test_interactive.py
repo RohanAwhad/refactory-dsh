@@ -60,6 +60,23 @@ def test_the_command_names_the_graph_the_profile_loads(tmp_path):
     assert (graphs / f"{name}.graph.json").exists()
 
 
+def test_the_command_hands_the_knobs_the_node_runner_can_read(tmp_path):
+    """The flag is the knob JSON itself, not a JSON string containing it.
+
+    The node runner accepts `--knobs` only when the value parses to an object; a
+    double-encoded string leaves every node on its op's fallback default, so the
+    run under DSH is not the candidate the loop scored on the walker.
+    """
+    name, graphs = interactive.prepare(
+        WITH_A_GATE, workdir=tmp_path / "run", intent="review this", project=ROOT
+    )
+    argv = interactive.command(WITH_A_GATE, workdir=tmp_path / "run", graphs=graphs, name=name)
+    knobs = json.loads(argv[argv.index("--knobs") + 1])
+    assert isinstance(knobs, dict), f"--knobs must carry the values, got {knobs!r}"
+    expected = registry.resolve(ROOT, WITH_A_GATE)[1]().state_dict()["knobs"]
+    assert knobs == {key: entry["value"] for key, entry in expected.items()}
+
+
 def test_a_run_that_refused_a_gate_is_a_failure_naming_it(tmp_path, monkeypatch):
     """The refusal must not read as a run that merely scored 0."""
     mode = registry.resolve(ROOT, WITH_A_GATE)[1]()

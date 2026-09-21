@@ -126,6 +126,22 @@ def declarations(workdir: Path, node_id: str) -> dict[str, list[str]]:
     return {"reads": [], "writes": [], "produces": []}
 
 
+def install_workspace_packages() -> None:
+    """Make this project's workspace packages importable in this process.
+
+    A package created into ``.factory/packages`` is importable only where
+    ``registry.install_workspace`` has run, and that is the driver's process. This
+    runner is the *node's* process — DSH runs every node as its own command — so
+    without the same root here an op in a created package cannot be imported, and
+    the mode scores nothing on the runtime that ships while working on the walker.
+    Idempotent, so an in-process caller that already installed the root pays nothing.
+    """
+    from refactory_dsh import registry
+    from refactory_dsh.paths import project_root
+
+    registry.install_workspace(project_root())
+
+
 def run_node(
     target: str, *, workdir: Path | None = None, node_id: str | None = None
 ) -> Any:
@@ -136,6 +152,7 @@ def run_node(
     guessing the target would silently look up nothing and stop enforcing the
     declarations the node declares.
     """
+    install_workspace_packages()
     manifest = _manifest()
     directory = Path(workdir or os.environ.get(WORKDIR_ENV) or Path.cwd())
     node_id = str(node_id or manifest.get("id") or "")
