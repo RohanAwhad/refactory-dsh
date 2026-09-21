@@ -110,6 +110,7 @@ SRF 以 vendor 形式放在 `refactory/vendor/srf`，**不属于运行时**：�
 | [api/](refactory/docs/api/index.md) | 每个公开名称的用途 |
 | [packing-tools.md](refactory/docs/packing-tools.md) | mode 如何声明它需要安装的工具 |
 | [hardening.md](refactory/docs/hardening.md) | 哪些保证被强制执行，由谁执行 |
+| [handoff.md](refactory/docs/handoff.md) | 工作进展到哪里，以及首先该运行什么 |
 | [contributing.md](refactory/docs/contributing.md) | 如何修改本仓库 |
 
 ---

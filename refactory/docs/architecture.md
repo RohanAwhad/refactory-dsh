@@ -369,12 +369,16 @@ promises more than it delivers.
   the intent needs a model to read it, and that is not built. Cheap half: have agent
   nodes cite the ledger entry they serve, so the chain is verifiable even though the
   judgement is not.
-- **Four strategies are inert under `optimizer=random`.** `research_then_optimize`,
-  `staged_curriculum`, `staged_v1` and `autoscientists` publish their decision into
-  `ProposalContext.strategy`, and the random proposer does not read it, so with that
-  optimizer they behave as `default` does. Giving `random` a reader — biasing which
-  edits it samples by the published stage — would make the effect observable without
-  a model.
+- **The GUI is not audited here at all.** See `GUI-HANDOFF.md` at the repository root;
+  #17 and #28 are open and deferred.
+
+**Not a gap, but worth knowing.** Four strategies — `research_then_optimize`,
+`staged_curriculum`, `staged_v1`, `autoscientists` — make a decision that is only
+readable by a proposer that reads `ProposalContext.strategy`. `random` does not read
+it, by definition: it samples the catalogue. So under `--optimizer random` those four
+behave as `default` does. That is the optimizer doing its job, not the strategy
+failing; a decision needs a reader, and a sampling proposer is not one. Pair them with
+`--optimizer autoresearch` to see the difference.
 - **Profiles are machine state.** A profile is created by `dsh plugin --profile <name>
   add <package>`, not derived from the bundle, so a checkout does not carry one and
   `--profile graph` stops on a machine that has never added it. Documented in the
@@ -441,5 +445,7 @@ newcomer's first reading a description of the wrong system.
   toolchain it cannot import, how that requirement is checked before a run spends
   budget, and how its absence is reported.
 - [Contributing](contributing.md) — for a coding agent or a person changing this.
+- [Handoff](handoff.md) — **where the work is, and the first thing to run**: the
+  four levels, how to run everything, and what is still open.
 - [Hardening](hardening.md) — what an adversarial audit of the finished work found,
   and what holds each fix in place.

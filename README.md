@@ -110,6 +110,7 @@ Start with [refactory/docs/architecture.md](refactory/docs/architecture.md) for 
 | [api/](refactory/docs/api/index.md) | What every public name is for |
 | [packing-tools.md](refactory/docs/packing-tools.md) | How a mode declares a tool it needs installed |
 | [hardening.md](refactory/docs/hardening.md) | Which guarantees are enforced, and by what |
+| [handoff.md](refactory/docs/handoff.md) | Where the work is, and what to run first |
 | [contributing.md](refactory/docs/contributing.md) | How to change this repo |
 
 ---
