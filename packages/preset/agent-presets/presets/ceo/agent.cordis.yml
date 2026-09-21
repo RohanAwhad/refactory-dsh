@@ -263,8 +263,11 @@
     fetch: true
     searchTimeoutMs: 60000
 
-# ── interactive workflow spine (science) ───────────────────────────────────
-# The deterministic spine plus the wf_* tools, and the drift-free guard (the CEO
-# cannot code; content work happens in the subagents it spawns). Deterministic
-# nodes (FnNode commands and fn gate evaluators) run in-process against SRF's
-# ops; the CEO only sees the LLM/Agent nodes and the gates.
+# ── interactive workflow spine ─────────────────────────────────────────────
+# NOT MOUNTED HERE, and that is the current state rather than an oversight: a
+# spine row needs a graph inlined at boot, and this preset has no mode to inline.
+# A person using a mode runs it through the `graph` profile instead —
+# `python -m refactory_dsh.interactive <package>/<mode>` lowers the mode with its
+# intent ledger and starts that profile with the terminal answering a `user` gate.
+# Mounting the spine here so a mode can be used from the Web view would need a
+# per-session graph, which is the follow-up in `refactory/`'s issue tracker.

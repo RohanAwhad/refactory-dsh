@@ -418,8 +418,6 @@ promises more than it delivers.
   the placeholder is reported, and given the run's agent outputs a node that cited no
   entry, or a dangling one, is caught. Whether the work **satisfies** the intent needs
   a model to read the work against the ledger, and that is not built.
-- **The GUI is not audited here at all.** See `GUI-HANDOFF.md` at the repository root;
-  #17 and #28 are open and deferred.
 - **Two suites are load-flaky.** `packages/boot/app-boot/tests/hmr-config.spec.ts`
   and `user-patches.spec.ts` poll file watchers with 20s and 10s deadlines and fail
   under full-suite contention while passing standalone; `hmr-config` is not in

@@ -458,7 +458,7 @@ export function apply(ctx: Context, config: Config): void {
       candidate: { type: 'string', description: 'Candidate id to read. Required by action "candidate".' },
       after: { type: 'integer', description: 'For action "status": only return events after this many progress lines, so a poll reads what is new.' },
       contents: { type: 'boolean', description: 'For action "artifacts": include each artifact\'s contents.' },
-      limit: { type: 'integer', description: 'For action "runs"/"leaderboard": how many rows to return.' },
+      limit: { type: 'integer', description: 'For action "leaderboard": how many rows to return.' },
       runsRoot: { type: 'string', description: 'Directory holding the runs (default: <repoRoot>/.factory/loop).' },
       settings: {
         type: 'object',

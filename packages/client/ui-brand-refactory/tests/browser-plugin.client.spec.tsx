@@ -108,7 +108,10 @@ describe('the brand renders a name once', () => {
       </>,
     )
     const img = container.querySelector('img')
-    expect(img?.getAttribute('alt')).toBe('re:factory')
+    // Decorative, like the harness logo it replaces: the lockup's own wordmark is
+    // not an accessible name, and a literal alt would be copy this package has no
+    // locale seat to own (`verify-client-ui-i18n`).
+    expect(img?.getAttribute('alt')).toBe('')
     // The name slot holds the slot without adding visible text beside the lockup.
     expect(container.textContent).toBe('')
   })

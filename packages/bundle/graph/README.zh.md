@@ -9,7 +9,7 @@ kind: "package-bundle"
 
 ## 概述
 
-`graph` profile 层端到端驱动一张 refactory 模式图：它以打开 `executeCommands` 的方式挂载工作流 spine，把 base persona 替换为 CEO 的措辞，并新增一个接收 mode 与 task 的 `run` 子命令。当 agent 达到静止后，你会得到一份 JSON 报告——本次运行的 `best_score`、session id、工作目录与 CEO 的最终消息。用一条 `dsh plugin` 命令把它安装进一个 profile；该层叠加在 `dsh-base` 之上，由后者提供模型连接、工具集、会话存储，以及确定性节点运行所需的 `shell` 执行器。本 bundle 自身不持有任何图：它在启动时从 `--graphs` 加载 `<mode>.graph.json`，因此一个模式就是一个文件加上其命令所调用的 Python op。选择它是为了无人值守地运行一个已提交的模式；交互式 Web 产品则通过自己的 preset 组合同一个 spine。
+`graph` profile 层端到端驱动一张 refactory 模式图：它以打开 `executeCommands` 的方式挂载工作流 spine，把 base persona 替换为 CEO 的措辞，并新增一个接收 mode 与 task 的 `run` 子命令。当 agent 达到静止后，你会得到一份 JSON 报告——本次运行的 `best_score`、session id、工作目录与 CEO 的最终消息。用一条 `dsh plugin` 命令把它安装进一个 profile；该层叠加在 `dsh-base` 之上，由后者提供模型连接、工具集、会话存储，以及确定性节点运行所需的 `shell` 执行器。本 bundle 自身不持有任何图：它在启动时从 `--graphs` 加载 `<mode>.graph.json`，因此一个模式就是一个文件加上其命令所调用的 Python op。选择它是为了运行一个已提交的模式；当该模式声明了 `user` gate 时，终端应答方会把该 gate 呈现给人，因此同一个 profile 既能服务无人值守的运行，也能服务有人在 gate 处的运行。refactory 的 `python -m refactory_dsh.interactive <package>/<mode>` 就是准备这次运行的入口：它把意图 ledger 折入模式并启动本 profile，同时接上终端。
 
 ## 目录
 

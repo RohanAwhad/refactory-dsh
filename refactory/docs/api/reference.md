@@ -639,6 +639,7 @@ Driving a run from a GUI: the catalogue, a live run, and what it produced.
 | function | `candidate` | `(run_root: 'Path', candidate_id: 'str') -> 'dict[str, Any]'` |
 | function | `catalogue` | `(*, project: 'Path \| None' = None) -> 'list[dict[str, Any]]'` |
 | function | `leaderboard` | `(run_root: 'Path', *, limit: 'int' = 20) -> 'list[dict[str, Any]]'` |
+| function | `level_two` | `() -> 'dict[str, Any]'` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
 | function | `runs` | `(*, project: 'Path \| None' = None, runs_root: 'Path \| None' = None, limit: 'int' = 20) -> 'list[dict[str, Any]]'` |
 | function | `start` | `(mode: 'str', *, project: 'Path \| None' = None, runs_root: 'Path \| None' = None, run_id: 'str \| None' = None, **config: 'Any') -> 'dict[str, Any]'` |
@@ -650,6 +651,7 @@ Driving a run from a GUI: the catalogue, a live run, and what it produced.
 - **`candidate`** — One candidate, with what it changed against the parent it came from.
 - **`catalogue`** — Every mode a run can be started from, with the surface it exposes.
 - **`leaderboard`** — The candidates by score, with each one's diff against its parent.
+- **`level_two`** — The three level-2 seams by name, each with what it says it is.
 - **`runs`** — Every run under the root, newest first, each with where it got to.
 - **`start`** — Begin a run in its own process, and hand back the id to watch it with.
 - **`status`** — Where the run is, and what is new since the reader last looked.

@@ -27,7 +27,7 @@ level before the one below it is verified.
 |---|---|---|---|
 | **1. semantics** | the language: define, create, modify modes and packages | `refactory_dsh/nn/`, `registry.py`, `refactory_packages/` | **verified by #40** |
 | **2. outerloop** | the autograd: evaluate a mode, propose edits, drive the search | `loop.py`, `evaluators.py`, `optim/`, `outerloop.py`, `strategies.py` | **verified by #40** |
-| **3. DSH run** | the CEO, interactive use, GUI last | `lowering.py`, `dsh_runtime.py`, `steering.py`, `packages/bundle/graph`, `tool-refactory` | **partial — #41, #42** |
+| **3. DSH run** | the CEO, interactive use, GUI last | `lowering.py`, `dsh_runtime.py`, `steering.py`, `interactive.py`, `packages/bundle/graph`, `tool-refactory` | **verified by #41 and #42** |
 | **4. packages** | specific domains, mostly for testing | `refactory_packages/` | **works where the tools are installed** |
 
 Level 4 is optional and mostly a testbed. Levels 1 and 2 are the product.
@@ -128,15 +128,63 @@ graph` is the headless run the DSH evaluator and the equivalence tests use.
 **A model key lives in the repo-root `.env`** as `DEEPSEEK_API_KEY`. Only
 `--optimizer autoresearch` needs it, through `dsh --profile headless`.
 
-## The first thing a new session should do
+## Where the work stands
 
-**#40 is done.** The walkthrough below was run by hand, all ten steps, and levels 1
-and 2 are real on this checkout. Where a step's own command was wrong it was corrected
-in the issue, and every code defect it exposed is filed and fixed — see
-[what it found](#the-walkthrough-and-what-it-found).
+**Levels 1–3 are verified, and the GUI is built on them.** The #40 walkthrough ran
+by hand, the interactive run was executed with a person at the gate, and the Web view
+was driven in a real browser. Everything below was found by running it, not by reading.
 
-The next thing is **#41**, the interactive DSH run. Do not start the GUI (#42) before
-it: see the ordering rule in that issue.
+The one open item is **#49**, the first-class picker: the GUI can do everything #28
+asked for, through the `refactory` tool in the conversation, but the strategy/mode/
+package choice is a described catalogue the model picks from rather than a dropdown.
+A dropdown needs a host RPC seam that does not exist yet.
+
+## Level 3, and what it found
+
+**The path could not work, and nobody had run it.** Four defects, each a case of a
+capability recorded as present:
+
+- **The spine routed a `user` gate on the model's own verdict.** A headless run of a
+  mode with a person's gate invented `proceed` and reported *approved by the person* —
+  exactly what the issue forbids. The spine now asks the person through the
+  `user-questions` seam, ignores the model's argument, and refuses with a message
+  naming the gate when no answerer exists. It records `done | ready | failed |
+  refused` in `<workdir>/.refactory/spine-status.json`, so a refused run is a failure,
+  not a score of 0.
+- **`steering.annotate` had no production caller.** The ledger never reached an agent
+  node in any real run; §11 said it did. Both runtimes now annotate through
+  `steering.for_run`, and the instruction names the live ledger so a note added
+  mid-run is read by the nodes that run afterwards.
+- **A verdict was never recorded or replayed.** `Ledger.verdict` writes it and the
+  executor replays it, so a resumed run is the same run rather than a second question.
+- **There was no mode with a `user` gate to run.** `review_pack/review` is one:
+  `task_input -> draft -> check(fn) -> approve(user) -> publish|reject`, driven by
+  `python -m refactory_dsh.interactive review_pack/review --intent "…"`.
+
+## The GUI, and what it found
+
+- **Selecting a workspace did nothing because session creation failed**, not because
+  the picker was wrong. The `ceo` preset mounts `tool-refactory`, and
+  `packages/bundle/web-app` never depended on it, so every session stopped with
+  *preset "ceo" failed to mount: row "tool-refactory" names a plugin that cannot be
+  resolved* — and the client swallowed the rejection. Fixed, with a spec that asserts
+  every plugin a shipped preset names is reachable from the install anchor.
+- **The tool exposed 8 of the console's verbs.** It now exposes the whole system:
+  `steer`, `best`, `adopt`, `registry`, `create`, `edit`, `design`, and a
+  `strategies` action that makes the loop a named choice with descriptions.
+- **Hygiene was red on `main`** before this session: four gates (runtime closure,
+  Cordis path mappings, package versions/`files`, and a client `alt` literal). All
+  green now.
+- The hero is **text-only by decision**, and the reason is in `Brand.tsx`'s JSDoc:
+  the only artwork is a 5.26:1 lockup on an opaque background, and the hero's next
+  column is already the wordmark.
+
+## What remains
+
+| # | what |
+|---|---|
+| **49** | A first-class picker for the mode, the loop and the packages, instead of the conversation — the only open issue |
+| — | Everything else (#17, #28, #40–#48) is closed, with its evidence on the issue |
 
 ## The walkthrough, and what it found
 
@@ -169,20 +217,6 @@ against the old code:
 - **#48** — `console best`/`adopt` and `report.json` named **different winners** when
   the top score tied, because one ordered by journal insertion and the other by id.
   Fixed; both use score-descending then id-ascending.
-
-## What remains
-
-All open work is filed. Read the issue, not this file, for the detail:
-
-| # | what |
-|---|---|
-| **41** | The interactive DSH run has never been walked through (level 3) — **do this next** |
-| **42** | The GUI, to start only once levels 1–3 are verified |
-| **43** | The fidelity gate checks the precondition, not the output |
-| **44** | A test that did not run is invisible (Lean and mathlib skips) |
-| **45** | A DSH profile is machine state, so a fresh checkout cannot run a mode |
-| 46–48 | Filed by the #40 walkthrough: corrected commands, atomic `add`, and the winner tie-break |
-| 17, 28 | The GUI proper; #42 orders them after levels 1–3 |
 
 ## Invariants that must not break
 
