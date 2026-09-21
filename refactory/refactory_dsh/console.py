@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -577,7 +578,63 @@ def _parser() -> argparse.ArgumentParser:
     take.add_argument("--as", dest="as_name", required=True, help="the new package name")
 
     add(sub.add_parser("stop", help="ask a run to stop"))
+
+    # ── the rest of the system, reachable through the same wire ────────────
+    # These forward to the entry points that already own the work, so the Web
+    # view reaches package management and the authoring modes without a second
+    # implementation. `--args` passes a caller's own flags through verbatim.
+    packages = sub.add_parser("registry", help="list, verify, add, import, remove, enable or disable packages")
+    packages.add_argument("registry_verb", choices=[
+        "list", "show", "verify", "smoke", "tools", "add", "import", "remove", "enable", "disable",
+    ])
+    packages.add_argument("target", nargs="?", default="")
+    packages.add_argument("--args", default="", help="extra registry flags, as a shell-quoted string")
+
+    make = sub.add_parser("create", help="create a package of modes from a brief (model-driven)")
+    make.add_argument("--name", required=True)
+    make.add_argument("--brief", required=True)
+    make.add_argument("--extends", default="")
+    make.add_argument("--attempts", type=int, default=3)
+
+    revise = sub.add_parser("edit", help="revise a mode from a brief (model-driven)")
+    revise.add_argument("--mode", required=True)
+    revise.add_argument("--name", required=True)
+    revise.add_argument("--brief", required=True)
+    revise.add_argument("--allow-regression", action="store_true")
+    revise.add_argument("--attempts", type=int, default=3)
+
+    artifact = sub.add_parser("design", help="design and check a software artifact (model-driven)")
+    artifact.add_argument("--name", required=True)
+    artifact.add_argument("--brief", required=True)
+    artifact.add_argument("--check", default="", help="the command that proves the artifact works")
+    artifact.add_argument("--attempts", type=int, default=3)
+
     return parser
+
+
+def _forward(module: str, argv: list[str]) -> dict[str, Any]:
+    """Run another entry point's ``main`` and return its output as this verb's payload.
+
+    The console's contract is one JSON object on stdout, and the forwarded entry
+    points print their own JSON. Capturing and re-parsing keeps that contract for a
+    caller that only knows the console, and a non-JSON line is returned as text
+    rather than lost — a forwarded command that half-printed before failing is
+    exactly the case a caller needs to see.
+    """
+    import contextlib
+    import importlib
+    import io
+
+    entry = importlib.import_module(f"refactory_dsh.{module}")
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        code = int(entry.main(argv) or 0)
+    text = buffer.getvalue().strip()
+    try:
+        payload: Any = json.loads(text)
+    except json.JSONDecodeError:
+        payload = {"output": text}
+    return {"verb": module, "exit_code": code, "ok": code == 0, "result": payload}
 
 
 def _root_for(args: argparse.Namespace, project: Path) -> Path:
@@ -592,7 +649,9 @@ def _root_for(args: argparse.Namespace, project: Path) -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    project = Path(args.project) if args.project else project_root()
+    # The forwarding verbs carry their own addressing flags, so `--project` is
+    # absent on them; a missing one is "the found root", not a crash.
+    project = Path(getattr(args, "project", None)) if getattr(args, "project", None) else project_root()
     try:
         if args.verb == "modes":
             payload: Any = catalogue(project=project)
@@ -634,6 +693,31 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.verb == "stop":
             payload = stop(_root_for(args, project))
+        elif args.verb == "registry":
+            extra = shlex.split(args.args) if args.args else []
+            forwarded = [args.registry_verb, "--json"]
+            if args.target:
+                forwarded.append(args.target)
+            forwarded += extra
+            payload = _forward("registry", forwarded)
+        elif args.verb == "create":
+            forwarded = ["--name", args.name, "--brief", args.brief, "--attempts", str(args.attempts)]
+            if args.extends:
+                forwarded += ["--extends", args.extends]
+            payload = _forward("create", forwarded)
+        elif args.verb == "edit":
+            forwarded = [
+                "--mode", args.mode, "--name", args.name, "--brief", args.brief,
+                "--attempts", str(args.attempts),
+            ]
+            if args.allow_regression:
+                forwarded.append("--allow-regression")
+            payload = _forward("edit", forwarded)
+        elif args.verb == "design":
+            forwarded = ["--name", args.name, "--brief", args.brief, "--attempts", str(args.attempts)]
+            if args.check:
+                forwarded += ["--check", args.check]
+            payload = _forward("design", forwarded)
         else:  # pragma: no cover - argparse rejects an unknown verb first
             raise ConsoleError(f"unknown verb {args.verb!r}")
     except (ConsoleError, LoopError, PackageError) as error:

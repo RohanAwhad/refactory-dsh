@@ -59,6 +59,13 @@ const VERBS = {
   artifacts: 'What a run left on disk, optionally with contents.',
   leaderboard: 'The run\'s candidates by score, each with its diff against its parent.',
   candidate: 'One candidate, with what it changed against the parent it came from.',
+  steer: 'Read a run\'s intent ledger, or add what the person said to it.',
+  best: 'The winner of a run, with the state that scored it.',
+  adopt: 'Write a run\'s winner as a new package, leaving the run and its source untouched.',
+  registry: 'List packages of modes, or verify, smoke, add, import, remove, enable or disable one.',
+  create: 'Create a package of modes from a brief (model-driven).',
+  edit: 'Revise an existing mode from a brief (model-driven), refusing a regression.',
+  design: 'Design, emit and check a software artifact from a brief (model-driven).',
   stop: 'Ask a run to stop.',
 } as const
 
@@ -66,7 +73,9 @@ const VERBS = {
 type Verb = keyof typeof VERBS
 
 /** The verbs that address an existing run. */
-const RUN_SCOPED: readonly Verb[] = ['status', 'artifacts', 'leaderboard', 'candidate', 'stop']
+const RUN_SCOPED: readonly Verb[] = [
+  'status', 'artifacts', 'leaderboard', 'candidate', 'steer', 'best', 'adopt', 'stop',
+]
 
 // One physical line per paragraph: the description reaches the tool catalog
 // verbatim, and a paragraph broken across source lines is a paragraph the
@@ -91,6 +100,20 @@ interface Args {
   limit?: number
   runsRoot?: string
   settings?: Record<string, string | number>
+  intent?: string
+  note?: string
+  kind?: string
+  state?: boolean
+  as?: string
+  packages?: string
+  target?: string
+  args?: string
+  name?: string
+  brief?: string
+  extends?: string
+  check?: string
+  allowRegression?: boolean
+  attempts?: number
 }
 
 /** One run's setting, as the console's `--<flag> value` pair. */
@@ -102,7 +125,8 @@ function settingsOf(args: Args): Record<string, string | number | undefined> {
 /**
  * The console invocation one call maps to. Every argument is passed through as
  * an option or positional; nothing is interpreted here, so a new console flag is
- * usable from the tool the moment the console declares it.
+ * usable from the tool the moment the console declares it. The authoring and
+ * package actions forward to the entry points the console now carries.
  * @param args - the model's arguments, already schema-checked.
  * @returns the verb, positionals, and options for one console call.
  */
@@ -111,31 +135,94 @@ export function invocationFor(args: Args): {
   positional: string[]
   options: Record<string, string | number | boolean | undefined>
 } {
-  const options: Record<string, string | number | boolean | undefined> = {
-    run: args.run,
-    'run-id': args.runId,
-    after: args.after,
-    contents: args.contents,
-    limit: args.limit,
-    'runs-root': args.runsRoot,
-    ...settingsOf(args),
-  }
-  if (args.action === 'candidate' && args.candidate === undefined) {
-    throw new Error('action "candidate" needs `candidate`: the candidate id to read')
-  }
   if (RUN_SCOPED.includes(args.action) && args.run === undefined) {
     throw new Error(`action "${args.action}" needs \`run\`: the run id or directory to read`)
   }
-  if (args.action === 'start' && args.mode === undefined) {
-    throw new Error('action "start" needs `mode`: the <package>/<name> to run')
+  const run: Record<string, string | number | boolean | undefined> = {
+    run: args.run,
+    'runs-root': args.runsRoot,
   }
-  // The console takes the mode as a positional and the candidate id as a
-  // positional; every other argument is an option.
-  const positional = [
-    ...args.action === 'start' && args.mode !== undefined ? [args.mode] : [],
-    ...args.action === 'candidate' && args.candidate !== undefined ? [args.candidate] : [],
-  ]
-  return { verb: args.action, positional, options }
+  switch (args.action) {
+    case 'start': {
+      if (args.mode === undefined) {
+        throw new Error('action "start" needs `mode`: the <package>/<name> to run')
+      }
+      return {
+        verb: args.action,
+        positional: [args.mode],
+        options: { 'run-id': args.runId, ...run, ...settingsOf(args) },
+      }
+    }
+    case 'candidate': {
+      if (args.candidate === undefined) {
+        throw new Error('action "candidate" needs `candidate`: the candidate id to read')
+      }
+      return { verb: args.action, positional: [args.candidate], options: run }
+    }
+    case 'status':
+      return { verb: args.action, positional: [], options: { ...run, after: args.after } }
+    case 'artifacts':
+      return { verb: args.action, positional: [], options: { ...run, contents: args.contents } }
+    case 'leaderboard':
+      return { verb: args.action, positional: [], options: { ...run, limit: args.limit } }
+    case 'steer':
+      return {
+        verb: args.action,
+        positional: [],
+        options: { ...run, seed: args.intent, note: args.note, kind: args.kind },
+      }
+    case 'best':
+      return { verb: args.action, positional: [], options: { ...run, state: args.state } }
+    case 'adopt': {
+      if (args.as === undefined) {
+        throw new Error('action "adopt" needs `as`: the new package name')
+      }
+      return { verb: args.action, positional: [], options: { ...run, as: args.as } }
+    }
+    case 'registry':
+      return {
+        verb: args.action,
+        positional: [args.packages ?? 'list', args.target ?? ''],
+        options: { args: args.args },
+      }
+    case 'create': {
+      if (args.name === undefined || args.brief === undefined) {
+        throw new Error('action "create" needs `name` and `brief`')
+      }
+      return {
+        verb: args.action,
+        positional: [],
+        options: { name: args.name, brief: args.brief, extends: args.extends, attempts: args.attempts },
+      }
+    }
+    case 'edit': {
+      if (args.mode === undefined || args.name === undefined || args.brief === undefined) {
+        throw new Error('action "edit" needs `mode`, `name` and `brief`')
+      }
+      return {
+        verb: args.action,
+        positional: [],
+        options: {
+          mode: args.mode, name: args.name, brief: args.brief,
+          'allow-regression': args.allowRegression, attempts: args.attempts,
+        },
+      }
+    }
+    case 'design': {
+      if (args.name === undefined || args.brief === undefined || args.check === undefined) {
+        throw new Error('action "design" needs `name`, `brief` and `check`')
+      }
+      return {
+        verb: args.action,
+        positional: [],
+        options: { name: args.name, brief: args.brief, check: args.check, attempts: args.attempts },
+      }
+    }
+    case 'modes':
+    case 'runs':
+    case 'stop':
+      return { verb: args.action, positional: [], options: run }
+  }
 }
 
 /**
@@ -224,6 +311,43 @@ export function renderResult(args: Args, value: unknown): ContentBlock[] {
       const parent = scalar(data.parent) || 'no parent'
       lines.push(`Candidate ${id} against ${parent}:`)
       lines.push(scalar(data.rendered))
+      break
+    }
+    case 'steer': {
+      const entries = Array.isArray(data.entries) ? data.entries : []
+      lines.push(
+        `The intent ledger is ${data.exists === true ? 'present' : 'missing'} `
+        + `with ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}:`,
+      )
+      for (const entry of entries) {
+        if (isRecord(entry)) lines.push(`- [${scalar(entry.kind)}] ${scalar(entry.text)}`)
+      }
+      const verdicts = isRecord(data.verdicts) ? data.verdicts : {}
+      const gates = Object.keys(verdicts)
+      if (gates.length > 0) {
+        lines.push(`Gate verdicts: ${gates.map(gate => `${gate}=${scalar(verdicts[gate])}`).join(', ')}.`)
+      }
+      for (const problem of Array.isArray(data.problems) ? data.problems : []) {
+        lines.push(`problem: ${scalar(problem)}`)
+      }
+      break
+    }
+    case 'best':
+      lines.push(`The winner is ${scalar(data.candidate)}, scoring ${typeof data.score === 'number' ? String(data.score) : 'nothing'}.`)
+      lines.push('Adopt it with action "adopt" and an "as" package name.')
+      break
+    case 'adopt':
+      lines.push(`Wrote ${scalar(data.mode)} from ${scalar(data.adopted_from)} at ${scalar(data.package_root)}.`)
+      lines.push(`The adopted mode scored ${typeof data.score === 'number' ? String(data.score) : 'nothing'}; the source is untouched.`)
+      break
+    case 'registry':
+    case 'create':
+    case 'edit':
+    case 'design': {
+      // These forward to another entry point; its own JSON is the answer.
+      lines.push(`${args.action} ${data.ok === true ? 'succeeded' : 'failed'} (exit ${scalar(data.exit_code)}).`)
+      const inner = isRecord(data.result) ? data.result : {}
+      lines.push(scalar(inner.output) || JSON.stringify(inner))
       break
     }
     default:
@@ -322,6 +446,20 @@ export function apply(ctx: Context, config: Config): void {
         additionalProperties: true,
         description: 'Run settings for action "start": epochs, batch_size, optimizer, strategy, evaluator, seed, elite, attempts, preset, max_evaluations. Passed through as console flags.',
       },
+      intent: { type: 'string', description: 'For action "steer": the request the run is for, written the first time the ledger is seeded.' },
+      note: { type: 'string', description: 'For action "steer": something said while the run goes, appended to the ledger.' },
+      kind: { type: 'string', enum: ['info', 'correction', 'constraint'], description: 'For action "steer": what the note is. A constraint must be respected, not merely known.' },
+      state: { type: 'boolean', description: 'For action "best": include the winner\'s full state dict.' },
+      as: { type: 'string', description: 'For action "adopt": the new package name. Required by "adopt".' },
+      packages: { type: 'string', enum: ['list', 'show', 'verify', 'smoke', 'tools', 'add', 'import', 'remove', 'enable', 'disable'], description: 'For action "registry": which package verb to run (default "list").' },
+      target: { type: 'string', description: 'For action "registry": the package name, <package>/<mode>, or directory the verb acts on.' },
+      args: { type: 'string', description: 'For action "registry": extra flags for that verb, as a shell-quoted string (e.g. "--as renamed --force").' },
+      name: { type: 'string', description: 'For "create"/"edit"/"design": the package or artifact name to write.' },
+      brief: { type: 'string', description: 'For "create"/"edit"/"design": what to build or change, in the asker\'s words.' },
+      extends: { type: 'string', description: 'For action "create": a <package>/<mode> to use as a reference.' },
+      check: { type: 'string', description: 'For action "design": the command that decides whether the artifact works. Required by "design".' },
+      allowRegression: { type: 'boolean', description: 'For action "edit": allow a revision that scores worse than the mode it came from.' },
+      attempts: { type: 'integer', description: 'For "create"/"edit"/"design": how many times the model may retry before the run fails.' },
     },
     output: {
       schema: {

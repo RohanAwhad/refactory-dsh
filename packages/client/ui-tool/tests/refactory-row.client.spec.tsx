@@ -211,6 +211,45 @@ describe('refactoryCardModel', () => {
     expect(card.title).toBe('refactory 运行 modes')
     expect(card.body).toEqual([])
   })
+
+  it('renders the ledger, its verdicts and its problems for a steer call', () => {
+    const card = refactoryCardModel(resultNode({ action: 'steer', run: 'r1' }, 'steer', {
+      exists: true,
+      entries: [
+        { at: 't1', kind: 'constraint', text: 'no numpy' },
+        { at: 't2', kind: 'verdict', text: 'gate: approve' },
+      ],
+      verdicts: { approve: 'proceed' },
+      problems: ['the ledger origin is empty'],
+    }), t)!
+    expect(card.body).toContain('[constraint] no numpy')
+    expect(card.body).toContain('approve=proceed')
+    expect(card.body).toContain('the ledger origin is empty')
+  })
+
+  it('names the winner, and the package an adoption wrote', () => {
+    expect(refactoryCardModel(
+      resultNode({ action: 'best', run: 'r1' }, 'best', { candidate: 'abc', score: 2 }), t,
+    )!.body).toEqual(['abc · 最佳 2'])
+
+    const adopted = refactoryCardModel(resultNode({ action: 'adopt', run: 'r1' }, 'adopt', {
+      mode: 'new/adaptive', adopted_from: 'circle_packing/adaptive', score: 2,
+    }), t)!
+    expect(adopted.body[0]).toBe('new/adaptive ← circle_packing/adaptive')
+  })
+
+  it('renders a forwarded action by its own output, and a failure as one', () => {
+    const listed = refactoryCardModel(resultNode({ action: 'registry' }, 'registry', {
+      ok: true, exit_code: 0, result: { output: 'circle_packing/\nreview_pack/' },
+    }), t)!
+    expect(listed.body).toEqual(['已完成', 'circle_packing/', 'review_pack/'])
+
+    const failed = refactoryCardModel(resultNode({ action: 'create' }, 'create', {
+      ok: false, exit_code: 2, result: { package: 'new_pkg' },
+    }), t)!
+    expect(failed.body[0]).toBe('已结束')
+    expect(failed.body[1]).toContain('new_pkg')
+  })
 })
 
 describe('RefactoryRow', () => {

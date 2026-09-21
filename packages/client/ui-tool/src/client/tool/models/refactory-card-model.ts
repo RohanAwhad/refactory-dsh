@@ -11,7 +11,10 @@ import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import { parsedToolCall, singleResultText, type ParsedToolCall } from './raw-tool-call.ts'
 
 /** The actions the tool exposes, in the order a reader meets them. */
-const ACTIONS = ['modes', 'runs', 'start', 'status', 'artifacts', 'leaderboard', 'candidate', 'stop'] as const
+const ACTIONS = [
+  'modes', 'runs', 'start', 'status', 'artifacts', 'leaderboard', 'candidate',
+  'steer', 'best', 'adopt', 'registry', 'create', 'edit', 'design', 'stop',
+] as const
 
 /** One action name. */
 type Action = typeof ACTIONS[number]
@@ -178,6 +181,37 @@ function bodyFor(action: Action, data: unknown, t: TranslateNS<'conversation'>):
         `${scalar(payload.candidate)} ← ${scalar(payload.parent) || t('refactory.seed')}`,
         ...rendered,
       ]
+    }
+    case 'steer': {
+      // The ledger itself: what was asked for, what was said since, and any gate
+      // verdict a person gave. Data, so it renders verbatim.
+      const entries = Array.isArray(payload.entries) ? payload.entries : []
+      const lines = entries.flatMap(entry => isRecord(entry)
+        ? [`[${scalar(entry.kind)}] ${scalar(entry.text)}`]
+        : [])
+      const verdicts = isRecord(payload.verdicts) ? payload.verdicts : {}
+      for (const [gate, verdict] of Object.entries(verdicts)) lines.push(`${gate}=${scalar(verdict)}`)
+      for (const problem of Array.isArray(payload.problems) ? payload.problems : []) {
+        lines.push(scalar(problem))
+      }
+      return lines
+    }
+    case 'best':
+      return [`${scalar(payload.candidate)} · ${score(payload.score, t)}`]
+    case 'adopt':
+      return [
+        `${scalar(payload.mode)} ← ${scalar(payload.adopted_from)}`,
+        score(payload.score, t),
+      ]
+    case 'registry':
+    case 'create':
+    case 'edit':
+    case 'design': {
+      // These forward to another entry point, so its own output is the body.
+      const inner = isRecord(payload.result) ? payload.result : {}
+      const output = scalar(inner.output)
+      const lines = output === '' ? [JSON.stringify(inner)] : output.split('\n')
+      return [payload.ok === true ? t('refactory.finished') : t('refactory.died'), ...lines]
     }
     default:
       return payload.stopped === true

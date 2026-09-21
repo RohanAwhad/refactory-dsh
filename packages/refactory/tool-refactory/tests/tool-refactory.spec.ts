@@ -116,7 +116,8 @@ describe('dsh-tool-refactory', () => {
     expect(schema).toBeDefined()
     const action = (schema!.parameters as { properties: Record<string, { enum?: string[] }> }).properties.action
     expect(action?.enum).toEqual([
-      'modes', 'runs', 'start', 'status', 'artifacts', 'leaderboard', 'candidate', 'stop',
+      'modes', 'runs', 'start', 'status', 'artifacts', 'leaderboard', 'candidate',
+      'steer', 'best', 'adopt', 'registry', 'create', 'edit', 'design', 'stop',
     ])
   })
 
@@ -270,6 +271,38 @@ describe('dsh-tool-refactory', () => {
   it('projects the console payload for the browser card', () => {
     const meta = tool.presentationMeta({ action: 'status', data: { run_id: 'r1', state: 'running' } })
     expect(meta).toEqual({ action: 'status', data: { run_id: 'r1', state: 'running' } })
+  })
+
+  it('maps the steering, winner and package actions onto the console verbs', async () => {
+    const { ctx, subprocess } = await setup()
+    subprocess.handler = () => runResult('{}')
+    await call(ctx, { action: 'steer', run: 'r1', note: 'no numpy', kind: 'constraint' })
+    expect(subprocess.spawns[0]!.argv).toEqual([
+      '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'steer',
+      '--run', 'r1', '--note', 'no numpy', '--kind', 'constraint',
+    ])
+    await call(ctx, { action: 'adopt', run: 'r1', as: 'adopted_demo' })
+    expect(subprocess.spawns[1]!.argv).toEqual([
+      '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'adopt',
+      '--run', 'r1', '--as', 'adopted_demo',
+    ])
+    await call(ctx, { action: 'registry', packages: 'remove', target: 'phase_pack' })
+    expect(subprocess.spawns[2]!.argv).toEqual([
+      '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'registry',
+      'remove', 'phase_pack',
+    ])
+    await call(ctx, { action: 'create', name: 'new_pkg', brief: 'count up' })
+    expect(subprocess.spawns[3]!.argv).toEqual([
+      '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'create',
+      '--name', 'new_pkg', '--brief', 'count up',
+    ])
+  })
+
+  it('refuses an adopt with no package name before spawning', async () => {
+    const { ctx, subprocess } = await setup()
+    subprocess.handler = () => runResult('{}')
+    expect(text(await call(ctx, { action: 'adopt', run: 'r1' }))).toContain('needs `as`')
+    expect(subprocess.spawns).toHaveLength(0)
   })
 
   it('registers a prompt section telling the model a run outlives the call', async () => {

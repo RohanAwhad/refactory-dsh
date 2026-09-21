@@ -50,12 +50,15 @@ So the mark's column is **34px** and the next column repeats the same word. Any
 seen.** In hindsight the likely outcome is that the crop shows a fragment of the
 wordmark — still wrong, and still adjacent to the same word.
 
-**Current state — a holding fix, not a design**: `RefactoryHeroMark` claims the
-slot and renders an empty `<span aria-hidden>`. Nothing visible means nothing can
-collide, and claiming the slot keeps the harness's own whale out. **Decide the real
-design**: either a square glyph asset for the hero, or a change to the hero's grid
-in `ui-conversation` so the mark column can hold a lockup. Neither belongs in the
-brand package.
+**Decided, and seen in a browser** — the hero is deliberately text-only.
+`RefactoryHeroMark` claims the slot and renders an empty `<span aria-hidden>`, so
+nothing can collide and the harness's own whale stays out. The reason is the asset,
+not the grid: the only artwork in the repository is an **opaque-background** lockup
+(`400x76`, no alpha), the hero's next column already reads `re:factory`, and a crop
+into the 34px square is a fragment of the wordmark on a dark box. A real hero mark
+needs a transparent square glyph asset, which does not exist here. The blank-session
+page was rendered and inspected: the headline reads "re:factory" once, with the
+`Preview` badge, and no stray mark or gap.
 
 ```tsx
 // packages/client/ui-brand-refactory/src/client/Brand.tsx
@@ -100,31 +103,54 @@ subset of modes".
   pointed at the deleted `~/dsh/refactory-dsh`. See
   `~/.dsh/.agent-presets/science/agent.cordis.yml:270`.
 
-**Not established, and needs the browser**: whether "clicking a workspace does
-nothing" is (a) the stale list, (b) the picker failing to open, or (c) a
-session-creation error that is logged only in the browser console. **Get the
-console output and the network tab** — the server log is clean, so it is client
-side or silent.
+**Root cause found, fixed, and seen working in a browser.** The picker was fine;
+**session creation was failing**. The `ceo` preset (the launcher's default) mounts
+`tool-refactory`, but `packages/bundle/web-app` never depended on
+`@deepseek-ai/dsh-tool-refactory`, so the profile's healed `node_modules` mirror
+carried no such package and every session failed with:
 
-## The question the vision session can answer that this one could not
+```
+SessionCreateError: session create failed: agent-preset/invalid:
+agent-presets: preset "ceo" failed to mount: row "tool-refactory" names a
+plugin that cannot be resolved: @deepseek-ai/dsh-tool-refactory
+```
 
-Open the app and look. Specifically:
+The client swallowed it — `selectWorkspace(...).catch(...)` in
+`ConversationRoot.tsx:309` — so clicking looked inert and the console stayed clean.
+Adding the dependency fixed it: the workspace auto-selects, the composer goes live,
+and the `refactory` tool answers from the conversation.
 
-1. Does the **hero** show a stray fragment, an empty gap, or nothing at all?
-2. Does the **sidebar** read "re:factory" once?
-3. What does the **preset picker** list, and does `ceo` carry a "broken" badge?
-4. What does the **workspace picker** do on click — open a dialog, go blank, or
-   nothing?
-5. Any red text, error strip, or console error.
+`packages/preset/agent-presets/tests/preset-plugin-dependencies.spec.ts` now asserts
+that every plugin a shipped preset names is reachable from the install anchor; with
+the dependency removed it fails naming `ceo: @deepseek-ai/dsh-tool-refactory`.
+
+The rest of the report was stale rather than broken: the workspace list contains
+this checkout, and the `ceo` preset carries no broken badge.
+
+## What the browser session saw
+
+Rendered with a headless Chromium against a second instance on `:3099`, and
+inspected as an image:
+
+1. **Hero** — reads "re:factory" once with the `Preview` badge. No stray fragment,
+   no empty gap.
+2. **Sidebar** — the lockup top-left and the workspace list; the name appears once.
+3. **Preset picker** — lists `CEO` (no broken badge) beside `Workspace Write` and
+   the model route.
+4. **Workspace picker** — opens a menu with the four workspaces and "Add
+   workspace…", and picking one creates the session and enables the composer.
+5. **No red text, error strip, or console error.**
 
 ## What is already fixed and should not be re-litigated
 
 | fix | file | how it is held |
 |---|---|---|
 | the sidebar name rendered twice | `src/client/Brand.tsx` | 9 tests in `tests/browser-plugin.client.spec.tsx` |
-| the hero overrunning its column | same, holding fix | same |
+| the hero overrunning its column | same, text-only by decision | same, and the reason is in the JSDoc |
 | the `science` preset's invalid YAML and stale path | `~/.dsh/.agent-presets/science/` | it parses; the roster lists it |
 | two workspaces chosen by working directory | `refactory/refactory_dsh/paths.py` | `refactory/tests/test_project_root.py` |
+| a workspace click creating no session | `packages/bundle/web-app/package.json` | `packages/preset/agent-presets/tests/preset-plugin-dependencies.spec.ts` |
+| the `refactory` tool had 8 of the console's verbs | `packages/refactory/tool-refactory/src/index.ts` | `tests/tool-refactory.spec.ts` |
 
 ## Rebuilding after a client change
 
@@ -138,12 +164,13 @@ pnpm run build:lib:client
 
 then refresh the page. `pnpm run dev:web` also reloads client plugins live.
 
-## Related, and still open
+## Related, and now reachable
 
-Not GUI defects, but next in the queue and adjacent:
+Both of the gaps this section used to list are closed in the tool surface:
 
-- `create` / `edit` / `design` are Python entry points with **no preset**, so the
-  GUI has no way to author a mode. They should come back as presets whose graph
-  calls `python -m refactory_dsh.create`.
-- A run does not record its winning **state**, so a winner cannot be re-run or
-  adopted as a mode. See [architecture.md §11](refactory/docs/architecture.md).
+- **Authoring.** `create`, `edit` and `design` are reachable through the `refactory`
+  tool's actions of the same name (the console forwards to the Python entry points),
+  so a person can ask the CEO to create or revise a mode from the conversation.
+- **The winner.** A run's state is addressable: `best` returns it and `adopt` writes
+  it as a new package, both as tool actions. See
+  [architecture.md §11](refactory/docs/architecture.md).

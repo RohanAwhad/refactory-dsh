@@ -41,18 +41,17 @@ export function RefactoryBrandName() {
  * The brand mark for the blank-session hero: deliberately nothing.
  *
  * The hero lays the slot out in a **34px grid column** whose next column is the
- * headline, and `hero.headline` is the wordmark itself — "re:factory". The asset
- * is a 5.26:1 lockup, so rendering it at the requested height overruns the column
- * and lands on that headline; cropping it into the square shows a fragment of the
- * wordmark, which is not a mark either. The name is already on screen, so this
- * claims the slot and renders nothing, which is the only option that cannot
- * collide.
+ * headline, and `hero.headline` is the wordmark itself — "re:factory". The only
+ * artwork in the repository is a 5.26:1 lockup on an **opaque dark background**
+ * (400x76, no alpha), so rendering it at the requested height overruns the column
+ * onto the headline, and cropping it into the 34px square shows a fragment of the
+ * wordmark on a dark box. The name is already on screen, so the hero is
+ * deliberately text-only; the slot is claimed with an empty node rather than left
+ * unregistered, which is what keeps the harness's own whale out.
  *
- * **This is a holding fix, not a design.** Making the hero carry a real re:factory
- * mark needs a square glyph asset, or a change to the hero's grid in
- * `ui-conversation`; neither belongs in the brand package. See
- * `packages/client/ui-brand-refactory/GUI-HANDOFF.md`.
- * @returns an empty node holding the slot, so the harness's own whale stays out.
+ * A real hero mark needs a transparent square glyph asset, which does not exist
+ * here. See `GUI-HANDOFF.md`.
+ * @returns an empty node holding the slot.
  */
 export function RefactoryHeroMark() {
   return <span aria-hidden="true" />
