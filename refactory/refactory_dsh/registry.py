@@ -351,6 +351,10 @@ def add(project: Path, source: Path, *, as_name: str = "", trust: str = "generat
     moved. The name is refused if it is already taken: the old registry resolved a
     clash by source precedence, silently, which is how a contributor's package gets
     shadowed and nobody can find out.
+
+    A refusal is atomic: the copy is undone, so the workspace is exactly what it was
+    before the call. A half-added package would turn the next attempt into a false
+    name clash.
     """
     import shutil
 
@@ -370,12 +374,20 @@ def add(project: Path, source: Path, *, as_name: str = "", trust: str = "generat
         )
     target = destination_root / name
     target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(source, target)
-    _write_origin(target, origin=str(source), trust=trust)
-    install_workspace(project)
-    if load(name, project).name != name:
+    try:
+        shutil.copytree(source, target)
+        _write_origin(target, origin=str(source), trust=trust)
+        install_workspace(project)
+        # `load` refuses a package whose declared name differs, so it both checks
+        # the copy and names the mismatch.
+        load(name, project)
+    except Exception:
+        # The copy is before the check, so a refusal has to undo it: the residue
+        # would make the next attempt a false name clash, and the clash message
+        # sends the caller to `--as`, which is what they already passed.
         shutil.rmtree(target, ignore_errors=True)
-        raise PackageError(f"the copied package declares a different name than {name!r}")
+        _evict_workspace(name, project)
+        raise
     importlib.invalidate_caches()
     log.info("package_added", package=name, source=str(source), trust=trust)
     return name

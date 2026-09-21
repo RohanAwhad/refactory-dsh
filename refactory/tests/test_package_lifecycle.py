@@ -108,6 +108,24 @@ def test_add_refuses_something_that_is_not_a_package(tmp_path):
         registry.add(tmp_path, empty)
 
 
+def test_a_refused_name_leaves_no_residue(tmp_path):
+    """A refused add must leave the workspace as it was.
+
+    The copy happens before the declared name is checked, and the check raises, so
+    a cleanup that only runs on the failed comparison's return value never runs.
+    The residue then makes the next attempt fail with a false clash that tells the
+    caller to pass ``--as`` -- which is what they already did.
+    """
+    source = _make_package(tmp_path / "elsewhere" / "whatever", "declared_name")
+    destination = registry.workspace_root(tmp_path) / "destination_name"
+    with pytest.raises(PackageError, match="must agree"):
+        registry.add(tmp_path, source, as_name="destination_name")
+    assert not destination.exists(), (
+        "a refused add left the copied package behind, so the next attempt is a "
+        "false name clash"
+    )
+
+
 def test_import_needs_a_path_or_a_url(tmp_path):
     with pytest.raises(PackageError, match="neither a path"):
         registry.import_package(tmp_path, "some/where/that/does/not/exist")
