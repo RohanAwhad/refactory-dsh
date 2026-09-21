@@ -78,12 +78,17 @@ def best(run_root: Path) -> dict[str, Any]:
     Read from the journal, because that is the only artifact that carries a
     candidate's *state*. `report.json` carries the score, and `state.json`'s
     population carries the edits, and neither can be run.
+
+    The order is the run report's own -- score descending, then id ascending
+    (`Loop.leaderboard`) -- so this and `report.json` name the same candidate.
+    Insertion order would pick the seed on a tie and adopt the baseline as the
+    result while the report named a structural winner.
     """
     run_root = Path(run_root)
     entries = _journal_entries(run_root)
     scores = _score_by_id(entries)
 
-    winner_id, winner_score, winner_state, winner_edits = "", None, None, []
+    scored: list[tuple[float, str, dict[str, Any], list[Any]]] = []
     for entry in entries:
         if entry.get("event") != "candidate":
             continue
@@ -94,15 +99,16 @@ def best(run_root: Path) -> dict[str, Any]:
         score = scores.get(candidate_id)
         if score is None:
             continue
-        if winner_score is None or score > winner_score:
-            winner_id, winner_score = candidate_id, score
-            winner_state, winner_edits = state, list(entry.get("edits") or ())
+        scored.append((score, candidate_id, state, list(entry.get("edits") or ())))
 
-    if winner_state is None:
+    if not scored:
         raise AdoptionError(
             f"{run_root} recorded no candidate that both scored and kept its state; "
             "there is nothing to adopt"
         )
+    winner_score, winner_id, winner_state, winner_edits = min(
+        scored, key=lambda candidate: (-candidate[0], candidate[1])
+    )
     return {
         "run": str(run_root),
         "candidate": winner_id,

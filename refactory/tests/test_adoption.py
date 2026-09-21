@@ -70,6 +70,49 @@ def test_best_reports_the_highest_score_in_the_run(finished_run):
     assert best(finished_run)["score"] == report["best_score"], (
         "best() disagrees with the run's own report about which candidate won"
     )
+    assert best(finished_run)["candidate"] == report["best"]["id"], (
+        "best() and the report name different winners; equal scores are a tie, "
+        "not agreement"
+    )
+
+
+def test_best_breaks_a_tie_the_way_the_run_reports_it(tmp_path):
+    """The tie-break is one rule, not two.
+
+    ``Loop.leaderboard()`` orders by score then id. The adopter ordered by journal
+    insertion, so on a tie it returned the seed while the report named a structural
+    winner -- and ``console adopt`` then wrote the baseline as the result. A
+    score-only assertion cannot see that; this pins the order.
+    """
+    import json
+
+    run = tmp_path / "tie"
+    run.mkdir()
+    state = {"version": 1, "graph": {"start": "a", "nodes": {}, "edges": []}, "knobs": {}}
+    entries = [
+        {"event": "candidate", "id": "ffff", "parent": None, "edits": [], "state": state},
+        {"event": "score", "id": "ffff", "score": 0.5},
+        {
+            "event": "candidate",
+            "id": "0000",
+            "parent": "ffff",
+            "edits": [{"op": "set_knob", "name": "x", "value": 1}],
+            "state": state,
+        },
+        {"event": "score", "id": "0000", "score": 0.5},
+    ]
+    (run / "journal.jsonl").write_text(
+        "".join(json.dumps(entry) + "\n" for entry in entries)
+    )
+
+    winner = best(run)
+    assert winner["candidate"] == "0000", (
+        "best() returned the first journaled candidate on a tie; the run's report "
+        "orders by id, so the two disagree about who won"
+    )
+    assert winner["edits"] == [{"op": "set_knob", "name": "x", "value": 1}], (
+        "the wrong candidate's edits came with the winner's state"
+    )
 
 
 def test_a_run_with_no_journal_refuses(tmp_path):
