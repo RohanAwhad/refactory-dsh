@@ -534,6 +534,28 @@
       "commit": "56aa77e448",
       "observed": "22 passed (composition.spec.ts)",
       "evidence": "The candidate's spine-status.json read {\"status\": \"failed\", \"error\": \"start exited with code 1\"} while the node's stderr (the ResolutionError naming the missing module) existed nowhere in the run directory. report() now appends the node's bounded stderr to the recorded error, keeping the exit code alone when the node said nothing. Both ways: the stderr test failed on the old code and passes after; a second test pins the empty-stderr arm, which also keeps the file at per-file 100% coverage."
+    },
+    {
+      "id": "adopt-workspace-read",
+      "issue": 56,
+      "title": "adopt reads a mode that lives in the workspace",
+      "why": "The loop runs in its own process, so the process running adopt never installed .factory/packages; _class_name read the mode with registry.load(package, None), which skips that install, so the winner of a created package's run could not be frozen at all.",
+      "verify": "pytest refactory/tests/test_adoption.py -q",
+      "status": "done",
+      "commit": "28948ba68b",
+      "observed": "12 passed (test_adoption.py)",
+      "evidence": "Live: `console adopt --run counting_pack-fixed_step-20260921-194815 --as counting_tuned` returned {\"error\": \"cannot import package 'counting_pack': No module named 'refactory_packages.counting_pack'\"}. The project is threaded from adopt() into _class_name/_mode_source and registry.load now gets it. Both ways: the new test reproduces the missing module (with the workspace root dropped to stand in for the run's separate process) and passes on the fix; the live adopt then wrote counting_tuned, which scores 1.0 on the walker and 1.0 on DSH with trace increments [1,1,1,1,1]."
+    },
+    {
+      "id": "adopt-atomic",
+      "issue": 57,
+      "title": "A refused adoption leaves nothing behind",
+      "why": "The destination and __init__.py were written before the step that can fail, so the residue could never be adopted over (adopt refuses an existing name) and every catalogue scan warned about a package whose mode module was never written. The same defect #47 fixed for registry add.",
+      "verify": "pytest refactory/tests/test_adoption.py -q",
+      "status": "done",
+      "commit": "28948ba68b",
+      "observed": "12 passed (test_adoption.py)",
+      "evidence": "Live: after the failed adopt, .factory/packages/counting_tuned held only __init__.py, `console modes` printed package_unavailable for it, and the retry refused because the name existed. The write now removes the destination on failure. Both ways: the new test saw the residue on the old code and no directory on the fix."
     }
   ],
   "verification": {
