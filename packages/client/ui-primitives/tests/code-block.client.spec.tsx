@@ -42,6 +42,9 @@ describe('highlightToHtml', () => {
     'xml', 'lua',
   ]
 
+  // 23 dynamic grammar imports; the default 5s is a latency budget under no load,
+  // and this asserts correctness, not speed. It flaked when the whole suite ran
+  // beside it.
   it('lazily loads every read-card grammar: plain first, highlighted after load', async () => {
     const registered = Promise.withResolvers<undefined>()
     // Registration notifications, not a private polling deadline, establish readiness.
@@ -55,7 +58,7 @@ describe('highlightToHtml', () => {
     } finally {
       stop()
     }
-  })
+  }, 30_000)
 })
 
 describe('CodeBlock', () => {
