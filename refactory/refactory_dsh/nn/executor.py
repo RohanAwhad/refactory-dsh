@@ -59,6 +59,7 @@ class RunContext:
         *,
         knobs: dict[str, Any] | None = None,
         facts: dict[str, Any] | None = None,
+        verdicts: dict[str, str] | None = None,
         model: ModelClient | None = None,
         task: dict[str, Any] | None = None,
         memory: Any = None,
@@ -68,6 +69,9 @@ class RunContext:
         self.workdir.mkdir(parents=True, exist_ok=True)
         self.knobs: dict[str, Any] = dict(knobs or {})
         self.facts: dict[str, Any] = dict(facts or {})
+        #: Verdicts for gates a person or an agent answers, by node id. Empty in a
+        #: headless run, which is why such a gate refuses rather than deciding.
+        self.verdicts: dict[str, str] = dict(verdicts or {})
         self.model = model
         self.task: dict[str, Any] = dict(task or {})
         #: The mode's declared memory, for an op that has something to remember.
@@ -280,9 +284,33 @@ class Executor:
         if node.produces:
             self.ctx.set_fact(node.produces[0], output)
 
+    def _answered_verdict(self, node: Node) -> str:
+        """The verdict for a gate a person or an agent answers.
+
+        A headless walk has nobody to ask, so it **refuses** rather than inventing an
+        answer. That is the whole point of :attr:`Node.gate_kind`: a run that pauses
+        for a person cannot quietly decide for them, and a run that did would be a
+        result nobody can account for. The answer is supplied through
+        ``RunContext.verdicts``, which an interactive run fills and a resumed run
+        replays from the intent ledger rather than asking again.
+        """
+        verdict = (self.ctx.verdicts or {}).get(node.id, "")
+        if not verdict:
+            raise ExecutionError(
+                f"gate {node.id!r} is answered by {node.gate_kind!r} and this run has "
+                "no verdict for it. A headless run cannot answer a gate meant for a "
+                "person or for an agent; pass one in RunContext.verdicts (an "
+                "interactive run collects it, a resumed run replays it) or make the "
+                "gate `fn`."
+            )
+        return str(verdict)
+
     def _visit_gate(self, node: Node) -> tuple[str, str]:
-        fn: Callable[[RunContext], Any] = resolve(node.evaluator)
-        verdict = fn(self.ctx)
+        if node.gate_kind != "fn":
+            verdict = self._answered_verdict(node)
+        else:
+            fn: Callable[[RunContext], Any] = resolve(node.evaluator)
+            verdict = fn(self.ctx)
         if not isinstance(verdict, str) or not verdict:
             raise ExecutionError(
                 f"gate {node.id!r} returned {verdict!r}; a gate must return a verdict label"
@@ -304,6 +332,7 @@ def execute(
     *,
     knobs: dict[str, Any] | None = None,
     facts: dict[str, Any] | None = None,
+    verdicts: dict[str, str] | None = None,
     model: ModelClient | None = None,
     task: dict[str, Any] | None = None,
     memory: Any = None,
@@ -315,6 +344,7 @@ def execute(
         workdir,
         knobs=knobs,
         facts=facts,
+        verdicts=verdicts,
         model=model,
         task=task,
         memory=memory,

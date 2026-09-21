@@ -10,7 +10,9 @@ Node mapping:
 ======================  ==================================================
 `op`                    `FnNode` running ``python -m refactory_dsh.run <call>``
 `agent`                 `AgentNode`, which DSH runs as a subagent
-`gate`                  `GateNode(evaluator_type="fn")`, verdict = last stdout line
+`gate`                  `GateNode`. ``fn`` runs its evaluator and routes by the
+                        last stdout line; ``user`` and ``agent`` carry no command
+                        and are answered by the person or by the driving agent
 ======================  ==================================================
 
 The runner is told its own node through the spine's `DSH_WORKFLOW_NODE`, and the
@@ -141,12 +143,18 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
                 notes=node.notes,
             )
         elif node.kind == "gate":
-            nodes[node_id] = GateNode(
-                **common,
-                evaluator_type="fn",
-                evaluator_command=f"{RUNNER} {node.evaluator}",
-                max_iterations=node.max_iterations,
-            )
+            # Who answers it decides whether there is a command at all. `fn` runs its
+            # evaluator; `user` and `agent` are handed to the driving agent by the
+            # spine, which presents a user gate to the person. Emitting a command for
+            # those would give the gate two answerers, and which one won would depend
+            # on the runtime.
+            gate: dict[str, Any] = {
+                "evaluator_type": node.gate_kind,
+                "max_iterations": node.max_iterations,
+            }
+            if node.gate_kind == "fn":
+                gate["evaluator_command"] = f"{RUNNER} {node.evaluator}"
+            nodes[node_id] = GateNode(**common, **gate)
         else:
             try:
                 role = AgentRole(node.role)

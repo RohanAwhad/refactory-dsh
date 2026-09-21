@@ -262,3 +262,90 @@ def test_the_console_reports_a_run_with_no_ledger(tmp_path):
     payload = console._steer(root)  # noqa: SLF001
     assert payload["exists"] is False
     assert payload["problems"], "a run with no ledger was reported as fine"
+
+
+# ── a gate a person answers ────────────────────────────────────────────────
+#
+# The half of #36 that was missed the first time and closed as if it had landed:
+# `lowering` hardcoded `evaluator_type="fn"` and `nn.Node` had no gate kind, so a
+# mode could not declare a pause point at all. These are the tests that would have
+# caught that.
+
+
+def _gated_mode():
+    """A mode whose one gate is answered by a person."""
+    from refactory_dsh import nn
+
+    class Gated(nn.Mode):
+        name = "gated"
+
+        def build(self) -> nn.Graph:
+            graph = nn.Graph()
+            graph.add(nn.Node("ask", "gate", gate_kind="user", notes="ask the person"))
+            graph.add(nn.Node(
+                "done", "op", call="refactory_packages.sympy_pack.ops:load_problems",
+                writes=("problems.json",), produces=("problem_count",),
+            ))
+            graph.connect("ask", "done", condition="proceed")
+            return graph
+
+        def score(self, run):
+            return 1.0
+
+    return Gated
+
+
+def test_a_mode_can_declare_a_gate_a_person_answers(tmp_path):
+    from refactory_dsh import lowering
+
+    state = _gated_mode()().state_dict()
+    workflow = lowering.to_workflow(state, name="gated")
+    gate = workflow.nodes["ask"]
+    assert gate.evaluator_type == "user", (
+        f"the declared gate kind did not reach the IR: {gate.evaluator_type!r}"
+    )
+    assert not gate.evaluator_command, (
+        "a user gate was given a command, so a program and a person would both answer it"
+    )
+
+
+def test_a_headless_run_refuses_a_gate_meant_for_a_person(tmp_path):
+    """A run that pauses cannot quietly decide for you.
+
+    This is the point of the gate kind: inventing a verdict would produce a result
+    nobody can account for, and it would be indistinguishable from one where the
+    person actually said something.
+    """
+    from refactory_dsh.nn.executor import ExecutionError
+
+    mode = _gated_mode()()
+    result = mode.evaluate(tmp_path / "run")
+    assert result.exit_ok is False
+    assert "answered by 'user'" in (result.error or ""), result.error
+
+
+def test_a_supplied_verdict_lets_it_proceed(tmp_path):
+    """An interactive run collects the answer; a resumed run replays it."""
+    from refactory_dsh.nn.executor import execute
+
+    graph = _gated_mode()().build()
+    result = execute(graph, tmp_path / "run", verdicts={"ask": "proceed"})
+    assert result.exit_ok, result.error
+
+
+def test_an_unknown_verdict_is_still_refused(tmp_path):
+    """A verdict that is not one of the gate's outcomes is not an answer."""
+    from refactory_dsh.nn.executor import execute
+
+    graph = _gated_mode()().build()
+    result = execute(graph, tmp_path / "run", verdicts={"ask": "nonsense"})
+    assert result.exit_ok is False
+    assert "nonsense" in (result.error or ""), result.error
+
+
+def test_a_gate_cannot_have_two_answerers():
+    """An evaluator AND a person would make the answer depend on the runtime."""
+    from refactory_dsh.nn.graph import GraphError, Node
+
+    with pytest.raises(GraphError, match="two things would answer it"):
+        Node("g", "gate", gate_kind="user", evaluator="pkg:fn")

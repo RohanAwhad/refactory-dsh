@@ -15,12 +15,21 @@ from typing import Any, Iterable
 
 NODE_KINDS = ("op", "agent", "gate")
 
+#: Who answers a gate: the evaluated function, a person, or the running agent.
+GATE_KINDS = ("fn", "user", "agent")
+
+#: Who answers a gate. ``fn`` runs the evaluator and routes by its verdict; ``user``
+#: is a pause the person answers while using the mode; ``agent`` is one the running
+#: agent answers. Only ``fn`` can be answered with nobody present, which is why the
+#: other two are refused by a headless run that has not been given a verdict.
+
 _NODE_FIELDS = frozenset(
     {
         "id",
         "kind",
         "call",
         "evaluator",
+        "gate_kind",
         "knobs",
         "reads",
         "writes",
@@ -45,7 +54,9 @@ class Node:
     """One step of a mode.
 
     ``op`` runs a resolved Python callable, ``agent`` makes one model call, and
-    ``gate`` runs a resolved callable whose returned label selects the out-edge.
+    ``gate`` routes by a verdict. ``gate_kind`` says who gives it: ``fn`` runs
+    ``evaluator``, while ``user`` and ``agent`` are answered by a person or by the
+    running agent, so they carry no evaluator at all.
 
     ``writes`` are the files the node produces and ``produces`` the run facts it
     sets. Both are declared rather than discovered, because the validator's
@@ -57,6 +68,8 @@ class Node:
     kind: str
     call: str = ""
     evaluator: str = ""
+    #: Who answers this gate: ``fn`` (the default), ``user`` or ``agent``.
+    gate_kind: str = "fn"
     knobs: tuple[str, ...] = ()
     reads: tuple[str, ...] = ()
     writes: tuple[str, ...] = ()
@@ -80,8 +93,21 @@ class Node:
             raise GraphError("a node needs an id")
         if self.kind == "op" and not self.call:
             raise GraphError(f"op node {self.id!r} declares no call")
-        if self.kind == "gate" and not self.evaluator:
+        if self.kind == "gate" and self.gate_kind not in GATE_KINDS:
+            raise GraphError(
+                f"gate node {self.id!r}: unknown gate_kind {self.gate_kind!r}; "
+                f"known: {list(GATE_KINDS)}"
+            )
+        if self.kind == "gate" and self.gate_kind == "fn" and not self.evaluator:
             raise GraphError(f"gate node {self.id!r} declares no evaluator")
+        if self.kind == "gate" and self.gate_kind != "fn" and self.evaluator:
+            # A `user` or `agent` gate is answered by a person or by the running
+            # agent. An evaluator would be a second answerer, and which one won
+            # would depend on the runtime, so it is refused rather than ignored.
+            raise GraphError(
+                f"gate node {self.id!r} is answered by {self.gate_kind!r} and "
+                "declares an evaluator too, so two things would answer it"
+            )
         if self.kind == "agent" and not self.prompt_template:
             raise GraphError(f"agent node {self.id!r} declares no prompt_template")
         if self.max_iterations < 1:
@@ -98,6 +124,11 @@ class Node:
             "kind": self.kind,
             "call": self.call,
             "evaluator": self.evaluator,
+            # Only when it is not the default. A new field that always serialized
+            # would change every mode's state dict, and therefore every candidate
+            # id the loop has ever recorded -- which breaks resume and moves a
+            # search for reasons that have nothing to do with the search.
+            **({"gate_kind": self.gate_kind} if self.gate_kind != "fn" else {}),
             "knobs": list(self.knobs),
             "reads": list(self.reads),
             "writes": list(self.writes),
@@ -122,6 +153,7 @@ class Node:
             id=str(state["id"]),
             kind=str(state["kind"]),
             call=str(state.get("call", "")),
+            gate_kind=str(state.get("gate_kind", "fn")),
             evaluator=str(state.get("evaluator", "")),
             knobs=tuple(state.get("knobs") or ()),
             reads=tuple(state.get("reads") or ()),

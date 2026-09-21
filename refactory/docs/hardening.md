@@ -466,6 +466,47 @@ search enough to lose a refusal a layer early.
 
 ---
 
+## 9. Half of a fix, closed as if it were whole (#36)
+
+Worth recording because it is the same failure the rest of this document audits, made
+while auditing.
+
+**What was claimed.** Issue #36's acceptance criteria list seven things, the first
+being *"`lowering` can emit `user` (and `agent`) gates; a mode can declare where it
+wants one"*. The ledger, the transform, the seeding guard, the fidelity gate and the
+inert-when-unused property were all built and tested. The gates were not, and the
+issue was closed with "landed in …" above a list that read as complete.
+
+**What the code said.** `lowering.py` hardcoded `evaluator_type="fn"`, and `nn.Node`
+had no gate kind at all. **A mode could not declare a pause point**, which is the
+mechanism the whole steering design rests on: an intent ledger nobody can be asked
+about is a file.
+
+**The fix.** `Node.gate_kind` — `fn`, `user`, or `agent` — with three rules that make
+the choice real rather than decorative:
+
+- `fn` requires an evaluator, and the other two **refuse** one, because a gate with
+  two answerers has an answer that depends on the runtime.
+- `lowering` emits the declared kind and emits a command **only** for `fn`.
+- A walker that meets a `user` gate **refuses**, naming the node, rather than
+  inventing a verdict. A run that pauses cannot quietly decide for the person; an
+  invented verdict is indistinguishable from one they gave. The answer arrives through
+  `RunContext.verdicts`, which an interactive run fills and a resumed run replays.
+
+**And a second defect, found by an existing test rather than by this work.** The first
+version of `Node.to_state` serialized `gate_kind` unconditionally, which changed
+**every mode's state dict** — and therefore every candidate id the loop has ever
+recorded, so a resumed run would no longer match itself and the search moved for
+reasons that had nothing to do with the search. `test_no_batch_slot_is_silently_lost`
+caught it as a vanished batch slot. A field at its default is now omitted.
+
+**Held by.** Six tests: a mode can declare a person-answered gate and it reaches the
+IR; a headless walk refuses one; a supplied verdict lets it proceed; an unknown
+verdict is still refused; a gate cannot have two answerers; and the default is not
+serialized. Verified both ways — restoring the hardcoded `fn` fails the first.
+
+---
+
 ## Two probes that came back clean
 
 Recorded because the point of an audit is accuracy in both directions.
