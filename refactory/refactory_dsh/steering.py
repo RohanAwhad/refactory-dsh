@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 #: Where the ledger lives inside a run directory.
 LEDGER = "intent-ledger.md"
@@ -42,6 +42,15 @@ LEDGER = "intent-ledger.md"
 #: *respected*, not merely known, which is why it is a separate kind rather than a
 #: note with a different tone.
 KINDS: tuple[str, ...] = ("info", "correction", "constraint")
+
+#: The entry kind a gate verdict is recorded under. Separate from the three the
+#: person writes, because a verdict is a decision the run routed on, not something
+#: the person said about it, and a resumed run has to tell them apart.
+VERDICT_KIND = "verdict"
+
+#: How a piece of work names the ledger entry it serves. A line, so it is readable
+#: in the artifact and findable without parsing the prose around it.
+CITATION = "Serves:"
 
 #: The placeholder the previous system fell back to. Refused rather than accepted:
 #: accepting it is what made the fidelity check vacuous, and a caller that reintroduces
@@ -114,6 +123,46 @@ class Ledger:
             handle.write(f"\n## [{entry['at']}] {kind}\n{body}\n")
         return entry
 
+    def verdict(self, gate: str, value: str) -> dict[str, Any]:
+        """Record the verdict a gate was answered with, so a resume replays it.
+
+        A verdict is a decision the run routed on. Writing it down is what makes a
+        resumed run the same run: re-asking the person would produce a second
+        answer to a question already answered, and inventing one would produce a
+        result nobody can account for. The last verdict for a gate wins, so a
+        person may change their mind while the run is paused.
+        """
+        gate = (gate or "").strip()
+        value = (value or "").strip()
+        if not gate:
+            raise SteeringError("a verdict needs the gate it answers")
+        if not value:
+            raise SteeringError(f"gate {gate!r} was answered with an empty verdict")
+        entry = {"at": _now(), "kind": VERDICT_KIND, "gate": gate, "verdict": value}
+        self.root.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a") as handle:
+            handle.write(
+                f"\n## [{entry['at']}] {VERDICT_KIND}\ngate: {gate}\nverdict: {value}\n"
+            )
+        return entry
+
+    def verdicts(self) -> dict[str, str]:
+        """Every gate verdict recorded so far, keyed by gate id."""
+        found: dict[str, str] = {}
+        for entry in self.entries():
+            if entry["kind"] != VERDICT_KIND:
+                continue
+            gate = verdict = ""
+            for line in entry["text"].splitlines():
+                key, _, value = line.partition(":")
+                if key.strip() == "gate":
+                    gate = value.strip()
+                elif key.strip() == "verdict":
+                    verdict = value.strip()
+            if gate and verdict:
+                found[gate] = verdict
+        return found
+
     # ── reading ────────────────────────────────────────────────────────────
     def exists(self) -> bool:
         return self.path.exists() and self.path.stat().st_size > 0
@@ -161,6 +210,29 @@ class Ledger:
         return "\n".join(lines)
 
 
+def _is_agent_node(node: Any) -> bool:
+    """A node that makes a model call, on either side of the lowering.
+
+    The transform runs on the lowered IR (``AgentNode``) and on the walker's own
+    graph (``nn.Node`` with ``kind == "agent"``), so it duck-types instead of
+    importing either: the two runtimes must carry the same ledger, and a mode's
+    author must not be the thing that decides whether they do.
+    """
+    return node.__class__.__name__ == "AgentNode" or getattr(node, "kind", "") == "agent"
+
+
+def _citation_block(ledger: Ledger) -> str:
+    """The instruction that makes the chain from ledger to work checkable."""
+    listed = ", ".join(f"`{entry['at']}`" for entry in ledger.entries())
+    return (
+        "\n\n## Trace your work to the ledger\n\n"
+        "End your output with a line naming the ledger entry you are serving:\n\n"
+        f"    {CITATION} <timestamp>\n\n"
+        f"The entries are: {listed}. Work that names no entry, or one that does not "
+        "exist, is reported as not traceable to what the person asked for."
+    )
+
+
 def annotate(workflow: Any, ledger: Ledger) -> Any:
     """Fold the ledger into every agent node. A no-op when the ledger is empty.
 
@@ -172,12 +244,119 @@ def annotate(workflow: Any, ledger: Ledger) -> Any:
     block = ledger.render()
     if not block:
         return workflow
+    block += _citation_block(ledger)
     for node in workflow.nodes.values():
-        if node.__class__.__name__ != "AgentNode":
+        if not _is_agent_node(node):
             continue
         existing = getattr(node, "prompt_template", "") or ""
         node.prompt_template = f"{existing}\n\n{block}" if existing else block
     return workflow
+
+
+def for_run(workflow: Any, workdir: Path) -> Any:
+    """Fold the run directory's ledger into a workflow about to run.
+
+    Called by **both** runtimes. A mode lowered for DSH and one executed by the
+    walker have to carry the same ledger; annotating in one path only is a
+    difference between the runtimes that nothing would report.
+    """
+    return annotate(workflow, Ledger(workdir))
+
+
+def citations(text: str) -> list[str]:
+    """The ledger entries a piece of work says it serves, in the order it names them."""
+    found: list[str] = []
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if not stripped.lower().startswith(CITATION.lower()):
+            continue
+        rest = stripped[len(CITATION):].strip()
+        for stamp in rest.replace(",", " ").split():
+            stamp = stamp.strip("`[]()")
+            if stamp and stamp not in found:
+                found.append(stamp)
+    return found
+
+
+def chain(ledger: Ledger, outputs: Mapping[str, str]) -> list[str]:
+    """Problems with the chain from the ledger to the work, mechanically.
+
+    The cheap half of the fidelity question: whether every agent output names an
+    entry that exists. It cannot say the work *satisfies* the intent -- that is a
+    judgement and needs a model -- but a node that ignored the ledger is caught, and
+    the check costs no model call.
+    """
+    known = {entry["at"] for entry in ledger.entries()}
+    problems: list[str] = []
+    for node_id in sorted(outputs):
+        cited = citations(outputs[node_id])
+        if not cited:
+            problems.append(
+                f"node {node_id!r} produced work that cites no ledger entry, so it is "
+                "not traceable to what was asked for"
+            )
+            continue
+        for stamp in cited:
+            if stamp not in known:
+                problems.append(
+                    f"node {node_id!r} cites {stamp!r}, which is not in the ledger, so "
+                    "the citation dangles"
+                )
+    return problems
+
+
+def outputs_in(run_root: Path) -> dict[str, str]:
+    """What each agent node wrote, read back so the citation chain can be checked.
+
+    Read from the declarations the lowering left beside the run, so it works for a
+    run either runtime executed and does not need the state. A file the node never
+    wrote is an empty output, which the chain reports as a node that cited nothing.
+    """
+    from refactory_dsh import lowering
+
+    declared = lowering.read_declarations(Path(run_root))
+    outputs: dict[str, str] = {}
+    for node_id, entry in declared.items():
+        if not isinstance(entry, dict) or entry.get("kind") != "agent":
+            continue
+        text = ""
+        for name in entry.get("writes") or ():
+            path = Path(run_root) / str(name)
+            if path.exists():
+                text += "\n" + path.read_text(errors="replace")
+        outputs[str(node_id)] = text
+    return outputs
+
+
+def fidelity(ledger: Ledger, outputs: Mapping[str, str] | None = None) -> list[str]:
+    """What is wrong with a ledger a run is about to be judged against.
+
+    Says which half it is, because the halves differ in cost and in what they can
+    conclude:
+
+    - **The precondition**, always. A ledger that is missing, empty, or holding the
+      placeholder. Deterministic, free. BUG-05 was this half being broken while the
+      gate reported a pass.
+    - **The chain**, when ``outputs`` is given. Every agent output must cite a ledger
+      entry that exists (``chain``). Deterministic, free.
+    - **The judgement** -- whether the work *satisfies* the intent -- is **not here**.
+      It needs a model to read the work against the ledger, and checking citations
+      does not substitute for it. That limit is in `architecture.md` §12.
+    """
+    problems: list[str] = []
+    if not ledger.exists():
+        return [f"no intent ledger at {ledger.path}: the run has nothing to be judged against"]
+    entries = ledger.entries()
+    if not entries:
+        return ["the intent ledger has no entries"]
+    origin = entries[0]["text"].strip()
+    if not origin:
+        problems.append("the ledger's origin is empty")
+    if origin == PLACEHOLDER:
+        problems.append(f"the ledger's origin is the placeholder {PLACEHOLDER!r}")
+    if outputs is not None:
+        problems.extend(chain(ledger, outputs))
+    return problems
 
 
 def interactive(
@@ -204,36 +383,19 @@ def interactive(
     return annotate(workflow, ledger), ledger
 
 
-def fidelity(ledger: Ledger) -> list[str]:
-    """What is wrong with a ledger a run is about to be judged against.
-
-    Checks the **precondition**, not the output. A gate that claims work is
-    "traceable to user intent" while reading a default is the BUG-05 failure, and it is
-    worse than no gate because it reports a pass. Whether the work *is* traceable needs
-    a model to read it; whether there was an intent to trace it to does not, and that is
-    the half that was broken.
-    """
-    problems: list[str] = []
-    if not ledger.exists():
-        return [f"no intent ledger at {ledger.path}: the run has nothing to be judged against"]
-    entries = ledger.entries()
-    if not entries:
-        return ["the intent ledger has no entries"]
-    origin = entries[0]["text"].strip()
-    if not origin:
-        problems.append("the ledger's origin is empty")
-    if origin == PLACEHOLDER:
-        problems.append(f"the ledger's origin is the placeholder {PLACEHOLDER!r}")
-    return problems
-
-
 __all__ = [
+    "CITATION",
     "KINDS",
     "LEDGER",
     "PLACEHOLDER",
+    "VERDICT_KIND",
     "Ledger",
     "SteeringError",
     "annotate",
+    "chain",
+    "citations",
     "fidelity",
+    "for_run",
     "interactive",
+    "outputs_in",
 ]

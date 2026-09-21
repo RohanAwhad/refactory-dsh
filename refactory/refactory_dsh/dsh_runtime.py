@@ -74,7 +74,17 @@ def run_on_dsh(
         return DshRun(facts={}, workdir=workdir, returncode=2, stderr=problem)
 
     graphs = workdir / "graphs"
-    lowering.write_mode_graph(state, graphs, name=name)
+    # The steering layer, on the runtime that ships. A run a person steered has a
+    # ledger in its work directory; folding it in here is what makes the CEO's agent
+    # nodes carry what was said, and what a resumed run replays.
+    from refactory_dsh import steering
+
+    lowering.write_mode_graph(
+        state,
+        graphs,
+        name=name,
+        transform=lambda workflow: steering.for_run(workflow, workdir),
+    )
     # The IR cannot carry the facts a node produces, so they travel in the run
     # directory and the runner reads them from there.
     lowering.write_declarations(state, workdir)

@@ -349,3 +349,167 @@ def test_a_gate_cannot_have_two_answerers():
 
     with pytest.raises(GraphError, match="two things would answer it"):
         Node("g", "gate", gate_kind="user", evaluator="pkg:fn")
+
+
+# ── the verdict is recorded, so a resume replays it (#41) ──────────────────
+
+
+def test_a_verdict_is_recorded_and_read_back(tmp_path):
+    ledger = Ledger.seed(tmp_path, "build a mode for circle packing")
+    assert ledger.verdicts() == {}
+    ledger.verdict("ask", "proceed")
+    ledger.verdict("confirm", "halt")
+    assert ledger.verdicts() == {"ask": "proceed", "confirm": "halt"}
+    body = ledger.path.read_text()
+    assert "gate: ask" in body and "verdict: proceed" in body
+
+
+def test_the_last_verdict_for_a_gate_wins(tmp_path):
+    """A person may change their mind while the run is paused."""
+    ledger = Ledger.seed(tmp_path, "build a mode")
+    ledger.verdict("ask", "proceed")
+    ledger.verdict("ask", "halt")
+    assert ledger.verdicts() == {"ask": "halt"}
+
+
+def test_a_verdict_needs_a_gate_and_a_value(tmp_path):
+    ledger = Ledger.seed(tmp_path, "build a mode")
+    with pytest.raises(SteeringError, match="needs the gate"):
+        ledger.verdict("", "proceed")
+    with pytest.raises(SteeringError, match="empty verdict"):
+        ledger.verdict("ask", "   ")
+
+
+def test_a_gate_a_person_answered_is_replayed_on_the_next_run(tmp_path):
+    """A resumed run is the same run, not a second question.
+
+    The first execution has nobody's answer and refuses; the second finds the
+    verdict in the ledger and completes on it. `RunContext.verdicts` is no longer
+    the only way in -- which is what "a resumed run replays the answer" means.
+    """
+    from refactory_dsh.nn.executor import execute
+
+    work = tmp_path / "run"
+    Ledger.seed(work, "build a mode for circle packing")
+    first = execute(_gated_mode()().build(), work)
+    assert first.exit_ok is False
+    assert "answered by 'user'" in (first.error or ""), first.error
+
+    Ledger(work).verdict("ask", "proceed")
+    replayed = execute(_gated_mode()().build(), work)
+    assert replayed.exit_ok, replayed.error
+
+
+def test_an_explicit_verdict_still_wins_over_the_ledger(tmp_path):
+    """A caller can override the recorded answer, which is what a test needs."""
+    from refactory_dsh.nn.executor import execute
+
+    work = tmp_path / "run"
+    Ledger.seed(work, "build a mode")
+    Ledger(work).verdict("ask", "proceed")
+    result = execute(_gated_mode()().build(), work, verdicts={"ask": "nonsense"})
+    assert result.exit_ok is False
+    assert "nonsense" in (result.error or ""), result.error
+
+
+# ── the chain: a node that ignored the ledger is caught (#43) ──────────────
+
+
+def test_the_ledger_instruction_asks_for_a_citation(tmp_path):
+    ledger = Ledger.seed(tmp_path, "build a mode for circle packing")
+    workflow = steering.interactive(_state(), tmp_path)[0]
+    prompts = " ".join(_agent_prompts(workflow))
+    assert steering.CITATION in prompts, "agent nodes were not told to cite the ledger"
+    assert ledger.entries()[0]["at"] in prompts, "the entries to cite were not listed"
+
+
+def test_a_node_that_cited_nothing_is_caught(tmp_path):
+    ledger = Ledger.seed(tmp_path, "build a mode")
+    problems = steering.chain(ledger, {"writer": "I did the work."})
+    assert problems and "cites no ledger entry" in problems[0]
+
+
+def test_a_dangling_citation_is_caught(tmp_path):
+    ledger = Ledger.seed(tmp_path, "build a mode")
+    problems = steering.chain(
+        ledger, {"writer": f"{steering.CITATION} 1999-01-01T00:00:00+00:00"}
+    )
+    assert problems and "dangles" in problems[0]
+
+
+def test_a_citation_that_exists_passes(tmp_path):
+    ledger = Ledger.seed(tmp_path, "build a mode")
+    stamp = ledger.entries()[0]["at"]
+    assert steering.chain(ledger, {"writer": f"done.\n{steering.CITATION} {stamp}"}) == []
+
+
+def test_fidelity_checks_the_chain_only_when_it_is_given_the_outputs(tmp_path):
+    """Says which half it is: the precondition alone, or the chain too."""
+    ledger = Ledger.seed(tmp_path, "build a mode")
+    assert steering.fidelity(ledger) == []
+    problems = steering.fidelity(ledger, {"writer": "no citation"})
+    assert problems, "the chain half was not checked when the outputs were given"
+
+
+def test_outputs_in_reads_what_the_agent_nodes_wrote(tmp_path):
+    """Read from the declarations beside the run, so either runtime can be checked."""
+    from refactory_dsh import lowering
+
+    work = tmp_path / "run"
+    work.mkdir()
+    lowering.write_declarations(_state(), work)
+    declared = lowering.read_declarations(work)
+    node_id, entry = next(
+        (nid, e)
+        for nid, e in declared.items()
+        if e.get("kind") == "agent" and e.get("writes")
+    )
+    (work / entry["writes"][0]).write_text(f"the work\n{steering.CITATION} x\n")
+
+    outputs = steering.outputs_in(work)
+    assert "the work" in outputs[node_id]
+    assert all(declared[nid].get("kind") == "agent" for nid in outputs), (
+        "a deterministic node was treated as an agent node"
+    )
+
+
+def test_the_dsh_runtime_loads_the_ledger_into_its_agent_nodes(tmp_path, monkeypatch):
+    """The runtime that ships gets the ledger too, not only the walker.
+
+    Both runtimes annotate through `steering.for_run`, because a difference between
+    them is exactly what nothing would report.
+    """
+    import json
+
+    from refactory_dsh import dsh_profile
+    from refactory_dsh.dsh_runtime import run_on_dsh
+
+    home = tmp_path / "home"
+    (home / "profiles" / "graph").mkdir(parents=True)
+    (home / "profiles" / "graph" / "package.json").write_text(
+        json.dumps({"dsh": {"profile": {"bundles": [dsh_profile.GRAPH_BUNDLE]}}})
+    )
+    monkeypatch.setenv("DSH_HOME", str(home))
+
+    work = tmp_path / "run"
+    Ledger.seed(work, "build a mode for circle packing")
+
+    class Result:
+        returncode = 1
+        stdout = ""
+        stderr = "stopped"
+
+    monkeypatch.setattr(
+        "refactory_dsh.dsh_runtime.subprocess.run", lambda *args, **kwargs: Result()
+    )
+    run_on_dsh(_state(), work, name="probe")
+
+    graph = json.loads((work / "graphs" / "probe.graph.json").read_text())
+    prompts = " ".join(
+        node.get("prompt_template") or ""
+        for node in graph["nodes"].values()
+        if node.get("_type") == "AgentNode"
+    )
+    assert "build a mode for circle packing" in prompts, (
+        "the DSH graph's agent nodes did not carry the ledger"
+    )

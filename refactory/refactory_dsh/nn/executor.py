@@ -339,12 +339,27 @@ def execute(
     enforce_writes: bool = True,
     max_steps: int = 2000,
 ) -> RunResult:
-    """Build a context and run the graph once."""
+    """Build a context and run the graph once.
+
+    Two things come from the run directory before anything executes, because a mode
+    author cannot be the thing that decides whether they happen:
+
+    - The **intent ledger** is folded into every agent node, so a run a person
+      steered carries what they said. Inert when there is no ledger.
+    - A gate a person answered is **replayed** from the ledger rather than asked
+      again. An explicit ``verdicts`` argument still wins, so a caller can override.
+    """
+    from refactory_dsh.steering import Ledger, for_run
+
+    workdir = Path(workdir)
+    graph = for_run(graph, workdir)
+    ledger = Ledger(workdir)
+    recorded = ledger.verdicts() if ledger.exists() else {}
     ctx = RunContext(
         workdir,
         knobs=knobs,
         facts=facts,
-        verdicts=verdicts,
+        verdicts={**recorded, **(verdicts or {})},
         model=model,
         task=task,
         memory=memory,

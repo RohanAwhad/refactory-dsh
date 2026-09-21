@@ -276,14 +276,22 @@ Steering a run while *using* it: the intent ledger, and the transform that adds 
 | class | `Ledger` | `(root: 'Path') -> 'None'` |
 | class | `SteeringError` | `` |
 | function | `annotate` | `(workflow: 'Any', ledger: 'Ledger') -> 'Any'` |
-| function | `fidelity` | `(ledger: 'Ledger') -> 'list[str]'` |
+| function | `chain` | `(ledger: 'Ledger', outputs: 'Mapping[str, str]') -> 'list[str]'` |
+| function | `citations` | `(text: 'str') -> 'list[str]'` |
+| function | `fidelity` | `(ledger: 'Ledger', outputs: 'Mapping[str, str] \| None' = None) -> 'list[str]'` |
+| function | `for_run` | `(workflow: 'Any', workdir: 'Path') -> 'Any'` |
 | function | `interactive` | `(state: 'dict[str, Any]', workdir: 'Path', *, request: 'str' = '', name: 'str' = '', description: 'str' = '') -> 'tuple[Any, Ledger]'` |
+| function | `outputs_in` | `(run_root: 'Path') -> 'dict[str, str]'` |
 
 - **`Ledger`** — The run's record of what was asked for, and everything said since.
 - **`SteeringError`** — The steering layer cannot be built or trusted. Always names what is wrong.
 - **`annotate`** — Fold the ledger into every agent node. A no-op when the ledger is empty.
+- **`chain`** — Problems with the chain from the ledger to the work, mechanically.
+- **`citations`** — The ledger entries a piece of work says it serves, in the order it names them.
 - **`fidelity`** — What is wrong with a ledger a run is about to be judged against.
+- **`for_run`** — Fold the run directory's ledger into a workflow about to run.
 - **`interactive`** — Lower a mode for a person to *use*, with the steering layer attached.
+- **`outputs_in`** — What each agent node wrote, read back so the citation chain can be checked.
 
 
 <a id="refactory_dsh-strategies"></a>
@@ -382,18 +390,18 @@ Lower a mode state to refactory's IR, so DSH can run it.
 | class | `LoweringError` | `` |
 | function | `knob_environment` | `(state: 'dict[str, Any]', *, extra: 'dict[str, str] \| None' = None) -> 'dict[str, str]'` |
 | function | `knob_specs` | `(state: 'dict[str, Any]') -> 'dict[str, Knob]'` |
-| function | `node_declarations` | `(state: 'dict[str, Any]') -> 'dict[str, dict[str, list[str]]]'` |
+| function | `node_declarations` | `(state: 'dict[str, Any]') -> 'dict[str, dict[str, Any]]'` |
 | function | `node_manifest` | `(state: 'dict[str, Any]', node_id: 'str') -> 'dict[str, Any]'` |
 | function | `read_declarations` | `(workdir: 'Path') -> 'dict[str, dict[str, list[str]]]'` |
 | function | `read_memory_declarations` | `(workdir: 'Path') -> 'list[Any]'` |
 | function | `to_workflow` | `(state: 'dict[str, Any]', *, name: 'str' = '', description: 'str' = '') -> 'Workflow'` |
 | function | `validate_ir` | `(workflow: 'Workflow') -> 'list[str]'` |
 | function | `write_declarations` | `(state: 'dict[str, Any]', workdir: 'Path') -> 'Path'` |
-| function | `write_mode_graph` | `(state: 'dict[str, Any]', out_dir: 'Path', *, name: 'str', description: 'str' = '') -> 'tuple[Path, Workflow]'` |
+| function | `write_mode_graph` | `(state: 'dict[str, Any]', out_dir: 'Path', *, name: 'str', description: 'str' = '', transform: 'Any' = None) -> 'tuple[Path, Workflow]'` |
 
 - **`LoweringError`** — A state cannot be expressed in the IR, and saying why is more useful than a traceback.
 - **`knob_environment`** — The environment a node command runs under: the knobs, and whatever else.
-- **`node_declarations`** — Every node's declared reads, writes and facts, keyed by node id.
+- **`node_declarations`** — Every node's kind and declared reads, writes and facts, keyed by node id.
 - **`node_manifest`** — What a node command is told about itself, mirroring `DSH_WORKFLOW_NODE`.
 - **`read_memory_declarations`** — The mode's memory declarations, as the runner reads them back.
 - **`to_workflow`** — The refactory `Workflow` for a mode state.

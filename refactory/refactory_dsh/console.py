@@ -359,20 +359,25 @@ def _steer(
     and conflating the two is how a run stops being accountable for what it was asked
     to do.
     """
-    from refactory_dsh.steering import Ledger, fidelity
+    from refactory_dsh.steering import Ledger, chain, fidelity, outputs_in
 
     ledger = Ledger(run_root)
     if seed is not None:
         Ledger.seed(run_root, seed)
     if note is not None:
         ledger.note(kind, note)
+    # The chain is checkable only when the run left agent outputs beside the ledger
+    # (a single mode run does; an outer-loop run keeps its candidates in subdirs).
+    outputs = outputs_in(run_root) if ledger.exists() else {}
     return {
         "run": str(run_root),
         "ledger": str(ledger.path),
         "exists": ledger.exists(),
         "entries": ledger.entries(),
         "constraints": ledger.constraints(),
-        "problems": fidelity(ledger),
+        "verdicts": ledger.verdicts(),
+        "chain": chain(ledger, outputs) if ledger.exists() else [],
+        "problems": fidelity(ledger, outputs),
     }
 
 

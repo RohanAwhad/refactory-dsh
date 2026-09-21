@@ -346,34 +346,47 @@ python -m refactory_dsh.console steer --run <run>          # read it back
 Three kinds, because they are not the same act: `info` (context), `correction`
 (something is wrong), `constraint` (must be respected, not merely known).
 
-**How it reaches the agents.** `steering.annotate` folds the ledger into **every**
-`AgentNode`'s prompt template of the lowered workflow. Every node, not one the author
-remembered to wire, so a mode author cannot be the thing that makes steering work —
-which is also why this is a transform over the IR and not a field on `nn.Node`. Modes
-stay Pythonic and unchanged, and `to_workflow` knows nothing about any of it.
+**How it reaches the agents.** `steering.for_run` folds the ledger into **every**
+agent node's prompt before a run, and **both runtimes call it**: the walker in
+`execute`, and DSH as the transform `write_mode_graph` applies. Every node, not one
+the author remembered to wire, so a mode author cannot be the thing that makes
+steering work — which is also why this is a transform over the IR and not a field on
+`nn.Node`. Modes stay Pythonic and unchanged, and `to_workflow` knows nothing about
+any of it. A note added to the ledger mid-run therefore reaches the agent nodes that
+run afterwards, which is what `console steer --note` is for.
+
+**A gate a person answers is recorded, and a resume replays it.** `wf_*`/the walker
+routes the verdict a person gave; `Ledger.verdict(gate, value)` writes it down, and
+`execute` reads `Ledger.verdicts()` back into the run so a resumed run is the same
+run rather than a second question. An explicit verdict passed by a caller still wins.
+Without a recorded verdict a headless run **refuses** at that gate and names it: an
+invented verdict is indistinguishable from one a person gave.
 
 **It is inert when unused.** An empty ledger renders the empty string and `annotate`
 returns the workflow it was given. A run nobody steered is the run it would have been,
 which is what lets the interactive and headless paths be compared at all.
 
-**The fidelity gate checks the precondition, not the output.** It reports a ledger that
-is missing, empty, or holding the placeholder. Whether the *work* is traceable to the
-intent needs a model to read it; whether there was an intent to trace it to does not —
-and that half is the one that was broken. `2026-09-12-create-v2-run.md` records BUG-05:
-`REFACTORY_INTENT` never arrived, so the previous system's ledger held the literal
-`"Build something useful."` and its gate, having nothing to check against, reported a
-pass. `Ledger.seed` refuses that string rather than accepting it.
+**The fidelity gate now checks the chain as well as the precondition.**
+`fidelity(ledger)` reports a ledger that is missing, empty, or holding the
+placeholder — the half that was broken in BUG-05, where `REFACTORY_INTENT` never
+arrived, the ledger held the literal `"Build something useful."`, and the gate
+reported a pass; `Ledger.seed` refuses that string. Given the run's agent outputs
+(`fidelity(ledger, outputs)`, via `outputs_in`), it additionally requires that every
+agent node **cite** a ledger entry that exists, so a node that ignored the ledger is
+caught for free. What it still cannot do is judge whether the work *satisfies* the
+intent: that needs a model to read the work against the ledger. That half is the
+remaining gap, stated in §12.
 
 ## 12. Known gaps
 
 Recorded here rather than in a backlog, because each one is a place the system
 promises more than it delivers.
 
-- **The fidelity gate checks the precondition, not the output.** It reports a ledger
-  that is missing, empty or holding a placeholder. Whether the *work* is traceable to
-  the intent needs a model to read it, and that is not built. Cheap half: have agent
-  nodes cite the ledger entry they serve, so the chain is verifiable even though the
-  judgement is not.
+- **The fidelity gate cannot judge the work.** The precondition and the citation
+  chain are checked (`steering.fidelity`): a ledger that is missing, empty or holding
+  the placeholder is reported, and given the run's agent outputs a node that cited no
+  entry, or a dangling one, is caught. Whether the work **satisfies** the intent needs
+  a model to read the work against the ledger, and that is not built.
 - **The GUI is not audited here at all.** See `GUI-HANDOFF.md` at the repository root;
   #17 and #28 are open and deferred.
 - **Two suites are load-flaky.** `packages/boot/app-boot/tests/hmr-config.spec.ts`

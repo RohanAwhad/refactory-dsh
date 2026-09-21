@@ -54,11 +54,17 @@ DECLARATIONS = ".refactory/declarations.json"
 MEMORY_KEY = "memory"
 
 
-def node_declarations(state: dict[str, Any]) -> dict[str, dict[str, list[str]]]:
-    """Every node's declared reads, writes and facts, keyed by node id."""
+def node_declarations(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Every node's kind and declared reads, writes and facts, keyed by node id.
+
+    The kind travels because a reader of a finished run has the run directory and
+    not the state: the citation chain has to know which nodes made a model call, or
+    it would demand a citation from a deterministic op.
+    """
     graph = Graph.from_state(state.get("graph") or {})
     return {
         node_id: {
+            "kind": node.kind,
             "reads": sorted(node.reads),
             "writes": sorted(node.writes),
             "produces": sorted(node.produces),
@@ -228,10 +234,22 @@ def validate_ir(workflow: Workflow) -> list[str]:
 
 
 def write_mode_graph(
-    state: dict[str, Any], out_dir: Path, *, name: str, description: str = ""
+    state: dict[str, Any],
+    out_dir: Path,
+    *,
+    name: str,
+    description: str = "",
+    transform: Any = None,
 ) -> tuple[Path, Workflow]:
-    """Write ``<out_dir>/<name>.graph.json`` the way the science bundle loads it."""
+    """Write ``<out_dir>/<name>.graph.json`` the way the science bundle loads it.
+
+    ``transform`` is applied to the workflow before it is written, so a caller can
+    layer something over the IR without this function knowing what the layer is. The
+    default writes the mode unchanged.
+    """
     workflow = to_workflow(state, name=name, description=description)
+    if transform is not None:
+        workflow = transform(workflow)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"{name}{SUFFIX}"
