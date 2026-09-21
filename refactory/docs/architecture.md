@@ -377,6 +377,37 @@ caught for free. What it still cannot do is judge whether the work *satisfies* t
 intent: that needs a model to read the work against the ledger. That half is the
 remaining gap, stated in §12.
 
+### A run with a person at a gate — the command and what it showed
+
+`refactory_packages/review_pack` exists for this: `review` is
+`task_input -> draft -> check(fn) -> approve(user) -> publish|reject`. No earlier
+mode declared a gate a person answers, so the path had nothing to exercise it.
+
+```bash
+.venv/bin/python -m refactory_dsh.interactive review_pack/review \
+  --intent "draft a note about circle packing and let me approve it"
+```
+
+Run against this checkout, with the terminal answering `1` (proceed) at
+`[gate approve]`:
+
+- **The IR carries who answers.** `approve` lowers to `evaluator_type="user"` with
+  **no** `evaluator_command`; `check` lowers to `"fn"` **with** one.
+- **The runtime asks, the model cannot answer.** The spine refuses to route a `user`
+  gate without an answerer, and ignores the model's `verdict` argument: a headless
+  run of the same mode stops at the gate with
+  `the graph did not finish: gate approve is answered by a person and could not be
+  asked: no user-questions answerer accepted the request`. Before this, the CEO's
+  invented `proceed` was routed and the run reported "approved by the person".
+- **The answer is recorded and replayed.** The terminal answer is written into the
+  run's ledger (`gate: approve` / `verdict: proceed`), so `console steer --run
+  <workdir>` shows the intent and the answer, and a later run replays it: with the
+  verdict in the ledger and no terminal, the same command completed and wrote
+  `final.md` without asking.
+- **A mid-run note reaches the agents.** `console steer --run <workdir> --note …
+  --kind constraint` appends to the ledger, and `for_run` is what folds it into the
+  agent nodes of a run that starts afterwards.
+
 ## 12. Known gaps
 
 Recorded here rather than in a backlog, because each one is a place the system

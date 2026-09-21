@@ -51,6 +51,7 @@ The run prints one JSON object with `mode`, `task`, `budget`, `best_score`, `ses
 - The [workflow spine](../../workflow/workflow-spine/README.md) row: prefix `wf`, `executeCommands: true`, `maxIterations: 500`, a one-hour node-command timeout, and a `ceoDeny` list that leaves the CEO with the `wf_*` tools.
 - The worker-thread code runtime, so a node's Python op runs without blocking the agent loop.
 - The runner, which drives the single CEO agent to quiescence and reports the run.
+- The terminal answerer, which puts a `user` gate to the person at the terminal and writes their verdict into the run's intent ledger. Without a terminal (a piped or captured stdin) it answers nothing, so a headless run refuses a person's gate rather than inventing a verdict.
 
 -----
 
@@ -60,7 +61,7 @@ The run prints one JSON object with `mode`, `task`, `budget`, `best_score`, `ses
 <details>
 <summary>Implementation internals — click to expand</summary>
 
-The bundle is one patch document over `dsh-base` plus two runtime plugins. The patch restates the targeted rows' whole config — the persona templates and the tools mode — and inserts four rows: the worker-thread code runtime, the `graph-startup` provider, the workflow spine, and the `graph-runner` glue. `graph-startup` parses the command line, loads the mode's graph, resolves the work directory and the node-command environment, and publishes `graphStartup`; the spine row and the runner both inject that service, so one parse parameterizes both and the graph is inlined at boot. The runner boots a single CEO agent, sends the driving prompt as a user message, waits for quiescence, flushes the session, reads `best_score` from the mode's state file in the work directory, and exits. Deterministic nodes run in-process through the `shell` executor that `dsh-base` mounts, and each routes its gate by the last non-empty stdout line.
+The bundle is one patch document over `dsh-base` plus three runtime plugins. The patch restates the targeted rows' whole config — the persona templates and the tools mode — and inserts five rows: the worker-thread code runtime, the `graph-startup` provider, the workflow spine, the terminal answerer, and the `graph-runner` glue. `graph-startup` parses the command line, loads the mode's graph, resolves the work directory and the node-command environment, and publishes `graphStartup`; the spine row, the answerer, and the runner all inject that service, so one parse parameterizes them and the graph is inlined at boot. The runner boots a single CEO agent, sends the driving prompt as a user message, waits for quiescence, flushes the session, reads `best_score` from the mode's state file in the work directory, and exits. Deterministic nodes run in-process through the `shell` executor that `dsh-base` mounts, and each routes its gate by the last non-empty stdout line. A `user` gate is not run: the spine asks the answerer, which prompts the terminal and records the verdict through `python -m refactory_dsh.console steer --verdict`, or replays a verdict already in the ledger.
 
 ### Source map
 

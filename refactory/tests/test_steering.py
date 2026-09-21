@@ -380,6 +380,15 @@ def test_a_verdict_needs_a_gate_and_a_value(tmp_path):
         ledger.verdict("ask", "   ")
 
 
+def test_the_console_records_a_verdict_so_the_runtime_can_write_it(tmp_path):
+    """The graph profile's answerer records a person's choice through this verb."""
+    from refactory_dsh import console
+
+    payload = console._steer(tmp_path, seed="build a mode", verdicts=("ask=proceed",))
+    assert payload["verdicts"] == {"ask": "proceed"}
+    assert "verdict: proceed" in (tmp_path / "intent-ledger.md").read_text()
+
+
 def test_a_gate_a_person_answered_is_replayed_on_the_next_run(tmp_path):
     """A resumed run is the same run, not a second question.
 

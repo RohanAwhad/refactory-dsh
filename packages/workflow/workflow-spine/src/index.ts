@@ -16,13 +16,16 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import z from '@deepseek-ai/schemastery'
 import { scopeChainOf, scopeOf } from '@deepseek-ai/dsh-scope'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import type { UserQuestionService } from '@deepseek-ai/dsh-user-questions'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { Spine, validateGraph } from './spine.ts'
-import type { SpineNext } from './spine.ts'
+import type { NodeView, SpineNext } from './spine.ts'
 import { isDeterministic, runDeterministic } from './execute.ts'
 import type { CommandOutcome } from './execute.ts'
 import type { WorkflowGraph } from './types.ts'
@@ -123,6 +126,36 @@ export function apply(ctx: Context, config: Config): void {
   }
   const spine = new Spine(config.graph, { maxIterations })
 
+  // Who answers a `user` gate. Resolved here, once, so routing one is a runtime act
+  // rather than a claim the model makes: a composition without an answerer (a
+  // headless run) cannot route a person's gate at all, and a model cannot route one
+  // on their behalf.
+  const userQuestions: UserQuestionService | undefined = ctx.get('userQuestions')
+
+  /**
+   * The cursor's own status on disk, when a work directory is configured.
+   *
+   * The runner cannot see the spine, so a run that stopped at a gate it could not
+   * route used to look like a run that simply scored 0. The status file is what makes
+   * "the graph finished" and "the graph refused" different facts to a reader.
+   * @param status - `done`, `ready`, `failed`, or `refused`.
+   * @param detail - the error, for a failure or refusal.
+   */
+  function recordStatus(status: string, detail?: string): void {
+    if (config.workdir === undefined) return
+    try {
+      const dir = join(config.workdir, '.refactory')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(
+        join(dir, 'spine-status.json'),
+        JSON.stringify({ status, ...(detail === undefined ? {} : { error: detail }) }, null, 2),
+      )
+    } catch {
+      // The work directory belongs to the caller; a status write must never be the
+      // thing that stops the run it is describing.
+    }
+  }
+
   /**
    * Run every deterministic node the cursor is sitting on, so `wf_next` reports
    * only work a model must do. A node that fails leaves the cursor where it is
@@ -157,6 +190,7 @@ export function apply(ctx: Context, config: Config): void {
   async function report(): Promise<JsonValue> {
     const { next, failure } = await drain()
     if (failure !== undefined) {
+      recordStatus('failed', failure.error ?? 'command failed')
       return json({
         status: 'failed',
         node: failure.command,
@@ -166,7 +200,58 @@ export function apply(ctx: Context, config: Config): void {
         stderr: failure.stderr,
       })
     }
+    recordStatus(next.status === 'done' ? 'done' : 'ready')
     return json(next)
+  }
+
+  /**
+   * The verdict a person gives at a `user` gate, asked by the runtime.
+   *
+   * Asked here rather than left to the model's own `ask_user_question`, because a
+   * model that can route a gate without asking can invent the answer, and an invented
+   * verdict is indistinguishable from one a person gave. The gate's own outcome labels
+   * are the options, so the answer is always one the graph accepts.
+   * @param gate - the gate node id.
+   * @param view - the gate's view, whose `verdicts` are the offered options.
+   * @param exec - the tool execution, for the calling agent and its abort signal.
+   * @returns the verdict the person chose.
+   */
+  async function askPerson(
+    gate: string,
+    view: NodeView,
+    exec: { agent?: Agent; signal?: AbortSignal },
+  ): Promise<string> {
+    if (userQuestions === undefined) {
+      const message = `gate ${gate} is answered by a person and this composition mounts no user-questions `
+        + 'channel, so it cannot be routed here; run it where a person can be asked'
+      recordStatus('refused', message)
+      throw new Error(message)
+    }
+    const labels = view.verdicts ?? []
+    let answer
+    try {
+      answer = await userQuestions.ask({
+        questions: [{
+          id: gate,
+          header: 'Workflow gate',
+          question: view.gate_prompt || `Gate ${gate}`,
+          ...(labels.length === 0 ? {} : { options: labels.map(verdict => ({ label: verdict })) }),
+        }],
+        ...(exec.agent === undefined ? {} : { agent: exec.agent }),
+        ...(exec.signal === undefined ? {} : { signal: exec.signal }),
+      })
+    } catch (error: unknown) {
+      const detail = error instanceof Error ? error.message : String(error)
+      const message = `gate ${gate} is answered by a person and could not be asked: ${detail}`
+      recordStatus('refused', message)
+      throw new Error(message)
+    }
+    const chosen = answer.answers.find(entry => entry.id === gate)
+    const verdict = (chosen?.selected?.[0] ?? chosen?.custom ?? '').trim()
+    if (verdict === '') {
+      throw new Error(`gate ${gate} was answered without a verdict`)
+    }
+    return verdict
   }
 
   // The driving contract. The spine enforces "what is next" structurally (it
@@ -177,7 +262,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.systemPrompt.section({
     name: `tool:${toolPrefix}-spine`,
     order: ctx.systemPrompt.getSectionOrder('TOOL_WORKFLOW'),
-    text: `You are the CEO of a workflow run, and you are DRIVING A WORKFLOW GRAPH. Your coding tools (bash, write, edit, web, skill) are disabled — you cannot implement, edit files, or browse yourself. Advance only through the wf tools. ${toolPrefix}_next is the ONLY way to learn what is due now: call it first, and call it again after every ${toolPrefix}_done / ${toolPrefix}_verdict / ${toolPrefix}_edit / ${toolPrefix}_expand — those tools only confirm the mutation, they do not tell you what is next. For an AgentNode or LLMNode, spawn a subagent (the subagent tool) whose task is the node's prompt_template, and explicitly tell the subagent to read the node's reads files and write its result to the node's writes file (the filename in the node's writes field, e.g. candidate.py) — wait for it, then report the node with ${toolPrefix}_done. For a FnNode, follow its content and report ${toolPrefix}_done. Route a gate with ${toolPrefix}_verdict, answering with one of the verdicts the gate view lists (proceed/reloop/halt, or the gate's own named outcomes) — for a user gate, first present the gate to the user with ask_user_question and route the verdict they give. Fan out a director's plan with ${toolPrefix}_expand, and apply user steering ("skip the tests") with ${toolPrefix}_edit. Never skip, reorder, or bypass a node — the runner refuses to advance until you report the current node complete.`,
+    text: `You are the CEO of a workflow run, and you are DRIVING A WORKFLOW GRAPH. Your coding tools (bash, write, edit, web, skill) are disabled — you cannot implement, edit files, or browse yourself. Advance only through the wf tools. ${toolPrefix}_next is the ONLY way to learn what is due now: call it first, and call it again after every ${toolPrefix}_done / ${toolPrefix}_verdict / ${toolPrefix}_edit / ${toolPrefix}_expand — those tools only confirm the mutation, they do not tell you what is next. For an AgentNode or LLMNode, spawn a subagent (the subagent tool) whose task is the node's prompt_template, and explicitly tell the subagent to read the node's reads files and write its result to the node's writes file (the filename in the node's writes field, e.g. candidate.py) — wait for it, then report the node with ${toolPrefix}_done. For a FnNode, follow its content and report ${toolPrefix}_done. Route a gate with ${toolPrefix}_verdict, answering with one of the verdicts the gate view lists (proceed/reloop/halt, or the gate's own named outcomes). For a user gate the runtime asks the person itself and routes the answer they give: call ${toolPrefix}_verdict with the gate id and never answer for them. Fan out a director's plan with ${toolPrefix}_expand, and apply user steering ("skip the tests") with ${toolPrefix}_edit. Never skip, reorder, or bypass a node — the runner refuses to advance until you report the current node complete.`,
   })
 
   ctx.tools.register(defineTool({
@@ -205,16 +290,22 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.tools.register(defineTool({
     name: `${toolPrefix}_verdict`,
-    description: 'Route a gate node. Pass one of the `verdicts` the gate view from `wf_next` lists: `proceed` advances along the proceed edge, `reloop` rewinds to the gate\'s reloop target with `feedback` (bounded by the iteration cap), `halt` stops or follows the halt edge, and any other label is that gate\'s own forward outcome. Returns only a confirmation — call `wf_next` to learn the next node.',
+    description: 'Route a gate node. Pass one of the `verdicts` the gate view from `wf_next` lists: `proceed` advances along the proceed edge, `reloop` rewinds to the gate\'s reloop target with `feedback` (bounded by the iteration cap), `halt` stops or follows the halt edge, and any other label is that gate\'s own forward outcome. A `user` gate is not yours to decide: the runtime asks the person and routes the answer they give, and refuses when nobody can be asked. Returns only a confirmation — call `wf_next` to learn the next node.',
     parameters: {
       gate: { type: 'string', required: true, description: 'The gate node id.' },
-      verdict: { type: 'string', required: true, description: 'The verdict: one of the gate\'s listed `verdicts`.' },
+      verdict: { type: 'string', required: true, description: 'The verdict: one of the gate\'s listed `verdicts`. Ignored for a `user` gate, whose verdict comes from the person.' },
       feedback: { type: 'string', description: 'Feedback to attach to the reloop target (reloop only).' },
     },
     output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
-    execute(args) {
+    async execute(args, exec) {
+      const view = spine.view(args.gate)
+      if (view.evaluator_type === 'user') {
+        const verdict = await askPerson(args.gate, view, exec)
+        spine.verdict(args.gate, verdict, args.feedback ?? '')
+        return json({ status: 'routed', gate: args.gate, verdict, answered_by: 'user' })
+      }
       spine.verdict(args.gate, args.verdict, args.feedback ?? '')
-      return sync(json({ status: 'routed', gate: args.gate, verdict: args.verdict }))
+      return json({ status: 'routed', gate: args.gate, verdict: args.verdict })
     },
   }))
 

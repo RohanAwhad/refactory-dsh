@@ -39,7 +39,7 @@ kind: "package-reference"
 |------|---------|
 | `wf_next` | 当前到期的节点（agent 任务 / 一次性 LLM / 用户 gate / fork），或 `done`。确定性节点会替你运行，且从不出现。 |
 | `wf_done(node)` | 将一个非 gate 节点标记为完成并前进。 |
-| `wf_verdict(gate, verdict, feedback?)` | 依据该节点视图列出的某个 `verdicts` 来路由一个 gate；reloop 受迭代上限约束。 |
+| `wf_verdict(gate, verdict, feedback?)` | 依据该节点视图列出的某个 `verdicts` 来路由一个 gate；reloop 受迭代上限约束。`user` gate 依据运行时从人那里取得的答复来路由，而不是依据该参数。 |
 | `wf_edit(node, skip\|unskip)` | 热移除 / 恢复一个节点（引导）。 |
 | `wf_expand(director, entries)` | 依据 director 的计划热插入它的 N 个子 agent。 |
 | `wf_state` | 完整的实时状态（cursor、completed、skipped、verdicts、log）。 |
@@ -84,6 +84,8 @@ agent 遵循的循环：`wf_next` → 只做那个节点（为 `AgentNode` 派�
 
 节点命令是通用的——它对调用它的图一无所知——因此插件把它自己的声明以 JSON 形式通过 `DSH_WORKFLOW_NODE` 交给它：`{ id, type, command, reads, writes }`。若命令以非零码退出、超时、被中止，或（对 gate 而言）没有打印任何 verdict，则该节点**失败**：`wf_next` 返回 `{ status: 'failed', node, exit_code, error, stdout, stderr }`，且 cursor 不移动，因为一个没有发生的步骤绝不能看起来像发生过。
 
+`user` gate 既不运行、也不由模型路由。`wf_verdict` 以该 gate 自身的 verdict 标签作为选项询问已组合的 `user-questions` 应答方，并路由所得答复；因此若组合中没有应答方，就会拒绝该 gate 并指名它，而不是凭空编造一个 verdict。当配置了 `workdir` 时，插件把 `{ status: done | ready | failed | refused }` 记录到 `<workdir>/.refactory/spine-status.json`，使读者能分辨一次运行是已完成还是停在某个 gate。
+
 -----
 
 <a id="node-dsh-mapping"></a>
@@ -109,7 +111,7 @@ agent 遵循的循环：`wf_next` → 只做那个节点（为 `AgentNode` 派�
 
 #### 模型看到什么
 
-插件为每个动词注册一个工具——`wf_next`、`wf_done`、`wf_verdict`、`wf_edit`、`wf_expand` 与 `wf_state`——各带一份描述与参数 schema。`wf_next` 返回当前到期节点的节点视图，携带该节点的 `prompt_template`、`reads` 与 `writes`，对 gate 还携带该 gate 接受的 `verdicts`。一个已注册的 prompt 段落（first-party 顺序 `TOOL_WORKFLOW`）告诉 CEO：`wf_*` 工具是唯一的前进方式；而 `ceoDeny` 守卫在 `agent/created` 时把编码与外部工具从 CEO 自己的 scope 中移除，因此 CEO 看到的是 `wf_*` 工具、委派与只读工具，而它派生的子 agent 保留完整工具集。
+插件为每个动词注册一个工具——`wf_next`、`wf_done`、`wf_verdict`、`wf_edit`、`wf_expand` 与 `wf_state`——各带一份描述与参数 schema。`wf_next` 返回当前到期节点的节点视图，携带该节点的 `prompt_template`、`reads` 与 `writes`，对 gate 还携带该 gate 接受的 `verdicts`。一个已注册的 prompt 段落（first-party 顺序 `TOOL_WORKFLOW`）告诉 CEO：`wf_*` 工具是唯一的前进方式；而 `ceoDeny` 守卫在 `agent/created` 时把编码与外部工具从 CEO 自己的 scope 中移除，因此 CEO 看到的是 `wf_*` 工具、委派与只读工具，而它派生的子 agent 保留完整工具集。`user` gate 由运行时回答，而不是由模型回答：当 `wf_verdict` 遇到这样的 gate 时，插件以该 gate 自身的 verdict 标签作为选项询问已组合的 `user-questions` 应答方，并路由人所给出的答复，同时忽略模型的 `verdict` 参数；若组合中没有应答方——即无头运行——则以指名该 gate 的消息拒绝它。
 
 #### Token 影响
 

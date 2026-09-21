@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import UserQuestionService from '@deepseek-ai/dsh-user-questions'
 import * as workflowSpine from '../src/index.ts'
 import type { WorkflowGraph } from '../src/types.ts'
 
@@ -25,6 +26,10 @@ async function setup(): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
+  await ctx.plugin(UserQuestionService)
+  ctx.on('user-questions/request', request => Promise.resolve({
+    answers: request.questions.map(question => ({ id: question.id, selected: ['proceed'] })),
+  }))
   await ctx.plugin(workflowSpine, { graph, toolPrefix: 'wf', maxIterations: 3 })
   return ctx
 }
@@ -49,6 +54,29 @@ describe('workflow-spine real composition', () => {
     expect(await run(ctx, 'wf_next', {})).toMatchObject({ status: 'ready', nodes: [{ id: 'b' }] })
     await run(ctx, 'wf_done', { node: 'b' })
     expect(await run(ctx, 'wf_next', {})).toMatchObject({ status: 'done' })
+  })
+
+  it('refuses to route a user gate when the composition can ask nobody', async () => {
+    // The defect this holds: a headless run used to route a `user` gate with whatever
+    // verdict the model passed, which is indistinguishable from one a person gave.
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(workflowSpine, { graph, toolPrefix: 'wf', maxIterations: 3 })
+    await run(ctx, 'wf_done', { node: 'a' })
+    await expect(run(ctx, 'wf_verdict', { gate: 'gate', verdict: 'proceed' }))
+      .rejects.toThrow(/gate gate is answered by a person/)
+  })
+
+  it('refuses to route a user gate when no answerer accepts the request', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(UserQuestionService)
+    await ctx.plugin(workflowSpine, { graph, toolPrefix: 'wf', maxIterations: 3 })
+    await run(ctx, 'wf_done', { node: 'a' })
+    await expect(run(ctx, 'wf_verdict', { gate: 'gate', verdict: 'proceed' }))
+      .rejects.toThrow(/gate gate is answered by a person and could not be asked/)
   })
 })
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import UserQuestionService from '@deepseek-ai/dsh-user-questions'
 import * as workflowSpine from '../src/index.ts'
 import type { WorkflowGraph } from '../src/types.ts'
 
@@ -55,6 +56,17 @@ describe('interactive design-v2 loop', () => {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
+    await ctx.plugin(UserQuestionService)
+    // The person at the `user` gate. The CEO's own verdict argument is deliberately
+    // the opposite of each answer, so the test fails if the model's word routes the
+    // gate instead of the person's.
+    const personSays: string[] = []
+    ctx.on('user-questions/request', request => Promise.resolve({
+      answers: request.questions.map(question => ({
+        id: question.id,
+        selected: [personSays.shift() ?? 'proceed'],
+      })),
+    }))
     await ctx.plugin(workflowSpine, { graph, toolPrefix: 'wf', maxIterations: 3 })
 
     // init -> research director
@@ -70,19 +82,22 @@ describe('interactive design-v2 loop', () => {
     expect(ids(await run(ctx, 'wf_next', {}))).toEqual(['synthesize'])
     await run(ctx, 'wf_done', { node: 'synthesize' })
 
-    // USER gate: reloop with feedback (steering "add a researcher")
+    // USER gate: the person reloops with feedback, though the CEO asked to proceed.
     expect(ids(await run(ctx, 'wf_next', {}))).toEqual(['gate_plan'])
-    await run(ctx, 'wf_verdict', { gate: 'gate_plan', verdict: 'reloop', feedback: 'also research security' })
+    personSays.push('reloop')
+    await run(ctx, 'wf_verdict', { gate: 'gate_plan', verdict: 'proceed', feedback: 'also research security' })
     expect(ids(await run(ctx, 'wf_next', {}))).toEqual(['research_director'])
     const state = await run(ctx, 'wf_state', {})
     expect((state as { feedback: Record<string, string> }).feedback.research_director).toBe('also research security')
 
-    // re-expand and reach the gate again
+    // re-expand and reach the gate again: now the person proceeds, though the CEO
+    // asked to reloop.
     await run(ctx, 'wf_expand', { director: 'research_director', entries: [{ slug: 'security', prompt: 'p3' }] })
     await run(ctx, 'wf_done', { node: 'research_director__security' })
     await run(ctx, 'wf_done', { node: 'synthesize' })
     expect(ids(await run(ctx, 'wf_next', {}))).toEqual(['gate_plan'])
-    await run(ctx, 'wf_verdict', { gate: 'gate_plan', verdict: 'proceed' })
+    personSays.push('proceed')
+    await run(ctx, 'wf_verdict', { gate: 'gate_plan', verdict: 'reloop' })
 
     // build -> agent gate -> proceed to fork
     expect(ids(await run(ctx, 'wf_next', {}))).toEqual(['builder'])

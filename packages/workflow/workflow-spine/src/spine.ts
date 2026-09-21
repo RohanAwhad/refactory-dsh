@@ -316,6 +316,20 @@ export class Spine {
     return view
   }
 
+  /**
+   * One node's view, due or not.
+   *
+   * The plugin needs this to decide who answers a gate: an `fn` gate carries a
+   * command and is run for the CEO, while a `user` gate names no command and must be
+   * put to a person. Deciding that from the view is what keeps the runtime, rather
+   * than the model's word, the thing that answers it.
+   * @param nodeId - the node to describe.
+   * @returns the node view.
+   */
+  view(nodeId: string): NodeView {
+    return this.describe(nodeId)
+  }
+
   /** The node(s) due now, or `done`. */
   next(): SpineNext {
     if (this.cursor.length === 0) {

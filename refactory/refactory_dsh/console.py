@@ -350,7 +350,12 @@ def candidate(run_root: Path, candidate_id: str) -> dict[str, Any]:
 
 
 def _steer(
-    run_root: Path, *, seed: str | None = None, note: str | None = None, kind: str = "info"
+    run_root: Path,
+    *,
+    seed: str | None = None,
+    note: str | None = None,
+    kind: str = "info",
+    verdicts: tuple[str, ...] | list[str] = (),
 ) -> dict[str, Any]:
     """Read the ledger, and optionally add to it.
 
@@ -366,6 +371,9 @@ def _steer(
         Ledger.seed(run_root, seed)
     if note is not None:
         ledger.note(kind, note)
+    for pair in verdicts:
+        gate, _, value = str(pair).partition("=")
+        ledger.verdict(gate, value)
     # The chain is checkable only when the run left agent outputs beside the ledger
     # (a single mode run does; an outer-loop run keeps its candidates in subdirs).
     outputs = outputs_in(run_root) if ledger.exists() else {}
@@ -552,6 +560,11 @@ def _parser() -> argparse.ArgumentParser:
         "--kind", default="info", choices=["info", "correction", "constraint"],
         help="a constraint must be respected; the others are context",
     )
+    steer.add_argument(
+        "--verdict", action="append", default=[],
+        help="record a gate verdict as <gate>=<value> (repeatable); the runtime "
+             "uses this so a person's answer is durable and a resume replays it",
+    )
 
     champion = add(
         sub.add_parser("best", help="the winner, with the state that scored it")
@@ -609,6 +622,7 @@ def main(argv: list[str] | None = None) -> int:
             payload = _steer(
                 _root_for(args, project),
                 seed=args.seed, note=args.note, kind=args.kind,
+                verdicts=args.verdict,
             )
         elif args.verb == "best":
             payload = _best_payload(_root_for(args, project), keep_state=args.state)

@@ -39,7 +39,7 @@ The headless `workflow` tool runs a script top-to-bottom and returns. It cannot 
 |------|---------|
 | `wf_next` | The node(s) due now (agent task / one-shot LLM / user gate / fork), or `done`. Deterministic nodes are run for you and never appear. |
 | `wf_done(node)` | Mark a non-gate node complete and advance. |
-| `wf_verdict(gate, verdict, feedback?)` | Route a gate by one of the `verdicts` its node view lists; reloop is iteration-capped. |
+| `wf_verdict(gate, verdict, feedback?)` | Route a gate by one of the `verdicts` its node view lists; reloop is iteration-capped. A `user` gate is routed on the answer the runtime gets from a person, not on the argument. |
 | `wf_edit(node, skip\|unskip)` | Hot-remove / restore a node (steering). |
 | `wf_expand(director, entries)` | Hot-plug a director's N child agents from its plan. |
 | `wf_state` | Full live state (cursor, completed, skipped, verdicts, log). |
@@ -84,6 +84,8 @@ With `executeCommands: true` and a `shell` executor mounted, the plugin runs a n
 
 A node command is generic — it knows nothing about the graph that invoked it — so the plugin hands it its own declaration as JSON under `DSH_WORKFLOW_NODE`: `{ id, type, command, reads, writes }`. A command that exits nonzero, times out, is aborted, or (for a gate) prints no verdict **fails the node**: `wf_next` returns `{ status: 'failed', node, exit_code, error, stdout, stderr }` and the cursor does not move, because a step that did not happen must not look like one that did.
 
+A `user` gate is neither run nor routed by the model. `wf_verdict` asks the composed `user-questions` answerer with the gate's own verdict labels as options and routes the answer, so a composition without an answerer refuses the gate with a message naming it instead of inventing a verdict. The plugin records `{ status: done | ready | failed | refused }` in `<workdir>/.refactory/spine-status.json` when `workdir` is configured, so a reader can tell a run that finished from one that stopped at a gate.
+
 -----
 
 <a id="node-dsh-mapping"></a>
@@ -109,7 +111,7 @@ A node command is generic — it knows nothing about the graph that invoked it �
 
 #### What the model sees
 
-The plugin registers one tool per verb — `wf_next`, `wf_done`, `wf_verdict`, `wf_edit`, `wf_expand`, and `wf_state` — each with a description and a parameter schema. `wf_next` returns the node view of the node due now, carrying that node's `prompt_template`, `reads`, and `writes`, and, for a gate, the `verdicts` the gate accepts. A registered prompt section (first-party order `TOOL_WORKFLOW`) tells the CEO that the `wf_*` tools are the only way to advance, and the `ceoDeny` guard removes the coding and external tools from the CEO's own scope at `agent/created`, so the CEO sees the `wf_*` tools, delegation, and read-only tools while the subagents it spawns keep the full set.
+The plugin registers one tool per verb — `wf_next`, `wf_done`, `wf_verdict`, `wf_edit`, `wf_expand`, and `wf_state` — each with a description and a parameter schema. `wf_next` returns the node view of the node due now, carrying that node's `prompt_template`, `reads`, and `writes`, and, for a gate, the `verdicts` the gate accepts. A registered prompt section (first-party order `TOOL_WORKFLOW`) tells the CEO that the `wf_*` tools are the only way to advance, and the `ceoDeny` guard removes the coding and external tools from the CEO's own scope at `agent/created`, so the CEO sees the `wf_*` tools, delegation, and read-only tools while the subagents it spawns keep the full set. A `user` gate is answered by the runtime, not by the model: when `wf_verdict` reaches one, the plugin asks the composed `user-questions` answerer with the gate's own verdict labels as options and routes the answer the person gave, ignoring the model's `verdict` argument; a composition with no answerer — a headless run — refuses the gate with a message naming it.
 
 #### Token effect
 

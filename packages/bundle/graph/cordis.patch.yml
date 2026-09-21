@@ -52,6 +52,10 @@
           - workflow
           - read_image
 
+    - id: graph-answerer
+      name: '@deepseek-ai/dsh-graph/src/answerer'
+      inject: [graphStartup]
+
     - id: graph-runner
       name: '@deepseek-ai/dsh-graph/src/index'
       inject: [graphStartup]

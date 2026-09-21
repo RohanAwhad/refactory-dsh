@@ -75,6 +75,8 @@ export interface GraphStartupValues {
   provider: string | undefined
   /** The CEO model id override, when the user named one. */
   model: string | undefined
+  /** The directory of the Python that has refactory_dsh installed. */
+  pythonBin: string
 }
 
 function graphCommand(): Command {
@@ -152,6 +154,7 @@ export function apply(ctx: Context): void {
       budget,
       provider: options.provider === undefined ? undefined : String(options.provider),
       model: options.model === undefined ? undefined : String(options.model),
+      pythonBin,
     } satisfies GraphStartupValues)
   })
   parseCmdline(ctx, program)

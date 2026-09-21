@@ -51,6 +51,7 @@ dsh --profile graph run --mode gepa --task circle_packing --budget 20
 - [workflow spine](../../workflow/workflow-spine/README.zh.md) 行：前缀 `wf`、`executeCommands: true`、`maxIterations: 500`、一小时的节点命令超时，以及让 CEO 只保留 `wf_*` 工具的 `ceoDeny` 列表。
 - worker-thread code runtime，使节点的 Python op 运行时不会阻塞 agent 循环。
 - runner：驱动单个 CEO agent 直至静止，并报告本次运行。
+- 终端应答方（terminal answerer）：在终端上把一个 `user` gate 呈现给人，并把其 verdict 写入本次运行的意图 ledger。没有终端时（stdin 被管道或捕获），它不作任何回答，因此无头运行会拒绝属于人的 gate，而不是编造一个 verdict。
 
 -----
 
@@ -60,7 +61,7 @@ dsh --profile graph run --mode gepa --task circle_packing --budget 20
 <details>
 <summary>实现内部细节——点击展开</summary>
 
-本 bundle 是一份叠加在 `dsh-base` 之上的 patch 文档，外加两个运行时插件。patch 会重述被定位行的整份 config——persona 模板与 tools 模式——并插入四行：worker-thread code runtime、`graph-startup` 提供方、workflow spine，以及 `graph-runner` glue。`graph-startup` 解析命令行、加载模式的图、解析工作目录与节点命令环境，并发布 `graphStartup`；spine 行与 runner 都注入该服务，因此一次解析同时参数化两者，且图在启动时被内联。runner 启动单个 CEO agent，把驱动提示作为用户消息发送，等待其静止，刷新 session，从工作目录中读取模式的 state 文件里的 `best_score`，然后退出。确定性节点经由 `dsh-base` 挂载的 `shell` 执行器在进程内运行，并各自按最后一行非空 stdout 路由 gate。
+本 bundle 是一份叠加在 `dsh-base` 之上的 patch 文档，外加三个运行时插件。patch 会重述被定位行的整份 config——persona 模板与 tools 模式——并插入五行：worker-thread code runtime、`graph-startup` 提供方、workflow spine、终端应答方，以及 `graph-runner` glue。`graph-startup` 解析命令行、加载模式的图、解析工作目录与节点命令环境，并发布 `graphStartup`；spine 行、应答方与 runner 都注入该服务，因此一次解析同时参数化它们，且图在启动时被内联。runner 启动单个 CEO agent，把驱动提示作为用户消息发送，等待其静止，刷新 session，从工作目录中读取模式的 state 文件里的 `best_score`，然后退出。确定性节点经由 `dsh-base` 挂载的 `shell` 执行器在进程内运行，并各自按最后一行非空 stdout 路由 gate。`user` gate 不会被运行：spine 询问应答方，后者在终端提示并通过 `python -m refactory_dsh.console steer --verdict` 记录 verdict，或重放 ledger 中已有的 verdict。
 
 ### 源码映射
 

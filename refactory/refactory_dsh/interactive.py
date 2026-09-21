@@ -1,0 +1,141 @@
+"""Run one mode with a person in the loop, on the runtime that ships.
+
+Level 3. The outer loop *searches* a mode (level 2); this is a person **using** one.
+The mode's graph is lowered with the run's intent ledger folded into every agent
+node, the CEO drives it on DSH, and a `user` gate is put to the person at the
+terminal by the runtime — not by the model, which cannot invent an answer it cannot
+give.
+
+    python -m refactory_dsh.interactive review_pack/review \
+        --intent "draft a note about circle packing and let me approve it"
+
+The answer is written into the run's ledger, so `console steer --run <workdir>`
+shows it and a later run replays it instead of asking again. Nothing here changes
+the mode: the graph is the author's, plus what the person said.
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+from refactory_dsh import lowering, registry, steering
+from refactory_dsh.dsh_runtime import TASK
+from refactory_dsh.paths import REPO_ROOT, node_bin, venv_bin
+
+#: Where an interactive run lives when no work directory is named.
+DEFAULT_ROOT = Path(".factory/interactive")
+
+#: Wall-clock ceiling is the person's, so there is none: the run waits for them.
+
+
+def prepare(
+    identifier: str,
+    *,
+    workdir: Path,
+    intent: str = "",
+    project: Path | None = None,
+) -> tuple[str, Path]:
+    """Lower the mode for a person to use, and leave the run ready to start.
+
+    Returns the graph name the profile loads and the directory it lives in. The
+    ledger is seeded **before** the lowering, because the lowering is what folds it
+    into the agent prompts; seeding afterwards would produce a run nobody steered.
+    """
+    project = Path(project or ".")
+    if "/" not in identifier:
+        raise ValueError(f"{identifier!r} is not a <package>/<mode> identifier")
+    package, mode_name = identifier.split("/", 1)
+    Mode = registry.resolve(project, identifier)[1]
+    mode = Mode()
+    state = mode.state_dict()
+
+    workdir = Path(workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+    if intent.strip() and not steering.Ledger(workdir).exists():
+        steering.Ledger.seed(workdir, intent)
+
+    graphs = workdir / "graphs"
+    name = f"{package}-{mode_name}"
+    lowering.write_mode_graph(
+        state,
+        graphs,
+        name=name,
+        transform=lambda workflow: steering.for_run(workflow, workdir),
+    )
+    lowering.write_declarations(state, workdir)
+    return name, graphs
+
+
+def command(identifier: str, *, workdir: Path, graphs: Path, name: str) -> list[str]:
+    """The DSH run whose stdin is the person's terminal."""
+    _, mode_name = identifier.split("/", 1)
+    return [
+        str(node_bin()), "--import", "tsx/esm", "apps/cli/src/bin.ts",
+        "--profile", "graph", "run",
+        "--mode", name,
+        "--task", TASK,
+        "--budget", "1",
+        "--graphs", str(graphs),
+        "--workdir", str(workdir),
+        "--python-bin", str(venv_bin()),
+        "--knobs", json.dumps(lowering.knob_environment(
+            registry.resolve(Path("."), identifier)[1]().state_dict()
+        )[lowering.KNOBS_ENV]),
+    ]
+
+
+def run(
+    identifier: str,
+    *,
+    workdir: Path | None = None,
+    intent: str = "",
+    project: Path | None = None,
+    timeout_s: int | None = None,
+) -> int:
+    """Lower, then run the mode under the CEO with the terminal attached."""
+    if workdir is None:
+        workdir = DEFAULT_ROOT / identifier.replace("/", "-")
+    name, graphs = prepare(identifier, workdir=workdir, intent=intent, project=project)
+    argv = command(identifier, workdir=workdir, graphs=graphs, name=name)
+    # stdin is inherited on purpose: the graph profile's answerer reads the person's
+    # answer from the terminal, and a captured stdin is not a person.
+    return subprocess.call(argv, cwd=str(REPO_ROOT), timeout=timeout_s)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """``python -m refactory_dsh.interactive <package>/<mode> --intent <text>``."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="python -m refactory_dsh.interactive",
+        description="Run one mode with a person in the loop, on DSH.",
+    )
+    parser.add_argument("mode", help="the mode to run, as <package>/<name>")
+    parser.add_argument(
+        "--intent", default="",
+        help="what the run is for, in the person's words; seeds the ledger the agent "
+             "nodes read and a resumed run is judged against",
+    )
+    parser.add_argument("--workdir", default="", help="the run directory")
+    parser.add_argument("--timeout", type=int, default=0, help="seconds; 0 waits for the person")
+    args = parser.parse_args(argv)
+
+    workdir = Path(args.workdir) if args.workdir else None
+    try:
+        code = run(
+            args.mode,
+            workdir=workdir,
+            intent=args.intent,
+            timeout_s=args.timeout or None,
+        )
+    except Exception as exc:  # a failed run must be a message, not a traceback
+        print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        return 2
+    return code
+
+
+if __name__ == "__main__":  # pragma: no cover - the entry point
+    raise SystemExit(main())

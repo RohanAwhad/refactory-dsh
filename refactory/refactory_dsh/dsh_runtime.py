@@ -159,7 +159,13 @@ def _last_json_object(text: str) -> dict[str, Any]:
 def evaluate_on_dsh(
     mode: Any, state: dict[str, Any], workdir: Path, *, timeout_s: int = DEFAULT_TIMEOUT_S
 ) -> RunResult:
-    """One forward pass on DSH, scored by the mode's own `score()`."""
+    """One forward pass on DSH, scored by the mode's own `score()`.
+
+    A run that stopped before the graph finished is a **failure naming why**, not a
+    score of 0. The distinction matters most at a `user` gate: the runtime refuses to
+    route one nobody answered, and without this the refusal would look like a run that
+    merely scored badly.
+    """
     name = f"{type(mode).__module__.split('.')[-2]}-{mode.name}"
     run = run_on_dsh(state, workdir, name=name, timeout_s=timeout_s)
     if run.returncode != 0 or not run.facts:
@@ -171,6 +177,16 @@ def evaluate_on_dsh(
             error=f"dsh run failed (exit {run.returncode}): {detail[:300]}",
             workdir=run.workdir,
         )
+    status = _spine_status(run.workdir)
+    if status.get("status") not in ("", "done"):
+        detail = str(status.get("error") or status.get("status"))
+        return RunResult(
+            facts=run.facts,
+            duration_s=run.duration_s,
+            exit_ok=False,
+            error=f"the graph did not finish: {detail[:300]}",
+            workdir=run.workdir,
+        )
     result = RunResult(facts=run.facts, duration_s=run.duration_s, workdir=run.workdir)
     try:
         result.score = float(mode.score(result))
@@ -178,3 +194,15 @@ def evaluate_on_dsh(
         result.exit_ok = False
         result.error = f"score() raised {type(exc).__name__}: {exc}"
     return result
+
+
+def _spine_status(workdir: Path) -> dict[str, Any]:
+    """What the spine recorded about where the graph got to, if it recorded anything."""
+    path = Path(workdir) / ".refactory" / "spine-status.json"
+    if not path.exists():
+        return {}
+    try:
+        loaded = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
