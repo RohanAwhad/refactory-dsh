@@ -425,6 +425,17 @@
       "commit": "809e4adb0f",
       "evidence": "Option A taken: install.sh creates the profile once per machine, idempotently, and leaves an existing profile alone; REFACTORY_SKIP_DSH_PROFILE=1 skips it. One shared helper refactory_dsh/dsh_profile.py answers 'is it present, and what fixes it' and is used by install.sh, by run_on_dsh (which refuses before spawning with the reason and the command, returncode 2), and by the tests. Six tests: absent vs present-without-bundle vs ready, the add command naming the checkout's bundle path, blank DSH_HOME falling back to ~/.dsh, and the pre-spawn refusal proving no subprocess runs. Verified by hand: is_ready() True here, and DSH_HOME=/tmp/nohome gives the actionable message. architecture.md section 12 lost the gap; handoff section records the option. Reproduce: pytest refactory/tests/test_dsh_profile.py -q",
       "observed": "6 passed in 0.10s"
+    },
+    {
+      "id": "toolchain-gate",
+      "issue": 44,
+      "title": "A test that did not run is invisible: Lean and mathlib skips",
+      "why": "The checker tests skip when lean or mathlib is absent, the suite goes green, and the green says nothing about the path they cover; two real defects hid there.",
+      "verify": "pytest refactory/tests/test_toolchain_gate.py -q",
+      "status": "done",
+      "commit": "7364421db1",
+      "evidence": "Every test gated by a real tool now carries a pytest 'toolchain' marker (4 lean, 3 sympy, 1 mathlib), and conftest records each marked test's outcome. One command, `pytest refactory/tests -q --toolchain-gate`, reports which tools were verified and which tests did not run with the reason, and exits 1 when any did not: on this machine it prints 'verified against real tools: lean: 4, sympy: 3' and fails naming the mathlib test and its skip reason (GATE_EXIT=1). A deselected toolchain test counts as not run (pytest_deselected), proven with -k. The pass branch was proven with a temporary probe (exit 0, 'verified against real tools: probe: 1'). test_toolchain_gate.py parses the sources and refuses a needs_* test without the marker; removing the mathlib marker makes it fail and restoring it makes it pass. CI story recorded in the handoff: no per-PR job installs the tools; verified on developer machines. Reproduce: pytest refactory/tests/test_toolchain_gate.py -q",
+      "observed": "4 passed in 0.11s"
     }
   ],
   "verification": {
