@@ -43,6 +43,12 @@ def test_the_ir_says_who_answers_each_gate():
     assert workflow.nodes["check"].evaluator_command
 
 
+def test_the_author_note_is_the_prompt_the_person_is_shown():
+    """A person asked to choose between labels needs the author's words, not `Gate approve`."""
+    workflow = lowering.to_workflow(_mode().state_dict(), name="review")
+    assert workflow.nodes["approve"].gate_prompt == "the person approves the draft, or halts the run"
+
+
 def test_a_headless_run_refuses_at_the_persons_gate(tmp_path):
     """An invented verdict is indistinguishable from one a person gave."""
     result = _mode().evaluate(tmp_path / "run")

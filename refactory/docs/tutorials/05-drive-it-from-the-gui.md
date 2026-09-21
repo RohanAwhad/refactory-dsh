@@ -23,12 +23,20 @@ One action per console verb, so the tool and a shell are the same surface:
 | action | needs | what it returns |
 |---|---|---|
 | `modes` | — | every mode the checkout can start, with its parameters |
+| `strategies` | — | the named outer loops, optimizers and evaluators, each with what it is |
 | `runs` | — | every run under the run root, newest first |
 | `start` | `mode`, `settings` | the run id, root, and pid |
 | `status` | `run`, `after` | the state, counters, best score, and new events |
 | `artifacts` | `run`, `contents` | what the run left, optionally with contents |
 | `leaderboard` | `run` | the candidates by score, each with its parent diff |
 | `candidate` | `run`, `candidate` | one candidate and what it changed |
+| `steer` | `run`, and `intent`/`note`/`kind` | the intent ledger, and any problems with it |
+| `best` | `run` | the winner, and with `state` its whole state dict |
+| `adopt` | `run`, `as` | the new package the winner was written to |
+| `registry` | `packages`, `target`, `args` | the registry's own JSON for `list`, `show`, `verify`, `smoke`, `add`, `import`, `remove`, `enable`, `disable` |
+| `create` | `name`, `brief` | the package it produced, and the design review it wrote |
+| `edit` | `mode`, `name`, `brief` | the revision, its before/after scores, and whether it regressed |
+| `design` | `name`, `brief`, `check` | the artifact, and whether its check command passed |
 | `stop` | `run` | whether the run was asked to stop |
 
 In the conversation, ask for it directly:
@@ -58,6 +66,47 @@ would be a run nobody could start and walk away from.
 re-reading the whole run. While the run is going the card shows the state, the
 best score so far, and the progress tail — one line per candidate evaluated, which
 is why it moves within an epoch rather than only between them.
+
+## Author, manage and steer
+
+The same tool reaches the rest of the system, so none of it needs a terminal.
+
+Authoring is model-driven and slow (minutes):
+
+> Use the refactory tool with action `create`, name `gui_made`, brief "count up to a
+> target in deterministic steps and score the count reached".
+
+It returns the package it wrote **and the design review** — which approaches it
+considered, which it chose, and what the review refused — so the choice is visible
+rather than only its result. `edit` revises a mode and returns the before/after
+scores, refusing a regression unless you pass `allowRegression`; `design` takes a
+`check` command and reports whether the artifact passed it.
+
+Managing packages is the registry's own verbs, passed through:
+
+> Use the refactory tool with action `registry`, packages `disable`, target `phase_pack`.
+> Then action `registry`, packages `list`.
+
+A refusal comes back as the console's own error, so removing a package another one
+requires fails naming the dependent rather than breaking it.
+
+Steering is what the person says while *using* a mode, and it never changes the
+graph:
+
+> Use the refactory tool with action `steer`, run `…`, intent "make it better, no new
+> deps", note "no numpy", kind "constraint".
+
+The card shows the ledger and any problem with it. The ledger is folded into every
+agent node, and the instruction names the live file, so a note added while the run
+goes reaches the nodes that run afterwards.
+
+And the winner becomes a mode of its own:
+
+> Use the refactory tool with action `best`, run `…`. Then action `adopt`, run `…`,
+> as `adopted_demo`.
+
+The adopted package scores what the winner scored and the source package is byte
+identical afterwards.
 
 ## What renders
 

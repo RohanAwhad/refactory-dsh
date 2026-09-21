@@ -1,6 +1,6 @@
 # Tutorials
 
-Five walkthroughs, in the order a person meets the system. Each one is a sequence
+Six walkthroughs, in the order a person meets the system. Each one is a sequence
 of commands that were run against this checkout, with the output they produced.
 
 The example running through all of them is **circle packing**: place circles on a
@@ -15,7 +15,8 @@ works.
 | 2 | [Optimize it](02-optimize-it.md) | a run, its report, and a candidate's diff |
 | 3 | [Author with a model](03-author-with-a-model.md) | a package created, revised, and designed |
 | 4 | [Ship it on DSH](04-ship-it-on-dsh.md) | the same mode scored by the runtime that ships |
-| 5 | [Drive it from the GUI](05-drive-it-from-the-gui.md) | a run started and read from the conversation |
+| 5 | [Drive it from the GUI](05-drive-it-from-the-gui.md) | a run started, authored, managed and steered from the conversation |
+| 6 | [Run it with a person](06-run-it-with-a-person.md) | a run paused at a gate only a person can answer |
 
 ---
 

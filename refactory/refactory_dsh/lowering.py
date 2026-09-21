@@ -158,6 +158,11 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
                 "evaluator_type": node.gate_kind,
                 "max_iterations": node.max_iterations,
             }
+            # The author's note is the gate's question: for a `user` gate it is what
+            # the person is shown, and an empty prompt would ask them to choose
+            # between labels with no statement of what they are choosing about.
+            if node.notes:
+                gate["gate_prompt"] = node.notes
             if node.gate_kind == "fn":
                 gate["evaluator_command"] = f"{RUNNER} {node.evaluator}"
             nodes[node_id] = GateNode(**common, **gate)
