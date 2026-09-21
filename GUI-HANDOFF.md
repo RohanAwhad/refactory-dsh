@@ -130,7 +130,10 @@ this checkout, and the `ceo` preset carries no broken badge.
 ## What the browser session saw
 
 Rendered with a headless Chromium against a second instance on `:3099`, and
-inspected as an image:
+inspected as an image. The recorded walkthrough is at
+[`refactory/docs/assets/refactory-gui.gif`](refactory/docs/assets/refactory-gui.gif):
+the workspace session with a live composer, the workspace picker, a message sent to
+the CEO, and the `refactory` tool card it produced.
 
 1. **Hero** — reads "re:factory" once with the `Preview` badge. No stray fragment,
    no empty gap.
