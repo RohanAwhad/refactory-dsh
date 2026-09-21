@@ -98,6 +98,9 @@ export const Config = z.object({
   ceoDeny: z.array(z.string()).default(DEFAULT_CEO_DENY),
 })
 
+/** How much of a failed node's stderr the status file keeps. */
+const STATUS_DETAIL = 2_000
+
 /** One model-visible step, rendered as compact JSON text. */
 function text(value: JsonValue): { type: 'text'; text: string } {
   return { type: 'text', text: JSON.stringify(value, null, 2) }
@@ -190,7 +193,10 @@ export function apply(ctx: Context, config: Config): void {
   async function report(): Promise<JsonValue> {
     const { next, failure } = await drain()
     if (failure !== undefined) {
-      recordStatus('failed', failure.error)
+      // The node's own stderr is why it failed. The exit code alone sends a reader
+      // back to re-run the node to find out, so the reason is recorded with it.
+      const reason = failure.stderr.trim()
+      recordStatus('failed', reason === '' ? failure.error : `${failure.error}: ${reason.slice(-STATUS_DETAIL)}`)
       return json({
         status: 'failed',
         node: failure.command,

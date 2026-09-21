@@ -73,7 +73,7 @@ interface ShellRequest {
 }
 
 /** A shell that reports whatever the caller asks for. */
-function shell(behaviour: (command: string) => { exitCode?: number; stdout?: string } = () => ({ exitCode: 0 })): object {
+function shell(behaviour: (command: string) => { exitCode?: number; stdout?: string; stderr?: string } = () => ({ exitCode: 0 })): object {
   return {
     resolve: (request: ShellRequest) => ({
       command: request.command,
@@ -87,7 +87,8 @@ function shell(behaviour: (command: string) => { exitCode?: number; stdout?: str
       const result = behaviour(spec.command)
       return {
         exitCode: result.exitCode ?? 0, signal: null, timedOut: false, aborted: false, timeoutMs: 10_000,
-        stdout: { text: result.stdout ?? '', truncated: false }, stderr: { text: '', truncated: false },
+        stdout: { text: result.stdout ?? '', truncated: false },
+        stderr: { text: result.stderr ?? '', truncated: false },
       }
     },
   }
@@ -157,6 +158,45 @@ describe('the cursor status a run leaves behind', () => {
     const recorded = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8')) as { status: string; error: string }
     expect(recorded.status).toBe('refused')
     expect(recorded.error).toContain('gate gate')
+  })
+
+  it('records the failed node\'s own stderr, not only its exit code', async () => {
+    // "exit code 4" sends a reader back to re-run the node to find out why; the
+    // stderr is the reason, and the run directory is where a reader looks.
+    const workdir = scratch()
+    const { ctx } = await mount({
+      workdir,
+      executeCommands: true,
+      graph: {
+        name: 't',
+        start_node: 'run',
+        nodes: { run: { _type: 'FnNode', id: 'run', command: 'run-it', reads: [], writes: [] } },
+        edges: [],
+      },
+    })
+    ctx.provide('shell', shell(() => ({ exitCode: 4, stderr: 'broken on purpose\n' })))
+    await expect(call(ctx, 'wf_next')).resolves.toMatchObject({ status: 'failed', exit_code: 4 })
+    const recorded = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8')) as { status: string; error: string }
+    expect(recorded.status).toBe('failed')
+    expect(recorded.error).toContain('broken on purpose')
+  })
+
+  it('records the exit code alone when a failed node said nothing', async () => {
+    const workdir = scratch()
+    const { ctx } = await mount({
+      workdir,
+      executeCommands: true,
+      graph: {
+        name: 't',
+        start_node: 'run',
+        nodes: { run: { _type: 'FnNode', id: 'run', command: 'run-it', reads: [], writes: [] } },
+        edges: [],
+      },
+    })
+    ctx.provide('shell', shell(() => ({ exitCode: 4 })))
+    await expect(call(ctx, 'wf_next')).resolves.toMatchObject({ status: 'failed' })
+    const recorded = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8')) as { error: string }
+    expect(recorded.error).toBe('run exited with code 4')
   })
 
   it('runs the graph even when the status cannot be written', async () => {
