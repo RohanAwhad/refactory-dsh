@@ -479,6 +479,61 @@
       "status": "done",
       "commit": "05c5a04df5",
       "evidence": "100% statements/branches/functions/lines per file for all eight files. Full gate: 19701 passed, 129 skipped, 0 failed; the only files below 100% are the two platform-lane ones (subprocess-local/src/linux-execve.ts, whose spec is describe.skipIf(platform !== 'linux'), and the /proc read in experimental/code-runtime-python/src/index.ts, whose v8 ignore comment names the Linux lane), both pre-existing and green in CI's Linux lane. Type unions now carry the facts: SpineNext is ready-with-nodes or done, CommandOutcome is ok-with-optional-verdict or failed-with-error, ConsoleResult is ok-with-value or failed-with-error. Other fixes: uncompleteBetween drains its queue with for..of instead of shift(); Spine.acceptedVerdicts is one expression used by describe(), verdict() and the gate question; expand() captures each waiting join's sources once instead of scanning twice. Commits: 05c5a04df5 (spine), e3925ef1ec (graph bundle), df15186d93 (refactory tool)."
+    },
+    {
+      "id": "untried-numeric",
+      "issue": 50,
+      "title": "knob_attribution.untried lists the values of a bounded numeric knob",
+      "why": "The gradient's whole purpose is telling an optimizer that a value nobody tried is not a value that failed. It answered empty for every numeric knob, so a step knob declaring 1..4 reported nothing untried after two of four values had run, and the one improving value was invisible.",
+      "verify": "pytest refactory/tests/test_loop.py -q",
+      "status": "done",
+      "commit": "cb144f2735",
+      "observed": "24 passed (test_loop.py)",
+      "evidence": "Found by a live run: 21 evaluations of counting_pack/fixed_step, step tried {2: 19, 3: 2}, untried [], while step=1 scores 1.0 and step=4 scores 0.25. _untried now enumerates an int knob with both bounds declared, reusing the same finite set Knob.alternatives offers a sampler; an open-ended numeric knob still answers empty. Both ways: the new test failed with `assert []` on the old code and passes on the fix, and the same run now reports untried [1, 4] and target untried [1,2,3,4,6,7,8]."
+    },
+    {
+      "id": "dsh-knob-encoding",
+      "issue": 54,
+      "title": "The DSH path runs the candidate's knob values, not the op defaults",
+      "why": "run_on_dsh and interactive.command json.dumps'd a value that lowering.knob_environment already returns as a JSON string, so the node runner read a string where it needs an object and every node fell back to its op's hardcoded default. The two runtimes ran different programs.",
+      "verify": "pytest refactory/tests/test_dsh_profile.py refactory/tests/test_interactive.py -q",
+      "status": "done",
+      "commit": "3220f3ae62",
+      "observed": "14 passed",
+      "evidence": "Evidence: counting_pack/fixed_step's seed (step=2, target=5) scored 1.0 on DSH with trace increments [1,1,1,1,1] where the walker scored 0.5 with [2,2,2]; after the fix DSH scores 0.5 with increments [2,2,2]. json.dumps(knob_environment(state)['REFACTORY_KNOBS']) produced '\"{\\\"target\\\": 5, \\\"step\\\": 2}\"'. Both ways: the new assertions failed seeing the double-encoded string and pass after dropping the outer dumps. test_equivalence.py never caught it because it builds its own command line instead of calling run_on_dsh; that gap is filed in the issue."
+    },
+    {
+      "id": "dsh-absolute-workdir",
+      "issue": 51,
+      "title": "run_on_dsh hands DSH an absolute work directory",
+      "why": "DSH refuses a relative session cwd, and the CLI's default run root is relative, so a dsh-evaluated run failed every candidate with \"session header cwd must be an absolute path\" and reported best_score 0.0.",
+      "verify": "pytest refactory/tests/test_dsh_profile.py -q",
+      "status": "done",
+      "commit": "3220f3ae62",
+      "observed": "7 passed (test_dsh_profile.py)",
+      "evidence": "Every candidate in the relative-root run carried exit_ok false and that error; the same state under an absolute root ran. run_on_dsh now resolves the workdir at the boundary that hands it to DSH. Both ways: the new test saw --workdir 'relative/run' before the fix and an absolute path after it."
+    },
+    {
+      "id": "workspace-node-import",
+      "issue": 52,
+      "title": "A node in a workspace package imports in the node's own process",
+      "why": "A package created into .factory/packages is importable only where registry.install_workspace ran, which is the driver's process. DSH runs each node as its own command, so the op could not be imported and a created mode scored nothing on the runtime that ships while scoring under the walker.",
+      "verify": "pytest refactory/tests/test_runner.py -q",
+      "status": "done",
+      "commit": "3220f3ae62",
+      "observed": "11 passed (test_runner.py)",
+      "evidence": "Reproduced by hand: the node command in the candidate's work directory failed with ResolutionError: cannot import 'refactory_packages.counting_pack.ops': No module named 'refactory_packages.counting_pack', and the spine recorded only 'start exited with code 1'. run_node now applies the same workspace root the driver uses (registry.install_workspace(project_root())), idempotently. Both ways: the new subprocess test failed with that import error and passes on the fix; the end-to-end dsh run reached both candidates and scored them."
+    },
+    {
+      "id": "node-failure-stderr",
+      "issue": 53,
+      "title": "A failed node records the stderr that says why",
+      "why": "The spine status carried only 'run exited with code 4', so the reason a node failed was nowhere a reader of the run could see it — the same class as #38, where a failure looks like a search result.",
+      "verify": "pnpm exec vitest run packages/workflow/workflow-spine/tests/composition.spec.ts",
+      "status": "done",
+      "commit": "56aa77e448",
+      "observed": "22 passed (composition.spec.ts)",
+      "evidence": "The candidate's spine-status.json read {\"status\": \"failed\", \"error\": \"start exited with code 1\"} while the node's stderr (the ResolutionError naming the missing module) existed nowhere in the run directory. report() now appends the node's bounded stderr to the recorded error, keeping the exit code alone when the node said nothing. Both ways: the stderr test failed on the old code and passes after; a second test pins the empty-stderr arm, which also keeps the file at per-file 100% coverage."
     }
   ],
   "verification": {
