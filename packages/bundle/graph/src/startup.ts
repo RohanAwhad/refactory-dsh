@@ -128,14 +128,18 @@ export function apply(ctx: Context): void {
     const graph = loadGraph(mode, graphsDir)
     // A node command's cwd must exist before the first one spawns.
     mkdirSync(workdir, { recursive: true })
+    // The run's interpreter leads the ambient PATH. A stripped environment has no
+    // PATH at all, and emitting a trailing separator there would put the current
+    // directory on the search path, so the bare interpreter is the whole value.
+    const ambientPath = process.env.PATH ?? ''
     const commandEnv: Record<string, string> = {
       SRF_WORK_DIR: workdir,
       SRF_TASK: taskName,
-      SRF_KNOBS: String(options.knobs ?? '{}'),
+      SRF_KNOBS: String(options.knobs),
       SRF_BUDGET: String(budget),
       REFACTORY_WORKDIR: workdir,
       REFACTORY_INTENT: taskName,
-      PATH: `${pythonBin}:${process.env.PATH ?? ''}`,
+      PATH: ambientPath === '' ? pythonBin : `${pythonBin}:${ambientPath}`,
     }
 
     ctx.provide(GRAPH_STARTUP_SERVICE, {

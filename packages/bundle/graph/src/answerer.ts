@@ -36,7 +36,7 @@ function recordedVerdicts(startup: GraphStartupValues): Record<string, string> {
     ['-m', 'refactory_dsh.console', 'steer', '--run', startup.workdir],
     { encoding: 'utf8' },
   )
-  if (result.status !== 0 || result.stdout === null) return {}
+  if (result.status !== 0) return {}
   try {
     const payload = JSON.parse(result.stdout) as { verdicts?: Record<string, string> }
     return payload.verdicts ?? {}
@@ -65,7 +65,7 @@ async function askTerminal(question: { id: string; question: string; options?: A
   const rl = createInterface({ input: process.stdin, output: process.stdout })
   try {
     for (;;) {
-      const line = (await new Promise<string>(resolve => rl.question('> ', resolve))).trim()
+      const line = (await new Promise<string>((resolve) => { rl.question('> ', resolve) })).trim()
       if (line === '') continue
       const index = Number(line)
       const byIndex = Number.isInteger(index) && index >= 1 && index <= options.length
@@ -103,7 +103,7 @@ export function apply(ctx: Context): void {
         answers.push({ id: question.id, selected: [replayed] })
         continue
       }
-      if (process.stdin.isTTY !== true) {
+      if (!process.stdin.isTTY) {
         // Nobody can be asked here. Delegating lets the spine refuse the gate with a
         // message that names it, rather than inventing a verdict.
         return next()
