@@ -370,6 +370,39 @@
       "commit": "50aa98b183",
       "observed": "18 passed (test_optimizer_policies.py); 613 passed with --run-integration",
       "evidence": "THE CAUSE WAS THE CONTRACT, NOT THE FILING, and finding it is what made the fix possible. Loop handed a proposer select_parents(elite) and Candidate.describe() carries no state, so a proposer only ever saw the elite's states: island selection, a niche grid and a tournament over an archive could not be written as proposers however they were filed. FIX: Loop.optimizer_step now hands over the evaluated population and the optimizer selects; ProposalContext gains `elite`, the count an optimizer with no parent policy should take, so widening the pool does not silently change what random and autoresearch propose. THE SPLIT: four of SRF's thirteen modes (scs, evox, openevolve, karpathy) moved to optim/policies.py as proposers, and map_elites joined them -- it was added as a 15th OuterLoop and SRF_LAB_PORT_COUNT existed to make the totals add up around that placement. Asserted rather than described: 13 - len(SRF_OPTIMIZER_PORTS) is the loop count, every optimizer port is in the optimizer registry, no name is in both buckets, and every registered name is one or the other. The CLI's --optimizer choices now come from the registry instead of a hardcoded pair, which is how five optimizers could be registered and unreachable. TWO DEFECTS FOUND BY THE NEW TESTS, not by reasoning: (1) MapElitesSelector.features read state['nodes'] where the nodes are at state['graph']['nodes'], and .get returns None rather than raising, so every candidate landed in one cell -- a niche grid that is a single bucket and looks like it works; caught by a test aiming at a known-empty niche. (2) island_of derived the island from hash(candidate.id), and Python salts string hashing per process, so the same candidate sat in a different island on a resumed run than when it was evaluated; inherited from IslandArchive and invisible until a run is resumed. It uses a digest now. Also fixed: _elite must reproduce Loop.leaderboard exactly -- score descending with id as the tie-break, unscored excluded, the population fallback -- because a subtly different ordering changed the search enough to lose a refusal a layer early (test_history caught it)."
+    },
+    {
+      "id": "walkthrough40",
+      "issue": 40,
+      "title": "Verify levels 1 and 2 by an end-to-end walkthrough",
+      "why": "Levels 1 and 2 were believed done and had never been walked through in one pass; everything above them depends on them being real.",
+      "verify": "pytest refactory/tests/test_package_lifecycle.py refactory/tests/test_adoption.py -q",
+      "status": "done",
+      "commit": "3fda8871f6",
+      "evidence": "All ten steps ran by hand. Walkthrough: smoke circle_packing/adaptive 0.875; state_dict is {version, graph, knobs, ports, memory}; 17 ops and 13 rules, a bad set_knob refused E-knob and a node removal refused V1/V2/V6/V7/I:fact_produced without a run; create wrote walk_pkg/walk smoke 5.0; edit wrote walk_rev/walk with revision_of + revision_of_digest, 5.0 -> 7.0; add/import/remove/enable/disable work; walker and dsh both score 0.875; random/islands/map_elites produced different mixes; default == reflective under a sampling proposer and the tower went 0.875 -> 1.04 by set_knob batch_size 4 -> 8; adopt scored what the winner scored with circle_packing byte-identical. Baseline suite 638 passed, 1 skipped (mathlib absent; Lean present). Three command defects filed as #46 and the #40 body corrected. Reproduce: pytest refactory/tests/test_package_lifecycle.py refactory/tests/test_adoption.py -q",
+      "observed": "99 passed in 10.70s"
+    },
+    {
+      "id": "add-atomic",
+      "issue": 47,
+      "title": "registry add is not atomic: a refused name leaves the copied package behind",
+      "why": "A refused add left residue, and the retry was then a false name clash that told the caller to pass --as, which they already had.",
+      "verify": "pytest refactory/tests/test_package_lifecycle.py -q",
+      "status": "done",
+      "commit": "2a78110b12",
+      "evidence": "add() copied, then called load(), which raises on a declared-name mismatch, so the rmtree cleanup after the comparison was unreachable. The copy is now undone in an except that also evicts the module. The new test test_a_refused_name_leaves_no_residue failed against the old code (destination existed) and passes against the fix; reproduced by hand with registry add --as destination_name, which now leaves .factory/packages unchanged and lets a correctly named add succeed. Reproduce: pytest refactory/tests/test_package_lifecycle.py -q",
+      "observed": "99 passed in 10.70s"
+    },
+    {
+      "id": "best-tie",
+      "issue": 48,
+      "title": "console best and adopt pick a different winner than report.json when scores tie",
+      "why": "Two readers of one run named different winners on a tie, and adopt wrote the seed -- edits [] -- while the report named a structural winner.",
+      "verify": "pytest refactory/tests/test_adoption.py -q",
+      "status": "done",
+      "commit": "1d00db208f",
+      "evidence": "Loop.leaderboard orders by score then id; best() walked the journal in insertion order and kept the first strict maximum, so on a six-way tie at 0.875 it returned the seed b6f0d3c9e601 while report.json named 0472f9addff5. best() now uses the report's order. The new test test_best_breaks_a_tie_the_way_the_run_reports_it failed against the old code ('ffff' != '0000') and passes; the existing test is strengthened to compare candidate identity, not only score. Re-checked on the real run: console best now returns 0472f9addff5. Reproduce: pytest refactory/tests/test_adoption.py -q",
+      "observed": "99 passed in 10.70s"
     }
   ],
   "verification": {
