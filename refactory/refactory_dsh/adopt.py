@@ -118,7 +118,9 @@ def best(run_root: Path) -> dict[str, Any]:
     }
 
 
-def _mode_source(package: str, mode_name: str, state: dict[str, Any]) -> str:
+def _mode_source(
+    package: str, mode_name: str, state: dict[str, Any], project: Path
+) -> str:
     """The adopted package's mode: the searched class, pinned to the winner's state.
 
     Inherited rather than regenerated. A regenerated mode would be a *new*
@@ -136,11 +138,11 @@ def _mode_source(package: str, mode_name: str, state: dict[str, Any]) -> str:
         '"""\n\n'
         "from __future__ import annotations\n\n"
         "from typing import Any\n\n"
-        f"from refactory_packages.{package}.mode import {_class_name(package, mode_name)}\n\n"
+        f"from refactory_packages.{package}.mode import {_class_name(package, mode_name, project)}\n\n"
         "#: The winning state. A dict literal rather than a sidecar file so the mode\n"
         "#: is reproducible from the source alone.\n"
         f"PINNED: dict[str, Any] = {pprint.pformat(state, width=88, sort_dicts=True)}\n\n\n"
-        f"class Adopted({_class_name(package, mode_name)}):\n"
+        f"class Adopted({_class_name(package, mode_name, project)}):\n"
         '    """The winner of a run, as a mode of its own."""\n\n'
         f"    name = {mode_name!r}\n"
         "    adopted = True\n\n"
@@ -149,11 +151,14 @@ def _mode_source(package: str, mode_name: str, state: dict[str, Any]) -> str:
     )
 
 
-def _class_name(package: str, mode_name: str) -> str:
-    """The class named by a mode, read from the package rather than guessed."""
-    from refactory_dsh.paths import project_root
+def _class_name(package: str, mode_name: str, project: Path) -> str:
+    """The class named by a mode, read from the package rather than guessed.
 
-    loaded = registry.load(package, None)
+    ``project`` is required rather than defaulted: the searched package may be a
+    workspace package, and the run happened in its own process, so this one has to
+    install that root itself or the import fails for a mode it just searched.
+    """
+    loaded = registry.load(package, project)
     for mode_class in loaded.modes:
         if mode_class.name == mode_name:
             return mode_class.__name__
@@ -199,33 +204,45 @@ def adopt(
         )
 
     destination.mkdir(parents=True)
-    (destination / "__init__.py").write_text(
-        '"""A package holding one adopted mode.\n\n'
-        f"Produced by `refactory_dsh.adopt` from the run at {run_root}.\n"
-        '"""\n\n'
-        "from __future__ import annotations\n\n"
-        "from refactory_dsh.nn import Package\n\n"
-        "from .mode import Adopted\n\n"
-        f"PACKAGE = Package(\n"
-        f"    name={as_name!r},\n"
-        f"    description='The winner of a run of {mode}, as a mode of its own.',\n"
-        "    modes=(Adopted,),\n"
-        f"    ops={('refactory_packages.' + package + '.ops',)!r},\n"
-        ")\n"
-    )
-    (destination / MODE_FILE).write_text(_mode_source(package, mode_name, winner["state"]))
-    (destination / ADOPTED).write_text(
-        json.dumps(
-            {
-                "adopted_from": mode,
-                "run": str(run_root),
-                "candidate": winner["candidate"],
-                "score": winner["score"],
-                "edits": winner["edits"],
-            },
-            indent=2,
+    # A half-written package is worse than none: adopting never overwrites, so a
+    # residue makes the name unusable, and the catalogue warns about a package whose
+    # mode module was never written. Written first, moved into place only when every
+    # file is there.
+    try:
+        (destination / "__init__.py").write_text(
+            '"""A package holding one adopted mode.\n\n'
+            f"Produced by `refactory_dsh.adopt` from the run at {run_root}.\n"
+            '"""\n\n'
+            "from __future__ import annotations\n\n"
+            "from refactory_dsh.nn import Package\n\n"
+            "from .mode import Adopted\n\n"
+            f"PACKAGE = Package(\n"
+            f"    name={as_name!r},\n"
+            f"    description='The winner of a run of {mode}, as a mode of its own.',\n"
+            "    modes=(Adopted,),\n"
+            f"    ops={('refactory_packages.' + package + '.ops',)!r},\n"
+            ")\n"
         )
-    )
+        (destination / MODE_FILE).write_text(
+            _mode_source(package, mode_name, winner["state"], project)
+        )
+        (destination / ADOPTED).write_text(
+            json.dumps(
+                {
+                    "adopted_from": mode,
+                    "run": str(run_root),
+                    "candidate": winner["candidate"],
+                    "score": winner["score"],
+                    "edits": winner["edits"],
+                },
+                indent=2,
+            )
+        )
+    except Exception:
+        import shutil
+
+        shutil.rmtree(destination, ignore_errors=True)
+        raise
 
     registry.install_workspace(project)
     loaded = registry.load(as_name, project)

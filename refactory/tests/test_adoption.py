@@ -53,6 +53,56 @@ def finished_run(tmp_path_factory) -> Path:
 
 
 # ── the winner is addressable ──────────────────────────────────────────────
+def test_adopting_a_mode_that_lives_in_the_workspace(tmp_path):
+    """The searched mode may be a workspace package, and adopt must be able to read it.
+
+    A package under `.factory/packages` is importable only once that root is on the
+    distribution's path. Reading the class without a project raised
+    "cannot import package ..." for a run that had just searched it, so the winner of
+    a run of a created mode could not be adopted at all.
+    """
+    source = tmp_path / ".factory" / "packages" / "probe_pack"
+    source.mkdir(parents=True)
+    (source / "__init__.py").write_text(
+        "from __future__ import annotations\n\n"
+        "from refactory_dsh.nn import Package\n\n"
+        "from .mode import Probe\n\n"
+        "PACKAGE = Package(\n"
+        "    name='probe_pack', description='', modes=(Probe,),\n"
+        "    ops=('refactory_packages.sympy_pack.ops',),\n"
+        ")\n"
+    )
+    (source / "mode.py").write_text(
+        "from refactory_packages.sympy_pack.mode import Exact\n\n\n"
+        "class Probe(Exact):\n"
+        "    name = 'probe'\n"
+    )
+    root = tmp_path / "runs" / "probe"
+    Loop(
+        "probe_pack/probe",
+        LoopConfig(epochs=1, batch_size=2, seed=0, optimizer="random",
+                   runs_root=root, max_evaluations=2),
+        project=tmp_path,
+    ).run()
+
+    # The run happens in its own process, so the process that adopts never installed
+    # the workspace root. Drop it here to be that process.
+    import sys
+
+    import refactory_packages
+
+    refactory_packages.__path__ = [
+        entry for entry in refactory_packages.__path__
+        if not entry.startswith(str(tmp_path))
+    ]
+    for cached in [name for name in sys.modules if name.startswith("refactory_packages.probe_pack")]:
+        del sys.modules[cached]
+
+    result = adopt(root, as_name="probe_adopted", project=tmp_path)
+    assert result["adopted_from"] == "probe_pack/probe"
+    assert (tmp_path / ".factory" / "packages" / "probe_adopted" / "mode.py").exists()
+
+
 def test_best_returns_the_state_the_winner_scored(finished_run):
     winner = best(finished_run)
     assert winner["state"], "the winner came back without the state that scored it"
@@ -157,6 +207,18 @@ def test_the_adopted_package_records_where_it_came_from(finished_run, tmp_path):
     assert result["candidate"] in recorded
     assert MODE in recorded
     assert str(finished_run) in recorded
+
+
+def test_a_refused_adoption_leaves_no_package_behind(finished_run, tmp_path):
+    """A half-written package is worse than none: it cannot be adopted over.
+
+    Adopting never overwrites, so a residue from a failed attempt makes the name
+    permanently unusable, and the catalogue warns about a package whose mode module
+    was never written.
+    """
+    with pytest.raises(AdoptionError, match="has no mode"):
+        adopt(finished_run, as_name="probe_residue", mode="sympy_pack/nope", project=tmp_path)
+    assert not (tmp_path / ".factory" / "packages" / "probe_residue").exists()
 
 
 def test_adopting_never_overwrites(finished_run, tmp_path):
