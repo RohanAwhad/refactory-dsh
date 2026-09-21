@@ -25,8 +25,8 @@ level before the one below it is verified.
 
 | level | what it is | where | state |
 |---|---|---|---|
-| **1. semantics** | the language: define, create, modify modes and packages | `refactory_dsh/nn/`, `registry.py`, `refactory_packages/` | **done** |
-| **2. outerloop** | the autograd: evaluate a mode, propose edits, drive the search | `loop.py`, `evaluators.py`, `optim/`, `outerloop.py`, `strategies.py` | **done** |
+| **1. semantics** | the language: define, create, modify modes and packages | `refactory_dsh/nn/`, `registry.py`, `refactory_packages/` | **verified by #40** |
+| **2. outerloop** | the autograd: evaluate a mode, propose edits, drive the search | `loop.py`, `evaluators.py`, `optim/`, `outerloop.py`, `strategies.py` | **verified by #40** |
 | **3. DSH run** | the CEO, interactive use, GUI last | `lowering.py`, `dsh_runtime.py`, `steering.py`, `packages/bundle/graph`, `tool-refactory` | **partial — #41, #42** |
 | **4. packages** | specific domains, mostly for testing | `refactory_packages/` | **works where the tools are installed** |
 
@@ -78,7 +78,10 @@ pnpm run typecheck
 ```
 
 Expected on a machine with Lean and mathlib: **639 passed, 0 failed**. Without them
-about 13 tests skip — see below for what a skip is worth.
+the tool-dependent tests skip — 13 on a machine with neither; 1 (mathlib only) on the
+checkout this walkthrough ran on, where `lean` is on `PATH` and `MATHLIB_PATH` is
+unset. Read the skip count, not the pass count: #44 is making the absence of a run a
+reported fact rather than a missing signal.
 
 ## Environment, and the two things that bite
 
@@ -106,9 +109,45 @@ tests use.
 
 ## The first thing a new session should do
 
-Run the walkthrough in **#40**. Ten commands, each ending in a number you can check.
-It is the acceptance test for levels 1 and 2, and nothing else should be built before
-it passes, because everything above depends on those two levels being real.
+**#40 is done.** The walkthrough below was run by hand, all ten steps, and levels 1
+and 2 are real on this checkout. Where a step's own command was wrong it was corrected
+in the issue, and every code defect it exposed is filed and fixed — see
+[what it found](#the-walkthrough-and-what-it-found).
+
+The next thing is **#41**, the interactive DSH run. Do not start the GUI (#42) before
+it: see the ordering rule in that issue.
+
+## The walkthrough, and what it found
+
+Ten steps across levels 1 and 2, run in order on 2026-09-20. The results, so a reader
+does not have to re-derive them:
+
+| step | result |
+|---|---|
+| 1 run a mode | `circle_packing/adaptive` smokes at `0.875` |
+| 2 define a mode | `state_dict` is `{version, graph, knobs, ports, memory}` — architecture **and** parameters |
+| 3 edit vocabulary | 17 ops, 13 rules; a legal `set_knob`/`insert_after` validates, an out-of-enum knob and a node removal are refused with codes |
+| 4 create a mode | `python -m refactory_dsh.create` wrote `walk_pkg/walk`, smoke `5.0` (481 s, model-driven) |
+| 5 modify a mode | `edit` wrote `walk_rev/walk`, `revision_of` + `revision_of_digest` recorded, `5.0 -> 7.0`, not regressed |
+| 6 lifecycle | add / import / remove / enable / disable all work when the declared name agrees |
+| 7 evaluators | `walker` and `dsh` both score the same mode `0.875` — the loop is not searching a fiction |
+| 8 optimizers | `random`, `islands`, `map_elites` produced different accepted-edit mixes and different refusals |
+| 9 loop structure | `default` == `reflective` under a sampling proposer (as architecture.md §12 says); the tower is `0.875 -> 1.04` by `set_knob batch_size 4 -> 8` |
+| 10 adopt the winner | adopted package scores what the winner scored; `circle_packing` byte-identical afterwards |
+
+**Findings, filed as their own issues.** Three were the walkthrough's own commands
+not running as written; two were real code defects, each fixed with a test that fails
+against the old code:
+
+- **#46** — step 3 used `validate.RULES` (the name is the function, not the module);
+  step 9 omitted `--optimizer`, and its documented results need `--optimizer random`;
+  step 10 used the console's `--runs-root` where it needs `--run`. The #40 body is
+  corrected.
+- **#47** — `registry add` was not atomic: a refused name left the copied package in
+  the workspace, so the retry was a false clash. Fixed; `add` undoes the copy.
+- **#48** — `console best`/`adopt` and `report.json` named **different winners** when
+  the top score tied, because one ordered by journal insertion and the other by id.
+  Fixed; both use score-descending then id-ascending.
 
 ## What remains
 
@@ -116,12 +155,12 @@ All open work is filed. Read the issue, not this file, for the detail:
 
 | # | what |
 |---|---|
-| **40** | Verify levels 1 and 2 by an end-to-end walkthrough — **do this first** |
-| **41** | The interactive DSH run has never been walked through (level 3) |
+| **41** | The interactive DSH run has never been walked through (level 3) — **do this next** |
 | **42** | The GUI, to start only once levels 1–3 are verified |
 | **43** | The fidelity gate checks the precondition, not the output |
 | **44** | A test that did not run is invisible (Lean and mathlib skips) |
 | **45** | A DSH profile is machine state, so a fresh checkout cannot run a mode |
+| 46–48 | Filed by the #40 walkthrough: corrected commands, atomic `add`, and the winner tie-break |
 | 17, 28 | The GUI proper; #42 orders them after levels 1–3 |
 
 ## Invariants that must not break
