@@ -343,6 +343,7 @@ def test_the_strategy_knob_is_what_moves_the_lean_score(monkeypatch, tmp_path):
 
 
 # ── the real proof checker ─────────────────────────────────────────────────
+@pytest.mark.toolchain("lean")
 @needs_lean
 def test_the_core_problem_is_checked_by_the_real_proof_checker(tmp_path):
     """End to end, with Lean deciding: no Python assertion about a theorem here."""
@@ -406,6 +407,7 @@ def test_a_declared_tools_environment_is_carried_to_a_sandboxed_run(tmp_path):
     )
 
 
+@pytest.mark.toolchain("lean")
 @needs_lean
 def test_the_lean_declaration_names_the_toolchain_home():
     """The real declaration, checked on a machine that has the toolchain.
@@ -455,6 +457,7 @@ def test_a_secret_is_not_forwarded_by_a_declaration(tmp_path):
     assert probe.payload["seen"] is None, "a declaration must not smuggle a secret in"
 
 
+@pytest.mark.toolchain("lean")
 @needs_lean
 def test_the_lean_mode_works_under_the_sandbox(tmp_path):
     """The shipped path, on a machine that has Lean. This is the regression.
@@ -478,6 +481,7 @@ def test_the_lean_mode_works_under_the_sandbox(tmp_path):
     assert written["used_sorry"] is False
 
 
+@pytest.mark.toolchain("lean")
 @needs_lean
 def test_a_sorry_is_not_a_proof(tmp_path):
     """The exit code alone would accept an unfinished proof; the axiom dump does not.
@@ -499,6 +503,7 @@ def test_a_sorry_is_not_a_proof(tmp_path):
 
 
 # ── the sympy half ─────────────────────────────────────────────────────────
+@pytest.mark.toolchain("sympy")
 @needs_sympy
 def test_the_python_tool_mode_establishes_identities_for_real(tmp_path):
     """sympy does the mathematics; the run's number is how many checked out."""
@@ -515,6 +520,7 @@ def test_the_python_tool_mode_establishes_identities_for_real(tmp_path):
     ]
 
 
+@pytest.mark.toolchain("sympy")
 @needs_sympy
 def test_a_weaker_reduction_route_misses_answers_that_are_there(tmp_path):
     """`route` is a real axis: a sound reduction that does not collect the terms.
@@ -530,6 +536,7 @@ def test_a_weaker_reduction_route_misses_answers_that_are_there(tmp_path):
     assert weak.score >= 1.0, "it still establishes the identity it can reduce"
 
 
+@pytest.mark.toolchain("sympy")
 @needs_sympy
 def test_the_outer_loop_improves_the_sympy_run(tmp_path):
     """The seed has a real defect and the search fixes it, through the real engine."""
@@ -624,6 +631,7 @@ def test_the_timeout_default_survives_importing_a_large_library():
     )
 
 
+@pytest.mark.toolchain("mathlib")
 @needs_mathlib
 def test_the_mathlib_problem_is_checked_by_the_real_proof_checker(tmp_path):
     """The path that had never run, run for real.

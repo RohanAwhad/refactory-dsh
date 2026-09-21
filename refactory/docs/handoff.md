@@ -91,6 +91,23 @@ is unset. A skipped test cannot fail, so a green suite on a machine without them
 **nothing** about the checker path. That is how two real defects hid. If you change
 anything in `lean_pack`, install them or you are not testing what you changed.
 
+**The toolchain gate makes the gap legible.** Every test that exercises a real
+external tool is marked `toolchain`, and one command reports which ran, which skipped
+and why, and **fails** if any did not run:
+
+```bash
+.venv/bin/python -m pytest refactory/tests -q --toolchain-gate
+# verified against real tools: lean: 4, sympy: 3
+# UNVERIFIED: [mathlib] ...test_the_mathlib_problem_is_checked_by_the_real_proof_checker:
+#   skipped -- mathlib is not installed (set MATHLIB_PATH to a built mathlib4 checkout)
+```
+
+**CI story, decided.** No per-PR job installs Lean or mathlib: mathlib is a 7.4 GB
+checkout, and the `refactory/` Python suite is not part of the DSH CI matrix at all.
+The checker paths are therefore verified **on developer machines**, by the gate above;
+a machine without the tools is expected to fail that gate and to say exactly what it
+did not verify. Run it before trusting a green `pytest refactory/tests`.
+
 **A DSH profile is machine state.** It is created with
 `dsh plugin --profile <name> add <package>`; it is not derived from the bundle. A fresh
 checkout does not carry one. `install.sh` now creates it, idempotently and without
