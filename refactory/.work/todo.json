@@ -469,6 +469,16 @@
       "commit": "0c3d12bc53",
       "evidence": "Root cause of the inert workspace click: session creation failed with 'preset \"ceo\" failed to mount: row \"tool-refactory\" names a plugin that cannot be resolved', swallowed by ConversationRoot's catch. Declaring @deepseek-ai/dsh-tool-refactory in packages/bundle/web-app fixed it; verified in a headless Chromium that the workspace auto-selects and the composer goes live. New guard packages/preset/agent-presets/tests/preset-plugin-dependencies.spec.ts asserts every plugin a shipped preset names is reachable from the install anchor; removing the dependency fails it naming 'ceo: @deepseek-ai/dsh-tool-refactory'. The tool gained steer, best, adopt, registry, create, edit and design (the console grew forwarding verbs for registry/create/edit/design), the client card renders them, and driving the CEO from the GUI returned the 13 packages with trust tiers. The hero is text-only by decision with the reason in the JSDoc. GIF: refactory/docs/assets/refactory-gui.gif; GUI-HANDOFF.md carries the browser findings. Reproduce: pnpm exec vitest run packages/refactory/tool-refactory/tests/tool-refactory.spec.ts packages/preset/agent-presets/tests/preset-plugin-dependencies.spec.ts",
       "observed": "23 passed (tool-refactory + preset guard)"
+    },
+    {
+      "id": "dsh-coverage",
+      "issue": null,
+      "title": "Hold the DSH per-file 100% coverage gate on every file this work touches",
+      "why": "The gate is the repo's merge bar. It was red on the three surfaces the refactory work added or changed: the spine plugin's composition (index.ts statements and branches), the spine state machine and gate bundle, and the refactory tool's console boundary and its sixteen actions. Several red spots were unreachable fallbacks the types already ruled out, so the fix was to say in the type when a value is present, not to test a branch no caller can reach.",
+      "verify": "pnpm exec vitest run packages/workflow/workflow-spine/tests/ packages/bundle/graph/tests/ packages/refactory/tool-refactory/tests/tool-refactory.spec.ts --coverage --coverage.include='packages/workflow/workflow-spine/src/**' --coverage.include='packages/bundle/graph/src/**' --coverage.include='packages/refactory/tool-refactory/src/**'",
+      "status": "done",
+      "commit": "05c5a04df5",
+      "evidence": "100% statements/branches/functions/lines per file for all eight files. Full gate: 19701 passed, 129 skipped, 0 failed; the only files below 100% are the two platform-lane ones (subprocess-local/src/linux-execve.ts, whose spec is describe.skipIf(platform !== 'linux'), and the /proc read in experimental/code-runtime-python/src/index.ts, whose v8 ignore comment names the Linux lane), both pre-existing and green in CI's Linux lane. Type unions now carry the facts: SpineNext is ready-with-nodes or done, CommandOutcome is ok-with-optional-verdict or failed-with-error, ConsoleResult is ok-with-value or failed-with-error. Other fixes: uncompleteBetween drains its queue with for..of instead of shift(); Spine.acceptedVerdicts is one expression used by describe(), verdict() and the gate question; expand() captures each waiting join's sources once instead of scanning twice. Commits: 05c5a04df5 (spine), e3925ef1ec (graph bundle), df15186d93 (refactory tool)."
     }
   ],
   "verification": {

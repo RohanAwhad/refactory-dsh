@@ -87,3 +87,12 @@ Before trusting a change, the cheap full pass is:
 .venv/bin/python -m pytest refactory/tests/ -q --run-integration
 pnpm run typecheck && pnpm run hygiene && pnpm run test:docs
 ```
+
+The full unit suite is 19,681 tests; the per-file 100% coverage gate is
+`pnpm run test:coverage`. On macOS that gate is red on exactly two files whose
+platform arms cannot execute there, and this is pre-existing, not a regression:
+`packages/subprocess/subprocess-local/src/linux-execve.ts` (its spec is
+`describe.skipIf(process.platform !== 'linux')`) and the `/proc` read in
+`packages/experimental/code-runtime-python/src/index.ts` (its `v8 ignore` comment
+names the Linux coverage lane). Every file this work touches holds per-file 100%;
+the two above are green in CI's Linux lane.
