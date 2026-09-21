@@ -458,6 +458,17 @@
       "commit": "22b197674e",
       "evidence": "The cheap half is built. annotate tells every agent node to end its output with 'Serves: <timestamp>' and lists the ledger's entry timestamps; citations() parses them; chain(ledger, outputs) reports a node that cited nothing and a citation that dangles; fidelity(ledger, outputs) adds the chain to the precondition, and its docstring says which half it is and that the judgement needs a model. outputs_in reads the agent nodes' declared writes from the run's declarations so either runtime can be checked, and console steer reports chain problems beside the verdicts. The expensive half (a model reading work against intent) is NOT built and remains in architecture.md section 12. Tests: a node that cited nothing is caught, a dangling citation is caught, a real citation passes, fidelity checks the chain only when given outputs, and outputs_in reads agent-node files only. Reproduce: pytest refactory/tests/test_steering.py -q",
       "observed": "48 passed"
+    },
+    {
+      "id": "gui-42",
+      "issue": 42,
+      "title": "GUI: workspace selection, the full tool surface, and the walkthrough",
+      "why": "Selecting a workspace did nothing because session creation failed: the ceo preset mounts tool-refactory and the web bundle never depended on it. The tool also exposed 8 of the console's verbs, so create/edit/design, package management and steering were unreachable from the page.",
+      "verify": "pnpm exec vitest run packages/refactory/tool-refactory/tests/tool-refactory.spec.ts packages/preset/agent-presets/tests/preset-plugin-dependencies.spec.ts",
+      "status": "done",
+      "commit": "0c3d12bc53",
+      "evidence": "Root cause of the inert workspace click: session creation failed with 'preset \"ceo\" failed to mount: row \"tool-refactory\" names a plugin that cannot be resolved', swallowed by ConversationRoot's catch. Declaring @deepseek-ai/dsh-tool-refactory in packages/bundle/web-app fixed it; verified in a headless Chromium that the workspace auto-selects and the composer goes live. New guard packages/preset/agent-presets/tests/preset-plugin-dependencies.spec.ts asserts every plugin a shipped preset names is reachable from the install anchor; removing the dependency fails it naming 'ceo: @deepseek-ai/dsh-tool-refactory'. The tool gained steer, best, adopt, registry, create, edit and design (the console grew forwarding verbs for registry/create/edit/design), the client card renders them, and driving the CEO from the GUI returned the 13 packages with trust tiers. The hero is text-only by decision with the reason in the JSDoc. GIF: refactory/docs/assets/refactory-gui.gif; GUI-HANDOFF.md carries the browser findings. Reproduce: pnpm exec vitest run packages/refactory/tool-refactory/tests/tool-refactory.spec.ts packages/preset/agent-presets/tests/preset-plugin-dependencies.spec.ts",
+      "observed": "23 passed (tool-refactory + preset guard)"
     }
   ],
   "verification": {
