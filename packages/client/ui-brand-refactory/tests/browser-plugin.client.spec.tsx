@@ -38,6 +38,26 @@ describe('re:factory browser-brand plugin', () => {
     expect(inject).toEqual(['slots'])
   })
 
+  it('tints the primary accent when a theme service is mounted, and disposes it', async () => {
+    const before = await bench()
+    const calls: Array<[string, unknown]> = []
+    let disposed = 0
+    before.ctx.provide('theme', {
+      overrideTokens: (id: string, tokens: unknown) => {
+        calls.push([id, tokens])
+        return () => { disposed += 1 }
+      },
+    } as never)
+
+    const fiber = before.ctx.plugin({ inject: [...inject], apply })
+    await fiber.await()
+    expect(calls).toEqual([['refactory-brand', {
+      '--dsw-alias-brand-primary': { light: '#e11d48', dark: '#fb7185' },
+    }]])
+    await fiber.dispose()
+    expect(disposed).toBe(1)
+  })
+
   it('fills the sidebar + hero brand slots regardless of build profile', async () => {
     const before = await bench()
     const fiber = before.ctx.plugin({ inject: [...inject], apply })
