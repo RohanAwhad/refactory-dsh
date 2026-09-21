@@ -472,9 +472,9 @@
     },
     {
       "id": "dsh-coverage",
-      "issue": null,
+      "issue": 42,
       "title": "Hold the DSH per-file 100% coverage gate on every file this work touches",
-      "why": "The gate is the repo's merge bar. It was red on the three surfaces the refactory work added or changed: the spine plugin's composition (index.ts statements and branches), the spine state machine and gate bundle, and the refactory tool's console boundary and its sixteen actions. Several red spots were unreachable fallbacks the types already ruled out, so the fix was to say in the type when a value is present, not to test a branch no caller can reach.",
+      "why": "The gate is the repo's merge bar, and the surfaces it holds are the ones #42 put behind the tool. It was red on the three surfaces the refactory work added or changed: the spine plugin's composition (index.ts statements and branches), the spine state machine and gate bundle, and the refactory tool's console boundary and its sixteen actions. Several red spots were unreachable fallbacks the types already ruled out, so the fix was to say in the type when a value is present, not to test a branch no caller can reach.",
       "verify": "pnpm exec vitest run packages/workflow/workflow-spine/tests/ packages/bundle/graph/tests/ packages/refactory/tool-refactory/tests/tool-refactory.spec.ts --coverage --coverage.include='packages/workflow/workflow-spine/src/**' --coverage.include='packages/bundle/graph/src/**' --coverage.include='packages/refactory/tool-refactory/src/**'",
       "status": "done",
       "commit": "05c5a04df5",
