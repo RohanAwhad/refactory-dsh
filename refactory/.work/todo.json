@@ -436,6 +436,28 @@
       "commit": "7364421db1",
       "evidence": "Every test gated by a real tool now carries a pytest 'toolchain' marker (4 lean, 3 sympy, 1 mathlib), and conftest records each marked test's outcome. One command, `pytest refactory/tests -q --toolchain-gate`, reports which tools were verified and which tests did not run with the reason, and exits 1 when any did not: on this machine it prints 'verified against real tools: lean: 4, sympy: 3' and fails naming the mathlib test and its skip reason (GATE_EXIT=1). A deselected toolchain test counts as not run (pytest_deselected), proven with -k. The pass branch was proven with a temporary probe (exit 0, 'verified against real tools: probe: 1'). test_toolchain_gate.py parses the sources and refuses a needs_* test without the marker; removing the mathlib marker makes it fail and restoring it makes it pass. CI story recorded in the handoff: no per-PR job installs the tools; verified on developer machines. Reproduce: pytest refactory/tests/test_toolchain_gate.py -q",
       "observed": "4 passed in 0.11s"
+    },
+    {
+      "id": "interactive-level3",
+      "issue": 41,
+      "title": "The interactive DSH run has never been walked through (level 3)",
+      "why": "No mode had ever been run with a person in the loop, and the path could not have worked: the spine routed a user gate on the model's own verdict, so a headless run invented 'proceed'.",
+      "verify": "pytest refactory/tests/test_interactive.py -q",
+      "status": "done",
+      "commit": "22b197674e",
+      "evidence": "review_pack/review is a real mode: task_input -> draft -> check(fn) -> approve(user) -> publish|reject. Its IR carries evaluator_type=user with no evaluator_command and fn with one (verified). The spine now asks the person through the user-questions seam and ignores the model's verdict; a headless run refuses naming the gate on BOTH runtimes (walker: registry smoke exits 1 with \"gate 'approve' is answered by 'user'\"; DSH: evaluate_on_dsh returns exit_ok False with 'the graph did not finish: gate approve is answered by a person and could not be asked: no user-questions answerer accepted the request'). The graph profile gained a terminal answerer that records the verdict through 'console steer --verdict', so a recorded verdict is replayed by DSH with no terminal and the run completes (final.md, spine status done), and a real PTY answer at the gate recorded 'gate: approve / verdict: proceed' in the ledger and completed the run. The ledger is folded into the agent prompts by steering.for_run in both runtimes, so a mid-run note reaches later agent nodes. Recorded as a run in architecture.md section 11. The human step was driven through a PTY (a real terminal answerer reading a keystroke), not by a person at a keyboard; that is the one link a machine cannot perform. Reproduce: pytest refactory/tests/test_interactive.py refactory/tests/test_steering.py -q",
+      "observed": "48 passed"
+    },
+    {
+      "id": "fidelity-chain",
+      "issue": 43,
+      "title": "The fidelity gate checks the precondition, not the output",
+      "why": "The gate could only say there was an intent, never that the work was traceable to it, so a run that ignored the ledger passed.",
+      "verify": "pytest refactory/tests/test_steering.py -q",
+      "status": "done",
+      "commit": "22b197674e",
+      "evidence": "The cheap half is built. annotate tells every agent node to end its output with 'Serves: <timestamp>' and lists the ledger's entry timestamps; citations() parses them; chain(ledger, outputs) reports a node that cited nothing and a citation that dangles; fidelity(ledger, outputs) adds the chain to the precondition, and its docstring says which half it is and that the judgement needs a model. outputs_in reads the agent nodes' declared writes from the run's declarations so either runtime can be checked, and console steer reports chain problems beside the verdicts. The expensive half (a model reading work against intent) is NOT built and remains in architecture.md section 12. Tests: a node that cited nothing is caught, a dangling citation is caught, a real citation passes, fidelity checks the chain only when given outputs, and outputs_in reads agent-node files only. Reproduce: pytest refactory/tests/test_steering.py -q",
+      "observed": "48 passed"
     }
   ],
   "verification": {
