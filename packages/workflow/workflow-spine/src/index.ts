@@ -27,12 +27,12 @@ import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { Spine, validateGraph } from './spine.ts'
 import type { NodeView, SpineNext } from './spine.ts'
 import { isDeterministic, runDeterministic } from './execute.ts'
-import type { CommandOutcome } from './execute.ts'
+import type { CommandFailure } from './execute.ts'
 import type { WorkflowGraph } from './types.ts'
 
 export { Spine, validateGraph } from './spine.ts'
 export { commandOf, isDeterministic, verdictOf, NODE_ENV_KEY } from './execute.ts'
-export type { CommandOutcome, CommandRunnerConfig, NodeManifest } from './execute.ts'
+export type { CommandFailure, CommandOutcome, CommandRunnerConfig, NodeManifest } from './execute.ts'
 export type { GraphIssue, NodeView, SpineNext } from './spine.ts'
 export type { WorkflowEdge, WorkflowGraph, WorkflowNode } from './types.ts'
 
@@ -162,7 +162,7 @@ export function apply(ctx: Context, config: Config): void {
    * and is reported instead: the graph must not advance past a step that did
    * not happen.
    */
-  async function drain(): Promise<{ next: SpineNext; failure?: CommandOutcome }> {
+  async function drain(): Promise<{ next: SpineNext; failure?: CommandFailure }> {
     if (!config.executeCommands) return { next: spine.next() }
     const shell = ctx.get('shell')
     if (shell === undefined) return { next: spine.next() }
@@ -175,7 +175,7 @@ export function apply(ctx: Context, config: Config): void {
     for (;;) {
       const state = spine.next()
       if (state.status === 'done') return { next: state }
-      const automatic = (state.nodes ?? []).filter(isDeterministic)
+      const automatic = state.nodes.filter(isDeterministic)
       if (automatic.length === 0) return { next: state }
       for (const node of automatic) {
         const outcome = await runDeterministic(shell, node, runner)
@@ -190,12 +190,12 @@ export function apply(ctx: Context, config: Config): void {
   async function report(): Promise<JsonValue> {
     const { next, failure } = await drain()
     if (failure !== undefined) {
-      recordStatus('failed', failure.error ?? 'command failed')
+      recordStatus('failed', failure.error)
       return json({
         status: 'failed',
         node: failure.command,
         exit_code: failure.exitCode,
-        error: failure.error ?? 'command failed',
+        error: failure.error,
         stdout: failure.stdout,
         stderr: failure.stderr,
       })
@@ -227,7 +227,7 @@ export function apply(ctx: Context, config: Config): void {
       recordStatus('refused', message)
       throw new Error(message)
     }
-    const labels = view.verdicts ?? []
+    const labels = spine.acceptedVerdicts(gate)
     let answer
     try {
       answer = await userQuestions.ask({
@@ -247,7 +247,7 @@ export function apply(ctx: Context, config: Config): void {
       throw new Error(message)
     }
     const chosen = answer.answers.find(entry => entry.id === gate)
-    const verdict = (chosen?.selected?.[0] ?? chosen?.custom ?? '').trim()
+    const verdict = (chosen?.selected[0] ?? chosen?.custom ?? '').trim()
     if (verdict === '') {
       throw new Error(`gate ${gate} was answered without a verdict`)
     }

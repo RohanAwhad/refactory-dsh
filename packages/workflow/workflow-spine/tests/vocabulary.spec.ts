@@ -136,11 +136,54 @@ describe('validateGraph', () => {
       name: 'broken',
       start_node: 'nope',
       nodes: { a: { _type: 'FnNode', id: 'a', command: 'true' } },
-      edges: [{ source: 'a', target: 'ghost' }],
+      edges: [{ source: 'a', target: 'ghost' }, { source: 'ghost', target: 'a' }],
     }
     const messages = validateGraph(broken).map(issue => issue.message)
     expect(messages).toContain("start_node 'nope' is not a node")
     expect(messages).toContain("edge target 'ghost' is not a node")
+    expect(messages).toContain("edge source 'ghost' is not a node")
+  })
+
+  it('reports a gate with no outgoing edge, and a fork or join that names a node that is not one', () => {
+    const broken: WorkflowGraph = {
+      name: 'broken',
+      start_node: 'gate',
+      nodes: {
+        gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'user' },
+        fork: { _type: 'ForkNode', id: 'fork', targets: ['ghost'] },
+        join: { _type: 'JoinNode', id: 'join', sources: ['ghost'] },
+      },
+      edges: [],
+    }
+    const messages = validateGraph(broken).map(issue => issue.message)
+    expect(messages).toContain('gate has no outgoing edge')
+    expect(messages).toContain("fork target 'ghost' is not a node")
+    expect(messages).toContain("join source 'ghost' is not a node")
+  })
+
+  it('accepts a fork and a join that declare no branches', () => {
+    expect(validateGraph({
+      name: 't',
+      start_node: 'fork',
+      nodes: {
+        fork: { _type: 'ForkNode', id: 'fork' },
+        join: { _type: 'JoinNode', id: 'join' },
+      },
+      edges: [{ source: 'fork', target: 'join' }],
+    })).toEqual([])
+  })
+
+  it('follows a fork\'s targets when deciding what the walk can reach', () => {
+    expect(validateGraph({
+      name: 't',
+      start_node: 'fork',
+      nodes: {
+        fork: { _type: 'ForkNode', id: 'fork', targets: ['c1'] },
+        c1: { _type: 'FnNode', id: 'c1', command: 'true', reads: [], writes: [] },
+        stranded: { _type: 'FnNode', id: 'stranded', command: 'true', reads: [], writes: [] },
+      },
+      edges: [],
+    })).toEqual([{ node: 'stranded', message: 'unreachable from start_node' }])
   })
 
   it('reports a node with two unconditional edges, which has no defined successor', () => {
@@ -245,5 +288,75 @@ describe('validateGraph', () => {
       subgraph_exit: 'b',
       limit: 7,
     })
+  })
+})
+
+describe('describing nodes that declare only their type', () => {
+  const spine = new Spine({
+    name: 'sparse',
+    start_node: 'gate',
+    nodes: {
+      gate: { _type: 'GateNode', id: 'gate' },
+      agent: { _type: 'AgentNode', id: 'agent' },
+      llm: { _type: 'LLMNode', id: 'llm' },
+      instance: { _type: 'LLMNode', id: 'instance', instance_prompt: 'per-instance' },
+      fork: { _type: 'ForkNode', id: 'fork' },
+      join: { _type: 'JoinNode', id: 'join' },
+      fn: { _type: 'FnNode', id: 'fn' },
+      data: { _type: 'DataNode', id: 'data' },
+      pick: { _type: 'SelectionNode', id: 'pick' },
+    },
+    edges: [],
+  })
+
+  it('leaves a gate bare rather than inventing an evaluator or labels', () => {
+    const view = spine.view('gate')
+    expect(view.evaluator_type).toBeUndefined()
+    expect(view.gate_prompt).toBe('')
+    expect(view.reads).toEqual([])
+    expect(view.verdicts).toEqual([])
+  })
+
+  it('describes a bare agent node with an empty prompt and no files', () => {
+    const view = spine.view('agent')
+    expect(view.writes).toEqual([])
+    expect(view.reads).toEqual([])
+    expect(view.prompt_template).toBe('')
+  })
+
+  it('falls back to the instance prompt, and then to nothing, for a bare LLM node', () => {
+    const bare = spine.view('llm')
+    expect(bare.writes).toEqual([])
+    expect(bare.reads).toEqual([])
+    expect(bare.prompt_template).toBe('')
+    expect(bare.model).toBe('')
+    expect(bare.temperature).toBe(0)
+    expect(spine.view('instance').prompt_template).toBe('per-instance')
+  })
+
+  it('describes a branch-less fork and join as empty', () => {
+    expect(spine.view('fork').targets).toEqual([])
+    expect(spine.view('join').sources).toEqual([])
+  })
+
+  it('describes a bare fn node with no writes and no command', () => {
+    const view = spine.view('fn')
+    expect(view.writes).toEqual([])
+    expect(view.command).toBe('')
+  })
+
+  it('describes a bare data node with empty source and subgraph fields', () => {
+    const view = spine.view('data')
+    expect(view.writes).toEqual([])
+    expect(view.reads).toEqual([])
+    expect(view.subgraph_entry).toBe('')
+    expect(view.subgraph_exit).toBe('')
+  })
+
+  it('defaults a selection node to the best_score strategy', () => {
+    const view = spine.view('pick')
+    expect(view.strategy).toBe('best_score')
+    expect(view.reads).toEqual([])
+    expect(view.writes).toEqual([])
   })
 })

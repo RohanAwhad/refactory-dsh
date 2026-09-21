@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import type { ShellExecRequest, ShellExecSpec, ShellExecutor, ShellRunResult } from '@deepseek-ai/dsh-shell'
 import { commandOf, isDeterministic, NODE_ENV_KEY, runDeterministic, verdictOf } from '../src/execute.ts'
-import type { CommandRunnerConfig, NodeManifest } from '../src/execute.ts'
+import type { CommandFailure, CommandOutcome, CommandRunnerConfig, NodeManifest } from '../src/execute.ts'
 import type { NodeView } from '../src/spine.ts'
 
 /**
@@ -38,6 +38,18 @@ const localShell = {
     }
   },
 } as unknown as ShellExecutor
+
+/** The failure of a call the test expected to fail. */
+function failure(outcome: CommandOutcome): CommandFailure {
+  if (outcome.ok) throw new Error('expected the node to fail')
+  return outcome
+}
+
+/** The success of a call the test expected to complete. */
+function completed(outcome: CommandOutcome): Extract<CommandOutcome, { ok: true }> {
+  if (!outcome.ok) throw new Error(`expected the node to complete: ${outcome.error}`)
+  return outcome
+}
 
 const config: CommandRunnerConfig = { env: {}, timeoutMs: 10_000 }
 
@@ -86,8 +98,40 @@ describe('running a deterministic node', () => {
     const outcome = await runDeterministic(localShell, fn('a', 'echo boom >&2; exit 3'), config)
     expect(outcome.ok).toBe(false)
     expect(outcome.exitCode).toBe(3)
-    expect(outcome.error).toContain('exited with code 3')
+    expect(failure(outcome).error).toContain('exited with code 3')
     expect(outcome.stderr).toBe('boom')
+  })
+
+  it('refuses a node it was asked to run that has no command', async () => {
+    const outcome = await runDeterministic(localShell, fn('a'), config)
+    expect(outcome.ok).toBe(false)
+    expect(failure(outcome).error).toBe('a has no command')
+  })
+
+  it('reports a timeout and an abort as failures, not as steps that happened', async () => {
+    const stub = (result: Partial<ShellRunResult>): ShellExecutor => ({
+      resolve: (request: ShellExecRequest): ShellExecSpec => ({
+        command: request.command,
+        workdir: request.workdir ?? process.cwd(),
+        timeoutMs: request.timeoutMs ?? 10_000,
+        stdoutMaxBytes: 1_000,
+        env: request.env,
+        sandboxPolicy: undefined,
+      }),
+      run: async () => ({
+        exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 250,
+        stdout: { text: '', truncated: false }, stderr: { text: '', truncated: false },
+        ...result,
+      }),
+    } as unknown as ShellExecutor)
+
+    const timedOut = await runDeterministic(stub({ timedOut: true }), fn('a', 'true'), config)
+    expect(timedOut.ok).toBe(false)
+    expect(failure(timedOut).error).toBe('a timed out after 250ms')
+
+    const aborted = await runDeterministic(stub({ aborted: true }), fn('a', 'true'), config)
+    expect(aborted.ok).toBe(false)
+    expect(failure(aborted).error).toBe('a was aborted')
   })
 
   it('runs in the configured work directory', async () => {
@@ -117,10 +161,42 @@ describe('running a deterministic node', () => {
     })
   })
 
+  it('declares empty reads and writes for a node that names none', async () => {
+    const bare: NodeView = { id: 'bare', _type: 'FnNode', command: `printf '%s' "$${NODE_ENV_KEY}"` }
+    const outcome = await runDeterministic(localShell, bare, config)
+    const manifest = JSON.parse(outcome.stdout) as NodeManifest
+    expect(manifest.reads).toEqual([])
+    expect(manifest.writes).toEqual([])
+  })
+
+  it('carries the sandbox policy into the command spec when one is configured', async () => {
+    let seen: ShellExecSpec | undefined
+    const capturing = {
+      resolve(request: ShellExecRequest): ShellExecSpec {
+        seen = {
+          command: request.command,
+          workdir: request.workdir ?? process.cwd(),
+          timeoutMs: request.timeoutMs ?? 10_000,
+          stdoutMaxBytes: 1_000,
+          env: request.env,
+          sandboxPolicy: request.sandboxPolicy,
+        }
+        return seen
+      },
+      run: async () => ({
+        exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 10_000,
+        stdout: { text: 'ok', truncated: false }, stderr: { text: '', truncated: false },
+      }),
+    } as unknown as ShellExecutor
+    const policy = { mode: 'workspace-write' as const, workspaceRoot: '/w' }
+    await runDeterministic(capturing, fn('a', 'true'), { ...config, sandboxPolicy: policy })
+    expect(seen?.sandboxPolicy).toEqual(policy)
+  })
+
   it('fails the node when its command produces no verdict', async () => {
     const outcome = await runDeterministic(localShell, gate('g', 'true'), config)
     expect(outcome.ok).toBe(false)
-    expect(outcome.error).toContain('printed no verdict')
+    expect(failure(outcome).error).toContain('printed no verdict')
   })
 })
 
@@ -139,11 +215,11 @@ describe('reading a gate verdict', () => {
   it('routes a gate by its evaluator output', async () => {
     const outcome = await runDeterministic(localShell, gate('action_gate', 'echo DRAFT'), config)
     expect(outcome.ok).toBe(true)
-    expect(outcome.verdict).toBe('draft')
+    expect(completed(outcome).verdict).toBe('draft')
   })
 
   it('ignores evaluator log lines before the verdict', async () => {
     const outcome = await runDeterministic(localShell, gate('g', 'echo "log line"; echo RELOOP'), config)
-    expect(outcome.verdict).toBe('reloop')
+    expect(completed(outcome).verdict).toBe('reloop')
   })
 })

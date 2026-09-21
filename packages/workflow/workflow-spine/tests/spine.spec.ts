@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { Spine } from '../src/spine.ts'
+import { Spine, validateGraph } from '../src/spine.ts'
 import type { WorkflowGraph } from '../src/types.ts'
 
 function ids(spine: Spine): string[] {
@@ -135,5 +135,431 @@ describe('skip mutation', () => {
     spine.skip('fork')
     expect(ids(spine)).toEqual(['join'])
     expect(spine.state().skipped).toContain('c1')
+  })
+
+  it('skipping the last parallel entry releases the barrier behind it', () => {
+    const spine = new Spine(graph)
+    spine.complete('fork')
+    spine.skip('c1')
+    // The join was waiting behind the barrier; emptying the cursor releases it.
+    expect(ids(spine)).toEqual(['join'])
+    expect(spine.state().skipped).toContain('c1')
+  })
+
+  it('unskips a node, and is inert for one that was never skipped', () => {
+    const spine = new Spine(graph)
+    spine.skip('c1')
+    expect(spine.state().skipped).toContain('c1')
+    spine.unskip('c1')
+    expect(spine.state().skipped).not.toContain('c1')
+    expect(() => spine.unskip('c1')).not.toThrow()
+  })
+
+  it('refuses a node that is not in the graph', () => {
+    const spine = new Spine(graph)
+    expect(() => spine.skip('absent')).toThrow(/unknown node absent/)
+  })
+})
+
+describe('routing a gate', () => {
+  const graph: WorkflowGraph = {
+    name: 't',
+    start_node: 'gate',
+    nodes: {
+      gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'user', gate_prompt: 'ok?', reads: [] },
+      back: { _type: 'FnNode', id: 'back', writes: [], command: '' },
+      on: { _type: 'FnNode', id: 'on', writes: [], command: '' },
+    },
+    edges: [
+      { source: 'gate', target: 'back', condition: 'reloop' },
+      { source: 'gate', target: 'on' },
+    ],
+  }
+
+  it('falls through the unconditional edge on proceed when the gate declares no proceed label', () => {
+    const spine = new Spine(graph)
+    spine.verdict('gate', 'proceed')
+    expect(ids(spine)).toEqual(['on'])
+  })
+
+  it('names the labels it does accept for an outcome it does not have', () => {
+    const spine = new Spine(graph)
+    expect(() => spine.verdict('gate', 'maybe')).toThrow(/has no 'maybe' edge \(accepts reloop\)/)
+  })
+
+  it('halts to the halt edge, and ends the run when the gate declares none', () => {
+    const withHalt = new Spine({
+      name: 't',
+      start_node: 'gate',
+      nodes: {
+        gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'user', reads: [] },
+        stop: { _type: 'FnNode', id: 'stop', writes: [], command: '' },
+      },
+      edges: [{ source: 'gate', target: 'stop', condition: 'halt' }],
+    })
+    withHalt.verdict('gate', 'halt')
+    expect(ids(withHalt)).toEqual(['stop'])
+
+    const withoutHalt = new Spine({
+      name: 't',
+      start_node: 'gate',
+      nodes: {
+        gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'user', reads: [] },
+        on: { _type: 'FnNode', id: 'on', writes: [], command: '' },
+      },
+      edges: [{ source: 'gate', target: 'on', condition: 'proceed' }],
+    })
+    withoutHalt.verdict('gate', 'halt')
+    expect(withoutHalt.next().status).toBe('done')
+  })
+})
+
+describe('a selection node is described, not executed', () => {
+  it('reports its strategy and the files it reads and writes', () => {
+    const spine = new Spine({
+      name: 't',
+      start_node: 'pick',
+      nodes: {
+        pick: { _type: 'SelectionNode', id: 'pick', strategy: 'best_score', reads: ['in.json'], writes: ['out.json'] },
+      },
+      edges: [],
+    })
+    const view = spine.view('pick')
+    expect(view.strategy).toBe('best_score')
+    expect(view.reads).toEqual(['in.json'])
+    expect(view.writes).toEqual(['out.json'])
+  })
+})
+
+describe('director expansion edges', () => {
+  it('refuses to expand a director that declares no expansion', () => {
+    const spine = new Spine({
+      name: 't',
+      start_node: 'a',
+      nodes: { a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', writes: [], reads: [] } },
+      edges: [],
+    })
+    expect(() => spine.expand('a', [])).toThrow(/has no expand annotation/)
+  })
+
+  it('re-points a join that named the director when the director has no successor', () => {
+    const graph: WorkflowGraph = {
+      name: 't',
+      start_node: 'dir',
+      nodes: {
+        dir: {
+          _type: 'AgentNode', id: 'dir', role: 'ceo', prompt_template: 'plan',
+          expand: { plan: 'p.json', role: 'researcher', slug_field: 'slug', prompt_field: 'prompt', writes_template: '' },
+        },
+        join: { _type: 'JoinNode', id: 'join', sources: ['dir'] },
+        end: { _type: 'FnNode', id: 'end', writes: [], command: '' },
+      },
+      edges: [{ source: 'join', target: 'end' }],
+    }
+    const spine = new Spine(graph)
+    spine.expand('dir', [{ slug: 'x', prompt: 'p1' }])
+    // The view is what the CEO reads, and the join now waits on the children.
+    expect(spine.view('join').sources).toEqual(['dir__x'])
+
+    // Re-expanding reverts the join's reference to the previous children first.
+    spine.expand('dir', [{ slug: 'y', prompt: 'p2' }])
+    expect(spine.view('join').sources).toEqual(['dir__y'])
+  })
+
+  it('leaves a join that declares no sources alone, and keeps a director source when a successor exists', () => {
+    const spine = new Spine({
+      name: 't',
+      start_node: 'dir',
+      nodes: {
+        dir: {
+          _type: 'AgentNode', id: 'dir', role: 'ceo', prompt_template: 'plan',
+          expand: { plan: 'p.json', role: 'researcher', slug_field: 'slug', prompt_field: 'prompt', writes_template: '' },
+        },
+        bare: { _type: 'JoinNode', id: 'bare' },
+        waiting: { _type: 'JoinNode', id: 'waiting', sources: ['dir'] },
+      },
+      edges: [{ source: 'dir', target: 'after' }],
+    })
+    spine.expand('dir', [{ slug: 'x', prompt: 'p1' }])
+    expect(spine.view('bare').sources).toEqual([])
+    // The successor is reached through the barrier, so the director keeps the join.
+    expect(spine.view('waiting').sources).toEqual(['dir'])
+  })
+
+  it('names a child with no slug or prompt rather than dropping it', () => {
+    const spine = new Spine({
+      name: 't',
+      start_node: 'dir',
+      nodes: {
+        dir: {
+          _type: 'AgentNode', id: 'dir', role: 'ceo', prompt_template: 'plan',
+          expand: { plan: 'p.json', role: 'researcher', slug_field: 'slug', prompt_field: 'prompt', writes_template: '' },
+        },
+      },
+      edges: [],
+    })
+    const result = spine.expand('dir', [{}, { slug: 'a b/c' }])
+    expect(result.children).toEqual(['dir__child0', 'dir__a-b-c'])
+    expect(spine.view('dir__child0').prompt_template).toBe('')
+  })
+})
+
+describe('describing the remaining node types', () => {
+  it('reports an LLMNode as the one-shot call it is', () => {
+    const spine = new Spine({
+      name: 't',
+      start_node: 'llm',
+      nodes: {
+        llm: {
+          _type: 'LLMNode', id: 'llm', system_prompt: 'summarise', model: 'flash',
+          temperature: 0.5, reads: ['in'], writes: ['out'],
+        },
+      },
+      edges: [],
+    })
+    const view = spine.view('llm')
+    expect(view.prompt_template).toBe('summarise')
+    expect(view.model).toBe('flash')
+    expect(view.temperature).toBe(0.5)
+    expect(view.writes).toEqual(['out'])
+  })
+
+  it('reports a fork\'s targets and a join\'s sources', () => {
+    const spine = new Spine({
+      name: 't',
+      start_node: 'fork',
+      nodes: {
+        fork: { _type: 'ForkNode', id: 'fork', targets: ['a', 'b'] },
+        a: { _type: 'FnNode', id: 'a', writes: [], command: '' },
+        b: { _type: 'FnNode', id: 'b', writes: [], command: '' },
+        join: { _type: 'JoinNode', id: 'join', sources: ['a', 'b'] },
+      },
+      edges: [{ source: 'fork', target: 'join' }],
+    })
+    expect(spine.view('fork').targets).toEqual(['a', 'b'])
+    expect(spine.view('join').sources).toEqual(['a', 'b'])
+  })
+})
+
+describe('validation', () => {
+  it('rejects a node keyed under a name it does not declare', () => {
+    const issues = validateGraph({
+      name: 't',
+      start_node: 'a',
+      nodes: { a: { _type: 'FnNode', id: 'b', writes: [], command: 'true' } },
+      edges: [],
+    })
+    expect(issues.map(issue => issue.message)).toContain("node declares id 'b' but is keyed as 'a'")
+  })
+
+  it('rejects a gate with two unconditional edges', () => {
+    const issues = validateGraph({
+      name: 't',
+      start_node: 'gate',
+      nodes: {
+        gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'fn', evaluator_command: 'true', reads: [] },
+        a: { _type: 'FnNode', id: 'a', writes: [], command: '' },
+        b: { _type: 'FnNode', id: 'b', writes: [], command: '' },
+      },
+      edges: [{ source: 'gate', target: 'a' }, { source: 'gate', target: 'b' }],
+    })
+    expect(issues.map(issue => issue.message)).toContain('gate has more than one unconditional edge')
+  })
+})
+
+describe('rewinding across a fork', () => {
+  it('un-completes the fork\'s branches when a gate reloops past it', () => {
+    const spine = new Spine({
+      name: 't',
+      start_node: 'a',
+      nodes: {
+        a: { _type: 'FnNode', id: 'a', writes: [], command: '' },
+        fork: { _type: 'ForkNode', id: 'fork', targets: ['c1', 'c2'] },
+        c1: { _type: 'AgentNode', id: 'c1', role: 'reviewer', prompt_template: 'r1', writes: [], reads: [] },
+        c2: { _type: 'AgentNode', id: 'c2', role: 'reviewer', prompt_template: 'r2', writes: [], reads: [] },
+        join: { _type: 'JoinNode', id: 'join', sources: ['c1', 'c2'] },
+        gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'fn', evaluator_command: 'true', reads: [] },
+        end: { _type: 'FnNode', id: 'end', writes: [], command: '' },
+      },
+      edges: [
+        { source: 'a', target: 'fork' },
+        { source: 'fork', target: 'join' },
+        { source: 'join', target: 'gate' },
+        { source: 'gate', target: 'a', condition: 'reloop' },
+        { source: 'gate', target: 'end', condition: 'proceed' },
+      ],
+    })
+    spine.complete('a')
+    spine.complete('fork')
+    spine.complete('c1')
+    spine.complete('c2')
+    spine.complete('join')
+    expect(ids(spine)).toEqual(['gate'])
+    spine.verdict('gate', 'reloop', 'again')
+    // The rewind un-completed the whole branch, not only the node it targeted.
+    expect(spine.state().completed).not.toContain('c1')
+    expect(spine.state().completed).not.toContain('c2')
+    expect(ids(spine)).toEqual(['a'])
+  })
+
+  it('rewinds through a fork that declares no targets, and one whose branch is the gate', () => {
+    const bareFork: WorkflowGraph = {
+      name: 't',
+      start_node: 'a',
+      nodes: {
+        a: { _type: 'FnNode', id: 'a', writes: [], command: 'true' },
+        fork: { _type: 'ForkNode', id: 'fork' },
+        gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'fn', evaluator_command: 'true', reads: [] },
+        end: { _type: 'FnNode', id: 'end', writes: [], command: 'true' },
+      },
+      edges: [
+        { source: 'a', target: 'fork' },
+        { source: 'fork', target: 'gate' },
+        { source: 'gate', target: 'a', condition: 'reloop' },
+        { source: 'gate', target: 'end', condition: 'proceed' },
+      ],
+    }
+    const bare = new Spine(bareFork)
+    bare.complete('a')
+    bare.verdict('gate', 'reloop')
+    expect(ids(bare)).toEqual(['a'])
+
+    // The gate is itself a branch of the fork whose rewind passes it.
+    const branching = new Spine({
+      name: 't',
+      start_node: 'a',
+      nodes: {
+        a: { _type: 'FnNode', id: 'a', writes: [], command: 'true' },
+        fork: { _type: 'ForkNode', id: 'fork', targets: ['c1', 'gate'] },
+        c1: { _type: 'FnNode', id: 'c1', writes: [], command: 'true' },
+        join: { _type: 'JoinNode', id: 'join', sources: ['c1', 'gate'] },
+        gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'fn', evaluator_command: 'true', reads: [] },
+        end: { _type: 'FnNode', id: 'end', writes: [], command: 'true' },
+      },
+      edges: [
+        { source: 'a', target: 'fork' },
+        { source: 'fork', target: 'join' },
+        { source: 'join', target: 'gate' },
+        { source: 'gate', target: 'a', condition: 'reloop' },
+        { source: 'gate', target: 'end', condition: 'proceed' },
+      ],
+    })
+    branching.complete('a')
+    branching.complete('fork')
+    branching.complete('c1')
+    expect(ids(branching)).toEqual(['gate'])
+    branching.verdict('gate', 'reloop')
+    expect(ids(branching)).toEqual(['a'])
+  })
+
+  it('rewinds through a node two branches share without visiting it twice', () => {
+    const spine = new Spine({
+      name: 't',
+      start_node: 'a',
+      nodes: {
+        a: { _type: 'FnNode', id: 'a', writes: [], command: 'true' },
+        fork: { _type: 'ForkNode', id: 'fork', targets: ['b', 'c'] },
+        b: { _type: 'FnNode', id: 'b', writes: [], command: 'true' },
+        c: { _type: 'FnNode', id: 'c', writes: [], command: 'true' },
+        shared: { _type: 'FnNode', id: 'shared', writes: [], command: 'true' },
+        gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'fn', evaluator_command: 'true', reads: [] },
+        end: { _type: 'FnNode', id: 'end', writes: [], command: 'true' },
+      },
+      edges: [
+        { source: 'a', target: 'fork' },
+        { source: 'b', target: 'shared' },
+        { source: 'c', target: 'shared' },
+        { source: 'shared', target: 'gate' },
+        { source: 'gate', target: 'a', condition: 'reloop' },
+        { source: 'gate', target: 'end', condition: 'proceed' },
+      ],
+    })
+    spine.complete('a')
+    spine.complete('fork')
+    spine.complete('b')
+    // Both branches name `shared`; the rewind has to reach it once and stop at the gate.
+    spine.verdict('gate', 'reloop')
+    expect(ids(spine)).toEqual(['a'])
+    expect(spine.state().gate_verdicts).toEqual({ gate: 'reloop' })
+  })
+})
+
+describe('refusing what the cursor cannot do', () => {
+  const graph: WorkflowGraph = {
+    name: 't',
+    start_node: 'gate',
+    nodes: {
+      gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'user', reads: [] },
+      on: { _type: 'FnNode', id: 'on', writes: [], command: 'true' },
+    },
+    edges: [{ source: 'gate', target: 'on', condition: 'proceed' }],
+  }
+
+  it('refuses a node the graph does not have, for both reads and completion', () => {
+    const spine = new Spine(graph)
+    expect(() => spine.view('ghost')).toThrow(/unknown node ghost/)
+    expect(() => spine.complete('ghost')).toThrow(/unknown node ghost/)
+  })
+
+  it('refuses to complete a gate, which only a verdict may route', () => {
+    const spine = new Spine(graph)
+    expect(() => spine.complete('gate')).toThrow(/is a gate — use verdict\(\)/)
+  })
+
+  it('refuses a verdict for a node that is not a gate, and an empty verdict', () => {
+    const spine = new Spine(graph)
+    expect(() => spine.verdict('on', 'proceed')).toThrow(/on is not a gate/)
+    expect(() => spine.verdict('gate', '   ')).toThrow(/empty verdict for gate gate/)
+  })
+
+  it('does not record a skipped node as complete', () => {
+    const spine = new Spine({
+      name: 't',
+      start_node: 'a',
+      nodes: { a: { _type: 'FnNode', id: 'a', writes: [], command: 'true' } },
+      edges: [],
+    })
+    spine.skip('a')
+    expect(spine.complete('a').status).toBe('done')
+    expect(spine.state().completed).toEqual([])
+  })
+
+  it('marks a node type the spine cannot execute as unsupported', () => {
+    const spine = new Spine({
+      name: 't',
+      start_node: 'exotic',
+      nodes: { exotic: { _type: 'SubgraphForkNode', id: 'exotic' } },
+      edges: [],
+    })
+    expect(spine.view('exotic').unsupported).toBe(true)
+  })
+})
+
+describe('a fork with nothing to fan out to', () => {
+  it('ends the run when the fork names no branches and no successor', () => {
+    const graph: WorkflowGraph = {
+      name: 't',
+      start_node: 'fork',
+      nodes: { fork: { _type: 'ForkNode', id: 'fork' } },
+      edges: [],
+    }
+    expect(new Spine(graph).complete('fork').status).toBe('done')
+    expect(new Spine(graph).skip('fork').status).toBe('done')
+  })
+
+  it('is inert when its targets are already skipped, and ends the run without a join', () => {
+    const spine = new Spine({
+      name: 't',
+      start_node: 'fork',
+      nodes: {
+        fork: { _type: 'ForkNode', id: 'fork', targets: ['c1'] },
+        c1: { _type: 'FnNode', id: 'c1', writes: [], command: 'true' },
+      },
+      edges: [],
+    })
+    spine.skip('c1')
+    expect(spine.skip('fork').status).toBe('done')
+    expect(() => spine.skip('fork')).not.toThrow()
+    expect(spine.state().skipped).toEqual(['c1', 'fork'])
   })
 })

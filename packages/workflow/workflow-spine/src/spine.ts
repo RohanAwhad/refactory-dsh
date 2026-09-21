@@ -51,14 +51,13 @@ export interface NodeView {
   unsupported?: boolean
 }
 
-/** The result of {@link Spine.next}. */
-export interface SpineNext {
-  status: 'ready' | 'done'
-  nodes?: NodeView[]
-  feedback?: Record<string, string>
-  completed?: number
-  skipped?: string[]
-}
+/**
+ * The result of {@link Spine.next}: the nodes due now, or the end of the run with
+ * the count of what completed.
+ */
+export type SpineNext =
+  | { status: 'ready'; nodes: NodeView[]; feedback?: Record<string, string>; completed?: number; skipped?: string[] }
+  | { status: 'done'; nodes?: never; feedback?: Record<string, string>; completed?: number; skipped?: string[] }
 
 const DEFAULT_MAX_ITERATIONS = 3
 
@@ -234,9 +233,8 @@ export class Spine {
   private uncompleteBetween(target: string, gate: string): void {
     const seen = new Set<string>()
     const queue: string[] = [target]
-    while (queue.length > 0) {
-      const node = queue.shift()
-      if (node === undefined || seen.has(node) || node === gate) continue
+    for (const node of queue) {
+      if (seen.has(node) || node === gate) continue
       seen.add(node)
       for (const edge of this.outgoing(node)) {
         if (edge.condition == null && edge.target !== gate && !seen.has(edge.target)) {
@@ -266,9 +264,7 @@ export class Spine {
       if (node.evaluator_command !== undefined) view.evaluator_command = node.evaluator_command
       view.gate_prompt = node.gate_prompt ?? ''
       view.reads = node.reads ?? []
-      view.verdicts = this.outgoing(nid)
-        .filter(edge => edge.condition != null)
-        .map(edge => label(edge.condition as string))
+      view.verdicts = this.acceptedVerdicts(nid)
       if (typeof node.max_iterations === 'number') view.max_iterations = node.max_iterations
     }
     if (node._type === 'AgentNode') {
@@ -328,6 +324,17 @@ export class Spine {
    */
   view(nodeId: string): NodeView {
     return this.describe(nodeId)
+  }
+
+  /**
+   * The verdict labels a gate accepts, in edge order and lowercased.
+   * @param gate - the gate node id.
+   * @returns the labels its conditional edges carry; empty when it has none.
+   */
+  acceptedVerdicts(gate: string): string[] {
+    return this.outgoing(gate)
+      .filter(edge => edge.condition != null)
+      .map(edge => label(edge.condition as string))
   }
 
   /** The node(s) due now, or `done`. */
@@ -419,7 +426,7 @@ export class Spine {
       const target = this.conditionalTarget(gate, outcome)
         ?? (outcome === PROCEED ? this.unconditionalTarget(gate) : undefined)
       if (target === undefined) {
-        const allowed = this.describe(gate).verdicts ?? []
+        const allowed = this.acceptedVerdicts(gate)
         throw new Error(`${gate} has no '${outcome}' edge (accepts ${allowed.join(', ')})`)
       }
       this.cursor = [target]
@@ -438,9 +445,14 @@ export class Spine {
     const promptField = expansion.prompt_field
     const writesTemplate = expansion.writes_template
 
+    // The children of a previous expansion carry edges from the director, so the
+    // successor is the director's unconditional target that is **not** one of them;
+    // otherwise a re-expansion would mistake its own child for the next node.
+    const prefix = `${director}__`
     let successor = this.successors[director]
     if (successor === undefined) {
-      const next = this.unconditionalTarget(director)
+      const next = this.edges.find(edge =>
+        edge.source === director && edge.condition == null && !edge.target.startsWith(prefix))?.target
       if (next !== undefined) {
         successor = next
         this.successors[director] = next
@@ -448,7 +460,18 @@ export class Spine {
     }
 
     // Revert the director's previous expansion: drop old children and their edges.
-    const prefix = `${director}__`
+    // Joins that wait on this director, or on the children of a previous expansion,
+    // are recorded with the sources they named before the revert erases them: a
+    // re-expansion has to re-point them at the new children, and after the revert
+    // nothing still says they were waiting on this director.
+    const waitingJoins: Array<{ body: WorkflowNode; sources: string[] }> = []
+    for (const body of this.nodes.values()) {
+      const sources = body._type === 'JoinNode' ? body.sources : undefined
+      if (sources === undefined) continue
+      if (sources.some(source => source === director || source.startsWith(prefix))) {
+        waitingJoins.push({ body, sources })
+      }
+    }
     for (const child of [...this.nodes.keys()]) {
       if (child.startsWith(prefix)) {
         this.nodes.delete(child)
@@ -459,10 +482,8 @@ export class Spine {
       !(edge.source === director && edge.condition == null)
       && !(edge.source.startsWith(prefix) || edge.target.startsWith(prefix)),
     )
-    for (const body of this.nodes.values()) {
-      if (body._type === 'JoinNode' && (body.sources ?? []).some(source => source.startsWith(prefix))) {
-        body.sources = (body.sources ?? []).filter(source => !source.startsWith(prefix))
-      }
+    for (const { body, sources } of waitingJoins) {
+      body.sources = sources.filter(source => !source.startsWith(prefix))
     }
 
     const children: string[] = []
@@ -483,10 +504,10 @@ export class Spine {
       // successor as soon as the first child finished.
     }
     if (successor === undefined) {
-      for (const body of this.nodes.values()) {
-        if (body._type === 'JoinNode' && (body.sources ?? []).includes(director)) {
-          body.sources = (body.sources ?? []).filter(source => source !== director).concat(children)
-        }
+      for (const { body, sources } of waitingJoins) {
+        body.sources = sources
+          .filter(source => source !== director && !source.startsWith(prefix))
+          .concat(children)
       }
     }
 

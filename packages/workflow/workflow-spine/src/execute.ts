@@ -44,23 +44,28 @@ export interface CommandRunnerConfig {
   sandboxPolicy?: { mode: 'read-only' | 'workspace-write' | 'danger-full-access'; workspaceRoot: string }
 }
 
-/** The outcome of one deterministic node. */
-export interface CommandOutcome {
-  /** True when the node completed and the spine may advance. */
-  ok: boolean
+/** What one deterministic node produced, before the plugin judges it. */
+interface CommandResult {
   /** The command that ran, for reporting. */
   command: string
-  /** The process exit code; null when the process died from a signal. */
+  /** The process exit code; null when the node never ran or died from a signal. */
   exitCode: number | null
-  /** A gate's routed outcome, read from the last non-empty stdout line. */
-  verdict?: string
-  /** Bounded stdout, for the failure report. */
+  /** Bounded stdout. */
   stdout: string
-  /** Bounded stderr, for the failure report. */
+  /** Bounded stderr. */
   stderr: string
-  /** Why the node failed, when it did. */
-  error?: string
 }
+
+/** A node that failed: the reason is always present, so no caller reports a bare failure. */
+export type CommandFailure = CommandResult & { ok: false; error: string }
+
+/**
+ * The outcome of one deterministic node: it completed, carrying the verdict a
+ * gate's evaluator printed, or it failed with the reason it failed.
+ */
+export type CommandOutcome =
+  | (CommandResult & { ok: true; verdict?: string })
+  | CommandFailure
 
 /** The command a node runs itself, or `undefined` when a model owns the node. */
 export function commandOf(node: NodeView): string | undefined {
@@ -119,15 +124,14 @@ export async function runDeterministic(
   config: CommandRunnerConfig,
 ): Promise<CommandOutcome> {
   const command = commandOf(node)
-  const base: CommandOutcome = {
-    ok: false,
+  const base: CommandResult = {
     command: command ?? '',
     exitCode: null,
     stdout: '',
     stderr: '',
   }
   if (command === undefined) {
-    return { ...base, error: `${node.id} has no command` }
+    return { ...base, ok: false, error: `${node.id} has no command` }
   }
 
   const request = {
@@ -141,19 +145,19 @@ export async function runDeterministic(
   const result = await shell.run(spec)
   const stdout = result.stdout.text.trim()
   const stderr = result.stderr.text.trim()
-  const outcome: CommandOutcome = { ...base, exitCode: result.exitCode, stdout, stderr }
+  const outcome: CommandResult = { ...base, exitCode: result.exitCode, stdout, stderr }
 
   if (result.timedOut) {
-    return { ...outcome, error: `${node.id} timed out after ${result.timeoutMs}ms` }
+    return { ...outcome, ok: false, error: `${node.id} timed out after ${result.timeoutMs}ms` }
   }
-  if (result.aborted) return { ...outcome, error: `${node.id} was aborted` }
+  if (result.aborted) return { ...outcome, ok: false, error: `${node.id} was aborted` }
   if (result.exitCode !== 0) {
-    return { ...outcome, error: `${node.id} exited with code ${String(result.exitCode)}` }
+    return { ...outcome, ok: false, error: `${node.id} exited with code ${String(result.exitCode)}` }
   }
 
   if (node._type === 'GateNode') {
     const verdict = verdictOf(stdout)
-    if (verdict === undefined) return { ...outcome, error: `${node.id} printed no verdict` }
+    if (verdict === undefined) return { ...outcome, ok: false, error: `${node.id} printed no verdict` }
     return { ...outcome, ok: true, verdict }
   }
   return { ...outcome, ok: true }
