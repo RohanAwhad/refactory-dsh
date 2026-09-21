@@ -116,7 +116,7 @@ describe('dsh-tool-refactory', () => {
     expect(schema).toBeDefined()
     const action = (schema!.parameters as { properties: Record<string, { enum?: string[] }> }).properties.action
     expect(action?.enum).toEqual([
-      'modes', 'runs', 'start', 'status', 'artifacts', 'leaderboard', 'candidate',
+      'modes', 'strategies', 'runs', 'start', 'status', 'artifacts', 'leaderboard', 'candidate',
       'steer', 'best', 'adopt', 'registry', 'create', 'edit', 'design', 'stop',
     ])
   })
@@ -276,23 +276,27 @@ describe('dsh-tool-refactory', () => {
   it('maps the steering, winner and package actions onto the console verbs', async () => {
     const { ctx, subprocess } = await setup()
     subprocess.handler = () => runResult('{}')
-    await call(ctx, { action: 'steer', run: 'r1', note: 'no numpy', kind: 'constraint' })
+    await call(ctx, { action: 'strategies' })
     expect(subprocess.spawns[0]!.argv).toEqual([
+      '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'strategies',
+    ])
+    await call(ctx, { action: 'steer', run: 'r1', note: 'no numpy', kind: 'constraint' })
+    expect(subprocess.spawns[1]!.argv).toEqual([
       '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'steer',
       '--run', 'r1', '--note', 'no numpy', '--kind', 'constraint',
     ])
     await call(ctx, { action: 'adopt', run: 'r1', as: 'adopted_demo' })
-    expect(subprocess.spawns[1]!.argv).toEqual([
+    expect(subprocess.spawns[2]!.argv).toEqual([
       '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'adopt',
       '--run', 'r1', '--as', 'adopted_demo',
     ])
     await call(ctx, { action: 'registry', packages: 'remove', target: 'phase_pack' })
-    expect(subprocess.spawns[2]!.argv).toEqual([
+    expect(subprocess.spawns[3]!.argv).toEqual([
       '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'registry',
       'remove', 'phase_pack',
     ])
     await call(ctx, { action: 'create', name: 'new_pkg', brief: 'count up' })
-    expect(subprocess.spawns[3]!.argv).toEqual([
+    expect(subprocess.spawns[4]!.argv).toEqual([
       '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'create',
       '--name', 'new_pkg', '--brief', 'count up',
     ])

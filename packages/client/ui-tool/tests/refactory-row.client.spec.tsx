@@ -250,6 +250,17 @@ describe('refactoryCardModel', () => {
     expect(failed.body[0]).toBe('已结束')
     expect(failed.body[1]).toContain('new_pkg')
   })
+
+  it('lists the named level-2 seams with what each one is', () => {
+    const card = refactoryCardModel(resultNode({ action: 'strategies' }, 'strategies', {
+      outer_loops: [{ name: 'reflective', description: 'reflective evolution' }],
+      optimizers: [{ name: 'random', description: 'sample the catalogue' }],
+      evaluators: [{ name: 'walker', description: 'run in this process' }],
+    }), t)!
+    expect(card.body).toContain('reflective: reflective evolution')
+    expect(card.body).toContain('random: sample the catalogue')
+    expect(card.body).toContain('walker: run in this process')
+  })
 })
 
 describe('RefactoryRow', () => {

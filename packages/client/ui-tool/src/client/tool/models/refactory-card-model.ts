@@ -12,7 +12,7 @@ import { parsedToolCall, singleResultText, type ParsedToolCall } from './raw-too
 
 /** The actions the tool exposes, in the order a reader meets them. */
 const ACTIONS = [
-  'modes', 'runs', 'start', 'status', 'artifacts', 'leaderboard', 'candidate',
+  'modes', 'strategies', 'runs', 'start', 'status', 'artifacts', 'leaderboard', 'candidate',
   'steer', 'best', 'adopt', 'registry', 'create', 'edit', 'design', 'stop',
 ] as const
 
@@ -157,6 +157,17 @@ function bodyFor(action: Action, data: unknown, t: TranslateNS<'conversation'>):
     case 'modes':
     case 'runs':
       return listingLines(action, data, t)
+    case 'strategies': {
+      // The named choice: each seam's implementations with what each says it is.
+      const lines: string[] = []
+      for (const key of ['outer_loops', 'optimizers', 'evaluators']) {
+        const entries = Array.isArray(payload[key]) ? payload[key] as unknown[] : []
+        for (const entry of entries) {
+          if (isRecord(entry)) lines.push(`${scalar(entry.name)}: ${scalar(entry.description)}`)
+        }
+      }
+      return lines
+    }
     case 'start':
       return [field(t('refactory.mode'), payload.mode), field(t('refactory.run'), payload.run_id)]
     case 'status':

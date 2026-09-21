@@ -53,6 +53,7 @@ type ResolvedConfig = Omit<Required<Config>, 'pythonBin'> & { pythonBin: string 
 /** The verbs the tool exposes, and the one thing each needs to be addressed. */
 const VERBS = {
   modes: 'List the modes a run can be started from, with their parameters.',
+  strategies: 'List the named outer loops, optimizers and evaluators, each with what it is. Choose settings.optimizer/strategy/evaluator from these names.',
   runs: 'List runs under the run root, newest first.',
   start: 'Start a run in its own process; returns the run id to watch it with.',
   status: 'Where a run is, and the events since an offset.',
@@ -219,6 +220,7 @@ export function invocationFor(args: Args): {
       }
     }
     case 'modes':
+    case 'strategies':
     case 'runs':
     case 'stop':
       return { verb: args.action, positional: [], options: run }
@@ -271,6 +273,23 @@ export function renderResult(args: Args, value: unknown): ContentBlock[] {
         if (!isRecord(run)) continue
         const state = run.finished === true ? 'finished' : 'in flight'
         lines.push(`- ${scalar(run.run_id)} · ${scalar(run.mode)} · ${score(run.best_score)} · ${state}`)
+      }
+      break
+    }
+    case 'strategies': {
+      const seams = isRecord(value) ? value : {}
+      const groups: Array<[string, string]> = [
+        ['outer_loops', 'outer loop'],
+        ['optimizers', 'optimizer'],
+        ['evaluators', 'evaluator'],
+      ]
+      for (const [key, label] of groups) {
+        const entries = Array.isArray(seams[key]) ? seams[key] : []
+        lines.push(`${entries.length} ${label}(s):`)
+        for (const entry of entries) {
+          if (!isRecord(entry)) continue
+          lines.push(`- ${scalar(entry.name)}: ${scalar(entry.description)}`)
+        }
       }
       break
     }
@@ -444,7 +463,7 @@ export function apply(ctx: Context, config: Config): void {
       settings: {
         type: 'object',
         additionalProperties: true,
-        description: 'Run settings for action "start": epochs, batch_size, optimizer, strategy, evaluator, seed, elite, attempts, preset, max_evaluations. Passed through as console flags.',
+        description: 'Run settings for action "start": epochs, batch_size, optimizer, strategy, evaluator, seed, elite, attempts, preset, max_evaluations. The optimizer, strategy and evaluator must be names from the "strategies" action, which lists each with what it is. Passed through as console flags.',
       },
       intent: { type: 'string', description: 'For action "steer": the request the run is for, written the first time the ledger is seeded.' },
       note: { type: 'string', description: 'For action "steer": something said while the run goes, appended to the ledger.' },

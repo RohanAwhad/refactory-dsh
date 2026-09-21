@@ -501,6 +501,52 @@ def runs(
 # ── the command line a tool shells out to ──────────────────────────────────
 
 
+def _first_line(cls: Any) -> str:
+    """A class's own one-line description, from its docstring."""
+    text = (getattr(cls, "__doc__", "") or "").strip()
+    return text.split("\n", 1)[0].strip()
+
+
+def level_two() -> dict[str, Any]:
+    """The three level-2 seams by name, each with what it says it is.
+
+    The named choice a GUI needs: a person picks an outer loop, an optimizer or an
+    evaluator from a catalogue with descriptions rather than typing a name they have
+    to already know. Read from the registries, so a new implementation appears here
+    the moment it registers.
+    """
+    from refactory_dsh import evaluators, optim, strategies
+
+    def entries(registry: dict[str, Any]) -> list[dict[str, Any]]:
+        return [
+            {"name": name, "description": _first_line(cls)}
+            for name, cls in sorted(registry.items())
+        ]
+
+    return {
+        "outer_loops": entries(strategies.STRATEGIES),
+        "optimizers": entries(optim.REGISTRY),
+        "evaluators": entries(evaluators.REGISTRY),
+    }
+
+
+def _design_review(project: Path) -> str:
+    """The design review a creation wrote, so the choice it made is visible.
+
+    A create run surveys approaches, picks one and writes `design.md`; without this
+    a caller sees only the package it produced and cannot tell which approaches were
+    considered or what the review refused.
+    """
+    for candidate in (project / ".factory" / "create", Path(".factory/create")):
+        path = candidate / "design.md"
+        if path.exists():
+            try:
+                return path.read_text()[:8000]
+            except OSError:
+                return ""
+    return ""
+
+
 def _parser() -> argparse.ArgumentParser:
     def with_common(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         """The shared options, on every subcommand.
@@ -531,6 +577,7 @@ def _parser() -> argparse.ArgumentParser:
 
     add(sub.add_parser("modes", help="the catalogue of startable modes"))
     add(sub.add_parser("runs", help="every run under the root"))
+    add(sub.add_parser("strategies", help="the named outer loops, optimizers and evaluators"))
 
     begin = add(sub.add_parser("start", help="begin a run in its own process"))
     begin.add_argument("mode")
@@ -655,6 +702,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.verb == "modes":
             payload: Any = catalogue(project=project)
+        elif args.verb == "strategies":
+            payload = level_two()
         elif args.verb == "runs":
             payload = runs(project=project, runs_root=args.runs_root)
         elif args.verb == "start":
@@ -705,6 +754,10 @@ def main(argv: list[str] | None = None) -> int:
             if args.extends:
                 forwarded += ["--extends", args.extends]
             payload = _forward("create", forwarded)
+            review = _design_review(project)
+            if review:
+                # The approaches it considered, not just the package it produced.
+                payload["design_review"] = review
         elif args.verb == "edit":
             forwarded = [
                 "--mode", args.mode, "--name", args.name, "--brief", args.brief,
