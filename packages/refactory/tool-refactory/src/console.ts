@@ -34,17 +34,13 @@ export interface ConsoleSettings {
   collectBytes: number
 }
 
-/** What a console call produced. */
-export interface ConsoleResult {
-  /** Whether the console exited zero. */
-  ok: boolean
-  /** The decoded stdout, when it was JSON. */
-  value?: unknown
-  /** Console stderr, or the reason stdout could not be decoded. */
-  error?: string
-  /** The exact argv, so a failure can be reproduced by hand. */
-  argv: string[]
-}
+/**
+ * What a console call produced: the decoded JSON, or the reason there is none.
+ * `argv` is the exact command, so a failure can be reproduced by hand.
+ */
+export type ConsoleResult =
+  | { ok: true; value: unknown; argv: string[] }
+  | { ok: false; error: string; argv: string[] }
 
 /** One console call against the real process. */
 export class Console {

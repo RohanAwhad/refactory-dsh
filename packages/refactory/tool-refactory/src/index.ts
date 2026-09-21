@@ -307,11 +307,11 @@ export function renderResult(args: Args, value: unknown): ContentBlock[] {
       break
     }
     case 'artifacts': {
-      const artifacts = Array.isArray(data.artifacts) ? data.artifacts : []
-      const present = artifacts.filter(entry => isRecord(entry) && entry.exists === true)
+      const artifacts: unknown[] = Array.isArray(data.artifacts) ? data.artifacts : []
+      const present = artifacts.filter((entry): entry is Record<string, unknown> =>
+        isRecord(entry) && entry.exists === true)
       lines.push(`${present.length} artifact(s) present:`)
       for (const entry of present) {
-        if (!isRecord(entry)) continue
         lines.push(`- ${scalar(entry.name)} (${scalar(entry.media_type)})`)
       }
       break
@@ -499,9 +499,9 @@ export function apply(ctx: Context, config: Config): void {
       if (!result.ok) {
         // A refusal carries the console's own reason. Surface it as a tool error
         // so the model corrects the call rather than reading a silent success.
-        throw new Error(`${resolved.toolName} ${typed.action} failed: ${result.error ?? 'no reason reported'}`)
+        throw new Error(`${resolved.toolName} ${typed.action} failed: ${result.error}`)
       }
-      return { action: typed.action, data: (result.value ?? null) as JsonValue }
+      return { action: typed.action, data: result.value as JsonValue }
     },
     presentCall: args => presentCall(args as unknown as Args),
     presentResult: (args, result) => presentResult(args as unknown as Args, result),

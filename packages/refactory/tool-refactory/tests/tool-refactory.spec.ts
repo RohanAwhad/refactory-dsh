@@ -319,6 +319,136 @@ describe('dsh-tool-refactory', () => {
     expect(ctx.tools.schemas().map(entry => entry.name)).toContain('loop')
     expect(await promptText(ctx)).toContain('loop tool to run and read')
   })
+
+  it('presents through the registered definition, so the runtime renders the same view', async () => {
+    const { ctx } = await setup()
+    const definition = ctx.tools.get('refactory')
+    expect(definition?.presentCall?.({ action: 'modes' })).toMatchObject({
+      card: 'generic', title: 'refactory modes',
+    })
+    expect(definition?.presentResult?.({ action: 'modes' }, {
+      content: [{ type: 'text', text: '0 mode(s)' }], isError: false,
+    })).toMatchObject({ card: 'generic', title: 'refactory modes' })
+  })
+})
+
+describe('invocationFor', () => {
+  it('maps best, edit and design onto their console verbs', () => {
+    expect(tool.invocationFor({ action: 'best', run: 'r1', state: true })).toMatchObject({
+      verb: 'best', positional: [], options: { run: 'r1', state: true },
+    })
+    expect(tool.invocationFor({
+      action: 'edit', mode: 'm/n', name: 'pkg', brief: 'faster', allowRegression: true, attempts: 2,
+    })).toMatchObject({
+      verb: 'edit',
+      options: { mode: 'm/n', name: 'pkg', brief: 'faster', 'allow-regression': true, attempts: 2 },
+    })
+    expect(tool.invocationFor({
+      action: 'design', name: 'pkg', brief: 'a thing', check: 'pytest', attempts: 3,
+    })).toMatchObject({
+      verb: 'design',
+      options: { name: 'pkg', brief: 'a thing', check: 'pytest', attempts: 3 },
+    })
+  })
+
+  it('defaults the registry verb to list, and refuses authoring calls missing an argument', () => {
+    expect(tool.invocationFor({ action: 'registry' })).toMatchObject({
+      verb: 'registry', positional: ['list', ''],
+    })
+    expect(() => tool.invocationFor({ action: 'create', name: 'p' })).toThrow(/needs `name` and `brief`/)
+    expect(() => tool.invocationFor({ action: 'edit', name: 'p', brief: 'b' })).toThrow(/needs `mode`, `name` and `brief`/)
+    expect(() => tool.invocationFor({ action: 'edit', mode: 'm/n', brief: 'b' })).toThrow(/needs `mode`, `name` and `brief`/)
+    expect(() => tool.invocationFor({ action: 'design', brief: 'b', check: 'c' })).toThrow(/needs `name`, `brief` and `check`/)
+    expect(() => tool.invocationFor({ action: 'design', name: 'p', check: 'c' })).toThrow(/needs `name`, `brief` and `check`/)
+  })
+
+  it('titles the pending call by whichever subject the action names', () => {
+    expect(tool.presentCall({ action: 'modes' }).title).toBe('refactory modes')
+    expect(tool.presentCall({ action: 'status', run: 'r1' }).title).toBe('refactory status r1')
+    expect(tool.presentCall({ action: 'candidate', candidate: 'abc' }).title).toBe('refactory candidate abc')
+  })
+
+  it('renders a completed call whose result carries no payload', () => {
+    expect(tool.presentResult({ action: 'modes' }, 'nonsense')).toMatchObject({
+      card: 'generic', title: 'refactory modes', content: [{ type: 'text' }],
+    })
+  })
+})
+
+describe('renderResult', () => {
+  function rendered(action: string, value: unknown): string {
+    const blocks = tool.renderResult({ action } as Parameters<typeof tool.renderResult>[0], value)
+    return blocks.map(block => block.type === 'text' ? block.text : '').join('')
+  }
+
+  it('renders modes, skipping entries that are not records', () => {
+    expect(rendered('modes', { not: 'an array' })).toContain('0 mode(s)')
+    expect(rendered('modes', [{ id: null, startable: true }, 'nope', { id: { nested: 1 } }]))
+      .toContain('- {"nested":1}')
+  })
+
+  it('renders runs with the state each one is in', () => {
+    expect(rendered('runs', { not: 'an array' })).toContain('0 run(s)')
+    expect(rendered('runs', ['nope', { run_id: 'r1', mode: 'a/b' }])).toContain('in flight')
+  })
+
+  it('renders the strategy seams, skipping malformed groups and entries', () => {
+    expect(rendered('strategies', 'nope')).toContain('0 outer loop(s)')
+    expect(rendered('strategies', { outer_loops: 'nope' })).toContain('0 outer loop(s)')
+    expect(rendered('strategies', { optimizers: ['nope', { name: 'autoresearch', description: 'searches' }] }))
+      .toContain('- autoresearch: searches')
+  })
+
+  it('renders a status with no counters rather than undefined', () => {
+    expect(rendered('status', { run_id: 'r1', state: 'running', counters: 'nope' }))
+      .toContain('epoch 0, generation 0, 0 evaluation(s)')
+  })
+
+  it('renders a leaderboard, saying a row with no score scored nothing', () => {
+    expect(rendered('leaderboard', 'nope')).toContain('0 candidate(s)')
+    expect(rendered('leaderboard', ['nope', { id: 'x' }])).toContain('- x scored nothing')
+  })
+
+  it('names the candidate the payload omits as the call asked for, or nothing', () => {
+    expect(rendered('candidate', {})).toContain('Candidate  against no parent:')
+  })
+
+  it('renders the intent ledger, its gate verdicts and its problems', () => {
+    expect(rendered('steer', { exists: false, entries: 'nope' })).toContain('missing with 0 entries')
+    const one = rendered('steer', {
+      exists: true,
+      entries: [{ kind: 'note', text: 'hi' }],
+      verdicts: { approve: 'proceed' },
+      problems: ['nothing'],
+    })
+    expect(one).toContain('with 1 entry')
+    expect(one).toContain('- [note] hi')
+    expect(one).toContain('Gate verdicts: approve=proceed.')
+    expect(one).toContain('problem: nothing')
+    // An entry that is not a record is counted, and skipped rather than printed.
+    expect(rendered('steer', { entries: ['nope'] })).toContain('with 1 entry')
+    expect(rendered('steer', { verdicts: 'nope' })).not.toContain('Gate verdicts')
+  })
+
+  it('renders the winner and the adoption', () => {
+    expect(rendered('best', { candidate: 'x', score: 1.5 })).toContain('The winner is x, scoring 1.5.')
+    expect(rendered('best', { candidate: 'x' })).toContain('The winner is x, scoring nothing.')
+    expect(rendered('adopt', { mode: 'm/n', adopted_from: 'r1', package_root: '/p', score: 2 }))
+      .toContain('The adopted mode scored 2')
+    expect(rendered('adopt', { mode: 'm/n', adopted_from: 'r1', package_root: '/p' }))
+      .toContain('scored nothing')
+  })
+
+  it('reports a forwarded authoring call by what it produced', () => {
+    const succeeded = rendered('create', { ok: true, exit_code: 0, result: { output: 'wrote pkg' } })
+    expect(succeeded).toContain('create succeeded (exit 0).')
+    expect(succeeded).toContain('wrote pkg')
+    expect(rendered('edit', { ok: false, exit_code: 1, result: 'nope' })).toContain('edit failed')
+  })
+
+  it('says nothing was stopped when the payload names no reason', () => {
+    expect(rendered('stop', { stopped: false })).toContain('unknown')
+  })
 })
 
 describe('Console', () => {
@@ -331,5 +461,54 @@ describe('Console', () => {
     expect(console.argv({ verb: 'status', positional: [], options: { run: 'a b; rm -rf /' } })).toEqual([
       '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'status', '--run', 'a b; rm -rf /',
     ])
+  })
+
+  /** A console over a scripted subprocess, whose outcome each case states. */
+  async function consoleOver(scripted: Scripted): Promise<{ console: Console; fake: FakeSubprocess }> {
+    const ctx = new Context()
+    await ctx.plugin(FakeSubprocess)
+    const fake = ctx.subprocess as FakeSubprocess
+    fake.handler = () => scripted
+    const console = new Console(ctx.subprocess, {
+      repoRoot: '/repo', pythonBin: '/repo/.venv/bin', timeoutMs: 1_000, collectBytes: 1_024,
+    })
+    return { console, fake }
+  }
+
+  it('decodes JSON when the caller passes no signal of its own', async () => {
+    const { console } = await consoleOver(runResult('[1]'))
+    await expect(console.run({ verb: 'modes' })).resolves.toMatchObject({ ok: true, value: [1] })
+  })
+
+  it('reports the console\'s stderr when it failed without a JSON reason', async () => {
+    const { console } = await consoleOver(runResult('', 2, '  broken pipe\n'))
+    await expect(console.run({ verb: 'modes' })).resolves.toMatchObject({ ok: false, error: 'broken pipe' })
+  })
+
+  it('names the signal when a killed console has no exit code', async () => {
+    const killed: Scripted = {
+      stdout: { text: '' }, stderr: { text: '' }, outcome: { exitCode: null, signal: 'SIGTERM' },
+    }
+    const { console } = await consoleOver(killed)
+    await expect(console.run({ verb: 'modes' })).resolves.toMatchObject({
+      ok: false, error: 'exited with SIGTERM',
+    })
+  })
+
+  it('reports no status at all when neither exit code nor signal is known', async () => {
+    const unknown: Scripted = {
+      stdout: { text: '' }, stderr: { text: '' }, outcome: { exitCode: null, signal: null },
+    }
+    const { console } = await consoleOver(unknown)
+    await expect(console.run({ verb: 'modes' })).resolves.toMatchObject({
+      ok: false, error: 'exited with no status',
+    })
+  })
+
+  it('falls back to stderr when a successful console printed no JSON', async () => {
+    const { console } = await consoleOver(runResult('   ', 0, 'warning: nothing to say'))
+    await expect(console.run({ verb: 'modes' })).resolves.toMatchObject({
+      ok: false, error: 'the console printed no JSON: warning: nothing to say',
+    })
   })
 })
