@@ -93,16 +93,20 @@ anything in `lean_pack`, install them or you are not testing what you changed.
 
 **A DSH profile is machine state.** It is created with
 `dsh plugin --profile <name> add <package>`; it is not derived from the bundle. A fresh
-checkout does not carry one, so:
+checkout does not carry one. `install.sh` now creates it, idempotently and without
+overwriting a profile you already have; `REFACTORY_SKIP_DSH_PROFILE=1` skips that step
+for someone who only wants the Python side. The one place that answers "is the profile
+there, and what fixes it" is `refactory_dsh/dsh_profile.py`, used by the installer, by
+the DSH runner (which refuses with that message instead of the bare profile error) and
+by the tests. If you skipped the installer step, the command is:
 
 ```bash
 node --import tsx/esm apps/cli/src/bin.ts plugin --profile graph add \
   "$PWD/packages/bundle/graph"
 ```
 
-Without it, anything that runs a mode on DSH stops with `profile "graph" does not
-exist`. `--profile graph` is the headless run the DSH evaluator and the equivalence
-tests use.
+Without it, anything that runs a mode on DSH stops at the first DSH call. `--profile
+graph` is the headless run the DSH evaluator and the equivalence tests use.
 
 **A model key lives in the repo-root `.env`** as `DEEPSEEK_API_KEY`. Only
 `--optimizer autoresearch` needs it, through `dsh --profile headless`.

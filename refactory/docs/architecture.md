@@ -376,6 +376,10 @@ promises more than it delivers.
   judgement is not.
 - **The GUI is not audited here at all.** See `GUI-HANDOFF.md` at the repository root;
   #17 and #28 are open and deferred.
+- **Two suites are load-flaky.** `packages/boot/app-boot/tests/hmr-config.spec.ts`
+  and `user-patches.spec.ts` poll file watchers with 20s and 10s deadlines and fail
+  under full-suite contention while passing standalone; `hmr-config` is not in
+  `processBoundTests` while its sibling `app-boot.spec.ts` is.
 
 **Not a gap, but worth knowing.** Four strategies — `research_then_optimize`,
 `staged_curriculum`, `staged_v1`, `autoscientists` — make a decision that is only
@@ -384,17 +388,6 @@ it, by definition: it samples the catalogue. So under `--optimizer random` those
 behave as `default` does. That is the optimizer doing its job, not the strategy
 failing; a decision needs a reader, and a sampling proposer is not one. Pair them with
 `--optimizer autoresearch` to see the difference.
-- **Profiles are machine state.** A profile is created by `dsh plugin --profile <name>
-  add <package>`, not derived from the bundle, so a checkout does not carry one and
-  `--profile graph` stops on a machine that has never added it. Documented in the
-  bundle README; it is a setup step, not a bug, but it is the first thing a new
-  machine hits.
-- **Two suites are load-flaky.** `packages/boot/app-boot/tests/hmr-config.spec.ts`
-  and `user-patches.spec.ts` poll file watchers with 20s and 10s deadlines and fail
-  under full-suite contention while passing standalone; `hmr-config` is not in
-  `processBoundTests` while its sibling `app-boot.spec.ts` is.
-- **The GUI is not audited here at all.** See `GUI-HANDOFF.md` at the repository root;
-  #17 and #28 are open and deferred.
 
 ## Why it looks like this
 

@@ -54,7 +54,23 @@ PY="$VENV/bin/python"
 uv pip install --python "$PY" -q 'structlog>=24'
 uv pip install --python "$PY" -q -e "$GLUE"
 
-# 5. the modes the registry lists and the loop runs.
+# 5. the DSH profile a mode runs on. A profile is **machine state** — it is
+#    created by `dsh plugin --profile graph add <package>`, not derived from the
+#    bundle — so a fresh clone that skips this can run every mode through the
+#    walker and still fail the first time anything reaches DSH. Idempotent: a
+#    profile that already carries the bundle is left alone, so a user's own
+#    profile is never overwritten. `REFACTORY_SKIP_DSH_PROFILE=1` skips it for
+#    someone who only wants the Python side and does not want ~/.dsh touched.
+if [ "${REFACTORY_SKIP_DSH_PROFILE:-}" = "1" ]; then
+  echo "  DSH profile 'graph': skipped (REFACTORY_SKIP_DSH_PROFILE=1)"
+elif "$PY" -c 'from refactory_dsh import dsh_profile; raise SystemExit(0 if dsh_profile.is_ready() else 1)'; then
+  echo "  DSH profile 'graph': already present"
+else
+  echo "  DSH profile 'graph': creating (machine state, once per machine)"
+  node --import tsx/esm apps/cli/src/bin.ts plugin --profile graph add "$HERE/packages/bundle/graph"
+fi
+
+# 6. the modes the registry lists and the loop runs.
 echo "  packages installed:"
 "$PY" -m refactory_dsh.registry list || true
 

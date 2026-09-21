@@ -62,8 +62,17 @@ def run_on_dsh(
     """Lower ``state``, run it on DSH, and read back the facts it produced."""
     import time
 
+    from refactory_dsh import dsh_profile
+
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
+    problem = dsh_profile.requirement()
+    if problem is not None:
+        # Checked here rather than left to the child: DSH's own error is about a
+        # missing profile, which reads as a packaging bug. The profile is machine
+        # state, and this is the one place that knows the command that creates it.
+        return DshRun(facts={}, workdir=workdir, returncode=2, stderr=problem)
+
     graphs = workdir / "graphs"
     lowering.write_mode_graph(state, graphs, name=name)
     # The IR cannot carry the facts a node produces, so they travel in the run
