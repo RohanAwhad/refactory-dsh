@@ -364,15 +364,28 @@ pass. `Ledger.seed` refuses that string rather than accepting it.
 Recorded here rather than in a backlog, because each one is a place the system
 promises more than it delivers.
 
-- **The winner is not addressable.** A run records what the best candidate *scored*,
-  not the state that scored it; you have to read `journal.jsonl`. There is no
-  supported way to take a winner and run it again. The plumbing exists
-  (`Mode(state=...)`, `lowering.write_mode_graph`) — reloading the winner from the
-  journal reproduces its score exactly — but no command does it.
+- **The fidelity gate checks the precondition, not the output.** It reports a ledger
+  that is missing, empty or holding a placeholder. Whether the *work* is traceable to
+  the intent needs a model to read it, and that is not built. Cheap half: have agent
+  nodes cite the ledger entry they serve, so the chain is verifiable even though the
+  judgement is not.
+- **Four strategies are inert under `optimizer=random`.** `research_then_optimize`,
+  `staged_curriculum`, `staged_v1` and `autoscientists` publish their decision into
+  `ProposalContext.strategy`, and the random proposer does not read it, so with that
+  optimizer they behave as `default` does. Giving `random` a reader — biasing which
+  edits it samples by the published stage — would make the effect observable without
+  a model.
+- **Profiles are machine state.** A profile is created by `dsh plugin --profile <name>
+  add <package>`, not derived from the bundle, so a checkout does not carry one and
+  `--profile graph` stops on a machine that has never added it. Documented in the
+  bundle README; it is a setup step, not a bug, but it is the first thing a new
+  machine hits.
 - **Two suites are load-flaky.** `packages/boot/app-boot/tests/hmr-config.spec.ts`
   and `user-patches.spec.ts` poll file watchers with 20s and 10s deadlines and fail
   under full-suite contention while passing standalone; `hmr-config` is not in
   `processBoundTests` while its sibling `app-boot.spec.ts` is.
+- **The GUI is not audited here at all.** See `GUI-HANDOFF.md` at the repository root;
+  #17 and #28 are open and deferred.
 
 ## Why it looks like this
 
