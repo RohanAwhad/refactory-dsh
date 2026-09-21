@@ -432,6 +432,54 @@ def test_the_ledger_instruction_asks_for_a_citation(tmp_path):
     assert ledger.entries()[0]["at"] in prompts, "the entries to cite were not listed"
 
 
+def test_the_instruction_names_the_ledger_path_so_a_mid_run_note_is_read(tmp_path):
+    """The inlined graph cannot carry a note added while it runs; the path can.
+
+    The lowered prompt is fixed at boot, so "a note added mid-run reaches the nodes
+    that run afterwards" only holds if the node re-reads the file. The instruction
+    says where it is and that the newest entry wins.
+    """
+    ledger = Ledger.seed(tmp_path, "build a mode")
+    workflow = steering.interactive(_state(), tmp_path)[0]
+    prompts = " ".join(_agent_prompts(workflow))
+    assert str(ledger.path) in prompts, "the prompt did not name the live ledger"
+    assert "appended to while the run goes" in prompts
+
+
+def test_a_note_added_mid_run_is_live_for_a_later_node(tmp_path):
+    """An agent that follows the instruction sees what the person said mid-run."""
+    import refactory_dsh.nn as nn
+    from refactory_dsh.nn import executor
+
+    work = tmp_path / "run"
+    ledger = Ledger.seed(work, "write a counter mode")
+    graph = nn.Graph()
+    graph.add(nn.Node("first", "agent", prompt_template="A", writes=("a.md",)))
+    graph.add(nn.Node("second", "agent", prompt_template="B", writes=("b.md",)))
+    graph.connect("first", "second")
+
+    class Reader:
+        """A stand-in agent: it reads the live ledger its prompt names."""
+
+        def __init__(self) -> None:
+            self.saw: list[bool] = []
+            self.prompted_path = False
+
+        def complete(self, prompt: str, system: str = "") -> str:
+            self.prompted_path = self.prompted_path or str(ledger.path) in prompt
+            if not self.saw:
+                # The person adds a constraint while the run is going.
+                Ledger(work).note("constraint", "no numpy")
+            self.saw.append("no numpy" in ledger.path.read_text())
+            return f"{steering.CITATION} {ledger.entries()[0]['at']}"
+
+    reader = Reader()
+    result = executor.execute(graph, work, model=reader)
+    assert result.exit_ok, result.error
+    assert reader.prompted_path, "the agent was not told where the live ledger is"
+    assert reader.saw[1] is True, "the node after the note did not see it"
+
+
 def test_a_node_that_cited_nothing_is_caught(tmp_path):
     ledger = Ledger.seed(tmp_path, "build a mode")
     problems = steering.chain(ledger, {"writer": "I did the work."})

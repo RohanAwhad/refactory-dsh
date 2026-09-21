@@ -342,6 +342,7 @@
       "@deepseek-ai/dsh-schedule": ["./packages/schedule/schedule/src"],
       "@deepseek-ai/dsh-schedule/invariant": ["./packages/schedule/schedule/src/invariant.ts"],
       "@deepseek-ai/dsh-graph": ["./packages/bundle/graph/src"],
+      "@deepseek-ai/dsh-graph/src/*": ["./packages/bundle/graph/src/*"],
       "@deepseek-ai/dsh-scope": ["./packages/core/scope/src"],
       "@deepseek-ai/dsh-sdk-app": ["./packages/bundle/sdk-app/src"],
       "@deepseek-ai/dsh-sdk-minimal": ["./packages/bundle/sdk-minimal/src"],

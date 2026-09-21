@@ -222,14 +222,23 @@ def _is_agent_node(node: Any) -> bool:
 
 
 def _citation_block(ledger: Ledger) -> str:
-    """The instruction that makes the chain from ledger to work checkable."""
+    """The instruction that makes the chain from ledger to work checkable.
+
+    It names the ledger's **path** as well as its contents, and tells the node to
+    read it live: the lowered graph is inlined at boot, so a note the person adds
+    *while the run goes* is not in the prompt this node received. Re-reading is what
+    makes "a note added mid-run reaches the nodes that run afterwards" true.
+    """
     listed = ", ".join(f"`{entry['at']}`" for entry in ledger.entries())
     return (
         "\n\n## Trace your work to the ledger\n\n"
+        f"Read the live ledger at `{ledger.path}` before you act. It is appended to while "
+        "the run goes, so it may say more than this prompt does, and the newest entry wins.\n\n"
         "End your output with a line naming the ledger entry you are serving:\n\n"
         f"    {CITATION} <timestamp>\n\n"
-        f"The entries are: {listed}. Work that names no entry, or one that does not "
-        "exist, is reported as not traceable to what the person asked for."
+        f"The entries at the time this prompt was written are: {listed}. Work that names "
+        "no entry, or one that does not exist, is reported as not traceable to what the "
+        "person asked for."
     )
 
 

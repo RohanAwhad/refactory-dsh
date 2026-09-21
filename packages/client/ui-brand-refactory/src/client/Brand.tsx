@@ -9,6 +9,10 @@ import { REFACTORY_LOGO } from './logo.ts'
  * {@link RefactoryBrandName} renders nothing: the sidebar row would otherwise
  * carry the name twice, colliding with itself. The width is bounded so the
  * lockup cannot overrun the row it shares with the New Session affordance.
+ *
+ * `alt=""` is deliberate: the mark is decorative chrome, exactly like the
+ * harness's own fallback logo it replaces, and a literal alt would be
+ * product-visible copy the brand package has no locale seat to own.
  * @param props - host-supplied mark presentation.
  * @param props.size - requested mark height in px.
  */
@@ -17,7 +21,7 @@ export function RefactoryBrandMark({ size }: SidebarBrandMarkOwnerProps) {
     <img
       src={REFACTORY_LOGO}
       height={size}
-      alt="re:factory"
+      alt=""
       style={{ display: 'block', maxWidth: '100%', objectFit: 'contain' }}
     />
   )
