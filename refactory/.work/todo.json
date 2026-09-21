@@ -403,6 +403,17 @@
       "commit": "1d00db208f",
       "evidence": "Loop.leaderboard orders by score then id; best() walked the journal in insertion order and kept the first strict maximum, so on a six-way tie at 0.875 it returned the seed b6f0d3c9e601 while report.json named 0472f9addff5. best() now uses the report's order. The new test test_best_breaks_a_tie_the_way_the_run_reports_it failed against the old code ('ffff' != '0000') and passes; the existing test is strengthened to compare candidate identity, not only score. Re-checked on the real run: console best now returns 0472f9addff5. Reproduce: pytest refactory/tests/test_adoption.py -q",
       "observed": "99 passed in 10.70s"
+    },
+    {
+      "id": "walkthrough-commands",
+      "issue": 46,
+      "title": "The #40 walkthrough's own commands do not run as written",
+      "why": "Step 3 raised AttributeError on validate.RULES; step 9 omitted --optimizer so its documented results needed a model key; step 10 used the console's --runs-root where it needs --run. The walkthrough was not reproducible without reading the source.",
+      "verify": "pytest refactory/tests/test_docs_api.py -q",
+      "status": "done",
+      "commit": "b7fca60bac",
+      "evidence": "All three observed and recorded on issue #46. The #40 body is corrected (nn.RULES; --optimizer autoresearch for the strategy pair and --optimizer random for the tower; console --run). The loop/console --runs-root asymmetry that made step 10 return [] is now stated in both CLIs' help and in architecture.md section 8. Docs gates 15 passed, 0 failed. Reproduce: pytest refactory/tests/test_docs_api.py -q",
+      "observed": "9 passed in 0.15s"
     }
   ],
   "verification": {
