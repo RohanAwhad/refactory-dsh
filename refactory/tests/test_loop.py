@@ -78,6 +78,41 @@ def _patch_mode(mode_class: type[nn.Mode]):
     return patched()
 
 
+class _BoundedInt(nn.Mode):
+    """A mode whose only knob is a bounded integer, so the gradient can enumerate it."""
+
+    name = "bounded"
+
+    @classmethod
+    def declare(cls) -> dict[str, nn.Knob]:
+        return {"step": nn.Knob(2, "int", lo=1, hi=4, description="a bounded counter")}
+
+    def build(self) -> nn.Graph:
+        graph = nn.Graph()
+        graph.add(nn.Node("only", "op", call="loop_ops:write_number",
+                          knobs=("step",), writes=("number.json",), produces=("value",)))
+        return graph
+
+    def score(self, run: nn.RunResult) -> float:
+        return float(run.facts["value"])
+
+
+class _OpenInt(nn.Mode):
+    """A mode whose only knob is an integer with no declared bounds."""
+
+    name = "open"
+
+    @classmethod
+    def declare(cls) -> dict[str, nn.Knob]:
+        return {"step": nn.Knob(2, "int", description="an open counter")}
+
+    def build(self) -> nn.Graph:
+        return _BoundedInt().build()
+
+    def score(self, run: nn.RunResult) -> float:
+        return float(run.facts["value"])
+
+
 class _Building(nn.Mode):
     """A constructible mode, so the loop can get as far as judging it."""
 
@@ -296,6 +331,38 @@ def test_the_starting_population_sweeps_the_parameters(tmp_path):
     assert swept, "the starting population only moved structure"
     moved = {edit["name"] for candidate in swept for edit in candidate.edits}
     assert {"order", "grid", "selector"} & moved
+
+
+def test_a_bounded_numeric_knob_reports_the_values_nobody_ran(tmp_path):
+    """`step` declares 1..4; the gradient must say which of those never ran.
+
+    The enum case is covered above. A numeric knob with both bounds declared has
+    just as finite a set, and reporting `untried: []` there tells an optimizer
+    that a value it never tried has already been ruled out.
+    """
+    with _patch_mode(_BoundedInt):
+        loop = Loop(MODE, _config(tmp_path), project=Path("."))
+        loop.init()
+        loop.forward()
+        loop.loss_step()
+        attribution = loop.backward()["knob_attribution"]
+    tried = attribution["step"]["tried"]
+    untried = attribution["step"]["untried"]
+    assert untried, "the sweep cannot have run all four values in one batch"
+    assert set(untried) <= {1, 2, 3, 4}
+    assert all(str(value) not in tried for value in untried)
+    assert {int(value) for value in tried} | set(untried) == {1, 2, 3, 4}
+
+
+def test_an_unbounded_numeric_knob_reports_no_untried_values(tmp_path):
+    """There is no enumerable set to read, so the gradient must not invent one."""
+    with _patch_mode(_OpenInt):
+        loop = Loop(MODE, _config(tmp_path), project=Path("."))
+        loop.init()
+        loop.forward()
+        loop.loss_step()
+        attribution = loop.backward()["knob_attribution"]
+    assert attribution["step"]["untried"] == []
 
 
 def test_the_gradient_reports_which_values_are_untried(tmp_path):

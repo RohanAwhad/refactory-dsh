@@ -541,11 +541,26 @@ class Loop(OuterLoop):
         return attribution
 
     def _untried(self, name: str, tried: dict[str, list[float]]) -> list[Any]:
-        """The enumerated values of a knob that have not been evaluated."""
+        """The declared values of a knob that have not been evaluated.
+
+        A knob with a finite set -- an enum, or a ``str`` with declared values --
+        enumerates it. An ``int`` with both bounds declared is just as finite and
+        just as readable, so it enumerates its range too. An open-ended numeric
+        knob has no set to enumerate and answers empty.
+        """
         knob = self.parameters.get(name)
-        if knob is None or knob.kind != "enum":
+        if knob is None:
             return []
-        return [member for member in knob.enum if str(member) not in tried]
+        finite = knob.accepted()
+        if finite:
+            return [member for member in finite if str(member) not in tried]
+        if knob.kind == "int" and knob.lo is not None and knob.hi is not None:
+            return [
+                value
+                for value in range(int(knob.lo), int(knob.hi) + 1)
+                if str(value) not in tried
+            ]
+        return []
 
     def _efficiency(self) -> dict[str, Any]:
         """How many attempts it took per candidate that could actually run."""
