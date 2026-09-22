@@ -134,3 +134,5 @@ spending a run.
 - **Determinism.** Every command sets `--seed`. The same seed and settings produce
   the same leaderboard, which is what makes these instructions testable rather
   than illustrative.
+
+A mode that iterates a dataset, and the Task that supplies and judges its items, is in [Datasets and Tasks](../datasets.md).
