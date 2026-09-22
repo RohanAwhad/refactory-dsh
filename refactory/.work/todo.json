@@ -560,13 +560,13 @@
     {
       "id": "final-epoch",
       "issue": 55,
-      "title": "epochs mean evaluated batches, so the final epoch does not propose",
-      "why": "The last epoch's proposals were installed, counted, and never evaluated: a live 2-epoch run kept 10 candidates that nothing ran, and a model-driven optimizer paid for a proposal round whose output was dropped. The decision (--epochs N means N evaluated batches) is recorded on the issue, including the test that pinned the older reading and was updated with it.",
-      "verify": "pytest refactory/tests/test_loop.py refactory/tests/test_outerloop.py refactory/tests/test_loop_as_mode.py -q",
+      "title": "The report names the batch the epoch bound drops, instead of changing when it is asked",
+      "why": "The final epoch's proposals were installed, counted, and never evaluated: a live 2-epoch run kept 10 candidates that nothing ran. I first changed the semantics (--epochs N means N evaluated batches) and reverted it: the full suite showed three tests use epochs=1 because one epoch still asks, a fourth shifted with the proposal mix, and epochs=1 meaning 'sweep only' is a functional surprise. Proposing ahead is the designed pipeline; the harm was a report that could be read as if everything kept had run.",
+      "verify": "pytest refactory/tests/test_loop.py -q",
       "status": "done",
-      "commit": "e7f8d4113b",
-      "observed": "59 passed, 1 skipped",
-      "evidence": "optimizer_step returns nothing once self.epoch >= config.epochs. Both ways: the new test failed on the old code with 'the final epoch proposed 10 candidate(s) that nothing runs' and passes now; a live 3-epoch x batch-4 run reports population 11 == evaluations 11 (nothing kept and unrun), where the old code left accepted candidates with evaluated: 0 in epochs_summary. The ask-count test now expects one ask per epoch after the sweep (2 for 3 epochs)."
+      "commit": "074c28bab0",
+      "observed": "25 passed (test_loop.py); full suite 686 passed, 1 skipped",
+      "evidence": "report.json now carries `unevaluated` (the ids installed and never run) and report.md names them in the inner-runs section. Both ways: the new test failed against the pre-accounting code with KeyError: 'unevaluated' and passes here. The behavioural attempt is in the history as e7f8d4113b and its revert as 074c28bab0, with the reasoning on the issue."
     }
   ],
   "verification": {
