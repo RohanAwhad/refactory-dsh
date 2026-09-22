@@ -406,7 +406,9 @@ def validate(ctx: Any) -> str:
     name = str(ctx.facts["name"])
     attempts = int(ctx.knob("attempts", 3))
     try:
-        problems = check_package(name)
+        problems = check_package(
+            name, requires_data_node=bool(ctx.knob("data_node", 0))
+        )
     except Exception as exc:
         problems = [f"{type(exc).__name__}: {exc}"]
 
@@ -441,7 +443,7 @@ def _evict(module_name: str) -> None:
         del sys.modules[cached]
 
 
-def check_package(name: str) -> list[str]:
+def check_package(name: str, *, requires_data_node: bool = False) -> list[str]:
     """Everything wrong with a staged package, as a list of reasons.
 
     A generated package is **never imported here**. It is parsed, and then every
@@ -472,7 +474,9 @@ def check_package(name: str) -> list[str]:
         # Nothing further can be learned from a file that is not valid Python.
         return problems
 
-    checked = sandbox.verify_sandboxed(name, project=Path.cwd())
+    checked = sandbox.verify_sandboxed(
+        name, project=Path.cwd(), requires_data_node=requires_data_node
+    )
     problems.extend(checked.payload.get("problems") or [])
     if not checked.ok and not problems:
         return [checked.problem() or "the structural check could not be run"]

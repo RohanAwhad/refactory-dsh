@@ -355,7 +355,11 @@ def smoke(identifier: str, workdir: Path, *, project: Path | None = None, **kwar
 
 
 def verify_sandboxed(
-    name: str, *, project: Path | None = None, **kwargs: Any
+    name: str,
+    *,
+    project: Path | None = None,
+    requires_data_node: bool = False,
+    **kwargs: Any,
 ) -> SandboxResult:
     """Everything wrong with a package, checked without importing it here.
 
@@ -376,6 +380,7 @@ def verify_sandboxed(
         "from refactory_dsh import registry\n"
         "from refactory_dsh.nn import validate_state\n"
         "problems = []\n"
+        f"requires_data_node = {bool(requires_data_node)!r}\n"
         f"package = registry.load({name!r}, Path({str(project)!r}))\n"
         f"expected = {name!r}\n"
         # Concatenation, not a nested f-string: `{name!r}` inside one would insert
@@ -404,6 +409,15 @@ def verify_sandboxed(
         "    for issue in validate_state(mode.state_dict(), invariants=mode.invariants(),"
         " resolve_calls=True):\n"
         "        problems.append(f'{identifier}: {issue}')\n"
+        # A creation can be asked for a mode that iterates data. The brief reaching
+        # the prompt is a request; this is the check, and it runs where the package is
+        # loaded because that is the only place its graph exists.
+        "    if requires_data_node and not any(\n"
+        "        node.kind == 'data' and node.subgraph_entry and node.subgraph_exit\n"
+        "        for node in mode.graph().nodes.values()\n"
+        "    ):\n"
+        "        problems.append(f'{identifier} declares no DataNode that iterates a "
+        "subgraph, which this creation asked for')\n"
         "print(json.dumps({'problems': problems}))\n"
     )
     return run_sandboxed(code, workdir=project, env=dict(os.environ), **kwargs)

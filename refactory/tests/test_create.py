@@ -434,3 +434,32 @@ def test_reading_a_package_manifest_does_not_import_it(tmp_path, monkeypatch):
     assert described.ok, described.stderr
     assert described.payload["ids"], "the manifest names no mode"
     assert imported == [], f"describe_package imported it here: {imported}"
+
+
+def test_a_creation_asked_for_a_data_node_is_checked_for_one():
+    """`--data-node` was prompt text; the gate now checks what it asked for.
+
+    A run asked for a mode that iterates data could emit one that never iterates and
+    validate cleanly, so the run looked successful and the mode did nothing the brief
+    asked for.
+    """
+    import shutil as _shutil
+
+    from refactory_dsh import registry
+    from refactory_dsh.create_ops import check_package
+    from tests_support import good_files
+
+    root = registry.workspace_root(Path(".")) / "checked_pkg"
+    _shutil.rmtree(root, ignore_errors=True)
+    root.mkdir(parents=True)
+    for filename, body in good_files("checked_pkg").items():
+        (root / filename).write_text(body)
+    try:
+        registry.install_workspace(Path.cwd())
+        assert check_package("checked_pkg") == [], "the fixture package should be clean"
+        problems = check_package("checked_pkg", requires_data_node=True)
+        assert any("DataNode" in problem for problem in problems), (
+            f"a data-node creation was not told its mode does not iterate: {problems}"
+        )
+    finally:
+        _shutil.rmtree(root, ignore_errors=True)
