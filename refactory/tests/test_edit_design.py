@@ -21,7 +21,13 @@ from refactory_dsh.design import DesignMode
 from refactory_dsh.design_ops import ARTIFACTS
 from refactory_dsh.edit import EditConfig, EditMode
 from refactory_dsh.run import run_node
-from tests_support import FakeModel, create_answers, good_files, render
+from tests_support import (
+    REVIEW_ANSWERS,
+    FakeModel,
+    create_answers,
+    good_files,
+    render,
+)
 
 NAME = "edited_pkg"
 ARTIFACT = "designed_tool"
@@ -154,11 +160,26 @@ def test_a_revision_of_a_mode_that_does_not_run_is_refused(monkeypatch):
 
 
 # ── designing software ─────────────────────────────────────────────────────
+def _design_answers(emit: list[str]) -> list[str]:
+    """Every answer design-v2's agents need, in the order the graph asks."""
+    return [
+        "research: what has to be learned before this artifact is designed",
+        "perspectives: the simplest thing that passes the check",
+        "one plan: the files, and how the check exercises them",
+        "the design document",
+        *emit,
+        *REVIEW_ANSWERS,
+    ]
+
+
 def test_the_design_graph_is_a_different_shape_from_a_package_one():
     graph = DesignMode().graph()
     assert sorted(graph.nodes) == [
-        "check", "design", "emit", "materialise", "prepare", "report"
-    ]
+        "check", "code_reviewer", "design_doc", "emit", "fork_qa", "gate_overwatch",
+        "gate_qa", "gate_strategy", "health_checker", "join_qa", "materialise",
+        "overwatch", "prepare", "qa_director", "report", "research_director",
+        "strategy_director", "synthesize_qa", "synthesize_strategy",
+    ], "the graph is design-v2's phases, not v1's"
     assert graph.nodes["check"].evaluator.endswith("check_artifact")
     assert "register" not in graph.nodes, "an artifact is not a package"
     assert "smoke" not in graph.nodes
@@ -236,11 +257,12 @@ def test_a_design_run_produces_a_checked_artifact():
     mode.load_state_dict(state)
     workdir = Path(".factory/design-run")
     shutil.rmtree(workdir, ignore_errors=True)
-    model = FakeModel(["a design", render({"tool.py": "print('built')\n"})])
+    model = FakeModel(_design_answers([render({"tool.py": "print('built')\n"})]))
     result = mode.run(
         workdir,
         model=model,
         task={"name": ARTIFACT, "brief": "a tool", "check": "python tool.py"},
+        verdicts={"gate_strategy": "proceed"},
     )
     assert result.exit_ok, result.error
     payload = json.loads((workdir / "design.json").read_text())
@@ -253,11 +275,12 @@ def test_a_design_that_never_passes_its_check_fails_loudly():
     mode = DesignMode()
     workdir = Path(".factory/design-fail")
     shutil.rmtree(workdir, ignore_errors=True)
-    model = FakeModel(["a design"] + [render({"tool.py": "raise SystemExit(1)\n"})] * 3)
+    model = FakeModel(_design_answers([render({"tool.py": "raise SystemExit(1)\n"})] * 4))
     result = mode.run(
         workdir,
         model=model,
         task={"name": ARTIFACT, "brief": "a tool", "check": "python tool.py"},
+        verdicts={"gate_strategy": "proceed"},
     )
     assert result.exit_ok is False
     assert "does not pass its check" in (result.error or "")
