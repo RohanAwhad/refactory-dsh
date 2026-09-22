@@ -70,6 +70,7 @@ export const SERVICE_PAGE: Record<string, string> = {
   authorization: 'credentials.md',
   credentials: 'credentials.md',
   credentialsController: 'credentials.md',
+  refactoryConsole: 'refactory.md',
   settingsController: 'settings.md',
   directoryPicker: 'workspace.md',
   deepseekLlmApiExtensions: 'llm-streaming.md',
@@ -767,6 +768,14 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   WorkspaceFileRange: 'Host workspace file endpoint contract is owned by packages/api/workspace-files/README.md',
   WorkspaceFileStat: 'Host workspace file endpoint contract is owned by packages/api/workspace-files/README.md',
   WorkspaceFileText: 'Host workspace file endpoint contract is owned by packages/api/workspace-files/README.md',
+  RefactoryModeChoice: 'Host refactory console endpoint contract is owned by packages/refactory/refactory-console/README.md',
+  RefactoryPackageChoice: 'Host refactory console endpoint contract is owned by packages/refactory/refactory-console/README.md',
+  RefactoryRunStatus: 'Host refactory console endpoint contract is owned by packages/refactory/refactory-console/README.md',
+  RefactoryRunSummary: 'Host refactory console endpoint contract is owned by packages/refactory/refactory-console/README.md',
+  RefactoryStartReceipt: 'Host refactory console endpoint contract is owned by packages/refactory/refactory-console/README.md',
+  RefactoryStartRequest: 'Host refactory console endpoint contract is owned by packages/refactory/refactory-console/README.md',
+  RefactoryStopReceipt: 'Host refactory console endpoint contract is owned by packages/refactory/refactory-console/README.md',
+  RefactoryStrategies: 'Host refactory console endpoint contract is owned by packages/refactory/refactory-console/README.md',
 }
 
 /** Repository data policy consumed by the Cordis catalog projector. */

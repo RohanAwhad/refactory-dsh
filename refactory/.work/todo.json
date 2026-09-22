@@ -576,8 +576,8 @@
       "verify": "pytest refactory/tests/test_default_package.py -q",
       "status": "done",
       "commit": "a0dc7e85ec",
-      "observed": "25 passed (test_default_package.py); both modes lower to IR and pass the IR validator, and DSH's own validateGraph accepts them with ForkNode/JoinNode intact.",
-      "evidence": "meta_pack became default_pack; the vocabulary gained fork/join/data with lowering, V12 and fork/subgraph reachability; the walker runs forks and joins to the same barrier. Live real-model runs of both modes executed their v2 phases (research director with five research subagents, strategy director, synthesize_strategy, design-v2's design_doc) and refused at the person's gate rather than approving their own plan. The handoff carries the survey of remote-factory's other fourteen workflows and why the benchmark harnesses are a Task package rather than ported modes."
+      "observed": "25 passed (test_default_package.py); both modes lower to IR and pass the IR validator, and DSH's own validateGraph accepts them with ForkNode/JoinNode intact; a live model-driven create run completed end to end in 1479s over 23 iterations.",
+      "evidence": "meta_pack became default_pack; the vocabulary gained fork/join/data with lowering, V12 and fork/subgraph reachability; the walker runs forks and joins to the same barrier as DSH. Live real-model runs executed the v2 phases (research director with subagents, strategy director, synthesize_strategy, design-v2's design_doc, emit, materialise, validate, the QA fork, synthesize_qa, gate_qa, overwatch, gate_overwatch, register, smoke) and refused at the person's gate rather than approving it themselves; the first full run then failed at qa_director with the 300s completion ceiling, which is why that ceiling is now 1800s and settable (f92276b0fb). Supplying the person's verdict with verdicts={'gate_strategy': 'proceed'} produced the package live_counting with smoke_score 1.0, sandboxed, qa-gate 'proceed: no blocking finding' and overwatch-gate 'proceed: overwatch passed'; re-smoked independently by hand: exit_ok true, score 1.0, and the step knob moves the score (step 1 -> 5/1.0, 4 -> 8/0.25, 7 -> 7/0.333 for target 5)."
     },
     {
       "id": "dataset-task",
@@ -599,7 +599,18 @@
       "status": "done",
       "commit": "9bf0e8446b",
       "observed": "44 passed (tool-refactory.spec.ts)",
-      "evidence": "Verified in the real GUI: one plain-language ask made the CEO call modes, list the counting modes, call start with the mode and settings, and return the run id, which finished at best 1.0. The catalogue now carries the action that runs each mode (start, or the authoring verb), the tool's description says which action to use and in what order, and start refuses an authoring mode synchronously naming the verb to use instead. The picker widget itself is not built and remains the issue's open half."
+      "evidence": "Verified in the real GUI: one plain-language ask made the CEO call modes, list the counting modes, call start with the mode and settings, and return the run id, which finished at best 1.0. The catalogue now carries the action that runs each mode (start, or the authoring verb), the tool's description says which action to use and in what order, and start refuses an authoring mode synchronously naming the verb to use instead. The picker widget is built and uncommitted in the working tree (packages/client/ui-refactory and packages/refactory/refactory-console); its ledger item is recorded with the commit that lands it, because every `done` item must name a commit git can resolve."
+    },
+    {
+      "id": "refactory-picker",
+      "issue": 49,
+      "title": "The picker: a mode, strategy and package panel over the same console the tool reads",
+      "why": "Issue #49's second half. #28's acceptance asks for \"a named choice with its description, not a free-text field\", and the conversation-first surface only reaches the model; the browser needed its own host path to the console.",
+      "verify": "pnpm exec vitest run packages/refactory/refactory-console/tests/service-live.spec.ts packages/client/ui-refactory/tests/body.client.spec.tsx",
+      "status": "done",
+      "commit": "HEAD",
+      "observed": "146 tests passed across 9 files (tool-refactory, refactory-console, ui-refactory), including service-live.spec.ts driving the real .venv console through the real local subprocess provider; client per-file coverage 100% on all four metrics; pnpm run test:gui 4735 passed.",
+      "evidence": "packages/refactory/refactory-console is a Typert Remote service (refactoryConsole) that holds the same Console the model-facing tool holds \u2014 both go through resolveConsoleSettings/startInvocation/registryInvocation in tool-refactory's new ./console entry \u2014 so a choice made in the panel is the invocation the tool makes. packages/client/ui-refactory registers kind `refactory` into ctx.sidebarRightTabs and a body into sidebar.right.pane.tab: a mode picker, three strategy pickers (name + own description), a package list with enable/disable/remove/import, start, and on-demand status with refresh and stop. Refusals carry codes (refactory/authoring-mode names the verb the catalogue's own `action` field reports). Wiring: the host row in the web-app composition (where the gateway discovers host services), the client row in the bundle, the tsconfig aggregates and the web-app dependency. Fixed while verifying: the generated lib/typert.host.js imports zod, which the package had not declared (91 web-lane files failed to boot until it did); the panel's 1px neutral borders violated the ui-theme hairline rule; and the console side-bundle needed a declared entry in the workspace publication policy. A GIF of the panel is recorded from the built tree and attached to issue #49."
     }
   ],
   "verification": {

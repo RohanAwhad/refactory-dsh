@@ -20,7 +20,7 @@ The blank-session hero is text-only by decision. The only artwork in the reposit
 
 ## Alternatives considered
 
-**A client panel with its own host RPC seam.** Deferred rather than rejected, and filed as the follow-up: a picker with the strategy descriptions beside it is the right home for the named choice, and it needs a Service Definition, a provider, a Typert remote and a client registration. The tool is model-facing, so the client cannot call it, and building that seam is a larger change than the surface it would replace.
+**A client panel with its own host RPC seam.** The surface this change shipped was the tool, because the panel needs a Service Definition, a provider, a Typert remote and a client registration — larger than the surface it would replace — and because the tool is model-facing, so the client cannot call it. [The Web picker reads the console through one Remote service](../architecture/2026-09-24-the-web-picker-reads-the-console-over-remote.md) builds that seam; a picker with the strategy descriptions beside it is that note's subject.
 
 **A second copy of the catalogue in the client.** Rejected: the console's JSON is the contract both surfaces read and `tool-refactory/src/console.ts` is the one boundary, so a parallel store would drift from the tool the moment either changed.
 
@@ -31,7 +31,7 @@ The blank-session hero is text-only by decision. The only artwork in the reposit
 ## Consequences
 
 - Every action shells out to the same `python -m refactory_dsh.console` a person runs, so a run started from the page is the run a shell would start, with the same artifacts and the same report.
-- The named choice is a described catalogue the model reads, not a dropdown widget; the picker is open work, not a gap in the verbs.
+- The named choice is a described catalogue the model reads and [the picker](../../../../packages/client/ui-refactory/README.md) offers as dropdowns; both read the console's own descriptions rather than a second list.
 - The preset-dependency gate fails naming `ceo: @deepseek-ai/dsh-tool-refactory` when the dependency is removed, so the workspace defect cannot return silently.
 - The tool's action enum and its model-visible description grow with the console; the client card's action list is a second list that must move with them, and a card test covers each new action.
 - `create`, `edit` and `design` are model-driven and slow; a call blocks for minutes, which is why the tool's timeout is ten minutes and why the run they start is not a background job.

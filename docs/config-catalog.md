@@ -1739,6 +1739,26 @@ Depends on: [`LocalConfig`](#deepseek-aidsh-pwsh-local)
 
 Source: [`packages/shell/pwsh-sandbox/src/index.ts:40`](../packages/shell/pwsh-sandbox/src/index.ts)
 
+<a id="deepseek-aidsh-refactory-console"></a>
+
+## `@deepseek-ai/dsh-refactory-console`
+
+Requires: `subprocess` · `typert`
+
+```ts config-catalog
+/**
+ * Deployment settings: where the checkout is and how long a call may take.
+ *
+ * The same four settings the model-facing tool mounts, from one schema, so a
+ * deployment that points the tool at a checkout points this service there too.
+ */
+export type Config = ConsoleSettings
+```
+
+Depends on: `ConsoleSettings` (`@deepseek-ai/dsh-tool-refactory/console`)
+
+Source: [`packages/refactory/refactory-console/src/index.ts:65`](../packages/refactory/refactory-console/src/index.ts)
+
 <a id="deepseek-aidsh-repeat-tool-reminder"></a>
 
 ## `@deepseek-ai/dsh-repeat-tool-reminder`
@@ -2597,7 +2617,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/core/system-prompt/src/index.ts:242`](../packages/core/system-prompt/src/index.ts)
+Source: [`packages/core/system-prompt/src/index.ts:243`](../packages/core/system-prompt/src/index.ts)
 
 <a id="deepseek-aidsh-terminal-bash"></a>
 
@@ -2920,6 +2940,30 @@ export interface Config {
 ```
 
 Source: [`packages/workflow/tool-ralph/src/index.ts:21`](../packages/workflow/tool-ralph/src/index.ts)
+
+<a id="deepseek-aidsh-tool-refactory"></a>
+
+## `@deepseek-ai/dsh-tool-refactory`
+
+Requires: `tools` · `subprocess` · `systemPrompt`
+
+```ts config-catalog
+/** Deployment settings: where the checkout is and how long a call may take. */
+export interface Config {
+  /** Model-facing tool name (default `refactory`). */
+  toolName?: string
+  /** Repository root holding `refactory/` and `.venv/` (default: the process cwd). */
+  repoRoot?: string
+  /** Directory of the interpreter with refactory_dsh installed (default `<repoRoot>/.venv/bin`). */
+  pythonBin?: string
+  /** Wall-clock ceiling for one console call (default 10 minutes). */
+  timeoutMs?: number
+  /** Per-stream collection cap in bytes (default 4 MiB). */
+  collectBytes?: number
+}
+```
+
+Source: [`packages/refactory/tool-refactory/src/index.ts:31`](../packages/refactory/tool-refactory/src/index.ts)
 
 <a id="deepseek-aidsh-tool-session-query"></a>
 
@@ -3382,6 +3426,159 @@ export interface Config {
 
 Source: [`packages/webhook/webhook-github/src/index.ts:17`](../packages/webhook/webhook-github/src/index.ts)
 
+<a id="deepseek-aidsh-workflow-spine"></a>
+
+## `@deepseek-ai/dsh-workflow-spine`
+
+Requires: `tools` · `systemPrompt`
+
+```ts config-catalog
+/** Config: the workflow graph, tool naming, iteration bounds, and the CEO deny-list. */
+export interface Config {
+  /** The workflow graph (refactory's `Workflow.to_dict()` output). */
+  graph: WorkflowGraph
+  /** Tool-name prefix (default `wf`, yielding `wf_next`, `wf_done`, …). */
+  toolPrefix: string
+  /** Maximum reloop iterations before a gate halts. */
+  maxIterations: number
+  /**
+   * Run deterministic nodes (`FnNode`/`Study` commands and `fn` gate evaluators)
+   * in-process instead of handing them to the driving agent. Requires a shell
+   * executor; with none mounted the nodes are handed over as before.
+   */
+  executeCommands: boolean
+  /** Working directory for node commands; absent uses the shell executor's own. */
+  workdir?: string
+  /** Extra environment entries for node commands. */
+  commandEnv: Record<string, string>
+  /**
+   * The command that selects a data node's items and opens and closes one pass,
+   * run as `<dataCommand> <list|begin|end> --node <id> [--index <n>]`. Required
+   * when the graph has a `DataNode` and `executeCommands` is on: the items live
+   * outside the graph, so a composition with no loader cannot iterate one.
+   */
+  dataCommand: string
+  /** Foreground timeout for one node command. */
+  commandTimeoutMs: number
+  /** Sandbox mode for node commands; graph commands are trusted ops, so full access. */
+  commandSandboxMode: string
+  /**
+   * Global tools the CEO is not allowed to call. The guard denies these on the
+   * CEO's own scope at `agent/created`, so subagents (which join the full
+   * `standard` composition as siblings) keep them. Names absent from the CEO's
+   * inherited surface are skipped, so the list can name platform-gated tools
+   * (e.g. `pwsh`) that are not present.
+   */
+  ceoDeny: string[]
+}
+
+/** A workflow graph — the exact shape of refactory's `Workflow.to_dict()`. */
+export interface WorkflowGraph {
+  /** The run's name, used in status and in the spine's own reporting. */
+  name: string
+  /** The node the cursor starts at. */
+  start_node: string
+  /** The directory the mode was lowered from, for a reader of the graph. */
+  project_dir?: string
+  /** Every node, keyed by the id it also declares. */
+  nodes: Record<string, WorkflowNode>
+  /** Every edge, with a gate's verdict labels as conditions. */
+  edges: WorkflowEdge[]
+}
+
+/** One workflow node. Loose on purpose: it mirrors an external JSON format. */
+export interface WorkflowNode {
+  /** The node's IR type, e.g. `AgentNode` or `FnNode`. Selects the behavior. */
+  _type: string
+  /** The node id the graph keys it by, and the id its commands are told. */
+  id: string
+  /** `AgentNode`: the agent role the node is declared with. */
+  role?: string
+  /** The artifacts the node produces, as paths relative to the run directory. */
+  writes?: string[]
+  /** The artifacts the node consumes; a subagent is told to read these. */
+  reads?: string[]
+  /** `AgentNode`: the task handed to the driving agent, with `{{fact}}` slots. */
+  prompt_template?: string
+  /** `LLMNode`: the system prompt for the one-shot call. */
+  system_prompt?: string
+  /** `LLMNode`: an alternative per-instance prompt when no system prompt is set. */
+  instance_prompt?: string
+  /** `AgentNode` / `LLMNode`: the model the node was declared with. */
+  model?: string
+  /** `LLMNode`: sampling temperature. */
+  temperature?: number
+  /** `LLMNode`: the node's own turn cap. */
+  max_turns?: number
+  /** `GateNode`: the cap for this gate's reloop edge. */
+  max_iterations?: number
+  /** `FnNode` / `Study`: prose the driving agent follows when it runs the node. */
+  content?: string
+  /** `FnNode` / `Study`: the shell command the spine runs for the node. */
+  command?: string
+  /** `GateNode`: who answers it — its evaluator, a person, or the driving agent. */
+  evaluator_type?: 'fn' | 'user' | 'agent'
+  /** `GateNode` with `evaluator_type` `fn`: the command whose last stdout line is the verdict. */
+  evaluator_command?: string
+  /** `GateNode`: what the person or the driving agent is asked. */
+  gate_prompt?: string
+  /** `ForkNode`: the branch entry nodes, which are reached through this list and not through edges. */
+  targets?: string[]
+  /** `JoinNode`: the branch exits this barrier waits for. */
+  sources?: string[]
+  /** `AgentNode`: the annotation that lets a director hot-plug its planned children. */
+  expand?: DirectorExpansion
+  /** `DataNode`: the Task binding that supplies the items and judges each pass. */
+  task_ref?: string
+  /** `DataNode`: the item source read as `source_format`, when the items are not inline. */
+  source_path?: string
+  /** `DataNode`: how to read `source_path` — `directory`, `jsonl`, or `csv`. */
+  source_format?: string
+  /** `DataNode`: the items declared in the graph itself, each with an `id`. */
+  inline_items?: Array<Record<string, unknown>>
+  /** `DataNode`: the first node of the subgraph run once per item. */
+  subgraph_entry?: string
+  /** `DataNode`: the subgraph's last node, included in every pass. */
+  subgraph_exit?: string
+  /** `DataNode`: the most items to iterate, after the source is read. */
+  limit?: number
+  /** `SelectionNode`: the selection strategy. */
+  strategy?: string
+  [key: string]: unknown
+}
+
+/** One directed edge with an optional gate condition label. */
+export interface WorkflowEdge {
+  /** The node the walk leaves. */
+  source: string
+  /** The node the walk arrives at. */
+  target: string
+  /**
+   * The verdict label that routes along this edge, or null/absent for the
+   * unconditional edge. `proceed` / `reloop` / `halt` carry their usual
+   * meaning; any other label is a gate-named forward outcome (a switch), e.g.
+   * `draft` / `improve` / `debug`. Labels are compared in lowercase.
+   */
+  condition?: string | null
+}
+
+/** A director annotation on an AgentNode: hot-plug N child agents from a plan. */
+export interface DirectorExpansion {
+  /** Artifact path the director writes (the plan). */
+  plan: string
+  /** Child agent role. */
+  role: string
+  /** Plan-entry field holding the child slug. */
+  slug_field: string
+  /** Plan-entry field holding the child prompt. */
+  prompt_field: string
+  /** Child writes template, with `{slug}` substituted. */
+  writes_template: string
+}
+```
+
+Source: [`packages/workflow/workflow-spine/src/index.ts:43`](../packages/workflow/workflow-spine/src/index.ts)
+
 <a id="deepseek-aidsh-workflow-worker-thread"></a>
 
 ## `@deepseek-ai/dsh-workflow-worker-thread`
@@ -3429,6 +3626,7 @@ These load from a `cordis.yml` entry with no `config:` block; they declare no co
 - `@deepseek-ai/dsh-client-ui-approval` ([`packages/client/ui-approval/src/index.ts`](../packages/client/ui-approval/src/index.ts))
 - `@deepseek-ai/dsh-client-ui-attachment` ([`packages/client/ui-attachment/src/index.ts`](../packages/client/ui-attachment/src/index.ts))
 - `@deepseek-ai/dsh-client-ui-brand-official` ([`packages/client/ui-brand-official/src/index.ts`](../packages/client/ui-brand-official/src/index.ts))
+- `@deepseek-ai/dsh-client-ui-brand-refactory` ([`packages/client/ui-brand-refactory/src/index.ts`](../packages/client/ui-brand-refactory/src/index.ts))
 - `@deepseek-ai/dsh-client-ui-chat` ([`packages/client/ui-chat/src/index.ts`](../packages/client/ui-chat/src/index.ts))
 - `@deepseek-ai/dsh-client-ui-commands` ([`packages/client/ui-commands/src/index.ts`](../packages/client/ui-commands/src/index.ts))
 - `@deepseek-ai/dsh-client-ui-conversation` ([`packages/client/ui-conversation/src/index.ts`](../packages/client/ui-conversation/src/index.ts))
@@ -3445,6 +3643,7 @@ These load from a `cordis.yml` entry with no `config:` block; they declare no co
 - `@deepseek-ai/dsh-client-ui-open-in-app` ([`packages/client/ui-open-in-app/src/index.ts`](../packages/client/ui-open-in-app/src/index.ts))
 - `@deepseek-ai/dsh-client-ui-permission-presets` ([`packages/client/ui-permission-presets/src/index.ts`](../packages/client/ui-permission-presets/src/index.ts))
 - `@deepseek-ai/dsh-client-ui-plan` ([`packages/client/ui-plan/src/index.ts`](../packages/client/ui-plan/src/index.ts))
+- `@deepseek-ai/dsh-client-ui-refactory` ([`packages/client/ui-refactory/src/index.ts`](../packages/client/ui-refactory/src/index.ts))
 - `@deepseek-ai/dsh-client-ui-reference` ([`packages/client/ui-reference/src/index.ts`](../packages/client/ui-reference/src/index.ts))
 - `@deepseek-ai/dsh-client-ui-renderer` ([`packages/client/ui-renderer/src/index.ts`](../packages/client/ui-renderer/src/index.ts))
 - `@deepseek-ai/dsh-client-ui-schedule` ([`packages/client/ui-schedule/src/index.ts`](../packages/client/ui-schedule/src/index.ts))
@@ -3476,6 +3675,7 @@ These load from a `cordis.yml` entry with no `config:` block; they declare no co
 - `@deepseek-ai/dsh-fs-e2b` — requires `e2b` ([`packages/e2b/fs-e2b/src/index.ts`](../packages/e2b/fs-e2b/src/index.ts))
 - `@deepseek-ai/dsh-fs-observation-policy` ([`packages/fs/fs-observation-policy/src/index.ts`](../packages/fs/fs-observation-policy/src/index.ts))
 - `@deepseek-ai/dsh-goal-round-driver` — requires `agents` · `goals` · `sessions` ([`packages/goal/goal-round-driver/src/index.ts`](../packages/goal/goal-round-driver/src/index.ts))
+- `@deepseek-ai/dsh-graph` — requires `agentDefaultModel` · `agents` · `sessions` · `GRAPH_STARTUP_SERVICE` ([`packages/bundle/graph/src/index.ts`](../packages/bundle/graph/src/index.ts))
 - `@deepseek-ai/dsh-host-directory-picker-auto` — requires `webServer` · `loader` ([`packages/host/directory-picker-auto/src/index.ts`](../packages/host/directory-picker-auto/src/index.ts))
 - `@deepseek-ai/dsh-host-directory-picker-native` ([`packages/host/directory-picker-native/src/index.ts`](../packages/host/directory-picker-native/src/index.ts))
 - `@deepseek-ai/dsh-host-plugin-inventory` — requires `loader` ([`packages/host/plugin-inventory/src/index.ts`](../packages/host/plugin-inventory/src/index.ts))

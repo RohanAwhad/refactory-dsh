@@ -8,7 +8,7 @@
  * @module @deepseek-ai/dsh-tool-refactory/console
  */
 
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import type { SubprocessHandle } from '@deepseek-ai/dsh-subprocess'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 
@@ -41,6 +41,93 @@ export interface ConsoleSettings {
 export type ConsoleResult =
   | { ok: true; value: unknown; argv: string[] }
   | { ok: false; error: string; argv: string[] }
+
+/**
+ * Deployment settings for reaching the console, before they are resolved.
+ *
+ * Both console consumers — the model-facing tool and the Web Remote service —
+ * declare these same four fields, so a deployment edits one row per consumer and
+ * the shared resolver turns both into the same absolute paths.
+ */
+export interface ConsoleConfig {
+  /** Repository root holding `refactory/` and `.venv/` (default: the process cwd). */
+  readonly repoRoot?: string
+  /** Directory of the interpreter with refactory_dsh installed (default `<repoRoot>/.venv/bin`). */
+  readonly pythonBin?: string
+  /** Wall-clock ceiling for one console call (default 10 minutes). */
+  readonly timeoutMs?: number
+  /** Per-stream collection cap in bytes (default 4 MiB). */
+  readonly collectBytes?: number
+}
+
+/**
+ * The console's deployment defaults, in one place.
+ *
+ * Schemastery has no non-mutating object-schema composition (its `set` edits the
+ * schema in place), so each consumer declares its own fields and takes every
+ * default from here: a cap can only change in one place.
+ */
+export const CONSOLE_DEFAULTS = {
+  /** Wall-clock ceiling for one console call. */
+  timeoutMs: 10 * 60 * 1000,
+  /** Per-stream collection cap in bytes. */
+  collectBytes: 4 * 1024 * 1024,
+} as const
+
+/**
+ * Resolve deployment settings into the absolute paths one `Console` needs.
+ *
+ * `pythonBin` defaults against the resolved repository root rather than in the
+ * schema, because a schema default cannot read a sibling field's value.
+ * @param config - loader-validated settings.
+ * @returns the settings as the process boundary consumes them.
+ */
+export function resolveConsoleSettings(config: Required<ConsoleConfig>): ConsoleSettings {
+  const repoRoot = resolve(config.repoRoot)
+  return {
+    repoRoot,
+    pythonBin: resolve(config.pythonBin || join(repoRoot, '.venv', 'bin')),
+    timeoutMs: config.timeoutMs,
+    collectBytes: config.collectBytes,
+  }
+}
+
+/** What one `start` call carries: the mode, where the run lives, and its settings. */
+export interface StartRequest {
+  /** Mode to run, as `<package>/<name>`. */
+  readonly mode: string
+  /** Run id to claim; the console derives one when absent. */
+  readonly runId?: string | undefined
+  /** Directory holding the runs; the console default when absent. */
+  readonly runsRoot?: string | undefined
+  /** Run settings, passed through as `--<name> <value>` flags; `undefined` is skipped. */
+  readonly settings?: Readonly<Record<string, string | number | boolean | undefined>> | undefined
+}
+
+/**
+ * The console invocation that starts one run. The flags are the console's, so a
+ * setting the console adds is usable here without an edit.
+ * @param request - the mode, run addressing, and settings.
+ * @returns the verb, positionals, and options for one console call.
+ */
+export function startInvocation(request: StartRequest): ConsoleInvocation {
+  return {
+    verb: 'start',
+    positional: [request.mode],
+    options: { 'run-id': request.runId, 'runs-root': request.runsRoot, ...request.settings },
+  }
+}
+
+/**
+ * The console invocation for one package-registry verb.
+ * @param action - the registry verb, e.g. `list` or `enable`.
+ * @param target - the package or directory it acts on; empty addresses the catalogue.
+ * @param args - extra registry flags, as a shell-quoted string.
+ * @returns the verb, positionals, and options for one console call.
+ */
+export function registryInvocation(action: string, target: string, args?: string): ConsoleInvocation {
+  return { verb: 'registry', positional: [action, target], options: { args } }
+}
 
 /** One console call against the real process. */
 export class Console {

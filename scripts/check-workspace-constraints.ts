@@ -163,6 +163,10 @@ const packageFileExtras: Readonly<Record<string, readonly string[]>> = {
   // The Web Host mounts the default-off settings owner independently of each
   // Agent-scoped delegation-tool instance.
   '@deepseek-ai/dsh-tool-subagent': ['lib/model-selection-settings.js'],
+  // The console process boundary is shared by two readers that must not load each
+  // other's plugin: the model-facing tool and the Web picker's Remote service. It
+  // ships as its own bundle, addressed through the package's ./console export.
+  '@deepseek-ai/dsh-tool-refactory': ['lib/console.js'],
   // The JSONL backend resolves its private verification Worker relative to
   // import.meta.url; it is shipped without a public package subpath.
   '@deepseek-ai/dsh-session-persistence-jsonl': ['lib/worker.cjs'],

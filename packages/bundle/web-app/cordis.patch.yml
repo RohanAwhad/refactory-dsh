@@ -110,6 +110,14 @@
     - id: workspace-files
       name: '@deepseek-ai/dsh-api-workspace-files'
 
+    # The refactory console over Typert Remote: the same process boundary the
+    # model-facing tool uses, so the Web picker and the model read one JSON.
+    # `repoRoot` is the checkout holding `refactory/` and `.venv/`.
+    - id: refactory-console
+      name: '@deepseek-ai/dsh-refactory-console'
+      config:
+        repoRoot: !!js process.cwd()
+
     # Configuration-surface reads and writes over Typert Remote. Each method
     # reports an actionable error when its settings-domain provider is absent.
     - id: settings-controller
@@ -233,6 +241,11 @@
     # The right Sidebar's workspace file tree tab type.
     - id: ui-sidebar-files
       name: '@deepseek-ai/dsh-client-ui-sidebar-files'
+
+    # The right Sidebar's refactory picker: the console's described choices,
+    # started and read through the refactoryConsole endpoint.
+    - id: ui-refactory
+      name: '@deepseek-ai/dsh-client-ui-refactory'
 
     - id: ui-settings
       name: '@deepseek-ai/dsh-client-ui-settings'

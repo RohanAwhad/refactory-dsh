@@ -1399,6 +1399,73 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'refactoryConsole',
+    summary: 'Host Remote service over the refactory console.',
+    description: 'Host Remote service over the refactory console.',
+    methods: [
+      {
+        signature: '@Remote async modes(signal: AbortSignal): Promise<readonly RefactoryModeChoice[]>',
+        description: 'The modes a run can be started from, each with the verb that runs it.',
+        parameters: [{ name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the console\'s catalogue, as the choices it describes.',
+      },
+      {
+        signature: '@Remote async strategies(signal: AbortSignal): Promise<RefactoryStrategies>',
+        description: 'The named outer loops, optimizers and evaluators a run\'s settings choose between.',
+        parameters: [{ name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the three registries, each a list of named choices.',
+      },
+      {
+        signature: '@Remote async runs(signal: AbortSignal): Promise<readonly RefactoryRunSummary[]>',
+        description: 'Every run under the run root, newest first.',
+        parameters: [{ name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the runs, each with where it got to.',
+      },
+      {
+        signature: '@Remote async packages(signal: AbortSignal): Promise<readonly RefactoryPackageChoice[]>',
+        description: 'The packages the registry knows, with the modes each declares.',
+        parameters: [{ name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the packages as described choices.',
+      },
+      {
+        signature: '@Remote async start(request: RefactoryStartRequest, signal: AbortSignal): Promise<RefactoryStartReceipt>',
+        description: 'Start a run from one described mode.\n\nThe mode must be one the catalogue offers and one whose `action` is `start`; an authoring mode is refused by name, with the verb that runs it, because a person who picked it needs the action rather than a failed process.',
+        parameters: [{ name: 'request', description: 'the mode, run addressing, and settings.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'what the console recorded about the start.',
+      },
+      {
+        signature: '@Remote async status(run: string, after: number, signal: AbortSignal): Promise<RefactoryRunStatus>',
+        description: 'Where one run is, and what is new since the reader last looked.',
+        parameters: [{ name: 'run', description: 'the run id or absolute run directory.' }, { name: 'after', description: 'how many progress lines the caller has already read.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the run\'s state, the new events, and the offset for the next look.',
+      },
+      {
+        signature: '@Remote async stop(run: string, signal: AbortSignal): Promise<RefactoryStopReceipt>',
+        description: 'Ask one run to stop.',
+        parameters: [{ name: 'run', description: 'the run id or absolute run directory.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'whether the run\'s process is gone.',
+      },
+      {
+        signature: '@Remote async setPackageEnabled( name: string, enabled: boolean, signal: AbortSignal, ): Promise<readonly RefactoryPackageChoice[]>',
+        description: 'Enable or disable one package, and answer with the catalogue as it now stands.',
+        parameters: [{ name: 'name', description: 'the package name, as the catalogue lists it.' }, { name: 'enabled', description: 'the state to set.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the packages as described choices, after the change.',
+      },
+      {
+        signature: '@Remote async removePackage(name: string, signal: AbortSignal): Promise<readonly RefactoryPackageChoice[]>',
+        description: 'Remove one workspace package, and answer with the catalogue as it now stands.',
+        parameters: [{ name: 'name', description: 'the package name, as the catalogue lists it.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the packages as described choices, after the change.',
+      },
+      {
+        signature: '@Remote async importPackage( source: string, name: string, signal: AbortSignal, ): Promise<readonly RefactoryPackageChoice[]>',
+        description: 'Bring a package in from a directory or git URL, and answer with the catalogue as it now stands.',
+        parameters: [{ name: 'source', description: 'the directory or git URL to import from.' }, { name: 'name', description: 'the name to import it as; empty keeps the package\'s own name.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the packages as described choices, after the import.',
+      },
+    ],
+  },
+  {
     key: 'sandbox',
     summary: 'Abstract process-sandbox service.',
     description: 'Abstract process-sandbox service. confine must return enforcing argv or fail closed at wrap or runner-execution time; silent unconfined passthrough is forbidden. Functional probes arbitrate multi-runner chains and may be skipped for a sole candidate, whose own refusal remains the fail-closed end.',
@@ -4830,6 +4897,54 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'RedactedSecret',
     declaration: 'export interface RedactedSecret {\n    path: string[];\n    set: boolean;\n}',
+  },
+  {
+    name: 'RefactoryModeChoice',
+    declaration: 'export interface RefactoryModeChoice {\n    readonly id: string;\n    readonly package: string;\n    readonly mode: string;\n    readonly description: string;\n    readonly startable: boolean;\n    readonly enabled: boolean;\n    readonly scored: boolean;\n    readonly action: string;\n    readonly trust?: string;\n    readonly reason?: string;\n}',
+  },
+  {
+    name: 'RefactoryPackageChoice',
+    declaration: 'export interface RefactoryPackageChoice {\n    readonly name: string;\n    readonly enabled: boolean | null;\n    readonly where: string;\n    readonly modes: readonly RefactoryPackageMode[];\n}',
+  },
+  {
+    name: 'RefactoryPackageMode',
+    declaration: 'export interface RefactoryPackageMode {\n    readonly name: string;\n    readonly description: string;\n    readonly trust: string;\n}',
+  },
+  {
+    name: 'RefactoryRunCounters',
+    declaration: 'export interface RefactoryRunCounters {\n    readonly epoch: number;\n    readonly generation: number;\n    readonly evaluations: number;\n    readonly steps: number;\n}',
+  },
+  {
+    name: 'RefactoryRunEvent',
+    declaration: 'export interface RefactoryRunEvent {\n    readonly epoch?: number;\n    readonly generation?: number;\n    readonly evaluations?: number;\n    readonly score?: number;\n}',
+  },
+  {
+    name: 'RefactoryRunStatus',
+    declaration: 'export interface RefactoryRunStatus {\n    readonly run_id: string;\n    readonly root: string;\n    readonly mode?: string | null;\n    readonly state: string;\n    readonly events: readonly RefactoryRunEvent[];\n    readonly cursor: number;\n    readonly counters: RefactoryRunCounters;\n    readonly best_score: number | null;\n    readonly finished: boolean;\n    readonly running: boolean;\n}',
+  },
+  {
+    name: 'RefactoryRunSummary',
+    declaration: 'export interface RefactoryRunSummary {\n    readonly run_id: string;\n    readonly root: string;\n    readonly mode?: string | null;\n    readonly best_score?: number | null;\n    readonly finished: boolean;\n}',
+  },
+  {
+    name: 'RefactoryStartReceipt',
+    declaration: 'export interface RefactoryStartReceipt {\n    readonly run_id: string;\n    readonly mode: string;\n    readonly root: string;\n    readonly started: number;\n    readonly config: Readonly<Record<string, string>>;\n    readonly log: string;\n    readonly pid: number;\n}',
+  },
+  {
+    name: 'RefactoryStartRequest',
+    declaration: 'export interface RefactoryStartRequest {\n    readonly mode: string;\n    readonly runId?: string;\n    readonly runsRoot?: string;\n    readonly settings?: Readonly<Record<string, string | number | boolean>>;\n}',
+  },
+  {
+    name: 'RefactoryStopReceipt',
+    declaration: 'export interface RefactoryStopReceipt {\n    readonly stopped: boolean;\n}',
+  },
+  {
+    name: 'RefactoryStrategies',
+    declaration: 'export interface RefactoryStrategies {\n    readonly outer_loops: readonly RefactoryStrategyChoice[];\n    readonly optimizers: readonly RefactoryStrategyChoice[];\n    readonly evaluators: readonly RefactoryStrategyChoice[];\n}',
+  },
+  {
+    name: 'RefactoryStrategyChoice',
+    declaration: 'export interface RefactoryStrategyChoice {\n    readonly name: string;\n    readonly description: string;\n}',
   },
   {
     name: 'RemoteError',

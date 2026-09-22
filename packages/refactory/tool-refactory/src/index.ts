@@ -13,14 +13,16 @@
  * @module @deepseek-ai/dsh-tool-refactory
  */
 
-import { resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { ToolCallView, ToolResultView } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
-import { Console, isRecord, type ConsoleResult } from './console.ts'
+import {
+  CONSOLE_DEFAULTS, Console, isRecord, registryInvocation, resolveConsoleSettings, startInvocation,
+  type ConsoleResult,
+} from './console.ts'
 
 export const name = 'tool-refactory'
 export const inject = ['tools', 'subprocess', 'systemPrompt']
@@ -43,12 +45,9 @@ export const Config: z<Config> = z.object({
   toolName: z.string().default('refactory'),
   repoRoot: z.string().default(process.cwd()),
   pythonBin: z.string().default(''),
-  timeoutMs: z.natural().min(1).max(60 * 60 * 1000).default(10 * 60 * 1000),
-  collectBytes: z.natural().min(1024).default(4 * 1024 * 1024),
+  timeoutMs: z.natural().min(1).max(60 * 60 * 1000).default(CONSOLE_DEFAULTS.timeoutMs),
+  collectBytes: z.natural().min(1024).default(CONSOLE_DEFAULTS.collectBytes),
 })
-
-/** Resolved config: `pythonBin` defaults against the resolved repo root, not the schema. */
-type ResolvedConfig = Omit<Required<Config>, 'pythonBin'> & { pythonBin: string }
 
 /** The verbs the tool exposes, and the one thing each needs to be addressed. */
 const VERBS = {
@@ -122,7 +121,7 @@ interface Args {
 }
 
 /** One run's setting, as the console's `--<flag> value` pair. */
-function settingsOf(args: Args): Record<string, string | number | undefined> {
+function settingsOf(args: Args): Readonly<Record<string, string | number>> {
   const settings = args.settings ?? {}
   return Object.fromEntries(Object.entries(settings))
 }
@@ -137,8 +136,8 @@ function settingsOf(args: Args): Record<string, string | number | undefined> {
  */
 export function invocationFor(args: Args): {
   verb: Verb
-  positional: string[]
-  options: Record<string, string | number | boolean | undefined>
+  positional: readonly string[]
+  options: Readonly<Record<string, string | number | boolean | undefined>>
 } {
   if (RUN_SCOPED.includes(args.action) && args.run === undefined) {
     throw new Error(`action "${args.action}" needs \`run\`: the run id or directory to read`)
@@ -152,11 +151,13 @@ export function invocationFor(args: Args): {
       if (args.mode === undefined) {
         throw new Error('action "start" needs `mode`: the <package>/<name> to run')
       }
-      return {
-        verb: args.action,
-        positional: [args.mode],
-        options: { 'run-id': args.runId, ...run, ...settingsOf(args) },
-      }
+      const { positional = [], options = {} } = startInvocation({
+        mode: args.mode,
+        runId: args.runId,
+        runsRoot: args.runsRoot,
+        settings: settingsOf(args),
+      })
+      return { verb: args.action, positional, options }
     }
     case 'candidate': {
       if (args.candidate === undefined) {
@@ -184,12 +185,14 @@ export function invocationFor(args: Args): {
       }
       return { verb: args.action, positional: [], options: { ...run, as: args.as } }
     }
-    case 'registry':
-      return {
-        verb: args.action,
-        positional: [args.packages ?? 'list', args.target ?? ''],
-        options: { args: args.args },
-      }
+    case 'registry': {
+      const { positional = [], options = {} } = registryInvocation(
+        args.packages ?? 'list',
+        args.target ?? '',
+        args.args,
+      )
+      return { verb: args.action, positional, options }
+    }
     case 'create': {
       if (args.name === undefined || args.brief === undefined) {
         throw new Error('action "create" needs `name` and `brief`')
@@ -427,16 +430,8 @@ export function presentResult(args: Args, result: unknown): ToolResultView {
 }
 
 export function apply(ctx: Context, config: Config): void {
-  const resolved: ResolvedConfig = {
-    ...config as Required<Config>,
-    pythonBin: (config as Required<Config>).pythonBin || resolve((config as Required<Config>).repoRoot, '.venv', 'bin'),
-  }
-  const console = new Console(ctx.subprocess, {
-    repoRoot: resolve(resolved.repoRoot),
-    pythonBin: resolve(resolved.pythonBin),
-    timeoutMs: resolved.timeoutMs,
-    collectBytes: resolved.collectBytes,
-  })
+  const resolved = config as Required<Config>
+  const console = new Console(ctx.subprocess, resolveConsoleSettings(resolved))
 
   // Usage policy ships with the tool: the loop is not something to reach for
   // unprompted, and the model needs to know a run outlives the call.

@@ -18,11 +18,16 @@
       "types": "./lib/types/index.d.ts",
       "default": "./lib/index.js"
     },
+    "./console": {
+      "types": "./lib/types/console.d.ts",
+      "default": "./lib/console.js"
+    },
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
   "files": [
     "lib/index.js",
+    "lib/console.js",
     "lib/types/**/*.d.ts"
   ],
   "license": "MIT",

@@ -72,6 +72,9 @@
       "path": "../workspace-files/tsconfig.client.json"
     },
     {
+      "path": "../../refactory/refactory-console"
+    },
+    {
       "path": "../settings-controller"
     },
     {

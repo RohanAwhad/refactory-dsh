@@ -20,7 +20,7 @@ Web 视图能运行外层循环并读取一次运行，除此之外什么也做�
 
 ## Alternatives considered
 
-**做一个带自有 host RPC seam 的客户端面板。** 被推迟而非拒绝，并已作为后续项归档：一个旁边列出 strategy 描述的 picker，才是「命名选择」的正确归宿，而它需要 Service Definition、provider、Typert remote 与客户端注册。tool 面向模型，因此客户端无法调用它，而搭建那条 seam 比它所替代的表面更大。
+**做一个带自有 host RPC seam 的客户端面板。** 本次变更交付的表面是 tool，因为面板需要 Service Definition、provider、Typert remote 与客户端注册——比它所替代的表面更大——也因为 tool 面向模型，客户端无法调用它。[The Web picker reads the console through one Remote service](../architecture/2026-09-24-the-web-picker-reads-the-console-over-remote.zh.md) 搭建了那条 seam；一个旁边列出 strategy 描述的 picker 正是该篇的主题。
 
 **在客户端再放一份目录副本。** 拒绝：console 的 JSON 是两个表面共同读取的契约，`tool-refactory/src/console.ts` 是唯一的边界；平行存储会在任一侧改动的瞬间与 tool 漂移。
 
@@ -31,7 +31,7 @@ Web 视图能运行外层循环并读取一次运行，除此之外什么也做�
 ## Consequences
 
 - 每个 action 都 shell out 到与人工运行相同的 `python -m refactory_dsh.console`，因此从页面启动的运行就是 shell 会启动的那次运行，产物相同、报告相同。
-- 「命名选择」是模型读取的有描述目录，不是下拉控件；picker 是未完成的工作，而不是动词上的缺口。
+- 「命名选择」是模型读取、并由[选择器](../../../../packages/client/ui-refactory/README.zh.md)以下拉控件提供的有描述目录；两者读的都是控制台自己的描述，而不是第二份列表。
 - 移除该依赖时，preset 依赖闸门会失败并指名 `ceo: @deepseek-ai/dsh-tool-refactory`，因此那个 workspace 缺陷无法悄悄回归。
 - tool 的 action 枚举及其对模型可见的描述会随 console 增长；客户端卡片的 action 列表是第二份列表，必须与之同步，而卡片测试覆盖每个新增 action。
 - `create`、`edit` 与 `design` 由模型驱动且很慢；一次调用会阻塞数分钟，这就是 tool 超时为十分钟、且它们启动的运行不是后台任务的原因。

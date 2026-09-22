@@ -1,0 +1,111 @@
+/**
+ * `sidebarRefactory` namespace dictionaries, and the namespace's declaration.
+ *
+ * Every string the picker draws is here: the section headings, the gestures, and
+ * the lines a refusal settles into. The Remote failure's own message is host
+ * text and reaches the reader through `error.failed` as data, because only the
+ * console knows why a particular console call was refused.
+ *
+ * The namespace merge lives with its key set so that any module naming
+ * `TranslateNS<'sidebarRefactory'>` or `PropsLocale<'sidebarRefactory'>` needs
+ * only this file, whichever entry a program loads first.
+ */
+import type {} from '@deepseek-ai/dsh-client-ui-slots'
+
+declare module '@deepseek-ai/dsh-client-ui-slots' {
+  interface LocaleNamespaceMap {
+    /** Picker type name, guide entry, section labels, gestures, and refusal lines. */
+    sidebarRefactory: SidebarRefactoryKey
+  }
+}
+
+/** Simplified Chinese dictionary and key-set source of truth. */
+export const zh = {
+  'type.label': '运行模式',
+  'guide.title': '运行模式',
+  'guide.description': '挑选一个模式开始运行，管理模式包，并查看运行进度。',
+  reload: '重新读取',
+  'choices.loading': '正在读取可选项目…',
+  'run.heading': '开始一次运行',
+  'mode.label': '模式',
+  'mode.choose': '选择一个模式',
+  'mode.authoring': '这个模式由「{action}」动作运行，不在这里启动。',
+  'mode.disabled': '它所属的包已停用。',
+  'strategy.label': '外层循环',
+  'optimizer.label': '优化器',
+  'evaluator.label': '评估器',
+  'setting.default': '用默认值',
+  'start': '开始运行',
+  'started': '已开始运行 {run}。',
+  'status.heading': '运行状态',
+  'status.none': '还没有在读取哪次运行。',
+  'status.reading': '正在读取…',
+  'status.state': '状态',
+  'status.best': '最好成绩 {score}',
+  'status.noScore': '还没有成绩',
+  'status.evaluations': '已评估 {count} 次',
+  'status.refresh': '刷新状态',
+  'status.stop': '停止运行',
+  'packages.heading': '模式包',
+  'packages.count': '{count} 个模式',
+  'packages.enabled': '已启用',
+  'packages.disabled': '已停用',
+  'packages.unknown': '未报告状态',
+  'packages.enable': '启用',
+  'packages.disable': '停用',
+  'packages.remove': '移除',
+  'packages.import': '导入包',
+  'packages.importSource': '目录或 git 地址',
+  'packages.importName': '导入后的名字（留空则用它自己的名字）',
+  'error.unknownMode': '这个模式不在目录里，请重新读取列表再选。',
+  'error.authoringMode': '这是创作模式，不是可以搜索的运行；请用它的创作动作。',
+  'error.packageDisabled': '这个模式的包已停用，请先启用它。',
+  'error.failed': '操作失败：{message}',
+} satisfies Record<string, string>
+
+/** Refactory dictionary key union. */
+export type SidebarRefactoryKey = keyof typeof zh
+
+/** English dictionary, checked against the Chinese key set. */
+export const en = {
+  'type.label': 'Modes',
+  'guide.title': 'Modes',
+  'guide.description': 'Pick a mode to run, manage the packages of modes, and watch a run.',
+  reload: 'Reload',
+  'choices.loading': 'Reading the choices…',
+  'run.heading': 'Start a run',
+  'mode.label': 'Mode',
+  'mode.choose': 'Choose a mode',
+  'mode.authoring': 'The "{action}" action runs this mode; it does not start here.',
+  'mode.disabled': 'Its package is disabled.',
+  'strategy.label': 'Outer loop',
+  'optimizer.label': 'Optimizer',
+  'evaluator.label': 'Evaluator',
+  'setting.default': 'Use the default',
+  start: 'Start',
+  'started': 'Started run {run}.',
+  'status.heading': 'Run status',
+  'status.none': 'No run is being read.',
+  'status.reading': 'Reading…',
+  'status.state': 'State',
+  'status.best': 'Best score {score}',
+  'status.noScore': 'No score yet',
+  'status.evaluations': '{count} evaluations',
+  'status.refresh': 'Refresh status',
+  'status.stop': 'Stop the run',
+  'packages.heading': 'Packages of modes',
+  'packages.count': '{count} modes',
+  'packages.enabled': 'Enabled',
+  'packages.disabled': 'Disabled',
+  'packages.unknown': 'No state reported',
+  'packages.enable': 'Enable',
+  'packages.disable': 'Disable',
+  'packages.remove': 'Remove',
+  'packages.import': 'Import a package',
+  'packages.importSource': 'Directory or git URL',
+  'packages.importName': 'Name to import it as (empty keeps its own)',
+  'error.unknownMode': 'That mode is not in the catalogue; reload the list and choose one of them.',
+  'error.authoringMode': 'That is an authoring mode, not a run to search; use its authoring action.',
+  'error.packageDisabled': 'That mode\'s package is disabled; enable the package first.',
+  'error.failed': 'That did not work: {message}',
+} satisfies Record<SidebarRefactoryKey, string>
