@@ -22,7 +22,7 @@ One action per console verb, so the tool and a shell are the same surface:
 
 | action | needs | what it returns |
 |---|---|---|
-| `modes` | — | every mode the checkout can start, with its parameters |
+| `modes` | — | every mode the checkout can start, with its parameters and the **action that runs it** (`start` for a scored mode, its own verb for an authoring one) |
 | `strategies` | — | the named outer loops, optimizers and evaluators, each with what it is |
 | `runs` | — | every run under the run root, newest first |
 | `start` | `mode`, `settings` | the run id, root, and pid |
@@ -34,10 +34,14 @@ One action per console verb, so the tool and a shell are the same surface:
 | `best` | `run` | the winner, and with `state` its whole state dict |
 | `adopt` | `run`, `as` | the new package the winner was written to |
 | `registry` | `packages`, `target`, `args` | the registry's own JSON for `list`, `show`, `verify`, `smoke`, `add`, `import`, `remove`, `enable`, `disable` |
-| `create` | `name`, `brief` | the package it produced, and the design review it wrote |
+| `create` | `name`, `brief`, and optionally `extends`, `dataNode`, `task` | the package it produced, and the design review it wrote; with `dataNode` the mode iterates a dataset, with `task` it is bound to a Task that supplies and judges the items |
 | `edit` | `mode`, `name`, `brief` | the revision, its before/after scores, and whether it regressed |
 | `design` | `name`, `brief`, `check` | the artifact, and whether its check command passed |
 | `stop` | `run` | whether the run was asked to stop |
+
+Read the `action` a mode's catalogue entry carries before running it: a scored mode
+is run by `start`, and an authoring mode — `create`, `edit`, `design` — by its own
+verb, which is also what `start` will tell you if you try it anyway.
 
 In the conversation, ask for it directly:
 
