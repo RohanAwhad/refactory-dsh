@@ -20,7 +20,7 @@ The default package's `create`, `edit` and `design` modes were a single pass: su
 
 ## Consequences
 
-The walker's fork is sequential where DSH's is concurrent: each branch runs to the same barrier, in order, so the result agrees and the concurrency does not. The DSH spine still hands a data node to the driving agent instead of iterating it, which is the one place the two runtimes still disagree about what a mode means.
+The walker's fork is sequential where DSH's is concurrent: each branch runs to the same barrier, in order, so the result agrees and the concurrency does not. Both runtimes iterate a data node — see [A data node iterates on both runtimes](2026-09-23-a-data-node-iterates-on-both-runtimes.md) — so a dataset mode produces the same facts on either one.
 
 ## Alternatives considered
 

@@ -50,6 +50,7 @@ MODULES: tuple[str, ...] = (
     "refactory_dsh.design",
     "refactory_dsh.observe",
     "refactory_dsh.console",
+    "refactory_dsh.items",
 )
 
 #: Names a reader imports from the package root, which the root module defines by

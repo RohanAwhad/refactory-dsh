@@ -49,6 +49,7 @@ function config(overrides: Partial<Config> = {}): Config {
     commandEnv: {},
     commandTimeoutMs: 10_000,
     commandSandboxMode: 'danger-full-access',
+    dataCommand: '',
     ceoDeny: [],
     ...overrides,
   }

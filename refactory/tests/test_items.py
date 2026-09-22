@@ -1,0 +1,269 @@
+"""The item loader and the per-item commands DSH drives a data node through.
+
+Issue #59: a data node iterates on both runtimes, and the item loader is one
+implementation. These tests pin the loader against the three source formats, the
+bounds, the unbound source, and — the point of the issue — that driving the
+commands by hand produces the facts the walking executor produces for the same
+graph.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from refactory_dsh import items, lowering, nn
+from refactory_dsh.nn.executor import CURRENT_ITEM, execute, load_items
+
+
+def _probe_task():
+    """A Task named, set up and judged without looking at the pass."""
+    from refactory_dsh import task as task_module
+
+    class Counting(task_module.Task):
+        name = "counting"
+
+        def instances(self):
+            return [
+                task_module.TaskInstance(id="alpha", metadata={"split": "train"}),
+                task_module.TaskInstance(id="beta", metadata={"split": "test"}),
+            ]
+
+        def setup(self, instance, workspace):
+            (workspace / f"setup-{instance.id}").write_text("prepared")
+
+        def verify(self, instance, workspace):
+            return task_module.VerifyResult(
+                passed=True, score=1.0 if instance.id == "alpha" else 0.5
+            )
+
+    task_module.register_task("counting", Counting)
+    return Counting
+
+
+def _data_graph(**fields) -> nn.Graph:
+    graph = nn.Graph()
+    graph.add(nn.Node(
+        "data", "data", subgraph_entry="work", subgraph_exit="work",
+        writes=(CURRENT_ITEM,), produces=("item_scores",), **fields,
+    ))
+    graph.add(nn.Node(
+        "work", "op", call="loop_ops:record_item",
+        reads=(CURRENT_ITEM,), writes=("seen.json",), produces=("seen",),
+    ))
+    graph.add(nn.Node(
+        "report", "op", call="loop_ops:write_best",
+        writes=("best.json",), produces=("best",),
+    ))
+    graph.connect("data", "report")
+    return graph
+
+
+def _declared(graph: nn.Graph, workdir: Path) -> nn.Node:
+    """Write the run's declarations and hand back the data node they describe."""
+    lowering.write_declarations({"graph": graph.to_state()}, workdir)
+    return items.data_node(workdir, "data")
+
+
+# ── the loader: one implementation, both runtimes ──────────────────────
+
+
+def test_the_loader_reads_jsonl_csv_and_directory(tmp_path):
+    """The three source formats, read the one way both runtimes read them."""
+    jsonl = tmp_path / "items.jsonl"
+    jsonl.write_text('{"id": "first", "value": 1}\n\n{"value": 2}\n')
+    rows = tmp_path / "items.csv"
+    rows.write_text("id,value\nfirst,1\nsecond,2\n")
+    directory = tmp_path / "projects"
+    (directory / "one").mkdir(parents=True)
+    (directory / "two").mkdir()
+    (directory / "loose.txt").write_text("not a project")
+
+    def node(**fields) -> nn.Node:
+        return nn.Node("data", "data", subgraph_entry="w", subgraph_exit="w", **fields)
+
+    assert load_items(node(source_path="items.jsonl", source_format="jsonl"), tmp_path) == [
+        {"id": "first", "value": 1},
+        # The id falls back to the line's position, so a blank line still counts.
+        {"id": "2", "value": 2},
+    ]
+    assert load_items(node(source_path="items.csv", source_format="csv"), tmp_path) == [
+        {"id": "first", "value": "1"},
+        {"id": "second", "value": "2"},
+    ]
+    assert load_items(node(source_path="projects", source_format="directory"), tmp_path) == [
+        {"id": "one", "path": str(directory / "one")},
+        {"id": "two", "path": str(directory / "two")},
+    ]
+
+
+def test_the_loader_bounds_the_selection_and_refuses_an_unbound_source(tmp_path):
+    """`limit` truncates; a source that was never bound is refused by name."""
+    node = nn.Node(
+        "data", "data", subgraph_entry="w", subgraph_exit="w",
+        source_path="items.jsonl", source_format="jsonl", limit=1,
+    )
+    (tmp_path / "items.jsonl").write_text('{"id": "a"}\n{"id": "b"}\n')
+    assert load_items(node, tmp_path) == [{"id": "a"}]
+
+    unbound = nn.Node(
+        "data", "data", subgraph_entry="w", subgraph_exit="w",
+        source_path="absent.jsonl", source_format="jsonl",
+    )
+    with pytest.raises(nn.ExecutionError) as caught:
+        load_items(unbound, tmp_path)
+    assert "absent.jsonl" in str(caught.value)
+    assert "bind the source" in str(caught.value)
+
+
+def test_an_empty_selection_is_a_fact_and_iterates_nothing(tmp_path):
+    """Zero items is a count, not a crash: the commands still answer."""
+    node = _declared(_data_graph(inline_items=()), tmp_path)
+    assert items.command_list(node, tmp_path) == {"count": 0, "ids": []}
+
+
+# ── the three commands ────────────────────────────────────────────────
+
+
+def test_begin_materialises_the_item_and_runs_the_task_setup(tmp_path):
+    """The pass reads the item from disk, and the Task prepares first."""
+    _probe_task()
+    node = _declared(_data_graph(task_ref="counting"), tmp_path)
+
+    assert items.command_list(node, tmp_path) == {"count": 2, "ids": ["alpha", "beta"]}
+    assert items.command_begin(node, tmp_path, 1) == {
+        "id": "beta", "path": None, "split": "test",
+    }
+    assert json.loads((tmp_path / CURRENT_ITEM).read_text())["id"] == "beta"
+    assert (tmp_path / "setup-beta").exists()
+
+
+def test_end_folds_the_task_verdict_into_the_run_facts(tmp_path):
+    """One verdict per pass, under the fact the walking executor writes."""
+    _probe_task()
+    node = _declared(_data_graph(task_ref="counting"), tmp_path)
+
+    assert items.command_end(node, tmp_path, 0) == {
+        "id": "alpha", "passed": True, "score": 1.0,
+    }
+    items.command_end(node, tmp_path, 1)
+    facts = json.loads((tmp_path / "facts.json").read_text())
+    assert facts["item_scores"] == [
+        {"id": "alpha", "passed": True, "score": 1.0},
+        {"id": "beta", "passed": True, "score": 0.5},
+    ]
+
+
+def test_a_node_that_declares_no_item_scores_keeps_none(tmp_path):
+    """The fact is written when the node declares it, as in the walker."""
+    _probe_task()
+    graph = _data_graph(task_ref="counting")
+    graph.nodes["data"].produces = ()
+    node = _declared(graph, tmp_path)
+
+    items.command_end(node, tmp_path, 0)
+    assert not (tmp_path / "facts.json").exists()
+
+
+def test_a_task_with_no_opinion_adds_no_score(tmp_path):
+    """`verify` returning `None` is the Task saying the mode's own score stands."""
+    from refactory_dsh import task as task_module
+
+    class Silent(task_module.Task):
+        name = "silent"
+
+    task_module.register_task("silent", Silent)
+    node = _declared(_data_graph(task_ref="silent"), tmp_path)
+    assert items.command_end(node, tmp_path, 0) == {}
+    assert not (tmp_path / "facts.json").exists()
+
+
+def test_an_out_of_range_item_is_refused_by_name(tmp_path):
+    node = _declared(_data_graph(inline_items=({"id": "only"},)), tmp_path)
+    with pytest.raises(items.ItemsError) as caught:
+        items.command_begin(node, tmp_path, 4)
+    assert "out of range" in str(caught.value)
+
+
+def test_the_commands_refuse_a_node_that_is_not_a_data_node(tmp_path):
+    """The declarations say which node is which, and a wrong id is named."""
+    graph = _data_graph(inline_items=({"id": "only"},))
+    lowering.write_declarations({"graph": graph.to_state()}, tmp_path)
+    with pytest.raises(items.ItemsError) as caught:
+        items.data_node(tmp_path, "work")
+    assert "'op'" in str(caught.value)
+
+    with pytest.raises(items.ItemsError) as caught:
+        items.data_node(tmp_path, "nowhere")
+    assert "not declared" in str(caught.value)
+
+
+def test_the_command_line_reports_the_count_as_json(tmp_path, monkeypatch, capsys):
+    """`main` is what the runtime calls: one JSON object on stdout, or a reason on stderr."""
+    import refactory_dsh.run
+
+    monkeypatch.setattr(refactory_dsh.run, "install_workspace_packages", lambda: None)
+    monkeypatch.setenv("REFACTORY_WORKDIR", str(tmp_path))
+    _declared(_data_graph(inline_items=({"id": "a"}, {"id": "b"})), tmp_path)
+
+    assert items.main(["list", "--node", "data"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"count": 2, "ids": ["a", "b"]}
+
+    assert items.main(["list"]) == 1
+    assert "--node is required" in capsys.readouterr().err
+
+    assert items.main(["dance"]) == 2
+    assert "usage" in capsys.readouterr().err
+
+
+# ── parity: the commands produce what the walker produces ─────────────
+
+
+def test_driving_the_commands_produces_the_walkers_facts(tmp_path):
+    """The acceptance the issue is about: same facts, either runtime.
+
+    The walking executor runs the whole loop itself; DSH runs the subgraph from
+    outside and drives the item loop through these three commands. Both must land on
+    the same `item_scores`, or a mode means two different things.
+    """
+    _probe_task()
+    graph = _data_graph(task_ref="counting")
+
+    walked = tmp_path / "walked"
+    result = execute(graph, walked)
+    assert result.exit_ok, result.error
+
+    driven = tmp_path / "driven"
+    node = _declared(graph, driven)
+    count = items.command_list(node, driven)["count"]
+    for index in range(count):
+        items.command_begin(node, driven, index)
+        items.command_end(node, driven, index)
+
+    assert json.loads((driven / "facts.json").read_text())["item_scores"] == (
+        result.facts["item_scores"]
+    )
+    assert json.loads((driven / CURRENT_ITEM).read_text()) == json.loads(
+        (walked / CURRENT_ITEM).read_text()
+    ), "the last item on disk differs between the runtimes"
+
+
+def test_the_declarations_carry_the_data_nodes_source(tmp_path):
+    """The IR carries the source; the runtime's declarations have to as well."""
+    graph = _data_graph(
+        task_ref="counting", source_path="items.jsonl", source_format="jsonl", limit=3,
+        inline_items=({"id": "a"},),
+    )
+    path = lowering.write_declarations({"graph": graph.to_state()}, tmp_path)
+    entry = json.loads(path.read_text())["data"]
+    assert entry["data"] == {
+        "subgraph_entry": "work",
+        "subgraph_exit": "work",
+        "task_ref": "counting",
+        "source_path": "items.jsonl",
+        "source_format": "jsonl",
+        "inline_items": [{"id": "a"}],
+        "limit": 3,
+    }

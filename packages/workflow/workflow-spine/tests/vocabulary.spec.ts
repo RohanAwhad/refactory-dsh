@@ -252,18 +252,23 @@ describe('validateGraph', () => {
         },
         work: { _type: 'FnNode', id: 'work', command: 'true', reads: [], writes: [] },
         end: { _type: 'FnNode', id: 'end', command: 'true', reads: [], writes: [] },
+        after: { _type: 'FnNode', id: 'after', command: 'true', reads: [], writes: [] },
+        pick: { _type: 'SelectionNode', id: 'pick', strategy: 'best_score', reads: [], writes: [] },
       },
       edges: [
-        { source: 'data', target: 'work' },
+        { source: 'data', target: 'after' },
         { source: 'work', target: 'end' },
+        { source: 'after', target: 'pick' },
       ],
     }
     expect(validateGraph(graph)).toEqual([])
     const spine = new Spine(graph, { maxIterations: 2 })
+    // The data node is not handed over: its first item's pass is.
     expect(spine.next().nodes?.[0]).toMatchObject({ id: 'data', _type: 'DataNode' })
+    expect(spine.startPass('data', 2).nodes?.[0]).toMatchObject({ id: 'work', _type: 'FnNode' })
   })
 
-  it('surfaces DataNode source and subgraph fields to the driving agent', () => {
+  it('describes a data node to a reader without handing it over to be iterated', () => {
     const graph: WorkflowGraph = {
       name: 'data-view',
       start_node: 'data',
@@ -276,11 +281,16 @@ describe('validateGraph', () => {
         },
         a: { _type: 'FnNode', id: 'a', command: 'true', reads: [], writes: [] },
         b: { _type: 'FnNode', id: 'b', command: 'true', reads: [], writes: [] },
+        after: { _type: 'FnNode', id: 'after', command: 'true', reads: [], writes: [] },
       },
-      edges: [{ source: 'data', target: 'a' }, { source: 'a', target: 'b' }],
+      edges: [
+        { source: 'data', target: 'after' },
+        { source: 'a', target: 'b' },
+      ],
     }
+    expect(validateGraph(graph)).toEqual([])
     const spine = new Spine(graph, { maxIterations: 2 })
-    expect(spine.next().nodes?.[0]).toMatchObject({
+    expect(spine.view('data')).toMatchObject({
       id: 'data',
       source_path: '/data',
       source_format: 'jsonl',
@@ -288,6 +298,7 @@ describe('validateGraph', () => {
       subgraph_exit: 'b',
       limit: 7,
     })
+    expect(spine.startPass('data', 1).nodes?.[0]).toMatchObject({ id: 'a' })
   })
 })
 

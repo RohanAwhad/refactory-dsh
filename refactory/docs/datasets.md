@@ -92,7 +92,18 @@ was expected. Asking is not the same as getting.
 
 ## On the runtimes
 
-The walker runs the passes itself. DSH's spine does not yet: it hands the data node
-to the driving agent, which iterates from the node's view — the difference is tracked
-as [#59](https://github.com/akashgit/refactory-dsh/issues/59). Until it is closed, a
-dataset mode's items are loaded by the walker and by the agent on DSH.
+Both runtimes iterate the node the same way and produce the same facts. The walker
+owns the whole loop and runs it in-process. DSH's spine walks the subgraph the way it
+walks the rest of the graph, so the item loop is split across the loader's three
+commands — `list` (how many items), `begin` (materialise one and run the Task's
+`setup`), and `end` (run the Task's `verify` and record the score) — and each pass's
+deterministic nodes run in-process while its agent nodes are handed to the subagents
+the graph names. The loader is one implementation
+(`refactory_dsh.nn.executor.load_items`), so the items a mode selects do not depend on
+which runtime is running it. The composition supplies the command
+(`dataCommand`, set by the `graph` bundle to `python -m refactory_dsh.items`); a graph
+with a data node and no loader is refused at load rather than handed to the model,
+because a model cannot enter a subgraph the cursor never enters.
+
+`refactory/tests/test_equivalence.py` runs one data-driven mode on both runtimes and
+compares the facts.

@@ -26,14 +26,14 @@ import type { UserQuestionService } from '@deepseek-ai/dsh-user-questions'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { Spine, validateGraph } from './spine.ts'
 import type { NodeView, SpineNext } from './spine.ts'
-import { isDeterministic, runDeterministic } from './execute.ts'
+import { isDeterministic, runDataCommand, runDeterministic } from './execute.ts'
 import type { CommandFailure } from './execute.ts'
 import type { WorkflowGraph } from './types.ts'
 
 export { Spine, validateGraph } from './spine.ts'
-export { commandOf, isDeterministic, verdictOf, NODE_ENV_KEY } from './execute.ts'
+export { commandOf, dataCommandOf, isDeterministic, runDataCommand, verdictOf, NODE_ENV_KEY } from './execute.ts'
 export type { CommandFailure, CommandOutcome, CommandRunnerConfig, NodeManifest } from './execute.ts'
-export type { GraphIssue, NodeView, SpineNext } from './spine.ts'
+export type { DataPass, GraphIssue, NodeView, SpineNext } from './spine.ts'
 export type { WorkflowEdge, WorkflowGraph, WorkflowNode } from './types.ts'
 
 export const name = 'workflow-spine'
@@ -57,6 +57,13 @@ export interface Config {
   workdir?: string
   /** Extra environment entries for node commands. */
   commandEnv: Record<string, string>
+  /**
+   * The command that selects a data node's items and opens and closes one pass,
+   * run as `<dataCommand> <list|begin|end> --node <id> [--index <n>]`. Required
+   * when the graph has a `DataNode` and `executeCommands` is on: the items live
+   * outside the graph, so a composition with no loader cannot iterate one.
+   */
+  dataCommand: string
   /** Foreground timeout for one node command. */
   commandTimeoutMs: number
   /** Sandbox mode for node commands; graph commands are trusted ops, so full access. */
@@ -93,6 +100,7 @@ export const Config = z.object({
   executeCommands: z.boolean().default(false),
   workdir: z.string(),
   commandEnv: z.dict(z.string()).default({}),
+  dataCommand: z.string().default(''),
   commandTimeoutMs: z.natural().default(600_000),
   commandSandboxMode: z.string().default('danger-full-access'),
   ceoDeny: z.array(z.string()).default(DEFAULT_CEO_DENY),
@@ -126,6 +134,26 @@ export function apply(ctx: Context, config: Config): void {
       .map(issue => (issue.node === undefined ? issue.message : `${issue.node}: ${issue.message}`))
       .join('; ')
     throw new Error(`invalid workflow graph: ${rendered}`)
+  }
+  // A data node's items live outside the graph, so a composition that mounts no
+  // loader hands the node to the driving agent, which cannot iterate a subgraph the
+  // cursor never enters. Refused here, at load, because both facts are config.
+  const dataNodes = Object.values(config.graph.nodes)
+    .filter(node => node._type === 'DataNode')
+    .map(node => node.id)
+  if (dataNodes.length > 0) {
+    const reason = !config.executeCommands
+      ? 'node commands are disabled (`executeCommands: false`)'
+      : config.dataCommand === ''
+        ? 'no item loader is configured (`dataCommand`)'
+        : ''
+    if (reason !== '') {
+      throw new Error(
+        `this graph iterates data in ${dataNodes.join(', ')}, and ${reason}; a data node's `
+        + 'items are selected by a command outside the graph, so a composition without one '
+        + 'cannot run it',
+      )
+    }
   }
   const spine = new Spine(config.graph, { maxIterations })
 
@@ -164,22 +192,105 @@ export function apply(ctx: Context, config: Config): void {
    * only work a model must do. A node that fails leaves the cursor where it is
    * and is reported instead: the graph must not advance past a step that did
    * not happen.
+   *
+   * A data node is iterated here too. The cursor cannot enter a subgraph on its
+   * own, so the loop selects the node's items, opens a pass, walks the subgraph the
+   * same way it walks the rest of the graph, and closes the pass when its exit
+   * completes — which is what makes one pass land per item on this runtime, the way
+   * the walking executor gives it.
    */
-  async function drain(): Promise<{ next: SpineNext; failure?: CommandFailure }> {
+  async function drain(): Promise<{ next: SpineNext; failure?: CommandFailure; item?: unknown }> {
     if (!config.executeCommands) return { next: spine.next() }
     const shell = ctx.get('shell')
-    if (shell === undefined) return { next: spine.next() }
+    if (shell === undefined) {
+      // Without an executor nothing deterministic can run. That is only a problem
+      // when something is waiting to be run: a data node handed to the driving
+      // agent would be a node the cursor never enters and never iterates.
+      const state = spine.next()
+      const waiting = state.status === 'ready'
+        ? state.nodes.find(node => node._type === 'DataNode')
+        : undefined
+      if (waiting === undefined) return { next: state }
+      return {
+        next: state,
+        failure: {
+          ok: false,
+          command: waiting.id,
+          exitCode: null,
+          stdout: '',
+          stderr: '',
+          error: `${waiting.id} iterates data and this composition mounts no shell executor to load its items`,
+        },
+      }
+    }
     const runner = {
       env: config.commandEnv,
       timeoutMs: config.commandTimeoutMs,
+      dataCommand: config.dataCommand,
       sandboxPolicy: { mode: config.commandSandboxMode as 'danger-full-access', workspaceRoot: config.workdir ?? process.cwd() },
       ...(config.workdir === undefined ? {} : { workdir: config.workdir }),
     }
+    /** `<node>:<index>` of the item already materialised on disk. */
+    let begun: string | undefined
+    let item: unknown
+
+    /** Select a data node's items and open its first pass. */
+    const openPass = async (data: NodeView): Promise<{ failure?: CommandFailure }> => {
+      const listed = await runDataCommand(shell, data, 'list', runner)
+      if (!listed.ok) return { failure: listed }
+      const count = Number(listed.value.count ?? 0)
+      // An empty selection is a fact, not a pass: the node completes and the run
+      // continues, exactly as the walking executor continues past it.
+      if (count === 0) {
+        spine.complete(data.id)
+        return {}
+      }
+      spine.startPass(data.id, count)
+      return {}
+    }
+
+    /** Materialise the running pass's item, once per item. */
+    const beginItem = async (): Promise<{ failure?: CommandFailure }> => {
+      const pass = spine.passOf()
+      if (pass === undefined || pass.finished) return {}
+      const key = `${pass.node}:${pass.index}`
+      if (begun === key) return {}
+      const data = spine.view(pass.node)
+      const started = await runDataCommand(shell, data, 'begin', runner, pass.index)
+      if (!started.ok) return { failure: started }
+      begun = key
+      item = started.value
+      return {}
+    }
+
+    /** Close a finished pass: judge it, then move to the next item or finish. */
+    const close = async (): Promise<{ failure?: CommandFailure }> => {
+      const pass = spine.passOf()
+      if (pass === undefined || !pass.finished) return {}
+      const data = spine.view(pass.node)
+      const ended = await runDataCommand(shell, data, 'end', runner, pass.index)
+      if (!ended.ok) return { failure: ended }
+      begun = undefined
+      item = undefined
+      spine.endPass()
+      return {}
+    }
+
     for (;;) {
+      const closed = await close()
+      if (closed.failure !== undefined) return { next: spine.next(), failure: closed.failure }
       const state = spine.next()
-      if (state.status === 'done') return { next: state }
+      if (state.status === 'done') return { next: state, item }
+      const started = await beginItem()
+      if (started.failure !== undefined) return { next: state, failure: started.failure }
+      const data = state.nodes.find(node => node._type === 'DataNode')
+      if (data !== undefined) {
+        const opened = await openPass(data)
+        if (opened.failure !== undefined) return { next: state, failure: opened.failure }
+        continue
+      }
       const automatic = state.nodes.filter(isDeterministic)
-      if (automatic.length === 0) return { next: state }
+      if (automatic.length === 0) return { next: state, item }
       for (const node of automatic) {
         const outcome = await runDeterministic(shell, node, runner)
         if (!outcome.ok) return { next: state, failure: outcome }
@@ -191,7 +302,7 @@ export function apply(ctx: Context, config: Config): void {
 
   /** The `wf_next` payload: the due nodes, or the node that failed to run. */
   async function report(): Promise<JsonValue> {
-    const { next, failure } = await drain()
+    const { next, failure, item } = await drain()
     if (failure !== undefined) {
       // The node's own stderr is why it failed. The exit code alone sends a reader
       // back to re-run the node to find out, so the reason is recorded with it.
@@ -207,7 +318,9 @@ export function apply(ctx: Context, config: Config): void {
       })
     }
     recordStatus(next.status === 'done' ? 'done' : 'ready')
-    return json(next)
+    // The item being iterated travels with the node views, so the subagent for a
+    // pass is handed the item rather than being sent to find it on disk.
+    return json(item === undefined ? next : { ...next, item })
   }
 
   /**
@@ -268,12 +381,12 @@ export function apply(ctx: Context, config: Config): void {
   ctx.systemPrompt.section({
     name: `tool:${toolPrefix}-spine`,
     order: ctx.systemPrompt.getSectionOrder('TOOL_WORKFLOW'),
-    text: `You are the CEO of a workflow run, and you are DRIVING A WORKFLOW GRAPH. Your coding tools (bash, write, edit, web, skill) are disabled — you cannot implement, edit files, or browse yourself. Advance only through the wf tools. ${toolPrefix}_next is the ONLY way to learn what is due now: call it first, and call it again after every ${toolPrefix}_done / ${toolPrefix}_verdict / ${toolPrefix}_edit / ${toolPrefix}_expand — those tools only confirm the mutation, they do not tell you what is next. For an AgentNode or LLMNode, spawn a subagent (the subagent tool) whose task is the node's prompt_template, and explicitly tell the subagent to read the node's reads files and write its result to the node's writes file (the filename in the node's writes field, e.g. candidate.py) — wait for it, then report the node with ${toolPrefix}_done. For a FnNode, follow its content and report ${toolPrefix}_done. Route a gate with ${toolPrefix}_verdict, answering with one of the verdicts the gate view lists (proceed/reloop/halt, or the gate's own named outcomes). For a user gate the runtime asks the person itself and routes the answer they give: call ${toolPrefix}_verdict with the gate id and never answer for them. Fan out a director's plan with ${toolPrefix}_expand, and apply user steering ("skip the tests") with ${toolPrefix}_edit. Never skip, reorder, or bypass a node — the runner refuses to advance until you report the current node complete.`,
+    text: `You are the CEO of a workflow run, and you are DRIVING A WORKFLOW GRAPH. Your coding tools (bash, write, edit, web, skill) are disabled — you cannot implement, edit files, or browse yourself. Advance only through the wf tools. ${toolPrefix}_next is the ONLY way to learn what is due now: call it first, and call it again after every ${toolPrefix}_done / ${toolPrefix}_verdict / ${toolPrefix}_edit / ${toolPrefix}_expand — those tools only confirm the mutation, they do not tell you what is next. For an AgentNode or LLMNode, spawn a subagent (the subagent tool) whose task is the node's prompt_template, and explicitly tell the subagent to read the node's reads files and write its result to the node's writes file (the filename in the node's writes field, e.g. candidate.py) — wait for it, then report the node with ${toolPrefix}_done. For a FnNode, follow its content and report ${toolPrefix}_done. Route a gate with ${toolPrefix}_verdict, answering with one of the verdicts the gate view lists (proceed/reloop/halt, or the gate's own named outcomes). For a user gate the runtime asks the person itself and routes the answer they give: call ${toolPrefix}_verdict with the gate id and never answer for them. Fan out a director's plan with ${toolPrefix}_expand, and apply user steering ("skip the tests") with ${toolPrefix}_edit. A DataNode is iterated for you: the runtime selects its items and hands you the subgraph's nodes one pass at a time, with the item being processed in the payload's item field and on disk as the node's current item file. Do not try to iterate it yourself, and do not report the data node — or the pass's last node — before its work is done. Never skip, reorder, or bypass a node — the runner refuses to advance until you report the current node complete.`,
   })
 
   ctx.tools.register(defineTool({
     name: `${toolPrefix}_next`,
-    description: 'Get the next node(s) the workflow graph says are due now. Deterministic nodes (a command an `fn` gate or an `FnNode` runs) are executed for you and do not appear. Returns `{ status, nodes }`: for `ready`, the node views you must act on (agent task / one-shot LLM / user gate / fork) with the fields you need; for `done`, the run is complete; for `failed`, a deterministic node failed and the cursor has not moved. Always call this first and act only on what it returns — never skip or reorder.',
+    description: 'Get the next node(s) the workflow graph says are due now. Deterministic nodes (a command an `fn` gate or an `FnNode` runs) and a data node\'s item passes are executed for you and do not appear. Returns `{ status, nodes }`: for `ready`, the node views you must act on (agent task / one-shot LLM / user gate / fork) with the fields you need, plus `item` while a data node is iterating; for `done`, the run is complete; for `failed`, a deterministic node failed and the cursor has not moved. Always call this first and act only on what it returns — never skip or reorder.',
     parameters: {},
     output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
     execute() {

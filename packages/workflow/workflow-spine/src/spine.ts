@@ -52,12 +52,31 @@ export interface NodeView {
 }
 
 /**
+ * A data node's iteration, in progress: the data node, how many items it selected,
+ * and which item's pass is the one running.
+ */
+export interface DataPass {
+  /** The data node being iterated. */
+  node: string
+  /** How many items the selection holds; zero finishes the node without a pass. */
+  count: number
+  /** The index of the item whose pass is running, or just finished. */
+  index: number
+  /** The subgraph's first node, where each pass starts. */
+  entry: string
+  /** The subgraph's last node; completing it ends one pass. */
+  exit: string
+  /** True once the exit completed: the pass is finished and awaits its verdict. */
+  finished: boolean
+}
+
+/**
  * The result of {@link Spine.next}: the nodes due now, or the end of the run with
  * the count of what completed.
  */
 export type SpineNext =
-  | { status: 'ready'; nodes: NodeView[]; feedback?: Record<string, string>; completed?: number; skipped?: string[] }
-  | { status: 'done'; nodes?: never; feedback?: Record<string, string>; completed?: number; skipped?: string[] }
+  | { status: 'ready'; nodes: NodeView[]; feedback?: Record<string, string>; completed?: number; skipped?: string[]; pass?: DataPass }
+  | { status: 'done'; nodes?: never; feedback?: Record<string, string>; completed?: number; skipped?: string[]; pass?: DataPass }
 
 const DEFAULT_MAX_ITERATIONS = 3
 
@@ -143,6 +162,9 @@ export function validateGraph(graph: WorkflowGraph): GraphIssue[] {
         if (!ids.has(source)) issues.push({ node: id, message: `join source '${source}' is not a node` })
       }
     }
+    if (node._type === 'DataNode') {
+      issues.push(...dataSubgraphIssues(graph, id, node, ids, outgoing))
+    }
   }
 
   for (const issue of unreachableNodes(graph, ids, outgoing)) {
@@ -165,6 +187,9 @@ function unreachableNodes(
     const next = (outgoing.get(id) ?? []).map(edge => edge.target)
     const node = graph.nodes[id]
     if (node?._type === 'ForkNode') next.push(...(node.targets ?? []))
+    // A data node's subgraph is reached through the data node, not through an edge:
+    // without this the whole subgraph reads as unreachable.
+    if (node?._type === 'DataNode' && (node.subgraph_entry ?? '') !== '') next.push(node.subgraph_entry as string)
     for (const target of next) {
       if (ids.has(target) && !seen.has(target)) {
         seen.add(target)
@@ -173,6 +198,78 @@ function unreachableNodes(
     }
   }
   return [...ids].filter(id => !seen.has(id))
+}
+
+/**
+ * What a data node's subgraph must be for the cursor to iterate it.
+ *
+ * The pass ends by completing `subgraph_exit`, and a gate is completed with
+ * `verdict()` rather than `complete()`, so a gate exit is a run that cannot
+ * finish. The entry must reach the exit, because the walk only ever moves forward
+ * from the entry; and the data node must not also have an explicit edge into its
+ * own subgraph, which would run the first node twice per item.
+ * @param graph - the whole graph, for the exit's type.
+ * @param id - the data node id.
+ * @param node - the data node.
+ * @param ids - every node id in the graph.
+ * @param outgoing - edges by source node.
+ * @returns every issue found, in the order the checks make them.
+ */
+function dataSubgraphIssues(
+  graph: WorkflowGraph,
+  id: string,
+  node: WorkflowNode,
+  ids: Set<string>,
+  outgoing: Map<string, WorkflowEdge[]>,
+): GraphIssue[] {
+  const issues: GraphIssue[] = []
+  const entry = node.subgraph_entry ?? ''
+  const exit = node.subgraph_exit ?? ''
+  if (entry === '' || !ids.has(entry)) {
+    issues.push({ node: id, message: `data node subgraph_entry '${entry}' is not a node` })
+  }
+  if (exit === '' || !ids.has(exit)) {
+    issues.push({ node: id, message: `data node subgraph_exit '${exit}' is not a node` })
+  } else if (graph.nodes[exit]?._type === 'GateNode') {
+    issues.push({
+      node: id,
+      message: `data node subgraph_exit '${exit}' is a gate; a pass ends by completing its exit`,
+    })
+  }
+  if (entry !== '' && ids.has(entry) && exit !== '' && ids.has(exit) && !reaches(entry, exit, ids, outgoing, graph)) {
+    issues.push({ node: id, message: `data node subgraph_entry '${entry}' cannot reach subgraph_exit '${exit}'` })
+  }
+  const intoSubgraph = (outgoing.get(id) ?? []).some(edge => edge.target === entry)
+  if (intoSubgraph) {
+    issues.push({
+      node: id,
+      message: `data node has an edge into its own subgraph ('${entry}'), which would run it twice per item`,
+    })
+  }
+  return issues
+}
+
+/** Whether `from` reaches `to` along edges plus fork fan-out. */
+function reaches(
+  from: string,
+  to: string,
+  ids: Set<string>,
+  outgoing: Map<string, WorkflowEdge[]>,
+  graph: WorkflowGraph,
+): boolean {
+  const seen = new Set<string>()
+  const queue = [from]
+  while (queue.length > 0) {
+    const id = queue.shift() as string
+    if (id === to) return true
+    if (seen.has(id)) continue
+    seen.add(id)
+    const next = (outgoing.get(id) ?? []).map(edge => edge.target)
+    const node = graph.nodes[id]
+    if (node?._type === 'ForkNode') next.push(...(node.targets ?? []))
+    for (const target of next) if (ids.has(target) && !seen.has(target)) queue.push(target)
+  }
+  return false
 }
 
 export class Spine {
@@ -190,6 +287,7 @@ export class Spine {
   private readonly feedback: Record<string, string>
   private readonly successors: Record<string, string>
   private readonly log: string[]
+  private pass: DataPass | undefined
 
   constructor(graph: WorkflowGraph, options?: { maxIterations?: number }) {
     this.nodes = new Map(Object.entries(graph.nodes))
@@ -339,10 +437,80 @@ export class Spine {
 
   /** The node(s) due now, or `done`. */
   next(): SpineNext {
+    const pass = this.pass === undefined ? {} : { pass: { ...this.pass } }
     if (this.cursor.length === 0) {
-      return { status: 'done', completed: this.completed.length, skipped: [...this.skipped] }
+      return { status: 'done', completed: this.completed.length, skipped: [...this.skipped], ...pass }
     }
-    return { status: 'ready', nodes: this.cursor.map(nid => this.describe(nid)), feedback: { ...this.feedback } }
+    return {
+      status: 'ready',
+      nodes: this.cursor.map(nid => this.describe(nid)),
+      feedback: { ...this.feedback },
+      ...pass,
+    }
+  }
+
+  /**
+   * The pass a data node is in the middle of, or `undefined`.
+   * @param node - a data node id; absent answers for whichever pass is running.
+   * @returns the pass, if one is running.
+   */
+  passOf(node?: string): DataPass | undefined {
+    if (this.pass === undefined) return undefined
+    if (node !== undefined && this.pass.node !== node) return undefined
+    return { ...this.pass }
+  }
+
+  /**
+   * Start iterating a data node: the cursor moves into the subgraph's entry.
+   *
+   * The items themselves are the caller's: loading them is I/O, and which command
+   * loads them is deployment state, not graph structure. A selection of zero items
+   * is not a pass — the caller completes the node instead.
+   * @param node - the data node id.
+   * @param count - how many items the selection holds; must be positive.
+   * @returns the spine's next state, whose cursor is the subgraph's entry.
+   */
+  startPass(node: string, count: number): SpineNext {
+    const body = this.nodes.get(node)
+    if (body === undefined) throw new Error(`unknown node ${node}`)
+    if (body._type !== 'DataNode') throw new Error(`${node} is not a data node`)
+    if (this.pass !== undefined) throw new Error(`${node} cannot start: ${this.pass.node} is iterating`)
+    if (!Number.isInteger(count) || count <= 0) {
+      throw new Error(`${node} was given ${String(count)} items; an empty selection completes the node`)
+    }
+    const entry = body.subgraph_entry ?? ''
+    const exit = body.subgraph_exit ?? ''
+    if (entry === '' || exit === '') throw new Error(`${node} declares no subgraph to iterate`)
+    this.pass = { node, count, index: 0, entry, exit, finished: false }
+    this.cursor = [entry]
+    this.afters = []
+    this.log.push(`data ${node}: ${count} item(s), first pass at ${entry}`)
+    return this.next()
+  }
+
+  /**
+   * End one item's pass: move to the next item, or complete the data node.
+   *
+   * Called after the pass's own verdict is in hand, so a pass that was never judged
+   * cannot be recorded as done. The data node's successor is reached here, on the
+   * last item, rather than by following the exit's out-edge.
+   * @returns the spine's next state.
+   */
+  endPass(): SpineNext {
+    const pass = this.pass
+    if (pass === undefined) throw new Error('no data pass is running')
+    if (!pass.finished) throw new Error(`item ${pass.index} of ${pass.node} has not finished`)
+    if (pass.index + 1 < pass.count) {
+      const index = pass.index + 1
+      this.pass = { ...pass, index, finished: false }
+      this.cursor = [pass.entry]
+      this.afters = []
+      this.log.push(`data ${pass.node}: item ${index + 1}/${pass.count}`)
+      return this.next()
+    }
+    this.pass = undefined
+    this.log.push(`data ${pass.node}: ${pass.count} item(s) done`)
+    return this.complete(pass.node)
   }
 
   /** Mark a non-gate node complete and advance. */
@@ -360,6 +528,15 @@ export class Spine {
       const join = this.unconditionalTarget(node)
       if (join !== undefined) this.afters.push(join)
       this.cursor = (body.targets ?? []).filter(target => !this.skipped.includes(target))
+      return this.next()
+    }
+
+    // Completing the subgraph's exit ends one pass. The exit's own out-edge is not
+    // followed: the data node's successor is reached when the last item is done, so
+    // a pass cannot walk out of its subgraph into the nodes after the data node.
+    if (this.pass !== undefined && !this.pass.finished && node === this.pass.exit) {
+      this.pass = { ...this.pass, finished: true }
+      this.cursor = this.cursor.filter(entry => entry !== node)
       return this.next()
     }
 
@@ -564,6 +741,7 @@ export class Spine {
       gate_verdicts: Object.fromEntries(this.gateVerdicts),
       iterations: { ...this.iterations },
       feedback: { ...this.feedback },
+      ...(this.pass === undefined ? {} : { pass: { ...this.pass } }),
       log: [...this.log],
     }
   }

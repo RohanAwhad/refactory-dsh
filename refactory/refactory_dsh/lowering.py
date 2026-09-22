@@ -70,17 +70,34 @@ def node_declarations(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
     The kind travels because a reader of a finished run has the run directory and
     not the state: the citation chain has to know which nodes made a model call, or
     it would demand a citation from a deterministic op.
+
+    A data node's *source* travels too. The IR carries it, but the runtime's node
+    manifest does not, and the item loader is a command of its own — it has the run
+    directory and must still know which items the node selected. Writing the source
+    beside the declarations is what lets one loader serve both runtimes instead of
+    the DSH path re-deriving it from an environment variable it cannot see.
     """
     graph = Graph.from_state(state.get("graph") or {})
-    return {
-        node_id: {
+    declarations: dict[str, dict[str, Any]] = {}
+    for node_id, node in graph.nodes.items():
+        entry: dict[str, Any] = {
             "kind": node.kind,
             "reads": sorted(node.reads),
             "writes": sorted(node.writes),
             "produces": sorted(node.produces),
         }
-        for node_id, node in graph.nodes.items()
-    }
+        if node.kind == "data":
+            entry["data"] = {
+                "subgraph_entry": node.subgraph_entry,
+                "subgraph_exit": node.subgraph_exit,
+                "task_ref": node.task_ref,
+                "source_path": node.source_path,
+                "source_format": node.source_format,
+                "inline_items": [dict(item) for item in node.inline_items],
+                "limit": node.limit,
+            }
+        declarations[node_id] = entry
+    return declarations
 
 
 def write_declarations(state: dict[str, Any], workdir: Path) -> Path:
@@ -104,7 +121,13 @@ def write_declarations(state: dict[str, Any], workdir: Path) -> Path:
     return path
 
 
-def read_declarations(workdir: Path) -> dict[str, dict[str, list[str]]]:
+def read_declarations(workdir: Path) -> dict[str, Any]:
+    """The declarations the lowering left in the run directory, keyed by node id.
+
+    A node entry carries its kind, its reads, writes and facts, and -- for a data
+    node -- its source. The value type is loose because the entry is a document the
+    lowering writes and several readers read parts of.
+    """
     path = Path(workdir) / DECLARATIONS
     if not path.exists():
         return {}

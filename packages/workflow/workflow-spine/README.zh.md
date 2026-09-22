@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-本包把一张 refactory 工作流图（`Workflow.to_dict()` 产出的 JSON）变成一次可实时引导的运行：由驱动 agent 逐步走完，却从不自行决定下一步做什么。一个按会话持有的 `Spine` 拥有当前位置（“下一步是什么”）、gate 路由、迭代上限、fork/join 屏障、director 展开与图编辑，并通过 `wf_*` 工具把这些状态暴露出来。在当前节点完成之前，spine 拒绝交出下一个节点，因此一次运行无法跳过、重排或绕过检查点。当 `executeCommands` 打开且挂载了 `shell` 执行器时，确定性节点——`FnNode` 与 `Study` 的命令，以及 `fn` gate 求值器——可以在进程内运行。主要代价是：图必须在加载时通过校验，而且 CEO 自身的编码工具被禁用，因此节点工作只能发生在它派生出的子 agent 内部。
+本包把一张 refactory 工作流图（`Workflow.to_dict()` 产出的 JSON）变成一次可实时引导的运行：由驱动 agent 逐步走完，却从不自行决定下一步做什么。一个按会话持有的 `Spine` 拥有当前位置（“下一步是什么”）、gate 路由、迭代上限、fork/join 屏障、director 展开与图编辑，并通过 `wf_*` 工具把这些状态暴露出来。在当前节点完成之前，spine 拒绝交出下一个节点，因此一次运行无法跳过、重排或绕过检查点。当 `executeCommands` 打开且挂载了 `shell` 执行器时，确定性节点——`FnNode` 与 `Study` 的命令，以及 `fn` gate 求值器——可以在进程内运行，而 `DataNode` 的子图会通过配置好的条目加载器逐个条目迭代。主要代价是：图必须在加载时通过校验，而且 CEO 自身的编码工具被禁用，因此节点工作只能发生在它派生出的子 agent 内部。
 
 ## 目录
 
@@ -62,6 +62,7 @@ agent 遵循的循环：`wf_next` → 只做那个节点（为 `AgentNode` 派�
     workdir: /runs/abc      # optional: working directory for node commands
     commandEnv: {}          # optional: extra environment for node commands
     commandTimeoutMs: 600000
+    dataCommand: ''         # optional: the item loader a DataNode iterates through
 ```
 
 `graph` 的字段名与 refactory 一致（`start_node`、`nodes`、`edges`、`prompt_template`、`evaluator_type`、`gate_prompt`、`writes`、`reads`、`expand`），因此 `graph.json` 文件可以原样加载。`validateGraph` 会拒绝那些游走无法遵循其结构的图——无法解析的 `start_node`、悬空的边、带有两条无条件边的节点、两条携带同一 gate verdict 的边、未知的节点类型，或游走永远无法到达的节点——因此坏图会在加载时失败，而不是让一次运行卡住。
@@ -84,6 +85,8 @@ agent 遵循的循环：`wf_next` → 只做那个节点（为 `AgentNode` 派�
 
 节点命令是通用的——它对调用它的图一无所知——因此插件把它自己的声明以 JSON 形式通过 `DSH_WORKFLOW_NODE` 交给它：`{ id, type, command, reads, writes }`。若命令以非零码退出、超时、被中止，或（对 gate 而言）没有打印任何 verdict，则该节点**失败**：`wf_next` 返回 `{ status: 'failed', node, exit_code, error, stdout, stderr }`，且 cursor 不移动，因为一个没有发生的步骤绝不能看起来像发生过。
 
+`DataNode` 以同样的方式迭代。它的条目位于图之外，因此由组合指定加载器（`dataCommand`）；插件运行 `<dataCommand> list --node <id>`，在一趟 pass 之前运行一次 `begin --index <n>`、之后运行一次 `end --index <n>`，并在两者之间用普通游标从 `subgraph_entry` 走到 `subgraph_exit`。条目既以节点的 `current_item.json` 落在磁盘上，也出现在 `wf_next` 返回值的 `item` 字段中，因此子 agent 拿到的是它正在处理的条目。空选择会完成该节点并继续；加载器以非零码退出或没有打印 JSON 时，该节点像其他命令一样失败。带 `DataNode` 却没有加载器的图在加载时即被拒绝，因为模型无法进入游标从不进入的子图。
+
 `user` gate 既不运行、也不由模型路由。`wf_verdict` 以该 gate 自身的 verdict 标签作为选项询问已组合的 `user-questions` 应答方，并路由所得答复；因此若组合中没有应答方，就会拒绝该 gate 并指名它，而不是凭空编造一个 verdict。当配置了 `workdir` 时，插件把 `{ status: done | ready | failed | refused }` 记录到 `<workdir>/.refactory/spine-status.json`，使读者能分辨一次运行是已完成还是停在某个 gate。
 
 -----
@@ -98,6 +101,7 @@ agent 遵循的循环：`wf_next` → 只做那个节点（为 `AgentNode` 派�
 | `AgentNode` + `expand`（director） | `wf_expand` 热插入 N 个子节点并展开。 |
 | `FnNode` / `Study` | `wf_next` 返回它；agent 运行该确定性 op，然后 `wf_done`。 |
 | `GateNode` fn/user/agent | `wf_next` 返回它；agent 调用 `wf_verdict`。 |
+| `DataNode` | 插件选出它的条目，并为每个条目迭代一次子图，每趟随 `item` 一并报告，并用加载器的 `end` 收尾。 |
 | `ForkNode` / `JoinNode` | `wf_done(fork)` 展开；每个分支各自前进，屏障则是 `afters` 栈。 |
 | 具名 gate 条件 | `wf_verdict(gate, \"draft\")` 沿匹配的边前进。 |
 | RELOOP 边 | `wf_verdict(reloop, feedback)` 回退，上限由 gate 的 `max_iterations` 或 `maxIterations` 决定。 |
@@ -128,6 +132,8 @@ agent 遵循的循环：`wf_next` → 只做那个节点（为 `AgentNode` 派�
 这些限制界定了当前 spine 的行为。它们是当前的包约束，不是图编写方面的待办清单。
 
 - `SubgraphForkNode` / `SelectionNode` 以 `unsupported` 标记带过；两者都需要一个隔离 worktree 的子执行器，而当前没有任何图声明了它。
+- `DataNode` 的各趟 pass 依次执行。节点的 `parallelism` 未被采纳：子图在单条游标上行走，因此含并发分支的子图需要为每个条目再引入一条游标。
+- 条目加载器是命令，而不是服务。`dataCommand` 是一条 shell 命令行，因此想要换用别的加载器的组合改的是它，而不是去实现一个接缝（seam）。
 - `LLMNode` 按一次性 agent 节点执行：由驱动 agent 发起调用。声明的 `model`、`temperature` 或工具集都不受强制。
 - reloop 会把 cursor 坍缩到它的目标上，丢弃其他任何活动位置，因此在有 fork 在途时到达的 reloop gate 会丢掉其他分支。图作者必须把 reloop gate 放在 cursor 唯一的位置。
 - `afters` 屏障只有一个栈，因此嵌套在 fork 分支内的 fork 会让内层屏障在外层 join 处触发。

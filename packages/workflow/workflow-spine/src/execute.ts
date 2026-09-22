@@ -107,6 +107,92 @@ function manifestOf(node: NodeView, command: string): NodeManifest {
   }
 }
 
+/** One command's request: where it runs, with what, and under which sandbox. */
+function requestFor(node: NodeView, command: string, config: CommandRunnerConfig): ShellExecRequest {
+  return {
+    command,
+    env: { ...config.env, [NODE_ENV_KEY]: JSON.stringify(manifestOf(node, command)) },
+    timeoutMs: config.timeoutMs,
+    ...(config.workdir === undefined ? {} : { workdir: config.workdir }),
+    ...(config.sandboxPolicy === undefined ? {} : { sandboxPolicy: config.sandboxPolicy }),
+  }
+}
+
+/** One argument, quoted so a shell hands it over whole. */
+function quoted(value: string): string {
+  return `'${value.replace(/'/g, String.raw`'\''`)}'`
+}
+
+/**
+ * The item command a data node runs: one verb of its loader, naming the node.
+ *
+ * The loader is deployment state (`dataCommand`), not graph structure: the graph
+ * says which items the node selected, and the command that reads them is what the
+ * composition mounts. The node id travels in the command line because the loader is
+ * a separate process with the run directory and no access to the graph.
+ * @param node - the data node whose items to act on.
+ * @param verb - the loader verb: `list`, `begin`, or `end`.
+ * @param config - the data loader command and the settings node commands run under.
+ * @param index - the item's position in the selection, for `begin` and `end`.
+ * @returns the command line.
+ */
+export function dataCommandOf(
+  node: NodeView,
+  verb: string,
+  config: { dataCommand: string },
+  index?: number,
+): string {
+  const position = index === undefined ? '' : ` --index ${String(index)}`
+  return `${config.dataCommand} ${verb} --node ${quoted(node.id)}${position}`
+}
+
+/**
+ * Run one of a data node's item commands and read the JSON it prints.
+ *
+ * The item loop is three commands because the pass between them can contain agent
+ * nodes: the runtime drives the subgraph, so it has to learn the selection, start
+ * one pass, and close it, rather than owning the whole loop the way the walking
+ * executor does.
+ * @param shell - the shell executor that runs node commands.
+ * @param node - the data node view.
+ * @param verb - the loader verb: `list`, `begin`, or `end`.
+ * @param config - the data loader command and the settings node commands run under.
+ * @param index - the item's position, for `begin` and `end`.
+ * @returns the parsed JSON the command printed, or a failure carrying its stderr.
+ */
+export async function runDataCommand(
+  shell: ShellExecutor,
+  node: NodeView,
+  verb: string,
+  config: CommandRunnerConfig & { dataCommand: string },
+  index?: number,
+): Promise<{ ok: true; value: Record<string, unknown> } | CommandFailure> {
+  const command = dataCommandOf(node, verb, config, index)
+  const spec = shell.resolve(requestFor(node, command, config))
+  const result = await shell.run(spec)
+  const stdout = result.stdout.text.trim()
+  const stderr = result.stderr.text.trim()
+  const base: CommandResult = { command, exitCode: result.exitCode, stdout, stderr }
+  if (result.timedOut) {
+    return { ...base, ok: false, error: `${node.id} ${verb} timed out after ${result.timeoutMs}ms` }
+  }
+  if (result.aborted) return { ...base, ok: false, error: `${node.id} ${verb} was aborted` }
+  if (result.exitCode !== 0) {
+    return { ...base, ok: false, error: `${node.id} ${verb} exited with code ${String(result.exitCode)}` }
+  }
+  try {
+    const value: unknown = JSON.parse(stdout)
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      return { ...base, ok: false, error: `${node.id} ${verb} printed ${stdout}, not a JSON object` }
+    }
+    return { ok: true, value: value as Record<string, unknown> }
+  } catch {
+    // The loader's stdout is its answer, so unparseable output is the failure: a
+    // command that printed a usage line exited 0 somewhere it should not have.
+    return { ...base, ok: false, error: `${node.id} ${verb} printed ${stdout}, not JSON` }
+  }
+}
+
 /**
  * Run one deterministic node.
  *
@@ -134,13 +220,7 @@ export async function runDeterministic(
     return { ...base, ok: false, error: `${node.id} has no command` }
   }
 
-  const request = {
-    command,
-    env: { ...config.env, [NODE_ENV_KEY]: JSON.stringify(manifestOf(node, command)) },
-    timeoutMs: config.timeoutMs,
-    ...(config.workdir === undefined ? {} : { workdir: config.workdir }),
-    ...(config.sandboxPolicy === undefined ? {} : { sandboxPolicy: config.sandboxPolicy }),
-  } as ShellExecRequest
+  const request = requestFor(node, command, config)
   const spec = shell.resolve(request)
   const result = await shell.run(spec)
   const stdout = result.stdout.text.trim()

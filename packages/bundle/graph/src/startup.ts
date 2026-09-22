@@ -55,6 +55,14 @@ function resolveDep(override: string | undefined, homeRelative: string, fallback
 const DEFAULT_GRAPHS_DIR = resolveDep(process.env.SRF_GRAPHS, 'refactory/vendor/srf/graphs', join(process.cwd(), 'refactory/vendor/srf/graphs'))
 const DEFAULT_VENV_BIN = resolveDep(process.env.VENV_BIN, '.venv/bin', join(process.cwd(), '.venv/bin'))
 
+/**
+ * The data node's item loader.
+ *
+ * Resolved by module, not by path: the run's interpreter leads PATH in
+ * `commandEnv`, exactly as `refactory_dsh.run` for a deterministic node is.
+ */
+const DATA_COMMAND = 'python -m refactory_dsh.items'
+
 /** Everything the run needs, resolved once from the command line. */
 export interface GraphStartupValues {
   /** The CEO driving prompt. */
@@ -77,6 +85,8 @@ export interface GraphStartupValues {
   model: string | undefined
   /** The directory of the Python that has refactory_dsh installed. */
   pythonBin: string
+  /** The command that selects a data node's items and opens and closes one pass. */
+  dataCommand: string
 }
 
 function graphCommand(): Command {
@@ -159,6 +169,7 @@ export function apply(ctx: Context): void {
       provider: options.provider === undefined ? undefined : String(options.provider),
       model: options.model === undefined ? undefined : String(options.model),
       pythonBin,
+      dataCommand: DATA_COMMAND,
     } satisfies GraphStartupValues)
   })
   parseCmdline(ctx, program)

@@ -44,9 +44,14 @@ What was proven, by execution:
 
 ## What is left
 
-**#49 is the only open issue**: a first-class picker for the mode, the loop and the
-packages, instead of the conversation. It needs a host RPC seam (the tool is
-model-facing only), so read the issue before starting.
+**#49**: the conversation-driven half is done and verified (the CEO calls the
+`refactory` tool for `modes`, `strategies`, `start`, `registry`, `create`, …), and what
+remains is the **picker**: a host seam that runs the console for the browser (the tool
+is model-facing, so the client cannot call it) plus a client panel in a sidebar slot,
+with locale dictionaries and per-file coverage. Read the issue's acceptance before
+starting.
+
+Everything else in the reset is closed, with evidence in `refactory/.work/todo.json`.
 
 ## Rules of engagement
 
@@ -125,11 +130,12 @@ Three things the next session should not have to rediscover:
   (with its `.zh.md` and recorded pair) states the three decisions, the vocabulary
   they needed, and the alternatives rejected. Read it before changing the node
   vocabulary or the default package's modes.
-- **The DSH half of the dataset work needs a decision first** (#59): the spine owns
-  the cursor, so iterating a DataNode means either the spine shells into the runner
-  for its items (one loader, shared) or the loader is reimplemented in TypeScript
-  (two, with a test pinning them together). Picking one is the first step; the
-  walker already does the whole thing.
+- **The dataset work is done on both runtimes** (#59, closed): the spine iterates a
+  `data` node — `startPass`/`endPass` around a subgraph walked by the ordinary cursor
+  — and the plugin drives `refactory_dsh.items list|begin|end` around each pass, so
+  one loader serves both runtimes. The decision and its alternatives are in
+  `.agents/notes/implemented/architecture/2026-09-23-a-data-node-iterates-on-both-runtimes.md`.
+  A composition with a `data` node and no `dataCommand` is refused at load.
 - **The walker's fork/join execution is a convenience, not the DSH semantics.** DSH
   runs a fork's branches concurrently and meets at the join; the walker runs them in
   order to the same barrier. Same barrier, same result, different concurrency — worth
@@ -138,9 +144,9 @@ Three things the next session should not have to rediscover:
 Two judgement calls to keep or change deliberately: both v2 modes keep v2's
 `gate_strategy` as a **person's** gate, so a headless create/design needs an explicit
 `verdicts={"gate_strategy": ...}` (the tests state who approved rather than inventing
-it); and the walker refuses a `data` node instead of silently iterating nothing,
-because a run that iterated zero items and a run that iterated all of them must not
-look the same.
+it); and a graph with a `data` node is refused at load when the composition mounts no
+item loader, because a run that iterated zero items and one that iterated all of them
+must not look the same.
 
 ## remote-factory's other default modes, surveyed
 

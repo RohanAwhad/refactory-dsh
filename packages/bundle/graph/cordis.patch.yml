@@ -38,6 +38,7 @@
         executeCommands: true
         workdir: !!js ctx.graphStartup.workdir
         commandEnv: !!js ctx.graphStartup.commandEnv
+        dataCommand: !!js ctx.graphStartup.dataCommand
         commandTimeoutMs: 3600000
         ceoDeny:
           - bash

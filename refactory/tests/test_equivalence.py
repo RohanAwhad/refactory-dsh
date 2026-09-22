@@ -34,12 +34,14 @@ def _mode():
     return mode_class()
 
 
-def _run_on_dsh(state: dict, tmp_path: Path, *, knobs: dict, timeout: int = 600) -> dict:
+def _run_on_dsh(
+    state: dict, tmp_path: Path, *, knobs: dict, name: str = "circle_packing", timeout: int = 600
+) -> dict:
     """Lower the mode, write it where the bundle loads it, and run DSH."""
     graphs = tmp_path / "graphs"
     work = tmp_path / "work"
     work.mkdir(parents=True, exist_ok=True)
-    lowering.write_mode_graph(state, graphs, name="circle_packing")
+    lowering.write_mode_graph(state, graphs, name=name)
     # The IR has no field for the facts a node produces, so the runner reads them
     # from the run directory.
     lowering.write_declarations(state, work)
@@ -48,7 +50,7 @@ def _run_on_dsh(state: dict, tmp_path: Path, *, knobs: dict, timeout: int = 600)
         [
             str(node_bin()), "--import", "tsx/esm", "apps/cli/src/bin.ts",
             "--profile", "graph", "run",
-            "--mode", "circle_packing",
+            "--mode", name,
             "--task", TASK,
             "--budget", "1",
             "--graphs", str(graphs),
@@ -219,3 +221,135 @@ def test_the_loop_refuses_an_unknown_evaluator(tmp_path):
                        evaluator="magic"),
             project=Path("."),
         ).init()
+
+
+# ── a data node: one pass per item, on both runtimes ──────────────────────────
+#
+# Issue #59. The walking executor runs a data node's loop itself; the spine drives
+# it from outside through the item loader's three commands, because the subgraph a
+# data node iterates can contain agent nodes. The acceptance is that the facts come
+# out the same either way, so this is the test that says so.
+
+#: A package whose single mode is a data node over a one-op subgraph, bound to a
+#: Task that names two items and judges each pass. Written into a temporary project
+#: so the node subprocesses resolve it the same way a created package resolves.
+PROBE = {
+    # The package's two modules, as a created package would write them.
+    "__init__.py": '''
+from refactory_dsh.nn import Package
+
+from .probe import Dataset
+
+PACKAGE = Package(
+    name="dataset_probe",
+    description="iterate a Task's items",
+    modes=(Dataset,),
+    ops=("refactory_packages.dataset_probe.probe",),
+)
+''',
+    "probe.py": '''
+from __future__ import annotations
+
+from pathlib import Path
+
+from refactory_dsh import nn
+from refactory_dsh.task import Task, TaskInstance, VerifyResult
+
+OPS = "refactory_packages.dataset_probe.probe"
+
+
+class CountingTask(Task):
+    """Two named items, each judged by whether the pass recorded it."""
+
+    name = "counting"
+
+    def instances(self):
+        return [TaskInstance(id="alpha"), TaskInstance(id="beta")]
+
+    def verify(self, instance, workspace: Path) -> VerifyResult:
+        seen = workspace / "seen.json"
+        passed = seen.exists() and instance.id in seen.read_text()
+        return VerifyResult(passed=passed, score=1.0 if passed else 0.0)
+
+
+class Dataset(nn.Mode):
+    """One data node over a one-node subgraph, bound to a Task."""
+
+    name = "dataset"
+    description = "iterate a Task's items and score the passes"
+
+    def build(self) -> nn.Graph:
+        graph = nn.Graph()
+        graph.add(nn.Node(
+            "data", "data", subgraph_entry="work", subgraph_exit="work",
+            task_ref="refactory_packages.dataset_probe.probe:CountingTask",
+            writes=("current_item.json",), produces=("item_scores",),
+        ))
+        graph.add(nn.Node(
+            "work", "op", call=f"{OPS}:record",
+            reads=("current_item.json",), writes=("seen.json",), produces=("value",),
+        ))
+        graph.add(nn.Node("finish", "op", call=f"{OPS}:done", produces=("finished",)))
+        graph.connect("data", "finish")
+        return graph
+
+
+def record(ctx) -> dict:
+    """Append the current item's id, the way a per-item worker would."""
+    item = ctx.read_json("current_item.json", {}) or {}
+    seen = ctx.read_json("seen.json", {"ids": []}) or {"ids": []}
+    seen.setdefault("ids", []).append(str(item.get("id")))
+    ctx.write_json("seen.json", seen)
+    return {"value": len(seen["ids"])}
+
+
+def done(ctx) -> dict:
+    return {"finished": True}
+''',
+}
+
+
+def _probe_project(root: Path) -> Path:
+    """Write the probe package into a temporary project and return the project."""
+    package = root / ".factory" / "packages" / "dataset_probe"
+    package.mkdir(parents=True)
+    for filename, source in PROBE.items():
+        (package / filename).write_text(source)
+    return root
+
+
+@pytest.mark.integration
+def test_a_data_node_iterates_the_same_items_on_dsh_as_with_the_walker(
+    tmp_path, monkeypatch
+):
+    """One pass per item, and the same facts, on the runtime that ships.
+
+    The item loader is a command the composition configures, so this also proves
+    the wiring: the bundle publishes `dataCommand`, the spine runs its three verbs
+    around each pass, and the Task's `verify` lands in `item_scores` exactly as it
+    does when the walker owns the loop.
+    """
+    project = _probe_project(tmp_path / "project")
+    # The node subprocesses resolve workspace packages against the project, and a
+    # `module:Class` Task reference is only importable where the package is.
+    monkeypatch.setenv("REFACTORY_PROJECT", str(project))
+    _package, mode_class = registry.resolve(project, "dataset_probe/dataset")
+    state = mode_class().state_dict()
+
+    walked = type(mode_class())(state=state).evaluate(tmp_path / "walk", max_steps=500)
+    assert walked.exit_ok, walked.error
+
+    dsh = _run_on_dsh(state, tmp_path / "dsh", knobs={}, name="dataset_probe")
+    assert dsh["_returncode"] == 0, dsh["_stderr"]
+
+    seen = json.loads((Path(dsh["_work"]) / "seen.json").read_text())
+    assert seen["ids"] == ["alpha", "beta"], (
+        "the subgraph did not run once per item, in order, on DSH: "
+        f"{seen}"
+    )
+    assert dsh["_facts"].get("item_scores") == walked.facts["item_scores"], (
+        f"the Task judged the passes differently: walker {walked.facts['item_scores']}, "
+        f"DSH {dsh['_facts'].get('item_scores')}"
+    )
+    assert dsh["_facts"].get("value") == walked.facts["value"]
+    assert dsh["_facts"].get("finished") is True

@@ -392,7 +392,7 @@ Lower a mode state to refactory's IR, so DSH can run it.
 | function | `knob_specs` | `(state: 'dict[str, Any]') -> 'dict[str, Knob]'` |
 | function | `node_declarations` | `(state: 'dict[str, Any]') -> 'dict[str, dict[str, Any]]'` |
 | function | `node_manifest` | `(state: 'dict[str, Any]', node_id: 'str') -> 'dict[str, Any]'` |
-| function | `read_declarations` | `(workdir: 'Path') -> 'dict[str, dict[str, list[str]]]'` |
+| function | `read_declarations` | `(workdir: 'Path') -> 'dict[str, Any]'` |
 | function | `read_memory_declarations` | `(workdir: 'Path') -> 'list[Any]'` |
 | function | `to_workflow` | `(state: 'dict[str, Any]', *, name: 'str' = '', description: 'str' = '') -> 'Workflow'` |
 | function | `validate_ir` | `(workflow: 'Workflow') -> 'list[str]'` |
@@ -403,6 +403,7 @@ Lower a mode state to refactory's IR, so DSH can run it.
 - **`knob_environment`** — The environment a node command runs under: the knobs, and whatever else.
 - **`node_declarations`** — Every node's kind and declared reads, writes and facts, keyed by node id.
 - **`node_manifest`** — What a node command is told about itself, mirroring `DSH_WORKFLOW_NODE`.
+- **`read_declarations`** — The declarations the lowering left in the run directory, keyed by node id.
 - **`read_memory_declarations`** — The mode's memory declarations, as the runner reads them back.
 - **`to_workflow`** — The refactory `Workflow` for a mode state.
 - **`validate_ir`** — refactory's own validation of a lowered graph.
@@ -656,3 +657,27 @@ Driving a run from a GUI: the catalogue, a live run, and what it produced.
 - **`start`** — Begin a run in its own process, and hand back the id to watch it with.
 - **`status`** — Where the run is, and what is new since the reader last looked.
 - **`stop`** — Ask the run to stop, and say whether it did.
+
+
+<a id="refactory_dsh-items"></a>
+
+## `refactory_dsh.items`
+
+The per-item half of a data node, from the command line.
+
+| kind | name | signature |
+|---|---|---|
+| class | `ItemsError` | `` |
+| function | `command_begin` | `(node: 'Node', workdir: 'Path', index: 'int') -> 'dict[str, Any]'` |
+| function | `command_end` | `(node: 'Node', workdir: 'Path', index: 'int') -> 'dict[str, Any]'` |
+| function | `command_list` | `(node: 'Node', workdir: 'Path') -> 'dict[str, Any]'` |
+| function | `data_node` | `(workdir: 'Path', node_id: 'str') -> 'Node'` |
+| function | `items_of` | `(node: 'Node', workdir: 'Path') -> 'list[dict[str, Any]]'` |
+| function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
+
+- **`ItemsError`** — A data node cannot be iterated: named, because the node id alone is not a reason.
+- **`command_begin`** — Materialise one item and prepare the workspace for its pass.
+- **`command_end`** — The Task's verdict on one pass, folded into the run's facts.
+- **`command_list`** — How many items the node iterates, and what they are called.
+- **`data_node`** — The data node the declarations describe, as the graph language's own node.
+- **`items_of`** — The data node's items, loaded the one way both runtimes load them.
