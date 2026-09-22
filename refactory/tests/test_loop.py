@@ -280,6 +280,24 @@ def test_the_gradient_carries_knob_attribution_and_reasons(tmp_path):
     assert gradient["structural"]["accepted_ops"]
 
 
+def test_the_final_epoch_does_not_propose_a_batch_nobody_will_run(tmp_path):
+    """A proposal for an epoch that cannot run is work whose output nobody evaluates.
+
+    Each epoch's batch is the previous epoch's proposals, so the final ask produced
+    candidates that were installed and then dropped: the run reported fewer
+    evaluations than its configuration promised, and a model-driven optimizer was
+    paid for a round nothing ran.
+    """
+    report = Loop(MODE, _config(tmp_path, epochs=2), project=Path(".")).run()
+    last = report["epochs_summary"][-1]
+    assert last["proposed"] == 0, (
+        f"the final epoch proposed {last['proposed']} candidate(s) that nothing runs"
+    )
+    assert report["population"] == report["evaluations"], (
+        "every candidate the run kept was evaluated; none was accepted and left unrun"
+    )
+
+
 def test_the_scheduler_reports_the_evaluation_bound(tmp_path):
     loop = Loop(MODE, _config(tmp_path, max_evaluations=2), project=Path("."))
     report = loop.run()

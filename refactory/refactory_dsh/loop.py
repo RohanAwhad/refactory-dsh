@@ -720,7 +720,15 @@ class Loop(OuterLoop):
 
         Going through ``propose`` and ``install`` rather than straight to the
         optimizer is what lets a strategy change one of them and keep the other.
+
+        Nothing is proposed once the epoch bound is reached. Each epoch's batch is
+        the previous epoch's proposals -- the first is the starting sweep -- so a
+        proposal made in the final epoch belongs to an epoch that cannot run, and is
+        a round of work (a model call, on a model-driven optimizer) whose output
+        nothing evaluates. ``--epochs N`` therefore means N batches evaluated.
         """
+        if self.epoch >= self.config.epochs:
+            return [], []
         run = run or Run(loop=self)
         # The pair a proposer is handed, and why it is the whole population rather
         # than the elite: `describe()` carries a score and the edits that produced
