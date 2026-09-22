@@ -276,6 +276,11 @@ export function RefactoryBody({
 
       <section className={css.section}>
         <h2 className={css.heading}>{t('status.heading')}</h2>
+        {run !== null && (
+          // Which run the gesture produced: the id is what `console status --run`
+          // and `wf_state` take, so a person can follow it outside the panel.
+          <p className={css.note} data-refactory-started>{t('started', { run })}</p>
+        )}
         {run === null
           ? <p className={css.note} data-refactory-status="none">{t('status.none')}</p>
           : (

@@ -6,6 +6,12 @@ The refactory seam is the DeepSeek Harness side of a refactory outer-loop run: t
 
 Source: [`packages/refactory/refactory-console/src/index.ts`](../../packages/refactory/refactory-console/src/index.ts)
 
+## The picker
+
+A person picks the mode, the three level-two names and the packages from the right Sidebar's **Modes** tab, which reads the same service. Every choice is a described entry — the selected mode and strategy carry the console's own description — the package list offers enable, disable, remove and import, and starting a run names the run it began so it can be followed outside the panel.
+
+![The Modes tab: a mode and an outer loop chosen by description, the package list, and the running run the Start button began](../../refactory/docs/assets/refactory-picker.gif)
+
 ## Described choices
 
 The console reports every choice by description, and the Remote service keeps them that way rather than reshaping them. A mode's catalogue entry carries the identifier `<package>/<mode>`, its description, whether it is scored, and the `action` field that names the verb which runs it — `start` for a scored mode, and the authoring verb `create`, `edit` or `design` for one the loop cannot search. The strategy, optimizer and evaluator names come from the three level-two registries, and the package list comes from the registry's own catalogue, which reports each package's enabled state and location on its modes. A package that declares no modes therefore reports no state rather than a guess.

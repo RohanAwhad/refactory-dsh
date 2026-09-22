@@ -6,6 +6,12 @@ refactory seam 是 refactory 外循环运行在 DeepSeek Harness 一侧的部分
 
 源码：[`packages/refactory/refactory-console/src/index.ts`](../../packages/refactory/refactory-console/src/index.ts)
 
+## 选择器
+
+人在右侧栏的 **Modes** 标签页里挑选模式、三个二级名称与模式包，它读取的是同一个服务。每个选项都带描述——选中的模式与策略会显示控制台自己的描述——模式包列表提供启用、停用、移除与导入，而启动一次运行会指名它所开启的运行，从而可以在面板之外跟进它。
+
+![Modes 标签页：按描述选中的模式与外层循环、模式包列表，以及 Start 按钮开启的运行](../../refactory/docs/assets/refactory-picker.gif)
+
 ## 有描述的可选项
 
 控制台对每个选项都连同描述一起报告，而 Remote 服务保持这个样子，不改写它们。模式目录条目携带标识 `<package>/<mode>`、描述、是否计分，以及指名运行它的动作的 `action` 字段——计分模式为 `start`，循环无法搜索的模式则为创作动作 `create`、`edit` 或 `design`。策略、优化器与评估器名来自三个二级注册表，包列表来自注册表自己的目录，后者在其每个模式上报告该包的启用状态与位置。因此不声明任何模式的包报告的是没有状态，而不是猜测。

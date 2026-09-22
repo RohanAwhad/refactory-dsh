@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/subsystems/refactory.md
-refactory.md: e7aae7fbee1d4685f58af056e93610b4bec365b9
-refactory.zh.md: 0da41d8d5b5a201af4c64b958c75297c5b35967c
+refactory.md: f629df584144f8a7c616392c6fb6560d007b99f1
+refactory.zh.md: 7e0d6361b2df4f4699e3ea994ba397f14757dd34

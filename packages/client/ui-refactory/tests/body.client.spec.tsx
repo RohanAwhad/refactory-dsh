@@ -169,6 +169,11 @@ describe('the picker with the described choices', () => {
 })
 
 describe('the run the picker is reading', () => {
+  it('names the run the gesture started, so it can be followed outside the panel', () => {
+    const { view } = mountBody({ choices: { kind: 'ready', value: CHOICES }, watching: '/runs/live' })
+    expect(at(view, 'data-refactory-started').textContent).toBe(zh['started'].replace('{run}', '/runs/live'))
+  })
+
   it('says it is reading while the first frame is on its way', () => {
     const { view } = mountBody({ choices: { kind: 'ready', value: CHOICES }, watching: '/runs/live' })
     expect(at(view, 'data-refactory-status', 'reading').textContent).toBe(zh['status.reading'])
