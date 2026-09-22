@@ -44,14 +44,27 @@ What was proven, by execution:
 
 ## What is left
 
-**#49**: the conversation-driven half is done and verified (the CEO calls the
-`refactory` tool for `modes`, `strategies`, `start`, `registry`, `create`, …), and what
-remains is the **picker**: a host seam that runs the console for the browser (the tool
-is model-facing, so the client cannot call it) plus a client panel in a sidebar slot,
-with locale dictionaries and per-file coverage. Read the issue's acceptance before
-starting.
+Every issue is closed, including the ones this session finished: #58 (the v2 port, with
+a live end-to-end `create` run), #59 (a data node iterates on both runtimes) and #49
+(the picker, demonstrated in `refactory/docs/assets/refactory-picker.gif`). The evidence
+for each is in `refactory/.work/todo.json`.
 
-Everything else in the reset is closed, with evidence in `refactory/.work/todo.json`.
+What is genuinely still open, so the next session does not rediscover it:
+
+- **`DSH_SNAPSHOT=replay pnpm run test:web` is red on this machine**, and it is not this
+  work's doing: `navigation-panes.e2e.ts` and `seeded-history.e2e.ts` fail identically
+  with the picker's two bundle rows removed, so it is a local environment failure (browser
+  downloads, aria goldens, timeouts). Linux CI owns that signal.
+- **A dataset mode needs a composition that names the loader.** A graph with a `data`
+  node is refused at load unless `executeCommands` is on and `dataCommand` is set; the
+  `graph` bundle sets it, so a new composition that wants one has to as well.
+- **The two runtimes still differ in two stated ways**: DSH starts a process per loader
+  verb where the walker runs the loop in-process, and neither honours a data node's
+  `parallelism`, so passes run one after another. Both are in the spine README and the
+  2026-09-23 Agent Note.
+- **The benchmark workflows in remote-factory are still not modes.** They are dataset
+  contracts over the `Task` protocol and a `data` node; the seam is what they needed, and
+  the survey below says why each was left.
 
 ## Rules of engagement
 
