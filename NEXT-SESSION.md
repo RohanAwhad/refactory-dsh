@@ -141,3 +141,36 @@ Two judgement calls to keep or change deliberately: both v2 modes keep v2's
 it); and the walker refuses a `data` node instead of silently iterating nothing,
 because a run that iterated zero items and a run that iterated all of them must not
 look the same.
+
+## remote-factory's other default modes, surveyed
+
+The registry (`factory/workflow/definitions.py::_get_builtin_registry`) builds
+sixteen workflows. Read at `f0d28a0c`, the ones beyond create-v2 and design-v2 are:
+
+| mode | its own README title | where it stands here |
+|---|---|---|
+| `create-v2` | create-v2 Workflow | ported as `default_pack/create` |
+| `design-v2` | design-v2 Workflow | ported as `default_pack/design` |
+| `devopsgym` | DevOps Gym Workflow | a benchmark harness: not ported |
+| `featurebench` | FeatureBench Workflow | a benchmark harness: not ported |
+| `legacybench` | LegacyBench Workflow | a benchmark harness: not ported |
+| `mini-swebench` | mini-swebench | a benchmark harness: not ported |
+| `outer-loop` | Outer Loop Workflow | we have `loop_mode/loop` (the loop as a mode) |
+| `programbench` | ProgramBench Workflow | a benchmark harness: not ported |
+| `salitrap` | SaliTrap Benchmark Workflow | a benchmark harness: not ported |
+| `swebench` | SWE-bench Workflow | a benchmark harness: not ported |
+| `swebenchifyhard` | SWE-benchify-hard Benchmark Workflow | a benchmark harness: not ported |
+| `terminalbench` | TerminalBench Workflow | a benchmark harness: not ported |
+| `tomswe` | ToM-SWE Benchmark Workflow | a benchmark harness: not ported |
+| `spec-generate` | generate the project specification, gated | not ported; the nearest thing we have is `default_pack/design`, which emits an artifact and checks it |
+
+**Why the benchmark harnesses are not ported as modes.** Each is one dataset's
+contract (its instances, its setup, its grader) rather than a general way to work,
+and porting them would mean porting ten dataset contracts. What they need from us is
+the seam, and that exists now: the `Task` protocol
+(`refactory_dsh/task.py`) carries `instances`/`setup`/`prompt`/`verify`, and a
+`data` node bound to a Task iterates and is judged per item. A benchmark mode is
+therefore a small package over that seam, not a copy of their workflow.
+
+**`outer-loop`** is the loop expressed as a workflow, which is what our
+`loop_mode/loop` already is; the two are the same idea, not a missing mode.
