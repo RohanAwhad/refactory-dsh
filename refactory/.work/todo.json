@@ -556,6 +556,17 @@
       "commit": "28948ba68b",
       "observed": "12 passed (test_adoption.py)",
       "evidence": "Live: after the failed adopt, .factory/packages/counting_tuned held only __init__.py, `console modes` printed package_unavailable for it, and the retry refused because the name existed. The write now removes the destination on failure. Both ways: the new test saw the residue on the old code and no directory on the fix."
+    },
+    {
+      "id": "final-epoch",
+      "issue": 55,
+      "title": "epochs mean evaluated batches, so the final epoch does not propose",
+      "why": "The last epoch's proposals were installed, counted, and never evaluated: a live 2-epoch run kept 10 candidates that nothing ran, and a model-driven optimizer paid for a proposal round whose output was dropped. The decision (--epochs N means N evaluated batches) is recorded on the issue, including the test that pinned the older reading and was updated with it.",
+      "verify": "pytest refactory/tests/test_loop.py refactory/tests/test_outerloop.py refactory/tests/test_loop_as_mode.py -q",
+      "status": "done",
+      "commit": "e7f8d4113b",
+      "observed": "59 passed, 1 skipped",
+      "evidence": "optimizer_step returns nothing once self.epoch >= config.epochs. Both ways: the new test failed on the old code with 'the final epoch proposed 10 candidate(s) that nothing runs' and passes now; a live 3-epoch x batch-4 run reports population 11 == evaluations 11 (nothing kept and unrun), where the old code left accepted candidates with evaluated: 0 in epochs_summary. The ask-count test now expects one ask per epoch after the sweep (2 for 3 epochs)."
     }
   ],
   "verification": {
