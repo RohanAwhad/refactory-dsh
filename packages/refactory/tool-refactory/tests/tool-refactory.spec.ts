@@ -514,6 +514,18 @@ describe('Console', () => {
 })
 
 
+it('passes a creation\'s data-node and task directives through to the console', async () => {
+  // create-v2's `--data-node` and `--task` are what make a dataset mode reachable
+  // from the conversation; the console checks both after the run.
+  const { ctx, subprocess } = await setup()
+  subprocess.handler = () => runResult('{}')
+  await call(ctx, { action: 'create', name: 'pkg', brief: 'count', dataNode: true, task: 'probe:Counting' })
+  expect(subprocess.spawns[0]!.argv).toEqual([
+    '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'create',
+    '--name', 'pkg', '--brief', 'count', '--data-node', '--task', 'probe:Counting',
+  ])
+})
+
 it('tells the model which action runs which kind of mode', async () => {
   // The description is the first thing the model reads; a caller that has to fail
   // `start` to learn that `create` is an authoring mode is a caller the tool could

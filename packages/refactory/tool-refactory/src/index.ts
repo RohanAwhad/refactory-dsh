@@ -117,6 +117,8 @@ interface Args {
   check?: string
   allowRegression?: boolean
   attempts?: number
+  dataNode?: boolean
+  task?: string
 }
 
 /** One run's setting, as the console's `--<flag> value` pair. */
@@ -195,7 +197,10 @@ export function invocationFor(args: Args): {
       return {
         verb: args.action,
         positional: [],
-        options: { name: args.name, brief: args.brief, extends: args.extends, attempts: args.attempts },
+        options: {
+          name: args.name, brief: args.brief, extends: args.extends, attempts: args.attempts,
+          'data-node': args.dataNode, task: args.task,
+        },
       }
     }
     case 'edit': {
@@ -481,6 +486,8 @@ export function apply(ctx: Context, config: Config): void {
       check: { type: 'string', description: 'For action "design": the command that decides whether the artifact works. Required by "design".' },
       allowRegression: { type: 'boolean', description: 'For action "edit": allow a revision that scores worse than the mode it came from.' },
       attempts: { type: 'integer', description: 'For "create"/"edit"/"design": how many times the model may retry before the run fails.' },
+      dataNode: { type: 'boolean', description: 'For action "create": build the mode as a DataNode that runs its subgraph once per item (a dataset mode). The run is refused if the produced mode does not declare one.' },
+      task: { type: 'string', description: 'For action "create": a Task class (module:Class or a registered name) the produced mode must satisfy — it supplies the per-item prompts and judges each pass. The run is refused if the produced mode is not bound to it.' },
     },
     output: {
       schema: {

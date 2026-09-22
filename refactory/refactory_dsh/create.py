@@ -513,6 +513,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--brief", required=True, help="what the package should do")
     parser.add_argument("--extends", default="", help="a <package>/<mode> to use as a reference")
     parser.add_argument("--attempts", type=int, default=3)
+    # create-v2's two creation directives, reachable from the shell.
+    parser.add_argument(
+        "--data-node", action="store_true", default=False, dest="data_node",
+        help="build the package as a DataNode that runs its subgraph once per item",
+    )
+    parser.add_argument(
+        "--task", default=None, metavar="TASK_REF", dest="task_ref",
+        help="a Task class (module:Class or a registered name) the produced mode must satisfy",
+    )
     parser.add_argument("--workdir", default=".factory/create")
     parser.add_argument("--model", default="")
     args = parser.parse_args(argv)
@@ -527,6 +536,8 @@ def main(argv: list[str] | None = None) -> int:
                 extends=args.extends,
                 attempts=args.attempts,
                 workdir=Path(args.workdir),
+                data_node=bool(args.data_node),
+                task_ref=str(args.task_ref or ""),
             ),
             client=DshModelClient(model=args.model),
         )

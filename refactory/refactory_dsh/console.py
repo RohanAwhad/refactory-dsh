@@ -675,6 +675,12 @@ def _parser() -> argparse.ArgumentParser:
     make.add_argument("--brief", required=True)
     make.add_argument("--extends", default="")
     make.add_argument("--attempts", type=int, default=3)
+    make.add_argument(
+        "--data-node", action="store_true", default=False, dest="data_node",
+        help="build the mode as a DataNode that iterates its subgraph per item",
+    )
+    make.add_argument("--task", default=None, metavar="TASK_REF", dest="task_ref",
+                      help="a Task class the produced mode must satisfy")
 
     revise = sub.add_parser("edit", help="revise a mode from a brief (model-driven)")
     revise.add_argument("--mode", required=True)
@@ -786,6 +792,10 @@ def main(argv: list[str] | None = None) -> int:
             forwarded = ["--name", args.name, "--brief", args.brief, "--attempts", str(args.attempts)]
             if args.extends:
                 forwarded += ["--extends", args.extends]
+            if args.data_node:
+                forwarded.append("--data-node")
+            if args.task_ref:
+                forwarded += ["--task", args.task_ref]
             payload = _forward("create", forwarded)
             review = _design_review(project, args.name)
             if review:
