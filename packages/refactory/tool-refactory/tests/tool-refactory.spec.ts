@@ -512,3 +512,14 @@ describe('Console', () => {
     })
   })
 })
+
+
+it('tells the model which action runs which kind of mode', async () => {
+  // The description is the first thing the model reads; a caller that has to fail
+  // `start` to learn that `create` is an authoring mode is a caller the tool could
+  // have directed.
+  const { ctx } = await setup()
+  const definition = ctx.tools.get('refactory')
+  expect(definition?.description).toContain('the action that runs it')
+  expect(definition?.description).toContain('authoring mode by its own verb')
+})

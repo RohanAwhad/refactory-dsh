@@ -87,6 +87,8 @@ const DESCRIPTION = [
   `Actions: ${Object.entries(VERBS).map(([verb, help]) => `${verb} (${help})`).join(' ')}`,
   '',
   'The loop runs in its own process, so a run continues after the call returns and after the session ends; watch it with action "status" and an "after" offset. Prefer this tool over running the loop in a shell: it is the same console the Web view renders, and a run started in a shell will not appear in the view unless it lives under the run root.',
+  '',
+  'Which action to use: "modes" answers with each mode\'s id and the action that runs it (a scored mode is run by "start"; an authoring mode by its own verb, "create", "edit" or "design"), so read that field rather than trying "start" and reading the refusal. "strategies" names every outer loop, optimizer and evaluator before you choose settings. Start with "modes", then "start" for a scored mode or the named authoring verb, then "status" until it finishes, then "leaderboard", "candidate", "artifacts" and "best".',
 ].join('\n')
 
 /** Input the tool accepts, after the registry's schema check. */
