@@ -96,3 +96,31 @@ platform arms cannot execute there, and this is pre-existing, not a regression:
 `packages/experimental/code-runtime-python/src/index.ts` (its `v8 ignore` comment
 names the Linux coverage lane). Every file this work touches holds per-file 100%;
 the two above are green in CI's Linux lane.
+
+## What the create-v2/design-v2 port left to do
+
+`default_pack` (formerly `meta_pack`) is the package a checkout starts with, and
+its `create`, `edit` and `design` modes are now remote-factory's **create-v2** and
+**design-v2** (`f0d28a0c`): research director → strategy director →
+`synthesize_strategy` → (design-v2's `design_doc`) → a person's gate → build →
+three reviews in parallel → merged synthesis → QA gate → overwatch → its gate.
+All three lower to IR with `ForkNode`/`JoinNode` and pass the IR validator.
+
+Two things are left, each written up with its acceptance rather than estimated:
+
+- **#59 — execute a DataNode.** A mode can declare `data` today, the lowering emits
+  it, `V12` checks it and the walker *refuses* one by name; but the DSH spine hands
+  the DataNode to the driving agent, where remote-factory's executor iterates
+  mechanically (item loader, split/shuffle/limit, per-item context, `Task.setup`/
+  `verify`). One loader, both runtimes, is the acceptance.
+- **#49 — the picker.** The conversation-first half is verified: asked in plain
+  language in the GUI, the CEO listed the modes, started the right one and returned
+  the run id (which finished at best 1.0). The widget (host remote + a client panel
+  in `sidebar.right.pane.tab` + locale dictionaries + coverage + a GIF) is not built.
+
+Two judgement calls to keep or change deliberately: both v2 modes keep v2's
+`gate_strategy` as a **person's** gate, so a headless create/design needs an explicit
+`verdicts={"gate_strategy": ...}` (the tests state who approved rather than inventing
+it); and the walker refuses a `data` node instead of silently iterating nothing,
+because a run that iterated zero items and a run that iterated all of them must not
+look the same.
