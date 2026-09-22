@@ -120,13 +120,11 @@ Two things are left, each written up with its acceptance rather than estimated:
 
 Three things the next session should not have to rediscover:
 
-- **No Agent Note was written for the port.** `AGENTS.md` requires one for a
-  non-trivial architecture change, and this changed the mode vocabulary (three new
-  node kinds) and what the default package's modes do. The note needs its `.zh.md`
-  counterpart and its `.i18n.yaml` recorded with
-  `pnpm run verify-translation-pairing --write <path>`; only an explicit user
-  invocation may run `dsh-translate-docs`, and a machine translation of the note is
-  not a substitute. This is a compliance gap, not a bug — the gates pass without it.
+- **The port's Agent Note is written**:
+  `.agents/notes/implemented/architecture/2026-09-22-v2-modes-and-the-workflow-vocabulary.md`
+  (with its `.zh.md` and recorded pair) states the three decisions, the vocabulary
+  they needed, and the alternatives rejected. Read it before changing the node
+  vocabulary or the default package's modes.
 - **The DSH half of the dataset work needs a decision first** (#59): the spine owns
   the cursor, so iterating a DataNode means either the spine shells into the runner
   for its items (one loader, shared) or the loader is reimplemented in TypeScript
