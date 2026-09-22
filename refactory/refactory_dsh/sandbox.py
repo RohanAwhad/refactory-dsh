@@ -359,6 +359,7 @@ def verify_sandboxed(
     *,
     project: Path | None = None,
     requires_data_node: bool = False,
+    requires_task_ref: str = "",
     **kwargs: Any,
 ) -> SandboxResult:
     """Everything wrong with a package, checked without importing it here.
@@ -381,6 +382,7 @@ def verify_sandboxed(
         "from refactory_dsh.nn import validate_state\n"
         "problems = []\n"
         f"requires_data_node = {bool(requires_data_node)!r}\n"
+        f"requires_task_ref = {str(requires_task_ref)!r}\n"
         f"package = registry.load({name!r}, Path({str(project)!r}))\n"
         f"expected = {name!r}\n"
         # Concatenation, not a nested f-string: `{name!r}` inside one would insert
@@ -418,6 +420,14 @@ def verify_sandboxed(
         "    ):\n"
         "        problems.append(f'{identifier} declares no DataNode that iterates a "
         "subgraph, which this creation asked for')\n"
+        # A Task binding is a declaration too: the mode has to be bound to the Task
+        # the brief named, or the run produced something the Task does not describe.
+        "    if requires_task_ref and not any(\n"
+        "        node.kind == 'data' and node.task_ref == requires_task_ref\n"
+        "        for node in mode.graph().nodes.values()\n"
+        "    ):\n"
+        "        problems.append(f'{identifier} declares no DataNode bound to the Task "
+        "{requires_task_ref!r}, which this creation asked for')\n"
         "print(json.dumps({'problems': problems}))\n"
     )
     return run_sandboxed(code, workdir=project, env=dict(os.environ), **kwargs)

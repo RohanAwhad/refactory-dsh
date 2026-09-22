@@ -461,5 +461,9 @@ def test_a_creation_asked_for_a_data_node_is_checked_for_one():
         assert any("DataNode" in problem for problem in problems), (
             f"a data-node creation was not told its mode does not iterate: {problems}"
         )
+        bound = check_package("checked_pkg", requires_task_ref="probe:Task")
+        assert any("probe:Task" in problem for problem in bound), (
+            f"a Task-bound creation was not told its mode is unbound: {bound}"
+        )
     finally:
         _shutil.rmtree(root, ignore_errors=True)

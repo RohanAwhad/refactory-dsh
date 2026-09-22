@@ -407,7 +407,9 @@ def validate(ctx: Any) -> str:
     attempts = int(ctx.knob("attempts", 3))
     try:
         problems = check_package(
-            name, requires_data_node=bool(ctx.knob("data_node", 0))
+            name,
+            requires_data_node=bool(ctx.knob("data_node", 0)),
+            requires_task_ref=str(ctx.knob("task_ref", "") or "").strip(),
         )
     except Exception as exc:
         problems = [f"{type(exc).__name__}: {exc}"]
@@ -443,7 +445,9 @@ def _evict(module_name: str) -> None:
         del sys.modules[cached]
 
 
-def check_package(name: str, *, requires_data_node: bool = False) -> list[str]:
+def check_package(
+    name: str, *, requires_data_node: bool = False, requires_task_ref: str = ""
+) -> list[str]:
     """Everything wrong with a staged package, as a list of reasons.
 
     A generated package is **never imported here**. It is parsed, and then every
@@ -475,7 +479,10 @@ def check_package(name: str, *, requires_data_node: bool = False) -> list[str]:
         return problems
 
     checked = sandbox.verify_sandboxed(
-        name, project=Path.cwd(), requires_data_node=requires_data_node
+        name,
+        project=Path.cwd(),
+        requires_data_node=requires_data_node,
+        requires_task_ref=requires_task_ref,
     )
     problems.extend(checked.payload.get("problems") or [])
     if not checked.ok and not problems:
