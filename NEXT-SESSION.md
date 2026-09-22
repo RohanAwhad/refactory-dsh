@@ -119,7 +119,8 @@ the two above are green in CI's Linux lane.
 
 `default_pack` (formerly `meta_pack`) is the package a checkout starts with, and
 its `create`, `edit` and `design` modes are now remote-factory's **create-v2** and
-**design-v2** (`f0d28a0c`): research director → strategy director →
+**design-v2** (the vendored tree, `refactory/vendor/remote-factory` at
+`e7eb2490`): research director → strategy director →
 `synthesize_strategy` → (design-v2's `design_doc`) → a person's gate → build →
 three reviews in parallel → merged synthesis → QA gate → overwatch → its gate.
 All three lower to IR with `ForkNode`/`JoinNode` and pass the IR validator.
@@ -164,7 +165,11 @@ must not look the same.
 ## remote-factory's other default modes, surveyed
 
 The registry (`factory/workflow/definitions.py::_get_builtin_registry`) builds
-sixteen workflows. Read at `f0d28a0c`, the ones beyond create-v2 and design-v2 are:
+sixteen workflows. Read at the vendored `refactory/vendor/remote-factory`
+(`e7eb2490`, six commits past the `f0d28a0c` this port first read — the later
+commits decouple the graph language from the runtime and rework the outer loop,
+and touch neither the `DataNode` fields, the `Task` protocol nor the v2 graphs),
+the ones beyond create-v2 and design-v2 are:
 
 | mode | its own README title | where it stands here |
 |---|---|---|
