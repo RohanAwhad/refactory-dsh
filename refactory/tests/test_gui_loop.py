@@ -361,3 +361,22 @@ def test_the_console_reads_a_run_it_did_not_start(tmp_path):
     finished = console.status(root)
     assert finished["finished"] is True
     assert finished["best_score"] is not None
+
+
+def test_the_design_review_reported_is_the_one_the_run_wrote(tmp_path):
+    """The create working directory is shared, so a stale review must not be reported.
+
+    A run that stopped before its design step (the person's gate, say) reported
+    whichever `design.md` happened to be in `.factory/create` — another package's
+    design, presented as this one's.
+    """
+    from refactory_dsh.console import _design_review
+
+    work = tmp_path / ".factory" / "create"
+    work.mkdir(parents=True)
+    (work / "brief.json").write_text('{"name": "other_pkg"}')
+    (work / "design.md").write_text("the other package's design")
+    assert _design_review(tmp_path, "mine") == "", "another package's review was reported"
+
+    (work / "brief.json").write_text('{"name": "mine"}')
+    assert _design_review(tmp_path, "mine") == "the other package's design"

@@ -530,20 +530,29 @@ def level_two() -> dict[str, Any]:
     }
 
 
-def _design_review(project: Path) -> str:
+def _design_review(project: Path, name: str) -> str:
     """The design review a creation wrote, so the choice it made is visible.
 
     A create run surveys approaches, picks one and writes `design.md`; without this
     a caller sees only the package it produced and cannot tell which approaches were
     considered or what the review refused.
+
+    The working directory is shared by every create run, so the review is reported
+    only when `brief.json` says it belongs to the package being reported: a run that
+    stopped before the design step otherwise reports whichever review happens to be
+    on disk — another package's.
     """
     for candidate in (project / ".factory" / "create", Path(".factory/create")):
-        path = candidate / "design.md"
-        if path.exists():
-            try:
-                return path.read_text()[:8000]
-            except OSError:
-                return ""
+        design = candidate / "design.md"
+        brief = candidate / "brief.json"
+        if not (design.exists() and brief.exists()):
+            continue
+        try:
+            if str(json.loads(brief.read_text()).get("name") or "") != name:
+                continue
+            return design.read_text()[:8000]
+        except (OSError, json.JSONDecodeError):
+            continue
     return ""
 
 
@@ -754,7 +763,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.extends:
                 forwarded += ["--extends", args.extends]
             payload = _forward("create", forwarded)
-            review = _design_review(project)
+            review = _design_review(project, args.name)
             if review:
                 # The approaches it considered, not just the package it produced.
                 payload["design_review"] = review
