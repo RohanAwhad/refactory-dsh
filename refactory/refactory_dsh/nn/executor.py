@@ -302,10 +302,25 @@ class Executor:
                 self.steps.append(Step(node.id, node.kind, 0.0))
                 try:
                     items = load_items(node, self.ctx.workdir)
+                    # A Task bound to the node supplies the items when the node names
+                    # none, and judges each pass. Loading it is what makes `task_ref` a
+                    # binding rather than a line in a prompt.
+                    from refactory_dsh.task import instance_of, load_task
+
+                    task = load_task(node.task_ref) if node.task_ref else None
+                    if not items and task is not None:
+                        items = [
+                            {"id": instance.id, "path": instance.path, **instance.metadata}
+                            for instance in task.instances()
+                        ]
                 except Exception as exc:
                     error = f"{node.id}: {type(exc).__name__}: {exc}"
                     break
+                scores: list[dict[str, Any]] = []
                 for item in items:
+                    instance = instance_of(item)
+                    if task is not None:
+                        task.setup(instance, self.ctx.workdir)
                     # The item is written as the data node, so the declaration that
                     # governs it is the data node's — not the last node of the pass
                     # before it.
@@ -320,8 +335,18 @@ class Executor:
                     if branch_error is not None:
                         error = branch_error
                         break
+                    if task is not None:
+                        verdict = task.verify(instance, self.ctx.workdir)
+                        if verdict is not None:
+                            scores.append({
+                                "id": instance.id,
+                                "passed": verdict.passed,
+                                "score": verdict.score,
+                            })
                 if error is not None:
                     break
+                if scores and "item_scores" in node.produces:
+                    self.ctx.set_fact("item_scores", scores)
                 out = self.graph.out_edges(node.id)
                 current = out[0].target if out else None
                 continue

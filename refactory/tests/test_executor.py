@@ -270,3 +270,50 @@ def test_a_data_node_with_no_items_iterates_nothing_and_still_finishes(tmp_path)
     result = execute(graph, tmp_path / "run")
     assert result.exit_ok, result.error
     assert not (tmp_path / "run" / "seen.json").exists(), "nothing should have run"
+
+
+def test_a_data_node_bound_to_a_task_uses_its_items_and_verifies_each(tmp_path):
+    """`task_ref` is a binding: the Task supplies the items and judges each pass."""
+    from refactory_dsh import task as task_module
+    from refactory_dsh.nn.executor import CURRENT_ITEM, execute
+
+    class Probe(task_module.Task):
+        name = "probe"
+
+        def instances(self):
+            return [task_module.TaskInstance(id="a"), task_module.TaskInstance(id="b")]
+
+        def setup(self, instance, workspace):
+            (workspace / f"setup-{instance.id}").write_text("prepared")
+
+        def verify(self, instance, workspace):
+            return task_module.VerifyResult(
+                passed=True, score=1.0 if instance.id == "a" else 0.5
+            )
+
+    task_module.register_task("probe", Probe)
+
+    graph = nn.Graph()
+    graph.add(nn.Node(
+        "data", "data", subgraph_entry="work", subgraph_exit="work",
+        task_ref="probe", writes=(CURRENT_ITEM,), produces=("item_scores",),
+    ))
+    graph.add(nn.Node(
+        "work", "op", call="loop_ops:record_item",
+        reads=(CURRENT_ITEM,), writes=("seen.json",), produces=("seen",),
+    ))
+    graph.add(nn.Node(
+        "report", "op", call="loop_ops:write_best", writes=("best.json",), produces=("best",),
+    ))
+    graph.connect("data", "report")
+
+    workdir = tmp_path / "run"
+    result = execute(graph, workdir)
+    assert result.exit_ok, result.error
+    assert (workdir / "setup-a").exists() and (workdir / "setup-b").exists(), (
+        "the Task's setup did not run per item"
+    )
+    assert result.facts["item_scores"] == [
+        {"id": "a", "passed": True, "score": 1.0},
+        {"id": "b", "passed": True, "score": 0.5},
+    ]
