@@ -169,9 +169,7 @@ def test_a_strategy_can_override_how_often_it_asks(tmp_path):
     Once.batch_size = batch_size  # type: ignore[assignment]
     loop = Once(MODE, _config(tmp_path / "run", epochs=3), project=Path("."))
     loop.run()
-    # The first epoch's batch is the starting sweep, so three evaluated epochs are
-    # one sweep plus two asks; no ask is made for an epoch that cannot run (#55).
-    assert asked["count"] == 2, "one ask per epoch after the sweep, with no retry round"
+    assert asked["count"] == 3, "one ask per epoch, with no retry round"
 
 
 def test_a_strategy_can_reject_a_candidate_and_still_archive_it(tmp_path):

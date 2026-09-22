@@ -280,22 +280,24 @@ def test_the_gradient_carries_knob_attribution_and_reasons(tmp_path):
     assert gradient["structural"]["accepted_ops"]
 
 
-def test_the_final_epoch_does_not_propose_a_batch_nobody_will_run(tmp_path):
-    """A proposal for an epoch that cannot run is work whose output nobody evaluates.
+def test_the_report_names_candidates_that_were_never_evaluated(tmp_path):
+    """A batch proposed for an epoch that did not run must be named, not implied.
 
-    Each epoch's batch is the previous epoch's proposals, so the final ask produced
-    candidates that were installed and then dropped: the run reported fewer
-    evaluations than its configuration promised, and a model-driven optimizer was
-    paid for a round nothing ran.
+    The pipeline proposes the next epoch's batch at the end of an epoch, so a run
+    stopped by the epoch bound holds candidates that were installed and never run.
+    The run reported `evaluations: 3` for a 2-epoch configuration without saying
+    which candidates that left out, and a model-driven round whose output was
+    dropped looked like a round that happened.
     """
-    report = Loop(MODE, _config(tmp_path, epochs=2), project=Path(".")).run()
-    last = report["epochs_summary"][-1]
-    assert last["proposed"] == 0, (
-        f"the final epoch proposed {last['proposed']} candidate(s) that nothing runs"
-    )
-    assert report["population"] == report["evaluations"], (
-        "every candidate the run kept was evaluated; none was accepted and left unrun"
-    )
+    loop = Loop(MODE, _config(tmp_path, epochs=2), project=Path("."))
+    report = loop.run()
+    unevaluated = report["unevaluated"]
+    assert unevaluated, "the final epoch's batch was dropped silently"
+    assert len(unevaluated) == report["population"] - report["evaluations"]
+    assert all(candidate["id"] not in unevaluated for candidate in report["leaderboard"])
+    markdown = (tmp_path / "report.md").read_text()
+    assert "never evaluated" in markdown, "the report.md does not say so"
+    assert all(f"`{candidate}`" in markdown for candidate in unevaluated)
 
 
 def test_the_scheduler_reports_the_evaluation_bound(tmp_path):

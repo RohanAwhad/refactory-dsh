@@ -720,15 +720,7 @@ class Loop(OuterLoop):
 
         Going through ``propose`` and ``install`` rather than straight to the
         optimizer is what lets a strategy change one of them and keep the other.
-
-        Nothing is proposed once the epoch bound is reached. Each epoch's batch is
-        the previous epoch's proposals -- the first is the starting sweep -- so a
-        proposal made in the final epoch belongs to an epoch that cannot run, and is
-        a round of work (a model call, on a model-driven optimizer) whose output
-        nothing evaluates. ``--epochs N`` therefore means N batches evaluated.
         """
-        if self.epoch >= self.config.epochs:
-            return [], []
         run = run or Run(loop=self)
         # The pair a proposer is handed, and why it is the whole population rather
         # than the elite: `describe()` carries a score and the edits that produced
@@ -1045,6 +1037,16 @@ class Loop(OuterLoop):
     def _evaluated(self) -> list[Candidate]:
         return [c for c in self.population if c.evaluated]
 
+    def _unevaluated(self) -> list[str]:
+        """Candidates the run kept but never ran, because it stopped at its bound.
+
+        The pipeline proposes the next epoch's batch at the end of an epoch, so a run
+        that stops on the epoch bound holds one batch that was installed and never
+        evaluated. Named in the report so it cannot be read as "all of this ran", and
+        so a model-driven proposal round whose output was dropped is visible.
+        """
+        return [c.id for c in self.population if not c.evaluated]
+
     def report(self) -> dict[str, Any]:
         board = self.leaderboard()
         best = board[0] if board else None
@@ -1058,6 +1060,7 @@ class Loop(OuterLoop):
             "evaluator": self.config.evaluator,
             "evaluations": self.evaluations,
             "population": len(self.population),
+            "unevaluated": self._unevaluated(),
             "best": best.describe() if best else None,
             "best_score": best.score if best else None,
             "seed_score": self.population[0].score if self.population else None,
@@ -1231,6 +1234,18 @@ class Loop(OuterLoop):
             f"{payload['cost'].get('inner_model_calls')} model call(s) made inside the "
             "graphs themselves (an inserted agent node costs these).",
             "",
+            *(
+                [
+                    f"{len(payload['unevaluated'])} candidate(s) were proposed for the "
+                    "next epoch and never evaluated, because the run stopped at its "
+                    "bound: "
+                    + ", ".join(f"`{candidate}`" for candidate in payload["unevaluated"])
+                    + ".",
+                    "",
+                ]
+                if payload.get("unevaluated")
+                else []
+            ),
             "## Proposal versus outcome",
             "",
             _md_table(
