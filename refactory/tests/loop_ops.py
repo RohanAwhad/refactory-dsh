@@ -46,3 +46,12 @@ def boom(ctx: Any) -> None:
 
 def write_best(ctx: Any) -> dict[str, Any]:
     return {"best": 42.0}
+
+
+def record_item(ctx: Any) -> dict[str, Any]:
+    """Append the current item's id, so a test can see one pass per item."""
+    item = ctx.read_json("current_item.json", {}) or {}
+    seen = ctx.read_json("seen.json", {"ids": []}) or {"ids": []}
+    seen.setdefault("ids", []).append(str(item.get("id")))
+    ctx.write_json("seen.json", seen)
+    return {"seen": seen["ids"]}

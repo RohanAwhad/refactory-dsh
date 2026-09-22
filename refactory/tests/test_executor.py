@@ -5,6 +5,8 @@ Phase 3 gate of ``docs/plans/pythonic-modes.md``.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from refactory_dsh import nn
@@ -212,3 +214,59 @@ def test_the_default_score_does_not_make_a_mode_look_measured(tmp_path):
         score = nn.Mode.score
 
     assert Unscored().is_scored() is False
+
+
+def test_a_data_node_runs_its_subgraph_once_per_item(tmp_path):
+    """A data node iterates: one pass per item, in order, with the item on disk.
+
+    The walker used to refuse a data node by name, because the runtime that loads a
+    source is DSH. Iterating here is what makes a dataset mode mean the same thing
+    on both runtimes.
+    """
+    from refactory_dsh.nn.executor import CURRENT_ITEM, execute
+
+    graph = nn.Graph()
+    graph.add(nn.Node(
+        "data", "data", subgraph_entry="work", subgraph_exit="work",
+        writes=(CURRENT_ITEM,), inline_items=({"id": "a"}, {"id": "b"}),
+    ))
+    graph.add(nn.Node(
+        "work", "op", call="loop_ops:record_item",
+        reads=(CURRENT_ITEM,), writes=("seen.json",), produces=("seen",),
+    ))
+    graph.add(nn.Node(
+        "report", "op", call="loop_ops:write_best",
+        writes=("best.json",), produces=("best",),
+    ))
+    graph.connect("data", "report")
+
+    workdir = tmp_path / "run"
+    result = execute(graph, workdir)
+    assert result.exit_ok, result.error
+    assert json.loads((workdir / "seen.json").read_text())["ids"] == ["a", "b"], (
+        "the subgraph did not run once per item"
+    )
+
+
+def test_a_data_node_with_no_items_iterates_nothing_and_still_finishes(tmp_path):
+    """An empty selection is a fact about the data, not a crash."""
+    from refactory_dsh.nn.executor import CURRENT_ITEM, execute
+
+    graph = nn.Graph()
+    graph.add(nn.Node(
+        "data", "data", subgraph_entry="work", subgraph_exit="work",
+        writes=(CURRENT_ITEM,), inline_items=(),
+    ))
+    graph.add(nn.Node(
+        "work", "op", call="loop_ops:record_item",
+        reads=(CURRENT_ITEM,), writes=("seen.json",), produces=("seen",),
+    ))
+    graph.add(nn.Node(
+        "report", "op", call="loop_ops:write_best",
+        writes=("best.json",), produces=("best",),
+    ))
+    graph.connect("data", "report")
+
+    result = execute(graph, tmp_path / "run")
+    assert result.exit_ok, result.error
+    assert not (tmp_path / "run" / "seen.json").exists(), "nothing should have run"

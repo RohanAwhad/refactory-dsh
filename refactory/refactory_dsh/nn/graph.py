@@ -333,6 +333,12 @@ class Graph:
             node = self.nodes.get(current)
             if node is not None and node.kind == "fork":
                 stack.extend(node.targets)
+            if node is not None and node.kind == "data":
+                # The subgraph is reached through the data node, not through an edge,
+                # for the same reason a fork's branches are: the entry is the thing
+                # the runtime starts, and an edge into it would run it once outside
+                # the iteration.
+                stack.append(node.subgraph_entry)
         return seen
 
     def knob_consumers(self) -> dict[str, list[str]]:

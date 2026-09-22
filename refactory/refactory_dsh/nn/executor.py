@@ -185,6 +185,55 @@ def render(template: str, ctx: RunContext) -> str:
     return re.sub(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}", replace, template)
 
 
+#: The file a data node's current item is written to, for the pass that reads it.
+CURRENT_ITEM = "current_item.json"
+
+
+def load_items(node: Node, workdir: Path) -> list[dict[str, Any]]:
+    """The items a data node iterates, in the order it declares them.
+
+    One loader, so a mode means the same thing on either runtime: the item is handed
+    to the pass as JSON rather than as a template variable, because a pass is a
+    subgraph of nodes and only the first of them sees a prompt.
+    """
+    items: list[dict[str, Any]] = [dict(item) for item in node.inline_items]
+    if not items and node.source_path:
+        source = workdir / node.source_path
+        if not source.exists():
+            source = Path(node.source_path)
+        if not source.exists():
+            raise ExecutionError(
+                f"data node {node.id!r} names source_path {node.source_path!r}, "
+                "which does not exist; bind the source before the run"
+            )
+        if node.source_format == "jsonl":
+            for index, line in enumerate(source.read_text().splitlines()):
+                if not line.strip():
+                    continue
+                payload = json.loads(line)
+                items.append(payload if isinstance(payload, dict) else {"value": payload})
+                items[-1].setdefault("id", str(index))
+        elif node.source_format == "csv":
+            import csv
+
+            with source.open(newline="") as handle:
+                items = [dict(row) for row in csv.DictReader(handle)]
+        elif node.source_format == "directory":
+            items = [
+                {"id": child.name, "path": str(child)}
+                for child in sorted(source.iterdir())
+                if child.is_dir()
+            ]
+        else:
+            raise ExecutionError(
+                f"data node {node.id!r} declares source_format "
+                f"{node.source_format!r}; known: directory, jsonl, csv"
+            )
+    if node.limit:
+        items = items[: int(node.limit)]
+    return items
+
+
 @dataclass
 class Executor:
     """Walk a graph from its start node to a terminal."""
@@ -245,15 +294,37 @@ class Executor:
                 current = out[0].target if out else None
                 continue
             if node.kind == "data":
-                # The walker does not load a data source; DSH does. Refusing says
-                # which runtime can run this mode instead of scoring a run that
-                # silently iterated nothing.
-                error = (
-                    f"data node {node.id!r} iterates its subgraph once per item, which "
-                    "the walker does not load; evaluate this mode with the `dsh` "
-                    "evaluator"
-                )
-                break
+                # A data node runs its subgraph once per item, in order, and the item
+                # is on disk for the ops and the agent nodes of that pass to read —
+                # the same contract remote-factory's executor gives them. An empty
+                # selection is a fact (`items_processed` is 0), not a crash and not a
+                # silent success.
+                self.steps.append(Step(node.id, node.kind, 0.0))
+                try:
+                    items = load_items(node, self.ctx.workdir)
+                except Exception as exc:
+                    error = f"{node.id}: {type(exc).__name__}: {exc}"
+                    break
+                for item in items:
+                    # The item is written as the data node, so the declaration that
+                    # governs it is the data node's — not the last node of the pass
+                    # before it.
+                    self.ctx.node_id = node.id
+                    self.ctx._declared = node.writes  # noqa: SLF001
+                    self.ctx._declared_facts = node.produces  # noqa: SLF001
+                    self.ctx._produced = set()  # noqa: SLF001
+                    self.ctx.write_json(CURRENT_ITEM, item)
+                    branch_error = self._walk_branch(
+                        node.subgraph_entry, node.subgraph_exit, include_barrier=True
+                    )
+                    if branch_error is not None:
+                        error = branch_error
+                        break
+                if error is not None:
+                    break
+                out = self.graph.out_edges(node.id)
+                current = out[0].target if out else None
+                continue
 
             self.ctx.iteration = len(self.steps)
             self.ctx.node_id = current
@@ -293,11 +364,23 @@ class Executor:
             model_calls=self.model_calls,
         )
 
-    # ── one branch of a fork ───────────────────────────────────────────────
-    def _walk_branch(self, start: str, barrier: str | None) -> str | None:
-        """Run one fork branch up to the barrier, and report why it failed."""
+    # ── one branch of a fork, or one pass of a data node ───────────────────
+    def _walk_branch(
+        self, start: str, barrier: str | None, *, include_barrier: bool = False
+    ) -> str | None:
+        """Run from ``start`` up to ``barrier``, and report why it failed.
+
+        A fork stops *before* its barrier, because the barrier is the node the walk
+        continues at. A data node's pass includes its ``subgraph_exit``: that node is
+        the last one of the subgraph, not the one after it.
+        """
         current: str | None = start
-        while current is not None and current != barrier:
+        while current is not None and (current != barrier or include_barrier):
+            if include_barrier and current == barrier:
+                barrier = None  # the exit is visited once, then the pass ends
+            node = self.graph.nodes.get(current)
+            if node is None:
+                return f"node {current!r} does not exist"
             node = self.graph.nodes.get(current)
             if node is None:
                 return f"node {current!r} does not exist"
