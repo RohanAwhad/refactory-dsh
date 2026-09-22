@@ -97,6 +97,7 @@ optimizer's prompt via `rules_text()`.
 | `V9` | every knob value must be of the declared kind and within its bounds |
 | `V10` | every cycle must pass through a gate, so the run is bounded |
 | `V11` | every declared port must be a file some node on a path writes |
+| `V12` | a fork's targets, a join's sources and a data node's subgraph must name nodes that exist |
 | `I:` | the mode's own rule, stated in `Mode.invariants()` |
 
 Two properties of the implementation are themselves tested:
@@ -289,14 +290,15 @@ that the knobs were *visible* — expressiveness, not use.
 
 ## 10. The meta-modes
 
-Three modes whose *output* is a mode or an artifact, in the package `meta_pack`.
+Three modes whose *output* is a mode or an artifact, in the package `default_pack`,
+which is the package a checkout starts with.
 All three produce something **new** and never mutate their input.
 
 | mode | also an entry point | input | output |
 |---|---|---|---|
-| `meta_pack/create` | `python -m refactory_dsh.create` | a brief | a package: `__init__.py`, `mode.py`, `ops.py` |
-| `meta_pack/edit` | `python -m refactory_dsh.edit` | a brief + an existing mode | a revised package, recording `revision_of` **and the state it came from** |
-| `meta_pack/design` | `python -m refactory_dsh.design` | a brief | a checked software artifact |
+| `default_pack/create` | `python -m refactory_dsh.create` | a brief | a package: `__init__.py`, `mode.py`, `ops.py` |
+| `default_pack/edit` | `python -m refactory_dsh.edit` | a brief + an existing mode | a revised package, recording `revision_of` **and the state it came from** |
+| `default_pack/design` | `python -m refactory_dsh.design` | a brief | a checked software artifact |
 
 They are discovered and validated like any other mode, and they are also entry
 points because a creation is a thing you run once from a shell as often as from a
@@ -306,7 +308,7 @@ no knobs, a graph that does not hold together) and reloops with its reasons.
 
 ### The exceptions this package needs
 
-`meta_pack` is where the mode contract is deliberately stretched, and each stretch
+`default_pack` is where the mode contract is deliberately stretched, and each stretch
 is a declaration rather than a special case in the library:
 
 - **Unscored, on purpose.** `create` and `design` do not override `score()`, because

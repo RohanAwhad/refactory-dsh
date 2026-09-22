@@ -16,7 +16,7 @@ import pytest
 from refactory_dsh import nn, registry
 from refactory_dsh.loop import Loop, LoopConfig
 
-PACKAGE = "meta_pack"
+PACKAGE = "default_pack"
 MODES = ("create", "edit", "design")
 
 
@@ -46,12 +46,12 @@ def test_every_meta_mode_validates_as_a_mode():
 def test_the_survey_node_declares_the_file_the_strategy_node_reads():
     """The specific latent bug, held so it cannot come back.
 
-    `strategy` reads `survey.json`; `survey` wrote it without declaring it, and the
+    `synthesize_strategy` reads `survey.json`; `survey` wrote it without declaring it, and the
     executor skips the write check when a node declares no writes — so nothing
     noticed until the graph was validated.
     """
     graph = _mode(f"{PACKAGE}/create").graph()
-    assert "survey.json" in graph.nodes["strategy"].reads
+    assert "survey.json" in graph.nodes["synthesize_strategy"].reads
     assert "survey.json" in graph.nodes["survey"].writes, (
         "the survey node writes a file it does not declare"
     )
@@ -113,7 +113,7 @@ def test_the_package_documents_its_own_exceptions():
 
 
 def test_an_entry_point_and_a_mode_agree(tmp_path):
-    """`python -m refactory_dsh.create` and `meta_pack/create` are one thing."""
+    """`python -m refactory_dsh.create` and `default_pack/create` are one thing."""
     from refactory_dsh.create import CreateMode
 
     assert CreateMode.name == "create"

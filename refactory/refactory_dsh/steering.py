@@ -13,7 +13,7 @@ Ledger* at ``.factory/strategy/user-intent.md``: seeded once by an ``init_user_i
 node, append-only, described as "the user's original idea **and feedback**", read by
 research, strategy, builder review, QA and overwatch, and checked by a gate that work
 must be "traceable to user intent". It was thrown away with the rest of that system,
-and ``meta_pack/create``'s intent became a static class attribute.
+and ``default_pack/create``'s intent became a static class attribute.
 
 It was also already broken, in a way worth not repeating. ``2026-09-12-create-v2-run.md``
 records BUG-05: ``REFACTORY_INTENT`` never arrived, so the ledger held the literal

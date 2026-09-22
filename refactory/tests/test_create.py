@@ -18,13 +18,25 @@ from refactory_dsh import create_ops, sandbox
 from refactory_dsh.create_ops import parse_files
 from tests_support import (
     FakeModel,
+    REVIEW_ANSWERS,
     create_answers,
+    create_script,
     good_files,
     render,
     strategy_answer,
 )
 
 NAME = "created_pkg"
+
+
+def _config(**overrides) -> CreateConfig:
+    """A create config with the person's strategy approval recorded.
+
+    `gate_strategy` is a `user` gate, carried over from create-v2: the strategy is
+    a decision the person owns. A headless run refuses it, so a test that wants a
+    package passes the approval it is standing in for.
+    """
+    return CreateConfig(verdicts={"gate_strategy": "proceed"}, **overrides)
 
 
 
@@ -56,10 +68,15 @@ def test_create_mode_is_itself_a_mode():
     mode = CreateMode()
     graph = mode.graph()
     assert sorted(graph.nodes) == [
-        "design", "emit", "materialise", "prepare", "register", "report", "review",
-        "smoke", "strategy", "survey", "validate",
-    ]
-    assert {node.kind for node in graph.nodes.values()} == {"op", "agent", "gate"}
+        "code_reviewer", "design", "emit", "fork_qa", "gate_overwatch", "gate_qa",
+        "gate_strategy", "health_checker", "join_qa", "materialise", "overwatch",
+        "prepare", "qa_director", "register", "report", "research_director", "review",
+        "smoke", "strategy_director", "survey", "synthesize_qa", "synthesize_strategy",
+        "validate",
+    ], "the graph is create-v2's phases, not v1's"
+    assert {node.kind for node in graph.nodes.values()} == {
+        "op", "agent", "gate", "fork", "join",
+    }
     assert mode.is_scored() is False, "creating is judged by the package, not by a number"
 
 
@@ -73,7 +90,7 @@ def test_prepare_needs_a_package_name(tmp_path):
 def test_a_good_answer_creates_registers_and_smoke_scores(tmp_path):
     model = FakeModel(create_answers(NAME, good_files(NAME)))
     result = create_module.create(
-        CreateConfig(name=NAME, brief="count to a target", workdir=tmp_path / "run"),
+        _config(name=NAME, brief="count to a target", workdir=tmp_path / "run"),
         client=model,
     )
     assert result.package == NAME
@@ -89,7 +106,7 @@ def test_a_good_answer_creates_registers_and_smoke_scores(tmp_path):
 def test_the_created_mode_runs_and_scores(tmp_path):
     model = FakeModel(create_answers(NAME, good_files(NAME)))
     create_module.create(
-        CreateConfig(name=NAME, brief="count", workdir=tmp_path / "run"), client=model
+        _config(name=NAME, brief="count", workdir=tmp_path / "run"), client=model
     )
     _package, mode_class = registry.resolve(Path("."), f"{NAME}/counter")
     workdir = tmp_path / "smoke"
@@ -105,13 +122,16 @@ def test_a_broken_package_is_refused_and_then_regenerated(tmp_path):
         "ops.py": "def nothing():\n    return None\n",
         "mode.py": "X = 1\n",
     }
-    model = FakeModel([*create_answers(NAME, broken), render(good_files(NAME))])
+    model = FakeModel(create_script(NAME, [render(broken), render(good_files(NAME))]))
     result = create_module.create(
-        CreateConfig(name=NAME, brief="count", attempts=3, workdir=tmp_path / "run"),
+        _config(name=NAME, brief="count", attempts=3, workdir=tmp_path / "run"),
         client=model,
     )
     assert result.smoke_score and result.smoke_score > 0
-    retry_prompt = model.prompts[-1]
+    # The last agent call is overwatch now, so the retry is the last *emit* prompt.
+    emit_prompts = [prompt for prompt in model.prompts if "Write the package" in prompt]
+    retry_prompt = emit_prompts[-1]
+    assert len(emit_prompts) == 2, "the run must have retried the emit once"
     assert "What went wrong last time" in retry_prompt
     assert "PACKAGE" in retry_prompt, (
         "the retry must say what was wrong; the AST check reports the manifest"
@@ -120,10 +140,13 @@ def test_a_broken_package_is_refused_and_then_regenerated(tmp_path):
 
 def test_a_package_that_never_works_fails_loudly(tmp_path):
     broken = {"__init__.py": "PACKAGE = object()\n"}
-    model = FakeModel([create_answers(NAME, broken)[0], "a design"] + [render(broken)] * 3)
+    model = FakeModel([
+        *create_script(NAME, [render(broken)] * 3)[:4],
+        *[render(broken)] * 3,
+    ])
     with pytest.raises(CreateError, match="does not work after"):
         create_module.create(
-            CreateConfig(name=NAME, brief="count", attempts=2, workdir=tmp_path / "run"),
+            _config(name=NAME, brief="count", attempts=2, workdir=tmp_path / "run"),
             client=model,
         )
 
@@ -142,9 +165,9 @@ def test_the_gate_refuses_a_mode_with_no_signal(tmp_path):
         " writes=('best.json',), produces=('best',)))\n"
         "        return graph\n"
     )
-    model = FakeModel([create_answers(NAME, hollow)[0], "a design", render(hollow), render(hollow), render(good_files(NAME))])
+    model = FakeModel(create_script(NAME, [render(hollow), render(hollow), render(good_files(NAME))]))
     result = create_module.create(
-        CreateConfig(name=NAME, brief="count", attempts=3, workdir=tmp_path / "run"),
+        _config(name=NAME, brief="count", attempts=3, workdir=tmp_path / "run"),
         client=model,
     )
     assert result.smoke_score and result.smoke_score > 0
@@ -156,7 +179,7 @@ def test_the_gate_refuses_a_mode_with_no_signal(tmp_path):
 def test_extends_hands_the_model_the_reference_source(tmp_path):
     model = FakeModel(create_answers(NAME, good_files(NAME)))
     create_module.create(
-        CreateConfig(
+        _config(
             name=NAME, brief="count", extends="circle_packing/adaptive",
             workdir=tmp_path / "run",
         ),
@@ -196,9 +219,9 @@ def test_the_survey_names_what_already_exists():
 def test_the_strategy_prompt_carries_the_survey_and_the_schema():
     model = FakeModel(create_answers(NAME, good_files(NAME)))
     create_module.create(
-        CreateConfig(name=NAME, brief="count", workdir=_tmpdir()), client=model
+        _config(name=NAME, brief="count", workdir=_tmpdir()), client=model
     )
-    strategy_prompt = model.prompts[0]
+    strategy_prompt = model.prompts[2]
     assert "What already exists" in strategy_prompt
     assert "circle_packing/adaptive" in strategy_prompt
     assert '"considered"' in strategy_prompt, "the schema must be in the prompt"
@@ -208,9 +231,9 @@ def test_the_strategy_prompt_carries_the_survey_and_the_schema():
 def test_the_design_prompt_carries_the_chosen_approach():
     model = FakeModel(create_answers(NAME, good_files(NAME)))
     create_module.create(
-        CreateConfig(name=NAME, brief="count", workdir=_tmpdir()), client=model
+        _config(name=NAME, brief="count", workdir=_tmpdir()), client=model
     )
-    design_prompt = model.prompts[1]
+    design_prompt = model.prompts[3]
     assert "The approach that was chosen" in design_prompt
     assert "count up one at a time" in design_prompt
 
@@ -294,7 +317,7 @@ def test_the_gate_reloops_then_fails_loudly(tmp_path):
                        "a design", render(good_files(NAME))])
     with pytest.raises(CreateError, match="design is still not coherent"):
         create_module.create(
-            CreateConfig(name=NAME, brief="count", attempts=1, workdir=tmp_path / "run"),
+            _config(name=NAME, brief="count", attempts=1, workdir=tmp_path / "run"),
             client=model,
         )
 
@@ -303,13 +326,15 @@ def test_a_bad_design_is_retried_with_its_reasons(tmp_path):
     bad = _coherent()
     bad["considered"] = [{"approach": "one", "why_not": ""}]
     model = FakeModel([
+        *create_script(NAME, [render(good_files(NAME))])[:2],
         json.dumps(bad), strategy_answer(NAME), "a design", render(good_files(NAME)),
+        *REVIEW_ANSWERS,
     ])
     result = create_module.create(
-        CreateConfig(name=NAME, brief="count", workdir=tmp_path / "run"), client=model
+        _config(name=NAME, brief="count", workdir=tmp_path / "run"), client=model
     )
     assert result.smoke_score and result.smoke_score > 0
-    assert "at least two" in model.prompts[1], (
+    assert "at least two" in model.prompts[3], (
         "the strategy retry must be told what was wrong with the design"
     )
 

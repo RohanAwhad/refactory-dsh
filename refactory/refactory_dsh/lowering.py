@@ -26,7 +26,17 @@ import json
 from pathlib import Path
 from typing import Any
 
-from factory.workflow.primitives import AgentNode, AgentRole, Edge, FnNode, GateNode, Workflow
+from factory.workflow.primitives import (
+    AgentNode,
+    AgentRole,
+    DataNode,
+    Edge,
+    FnNode,
+    ForkNode,
+    GateNode,
+    JoinNode,
+    Workflow,
+)
 
 from refactory_dsh.nn import Graph, Knob
 
@@ -166,6 +176,24 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
             if node.gate_kind == "fn":
                 gate["evaluator_command"] = f"{RUNNER} {node.evaluator}"
             nodes[node_id] = GateNode(**common, **gate)
+        elif node.kind == "fork":
+            # The branches are reached through `targets`, not edges: one out-edge
+            # per branch would let the successor run as soon as the first one
+            # finished, which is the bug the barrier exists to prevent.
+            nodes[node_id] = ForkNode(**common, targets=list(node.targets))
+        elif node.kind == "join":
+            nodes[node_id] = JoinNode(**common, sources=list(node.sources))
+        elif node.kind == "data":
+            nodes[node_id] = DataNode(
+                **common,
+                subgraph_entry=node.subgraph_entry,
+                subgraph_exit=node.subgraph_exit,
+                task_ref=node.task_ref or None,
+                source_path=node.source_path or None,
+                source_format=node.source_format or None,
+                inline_items=[dict(item) for item in node.inline_items],
+                limit=node.limit or None,
+            )
         else:
             try:
                 role = AgentRole(node.role)

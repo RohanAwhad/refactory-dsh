@@ -36,6 +36,15 @@ def _clean():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _edit_config(**overrides) -> EditConfig:
+    """An edit config with the person's strategy approval recorded.
+
+    `EditMode` is the create-v2 graph, so it carries the same `user` gate: a
+    headless run refuses it, and a test that stands in for the person says so.
+    """
+    return EditConfig(verdicts={"gate_strategy": "proceed"}, **overrides)
+
+
 def _answers() -> list[str]:
     return [*create_answers(NAME, good_files(NAME))]
 
@@ -72,12 +81,12 @@ def test_prepare_hands_the_model_the_source_it_is_revising():
 
 def test_a_revision_needs_a_mode():
     with pytest.raises(CreateError, match="needs the mode to revise"):
-        edit_module.edit(EditConfig(name=NAME, brief="anything"))
+        edit_module.edit(_edit_config(name=NAME, brief="anything"))
 
 
 def test_a_revision_produces_a_package_and_reports_before_and_after():
     result = edit_module.edit(
-        EditConfig(
+        _edit_config(
             name=NAME, brief="count to a target", mode="circle_packing/adaptive",
             workdir=Path(".factory/edit-run"),
         ),
@@ -91,7 +100,7 @@ def test_a_revision_produces_a_package_and_reports_before_and_after():
 
 def test_the_revision_records_what_it_came_from():
     edit_module.edit(
-        EditConfig(
+        _edit_config(
             name=NAME, brief="count", mode="circle_packing/adaptive",
             workdir=Path(".factory/edit-run"),
         ),
@@ -110,7 +119,7 @@ def test_a_regression_is_refused_by_default(monkeypatch):
     })
     with pytest.raises(CreateError, match="pass --allow-regression"):
         edit_module.edit(
-            EditConfig(
+            _edit_config(
                 name=NAME, brief="count", mode="circle_packing/adaptive",
                 workdir=Path(".factory/edit-run"),
             ),
@@ -124,7 +133,7 @@ def test_a_regression_can_be_intended(monkeypatch):
         "exit_ok": True, "error": None, "score": next(scores),
     })
     result = edit_module.edit(
-        EditConfig(
+        _edit_config(
             name=NAME, brief="count", mode="circle_packing/adaptive",
             allow_regression=True, workdir=Path(".factory/edit-run"),
         ),
@@ -139,7 +148,7 @@ def test_a_revision_of_a_mode_that_does_not_run_is_refused(monkeypatch):
     })
     with pytest.raises(CreateError, match="its own smoke run failed"):
         edit_module.edit(
-            EditConfig(name=NAME, brief="count", mode="circle_packing/adaptive"),
+            _edit_config(name=NAME, brief="count", mode="circle_packing/adaptive"),
             client=FakeModel(_answers()),
         )
 
@@ -263,7 +272,7 @@ def test_a_revision_records_the_state_it_came_from(tmp_path):
     actually started from.
     """
     result = edit_module.edit(
-        EditConfig(name=NAME, mode="circle_packing/adaptive",
+        _edit_config(name=NAME, mode="circle_packing/adaptive",
                    brief="restart on a stall", workdir=tmp_path / "run"),
         client=FakeModel(_answers()),
     )

@@ -60,46 +60,109 @@ class CreateMode(Mode):
                 description="how many times the strategy step may be retried when the "
                             "intended graph does not hold together",
             ),
+            # create-v2's two creation directives: a Task class the produced mode
+            # must satisfy, and whether the package iterates data per item.
+            "task_ref": Knob(
+                "", "str",
+                description="a Task class the produced mode must satisfy, as "
+                            "`module:Class` or a registered name (empty for none)",
+            ),
+            "data_node": Knob(
+                False, "bool",
+                description="build the package as a DataNode that runs its subgraph "
+                            "once per data item",
+            ),
         }
 
     def build(self) -> Graph:
         graph = Graph()
         graph.add(Node(
             "prepare", "op", call=f"{OPS}:prepare",
+            # `task_ref` and `data_node` are read here and published as facts.
+            knobs=("task_ref", "data_node"),
             writes=("brief.json",),
             produces=("name", "brief", "extends", "revision_of", "intent", "validation",
-                      "design_review", "api", "reference"),
+                      "design_review", "api", "reference", "task_ref", "data_node"),
             notes="read the brief and publish it to the prompts",
         ))
         graph.add(Node(
             "survey", "op", call=f"{OPS}:survey",
-            # `strategy` reads `survey.json`, and the declaration is what says so.
-            # It was missing, and nothing caught it because the executor skips the
-            # write check for a node that declares no writes: the run worked and the
-            # validator had never seen this graph. Putting the mode in a package is
-            # what surfaced both.
             writes=("survey.json",),
             produces=("survey", "existing"),
             notes="enumerate what already exists, before anything is invented",
         ))
+
+        # ── create-v2: the research director ───────────────────────────────
+        # v2 replaced v1's fixed three-researcher fork with a director that chooses
+        # the directions itself. Ours spawns one subagent per direction, which is
+        # this runtime's way of fanning out, and the plan it leaves behind is what
+        # the strategy director reads — the fan-out is not a side effect.
         graph.add(Node(
-            "strategy", "agent",
+            "research_director", "agent",
             prompt_template=(
                 "{{intent}}\n\n"
-                "Package name: {{name}}\n"
-                "Brief: {{brief}}\n\n"
+                "Package name: {{name}}\nBrief: {{brief}}\n\n"
                 "## What already exists\n{{survey}}\n\n"
-                "## Reference package\n{{reference}}\n\n"
-                "## What went wrong last time\n{{design_review}}\n\n"
-                "Decide the approach before any code is written: consider at least two, "
-                "say why the one you chose wins, say what it will not do, name the "
-                "existing mode it is closest to, and describe the graph you intend to "
-                "write.\n\n" + STRATEGY_SCHEMA
+                "You are the research director. Decide what has to be learned before "
+                "this package can be designed: between three and five questions, each "
+                "one answerable from this checkout, from the reference package, or from "
+                "the API below. Spawn one subagent per question and have each write its "
+                "findings to `research/<slug>.md` under the run directory. Then write "
+                "`research-plan.json` as an array of `{\"focus\", \"slug\", "
+                "\"finding\"}` objects. A direction whose finding is empty did not "
+                "answer its question: say so rather than writing something plausible.\n\n"
+                "## API\n{{api}}\n\n## Reference package\n{{reference}}\n"
             ),
-            reads=("brief.json", "survey.json", "strategy-review.txt"),
+            reads=("brief.json", "survey.json"),
+            writes=("research-plan.json",),
+            produces=("research",),
+            notes="choose the research directions and have a subagent answer each one",
+        ))
+        graph.add(Node(
+            "strategy_director", "agent",
+            prompt_template=(
+                "{{intent}}\n\n"
+                "Package name: {{name}}\nBrief: {{brief}}\n\n"
+                "## What already exists\n{{survey}}\n\n"
+                "## What the research found\n{{research}}\n\n"
+                "You are the strategy director. From the research, choose between two "
+                "and five strategy perspectives on how this package could work — "
+                "including one that argues for the simplest thing that satisfies the "
+                "brief, and one that says what the acceptance criteria must be. Spawn "
+                "one subagent per perspective and have each write `strategy/<slug>.md` "
+                "under the run directory. Then write `strategy-plan.json` as an array of "
+                "`{\"perspective\", \"slug\", \"intent_items\"}` objects, where "
+                "`intent_items` lists the asks from the brief that perspective covers. "
+                "Every ask must be covered by at least one perspective; name the "
+                "uncovered ones rather than leaving them out.\n\n"
+                "## Reference package\n{{reference}}\n"
+            ),
+            reads=("brief.json", "survey.json", "research-plan.json"),
+            writes=("strategy-plan.json",),
+            produces=("strategy_plan",),
+            notes="choose the strategy perspectives and their intent coverage",
+        ))
+        graph.add(Node(
+            "synthesize_strategy", "agent",
+            prompt_template=(
+                "{{intent}}\n\n"
+                "Package name: {{name}}\nBrief: {{brief}}\n\n"
+                "## What already exists\n{{survey}}\n\n"
+                "## What the research found\n{{research}}\n\n"
+                "## The perspectives\n{{strategy_plan}}\n\n"
+                "## What went wrong last time\n{{design_review}}\n\n"
+                "Compile the perspectives into one strategy. Every ask in the brief must "
+                "appear in it or be named as deliberately out of scope: an ask that is "
+                "silently dropped is the failure this step exists to catch. Then decide "
+                "the approach: consider at least two, say why the one you chose wins, "
+                "say what it will not do, name the existing mode it is closest to, and "
+                "describe the graph you intend to write.\n\n" + STRATEGY_SCHEMA
+            ),
+            reads=("brief.json", "survey.json", "research-plan.json",
+                   "strategy-plan.json", "strategy-review.txt"),
             writes=("strategy.json",),
             produces=("strategy",),
-            notes="decide the approach and declare the intended graph",
+            notes="compile the perspectives into one intent-faithful strategy",
         ))
         graph.add(Node(
             "review", "gate", evaluator=f"{OPS}:review_design",
@@ -110,12 +173,26 @@ class CreateMode(Mode):
             max_iterations=8,
             notes="check the intended graph before any code exists",
         ))
+        # create-v2 puts a person here (`gate_strategy`), and it is the one v2 gate
+        # this port keeps as-is: the strategy is a decision the person owns, and a
+        # run that can approve its own strategy is not reviewed at all. A headless
+        # run refuses it, exactly as it refuses any `user` gate.
+        graph.add(Node(
+            "gate_strategy", "gate", gate_kind="user",
+            reads=("strategy.json",),
+            max_iterations=4,
+            notes=(
+                "Approve the strategy before any code is written? The chosen approach "
+                "is in strategy.json in the run directory, and the package is written "
+                "from it. Answer proceed to build it, or reloop to have the strategy "
+                "director choose another approach."
+            ),
+        ))
         graph.add(Node(
             "design", "agent",
             prompt_template=(
                 "{{intent}}\n\n"
-                "Package name: {{name}}\n"
-                "Brief: {{brief}}\n\n"
+                "Package name: {{name}}\nBrief: {{brief}}\n\n"
                 "Read the API below and write the design for the package: every "
                 "operation, every node, every knob, and what score() reads. Be concrete "
                 "and complete — the next step writes the code from your design alone.\n\n"
@@ -137,12 +214,18 @@ class CreateMode(Mode):
                 "## API\n{{api}}\n\n"
                 "## Reference package\n{{reference}}\n\n"
                 "## What went wrong last time\n{{validation}}\n\n"
+                "## A Task this mode must satisfy\n{{task_ref}}\n\n"
+                "## Data iteration\n{{data_node}}\n\n"
                 "Answer with file blocks, each introduced by a line of exactly:\n"
                 "===FILE: <relative path>===\n"
                 "followed by the file's contents. Emit `__init__.py` (with "
                 "`PACKAGE = nn.Package(...)`), the ops module, and any module the "
                 "ops or the mode need. Use the declared ops module path in every "
-                "`call` and `evaluator`. No prose outside the blocks.\n"
+                "`call` and `evaluator`. When a Task is named, the mode must accept "
+                "that Task's per-item prompt as its input and produce what its "
+                "`verify()` scores. When data iteration is asked for, the graph's "
+                "start node is a `data` node whose `subgraph_entry` and `subgraph_exit` "
+                "delimit the per-item subgraph. No prose outside the blocks.\n"
             ),
             reads=("brief.json", "design.md", "validation.txt"),
             writes=("emit.txt",),
@@ -156,6 +239,7 @@ class CreateMode(Mode):
             produces=("package_path", "files"),
             notes="write the staged package to disk",
         ))
+        # create-v2's `gate_build`: the built thing is checked before it is reviewed.
         graph.add(Node(
             "validate", "gate", evaluator=f"{OPS}:validate",
             reads=("emit.txt",),
@@ -165,6 +249,110 @@ class CreateMode(Mode):
             max_iterations=12,
             notes="import the package and check it is a usable mode",
         ))
+
+        # ── create-v2: the three reviews, in parallel ──────────────────────
+        # v2 fans out to a health check, a code review and an adversarial QA
+        # director, and waits for all three before synthesising. The fork reaches
+        # its branches through `targets` and the join waits on `sources`, so one
+        # review finishing early cannot let the run past the barrier.
+        graph.add(Node("fork_qa", "fork",
+                       targets=("health_checker", "code_reviewer", "qa_director"),
+                       notes="start the three reviews"))
+        graph.add(Node(
+            "health_checker", "agent",
+            prompt_template=(
+                "Brief: {{brief}}\n\n## The design\n{{design}}\n\n"
+                "You are the health checker. Run the created package the way a user "
+                "would: import it, list its modes, and run its smoke check. Record every "
+                "command and its exact output in `reviews/health-check.md`. If anything "
+                "fails or is missing, write the line `BLOCKING:` followed by what failed. "
+                "A check you did not run is not a check that passed — say which ones you "
+                "skipped."
+            ),
+            reads=("brief.json", "design.md"),
+            writes=("reviews/health-check.md",),
+            produces=("health_check",),
+            notes="run the package and record what happened, command by command",
+        ))
+        graph.add(Node(
+            "code_reviewer", "agent",
+            prompt_template=(
+                "## The design\n{{design}}\n\n## The emitted source\n{{emit}}\n\n"
+                "You are the code reviewer. Read the emitted source against the design "
+                "and the API: are every op, node, knob and fact declared and consumed, "
+                "does `score()` read a fact the graph produces, and would the package "
+                "import? Record findings in `reviews/code-review.md`. A defect that "
+                "would stop the package working is written as `BLOCKING:` followed by "
+                "the file and what is wrong. Style is not blocking."
+            ),
+            reads=("design.md", "emit.txt"),
+            writes=("reviews/code-review.md",),
+            produces=("code_review",),
+            notes="review the emitted source against the design",
+        ))
+        graph.add(Node(
+            "qa_director", "agent",
+            prompt_template=(
+                "Brief: {{brief}}\n\n## The strategy (the acceptance criteria are in "
+                "it)\n{{strategy}}\n\n"
+                "You are the QA director. Design adversarial checks against this "
+                "package — the cases a friendly reviewer would not try — and run them. "
+                "Write `reviews/qa.md` with each check and its exact result. Every "
+                "acceptance criterion in the strategy must have a check. Anything that "
+                "breaks an acceptance criterion is written as `BLOCKING:` followed by "
+                "what you ran and what happened."
+            ),
+            reads=("brief.json", "strategy.json"),
+            writes=("reviews/qa.md",),
+            produces=("qa_review",),
+            notes="attack the package against its acceptance criteria",
+        ))
+        graph.add(Node("join_qa", "join",
+                       sources=("health_checker", "code_reviewer", "qa_director"),
+                       notes="wait for all three reviews"))
+        graph.add(Node(
+            "synthesize_qa", "op", call=f"{OPS}:synthesize_qa",
+            reads=("reviews/health-check.md", "reviews/code-review.md", "reviews/qa.md"),
+            writes=("reviews/qa-synthesized.md",),
+            produces=("qa", "qa_blocking", "qa_missing"),
+            notes="merge the three reviews; an absent review is not a passed one",
+        ))
+        graph.add(Node(
+            "gate_qa", "gate", evaluator=f"{OPS}:gate_qa",
+            reads=("reviews/qa-synthesized.md",),
+            writes=("reviews/qa-gate.txt",),
+            max_iterations=4,
+            notes="proceed only when every review ran and none is blocking",
+        ))
+
+        # ── create-v2: the overwatch pass ──────────────────────────────────
+        graph.add(Node(
+            "overwatch", "agent",
+            prompt_template=(
+                "Brief: {{brief}}\n\n## The strategy\n{{strategy}}\n\n"
+                "## The merged reviews\n{{qa}}\n\n"
+                "You are the overwatch. This is not another review: audit the reviews "
+                "themselves. Take each ask in the brief and each acceptance criterion, "
+                "and say what evidence proves it — a command and its output — or that "
+                "nothing does. Run your own spot checks on the things the reviews claim "
+                "passed: import the package, run its smoke check, read back the mode's "
+                "knobs. Write `reviews/overwatch.md` ending with a line that is exactly "
+                "`VERDICT: PASS` or `VERDICT: FAIL`, and name every ask with no evidence "
+                "behind it. A claim you could not reproduce is not evidence."
+            ),
+            reads=("brief.json", "strategy.json", "reviews/qa-synthesized.md", "design.md"),
+            writes=("reviews/overwatch.md",),
+            produces=("overwatch",),
+            notes="audit the evidence behind the reviews, not the work again",
+        ))
+        graph.add(Node(
+            "gate_overwatch", "gate", evaluator=f"{OPS}:gate_overwatch",
+            reads=("reviews/overwatch.md",),
+            writes=("reviews/overwatch-gate.txt",),
+            max_iterations=4,
+            notes="proceed only on a stated PASS verdict",
+        ))
+
         graph.add(Node(
             "register", "op", call=f"{OPS}:register",
             writes=("registered.json",),
@@ -185,15 +373,27 @@ class CreateMode(Mode):
         ))
 
         graph.connect("prepare", "survey")
-        graph.connect("survey", "strategy")
-        graph.connect("strategy", "review")
-        graph.connect("review", "strategy", condition="reloop")
-        graph.connect("review", "design", condition="proceed")
+        graph.connect("survey", "research_director")
+        graph.connect("research_director", "strategy_director")
+        graph.connect("strategy_director", "synthesize_strategy")
+        graph.connect("synthesize_strategy", "review")
+        graph.connect("review", "synthesize_strategy", condition="reloop")
+        graph.connect("review", "gate_strategy", condition="proceed")
+        graph.connect("gate_strategy", "strategy_director", condition="reloop")
+        graph.connect("gate_strategy", "design", condition="proceed")
         graph.connect("design", "emit")
         graph.connect("emit", "materialise")
         graph.connect("materialise", "validate")
         graph.connect("validate", "emit", condition="reloop")
-        graph.connect("validate", "register", condition="proceed")
+        graph.connect("validate", "fork_qa", condition="proceed")
+        graph.connect("fork_qa", "join_qa")
+        graph.connect("join_qa", "synthesize_qa")
+        graph.connect("synthesize_qa", "gate_qa")
+        graph.connect("gate_qa", "emit", condition="reloop")
+        graph.connect("gate_qa", "overwatch", condition="proceed")
+        graph.connect("overwatch", "gate_overwatch")
+        graph.connect("gate_overwatch", "emit", condition="reloop")
+        graph.connect("gate_overwatch", "register", condition="proceed")
         graph.connect("register", "smoke")
         graph.connect("smoke", "report")
         return graph
@@ -210,6 +410,13 @@ class CreateConfig:
     workdir: Path = Path(".factory/create")
     max_steps: int = 200
     seed: int = 0
+    #: A Task class the produced mode must satisfy (create-v2's `--task`).
+    task_ref: str = ""
+    #: Whether the produced graph is a DataNode iterating a subgraph per item.
+    data_node: bool = False
+    #: Verdicts for gates a person answers. `gate_strategy` is one, so a headless
+    #: run has to be given the person's answer explicitly rather than inventing it.
+    verdicts: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -241,6 +448,8 @@ def create(config: CreateConfig, client: Any = None) -> CreateResult:
     mode = CreateMode()
     state = mode.state_dict()
     state["knobs"]["attempts"]["value"] = int(config.attempts)
+    state["knobs"]["task_ref"]["value"] = config.task_ref
+    state["knobs"]["data_node"]["value"] = bool(config.data_node)
     mode.load_state_dict(state)
 
     workdir = Path(config.workdir)
@@ -248,8 +457,15 @@ def create(config: CreateConfig, client: Any = None) -> CreateResult:
     run = mode.run(
         workdir,
         model=client,
-        task={"name": config.name, "brief": config.brief, "extends": config.extends},
+        task={
+            "name": config.name,
+            "brief": config.brief,
+            "extends": config.extends,
+            "task_ref": config.task_ref,
+            "data_node": config.data_node,
+        },
         max_steps=config.max_steps,
+        verdicts=dict(config.verdicts),
     )
     if not run.exit_ok:
         raise CreateError(f"creating {config.name!r} failed: {run.error}")

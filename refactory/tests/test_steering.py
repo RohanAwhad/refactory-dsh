@@ -23,7 +23,7 @@ from refactory_dsh.steering import Ledger, SteeringError
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 #: A mode with agent nodes, so the transform has something to reach.
-MODE = "meta_pack/create"
+MODE = "default_pack/create"
 
 
 def _state() -> dict:
@@ -521,7 +521,9 @@ def test_outputs_in_reads_what_the_agent_nodes_wrote(tmp_path):
         for nid, e in declared.items()
         if e.get("kind") == "agent" and e.get("writes")
     )
-    (work / entry["writes"][0]).write_text(f"the work\n{steering.CITATION} x\n")
+    target = work / entry["writes"][0]
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(f"the work\n{steering.CITATION} x\n")
 
     outputs = steering.outputs_in(work)
     assert "the work" in outputs[node_id]

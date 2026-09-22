@@ -16,7 +16,7 @@ from refactory_dsh import dsh_runtime, interactive, registry, steering
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 #: A mode with agent nodes, so "the ledger reaches the agents" has something to reach.
-WITH_AGENTS = "meta_pack/create"
+WITH_AGENTS = "default_pack/create"
 #: A mode with a gate a person answers and a deterministic gate.
 WITH_A_GATE = "review_pack/review"
 

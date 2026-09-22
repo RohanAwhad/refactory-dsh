@@ -44,6 +44,8 @@ RULES: dict[str, str] = {
     "V9": "every knob value must be of the declared kind and within its bounds",
     "V10": "every cycle must pass through a gate, so the run is bounded",
     "V11": "every declared port must be a file some node on a path writes",
+    "V12": "a fork's targets, a join's sources and a data node's subgraph must name "
+           "nodes that exist",
     "I:": "the mode's own invariant, stated in Mode.invariants()",
 }
 
@@ -220,6 +222,28 @@ def validate(
                     node=node_id,
                 )
             )
+
+    # V12 the nodes a fork, a join or a data node names.
+    #
+    # These are how a fork reaches its branches and a join waits for them, so a
+    # name that is not a node is a barrier that can never be satisfied — a failure
+    # at run time that the state itself already knows about.
+    for node_id in sorted(graph.nodes):
+        node = graph.nodes[node_id]
+        for kind, names in (
+            ("fork target", node.targets),
+            ("join source", node.sources),
+            ("data subgraph", (node.subgraph_entry, node.subgraph_exit)),
+        ):
+            for name in names:
+                if name and name not in graph.nodes:
+                    issues.append(
+                        Issue(
+                            "V12",
+                            f"{kind} {name!r} is not a node",
+                            node=node_id,
+                        )
+                    )
 
     # V6 every read is produced by a node on a path the run can take.
     produced = produced_on_path(graph)

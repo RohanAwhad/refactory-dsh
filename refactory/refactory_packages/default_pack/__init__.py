@@ -1,4 +1,4 @@
-"""The meta-modes: modes whose output is a mode, or an artifact.
+"""The default package: the modes a checkout starts with, whose output is a mode or an artifact.
 
 These are modes like any other — they have a graph, they are walked by the same
 executor, and they are discovered by the same registry. What makes them a package
@@ -29,7 +29,7 @@ from refactory_dsh.edit import EditMode
 from refactory_dsh.nn import Package
 
 PACKAGE = Package(
-    name="meta_pack",
+    name="default_pack",
     description="Create a package, revise one, or design an artifact — from a brief.",
     modes=(CreateMode, EditMode, DesignMode),
     ops=("refactory_dsh.create_ops", "refactory_dsh.design_ops"),

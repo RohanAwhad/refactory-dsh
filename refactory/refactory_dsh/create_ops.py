@@ -105,9 +105,15 @@ def prepare(ctx: Any) -> dict[str, Any]:
     extends = str(task.get("extends") or "").strip()
     revision = str(task.get("mode") or "").strip()
     intent = str(task.get("intent") or "Make a new package of modes.").strip()
+    # The two create-v2 directives (its `--task` and `--data-node` flags): a Task
+    # class the produced mode must satisfy, and whether the produced graph is a
+    # DataNode that runs a subgraph once per item. Both reach the prompts as facts.
+    task_ref = str(ctx.knob("task_ref", "") or "").strip()
+    data_node = bool(ctx.knob("data_node", 0))
     reference = _revision_source(revision) if revision else _reference(extends)
     ctx.write_json("brief.json", {
         "name": name, "brief": brief, "extends": extends, "mode": revision,
+        "task_ref": task_ref, "data_node": data_node,
     })
     return {
         "name": name,
@@ -119,6 +125,8 @@ def prepare(ctx: Any) -> dict[str, Any]:
         "design_review": "(no design has been reviewed yet)",
         "api": API,
         "reference": reference,
+        "task_ref": task_ref or "(no Task class was named)",
+        "data_node": "yes" if data_node else "no",
     }
 
 
@@ -530,3 +538,87 @@ def write_result(ctx: Any) -> dict[str, Any]:
     }
     ctx.write_json("create.json", payload)
     return {"created": json.dumps(payload, default=str)}
+
+
+# ── the v2 review phases ───────────────────────────────────────────────────
+#
+# create-v2 runs three reviews in parallel (a health check, a code review, and an
+# adversarial QA director), merges them into one synthesis, and then audits the
+# synthesis with an overwatch pass. Our fork/join does the parallel part; these
+# ops do the merge and the two gates, so the three verdicts a reader cares about
+# (did every review run, is anything blocking, did overwatch pass) are decided by
+# the runtime rather than by an agent's summary of itself.
+
+#: The reviews the fork produces, in the order the synthesis reads them.
+QA_REVIEWS = (
+    "reviews/health-check.md",
+    "reviews/code-review.md",
+    "reviews/qa.md",
+)
+
+#: How a review marks a finding it will not pass with.
+BLOCKING_MARK = "BLOCKING"
+
+#: How the overwatch pass states its own verdict.
+PASS_MARK = "VERDICT: PASS"
+
+
+def synthesize_qa(ctx: Any) -> dict[str, Any]:
+    """Merge the three reviews into one file, and count the blocking findings.
+
+    A review that never ran is reported as missing rather than skipped: an absent
+    review is not a review that passed, which is the mistake this phase exists to
+    prevent.
+    """
+    sections: list[str] = []
+    missing: list[str] = []
+    for name in QA_REVIEWS:
+        text = ctx.read_text(name).strip() if ctx.exists(name) else ""
+        if not text:
+            missing.append(name)
+            continue
+        sections.append(f"## {name}\n\n{text}")
+    # Only a review's own finding line counts. The header below mentions the marker,
+    # and a gate that searched the whole file for the word would read its own summary
+    # as a finding.
+    blocking = sum(
+        1
+        for section in sections
+        if any(line.strip().startswith(BLOCKING_MARK) for line in section.splitlines())
+    )
+    header = (
+        "# QA synthesis\n\n"
+        f"{len(sections)} review(s) merged, {blocking} blocking finding(s), "
+        f"{len(missing)} review(s) missing.\n"
+    )
+    if missing:
+        header += "\n## WARNING: NO REVIEW FROM " + ", ".join(missing) + "\n"
+    body = header + "\n" + "\n\n".join(sections) + "\n"
+    ctx.write_text("reviews/qa-synthesized.md", body)
+    return {"qa": body, "qa_blocking": blocking, "qa_missing": len(missing)}
+
+
+def gate_qa(ctx: Any) -> str:
+    """Proceed only when every review ran and none named a blocking finding."""
+    text = ctx.read_text("reviews/qa-synthesized.md")
+    if "WARNING: NO REVIEW FROM" in text:
+        ctx.write_text("reviews/qa-gate.txt", "reloop: a review did not run\n")
+        return "reloop"
+    if any(line.strip().startswith(BLOCKING_MARK) for line in text.splitlines()):
+        ctx.write_text("reviews/qa-gate.txt", f"reloop: a {BLOCKING_MARK} finding\n")
+        return "reloop"
+    ctx.write_text("reviews/qa-gate.txt", "proceed: no blocking finding\n")
+    return "proceed"
+
+
+def gate_overwatch(ctx: Any) -> str:
+    """Proceed only when the overwatch pass stated a PASS verdict."""
+    text = ctx.read_text("reviews/overwatch.md")
+    if PASS_MARK in text.upper():
+        ctx.write_text("reviews/overwatch-gate.txt", "proceed: overwatch passed\n")
+        return "proceed"
+    ctx.write_text(
+        "reviews/overwatch-gate.txt",
+        f"reloop: overwatch did not state {PASS_MARK!r}\n",
+    )
+    return "reloop"

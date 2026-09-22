@@ -99,6 +99,8 @@ def edit(config: EditConfig, client: Any = None) -> dict[str, Any]:
     mode = mode_class()
     state = mode.state_dict()
     state["knobs"]["attempts"]["value"] = int(config.attempts)
+    state["knobs"]["task_ref"]["value"] = config.task_ref
+    state["knobs"]["data_node"]["value"] = bool(config.data_node)
     mode.load_state_dict(state)
     run = mode.run(
         run_workdir,
@@ -111,6 +113,9 @@ def edit(config: EditConfig, client: Any = None) -> dict[str, Any]:
             "intent": EditMode.intent,
         },
         max_steps=config.max_steps,
+        # The revision is the create-v2 graph, so it carries the same person's gate
+        # on the strategy; a headless run has to be given their answer.
+        verdicts=dict(config.verdicts),
     )
     if not run.exit_ok:
         raise CreateError(f"revising {config.mode!r} failed: {run.error}")

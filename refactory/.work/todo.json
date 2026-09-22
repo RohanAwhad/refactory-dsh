@@ -244,7 +244,7 @@
       "issue": 29,
       "title": "create-v2 and design-v2 as modes in the default package",
       "why": "The original product had three meta-modes. We have create (a mode), edit (a mode), loop, and design (a mode) — but they are separate entry points, not a package. They belong in one default package, which may need exceptions the mode contract does not otherwise allow.",
-      "verify": "pytest refactory/tests/test_meta_package.py -q",
+      "verify": "pytest refactory/tests/test_default_package.py -q",
       "status": "done",
       "commit": "72fa042719",
       "observed": "10 passed (test_meta_package.py), 529 passed overall",

@@ -42,10 +42,15 @@ def _config(root: Path, **overrides: object) -> LoopConfig:
 
 
 # ── half one: a brief becomes a working package ────────────────────────────
+def _create_config(**overrides) -> CreateConfig:
+    """A create config with the person's strategy approval recorded (`user` gate)."""
+    return CreateConfig(verdicts={"gate_strategy": "proceed"}, **overrides)
+
+
 def test_a_brief_becomes_a_registered_package_that_scores(tmp_path):
     model = FakeModel(create_answers(CREATED, good_files(CREATED)))
     result = create(
-        CreateConfig(name=CREATED, brief="count to a target", workdir=tmp_path / "create"),
+        _create_config(name=CREATED, brief="count to a target", workdir=tmp_path / "create"),
         client=model,
     )
     assert result.package == CREATED
@@ -56,7 +61,7 @@ def test_a_brief_becomes_a_registered_package_that_scores(tmp_path):
 
 def test_the_created_mode_validates_with_all_its_calls_resolved(tmp_path):
     create(
-        CreateConfig(name=CREATED, brief="count", workdir=tmp_path / "create"),
+        _create_config(name=CREATED, brief="count", workdir=tmp_path / "create"),
         client=FakeModel(create_answers(CREATED, good_files(CREATED))),
     )
     _package, mode_class = registry.resolve(Path("."), f"{CREATED}/counter")
@@ -145,7 +150,7 @@ def test_the_run_leaves_the_artifacts_a_person_needs(tmp_path):
 def test_the_created_package_can_be_optimized_too(tmp_path):
     """The full chain: a brief, a package, and then a search over it."""
     create(
-        CreateConfig(name=CREATED, brief="count", workdir=tmp_path / "create"),
+        _create_config(name=CREATED, brief="count", workdir=tmp_path / "create"),
         client=FakeModel(create_answers(CREATED, good_files(CREATED))),
     )
     report = _optimize(f"{CREATED}/counter", tmp_path / "runs")

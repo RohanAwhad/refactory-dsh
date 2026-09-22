@@ -219,6 +219,42 @@ class Executor:
                 break
             visits[current] = visits.get(current, 0) + 1
 
+            # A fork starts its branches and the barrier is its single out-edge.
+            # The walker runs each branch in turn and then continues at the barrier,
+            # so the shared tail sees every branch's writes; the DSH runtime runs
+            # them concurrently and waits on the join, which is the same barrier.
+            if node.kind == "fork":
+                barrier = next(
+                    (edge.target for edge in self.graph.out_edges(node.id)
+                     if edge.condition is None),
+                    None,
+                )
+                self.steps.append(Step(node.id, node.kind, 0.0))
+                for target in node.targets:
+                    branch_error = self._walk_branch(target, barrier)
+                    if branch_error is not None:
+                        error = branch_error
+                        break
+                current = barrier if error is None else None
+                if error is not None:
+                    break
+                continue
+            if node.kind == "join":
+                self.steps.append(Step(node.id, node.kind, 0.0))
+                out = self.graph.out_edges(node.id)
+                current = out[0].target if out else None
+                continue
+            if node.kind == "data":
+                # The walker does not load a data source; DSH does. Refusing says
+                # which runtime can run this mode instead of scoring a run that
+                # silently iterated nothing.
+                error = (
+                    f"data node {node.id!r} iterates its subgraph once per item, which "
+                    "the walker does not load; evaluate this mode with the `dsh` "
+                    "evaluator"
+                )
+                break
+
             self.ctx.iteration = len(self.steps)
             self.ctx.node_id = current
             self.ctx._declared = node.writes  # noqa: SLF001 - the run owns the context
@@ -256,6 +292,37 @@ class Executor:
             workdir=self.ctx.workdir,
             model_calls=self.model_calls,
         )
+
+    # ── one branch of a fork ───────────────────────────────────────────────
+    def _walk_branch(self, start: str, barrier: str | None) -> str | None:
+        """Run one fork branch up to the barrier, and report why it failed."""
+        current: str | None = start
+        while current is not None and current != barrier:
+            node = self.graph.nodes.get(current)
+            if node is None:
+                return f"node {current!r} does not exist"
+            if len(self.steps) >= self.max_steps:
+                return f"the run exceeded {self.max_steps} steps"
+            self.ctx.iteration = len(self.steps)
+            self.ctx.node_id = current
+            self.ctx._declared = node.writes  # noqa: SLF001 - the run owns the context
+            self.ctx._declared_facts = node.produces  # noqa: SLF001
+            self.ctx._produced = set()  # noqa: SLF001
+            started = time.time()
+            verdict: str | None = None
+            try:
+                current, verdict = self._visit(node)
+                self.ctx._check_produces()  # noqa: SLF001
+            except Exception as exc:  # a failing branch ends the run, visibly
+                self.steps.append(
+                    Step(node.id, node.kind, time.time() - started,
+                         error=f"{type(exc).__name__}: {exc}")
+                )
+                return f"{node.id}: {type(exc).__name__}: {exc}"
+            self.steps.append(
+                Step(node.id, node.kind, time.time() - started, verdict=verdict)
+            )
+        return None
 
     # ── one node ───────────────────────────────────────────────────────────
     def _visit(self, node: Node) -> tuple[str | None, str | None]:

@@ -26,7 +26,7 @@ The mode library: the ``nn`` of the harness world.
 | class | `Knob` | `(default: 'Any', kind: 'str' = 'float', lo: 'float \| None' = None, hi: 'float \| None' = None, enum: 'tuple[Any, ...]' = (), values: 'tuple[str, ...]' = (), frozen: 'bool' = False, description: 'str' = '') -> None` |
 | class | `Memory` | `(namespace: 'str', kind: 'str' = 'log', retention: 'str' = 'run', description: 'str' = '') -> None` |
 | class | `Mode` | `(state: 'dict[str, Any] \| None' = None) -> 'None'` |
-| class | `Node` | `(id: 'str', kind: 'str', call: 'str' = '', evaluator: 'str' = '', gate_kind: 'str' = 'fn', knobs: 'tuple[str, ...]' = (), reads: 'tuple[str, ...]' = (), writes: 'tuple[str, ...]' = (), produces: 'tuple[str, ...]' = (), prompt_template: 'str' = '', role: 'str' = 'ceo', tools: 'tuple[str, ...]' = (), max_iterations: 'int' = 1, notes: 'str' = '', blocking: 'bool' = True, score_effect: 'str' = 'affects') -> None` |
+| class | `Node` | `(id: 'str', kind: 'str', call: 'str' = '', evaluator: 'str' = '', gate_kind: 'str' = 'fn', knobs: 'tuple[str, ...]' = (), reads: 'tuple[str, ...]' = (), writes: 'tuple[str, ...]' = (), produces: 'tuple[str, ...]' = (), prompt_template: 'str' = '', role: 'str' = 'ceo', tools: 'tuple[str, ...]' = (), max_iterations: 'int' = 1, notes: 'str' = '', blocking: 'bool' = True, score_effect: 'str' = 'affects', targets: 'tuple[str, ...]' = (), sources: 'tuple[str, ...]' = (), subgraph_entry: 'str' = '', subgraph_exit: 'str' = '', task_ref: 'str' = '', source_path: 'str' = '', source_format: 'str' = '', inline_items: 'tuple[dict[str, Any], ...]' = (), limit: 'int' = 0) -> None` |
 | class | `Package` | `(name: 'str', description: 'str' = '', version: 'str' = '0.1.0', modes: "tuple[type['Mode'], ...]" = (), ops: 'tuple[str, ...]' = (), extends: 'str' = '', requires: 'tuple[str, ...]' = (), trust: 'str' = 'trusted', origin: 'str' = '') -> None` |
 | class | `Port` | `(name: 'str', path: 'str', media_type: 'str' = 'text/markdown', description: 'str' = '') -> None` |
 
@@ -52,7 +52,7 @@ The structure of a mode: nodes, edges, and their canonical serialization.
 | class | `Edge` | `(source: 'str', target: 'str', condition: 'str \| None' = None) -> None` |
 | class | `Graph` | `(*, auto_start: 'bool' = True) -> 'None'` |
 | class | `GraphError` | `` |
-| class | `Node` | `(id: 'str', kind: 'str', call: 'str' = '', evaluator: 'str' = '', gate_kind: 'str' = 'fn', knobs: 'tuple[str, ...]' = (), reads: 'tuple[str, ...]' = (), writes: 'tuple[str, ...]' = (), produces: 'tuple[str, ...]' = (), prompt_template: 'str' = '', role: 'str' = 'ceo', tools: 'tuple[str, ...]' = (), max_iterations: 'int' = 1, notes: 'str' = '', blocking: 'bool' = True, score_effect: 'str' = 'affects') -> None` |
+| class | `Node` | `(id: 'str', kind: 'str', call: 'str' = '', evaluator: 'str' = '', gate_kind: 'str' = 'fn', knobs: 'tuple[str, ...]' = (), reads: 'tuple[str, ...]' = (), writes: 'tuple[str, ...]' = (), produces: 'tuple[str, ...]' = (), prompt_template: 'str' = '', role: 'str' = 'ceo', tools: 'tuple[str, ...]' = (), max_iterations: 'int' = 1, notes: 'str' = '', blocking: 'bool' = True, score_effect: 'str' = 'affects', targets: 'tuple[str, ...]' = (), sources: 'tuple[str, ...]' = (), subgraph_entry: 'str' = '', subgraph_exit: 'str' = '', task_ref: 'str' = '', source_path: 'str' = '', source_format: 'str' = '', inline_items: 'tuple[dict[str, Any], ...]' = (), limit: 'int' = 0) -> None` |
 
 - **`Edge`** — One connection between two nodes, and the verdict that selects it.
 - **`Graph`** — A mutable graph. Edits mutate it; serialization canonicalizes it.
@@ -552,7 +552,7 @@ create-mode: a mode whose output is a whole package.
 
 | kind | name | signature |
 |---|---|---|
-| class | `CreateConfig` | `(name: 'str', brief: 'str', extends: 'str' = '', attempts: 'int' = 3, workdir: 'Path' = PosixPath('.factory/create'), max_steps: 'int' = 200, seed: 'int' = 0) -> None` |
+| class | `CreateConfig` | `(name: 'str', brief: 'str', extends: 'str' = '', attempts: 'int' = 3, workdir: 'Path' = PosixPath('.factory/create'), max_steps: 'int' = 200, seed: 'int' = 0, task_ref: 'str' = '', data_node: 'bool' = False, verdicts: 'dict[str, str]' = <factory>) -> None` |
 | class | `CreateError` | `` |
 | class | `CreateMode` | `(state: 'dict[str, Any] \| None' = None) -> 'None'` |
 | class | `CreateResult` | `(package: 'str', mode: 'str', path: 'Path', files: 'list[str]' = <factory>, smoke_score: 'float \| None' = None, iterations: 'int' = 0, duration_s: 'float' = 0.0) -> None` |
@@ -577,7 +577,7 @@ Revise an existing mode from a brief.
 
 | kind | name | signature |
 |---|---|---|
-| class | `EditConfig` | `(name: 'str', brief: 'str', extends: 'str' = '', attempts: 'int' = 3, workdir: 'Path' = PosixPath('.factory/create'), max_steps: 'int' = 200, seed: 'int' = 0, mode: 'str' = '', allow_regression: 'bool' = False) -> None` |
+| class | `EditConfig` | `(name: 'str', brief: 'str', extends: 'str' = '', attempts: 'int' = 3, workdir: 'Path' = PosixPath('.factory/create'), max_steps: 'int' = 200, seed: 'int' = 0, task_ref: 'str' = '', data_node: 'bool' = False, verdicts: 'dict[str, str]' = <factory>, mode: 'str' = '', allow_regression: 'bool' = False) -> None` |
 | class | `EditMode` | `(state: 'dict[str, Any] \| None' = None) -> 'None'` |
 | function | `edit` | `(config: 'EditConfig', client: 'Any' = None) -> 'dict[str, Any]'` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |

@@ -13,7 +13,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any, Iterable
 
-NODE_KINDS = ("op", "agent", "gate")
+#: The node kinds a mode may declare. `fork`/`join` are a barrier pair and
+#: `data` iterates a subgraph once per item; all three are executed by the
+#: runtime, and they are kinds here because a mode has to be able to declare
+#: them (create-v2 forks its three reviews, and a dataset mode is a DataNode).
+NODE_KINDS = ("op", "agent", "gate", "fork", "join", "data")
 
 #: Who answers a gate: the evaluated function, a person, or the running agent.
 GATE_KINDS = ("fn", "user", "agent")
@@ -41,6 +45,15 @@ _NODE_FIELDS = frozenset(
         "notes",
         "blocking",
         "score_effect",
+        "targets",
+        "sources",
+        "subgraph_entry",
+        "subgraph_exit",
+        "task_ref",
+        "source_path",
+        "source_format",
+        "inline_items",
+        "limit",
     }
 )
 
@@ -85,6 +98,20 @@ class Node:
     #: a block that cannot change the number is otherwise indistinguishable from
     #: one that can, and an optimizer given both as equals will try the useless one.
     score_effect: str = "affects"
+    #: `fork`: the nodes whose branches start here. A fork reaches its branches
+    #: through this list rather than through edges, because one out-edge per branch
+    #: would schedule the successor as soon as the first branch finished.
+    targets: tuple[str, ...] = ()
+    #: `join`: the nodes this barrier waits for. Declared for the same reason.
+    sources: tuple[str, ...] = ()
+    #: `data`: the subgraph it runs once per item, and where the items come from.
+    subgraph_entry: str = ""
+    subgraph_exit: str = ""
+    task_ref: str = ""
+    source_path: str = ""
+    source_format: str = ""
+    inline_items: tuple[dict[str, Any], ...] = ()
+    limit: int = 0
 
     def __post_init__(self) -> None:
         if self.kind not in NODE_KINDS:
@@ -110,6 +137,20 @@ class Node:
             )
         if self.kind == "agent" and not self.prompt_template:
             raise GraphError(f"agent node {self.id!r} declares no prompt_template")
+        if self.kind == "fork" and not self.targets:
+            raise GraphError(f"fork node {self.id!r} declares no targets")
+        if self.kind == "join" and not self.sources:
+            raise GraphError(f"join node {self.id!r} declares no sources")
+        if self.kind == "data":
+            if not self.subgraph_entry or not self.subgraph_exit:
+                raise GraphError(
+                    f"data node {self.id!r} needs subgraph_entry and subgraph_exit, "
+                    "which say which part of the graph runs once per item"
+                )
+        if self.kind != "fork" and self.targets:
+            raise GraphError(f"node {self.id!r} is not a fork but declares targets")
+        if self.kind != "join" and self.sources:
+            raise GraphError(f"node {self.id!r} is not a join but declares sources")
         if self.max_iterations < 1:
             raise GraphError(f"node {self.id!r}: max_iterations must be >= 1")
         if self.score_effect not in ("affects", "none"):
@@ -140,6 +181,16 @@ class Node:
             "notes": self.notes,
             "blocking": self.blocking,
             "score_effect": self.score_effect,
+            **({"targets": list(self.targets)} if self.targets else {}),
+            **({"sources": list(self.sources)} if self.sources else {}),
+            **({"subgraph_entry": self.subgraph_entry} if self.subgraph_entry else {}),
+            **({"subgraph_exit": self.subgraph_exit} if self.subgraph_exit else {}),
+            **({"task_ref": self.task_ref} if self.task_ref else {}),
+            **({"source_path": self.source_path} if self.source_path else {}),
+            **({"source_format": self.source_format} if self.source_format else {}),
+            **({"inline_items": [dict(item) for item in self.inline_items]}
+               if self.inline_items else {}),
+            **({"limit": self.limit} if self.limit else {}),
         }
 
     @classmethod
@@ -166,13 +217,23 @@ class Node:
             notes=str(state.get("notes", "")),
             blocking=bool(state.get("blocking", True)),
             score_effect=str(state.get("score_effect", "affects")),
+            targets=tuple(state.get("targets") or ()),
+            sources=tuple(state.get("sources") or ()),
+            subgraph_entry=str(state.get("subgraph_entry", "")),
+            subgraph_exit=str(state.get("subgraph_exit", "")),
+            task_ref=str(state.get("task_ref", "")),
+            source_path=str(state.get("source_path", "")),
+            source_format=str(state.get("source_format", "")),
+            inline_items=tuple(state.get("inline_items") or ()),
+            limit=int(state.get("limit", 0)),
         )
 
     def with_field(self, field_name: str, value: Any) -> "Node":
         """A copy with one field replaced, refusing an unknown field."""
         if field_name not in _NODE_FIELDS:
             raise GraphError(f"node {self.id!r} has no field {field_name!r}")
-        if field_name in ("knobs", "reads", "writes", "produces", "tools") and isinstance(value, list):
+        if field_name in ("knobs", "reads", "writes", "produces", "tools", "targets",
+                          "sources", "inline_items") and isinstance(value, list):
             value = tuple(value)
         return replace(self, **{field_name: value})
 
@@ -254,6 +315,13 @@ class Graph:
         return sorted(n for n in self.nodes if not self.out_edges(n))
 
     def reachable(self) -> set[str]:
+        """Every node the walk can reach from the start, following fork fan-out.
+
+        A fork reaches its branches through `targets` rather than edges (one
+        out-edge per branch would let the successor run as soon as the first branch
+        finished), so a traversal that only follows edges would call every branch
+        unreachable.
+        """
         seen: set[str] = set()
         stack = [self.start] if self.start in self.nodes else []
         while stack:
@@ -262,6 +330,9 @@ class Graph:
                 continue
             seen.add(current)
             stack.extend(e.target for e in self.out_edges(current))
+            node = self.nodes.get(current)
+            if node is not None and node.kind == "fork":
+                stack.extend(node.targets)
         return seen
 
     def knob_consumers(self) -> dict[str, list[str]]:

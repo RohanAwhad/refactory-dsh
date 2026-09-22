@@ -142,9 +142,45 @@ def strategy_answer(name: str) -> str:
     })
 
 
+#: The answers create-v2's non-emit agents give, in the order the graph asks.
+RESEARCH_ANSWER = "research: the questions that matter, and what the checkout answers"
+PERSPECTIVES_ANSWER = "perspectives: the simplest thing that works, and the criteria"
+DESIGN_ANSWER = "a design"
+#: The three reviews and the overwatch pass. Overwatch states its verdict because
+#: the gate reads that line rather than trusting the review's own summary.
+REVIEW_ANSWERS = [
+    "health: the package imports, registers and smoke-scores",
+    "code review: the ops, nodes and knobs agree with the design",
+    "qa: every acceptance criterion has a check and they hold",
+    "VERDICT: PASS",
+]
+
+
+def create_script(name: str, emits: list[str]) -> list[str]:
+    """The whole answer script, with the given emit answers in the order used.
+
+    A reloop back to `emit` consumes the next one, so a test that expects a retry
+    passes two; a run whose validation never passes is scripted without the reviews,
+    because it never reaches them.
+    """
+    return [
+        RESEARCH_ANSWER,
+        PERSPECTIVES_ANSWER,
+        strategy_answer(name),
+        DESIGN_ANSWER,
+        *emits,
+        *REVIEW_ANSWERS,
+    ]
+
+
 def create_answers(name: str, files: dict[str, str]) -> list[str]:
-    """The three answers create-mode now needs: strategy, design, emit."""
-    return [strategy_answer(name), "a design", render(files)]
+    """Every answer create-v2's agents need, in the order the graph asks for them.
+
+    The three reviews and the overwatch pass answer as text; the executor writes
+    each to the file the node declares, and the QA synthesis and its gate read them
+    back. Overwatch must state its verdict line, because the gate reads it.
+    """
+    return create_script(name, [render(files)])
 
 
 def render(files: dict[str, str]) -> str:
