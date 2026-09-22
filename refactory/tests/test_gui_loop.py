@@ -392,3 +392,19 @@ def test_start_points_an_authoring_mode_at_its_own_action(tmp_path):
         start("default_pack/create", project=Path("."), runs_root=tmp_path / "runs")
     except ConsoleError as exc:
         assert "`create` action" in str(exc), str(exc)
+
+
+def test_the_catalogue_names_the_action_that_runs_each_mode():
+    """An authoring mode is run by its own verb, and the catalogue says so.
+
+    A caller that learns that by failing `start` picked the wrong tool from a
+    catalogue that could have told it.
+    """
+    from refactory_dsh.console import catalogue
+
+    entries = {entry["id"]: entry for entry in catalogue(project=Path("."))}
+    assert entries["default_pack/create"]["action"] == "create"
+    assert entries["default_pack/design"]["action"] == "design"
+    assert entries["default_pack/create"]["scored"] is False
+    assert entries["circle_packing/adaptive"]["action"] == "start"
+    assert entries["circle_packing/adaptive"]["scored"] is True

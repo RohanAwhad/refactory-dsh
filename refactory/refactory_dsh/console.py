@@ -109,6 +109,14 @@ def catalogue(*, project: Path | None = None) -> list[dict[str, Any]]:
                 "enabled": enabled,
                 "trust": package.trust,
                 "scored": mode.is_scored(),
+                # Which verb runs this mode. An unscored mode is an authoring mode:
+                # `start` refuses it, and a caller that has to fail to find that out
+                # is a caller that picked the wrong tool from the catalogue.
+                "action": (
+                    "start" if mode.is_scored()
+                    else entry["name"] if entry["name"] in ("create", "edit", "design")
+                    else "start"
+                ),
                 "guidance": described["guidance"],
                 "preferred_edits": described["preferred_edits"],
                 "parameters": described["knobs"],
