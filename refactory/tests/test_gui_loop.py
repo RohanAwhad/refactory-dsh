@@ -380,3 +380,15 @@ def test_the_design_review_reported_is_the_one_the_run_wrote(tmp_path):
 
     (work / "brief.json").write_text('{"name": "mine"}')
     assert _design_review(tmp_path, "mine") == "the other package's design"
+
+
+def test_start_points_an_authoring_mode_at_its_own_action(tmp_path):
+    """`create` is not a search target; the refusal says what to use instead."""
+    from refactory_dsh.console import ConsoleError, start
+
+    with pytest.raises(ConsoleError, match="authoring mode"):
+        start("default_pack/create", project=Path("."), runs_root=tmp_path / "runs")
+    try:
+        start("default_pack/create", project=Path("."), runs_root=tmp_path / "runs")
+    except ConsoleError as exc:
+        assert "`create` action" in str(exc), str(exc)

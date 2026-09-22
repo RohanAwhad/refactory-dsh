@@ -136,6 +136,22 @@ def start(
     start and walk away from.
     """
     project = Path(project or project_root())
+    # An authoring mode (`create`, `edit`, `design`) declares no `score()`, so the
+    # loop has no signal to search and refuses it. Said here rather than in the run's
+    # log, because a caller told "this mode is for authoring; use the create action"
+    # picks the right thing, and one told "the run exited 1" does not.
+    try:
+        _package, mode_class = registry.resolve(project, mode)
+    except Exception:
+        mode_class = None
+    if mode_class is not None and not mode_class().is_scored():
+        verb = mode.split("/", 1)[-1]
+        action = verb if verb in ("create", "edit", "design") else "the console's authoring verb"
+        raise ConsoleError(
+            f"{mode} declares no score(), so there is nothing for a run to search; "
+            f"it is an authoring mode — run it with the `{action}` action instead of "
+            "`start`"
+        )
     runs_root = Path(runs_root) if runs_root else project / RUNS_ROOT
     run_id = run_id or _run_id(mode)
     root = runs_root / run_id
