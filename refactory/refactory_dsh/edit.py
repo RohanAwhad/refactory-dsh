@@ -21,6 +21,7 @@ from typing import Any
 
 from refactory_dsh import registry
 from refactory_dsh.create import CreateConfig, CreateError, CreateMode, CreateResult, create
+from refactory_dsh.model import DEFAULT_TIMEOUT_S
 
 
 class EditMode(CreateMode):
@@ -185,6 +186,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--allow-regression", action="store_true")
     parser.add_argument("--workdir", default=".factory/edit")
     parser.add_argument("--model", default="")
+    parser.add_argument(
+        "--model-timeout", type=int, default=DEFAULT_TIMEOUT_S, dest="model_timeout_s",
+        help="seconds one model completion may take before it is called hung",
+    )
     args = parser.parse_args(argv)
 
     from refactory_dsh.model import DshModelClient
@@ -198,8 +203,9 @@ def main(argv: list[str] | None = None) -> int:
                 attempts=args.attempts,
                 allow_regression=args.allow_regression,
                 workdir=Path(args.workdir),
+                model_timeout_s=int(args.model_timeout_s),
             ),
-            client=DshModelClient(model=args.model),
+            client=DshModelClient(timeout_s=int(args.model_timeout_s), model=args.model),
         )
     except CreateError as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)

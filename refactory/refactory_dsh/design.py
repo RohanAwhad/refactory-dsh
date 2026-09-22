@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from refactory_dsh.create_ops import API
+from refactory_dsh.model import DEFAULT_TIMEOUT_S
 from refactory_dsh.nn import Graph, Knob, Mode, Node, RunResult
 
 OPS = "refactory_dsh.design_ops"
@@ -314,6 +315,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--attempts", type=int, default=2)
     parser.add_argument("--workdir", default=".factory/design")
     parser.add_argument("--model", default="")
+    parser.add_argument(
+        "--model-timeout", type=int, default=DEFAULT_TIMEOUT_S, dest="model_timeout_s",
+        help="seconds one model completion may take before it is called hung",
+    )
     args = parser.parse_args(argv)
 
     from refactory_dsh.model import DshModelClient
@@ -324,7 +329,7 @@ def main(argv: list[str] | None = None) -> int:
     mode.load_state_dict(state)
     result = mode.run(
         Path(args.workdir),
-        model=DshModelClient(model=args.model),
+        model=DshModelClient(timeout_s=int(args.model_timeout_s), model=args.model),
         task={"name": args.name, "brief": args.brief, "check": args.check},
     )
     if not result.exit_ok:

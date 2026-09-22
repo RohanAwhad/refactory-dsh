@@ -17,9 +17,14 @@ from pathlib import Path
 
 from refactory_dsh.paths import dsh_root, node_bin
 
-#: Wall-clock ceiling for one completion. Analysis of a handful of traces takes
-#: seconds; anything near this is a hung subprocess, not a slow model.
-DEFAULT_TIMEOUT_S = 300
+#: Wall-clock ceiling for one completion, before the subprocess is called hung.
+#:
+#: It is a hang detector rather than a budget: the authoring modes' agent nodes are
+#: tool-using tasks that write a package, run it and write up what happened, and one
+#: of them (`qa_director`, which builds and runs an adversarial probe) exceeded a
+#: five-minute ceiling in a live create run. A caller that knows its own nodes can
+#: set `timeout_s`; the default has to cover the slowest node a shipped mode declares.
+DEFAULT_TIMEOUT_S = 1800
 
 
 class DshModelClient:

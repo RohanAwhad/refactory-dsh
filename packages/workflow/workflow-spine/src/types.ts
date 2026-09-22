@@ -21,11 +21,17 @@ export interface DirectorExpansion {
 
 /** One workflow node. Loose on purpose: it mirrors an external JSON format. */
 export interface WorkflowNode {
+  /** The node's IR type, e.g. `AgentNode` or `FnNode`. Selects the behavior. */
   _type: string
+  /** The node id the graph keys it by, and the id its commands are told. */
   id: string
+  /** `AgentNode`: the agent role the node is declared with. */
   role?: string
+  /** The artifacts the node produces, as paths relative to the run directory. */
   writes?: string[]
+  /** The artifacts the node consumes; a subagent is told to read these. */
   reads?: string[]
+  /** `AgentNode`: the task handed to the driving agent, with `{{fact}}` slots. */
   prompt_template?: string
   /** `LLMNode`: the system prompt for the one-shot call. */
   system_prompt?: string
@@ -39,21 +45,35 @@ export interface WorkflowNode {
   max_turns?: number
   /** `GateNode`: the cap for this gate's reloop edge. */
   max_iterations?: number
+  /** `FnNode` / `Study`: prose the driving agent follows when it runs the node. */
   content?: string
+  /** `FnNode` / `Study`: the shell command the spine runs for the node. */
   command?: string
+  /** `GateNode`: who answers it — its evaluator, a person, or the driving agent. */
   evaluator_type?: 'fn' | 'user' | 'agent'
+  /** `GateNode` with `evaluator_type` `fn`: the command whose last stdout line is the verdict. */
   evaluator_command?: string
+  /** `GateNode`: what the person or the driving agent is asked. */
   gate_prompt?: string
+  /** `ForkNode`: the branch entry nodes, which are reached through this list and not through edges. */
   targets?: string[]
+  /** `JoinNode`: the branch exits this barrier waits for. */
   sources?: string[]
+  /** `AgentNode`: the annotation that lets a director hot-plug its planned children. */
   expand?: DirectorExpansion
-  /** `DataNode`: the resolved data source and the subgraph it iterates. */
+  /** `DataNode`: the Task binding that supplies the items and judges each pass. */
   task_ref?: string
+  /** `DataNode`: the item source read as `source_format`, when the items are not inline. */
   source_path?: string
+  /** `DataNode`: how to read `source_path` — `directory`, `jsonl`, or `csv`. */
   source_format?: string
+  /** `DataNode`: the items declared in the graph itself, each with an `id`. */
   inline_items?: Array<Record<string, unknown>>
+  /** `DataNode`: the first node of the subgraph run once per item. */
   subgraph_entry?: string
+  /** `DataNode`: the subgraph's last node, included in every pass. */
   subgraph_exit?: string
+  /** `DataNode`: the most items to iterate, after the source is read. */
   limit?: number
   /** `SelectionNode`: the selection strategy. */
   strategy?: string
@@ -62,7 +82,9 @@ export interface WorkflowNode {
 
 /** One directed edge with an optional gate condition label. */
 export interface WorkflowEdge {
+  /** The node the walk leaves. */
   source: string
+  /** The node the walk arrives at. */
   target: string
   /**
    * The verdict label that routes along this edge, or null/absent for the
@@ -75,9 +97,14 @@ export interface WorkflowEdge {
 
 /** A workflow graph — the exact shape of refactory's `Workflow.to_dict()`. */
 export interface WorkflowGraph {
+  /** The run's name, used in status and in the spine's own reporting. */
   name: string
+  /** The node the cursor starts at. */
   start_node: string
+  /** The directory the mode was lowered from, for a reader of the graph. */
   project_dir?: string
+  /** Every node, keyed by the id it also declares. */
   nodes: Record<string, WorkflowNode>
+  /** Every edge, with a gate's verdict labels as conditions. */
   edges: WorkflowEdge[]
 }

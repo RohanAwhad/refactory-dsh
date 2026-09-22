@@ -25,6 +25,7 @@ from typing import Any
 
 from refactory_dsh import registry
 from refactory_dsh.create_ops import STRATEGY_SCHEMA
+from refactory_dsh.model import DEFAULT_TIMEOUT_S
 from refactory_dsh.nn import Graph, Knob, Mode, Node, RunResult
 
 OPS = "refactory_dsh.create_ops"
@@ -410,6 +411,10 @@ class CreateConfig:
     workdir: Path = Path(".factory/create")
     max_steps: int = 200
     seed: int = 0
+    #: Wall-clock ceiling for one model completion. A create-v2 node writes and runs
+    #: code, so the ceiling exists to catch a hung subprocess rather than to bound the
+    #: work; raise it for a slower route or a larger package.
+    model_timeout_s: int = DEFAULT_TIMEOUT_S
     #: A Task class the produced mode must satisfy (create-v2's `--task`).
     task_ref: str = ""
     #: Whether the produced graph is a DataNode iterating a subgraph per item.
@@ -524,6 +529,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--workdir", default=".factory/create")
     parser.add_argument("--model", default="")
+    parser.add_argument(
+        "--model-timeout", type=int, default=DEFAULT_TIMEOUT_S, dest="model_timeout_s",
+        help="seconds one model completion may take before it is called hung",
+    )
     args = parser.parse_args(argv)
 
     from refactory_dsh.model import DshModelClient
@@ -538,8 +547,9 @@ def main(argv: list[str] | None = None) -> int:
                 workdir=Path(args.workdir),
                 data_node=bool(args.data_node),
                 task_ref=str(args.task_ref or ""),
+                model_timeout_s=int(args.model_timeout_s),
             ),
-            client=DshModelClient(model=args.model),
+            client=DshModelClient(timeout_s=int(args.model_timeout_s), model=args.model),
         )
     except CreateError as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
