@@ -567,6 +567,39 @@
       "commit": "074c28bab0",
       "observed": "25 passed (test_loop.py); full suite 686 passed, 1 skipped",
       "evidence": "report.json now carries `unevaluated` (the ids installed and never run) and report.md names them in the inner-runs section. Both ways: the new test failed against the pre-accounting code with KeyError: 'unevaluated' and passes here. The behavioural attempt is in the history as e7f8d4113b and its revert as 074c28bab0, with the reasoning on the issue."
+    },
+    {
+      "id": "v2-modes",
+      "issue": 58,
+      "title": "remote-factory's create-v2 and design-v2 are the default package's modes",
+      "why": "The default package's create/edit/design were a single pass; create-v2 and design-v2 add a research director, a strategy director with intent coverage, a person's approval before anything is built, three reviews in parallel, and an overwatch pass that audits their evidence. None of it could be expressed: the vocabulary had three node kinds and no barrier or iteration.",
+      "verify": "pytest refactory/tests/test_default_package.py -q",
+      "status": "done",
+      "commit": "a0dc7e85ec",
+      "observed": "25 passed (test_default_package.py); both modes lower to IR and pass the IR validator, and DSH's own validateGraph accepts them with ForkNode/JoinNode intact.",
+      "evidence": "meta_pack became default_pack; the vocabulary gained fork/join/data with lowering, V12 and fork/subgraph reachability; the walker runs forks and joins to the same barrier. Live real-model runs of both modes executed their v2 phases (research director with five research subagents, strategy director, synthesize_strategy, design-v2's design_doc) and refused at the person's gate rather than approving their own plan. The handoff carries the survey of remote-factory's other fourteen workflows and why the benchmark harnesses are a Task package rather than ported modes."
+    },
+    {
+      "id": "dataset-task",
+      "issue": 59,
+      "title": "A data node iterates and a Task binding supplies and judges its items",
+      "why": "The dataset half of the port: a mode could declare neither an iteration nor a binding, and `--data-node`/`--task` were prompt text with no path that set them and no check that they were honoured.",
+      "verify": "pytest refactory/tests/test_executor.py -q",
+      "status": "done",
+      "commit": "ed1381bda4",
+      "observed": "21 passed (test_executor.py); registry smoke of a Task-bound probe mode scores 0.75, the mean of the Task's own per-item verdicts.",
+      "evidence": "The walker runs a data node's subgraph once per item with the item on disk (current_item.json); load_items handles inline items, directory/jsonl/csv sources and the node's limit; refactory_dsh/task.py is the Task protocol (instances/setup/prompt/verify, resolved by module:Class or a registered name); a bound node takes the Task's items and records item_scores. Both directives are reachable (create --data-node/--task, the console verb, the tool's create action) and enforced: verify_sandboxed takes requires_data_node/requires_task_ref and the validate gate refuses a package that ignored either. Left undone and recorded on the issue: the DSH side, where the spine still hands a data node to the driving agent."
+    },
+    {
+      "id": "ceo-flow",
+      "issue": 49,
+      "title": "Asking the CEO reaches list, choose, start and read",
+      "why": "The conversation-first half of the picker issue: a person should be able to ask in words and have the CEO use the right tool, without the tool having to fail to teach it.",
+      "verify": "pnpm exec vitest run packages/refactory/tool-refactory/tests/tool-refactory.spec.ts",
+      "status": "done",
+      "commit": "9bf0e8446b",
+      "observed": "44 passed (tool-refactory.spec.ts)",
+      "evidence": "Verified in the real GUI: one plain-language ask made the CEO call modes, list the counting modes, call start with the mode and settings, and return the run id, which finished at best 1.0. The catalogue now carries the action that runs each mode (start, or the authoring verb), the tool's description says which action to use and in what order, and start refuses an authoring mode synchronously naming the verb to use instead. The picker widget itself is not built and remains the issue's open half."
     }
   ],
   "verification": {
