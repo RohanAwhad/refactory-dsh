@@ -1031,6 +1031,8 @@ uv run refactory steer --run &lt;id&gt; --verdict gate_strategy=proceed</code></
       <table>
         <thead><tr><th>what</th><th>where</th></tr></thead>
         <tbody>
+          <tr><td>the entry point</td><td><code>refactory/refactory_dsh/cli.py</code> — one verb per question, dispatching onto the module that owns it</td></tr>
+          <tr><td>the install</td><td><code>pyproject.toml</code> + <code>uv.lock</code> (`uv sync`), <code>install.sh</code>, <code>refactory-dsh</code></td></tr>
           <tr><td>the modes</td><td><code>refactory/refactory_packages/</code> — <code>default_pack</code> is the authoring one</td></tr>
           <tr><td>the walker (debug runtime)</td><td><code>refactory/refactory_dsh/nn/</code> — graph, knobs, validation, executor</td></tr>
           <tr><td>the outer loop</td><td><code>refactory/refactory_dsh/loop.py</code>, <code>optim/</code>, <code>strategies.py</code></td></tr>
@@ -1040,6 +1042,8 @@ uv run refactory steer --run &lt;id&gt; --verdict gate_strategy=proceed</code></
           <tr><td>the CEO's tool</td><td><code>packages/refactory/tool-refactory/</code></td></tr>
           <tr><td>the GUI panel</td><td><code>packages/client/ui-refactory/</code> + <code>packages/refactory/refactory-console/</code></td></tr>
           <tr><td>the tutorials, in prose</td><td><code>refactory/docs/tutorials/</code></td></tr>
+          <tr><td>the documented commands, and their checker</td><td><code>refactory/refactory_dsh/tools/recipes.py</code> + <code>check_recipes.py</code></td></tr>
+          <tr><td>the generators</td><td><code>refactory/refactory_dsh/tools/gen_tutorial.py</code>, <code>gen_api_reference.py</code></td></tr>
           <tr><td>datasets and Tasks</td><td><code>refactory/docs/datasets.md</code></td></tr>
         </tbody>
       </table>
