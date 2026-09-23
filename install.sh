@@ -48,24 +48,40 @@ if [ "$NODE_MAJOR" -lt 22 ] || { [ "$NODE_MAJOR" -eq 22 ] && [ "$NODE_MINOR" -lt
   exit 1
 fi
 echo "  node:  $(node --version)"
+# The even releases are the ones this workspace is tested on. An odd major is a
+# current release, not LTS, and it may be younger than the packages here — worth
+# saying before a build failure rather than after one.
+if [ $((NODE_MAJOR % 2)) -eq 1 ] && [ "$NODE_MAJOR" -gt 22 ]; then
+  echo "  note:  node $(node --version) is a current release; 22 and 24 are what this workspace is tested on." >&2
+  echo "         If the build below fails, try: nvm install 22 && nvm use 22" >&2
+fi
 
-# One way to run pnpm, whichever is available: the shim if it is on PATH, else
-# corepack running package.json's pin directly.
+# The pnpm version this workspace pins, read from its own manifest.
+PNPM_PIN="$(sed -n 's/.*"packageManager"[[:space:]]*:[[:space:]]*"pnpm@\([^"]*\)".*/\1/p' "$HERE/package.json" | head -1)"
+PNPM_PIN="${PNPM_PIN:-latest}"
+
+# One way to run pnpm, out of three, in the order that needs the least from the
+# reader: the shim if it is on PATH; else corepack, which runs the pin without
+# anything being enabled; else npx, which needs only the npm that ships with Node.
+# Corepack is *not* bundled from Node 25 on, so npx is the route that always exists.
 PNPM=(pnpm)
 if ! command -v pnpm >/dev/null 2>&1; then
   if command -v corepack >/dev/null 2>&1; then
-    echo "  pnpm:  not on PATH; using corepack with package.json's pin"
+    echo "  pnpm:  not on PATH; using corepack with the pinned pnpm@$PNPM_PIN"
     PNPM=(corepack pnpm)
+  elif command -v npx >/dev/null 2>&1; then
+    echo "  pnpm:  neither pnpm nor corepack is on PATH; using npx to run pnpm@$PNPM_PIN"
+    PNPM=(npx --yes "pnpm@$PNPM_PIN")
   else
-    echo "  error: neither pnpm nor corepack is on PATH. With Node >=16.9 corepack is" >&2
-    echo "         bundled, so this is usually a PATH problem. Either:" >&2
-    echo "           corepack enable pnpm          # then re-run this script" >&2
-    echo "           npm install -g pnpm@11.7.0    # or install pnpm globally" >&2
+    echo "  error: no way to run pnpm: neither pnpm, nor corepack, nor npx is on PATH." >&2
+    echo "         Install it once, then run this script again:" >&2
+    echo "           npm install -g pnpm@$PNPM_PIN" >&2
     exit 1
   fi
 fi
 "${PNPM[@]}" --version >/dev/null 2>&1 || {
-  echo "  error: \`${PNPM[*]}\` did not run. Try: corepack install -g pnpm@11.7.0" >&2
+  echo "  error: \`${PNPM[*]}\` did not run. Install it once with:" >&2
+  echo "           npm install -g pnpm@$PNPM_PIN" >&2
   exit 1
 }
 
