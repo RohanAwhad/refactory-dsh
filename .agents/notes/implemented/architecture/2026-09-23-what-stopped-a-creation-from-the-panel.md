@@ -16,6 +16,10 @@ Creating a mode from the Web GUI failed with `create failed (exit 2).` and nothi
 
 **The research stage was never checked.** `research-plan.json`'s only contract was `writes=("research-plan.json",)`, which any bytes satisfy. Two independent runs wrote a prose status message about subagents "running in the background" and left `research/` empty, and the design proceeded on unverified assumptions (issue #63). The reason the subagents never wrote anything is the one that mattered: a node's model call runs on the one-shot profile, whose spawn subagent tool defaults to `backgroundMode: continuable` — so the agent ended its turn with its researchers still running, and the node's output was a sentence about them.
 
+**The panel could optimize a mode but not use one.** The tool's only execute action was `start`, which is the outer loop; `refactory run` existed as a CLI verb with no console verb and therefore no tool action, so a person who had just created a mode could not run it once and see what it did.
+
+**Nothing checked that the mode did what the brief asked.** `validate` proved a package was structurally a mode: it imports, declares a valid graph, and satisfies the optional bindings it was given. A brief whose entire subject was a Python package produced a mode that took no package at all — it built a fixture hardcoded in `ops.py` — and passed every check. The pipeline had no representation of "the brief says this mode consumes X".
+
 **A node's model call ran in the checkout.** The reviewing nodes are completions that spawn an agent with tools, and the completion ran with the checkout as its working directory, so those agents wrote `reviews/*.md` at the repository root while the run's own `reviews/` stayed empty. The QA synthesis reads the run directory, so it synthesized no reviews at all, and the overwatch gate sent the build back to `emit` — a reloop that cost fifteen minutes and looked like a model-quality problem. Found by the run that proved the other five fixes.
 
 **Every creation shared one work directory.** `--workdir` defaulted to the fixed `.factory/create`, so a second run wrote its brief, research and strategy over the first one's, and a cancelled run's leftovers were what the next run read (issue #64).
@@ -31,6 +35,10 @@ Creating a mode from the Web GUI failed with `create failed (exit 2).` and nothi
 **A node's model call cannot background its own work.** `DshModelClient` runs the one-shot profile with a checked-in overlay (`refactory_dsh/patches/agent-node.yml`) that patches the spawn subagent tool to `backgroundMode: one-shot` and `enableRunInBackground: false` — the same decision the graph profile already made for the CEO, for the same reason. One node is one completion whose answer is the node's artifact.
 
 **The research stage is validated, and its findings must exist.** `record_findings` writes each direction's finding to `research/<slug>.md` when no subagent left one, and `gate_research` requires a JSON array of `{focus, slug, finding}` with three to five non-empty, uniquely-slugged entries whose files are on disk. A failure writes `research-review.txt`, sets `research_review`, and reloops into the prompt that reads it — exactly what the design review does for the strategy.
+
+**The tool can use a mode once.** A `run` console verb forwards to the interactive entry point (`refactory run`: the mode on DSH, the person answering any gate) and the tool gained a matching action, named like the CLI's rather than like the optimizer's. The one-shot runner prints its report from the child process — the terminal's stdout, not the console's buffer — so the console reads the run directory back and reports where the run is, how it ended and what it recorded.
+
+**The brief's inputs are declarable, and the mode must have a way to receive them.** `--input NAME` (`--knob requires_input=…` from `ceo`, `inputs` from the tool) lists what the brief says the mode operates on. `validate` refuses a mode with no declared knob named after an input and no read under that name, the reason goes back into the emit prompt, and the design and emit prompts are told the list — the first bullet of the issue, which is the only half that can be checked mechanically. Whether the work *satisfies* the brief remains a review judgement: the strategy review already refuses a design that drops an ask, and the reviews read the brief.
 
 **A node's model call runs in the node's own run directory.** `DshModelClient.complete` takes the directory to run in, the walker passes the node's run directory, and a caller with none gets the scratch directory rather than the checkout; the launcher is named absolutely now that the child's working directory is not the repository. The vendored `ModelClient` protocol stays text in, text out, so a client without the argument is asked without it.
 
@@ -55,6 +63,10 @@ The library READMEs and the authoring tutorials say what changed where a reader 
 **Raise the timeout and leave the rest alone.** Rejected: the killed run in the report also had no way to see how far it had got, and the next thing a person asks after "it timed out" is "where was it".
 
 **Make the tool start a background authoring run and return a run id.** Deferred, not rejected: it is the honest shape for a twenty-minute call, and it needs a job handle the console does not have yet. The run directory is the handle this change provides (`status --run <dir>`), and a resumed run is the next step.
+
+**Guess the brief's inputs from its prose.** Rejected: a checker that reads English would pass a mode whose prose matched and fail one that said the same thing differently, and the failure would be unactionable. The person declares the name; the check is mechanical.
+
+**Let `run` stream the child's output through the console's buffer.** Rejected: the console's contract is one JSON object on stdout, and the runner writes its report on the child's inherited stdout — capturing it would take the report away from a person running the console by hand. The run directory answers the same question durably.
 
 **Validate the research plan at the prompt only.** Rejected: the prompt already asked for the array, and the model answered with prose twice. The gate is what makes the contract real, and it costs nothing.
 

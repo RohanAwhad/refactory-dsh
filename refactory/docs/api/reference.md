@@ -530,7 +530,7 @@ Running code we did not write.
 | function | `scrub` | `(env: 'dict[str, str] \| None' = None) -> 'dict[str, str]'` |
 | function | `smoke` | `(identifier: 'str', workdir: 'Path', *, project: 'Path \| None' = None, model: 'bool' = False, **kwargs: 'Any') -> 'SandboxResult'` |
 | function | `usage` | `() -> 'str'` |
-| function | `verify_sandboxed` | `(name: 'str', *, project: 'Path \| None' = None, requires_data_node: 'bool' = False, requires_task_ref: 'str' = '', **kwargs: 'Any') -> 'SandboxResult'` |
+| function | `verify_sandboxed` | `(name: 'str', *, project: 'Path \| None' = None, requires_data_node: 'bool' = False, requires_task_ref: 'str' = '', requires_input: 'tuple[str, ...]' = (), **kwargs: 'Any') -> 'SandboxResult'` |
 
 - **`SandboxError`** — A sandboxed run could not be carried out.
 - **`SandboxResult`** — What a sandboxed run produced.
@@ -555,7 +555,7 @@ create-mode: a mode whose output is a whole package.
 
 | kind | name | signature |
 |---|---|---|
-| class | `CreateConfig` | `(name: 'str', brief: 'str', extends: 'str' = '', attempts: 'int' = 3, workdir: 'Path' = PosixPath('.factory/create'), max_steps: 'int' = 200, seed: 'int' = 0, model_timeout_s: 'int' = 1800, task_ref: 'str' = '', data_node: 'bool' = False, verdicts: 'dict[str, str]' = <factory>) -> None` |
+| class | `CreateConfig` | `(name: 'str', brief: 'str', extends: 'str' = '', attempts: 'int' = 3, workdir: 'Path' = PosixPath('.factory/create'), max_steps: 'int' = 200, seed: 'int' = 0, model_timeout_s: 'int' = 1800, task_ref: 'str' = '', requires_input: 'str' = '', data_node: 'bool' = False, verdicts: 'dict[str, str]' = <factory>) -> None` |
 | class | `CreateError` | `` |
 | class | `CreateMode` | `(state: 'dict[str, Any] \| None' = None) -> 'None'` |
 | class | `CreateResult` | `(package: 'str', mode: 'str', path: 'Path', files: 'list[str]' = <factory>, smoke_score: 'float \| None' = None, iterations: 'int' = 0, duration_s: 'float' = 0.0) -> None` |
@@ -582,7 +582,7 @@ Revise an existing mode from a brief.
 
 | kind | name | signature |
 |---|---|---|
-| class | `EditConfig` | `(name: 'str', brief: 'str', extends: 'str' = '', attempts: 'int' = 3, workdir: 'Path' = PosixPath('.factory/create'), max_steps: 'int' = 200, seed: 'int' = 0, model_timeout_s: 'int' = 1800, task_ref: 'str' = '', data_node: 'bool' = False, verdicts: 'dict[str, str]' = <factory>, mode: 'str' = '', allow_regression: 'bool' = False) -> None` |
+| class | `EditConfig` | `(name: 'str', brief: 'str', extends: 'str' = '', attempts: 'int' = 3, workdir: 'Path' = PosixPath('.factory/create'), max_steps: 'int' = 200, seed: 'int' = 0, model_timeout_s: 'int' = 1800, task_ref: 'str' = '', requires_input: 'str' = '', data_node: 'bool' = False, verdicts: 'dict[str, str]' = <factory>, mode: 'str' = '', allow_regression: 'bool' = False) -> None` |
 | class | `EditMode` | `(state: 'dict[str, Any] \| None' = None) -> 'None'` |
 | function | `edit` | `(config: 'EditConfig', client: 'Any' = None) -> 'dict[str, Any]'` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |

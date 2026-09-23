@@ -116,8 +116,8 @@ describe('dsh-tool-refactory', () => {
     expect(schema).toBeDefined()
     const action = (schema!.parameters as { properties: Record<string, { enum?: string[] }> }).properties.action
     expect(action?.enum).toEqual([
-      'modes', 'strategies', 'runs', 'start', 'status', 'artifacts', 'leaderboard', 'candidate',
-      'steer', 'best', 'adopt', 'registry', 'create', 'edit', 'design', 'stop',
+      'modes', 'strategies', 'runs', 'start', 'run', 'status', 'artifacts', 'leaderboard',
+      'candidate', 'steer', 'best', 'adopt', 'registry', 'create', 'edit', 'design', 'stop',
     ])
   })
 
@@ -601,5 +601,76 @@ describe('authoring from the Web GUI', () => {
     // inner runs, one overwatch reloop), so the ceiling has to clear that with room
     // for one more reloop.
     expect(CONSOLE_DEFAULTS.timeoutMs).toBeGreaterThanOrEqual(90 * 60 * 1000)
+  })
+})
+
+describe('the brief\'s declared inputs', () => {
+  it('forwards each input the caller names to the creation', async () => {
+    // The validate gate refuses a mode with no way to receive an input the brief
+    // stated, so the directive has to survive the hop.
+    const { ctx, subprocess } = await setup()
+    subprocess.handler = () => runResult(JSON.stringify({ ok: true, exit_code: 0, result: {} }))
+    await call(ctx, {
+      action: 'create',
+      name: 'buildroot_pack',
+      brief: 'match a wheel against a package',
+      approve: ['gate_strategy=proceed'],
+      inputs: ['package', 'reference_wheel'],
+    })
+    const argv = subprocess.spawns[0]!.argv
+    expect(argv.filter(part => part === '--input')).toHaveLength(2)
+    expect(argv).toContain('package')
+    expect(argv).toContain('reference_wheel')
+  })
+})
+
+describe('running a mode once from the panel', () => {
+  it('forwards a single run to the console\'s run verb, with the gate answers', async () => {
+    // `start` is the optimizer; a person who has just created a mode needs to *use*
+    // it, and the console had no verb for that at all.
+    const { ctx, subprocess } = await setup()
+    subprocess.handler = () => runResult(JSON.stringify({ ok: true, exit_code: 0, result: {} }))
+    await call(ctx, {
+      action: 'run',
+      mode: 'buildroot_pack/build',
+      intent: 'discover the recipe',
+      approve: ['approve=proceed'],
+      model: 'deepseek-v4-pro',
+    })
+    const argv = subprocess.spawns[0]!.argv
+    expect(argv.slice(0, 4)).toEqual([
+      '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'run',
+    ])
+    expect(argv).toContain('buildroot_pack/build')
+    expect(argv[argv.indexOf('--intent') + 1]).toBe('discover the recipe')
+    expect(argv[argv.indexOf('--verdict') + 1]).toBe('approve=proceed')
+    expect(argv[argv.indexOf('--model') + 1]).toBe('deepseek-v4-pro')
+  })
+
+  it('reports where a single run left its artifacts and what it recorded', async () => {
+    const { ctx, subprocess } = await setup()
+    subprocess.handler = () => runResult(JSON.stringify({
+      ok: true,
+      exit_code: 0,
+      result: { output: '' },
+      run: {
+        run_id: 'buildroot_pack-build',
+        state: 'finished',
+        workdir: '/repo/.factory/interactive/buildroot_pack-build',
+        facts: { name: 'buildroot_pack', closeness: 1.0 },
+      },
+    }))
+    const rendered = text(await call(ctx, { action: 'run', mode: 'buildroot_pack/build' }))
+    expect(rendered).toContain('Ran buildroot_pack/build')
+    expect(rendered).toContain('/repo/.factory/interactive/buildroot_pack-build')
+    expect(rendered).toContain('finished')
+    expect(rendered).toContain('closeness: 1')
+  })
+
+  it('needs a mode to run', async () => {
+    const { ctx } = await setup()
+    const failed = await call(ctx, { action: 'run' })
+    expect(failed.isError).toBe(true)
+    expect(text(failed)).toContain('action "run" needs `mode`')
   })
 })

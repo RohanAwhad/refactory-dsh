@@ -505,3 +505,45 @@ def test_the_console_forwards_a_workdir_to_an_authoring_run(monkeypatch, capsys)
         argv = seen[-1]
         assert "--workdir" in argv and "/tmp/somewhere" in argv, verb
     capsys.readouterr()
+
+
+# ── running a mode once from the panel (#66) ───────────────────────────────
+#
+# The tool's only "execute this mode" action was `start`, which is the outer loop:
+# from the GUI a person could create a mode and then only optimize it, never *use*
+# it. `refactory run` existed as a CLI verb with no console verb and therefore no
+# tool action.
+
+
+def test_the_console_forwards_a_single_run_of_a_mode(monkeypatch, capsys):
+    from refactory_dsh import console
+
+    seen: list[tuple[str, list[str]]] = []
+    monkeypatch.setattr(
+        console, "_forward",
+        lambda module, argv: (seen.append((module, argv)), {
+            "verb": module, "exit_code": 0, "ok": True, "result": {"final": "done"},
+        })[1],
+    )
+    code = console.main([
+        "run", "buildroot_pack/build", "--intent", "discover the recipe",
+        "--knob", "rounds=2", "--verdict", "approve=proceed",
+        "--workdir", "/tmp/somewhere", "--timeout", "60",
+    ])
+    assert code == 0
+    module, argv = seen[-1]
+    assert module == "interactive", "a single run is the interactive entry point"
+    assert argv[0] == "buildroot_pack/build"
+    assert argv[argv.index("--intent") + 1] == "discover the recipe"
+    assert argv[argv.index("--knob") + 1] == "rounds=2"
+    assert argv[argv.index("--approve") + 1] == "approve=proceed"
+    assert argv[argv.index("--workdir") + 1] == "/tmp/somewhere"
+    assert argv[argv.index("--timeout") + 1] == "60"
+    capsys.readouterr()
+
+
+def test_a_single_run_needs_the_mode_to_run():
+    from refactory_dsh import console
+
+    with pytest.raises(SystemExit):
+        console.main(["run"])

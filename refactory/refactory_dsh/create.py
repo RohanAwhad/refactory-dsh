@@ -74,6 +74,15 @@ class CreateMode(Mode):
                 description="a Task class the produced mode must satisfy, as "
                             "`module:Class` or a registered name (empty for none)",
             ),
+            # What the brief says the mode operates on. `validate` cannot read the
+            # brief, so this is how "the mode must take a Python package" becomes
+            # something checked instead of something assumed.
+            "requires_input": Knob(
+                "", "str",
+                description="the inputs the produced mode must accept, comma-separated "
+                            "(e.g. `package` or `source_tree`); each must be received "
+                            "as a knob named after it or read from the run directory",
+            ),
             "data_node": Knob(
                 False, "bool",
                 description="build the package as a DataNode that runs its subgraph "
@@ -115,10 +124,11 @@ class CreateMode(Mode):
             # What to build (`name`, `brief`) and create-v2's two directives
             # (`task_ref`, `data_node`) are read here and published as facts. The
             # walker passes the first two in the run's task; on DSH they are knobs.
-            knobs=("name", "brief", "task_ref", "data_node", "revision_of"),
+            knobs=("name", "brief", "task_ref", "data_node", "revision_of", "requires_input"),
             writes=("brief.json",),
             produces=("name", "brief", "extends", "revision_of", "intent", "validation",
-                      "design_review", "api", "reference", "task_ref", "data_node"),
+                      "design_review", "api", "reference", "task_ref", "data_node",
+                      "requires_input"),
             notes="read the brief and publish it to the prompts",
         ))
         graph.add(Node(
@@ -253,6 +263,7 @@ class CreateMode(Mode):
                 "operation, every node, every knob, and what score() reads. Be concrete "
                 "and complete — the next step writes the code from your design alone.\n\n"
                 "## The approach that was chosen\n{{strategy}}\n\n"
+                "## What this mode must take as input\n{{requires_input}}\n"
                 "## API\n{{api}}\n\n"
                 "## Reference package\n{{reference}}\n"
             ),
@@ -267,6 +278,7 @@ class CreateMode(Mode):
                 "Write the package `{{name}}` as complete, runnable Python.\n\n"
                 "Brief: {{brief}}\n\n"
                 "Design:\n{{design}}\n\n"
+                "## What this mode must take as input\n{{requires_input}}\n\n"
                 "## API\n{{api}}\n\n"
                 "## Reference package\n{{reference}}\n\n"
                 "## What went wrong last time\n{{validation}}\n\n"
@@ -483,6 +495,10 @@ class CreateConfig:
     model_timeout_s: int = DEFAULT_TIMEOUT_S
     #: A Task class the produced mode must satisfy (create-v2's `--task`).
     task_ref: str = ""
+    #: The inputs the brief says the mode takes, comma-separated. Checked against the
+    #: produced mode's knobs and reads, so a mode that hardcodes a fixture instead of
+    #: accepting the input is refused rather than shipped.
+    requires_input: str = ""
     #: Whether the produced graph is a DataNode iterating a subgraph per item.
     data_node: bool = False
     #: Verdicts for gates a person answers. `gate_strategy` is one, so a headless
@@ -540,6 +556,7 @@ def create(config: CreateConfig, client: Any = None) -> CreateResult:
     state["knobs"]["attempts"]["value"] = int(config.attempts)
     state["knobs"]["task_ref"]["value"] = config.task_ref
     state["knobs"]["data_node"]["value"] = bool(config.data_node)
+    state["knobs"]["requires_input"]["value"] = config.requires_input
     mode.load_state_dict(state)
 
     workdir = Path(config.workdir)
@@ -553,6 +570,7 @@ def create(config: CreateConfig, client: Any = None) -> CreateResult:
             "extends": config.extends,
             "task_ref": config.task_ref,
             "data_node": config.data_node,
+            "requires_input": config.requires_input,
         },
         max_steps=config.max_steps,
         verdicts=dict(config.verdicts),
@@ -609,6 +627,12 @@ def main(argv: list[str] | None = None) -> int:
         help="build the package as a DataNode that runs its subgraph once per item",
     )
     parser.add_argument(
+        "--input", action="append", default=[], metavar="NAME", dest="inputs",
+        help="an input the produced mode must accept, named the way a knob or a file "
+             "would be (repeatable). The mode must receive it as a knob or read a file "
+             "under that name, or validation refuses it",
+    )
+    parser.add_argument(
         "--task", default=None, metavar="TASK_REF", dest="task_ref",
         help="a Task class (module:Class or a registered name) the produced mode must satisfy",
     )
@@ -642,6 +666,7 @@ def main(argv: list[str] | None = None) -> int:
                 workdir=Path(args.workdir or f".factory/create/{args.name}"),
                 data_node=bool(args.data_node),
                 task_ref=str(args.task_ref or ""),
+                requires_input=", ".join(args.inputs),
                 model_timeout_s=int(args.model_timeout_s),
                 verdicts=parse_verdicts(args.verdict),
             ),

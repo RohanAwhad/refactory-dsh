@@ -159,7 +159,7 @@ uv run refactory package add|import|remove|enable|disable …
 | `--revise <包>/<模式>` | 仅 edit：被修订的那个模式 |
 | `--model <id>` | 这次运行用的模型，例如 `deepseek-v4-pro`（默认：你设置里的默认） |
 | `--provider <路由>` | 那个模型所在的服务路由，例如 `deepseek-official` 或 `openai` |
-| `--knob name=value` | 为这次运行设置创作模式的一个旋钮，例如 `allow_regression=1` 接受一个分数更低的修订 |
+| `--knob name=value` | 为这次运行设置创作模式的一个旋钮，例如 `allow_regression=1` 接受一个分数更低的修订，或 `requires_input=package` 要求产出的模式接受一个包 |
 | `--approve <门>=<值>` | 事先给出某道门的答案，例如 `gate_strategy=proceed`，用于无人值守的运行 |
 | `--workdir <目录>` | 运行的证据落在哪里（默认 `.factory/interactive/<包>-<模式>`） |
 
@@ -292,6 +292,7 @@ dsh web: http://127.0.0.1:3081/?token=<per-process token>
 | *"这次运行是为了让计数正好落点；步子留小点。"* | `steer`：这句话进入运行的意图账本 |
 | *"创建一个用 agent 写文案并检查它的模式。"* | `create`，和 `ceo --mode create` 同一个创作模式——CEO 会先请你批准计划，并把你的回答随调用一起传过去 |
 | *"那次创作进行到哪了？"* | 对运行目录（`.factory/create/<名字>`）用 `status`，它会报出创作运行自己的逐节点进度 |
+| *"把那个模式跑一次给我看看。"* | `run`，就是 CLI 的 `refactory run`：它在 DSH 上使用这个模式，并报出运行目录与它记录下来的东西 |
 | *"把包列出来，然后 disable annealing_pack。"* | `registry` 先 `list`，再 `disable` |
 
 <a id="gui-gates"></a>

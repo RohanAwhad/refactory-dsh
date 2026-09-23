@@ -33,6 +33,15 @@ than approving its own plan. Drop the flag and the run stops at that gate with t
 message saying so. `uv run refactory steer --run <id> --verdict gate_strategy=proceed` records the
 same answer on a paused run, and a resumed run replays it instead of asking again.
 
+**A brief that is *about* something the caller supplies should say so.** `--knob
+requires_input=package` (or `--input package` on `python -m refactory_dsh.create`, and
+`inputs` on the tool's `create` action) declares what the mode must take as input.
+`validate` then refuses a mode with no way to receive it — no declared knob named after
+it and no read under that name — which is the difference between a mode that operates on
+a package and one that hardcodes a fixture shaped like the brief. The design and emit
+prompts are told the same list, so the requirement reaches the code rather than the
+gate alone.
+
 What happens, in order — and the gates are the point:
 
 1. **survey** — what already exists, so the model can build on it rather than

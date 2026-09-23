@@ -134,10 +134,14 @@ def prepare(ctx: Any) -> dict[str, Any]:
     # DataNode that runs a subgraph once per item. Both reach the prompts as facts.
     task_ref = str(ctx.knob("task_ref", "") or "").strip()
     data_node = bool(ctx.knob("data_node", 0))
+    # The inputs the brief says the mode must take. Published as a fact so the design
+    # and emit prompts state them, and read by `validate` so a mode that hardcodes a
+    # fixture instead is refused rather than shipped.
+    inputs = declared_inputs(ctx.knob("requires_input", ""))
     reference = _revision_source(revision) if revision else _reference(extends)
     ctx.write_json("brief.json", {
         "name": name, "brief": brief, "extends": extends, "mode": revision,
-        "task_ref": task_ref, "data_node": data_node,
+        "task_ref": task_ref, "data_node": data_node, "requires_input": list(inputs),
     })
     return {
         "name": name,
@@ -151,6 +155,13 @@ def prepare(ctx: Any) -> dict[str, Any]:
         "reference": reference,
         "task_ref": task_ref or "(no Task class was named)",
         "data_node": "yes" if data_node else "no",
+        "requires_input": (
+            "The brief says this mode takes these as input: " + ", ".join(f"`{name}`" for name in inputs)
+            + ". It must receive each one as a declared knob named after it, or by "
+            "reading a file under that name from the run directory. A mode that "
+            "hardcodes a fixture instead of accepting the input is refused by "
+            "validation."
+        ) if inputs else "(the brief named no inputs this mode must accept)",
     }
 
 
@@ -611,6 +622,7 @@ def validate(ctx: Any) -> str:
             name,
             requires_data_node=bool(ctx.knob("data_node", 0)),
             requires_task_ref=str(ctx.knob("task_ref", "") or "").strip(),
+            requires_input=declared_inputs(ctx.knob("requires_input", "")),
         )
     except Exception as exc:
         problems = [f"{type(exc).__name__}: {exc}"]
@@ -646,8 +658,33 @@ def _evict(module_name: str) -> None:
         del sys.modules[cached]
 
 
+def declared_inputs(raw: Any) -> tuple[str, ...]:
+    """The inputs a brief declared, from the comma-separated knob a run carries.
+
+    A name, not a sentence: the check is whether the produced mode has a *way to
+    receive* it — a knob named after it, or a read under that name — so the name has
+    to be something a knob or a file could be called. Anything shorter than three
+    characters is refused rather than accepted, because `"a" in "package_path"` is not
+    a check.
+    """
+    names = tuple(
+        part.strip() for part in str(raw or "").replace(";", ",").split(",") if part.strip()
+    )
+    for name in names:
+        if len(name) < 3:
+            raise ValueError(
+                f"required input {name!r} is too short to check; name it the way a knob "
+                "or a file would be named, e.g. `package` or `source_tree`"
+            )
+    return names
+
+
 def check_package(
-    name: str, *, requires_data_node: bool = False, requires_task_ref: str = ""
+    name: str,
+    *,
+    requires_data_node: bool = False,
+    requires_task_ref: str = "",
+    requires_input: tuple[str, ...] = (),
 ) -> list[str]:
     """Everything wrong with a staged package, as a list of reasons.
 
@@ -688,6 +725,7 @@ def check_package(
         project=project_for_nodes(),
         requires_data_node=requires_data_node,
         requires_task_ref=requires_task_ref,
+        requires_input=requires_input,
     )
     problems.extend(checked.payload.get("problems") or [])
     if not checked.ok and not problems:

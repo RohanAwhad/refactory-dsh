@@ -97,6 +97,15 @@ rather than only its result. `edit` revises a mode and returns the before/after
 scores, refusing a regression unless you pass `allowRegression`; `design` takes a
 `check` command and reports whether the artifact passed it.
 
+A mode you have just created can be used from the same conversation, which `start`
+cannot do: `start` is the optimizer.
+
+> Use the refactory tool with action `run`, mode `gui_made/counter`, intent "count
+> to five and show me the result".
+
+It runs the mode once on DSH and reports the run directory, how the run ended and
+what it recorded, so the answer is the run rather than a promise about one.
+
 Managing packages is the registry's own verbs, passed through:
 
 > Use the refactory tool with action `registry`, packages `disable`, target `annealing_pack`.

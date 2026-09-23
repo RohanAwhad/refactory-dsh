@@ -710,3 +710,61 @@ def test_a_created_packages_artifacts_stay_in_the_run_directory(tmp_path):
         assert not (REPO_ROOT / artifact).exists(), (
             f"{artifact} was written into the checkout instead of the run directory"
         )
+
+
+# ── the brief's inputs are checked (#67) ───────────────────────────────────
+#
+# `validate` proved a package was structurally a mode, not that it did what was
+# asked. A mode whose whole subject was a Python package took no package at all — it
+# built a fixture hardcoded in `ops.py` — and passed every check. The brief's inputs
+# are now declarable, and the check is whether the mode has a *way to receive* each
+# one: a knob named after it, or a read under that name.
+
+
+def test_a_mode_that_cannot_receive_the_briefs_input_is_refused(tmp_path, monkeypatch):
+    """The counter takes `target` and reads `state.json`, so it cannot take a package."""
+    _stage(tmp_path, NAME, _valid_package(NAME))
+    monkeypatch.chdir(tmp_path)
+    problems = create_ops.check_package(NAME, requires_input=("package",))
+    assert any("no way to receive 'package'" in problem for problem in problems), problems
+    assert any("declare a knob named after it" in problem for problem in problems)
+
+
+def test_a_mode_that_takes_the_input_passes(tmp_path, monkeypatch):
+    """A knob named after the input is the caller's handle on it."""
+    files = _valid_package(NAME)
+    files["mode.py"] = files["mode.py"].replace(
+        "        return {'target': nn.Knob(3, 'int', lo=1, hi=9)}\n",
+        "        return {'package_path': nn.Knob('', 'str'),\n"
+        "                'target': nn.Knob(3, 'int', lo=1, hi=9)}\n",
+    ).replace(
+        "knobs=('target',)))",
+        "knobs=('target', 'package_path')))",
+    )
+    _stage(tmp_path, NAME, files)
+    monkeypatch.chdir(tmp_path)
+    assert create_ops.check_package(NAME, requires_input=("package",)) == []
+
+
+def test_declared_inputs_refuses_a_name_too_short_to_check():
+    assert create_ops.declared_inputs("package, source_tree") == ("package", "source_tree")
+    assert create_ops.declared_inputs("") == ()
+    with pytest.raises(ValueError, match="too short to check"):
+        create_ops.declared_inputs("a")
+
+
+def test_the_design_and_emit_prompts_are_told_what_the_mode_must_take(tmp_path):
+    """The rule reaches the two prompts that decide the interface and the code."""
+    graph = CreateMode().build()
+    for node_id in ("design", "emit"):
+        prompt = graph.nodes[node_id].prompt_template
+        assert "{{requires_input}}" in prompt, node_id
+    from refactory_dsh.nn import RunContext
+
+    ctx = RunContext(
+        tmp_path, knobs={"name": NAME, "brief": "count", "requires_input": "package"},
+        facts={}, task={},
+    )
+    published = create_ops.prepare(ctx)
+    assert "takes these as input: `package`" in published["requires_input"]
+    assert "hardcodes a fixture" in published["requires_input"]

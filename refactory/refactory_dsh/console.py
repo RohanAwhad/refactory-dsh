@@ -670,6 +670,26 @@ def _parser() -> argparse.ArgumentParser:
             "--" + setting.replace("_", "-"), type=kind, default=None, help=help_text
         )
 
+    # `run` is the CLI's run: use a mode once, with the person answering any gate.
+    # `start` is the outer loop (`refactory optimize`); the two are different acts and
+    # the tool's actions are named the same way, so neither is mistaken for the other.
+    single = add(sub.add_parser("run", help="use one mode once, with you answering any gate"))
+    single.add_argument("mode", help="the mode, as <package>/<name>")
+    single.add_argument("--intent", default="", help="what this run is for, in your words")
+    single.add_argument("--workdir", default="", help="the run directory")
+    single.add_argument(
+        "--knob", action="append", default=[], metavar="NAME=VALUE",
+        help="set one of the mode's knobs for this run (repeatable)",
+    )
+    single.add_argument(
+        "--verdict", action="append", default=[], metavar="GATE=VALUE",
+        help="answer a gate a person owns, as <gate>=<value> (repeatable); a headless "
+             "run refuses a user gate it was not told the answer to",
+    )
+    single.add_argument("--timeout", type=int, default=0, help="seconds; 0 waits for the person")
+    single.add_argument("--provider", default="", help="provider route for this run's model")
+    single.add_argument("--model", default="", help="model id for this run")
+
     watch = add(sub.add_parser("status", help="where a run is"))
     watch.add_argument("--after", type=int, default=0)
 
@@ -732,6 +752,11 @@ def _parser() -> argparse.ArgumentParser:
     make.add_argument("--task", default=None, metavar="TASK_REF", dest="task_ref",
                       help="a Task class the produced mode must satisfy")
     make.add_argument("--workdir", default="", help="the run directory (default: .factory/create/<name>)")
+    make.add_argument(
+        "--input", action="append", default=[], metavar="NAME",
+        help="an input the produced mode must accept, named the way a knob or a file "
+             "would be (repeatable); validation refuses a mode with no way to receive it",
+    )
     make.add_argument(
         "--verdict", action="append", default=[], metavar="GATE=VALUE",
         help="answer a gate a person owns, as <gate>=<value> (repeatable); "
@@ -899,10 +924,43 @@ def main(argv: list[str] | None = None) -> int:
                 forwarded.append(args.target)
             forwarded += extra
             payload = _forward("registry", forwarded)
+        elif args.verb == "run":
+            forwarded = [args.mode]
+            if args.intent:
+                forwarded += ["--intent", args.intent]
+            if args.workdir:
+                forwarded += ["--workdir", args.workdir]
+            for pair in args.knob:
+                forwarded += ["--knob", pair]
+            for pair in args.verdict:
+                forwarded += ["--approve", pair]
+            if args.timeout:
+                forwarded += ["--timeout", str(args.timeout)]
+            if args.provider:
+                forwarded += ["--provider", args.provider]
+            if args.model:
+                forwarded += ["--model", args.model]
+            payload = _forward("interactive", forwarded)
+            # The one-shot runner prints its report from the child process, whose
+            # stdout is the terminal's rather than this buffer, so the JSON contract
+            # would otherwise carry nothing. The run directory is the durable answer:
+            # where it is, how it ended and what it recorded.
+            root = (
+                Path(args.workdir)
+                if args.workdir
+                else project / "interactive" / args.mode.replace("/", "-")
+            )
+            if root.is_dir():
+                payload["run"] = {
+                    **status(root),
+                    "facts": _read_json(root / "facts.json"),
+                }
         elif args.verb == "create":
             forwarded = ["--name", args.name, "--brief", args.brief, "--attempts", str(args.attempts)]
             if args.workdir:
                 forwarded += ["--workdir", args.workdir]
+            for name in args.input:
+                forwarded += ["--input", name]
             if args.extends:
                 forwarded += ["--extends", args.extends]
             if args.data_node:

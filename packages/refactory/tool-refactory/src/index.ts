@@ -54,7 +54,8 @@ const VERBS = {
   modes: 'List the modes a run can be started from, with their parameters.',
   strategies: 'List the named outer loops, optimizers and evaluators, each with what it is. Choose settings.optimizer/strategy/evaluator from these names.',
   runs: 'List runs under the run root, newest first.',
-  start: 'Start a run in its own process; returns the run id to watch it with.',
+  start: 'Optimize a mode: start an outer-loop run in its own process and return the run id to watch it with.',
+  run: 'Use a mode once: run it on DSH and report the result and where its artifacts are. This is the CLI\'s "run", not the optimizer.',
   status: 'Where a run is, and the events since an offset.',
   artifacts: 'What a run left on disk, optionally with contents.',
   leaderboard: 'The run\'s candidates by score, each with its diff against its parent.',
@@ -118,6 +119,9 @@ interface Args {
   check?: string
   allowRegression?: boolean
   approve?: string[]
+  inputs?: string[]
+  provider?: string
+  model?: string
   attempts?: number
   dataNode?: boolean
   task?: string
@@ -161,6 +165,21 @@ export function invocationFor(args: Args): {
         settings: settingsOf(args),
       })
       return { verb: args.action, positional, options }
+    }
+    case 'run': {
+      if (args.mode === undefined) {
+        throw new Error('action "run" needs `mode`: the <package>/<name> to run once')
+      }
+      return {
+        verb: args.action,
+        positional: [args.mode],
+        options: {
+          intent: args.intent,
+          verdict: args.approve,
+          provider: args.provider,
+          model: args.model,
+        },
+      }
     }
     case 'candidate': {
       if (args.candidate === undefined) {
@@ -206,6 +225,7 @@ export function invocationFor(args: Args): {
         options: {
           name: args.name, brief: args.brief, extends: args.extends, attempts: args.attempts,
           'data-node': args.dataNode, task: args.task, verdict: args.approve,
+          input: args.inputs, provider: args.provider, model: args.model,
         },
       }
     }
@@ -219,7 +239,7 @@ export function invocationFor(args: Args): {
         options: {
           mode: args.mode, name: args.name, brief: args.brief,
           'allow-regression': args.allowRegression, attempts: args.attempts,
-          verdict: args.approve,
+          verdict: args.approve, provider: args.provider, model: args.model,
         },
       }
     }
@@ -232,7 +252,7 @@ export function invocationFor(args: Args): {
         positional: [],
         options: {
           name: args.name, brief: args.brief, check: args.check, attempts: args.attempts,
-          verdict: args.approve,
+          verdict: args.approve, provider: args.provider, model: args.model,
         },
       }
     }
@@ -350,6 +370,24 @@ export function renderResult(args: Args, value: unknown): ContentBlock[] {
         if (!isRecord(row)) continue
         lines.push(`- ${scalar(row.id)} scored ${typeof row.score === 'number' ? String(row.score) : 'nothing'}`)
       }
+      break
+    }
+    case 'run': {
+      // A single run is the CLI's `run`. The runner prints its report from the child
+      // process — the terminal's stdout, not the console's buffer — so the console
+      // reads the run directory back and reports that instead.
+      lines.push(`Ran ${scalar(args.mode)}${data.ok === true ? '' : ' and it did not finish'}.`)
+      const single = isRecord(data.run) ? data.run : {}
+      if (typeof single.workdir === 'string') {
+        lines.push(`Run directory: ${single.workdir}. Read it with action "status", or "artifacts" for what it left.`)
+      }
+      if (typeof single.state === 'string') lines.push(`State: ${single.state}.`)
+      const facts = isRecord(single.facts) ? single.facts : {}
+      const recorded = Object.entries(facts)
+        .filter(([, value]) => value !== null && value !== '' && value !== undefined)
+        .slice(0, 8)
+        .map(([key, value]) => `${key}: ${scalar(value)}`)
+      if (recorded.length > 0) lines.push(`What the run recorded — ${recorded.join(', ')}.`)
       break
     }
     case 'candidate': {
@@ -490,7 +528,9 @@ export function apply(ctx: Context, config: Config): void {
         additionalProperties: true,
         description: 'Run settings for action "start": epochs, batch_size, optimizer, strategy, evaluator, seed, elite, attempts, preset, max_evaluations. The optimizer, strategy and evaluator must be names from the "strategies" action, which lists each with what it is. Passed through as console flags.',
       },
-      intent: { type: 'string', description: 'For action "steer": the request the run is for, written the first time the ledger is seeded.' },
+      intent: { type: 'string', description: 'For actions "steer" and "run": what the run is for, in the user\'s words. For "run" it seeds the intent ledger every agent node reads.' },
+      provider: { type: 'string', description: 'For actions "run", "create", "edit" and "design": the provider route the model runs on (default: the settings default).' },
+      model: { type: 'string', description: 'For actions "run", "create", "edit" and "design": the model id to run on (default: the settings default).' },
       note: { type: 'string', description: 'For action "steer": something said while the run goes, appended to the ledger.' },
       kind: { type: 'string', enum: ['info', 'correction', 'constraint'], description: 'For action "steer": what the note is. A constraint must be respected, not merely known.' },
       state: { type: 'boolean', description: 'For action "best": include the winner\'s full state dict.' },
@@ -511,6 +551,11 @@ export function apply(ctx: Context, config: Config): void {
       attempts: { type: 'integer', description: 'For "create"/"edit"/"design": how many times the model may retry before the run fails.' },
       dataNode: { type: 'boolean', description: 'For action "create": build the mode as a DataNode that runs its subgraph once per item (a dataset mode). The run is refused if the produced mode does not declare one.' },
       task: { type: 'string', description: 'For action "create": a Task class (module:Class or a registered name) the produced mode must satisfy — it supplies the per-item prompts and judges each pass. The run is refused if the produced mode is not bound to it.' },
+      inputs: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'For action "create": the inputs the mode must accept, each named the way a knob or a file would be (e.g. "package", "source_tree"). The run is refused when the produced mode has no way to receive one — no knob named after it and no read under that name — so state them when the brief is about operating on something the caller supplies.',
+      },
     },
     output: {
       schema: {

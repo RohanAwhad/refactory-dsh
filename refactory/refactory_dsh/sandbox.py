@@ -398,6 +398,7 @@ def verify_sandboxed(
     project: Path | None = None,
     requires_data_node: bool = False,
     requires_task_ref: str = "",
+    requires_input: tuple[str, ...] = (),
     **kwargs: Any,
 ) -> SandboxResult:
     """Everything wrong with a package, checked without importing it here.
@@ -421,6 +422,7 @@ def verify_sandboxed(
         "problems = []\n"
         f"requires_data_node = {bool(requires_data_node)!r}\n"
         f"requires_task_ref = {str(requires_task_ref)!r}\n"
+        f"required_inputs = {tuple(requires_input)!r}\n"
         f"package = registry.load({name!r}, Path({str(project)!r}))\n"
         f"expected = {name!r}\n"
         # Concatenation, not a nested f-string: `{name!r}` inside one would insert
@@ -466,6 +468,25 @@ def verify_sandboxed(
         "    ):\n"
         "        problems.append(f'{identifier} declares no DataNode bound to the Task "
         "{requires_task_ref!r}, which this creation asked for')\n"
+        # The brief's inputs are a declaration too, and the one the pipeline could not
+        # check before: a mode can ignore the thing it was asked to operate on and
+        # still be structurally perfect. What is checkable is whether the mode has a
+        # way to receive it — a knob, or a read named after it — because those are the
+        # two ways a caller hands anything to a mode.
+        "    surface = [str(knob).lower() for knob in mode.parameters()] + [\n"
+        "        str(read).lower()\n"
+        "        for node in mode.graph().nodes.values()\n"
+        "        for read in node.reads\n"
+        "    ]\n"
+        "    for wanted in required_inputs:\n"
+        "        slug = str(wanted).strip().lower()\n"
+        "        if slug and not any(slug in entry or entry in slug for entry in surface):\n"
+        "            problems.append(\n"
+        "                f'{identifier} has no way to receive {wanted!r}, which this '\n"
+        "                'creation asked for: declare a knob named after it, or read a '\n"
+        "                'file under that name from the run directory, rather than '\n"
+        "                'hardcoding a fixture'\n"
+        "            )\n"
         "print(json.dumps({'problems': problems}))\n"
     )
     return run_sandboxed(code, workdir=project, env=dict(os.environ), **kwargs)

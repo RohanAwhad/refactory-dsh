@@ -159,7 +159,7 @@ Every command is `uv run refactory <verb>`. This is the reference; [QUICKSTART.m
 | `--revise <package>/<mode>` | edit only: the mode being revised |
 | `--model <id>` | the model this run uses, e.g. `deepseek-v4-pro` (default: your settings default) |
 | `--provider <route>` | the provider route that model is on, e.g. `deepseek-official` or `openai` |
-| `--knob name=value` | set one of the authoring mode's knobs for this run, e.g. `allow_regression=1` to accept a revision that scores lower |
+| `--knob name=value` | set one of the authoring mode's knobs for this run, e.g. `allow_regression=1` to accept a revision that scores lower, or `requires_input=package` to require that the produced mode accepts a package |
 | `--approve <gate>=<value>` | state a gate's answer up front, e.g. `gate_strategy=proceed`, for an unattended run |
 | `--workdir <dir>` | where the run's evidence lands (default `.factory/interactive/<package>-<mode>`) |
 
@@ -292,6 +292,7 @@ Ask in words; the CEO calls the `refactory` tool, which is the same console. Its
 | *"This run is for making the count land exactly; keep the step small."* | `steer`: the note reaches the run's intent ledger |
 | *"Create a mode that drafts a blurb with an agent and checks it."* | `create`, the same authoring mode as `ceo --mode create` — the CEO asks you to approve the plan first, and passes your answer with the call |
 | *"Where is that creation up to?"* | `status` on the run directory (`.factory/create/<name>`), which reports the authoring run's own node-by-node progress |
+| *"Run that mode once and show me."* | `run`, the CLI's `refactory run`: it uses the mode on DSH and reports the run directory and what it recorded |
 | *"Show me the packages, then disable annealing_pack."* | `registry` with `list`, then `disable` |
 
 <a id="gui-gates"></a>
