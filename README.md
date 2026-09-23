@@ -2,40 +2,31 @@
 
 English | [中文](README.zh.md)
 
-A **self-contained single repo** that turns refactory's graph semantics into a running product: refactory defines the workflow, DSH executes it.
+**Describe what you want; a graph of typed nodes designs, builds and improves it.**
 
+```bash
+git clone <this-repo> --recurse-submodules && cd <this-repo>
+./install.sh
+uv run refactory ceo "a mode that drafts a haiku and checks the syllable count" --mode create
 ```
-refactory (the language)  →  graph.json  →  DSH (the runtime)
-   Workflow.to_dict()                        workflow-spine + CEO + subagents
-```
 
-- **refactory** (`refactory/vendor/remote-factory`) is the *language* — typed nodes, `Verdict`, `OptKnob`s — plus the outer-loop optimizer (`SwarmEngine`, 8-operator MAP-Elites).
-- **SRF** (`refactory/vendor/srf`) is the first package of science modes (gepa, best_of_n, …) and tasks (circle_packing, …).
-- **DSH** is this repo — an upstream-forked DeepSeek Harness with the workflow-spine, the science runner, and the re:factory brand.
+That is the whole product. Everything below is what it is made of.
 
-Three **meta-modes** ship as refactory modes, and one DSH preset carries the loop:
-
-| Mode | What it does |
+| layer | what it owns |
 |---|---|
-| `python -m refactory_dsh.create` | create a new mode: a package of Python plus a `graph.json` |
-| `python -m refactory_dsh.edit` | revise an existing mode from a stated intent |
-| `python -m refactory_dsh.design` | design software (research → strategy → build → review) |
-| **ceo** preset (`refactory` tool) | run and read an outer-loop run from the Web view |
+| **the mode** | a Python class: a graph of typed nodes, declared knobs, and a `score()`. The unit you create, run and search. |
+| **the outer loop** | the search over a mode: propose typed edits → validate → evaluate → keep what improves, and report what it refused. |
+| **the CEO** | one agent that drives a mode's graph node by node, spawning a subagent per model call, and stops at the gates a person owns. |
+| **the panel** | the same choices in the browser: pick a mode, press Start, read the run. |
 
-The three meta-modes are Python entry points rather than presets: they write Python and a `graph.json`, which is not something a workflow graph can carry. The loop itself is a mode too — `loop_mode/loop` is its eight steps as a graph.
-
----
-
-## Prerequisites
-
-- **Node ≥ 22.19** (nvm `v22.23.2` is what it's built against)
-- **pnpm** (via corepack)
-- **uv** (Python package manager — creates the venv; it manages its own Python ≥ 3.11)
-- **git** (with `--recurse-submodules`)
+Two runtimes execute the same graph and are kept honest by running one mode on both and comparing the facts: the **walker** (in-process, what a search uses) and **DSH** (what ships). A mode is lowered to one IR — `Workflow.to_dict()` — and that JSON is the only thing the runtime sees.
 
 ---
 
+<a id="run-from-source"></a>
 ## Install
+
+**Prerequisites:** [uv](https://docs.astral.sh/uv), Node ≥ 22.19 + pnpm (corepack), git, and a DeepSeek API key in `.env` for anything that calls a model.
 
 ```bash
 git clone <this-repo> --recurse-submodules
@@ -43,127 +34,200 @@ cd <this-repo>
 ./install.sh
 ```
 
-`install.sh` does, in order:
+`install.sh` does four things, in order:
 
-1. `git submodule update --init --recursive` — pulls refactory + SRF
-2. `pnpm install` + `pnpm run build` — the DSH workspace and its client/host bundles
-3. `uv venv .venv --seed` — a self-contained venv (pip kept for the mode-creation entry points)
-4. `uv pip install` the glue + the minimal semantics deps (pydantic, structlog, networkx, pyyaml, filelock)
-5. `uv pip install -e … --no-deps` links `factory` (refactory) and `srf` into the venv
-6. writes the Python mode packages and the `graph.json` files the science runner loads
+1. `git submodule update --init --recursive` — the vendored language (`factory`) and reference modes (`srf`).
+2. `pnpm install --frozen-lockfile && pnpm run build` — the DSH workspace and the client/host bundles the Web view serves.
+3. `uv sync` — **one** Python project at the root: it creates `.venv`, installs the three local packages in editable mode and puts the `refactory` command on `.venv/bin`, pinned by `uv.lock`.
+4. Creates the DSH profile a mode runs on (`dsh plugin --profile graph add …`). A profile is machine state, so this is a once-per-machine step; skip it with `REFACTORY_SKIP_DSH_PROFILE=1`.
 
-No absolute paths are baked in — everything resolves from the repo root (`refactory/refactory_dsh/paths.py`), with `REFACTORY_DSH_HOME` / `DSH_ROOT` / `SRF_GRAPHS` / `VENV_BIN` / `NODE_BIN` overrides if you use a non-default layout.
+Then check the machine, not the docs:
+
+```bash
+uv run refactory doctor
+```
+
+```
+  ok    python >= 3.12        3.13.2
+  ok    uv                    /Users/you/.local/bin/uv
+  ok    node >= 22.19         /Users/you/.nvm/versions/node/v22.23.2/bin/node
+  ok    import factory        the vendored graph language (refactory/vendor/remote-factory)
+  ok    import refactory_dsh  this package
+  ok    DSH profile 'graph'   /Users/you/.dsh/profiles/graph
+  ok    packages of modes     14 package(s)
+
+refactory doctor: ready — try `refactory list`, or `refactory ceo "an idea" --mode design`
+```
 
 ---
 
-<a id="run"></a> <a id="run-from-source"></a>
-## Run
+<a id="run"></a>
+## Use
 
-### Interactive (the product)
+Four steps, four commands.
 
-```bash
-./refactory-dsh --port 3081 --no-open
-```
-
-Open the printed URL. The default preset is **ceo**, which carries the `refactory` tool: list the modes a checkout can run, start an outer-loop run, watch it while it is in flight, and read its leaderboard, candidate diffs, and artifacts — all from the conversation. For a refactory *graph*, the `wf_*` tools drive it node by node and you steer at the gates.
-
-### Headless science runner
+###
+1. Create a mode
 
 ```bash
-node --import tsx/esm apps/cli/src/bin.ts --profile graph run \
-  --mode gepa \
-  --task circle_packing \
-  --budget 1
+uv run refactory ceo "one agent drafts a product blurb; one op checks its length and cliches" \
+  --mode create --name blurb
 ```
 
-prints `{"best_score": …}` and the session log. `--graphs` and `--python-bin` default to the checkout's own `.venv/bin` and `refactory/vendor/srf/graphs`, so a fresh clone needs neither flag. Pick the CEO model with `--provider` (e.g. `deepseek-official`, `openai`, `anthropic` — the pi-ai routes resolve keys from `settings.yaml` + `.env`).
+`create` is remote-factory's **create-v2**: a research phase, a strategy phase **you approve**, a build, three reviews in parallel, an audit of their evidence, then registration and a smoke run. It writes a Python package under `.factory/packages/<name>` and registers it.
 
-### SRF: the reference package of modes
+- `--mode design` (the default) designs a checked **artifact** instead of a package. It needs `--check "<command that proves it works>"`.
+- `--mode edit` revises an existing mode and refuses a regression.
+- A name is optional: without `--name`, your words become the name.
+- Ask for a model call in what you say ("one agent drafts …") and the created mode has an `agent` node. Otherwise it is deterministic — which is a feature: an offline mode is one a search can evaluate hundreds of times.
+- A `data` node and a `Task` are asked for the same way, and the validate gate *checks* you got one: `--data-node` and `--task my_pack.tasks:MyTask`.
 
-**A mode is a Python class inside `refactory_packages/<package>/`**, and `circle_packing` is the running example:
+###
+2. Use it
 
+```bash
+uv run refactory run blurb/writer --intent "a blurb about teapots"
 ```
-circle_packing/
-  __init__.py             PACKAGE = Package(name=…, modes=(…,), ops=(…,))
-  mode.py                 class Adaptive(nn.Mode): knobs, build(), score()
-  ops.py                  the functions its nodes call
-  tools.py                only when the mode needs something the machine must have
+
+Runs the mode on **DSH** with your terminal attached, so a gate only a person can answer reaches you. The run's directory holds `facts.json`, `trace.json`, `state.json`, `result.json`, the intent ledger and the lowered graph.
+
+`uv run refactory package smoke <package>/<mode>` is the fast check, and it runs **without** a model on purpose — a mode with an `agent` node cannot be smoked, and says so instead of failing obscurely.
+
+###
+3. Optimize it
+
+```bash
+uv run refactory optimize blurb/writer --epochs 4 --batch-size 6 --optimizer random --seed 5
 ```
 
-SRF is vendored at `refactory/vendor/srf` and is **not part of the runtime**: its thirteen modes are ported as outer-loop strategies in `refactory_dsh/strategies.py`. To add your own mode you touch only your package — it is lowered to refactory's IR and DSH runs it, with no change on the DSH side.
+The **outer loop**: it proposes typed edits to the mode — `set_knob`, `duplicate`, `insert_after`, … — validates every candidate before it may cost a run, evaluates what survives, and keeps what improves. It reports the leaderboard *and* every rejection, so a run that found nothing says why.
 
-### End-to-end example: create a mode, then optimize it
+`uv run refactory list` shows what it can search. The loop's own options, the ten strategies, seven optimizers, two evaluators and four edit presets are in [the HTML tour](refactory/docs/tutorial.html#loop).
 
-1. `python -m refactory_dsh.create` with the intent *"a basic inner loop for circle packing"*. It writes a package under `.factory/packages/`, which the registry finds on the next run.
-2. Start an outer-loop run on it — from the Web view through the `refactory` tool, or `python -m refactory_dsh.loop <package>/<mode>`. It proposes edits, evaluates them, keeps what improves the score, and reports the best score it reached.
+###
+4. Use it again
+
+```bash
+uv run refactory adopt --run <the run id the last command printed> --as blurb_tuned
+uv run refactory run blurb_tuned/writer --intent "another blurb"
+```
+
+`adopt` writes the winning state as a new package and leaves its input untouched, so the tuned mode is a mode like any other.
+
+### Read a run
+
+```bash
+uv run refactory runs                                       # every run, newest first
+uv run refactory status --run <id>                          # where it is
+uv run refactory leaderboard --run <id>                     # candidates, with diffs against their parents
+uv run refactory candidate <candidate> --run <id>           # one candidate, exactly what it changed
+uv run refactory best --run <id>                            # the winner, with the state that scored it
+uv run refactory artifacts --run <id> --contents            # what it left on disk
+uv run refactory steer --run <id> --note "keep it small"    # what the run is for, while it runs
+uv run refactory stop --run <id>
+```
+
+### Manage packages
+
+```bash
+uv run refactory list                                       # every package and mode
+uv run refactory package verify my_pack                     # does it import and validate
+uv run refactory package smoke my_pack/<mode> --json        # run it once, offline
+uv run refactory package add|import|remove|enable|disable …
+```
+
+---
+
+## The GUI: ask instead of typing
+
+```bash
+uv run refactory ui --port 3081 --no-open
+```
+
+Open the printed `http://127.0.0.1:3081/?token=…` — the token is per-process, and the bare URL answers `401` without it.
+
+- **The conversation** carries the `refactory` tool: *"what modes can I run?"*, *"start a run of counting_pack/fixed_step with the random optimizer"*, *"show me the leaderboard"*, *"keep the winner as a package called my_tuned"*, *"this run is for making the count land exactly"*. The CEO's coding tools are disabled on purpose: it can choose, start, read, steer and author, and cannot wander off and implement something itself.
+- **The panel** (right Sidebar → **Modes**) is the same choices as clicks: the mode, the outer loop, the optimizer and the evaluator are all *described* choices read from the same console, and pressing **Start** names the run it began.
+- **A gate a person owns is still a person's.** The runtime asks you — the terminal in `refactory run`, the dialog in the GUI. The model cannot answer it.
+
+[The GUI tutorial](refactory/docs/tutorials/05-drive-it-from-the-gui.md) walks through it, and [the panel tutorial](refactory/docs/tutorials/07-pick-and-watch-from-the-panel.md) covers the widget.
 
 ---
 
 ## Documentation
 
-Start with [refactory/docs/architecture.md](refactory/docs/architecture.md) for how the pieces fit, then work through the [tutorials](refactory/docs/tutorials/index.md), which go from writing a mode to driving it from the Web GUI.
+| document | what it answers |
+|---|---|
+| **[`refactory/docs/tutorial.html`](refactory/docs/tutorial.html)** | every mode, both v2 pipelines, the outer loop and all its options, the GUI — as one generated page |
+| [tutorials/](refactory/docs/tutorials/index.md) | how do I do the next thing, in order |
+| [architecture.md](refactory/docs/architecture.md) | what the layers are, and which one owns a behaviour |
+| [datasets.md](refactory/docs/datasets.md) | a mode that iterates items, and the Task that supplies and judges them |
+| [api/](refactory/docs/api/index.md) | what every public name is for |
+| [hardening.md](refactory/docs/hardening.md) | which guarantees are enforced, and by what |
+| [packing-tools.md](refactory/docs/packing-tools.md) | how a mode declares a tool it needs installed |
+| [contributing.md](refactory/docs/contributing.md) | how to change this repo |
 
-| Document | What it answers |
-| --- | --- |
-| [architecture.md](refactory/docs/architecture.md) | What the layers are and which one owns a behaviour |
-| [tutorials/](refactory/docs/tutorials/index.md) | How do I do the next thing, in order |
-| [api/](refactory/docs/api/index.md) | What every public name is for |
-| [packing-tools.md](refactory/docs/packing-tools.md) | How a mode declares a tool it needs installed |
-| [hardening.md](refactory/docs/hardening.md) | Which guarantees are enforced, and by what |
-| [handoff.md](refactory/docs/handoff.md) | Where the work is, and what to run first |
-| [contributing.md](refactory/docs/contributing.md) | How to change this repo |
+The HTML tour, the API reference and the config catalog are **generated from the code**, and the commands this README shows are recipes that `uv run python -m refactory_dsh.tools.check_recipes` executes — a doc that lies fails a gate rather than a reader.
+
+---
+
+## What ships
+
+**The modes.** `default_pack` is the authoring package: `create` (create-v2), `design` (design-v2) and `edit`, each with a plan-approval gate a person answers. The rest are fixtures — small, deterministic and offline on purpose, so the whole system can be tested and searched without a provider: `circle_packing`, `counting_pack`, `sympy_pack`, `lean_pack`, `review_pack`, `phase_pack`, `annealing_pack`, `loop_mode`, and `dataset_probe` (a Task-bound data node).
+
+**The loop.** Ten strategies (ports of SRF's own loops: `default`, `best_of_n`, `reflective`, `tree_search`, `staged_curriculum`, …), seven optimizers (`random`, `hill_climb`, `evolutionary`, `archive`, `islands`, `map_elites`, `autoresearch`) and two evaluators (`walker`, `dsh`).
+
+**The panel.** `packages/client/ui-refactory` + `packages/refactory/refactory-console`: a Typert Remote service over the same console the tool reads, and a Sidebar tab over that.
 
 ---
 
 ## Layout
 
 ```
-apps/                    DSH apps (CLI, web)
-packages/                DSH packages (workflow-spine, science, ui-brand-refactory, …)
-refactory/               the glue
-  refactory_dsh/           the mode library, the loop, the optimizers, the evaluators
-  refactory_packages/      the packages of modes (circle_packing, sympy_pack, …)
-  docs/                    architecture, tutorials, tool packing, hardening
-  vendor/remote-factory/   refactory (git submodule)
-  vendor/srf/              SRF (git submodule)
-install.sh               one-command install
-refactory-dsh            the launcher
+apps/                        DSH apps (CLI, web)
+packages/                    DSH packages (workflow-spine, graph bundle, ui-refactory, …)
+refactory/                   the glue — the modes, the loop, the console
+  refactory_dsh/               cli.py is the entry point; nn/ is the language; tools/ generates docs
+  refactory_packages/          the packages of modes
+  docs/                        the HTML tour, tutorials, architecture, API reference
+  vendor/remote-factory/       the language (git submodule)
+  vendor/srf/                  the reference modes (git submodule)
+pyproject.toml               the one Python project (`uv sync`, `uv run refactory …`)
+uv.lock                      the pinned environment
+install.sh                   one-command install
+refactory-dsh                the GUI launcher (what `refactory ui` runs)
 ```
 
-A mode is a Python class in `refactory_packages/<package>/`, not a `graph.json`: the decision record is [refactory/docs/plans/pythonic-modes.md](refactory/docs/plans/pythonic-modes.md).
+A mode is a Python class in `refactory_packages/<package>/`, not a `graph.json`; the decision record is [pythonic-modes.md](refactory/docs/plans/pythonic-modes.md).
 
 ---
 
 ## Development
 
-### Tests
+```bash
+uv run python -m pytest refactory/tests -q          # the glue: 700+ tests, offline
+pnpm run test                                        # the runtime and the client
+pnpm run typecheck && pnpm run lint                  # TypeScript
+pnpm run test:docs                                   # documentation gates
+uv run python -m refactory_dsh.tools.check_recipes   # every command this repo documents
+```
+
+The integration tier makes real model calls:
 
 ```bash
-# the outer-loop faithfulness harness (8 operators, archive, reflection)
-FACTORY_CLAUDE_BIN=/bin/true .venv/bin/python -m pytest refactory/tests -q
-
-# refactory's outer-loop suite
-FACTORY_CLAUDE_BIN=/bin/true .venv/bin/python -m pytest \
-  refactory/vendor/remote-factory/tests/test_outer_loop -q
-
-# the DSH client/host GUI suite
-pnpm run test:gui
+uv run python -m pytest refactory/tests -q --run-integration   # one mode on both runtimes
+uv run python -m refactory_dsh.tools.check_recipes --tier model
 ```
 
 ### Rebasing on upstream DSH
 
-This repo is a **fork of `deepseek-ai/deepseek-harness`** on branch `feature/workflow-spine`. Our changes are isolated deltas so they re-apply after a rebase:
-
-- new packages/files (e.g. `packages/client/ui-brand-refactory`, `refactory/`)
-- one-line wiring edits (`cordis.patch.yml` rows, `tsconfig` references, `paths` mappings)
-- two locale strings (`hero.headline`)
-
-`refactory` + `srf` are git **submodules** (your own repos), so they rebase/update independently.
+This repo is a **fork of `deepseek-ai/deepseek-harness`**. Our changes are isolated deltas so they re-apply after a rebase: new packages/files, one-line wiring edits (`cordis.patch.yml` rows, `tsconfig` references, `paths` mappings), and two locale strings. `factory` and `srf` are git **submodules**, so they rebase independently.
 
 ---
 
 ## Known limitations
 
-- **`trimul` (GPU task) needs `numpy`** — not in the minimal semantics deps; the math tasks (`circle_packing`, `autocorrelation_inequality`) don't need it. Its tests `importorskip("numpy")`, so the suite passes without it.
-- The logo is an inlined downscale of `remote-factory/docs/assets/refactory_logo.png`; refresh it in `packages/client/ui-brand-refactory/src/client/logo.ts` if upstream changes.
-- Ships as **repo + `install.sh`**, not a single binary — bundling Node + Python runtimes into one per-platform executable was considered and deferred; the repo is already self-contained and installable.
+- **A mode that calls a model costs money to run.** Nothing else does: the fixtures and the walker are offline, and the loop's `walker` evaluator never calls a model unless the mode itself has `agent` nodes.
+- **`trimul` (GPU task) needs `numpy`** — not in the project's dependencies; the math tasks do not need it.
+- **The panel needs the GUI from this checkout.** An installed `dsh` from before this work does not carry the client plugin; `uv run refactory ui` runs the right one.
+- **Ships as a repo + `install.sh`**, not a single binary: bundling Node and Python into one per-platform executable was considered and deferred.

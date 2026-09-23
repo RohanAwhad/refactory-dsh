@@ -33,10 +33,10 @@ are the detail behind each step.
 
 | step | command | what you have at the end |
 |---|---|---|
-| **create** | `.venv/bin/python -m refactory_dsh.create --name my_pack --brief "<what it does>" --verdict gate_strategy=proceed` | a package on disk, registered, its mode smoke-scored |
-| **use** | `.venv/bin/python -m refactory_dsh.interactive my_pack/<mode> --intent "<what you want>"` | the mode ran, with its own artifacts, and a person answered any gate |
-| **optimize** | `.venv/bin/python -m refactory_dsh.loop my_pack/<mode> --epochs 4 --batch-size 6 --optimizer random --seed 5 --runs-root /tmp/run` | a leaderboard, a report, and the edits that improved it |
-| **use it again** | `.venv/bin/python -m refactory_dsh.console adopt --run /tmp/run --as my_tuned` | the winner as a mode of its own, `registry smoke my_tuned/<mode>` scoring it |
+| **create** | `uv run refactory ceo "<what it does>" --mode create --name my_pack` | a package on disk, registered, its mode smoke-scored |
+| **use** | `uv run refactory run my_pack/<mode> --intent "<what you want>"` | the mode ran on DSH, with its own artifacts, and a person answered any gate |
+| **optimize** | `uv run refactory optimize my_pack/<mode> --epochs 4 --batch-size 6 --optimizer random --seed 5` | a leaderboard, a report, and the edits that improved it |
+| **use it again** | `uv run refactory adopt --run <run id> --as my_tuned` | the winner as a mode of its own, smoked by the registry |
 
 Two things decide whether a step costs money, and they are worth knowing before you
 start:

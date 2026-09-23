@@ -597,16 +597,16 @@ TEMPLATE = """<!DOCTYPE html>
         <thead><tr><th>step</th><th>command</th><th>what you have at the end</th></tr></thead>
         <tbody>
           <tr><td><strong>create</strong></td>
-              <td><code>python -m refactory_dsh.create --name my_pack --brief "&lt;what it does&gt;" --verdict gate_strategy=proceed</code></td>
+              <td><code>uv run refactory ceo "&lt;what it does&gt;" --mode create --name my_pack</code></td>
               <td>a package on disk, registered, its mode smoke-scored</td></tr>
           <tr><td><strong>use it</strong></td>
-              <td><code>python -m refactory_dsh.interactive my_pack/&lt;mode&gt; --intent "&lt;what you want&gt;"</code></td>
+              <td><code>uv run refactory run my_pack/&lt;mode&gt; --intent "&lt;what you want&gt;"</code></td>
               <td>the mode ran on DSH, with its artifacts, and a person answered any gate</td></tr>
           <tr><td><strong>optimize it</strong></td>
-              <td><code>python -m refactory_dsh.loop my_pack/&lt;mode&gt; --epochs 4 --batch-size 6 --optimizer random --seed 5 --runs-root /tmp/run</code></td>
+              <td><code>uv run refactory optimize my_pack/&lt;mode&gt; --epochs 4 --batch-size 6 --optimizer random --seed 5</code></td>
               <td>a leaderboard, a report, and the edits that improved it</td></tr>
           <tr><td><strong>use it again</strong></td>
-              <td><code>python -m refactory_dsh.console adopt --run /tmp/run --as my_tuned</code></td>
+              <td><code>uv run refactory adopt --run &lt;run id&gt; --as my_tuned</code></td>
               <td>the winner as a mode of its own, smoke-scored by the registry</td></tr>
         </tbody>
       </table>
