@@ -361,6 +361,37 @@ def example_block(label: str, command: str, output: str) -> str:
     )
 
 
+def render_recipes() -> str:
+    """Every documented command, from the one place that also checks them.
+
+    The page and `check_recipes` read the same recipes, so a command cannot be shown
+    without also being runnable -- and the tier badge says honestly which ones cost a
+    model call.
+    """
+    from refactory_dsh.tools import recipes as recipes_module
+
+    blocks: list[str] = []
+    for group, group_recipes in recipes_module.by_group().items():
+        rows = []
+        for recipe in group_recipes:
+            badge = {
+                "cheap": '<span class="badge badge-run">offline</span>',
+                "model": '<span class="badge badge-author">model calls</span>',
+                "manual": '<span class="badge">by hand</span>',
+            }[recipe.tier]
+            rows.append(
+                f'<h4>{esc(recipe.title)} {badge}</h4>'
+                f'<div class="cmd"><pre><code>{esc(recipe.command)}</code></pre>'
+                f'<button class="copy" type="button" data-copy>copy</button></div>'
+                f'<p class="muted">{esc(recipe.expect)}</p>'
+            )
+        blocks.append(
+            f'<details open><summary>{esc(recipes_module.GROUP_TITLES[group])}</summary>'
+            f'{"".join(rows)}</details>'
+        )
+    return "".join(blocks)
+
+
 def render(project: Path | None = None) -> str:
     """The whole page."""
     project = Path(project or REPO_ROOT)
@@ -395,6 +426,7 @@ def render(project: Path | None = None) -> str:
         options=render_options(),
         steps=render_steps(),
         console_verbs=render_console_verbs(),
+        recipes=render_recipes(),
         ceo_verbs=render_ceo_verbs(),
         loop_help=esc(loop_help),
         create_help=esc(create_help),
@@ -551,6 +583,7 @@ TEMPLATE = """<!DOCTYPE html>
       <li><a href="#loop">The outer loop</a></li>
       <li><a href="#read">Reading a run</a></li>
       <li><a href="#gui">Asking the CEO (GUI)</a></li>
+      <li><a href="#commands">Every command</a></li>
       <li><a href="#where">Where things live</a></li>
     </ol>
   </nav>
@@ -779,6 +812,16 @@ TEMPLATE = """<!DOCTYPE html>
         <code>gate_strategy</code> is one), the runtime asks <em>you</em> — the terminal answerer in
         <code>interactive</code>, or the GUI's own dialog. The CEO cannot answer it, and neither can the model.
       </div>
+    </section>
+
+    <section id="commands">
+      <h2>Every command, and what it should produce</h2>
+      <p class="lede">The page and the checker read one list:
+      <code>refactory_dsh/tools/recipes.py</code>. `uv run python -m
+      refactory_dsh.tools.check_recipes` executes the offline ones and fails when any
+      no longer does what this page says; <code>--tier model</code> runs the ones that
+      make real model calls.</p>
+      {recipes}
     </section>
 
     <section id="where">

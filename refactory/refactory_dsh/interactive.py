@@ -19,6 +19,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 from refactory_dsh import lowering, registry, steering
 from refactory_dsh.dsh_runtime import TASK
@@ -30,12 +31,33 @@ DEFAULT_ROOT = Path(".factory/interactive")
 #: Wall-clock ceiling is the person's, so there is none: the run waits for them.
 
 
+def with_knobs(state: dict[str, Any], overrides: list[str]) -> dict[str, Any]:
+    """One state with `NAME=VALUE` knob overrides applied.
+
+    The CLI's spelling for something a person changes about *this* run: which
+    package to create, what to check, how many attempts. Applied through the editor
+    (`nn.edits`) rather than written into the dict, so a wrong name is refused by
+    name and an out-of-range value is refused by range, exactly as the optimizer's
+    own edits are.
+    """
+    from refactory_dsh import nn
+
+    for pair in overrides:
+        name, separator, value = str(pair).partition("=")
+        name, value = name.strip(), value.strip()
+        if not separator or not name:
+            raise ValueError(f"--knob takes NAME=VALUE, not {pair!r}")
+        state = nn.edits.apply({"op": "set_knob", "name": name, "value": value}, state)
+    return state
+
+
 def prepare(
     identifier: str,
     *,
     workdir: Path,
     intent: str = "",
     project: Path | None = None,
+    knobs: list[str] | None = None,
 ) -> tuple[str, Path]:
     """Lower the mode for a person to use, and leave the run ready to start.
 
@@ -49,7 +71,7 @@ def prepare(
     package, mode_name = identifier.split("/", 1)
     Mode = registry.resolve(project, identifier)[1]
     mode = Mode()
-    state = mode.state_dict()
+    state = with_knobs(mode.state_dict(), list(knobs or []))
 
     # Absolute, because this directory becomes DSH's session cwd and DSH refuses a
     # relative one: `interactive <mode>` with no `--workdir` used to fail before the
@@ -71,7 +93,15 @@ def prepare(
     return name, graphs
 
 
-def command(identifier: str, *, workdir: Path, graphs: Path, name: str) -> list[str]:
+def command(
+    identifier: str,
+    *,
+    workdir: Path,
+    graphs: Path,
+    name: str,
+    knobs: list[str] | None = None,
+    project: Path | None = None,
+) -> list[str]:
     """The DSH run whose stdin is the person's terminal."""
     _, mode_name = identifier.split("/", 1)
     return [
@@ -86,7 +116,10 @@ def command(identifier: str, *, workdir: Path, graphs: Path, name: str) -> list[
         "--python-bin", str(venv_bin()),
         # Already the JSON string `--knobs` wants; see `run_on_dsh`.
         "--knobs", lowering.knob_environment(
-            registry.resolve(Path("."), identifier)[1]().state_dict()
+            with_knobs(
+                registry.resolve(Path(project or "."), identifier)[1]().state_dict(),
+                list(knobs or []),
+            )
         )[lowering.KNOBS_ENV],
     ]
 
@@ -98,12 +131,29 @@ def run(
     intent: str = "",
     project: Path | None = None,
     timeout_s: int | None = None,
+    knobs: list[str] | None = None,
+    approve: list[str] | None = None,
 ) -> int:
-    """Lower, then run the mode under the CEO with the terminal attached."""
+    """Lower, then run the mode under the CEO with the terminal attached.
+
+    ``approve`` states a gate's answer before the run starts. It is the same act as
+    answering at the terminal, recorded in the same ledger, so a run nobody is
+    sitting at can still be given a person's decision -- explicitly, by name.
+    """
     if workdir is None:
         workdir = DEFAULT_ROOT / identifier.replace("/", "-")
-    name, graphs = prepare(identifier, workdir=workdir, intent=intent, project=project)
-    argv = command(identifier, workdir=workdir, graphs=graphs, name=name)
+    name, graphs = prepare(
+        identifier, workdir=workdir, intent=intent, project=project, knobs=knobs,
+    )
+    for pair in list(approve or []):
+        gate, separator, value = str(pair).partition("=")
+        if not separator or not gate.strip() or not value.strip():
+            raise ValueError(f"--approve takes GATE=VALUE, not {pair!r}")
+        # After prepare(), so the intent seed and the verdicts are both in the ledger.
+        steering.Ledger(workdir).verdict(gate.strip(), value.strip())
+    argv = command(
+        identifier, workdir=workdir, graphs=graphs, name=name, knobs=knobs, project=project,
+    )
     # stdin is inherited on purpose: the graph profile's answerer reads the person's
     # answer from the terminal, and a captured stdin is not a person.
     return subprocess.call(argv, cwd=str(REPO_ROOT), timeout=timeout_s)
@@ -124,6 +174,15 @@ def main(argv: list[str] | None = None) -> int:
              "nodes read and a resumed run is judged against",
     )
     parser.add_argument("--workdir", default="", help="the run directory")
+    parser.add_argument(
+        "--knob", action="append", default=[], metavar="NAME=VALUE",
+        help="set one of the mode's knobs for this run (repeatable)",
+    )
+    parser.add_argument(
+        "--approve", action="append", default=[], metavar="GATE=VALUE",
+        help="state a gate's answer before the run, e.g. gate_strategy=proceed "
+             "(repeatable); without it the run asks you at the terminal",
+    )
     parser.add_argument("--timeout", type=int, default=0, help="seconds; 0 waits for the person")
     args = parser.parse_args(argv)
 
@@ -133,6 +192,8 @@ def main(argv: list[str] | None = None) -> int:
             args.mode,
             workdir=workdir,
             intent=args.intent,
+            knobs=args.knob,
+            approve=args.approve,
             timeout_s=args.timeout or None,
         )
     except Exception as exc:  # a failed run must be a message, not a traceback

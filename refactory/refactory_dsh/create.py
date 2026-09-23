@@ -73,14 +73,28 @@ class CreateMode(Mode):
                 description="build the package as a DataNode that runs its subgraph "
                             "once per data item",
             ),
+            # What to build, and what to call it. The walker passes these in the run's
+            # task; a run on DSH has no task to pass, so they travel as knobs and the
+            # prepare op reads whichever it was given. One *thing* either way: the
+            # brief is what the run is for, and naming it is how the package is found.
+            "name": Knob(
+                "", "str",
+                description="the package to create (empty takes the name from the brief)",
+            ),
+            "brief": Knob(
+                "", "str",
+                description="what the package should do, in the asker's words",
+            ),
         }
 
     def build(self) -> Graph:
         graph = Graph()
         graph.add(Node(
             "prepare", "op", call=f"{OPS}:prepare",
-            # `task_ref` and `data_node` are read here and published as facts.
-            knobs=("task_ref", "data_node"),
+            # What to build (`name`, `brief`) and create-v2's two directives
+            # (`task_ref`, `data_node`) are read here and published as facts. The
+            # walker passes the first two in the run's task; on DSH they are knobs.
+            knobs=("name", "brief", "task_ref", "data_node"),
             writes=("brief.json",),
             produces=("name", "brief", "extends", "revision_of", "intent", "validation",
                       "design_review", "api", "reference", "task_ref", "data_node"),

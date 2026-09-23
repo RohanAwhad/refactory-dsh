@@ -1,0 +1,370 @@
+"""The one command: `refactory`.
+
+    refactory ceo "an idea" --mode design     describe it; the CEO designs and builds it
+    refactory ceo "an idea" --mode create     build a new package of modes
+    refactory run <package>/<mode>            use a mode, with you answering any gate
+    refactory optimize <package>/<mode>       search a mode's architecture and knobs
+    refactory list                            what this checkout can do
+    refactory status|leaderboard|best|adopt … read and keep a run
+    refactory package list|smoke|add|…        manage packages of modes
+    refactory ui                              the GUI
+    refactory doctor                          is this machine ready
+
+Every verb is a thin dispatcher onto the module that already owns it — `console`,
+`registry`, `loop`, `interactive`, `create`, `design`, `edit` — so there is one
+implementation and this file only decides how a person reaches it. The upstream
+project's shape is the model: one `ceo` command whose `--mode` picks what is built,
+because "describe what you want" is the use case, and everything else is plumbing.
+
+    uv run refactory ceo "a mode that drafts a haiku and checks the syllables" --mode create
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+from refactory_dsh.paths import REPO_ROOT, node_bin, venv_bin
+
+#: The authoring modes, by the verb a person names them with.
+AUTHORING: dict[str, str] = {
+    "create": "default_pack/create",
+    "design": "default_pack/design",
+    "edit": "default_pack/edit",
+}
+
+#: Verbs the console already answers, so `refactory <verb>` is `console <verb>`.
+READ_VERBS: tuple[str, ...] = (
+    "status", "runs", "artifacts", "leaderboard", "candidate", "best", "adopt", "steer", "stop",
+)
+
+#: Package verbs the registry already answers.
+PACKAGE_VERBS: tuple[str, ...] = (
+    "list", "show", "verify", "smoke", "tools", "add", "import", "remove", "enable", "disable",
+)
+
+
+def slug(text: str, *, words: int = 3) -> str:
+    """A name for what was asked for, when the asker did not give one."""
+    kept = [part for part in re.findall(r"[a-z0-9]+", text.lower()) if part]
+    name = "_".join(kept[:words]) or "new_mode"
+    return f"pkg_{name}" if name[0].isdigit() else name[:40]
+
+
+def _forward(module: str, argv: list[str]) -> int:
+    """Run one of the modules that owns a verb, in this process."""
+    import importlib
+
+    owner = importlib.import_module(module)
+    return int(owner.main(argv))
+
+
+def _launcher() -> Path:
+    """The GUI launcher this checkout ships."""
+    return REPO_ROOT / "refactory-dsh"
+
+
+def cmd_ceo(args: argparse.Namespace) -> int:
+    """Describe what you want: an authoring mode, or a mode to run.
+
+    A positional that names a mode (`pkg/mode`) *runs* that mode; anything else is
+    what you are asking for, and `--mode` says what to do about it. That is the whole
+    contract, and it is why the default is `design`: the headline case is "I have an
+    idea", not "I have a mode".
+    """
+    target = str(args.what)
+    mode = str(args.mode or "")
+    if "/" in target and not mode:
+        return _forward("refactory_dsh.interactive", [target, *args.rest])
+
+    if mode == "" or mode == "design":
+        identifier, authoring = AUTHORING["design"], "design"
+    elif mode in AUTHORING:
+        identifier, authoring = AUTHORING[mode], mode
+    elif "/" in mode:
+        return _forward("refactory_dsh.interactive", [mode, *args.rest])
+    else:
+        print(
+            f"refactory: --mode {mode!r} is not one of "
+            f"{', '.join(sorted(AUTHORING))} or <package>/<mode>",
+            file=sys.stderr,
+        )
+        return 2
+
+    check = str(args.check or "")
+    if authoring == "design" and not check:
+        print(
+            "refactory: design needs --check \"<command that proves it works>\", because a "
+            "design nobody can run is not a finished one",
+            file=sys.stderr,
+        )
+        return 2
+
+    knobs = [f"brief={target}", f"name={args.name or slug(target)}"]
+    if check:
+        knobs.append(f"check={check}")
+    forwarded = [identifier, "--intent", target]
+    for pair in knobs:
+        forwarded += ["--knob", pair]
+    if args.workdir:
+        forwarded += ["--workdir", str(args.workdir)]
+    # The person answers `gate_strategy` at the terminal. `--approve` is for a run
+    # with nobody sitting there, and it is an explicit act rather than a default.
+    for pair in args.verdict:
+        forwarded += ["--approve", pair]
+    print(f"refactory: {authoring} — {target}", file=sys.stderr)
+    return _forward("refactory_dsh.interactive", forwarded)
+
+
+def cmd_list(args: argparse.Namespace) -> int:
+    """What this checkout can do.
+
+    Readable by default -- a person typed this -- and JSON behind `--json`, which is
+    what a script or the CEO gets from the same console.
+    """
+    from refactory_dsh import registry
+
+    if args.json:
+        if args.what == "packages":
+            return _forward("refactory_dsh.registry", ["list", "--json"])
+        return _forward("refactory_dsh.console", ["modes"])
+    print(registry.render_catalogue(REPO_ROOT), end="")
+    return 0
+
+
+def cmd_ui(args: argparse.Namespace) -> int:
+    """The GUI, launched from this checkout (the panel and the tool both live here)."""
+    launcher = _launcher()
+    if not launcher.exists():
+        print(f"refactory: no launcher at {launcher}", file=sys.stderr)
+        return 2
+    forwarded = [str(launcher)]
+    if args.port:
+        forwarded += ["--port", str(args.port)]
+    if args.no_open:
+        forwarded.append("--no-open")
+    return subprocess.call(forwarded, cwd=str(REPO_ROOT))
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """Whether this machine can run a mode, and what to do about anything missing."""
+    checks: list[tuple[str, bool, str]] = []
+    interpreter = Path(sys.executable)
+    version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    checks.append(("python >= 3.12", sys.version_info >= (3, 12), version))
+    checks.append(("uv", shutil.which("uv") is not None, shutil.which("uv") or "install from https://docs.astral.sh/uv"))
+    checks.append(("node >= 22.19", _node_ok(), node_bin()))
+    for module, why in (
+        ("factory", "the vendored graph language (refactory/vendor/remote-factory)"),
+        ("refactory_dsh", "this package"),
+    ):
+        try:
+            __import__(module)
+            checks.append((f"import {module}", True, why))
+        except Exception as exc:  # the whole point is to report it, not to raise
+            checks.append((f"import {module}", False, f"{exc}"))
+    try:
+        from refactory_dsh import dsh_profile
+
+        problem = dsh_profile.requirement()
+        checks.append(("DSH profile 'graph'", problem is None, problem or dsh_profile.profile_dir().__str__()))
+    except Exception as exc:
+        checks.append(("DSH profile 'graph'", False, str(exc)))
+    try:
+        from refactory_dsh import registry
+
+        count = len(registry.installed_names(REPO_ROOT))
+        checks.append(("packages of modes", count > 0, f"{count} package(s) under {REPO_ROOT}"))
+    except Exception as exc:
+        checks.append(("packages of modes", False, str(exc)))
+
+    width = max(len(name) for name, _ok, _detail in checks)
+    for name, ok, detail in checks:
+        print(f"  {'ok  ' if ok else 'MISS'}  {name:<{width}}  {detail}")
+    bad = [name for name, ok, _detail in checks if not ok]
+    if bad:
+        print(f"\nrefactory doctor: {len(bad)} problem(s): {', '.join(bad)}")
+        return 1
+    print("\nrefactory doctor: ready — try `refactory list`, or `refactory ceo \"an idea\" --mode design`")
+    return 0
+
+
+def _smoke_without_a_model(identifier: str) -> str:
+    """Why `package smoke` cannot check this mode, or the empty string.
+
+    `smoke` runs a mode with no model client, which is the right default: a check
+    that quietly made paid calls would be a nasty surprise. A mode whose graph has
+    an `agent` node therefore cannot be smoked at all, and the honest answer is to
+    say so and name the command that does supply a model, rather than to fail deep
+    inside the executor with "agent node 'draft' needs a model client".
+    """
+    try:
+        from refactory_dsh import registry
+
+        mode = registry.resolve(REPO_ROOT, identifier)[1]()
+        graph = mode.build()
+    except Exception:
+        return ""
+    agents = [node.id for node in graph.nodes.values() if node.kind == "agent"]
+    if not agents:
+        return ""
+    return (
+        f"refactory: {identifier} calls a model ({len(agents)} agent node(s): "
+        f"{', '.join(agents)}), and `package smoke` runs without one on purpose.\n"
+        f"           use `refactory run {identifier}` — it runs the mode on DSH and supplies a model."
+    )
+
+
+def _node_ok() -> bool:
+    """Whether the Node this repository needs is runnable."""
+    try:
+        out = subprocess.run([str(node_bin()), "--version"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    match = re.search(r"v(\d+)\.(\d+)", out.stdout)
+    if not match:
+        return False
+    major, minor = int(match.group(1)), int(match.group(2))
+    return major > 22 or (major == 22 and minor >= 19)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """The command line, with one verb per question a person has."""
+    parser = argparse.ArgumentParser(
+        prog="refactory",
+        description="Create a mode, use it, optimize it, use it again.",
+        epilog=(
+            "Start with `refactory doctor`, then `refactory list`, then "
+            "`refactory ceo \"an idea\" --mode design`."
+        ),
+    )
+    sub = parser.add_subparsers(dest="verb", required=True)
+
+    ceo = sub.add_parser(
+        "ceo",
+        help="describe what you want: the CEO designs or builds it (or run the mode you name)",
+        description=(
+            "Give it an idea and a mode, or name a mode to run. An authoring mode runs on "
+            "DSH with your terminal attached, so the plan-approval gate reaches you."
+        ),
+    )
+    ceo.add_argument("what", help="what you want, or <package>/<mode> to run")
+    ceo.add_argument(
+        "--mode", default="design",
+        help="design (the default), create, edit, or <package>/<mode>",
+    )
+    ceo.add_argument("--name", default="", help="the package or artifact name (default: from what you said)")
+    ceo.add_argument("--check", default="", help="design only: the command that decides whether it works")
+    ceo.add_argument("--workdir", default="", help="the run directory")
+    ceo.add_argument(
+        "--approve", dest="verdict", action="append", default=[], metavar="GATE=VALUE",
+        help="state a gate's answer up front, e.g. gate_strategy=proceed, for an unattended run",
+    )
+
+    run = sub.add_parser("run", help="use one mode, with you answering any gate")
+    run.add_argument("mode", help="the mode, as <package>/<name>")
+    run.add_argument("--intent", default="", help="what this run is for, in your words")
+    run.add_argument("--workdir", default="", help="the run directory")
+    run.add_argument("--knob", action="append", default=[], metavar="NAME=VALUE", help="set a knob for this run")
+    run.add_argument("--timeout", type=int, default=0, help="seconds; 0 waits for you")
+
+    optimize = sub.add_parser("optimize", help="search a mode's architecture and knobs")
+    optimize.add_argument("mode", help="the mode, as <package>/<name>")
+    for flag, help_text in (
+        ("--epochs", "rounds of propose → validate → evaluate → select"),
+        ("--batch-size", "candidates per epoch"),
+        ("--optimizer", "how candidates are proposed"),
+        ("--strategy", "which outer loop drives the search"),
+        ("--evaluator", "walker (fast) or dsh (ships)"),
+        ("--preset", "which edits are allowed"),
+        ("--seed", "reproduce a search"),
+        ("--elite", "how many parents each round proposes against"),
+        ("--max-evaluations", "a hard ceiling on evaluated candidates"),
+        ("--attempts", "retries per batch after a refusal"),
+        ("--runs-root", "the run directory to write"),
+        ("--intent", "what the run is for, in your words"),
+        ("--model", "the model the reasoning optimizer asks"),
+    ):
+        optimize.add_argument(flag, default=None, help=help_text)
+
+    listing = sub.add_parser("list", help="what this checkout can do")
+    listing.add_argument("what", nargs="?", default="modes", choices=["modes", "packages"])
+    listing.add_argument("--json", action="store_true", help="the console's JSON instead of the listing")
+
+    for verb in READ_VERBS:
+        # The console owns these; `refactory status --help` shows the console's help.
+        sub.add_parser(verb, help=f"`refactory {verb}` — the console's own verb, arguments pass through")
+
+    package = sub.add_parser("package", help="manage packages of modes")
+    package.add_argument(
+        "what", nargs="?", choices=PACKAGE_VERBS,
+        help="the registry verb; its own arguments pass through",
+    )
+
+    ui = sub.add_parser("ui", help="the Web GUI (the tool, the panel, the conversation)")
+    ui.add_argument("--port", type=int, default=0, help="default: the launcher's own")
+    ui.add_argument("--no-open", action="store_true", help="do not open a browser")
+
+    sub.add_parser("doctor", help="whether this machine can run a mode")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Dispatch one verb onto the module that owns it."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+
+    # The run-reading verbs and the package verbs take the console's and the
+    # registry's own arguments verbatim -- including flags -- so they are forwarded
+    # before argparse, which would otherwise try to claim `--run` for itself.
+    if argv and argv[0] in READ_VERBS:
+        return _forward("refactory_dsh.console", argv)
+    if argv and argv[0] == "package" and len(argv) >= 2:
+        if argv[1] == "smoke" and len(argv) >= 3:
+            problem = _smoke_without_a_model(argv[2])
+            if problem:
+                print(problem, file=sys.stderr)
+                return 2
+        return _forward("refactory_dsh.registry", argv[1:])
+
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.verb == "ceo":
+        return cmd_ceo(args)
+    if args.verb == "run":
+        forwarded = [args.mode]
+        if args.intent:
+            forwarded += ["--intent", args.intent]
+        if args.workdir:
+            forwarded += ["--workdir", args.workdir]
+        for pair in args.knob:
+            forwarded += ["--knob", pair]
+        if args.timeout:
+            forwarded += ["--timeout", str(args.timeout)]
+        return _forward("refactory_dsh.interactive", forwarded)
+    if args.verb == "optimize":
+        forwarded = [args.mode]
+        for flag, value in vars(args).items():
+            if flag in ("verb", "mode") or value is None:
+                continue
+            forwarded += [f"--{flag.replace('_', '-')}", str(value)]
+        return _forward("refactory_dsh.loop", forwarded)
+    if args.verb == "list":
+        return cmd_list(args)
+    if args.verb == "ui":
+        return cmd_ui(args)
+    if args.verb == "doctor":
+        return cmd_doctor(args)
+    if args.verb == "package":  # handled before argparse; kept for completeness
+        return _forward("refactory_dsh.registry", [])
+    parser.error(f"unknown verb {args.verb!r}")  # pragma: no cover - argparse rejects first
+    return 2
+
+
+if __name__ == "__main__":  # pragma: no cover - the entry point
+    raise SystemExit(main())

@@ -7,7 +7,10 @@ name = "refactory-dsh"
 version = "0.1.0"
 description = "refactory's graph semantics -> graph.json -> DSH executes (create / optimize / design meta-modes)."
 requires-python = ">=3.11"
-dependencies = ["pydantic>=2", "PyYAML>=6"]
+dependencies = ["pydantic>=2", "PyYAML>=6", "structlog>=24"]
+
+[project.scripts]
+refactory = "refactory_dsh.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["refactory_dsh*", "refactory_packages*"]

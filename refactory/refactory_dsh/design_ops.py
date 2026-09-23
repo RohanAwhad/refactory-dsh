@@ -26,11 +26,19 @@ ARTIFACTS = Path(".factory") / "artifacts"
 def prepare_design(ctx: Any) -> dict[str, Any]:
     """Read the brief, and what the brief says counts as done."""
     task = dict(getattr(ctx, "task", {}) or {})
-    name = str(task.get("name") or "").strip()
+    # The walker passes these in the run's task; a run on DSH carries them as knobs.
+    name = str(task.get("name") or ctx.knob("name", "") or "").strip()
+    brief = str(task.get("brief") or ctx.knob("brief", "") or "").strip()
+    check = str(task.get("check") or ctx.knob("check", "") or "").strip()
+    if not name and brief:
+        from refactory_dsh.create_ops import _slug
+
+        name = _slug(brief)
     if not name:
-        raise ValueError("design-mode needs an artifact name, e.g. {'name': 'my_tool'}")
-    brief = str(task.get("brief") or "").strip()
-    check = str(task.get("check") or "").strip()
+        raise ValueError(
+            "design-mode needs what to build: pass {'name': ..., 'brief': ..., 'check': ...} "
+            "in the task (the walker) or the `name`/`brief`/`check` knobs (a run on DSH)"
+        )
     if not check:
         raise ValueError(
             "design-mode needs a check: the command that decides whether the artifact "

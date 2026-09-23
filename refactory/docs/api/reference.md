@@ -629,6 +629,31 @@ What a reader needs to show a run: progress while it happens, a diff of a
 - **`render_diff`** — The diff as markdown, for the report and for a reader.
 
 
+<a id="refactory_dsh-cli"></a>
+
+## `refactory_dsh.cli`
+
+The one command: `refactory`.
+
+| kind | name | signature |
+|---|---|---|
+| function | `build_parser` | `() -> 'argparse.ArgumentParser'` |
+| function | `cmd_ceo` | `(args: 'argparse.Namespace') -> 'int'` |
+| function | `cmd_doctor` | `(args: 'argparse.Namespace') -> 'int'` |
+| function | `cmd_list` | `(args: 'argparse.Namespace') -> 'int'` |
+| function | `cmd_ui` | `(args: 'argparse.Namespace') -> 'int'` |
+| function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
+| function | `slug` | `(text: 'str', *, words: 'int' = 3) -> 'str'` |
+
+- **`build_parser`** — The command line, with one verb per question a person has.
+- **`cmd_ceo`** — Describe what you want: an authoring mode, or a mode to run.
+- **`cmd_doctor`** — Whether this machine can run a mode, and what to do about anything missing.
+- **`cmd_list`** — What this checkout can do.
+- **`cmd_ui`** — The GUI, launched from this checkout (the panel and the tool both live here).
+- **`main`** — Dispatch one verb onto the module that owns it.
+- **`slug`** — A name for what was asked for, when the asker did not give one.
+
+
 <a id="refactory_dsh-console"></a>
 
 ## `refactory_dsh.console`

@@ -97,11 +97,39 @@ def test_create_mode_is_itself_a_mode():
     assert mode.is_scored() is False, "creating is judged by the package, not by a number"
 
 
-def test_prepare_needs_a_package_name(tmp_path):
-    mode = CreateMode()
-    result = mode.run(tmp_path, task={"brief": "no name given"})
-    assert result.exit_ok is False
-    assert "needs a package name" in (result.error or "")
+def test_a_brief_alone_names_the_package(tmp_path):
+    """"Make me a thing that counts teapots" is a complete request.
+
+    The name is how the result is found later, so it has to exist -- but refusing to
+    start over a missing name, when the brief already says what is wanted, is the
+    wrong thing to be strict about. The brief's own words become the name.
+    """
+    from refactory_dsh import create_ops
+    from refactory_dsh.nn import RunContext
+
+    ctx = RunContext(tmp_path, knobs={"brief": "count the teapots in a tray"}, facts={}, task={})
+    assert create_ops.prepare(ctx)["name"] == "count_the_teapots"
+
+
+def test_prepare_reads_the_knobs_a_run_on_dsh_carries(tmp_path):
+    """The walker passes name/brief in the task; DSH has no task, so they are knobs."""
+    from refactory_dsh import create_ops
+    from refactory_dsh.nn import RunContext
+
+    ctx = RunContext(
+        tmp_path, knobs={"name": "knob_pack", "brief": "from the knobs"}, facts={}, task={},
+    )
+    published = create_ops.prepare(ctx)
+    assert published["name"] == "knob_pack"
+    assert published["brief"] == "from the knobs"
+
+
+def test_prepare_refuses_a_run_with_nothing_to_build(tmp_path):
+    from refactory_dsh import create_ops
+    from refactory_dsh.nn import RunContext
+
+    with pytest.raises(ValueError, match="needs what to build"):
+        create_ops.prepare(RunContext(tmp_path, knobs={}, facts={}, task={}))
 
 
 def test_a_good_answer_creates_registers_and_smoke_scores(tmp_path):

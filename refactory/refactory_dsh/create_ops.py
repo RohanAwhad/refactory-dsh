@@ -95,13 +95,36 @@ Rules the validator enforces on every candidate, so a violation is a refusal:
 """
 
 
+def _slug(text: str, *, words: int = 3) -> str:
+    """A package name from what the run is for.
+
+    A name is how the result is found later, so a run given only an idea still needs
+    one. Three words, lowercased, `_`-joined -- which is the shape a package name
+    already has to be, so the same text that asks for something also names it.
+    """
+    kept = [part for part in re.findall(r"[a-z0-9]+", text.lower()) if part]
+    slug = "_".join(kept[:words]) or "created_pack"
+    if slug[0].isdigit():
+        slug = f"pkg_{slug}"
+    return slug[:40]
+
+
 def prepare(ctx: Any) -> dict[str, Any]:
     """Read the brief the run was given and publish it to the prompts."""
     task = dict(getattr(ctx, "task", {}) or {})
-    name = str(task.get("name") or "").strip()
+    # The walker passes name/brief in the run's task; a run on DSH carries them as
+    # knobs, because DSH's task is the CEO's prompt. Both are the same fact.
+    name = str(task.get("name") or ctx.knob("name", "") or "").strip()
+    brief = str(task.get("brief") or ctx.knob("brief", "") or "").strip()
+    if not name and brief:
+        # "an idea" is enough to start: the name is how the result is found later, and
+        # a slug of the brief is a better answer than refusing to begin.
+        name = _slug(brief)
     if not name:
-        raise ValueError("create-mode needs a package name in its task, e.g. {'name': 'my_pkg'}")
-    brief = str(task.get("brief") or "").strip()
+        raise ValueError(
+            "create-mode needs what to build: pass {'name': ..., 'brief': ...} in the "
+            "task (the walker) or the `name`/`brief` knobs (a run on DSH)"
+        )
     extends = str(task.get("extends") or "").strip()
     revision = str(task.get("mode") or "").strip()
     intent = str(task.get("intent") or "Make a new package of modes.").strip()

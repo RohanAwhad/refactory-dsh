@@ -43,12 +43,18 @@ class DesignMode(Mode):
                 180, "int", lo=10, hi=1800,
                 description="how long the brief's check may run",
             ),
+            # As in create: the walker passes these in the run's task, and a run on
+            # DSH carries them as knobs.
+            "name": Knob("", "str", description="the artifact to design (empty takes the name from the brief)"),
+            "brief": Knob("", "str", description="what to build, in the asker's words"),
+            "check": Knob("", "str", description="the command that decides whether the artifact works"),
         }
 
     def build(self) -> Graph:
         graph = Graph()
         graph.add(Node(
             "prepare", "op", call=f"{OPS}:prepare_design",
+            knobs=("name", "brief", "check"),
             writes=("brief.json",),
             produces=("name", "brief", "check", "validation"),
             notes="read the brief and the command that decides whether it is done",
