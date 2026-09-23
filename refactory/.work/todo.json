@@ -622,6 +622,17 @@
       "commit": "8b7c4a574c",
       "observed": "The offline recipe set passes 15/15 in a fresh clone; `refactory ceo --mode create` completed all 23 nodes of create-v2 on DSH and produced haiku_pack/haiku (one agent node), which `refactory run haiku_pack/haiku --intent \"a haiku about the ocean\"` then ran to a real 5-7 haiku with syllable_accuracy 1.0.",
       "evidence": "A root pyproject.toml with the three local packages as editable sources makes `uv sync` the whole install and `uv run refactory \u2026` every command (install.sh does submodules + pnpm + uv sync + the DSH profile). `cli.py` is one verb per question, dispatching onto the module that owns it; `ceo \"<an idea>\" --mode design|create|edit` runs the authoring mode on DSH with the terminal attached, with name/brief/check travelling as knobs and `--approve GATE=VALUE` for an unattended run. The graph profile mounts tool-subagent foreground-only and the runner reads .refactory/spine-status.json, failing with the nodes still due instead of exiting 0 on an abandoned graph. Node commands resolve the project through paths.project_for_nodes() (REFACTORY_PROJECT, set by the graph bundle), so a created package lands in the workspace rather than inside the run. tools/recipes.py is the single list of documented commands: the HTML tour renders it and check_recipes executes it. Also fixed on the way: `interactive`/`refactory run` refused to start because DSH needs an absolute session cwd."
+    },
+    {
+      "id": "revision-compare",
+      "issue": 13,
+      "title": "The revision comparison lived in a function the console script never called",
+      "why": "`refactory ceo \"\u2026\" --mode edit` documents a revision that refuses a regression. A run of it showed no comparison happened at all on that path: `facts.json` recorded `revision_of` and nothing else, the package's `.origin.json` said only `origin: create-mode`, and the whole comparison \u2014 before score, after score, the source state and its digest \u2014 existed only in `edit.edit()`, which the CLI never reaches. The `edit-mode` recipe asserted `before_score`/`after_score` in the output, strings the run could not produce, at a tier no gate runs by default.",
+      "verify": "pytest refactory/tests/test_edit_design.py -q",
+      "status": "done",
+      "commit": "2195b411d5",
+      "evidence": "Fixed and verified end to end. The `smoke` node now scores the mode being revised as well, compares the two, and fails the run naming both scores; `before_score`/`after_score`/`regressed` are recorded in the run's `revision.json` and, with `revision_of` and the source's whole state plus digest, in the package's `.origin.json`. Two modes are compared only when one smoke run measures both: an unscored source, or one whose graph calls a model, is recorded as not compared with the reason, so it cannot be read as a pass. `allow_regression` is a declared knob reachable as `ceo --knob allow_regression=1`. `interactive.run` prints one line of the run's own facts when it finishes, which is what makes the recipe's promise checkable and was verified by running the documented command at the model tier (`check_recipes --tier model --only edit-mode`). A run of the new suite also exposed the guard this file records: with no `package_path` in its facts the comparison wrote `.origin.json` into the working directory. Reproduce: pytest refactory/tests/test_edit_design.py -q",
+      "observed": "26 passed (test_edit_design.py)"
     }
   ],
   "verification": {
