@@ -52,8 +52,18 @@ class DshModelClient:
         self._model = model
         self._provider = provider
 
-    def complete(self, prompt: str, *, system: str = "") -> str:
+    def complete(
+        self, prompt: str, *, system: str = "", workdir: Path | None = None
+    ) -> str:
         """Return the model's answer to ``prompt``.
+
+        ``workdir`` is where the completion runs, and it is not a detail: the agent
+        this spawns has tools and writes files with relative paths, so a completion
+        with the checkout as its working directory writes a node's artifacts into the
+        repository. The reviewing nodes did exactly that — their `reviews/*.md`
+        appeared at the checkout root while the run's own `reviews/` stayed empty, and
+        the QA synthesis, reading the run directory, found no reviews at all. A caller
+        with no run directory to name gets the scratch directory instead.
 
         Raises ``RuntimeError`` on a non-zero exit or timeout. The loop survives
         that and records it: a failed round contributes no proposals and lands in
@@ -65,11 +75,13 @@ class DshModelClient:
         simply has no better version.
         """
         task = f"{system}\n\n{prompt}" if system else prompt
+        # Absolute, because the child's working directory is the node's, not the
+        # checkout's.
         cmd = [
             str(node_bin()),
             "--import",
             "tsx/esm",
-            "apps/cli/src/bin.ts",
+            str(dsh_root() / "apps" / "cli" / "src" / "bin.ts"),
             "--profile",
             "headless",
             # A node is one completion whose answer is the node's output, so a model
@@ -88,13 +100,14 @@ class DshModelClient:
         cmd.append(task)
 
         scratch = Path(os.environ.get("REFACTORY_MODEL_SCRATCH", "/tmp")) / "refactory-model"
-        scratch.mkdir(parents=True, exist_ok=True)
+        run_dir = Path(workdir).expanduser().resolve() if workdir is not None else scratch
+        run_dir.mkdir(parents=True, exist_ok=True)
         try:
             proc = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                cwd=str(dsh_root()),
+                cwd=str(run_dir),
                 timeout=self._timeout_s,
             )
         except subprocess.TimeoutExpired as exc:

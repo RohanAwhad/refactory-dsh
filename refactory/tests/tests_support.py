@@ -216,7 +216,10 @@ class FakeModel:
     def __init__(self, answers: list[str]) -> None:
         self.answers = list(answers)
         self.prompts: list[str] = []
+        #: The directory each completion was told to run in; see the walker's `_ask_model`.
+        self.workdirs: list[object] = []
 
-    def complete(self, prompt: str, *, system: str = "") -> str:
+    def complete(self, prompt: str, *, system: str = "", workdir: object = None) -> str:
         self.prompts.append(prompt)
+        self.workdirs.append(workdir)
         return self.answers.pop(0) if self.answers else ""

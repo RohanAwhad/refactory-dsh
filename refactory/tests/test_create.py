@@ -16,6 +16,7 @@ from refactory_dsh import registry
 from refactory_dsh.create import CreateConfig, CreateError, CreateMode
 from refactory_dsh import create_ops, sandbox
 from refactory_dsh.create_ops import parse_files
+from refactory_dsh.paths import REPO_ROOT
 from tests_support import (
     FakeModel,
     RESEARCH_ANSWER,
@@ -688,3 +689,24 @@ def test_the_research_prompt_states_the_shape_and_the_retry(tmp_path):
     assert "research-plan.json" in prompt
     assert '"slug"' in prompt and '"finding"' in prompt
     assert "{{research_review}}" in prompt
+
+
+def test_a_created_packages_artifacts_stay_in_the_run_directory(tmp_path):
+    """Every agent node's completion runs in the run directory, not the checkout.
+
+    The model client spawns an agent with tools; run from the checkout, the reviews it
+    writes land in the repository, the run's own `reviews/` stays empty, and the QA
+    gate reads nothing. The walker tells the client where the node lives.
+    """
+    model = FakeModel(create_answers(NAME, good_files(NAME)))
+    workdir = tmp_path / "run"
+    create_module.create(_config(name=NAME, brief="count", workdir=workdir), client=model)
+    assert model.workdirs, "no completion was told where to run"
+    assert all(Path(str(where)).resolve() == workdir.resolve() for where in model.workdirs), (
+        f"a completion ran outside the run directory: {set(map(str, model.workdirs))}"
+    )
+    for artifact in ("reviews/health-check.md", "reviews/code-review.md", "reviews/qa.md"):
+        assert (workdir / artifact).exists(), f"{artifact} stayed out of the run directory"
+        assert not (REPO_ROOT / artifact).exists(), (
+            f"{artifact} was written into the checkout instead of the run directory"
+        )

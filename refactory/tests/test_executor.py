@@ -317,3 +317,52 @@ def test_a_data_node_bound_to_a_task_uses_its_items_and_verifies_each(tmp_path):
         {"id": "a", "passed": True, "score": 1.0},
         {"id": "b", "passed": True, "score": 0.5},
     ]
+
+
+def test_an_agent_node_tells_the_model_client_where_the_node_lives(tmp_path):
+    """A completion runs in the node's run directory (#63's family).
+
+    The client spawns an agent with tools, and that agent writes files with relative
+    paths. Run from the checkout, a node's artifacts land in the repository: the
+    reviewing nodes wrote `reviews/*.md` at the checkout root while the run's own
+    `reviews/` stayed empty, so the QA synthesis read no reviews and the overwatch
+    gate sent the build back to emit for nothing.
+    """
+    from refactory_dsh.nn import Graph, Node, RunContext
+    from refactory_dsh.nn.executor import execute
+
+    class Recording:
+        def __init__(self) -> None:
+            self.workdirs: list[object] = []
+
+        def complete(self, prompt: str, *, system: str = "", workdir: object = None) -> str:
+            self.workdirs.append(workdir)
+            return "reviewed\n"
+
+    graph = Graph()
+    graph.add(Node("review", "agent", prompt_template="review it",
+                   writes=("reviews/qa.md",), produces=("qa",)))
+    client = Recording()
+    result = execute(graph, tmp_path / "run", model=client, max_steps=10)
+    assert result.exit_ok, result.error
+    assert client.workdirs == [(tmp_path / "run").resolve()], (
+        "the client was not told where the node's artifacts belong"
+    )
+    assert (tmp_path / "run" / "reviews" / "qa.md").exists()
+
+
+def test_a_model_client_without_a_workdir_argument_is_still_asked(tmp_path):
+    """The vendored protocol takes only text in, text out; the walker copes."""
+    from refactory_dsh.nn import Graph, Node
+    from refactory_dsh.nn.executor import execute
+
+    class Minimal:
+        def complete(self, prompt: str, *, system: str = "") -> str:
+            return "done\n"
+
+    graph = Graph()
+    graph.add(Node("review", "agent", prompt_template="review it",
+                   writes=("reviews/qa.md",), produces=("qa",)))
+    result = execute(graph, tmp_path / "run", model=Minimal(), max_steps=10)
+    assert result.exit_ok, result.error
+    assert (tmp_path / "run" / "reviews" / "qa.md").read_text() == "done\n"

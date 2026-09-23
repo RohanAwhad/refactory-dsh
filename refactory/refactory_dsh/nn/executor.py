@@ -235,6 +235,28 @@ def load_items(node: Node, workdir: Path) -> list[dict[str, Any]]:
     return items
 
 
+def _ask_model(model: Any, prompt: str, *, system: str, workdir: Path) -> str:
+    """One completion, telling the client where the node's artifacts belong.
+
+    ``workdir`` is not part of the vendored ``ModelClient`` protocol — the optimizer
+    needs only text back — so a client that does not accept it is asked without it. The
+    client that spawns an agent has to know: that agent has tools and writes files with
+    relative paths, and a completion run from the checkout writes a node's artifacts
+    into the repository. The reviewing nodes did exactly that, leaving the run's own
+    `reviews/` empty while the QA synthesis read nothing.
+    """
+    import inspect
+
+    kwargs: dict[str, Any] = {"system": system}
+    try:
+        parameters = inspect.signature(model.complete).parameters
+    except (TypeError, ValueError):  # pragma: no cover - a builtin or a stub
+        parameters = {}
+    if "workdir" in parameters:
+        kwargs["workdir"] = workdir
+    return str(model.complete(prompt, **kwargs))
+
+
 @dataclass
 class Executor:
     """Walk a graph from its start node to a terminal."""
@@ -454,7 +476,9 @@ class Executor:
             raise ExecutionError(f"agent node {node.id!r} needs a model client")
         prompt = render(node.prompt_template, self.ctx)
         self.model_calls += 1
-        output = self.ctx.model.complete(prompt, system=node.notes)
+        output = _ask_model(
+            self.ctx.model, prompt, system=node.notes, workdir=self.ctx.workdir
+        )
         if node.writes:
             self.ctx.write_text(node.writes[0], output)
         if node.produces:
