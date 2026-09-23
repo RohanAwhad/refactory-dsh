@@ -516,3 +516,23 @@ def test_the_run_summary_says_nothing_when_there_is_nothing_to_say(tmp_path):
     assert run_summary(workdir) == ""
     (workdir / "facts.json").write_text("{ not json")
     assert run_summary(workdir) == ""
+
+
+def test_a_comparison_with_no_package_path_writes_no_provenance(tmp_path, monkeypatch):
+    """The provenance belongs to the package; a node with no package writes none.
+
+    `Path("") / ".origin.json"` is `./.origin.json`, so an unguarded write put a
+    revision's provenance into whatever directory the node was standing in — which for
+    a hand-invoked node is the checkout. Found exactly that way: a run of the suite
+    left an untracked `.origin.json` at the repository root.
+    """
+    from refactory_dsh.run import run_node
+
+    stray = Path(".origin.json")
+    stray.unlink(missing_ok=True)
+    workdir = _smoke_run(
+        tmp_path, monkeypatch, revision="default_pack/design",
+        scores={"phase_pack/countup": 0.4},
+    )
+    run_node("refactory_dsh.create_ops:smoke", workdir=workdir, node_id="smoke")
+    assert not stray.exists(), "the comparison wrote provenance into the working directory"

@@ -697,8 +697,12 @@ def _revision(
         "note": reason,
     }
     ctx.write_json("revision.json", recorded)
-    path = Path(str(ctx.facts.get("package_path") or "")) / ".origin.json"
-    if path.parent.is_dir():
+    # Where the package is, when the run has got that far. A node invoked without one
+    # (a test, or a run that stopped earlier) must not write provenance into whatever
+    # directory it happens to be standing in.
+    package = str(ctx.facts.get("package_path") or "")
+    if package:
+        path = Path(package) / ".origin.json"
         current = json.loads(path.read_text()) if path.exists() else {}
         current.update({key: value for key, value in recorded.items() if key != "note"})
         path.write_text(json.dumps(current, indent=2, default=str))
