@@ -7,6 +7,7 @@ refusals that exist to stop a person being confused by a low-level error.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -107,3 +108,48 @@ def test_help_is_available_for_every_verb_a_person_starts_with(argv):
     result = _run(*argv)
     assert result.returncode == 0
     assert "usage:" in result.stdout
+
+
+#: An option argparse prints at the start of its own line, as `  --flag METAVAR`.
+_OPTION = re.compile(r"^\s+(--[a-z][a-z0-9-]*)", re.MULTILINE)
+
+#: The verbs whose options the README tabulates, so every one of their flags is owed a row.
+_TABULATED = ("ceo", "run", "optimize", "list", "ui", "doctor")
+
+
+def test_the_readme_reference_matches_the_command_line():
+    """The README's command tables are the parser's own verbs, options and defaults.
+
+    Both directions matter: a reader told about a verb or flag that does not exist
+    gets an exit 2, and a flag the parser accepts but the reference omits is a
+    feature nobody finds. The verbs are read back from `--help` rather than from a
+    list here, so a new verb cannot be added without the README learning about it.
+    """
+    readme = (REPO_ROOT / "README.md").read_text()
+    start = readme.index("## The command line")
+    reference = readme[start:readme.index("## Documentation", start)]
+
+    verbs = re.search(r"\{([a-z,]+)\}", _run("--help").stdout)
+    assert verbs, "`refactory --help` no longer lists its verbs, so this test proves nothing"
+    verb_list = verbs.group(1).split(",")
+
+    missing = [verb for verb in verb_list if f"refactory {verb}" not in reference]
+    assert missing == [], f"the README reference documents no command for: {missing}"
+
+    declared: dict[str, set[str]] = {}
+    for verb in verb_list:
+        helped = _run(verb, "--help")
+        assert helped.returncode == 0, f"the README documents `refactory {verb}`, which has no help: {helped.stderr}"
+        declared[verb] = set(_OPTION.findall(helped.stdout))
+    named = set(re.findall(r"--[a-z][a-z0-9-]*", reference))
+
+    # argparse writes `-h, --help` on one line, which `_OPTION` skips; every verb
+    # still accepts it, so the reference naming it is correct.
+    invented = sorted(named - set().union(*declared.values()) - {"--help"})
+    assert invented == [], f"the README reference invents options no verb accepts: {invented}"
+
+    undocumented = {
+        verb: sorted(declared[verb] - named)
+        for verb in _TABULATED if declared[verb] - named
+    }
+    assert undocumented == {}, f"the README reference omits options the parser accepts: {undocumented}"

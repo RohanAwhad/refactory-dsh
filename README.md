@@ -138,21 +138,160 @@ uv run refactory package add|import|remove|enable|disable …
 
 ---
 
-## The GUI: ask instead of typing
+## The command line
+
+Every command is `uv run refactory <verb>`. This is the reference; [QUICKSTART.md](QUICKSTART.md) is the same thing as a walkthrough, and `uv run refactory <verb> --help` is always the current truth for one verb.
+
+<a id="cli-create"></a>
+### Create and build
+
+| command | what it does |
+|---|---|
+| `refactory ceo "<what you want>" --mode create` | build a package of modes from a brief: research, a strategy you approve, a build, three parallel reviews, an audit, then register and smoke (20–30 minutes) |
+| `refactory ceo "<what you want>" --mode design --check "<command>"` | design a checked artifact instead of a package; `--check` is the command that decides whether it works (this is the default mode) |
+| `refactory ceo "<what you want>" --mode edit --revise <package>/<mode>` | revise an existing mode and refuse a regression; `--revise` names what it started from |
+| `refactory ceo <package>/<mode>` | run that mode instead of authoring anything |
+
+| option | what it does |
+|---|---|
+| `--name <name>` | the package or artifact name; without it your words become the name |
+| `--check "<command>"` | design only: run inside the artifact directory; the gate reloops until it exits 0 |
+| `--revise <package>/<mode>` | edit only: the mode being revised |
+| `--approve <gate>=<value>` | state a gate's answer up front, e.g. `gate_strategy=proceed`, for an unattended run |
+| `--workdir <dir>` | where the run's evidence lands (default `.factory/interactive/<package>-<mode>`) |
+
+<a id="cli-manage"></a>
+### Manage packages of modes
+
+| command | what it does |
+|---|---|
+| `refactory list` | every package and mode this checkout can run |
+| `refactory list modes --json` | the same catalogue as JSON, with each mode's `action`, parameters and guidance |
+| `refactory package verify <package>` | import every mode and validate its graph; an absent tool is not a finding |
+| `refactory package show <package>/<mode>` | one mode, described |
+| `refactory package tools <package>` | the tools it declares, and whether this machine has them |
+| `refactory package add <dir>` | install a package from a directory (`--as` to rename) |
+| `refactory package import <dir-or-git-url>` | import one, recording where it came from (`--ref`, `--as`) |
+| `refactory package remove <package>` | remove it |
+| `refactory package enable/disable <package>` | include it, or leave it out of the catalogue |
+
+<a id="cli-run"></a>
+### Run and use a mode
+
+| command | what it does |
+|---|---|
+| `refactory run <package>/<mode> --intent "<what it is for>"` | run the mode on DSH with your terminal attached, so a gate reaches you |
+| `refactory run <package>/<mode> --knob name=value` | set one of the mode's knobs for this run |
+| `refactory run <package>/<mode> --workdir <dir>` | where the run's evidence lands |
+| `refactory run <package>/<mode> --timeout <seconds>` | how long to wait at a gate; `0` waits for you |
+| `refactory run <package>/<mode> --approve <gate>=<value>` | answer a gate before the run instead of at it |
+| `refactory package smoke <package>/<mode>` | run it once, in a sandbox, without a model (free) |
+| `refactory package smoke <package>/<mode> --model` | score a mode whose graph has an `agent` node, by supplying a model |
+
+<a id="cli-optimize"></a>
+### Optimize it
+
+`refactory optimize <package>/<mode>` searches a mode's architecture and knobs: propose typed edits, validate, evaluate, keep what improves.
+
+| option | what it does | default |
+|---|---|---|
+| `--epochs <n>` | rounds of propose → validate → evaluate → select | 2 |
+| `--batch-size <n>` | candidates proposed per epoch | 4 |
+| `--optimizer <name>` | how candidates are proposed: `random`, `hill_climb`, `evolutionary`, `archive`, `islands`, `map_elites`, `autoresearch` | `autoresearch` |
+| `--strategy <name>` | which outer loop drives the search: `default`, `best_of_n`, `reflective`, `reflective_sampler`, `tree_search`, `staged_curriculum`, `staged_v1`, `adaptive_meta`, `autoscientists`, `research_then_optimize` | the harness's own (`default`) |
+| `--evaluator walker\|dsh` | which runtime scores a candidate: fast in-process, or the one that ships | `walker` |
+| `--preset <name>` | which edits are allowed: `broad`, `structure`, `conservative`, `knob_only` | `broad` |
+| `--seed <n>` | reproduce a search exactly | 0 |
+| `--elite <n>` | how many parents each round proposes against | 3 |
+| `--max-evaluations <n>` | a hard ceiling on evaluated candidates | 64 |
+| `--attempts <n>` | retries per batch after a refusal | 3 |
+| `--runs-root <dir>` | the run directory itself; read it back with `--run <this path>` | `.factory/loop` |
+| `--intent "<words>"` | what the run is for; seeds the ledger the agents read | empty |
+| `--model <name>` | the model the reasoning optimizer asks (not the mode's own agents) | the configured route |
+
+<a id="cli-read"></a>
+### Read the run, and steer it
+
+| command | what it does |
+|---|---|
+| `refactory runs` | every run under the root, newest first |
+| `refactory status --run <id>` | where it is, and the events since an offset |
+| `refactory leaderboard --run <id>` | candidates by score, each with its diff against its parent |
+| `refactory candidate <id> --run <id>` | one candidate, exactly what it changed |
+| `refactory best --run <id>` | the winner, with the state that scored it |
+| `refactory artifacts --run <id> [--contents]` | what it left on disk |
+| `refactory adopt --run <id> --as <package>` | write the winner as a new package, input untouched |
+| `refactory steer --run <id> --note "<words>" [--kind info\|correction\|constraint]` | add what you said to the run's intent ledger |
+| `refactory steer --run <id> --verdict <gate>=<value>` | record a gate's answer, so a resume replays it |
+| `refactory stop --run <id>` | ask a run to stop |
+
+<a id="cli-other"></a>
+### Everything else
+
+| command | what it does |
+|---|---|
+| `refactory doctor` | whether this machine can run a mode, and what to install if not |
+| `refactory ui [--port <n>] [--no-open]` | the Web GUI (below) |
+
+## The GUI: run modes from the browser
+
+<a id="gui-launch"></a>
+### Launch it
 
 ```bash
 uv run refactory ui --port 3081 --no-open
 ```
 
-Open the printed `http://127.0.0.1:3081/?token=…` — the token is per-process, and the bare URL answers `401` without it.
+It prints one line — open that URL, token and all:
 
-- **The conversation** carries the `refactory` tool: *"what modes can I run?"*, *"start a run of counting_pack/fixed_step with the random optimizer"*, *"show me the leaderboard"*, *"keep the winner as a package called my_tuned"*, *"this run is for making the count land exactly"*. The CEO's coding tools are disabled on purpose: it can choose, start, read, steer and author, and cannot wander off and implement something itself.
-- **The panel** (right Sidebar → **Modes**) is the same choices as clicks: the mode, the outer loop, the optimizer and the evaluator are all *described* choices read from the same console, and pressing **Start** names the run it began.
-- **A gate a person owns is still a person's.** The runtime asks you — the terminal in `refactory run`, the dialog in the GUI. The model cannot answer it.
+```
+dsh web: http://127.0.0.1:3081/?token=<per-process token>
+```
 
-[The GUI tutorial](refactory/docs/tutorials/05-drive-it-from-the-gui.md) walks through it, and [the panel tutorial](refactory/docs/tutorials/07-pick-and-watch-from-the-panel.md) covers the widget.
+The token is per-process; the bare `http://127.0.0.1:3081/` answers `401`. Leave off `--no-open` and your browser opens for you.
 
----
+<a id="gui-first-run"></a>
+### First run
+
+1. **Pick the workspace.** Choose this checkout. The app remembers it next time.
+2. **Send one message.** Any message will do — "hello". A session has to exist before the Sidebar's expand control appears in the header, which is the step that confuses people.
+3. **Open the panel:** press the expand control in the conversation header (its tooltip is `Open the sidebar`), then the **Modes** tab.
+
+<a id="gui-panel"></a>
+### Running a mode from the panel
+
+| control | what it does |
+|---|---|
+| **Mode** | every mode the catalogue lists, each with the verb that runs it |
+| **Outer loop**, **Optimizer**, **Evaluator** | the three level-two choices, each with the console's own description; `Use the default` leaves the console's default in place |
+| **Start** | starts the chosen mode in its own process, and the panel names the run it began |
+| **Run status** | state, best score and evaluations; **Refresh status** reads the next frame, **Stop the run** asks it to stop |
+| **Packages of modes** | per package: **Enable**, **Disable**, **Remove**, and **Import a package** from a directory or a git URL |
+
+The panel reads the same console the CLI and the model do, so a run started here is the run `refactory status --run <id>` reads back, with the same artifacts.
+
+<a id="gui-ceo"></a>
+### Running and authoring from the conversation
+
+Ask in words; the CEO calls the `refactory` tool, which is the same console. Its coding tools are disabled on purpose: it can choose, start, read, steer and author, and cannot wander off and implement something itself.
+
+| you say | what happens |
+|---|---|
+| *"What modes can I run?"* | the catalogue, with each mode's parameters |
+| *"Start a run of counting_pack/fixed_step with the random optimizer."* | a run starts; the CEO answers with the run id |
+| *"Where is that run? Show me the best score."* | `status` then `best`, answered in words |
+| *"Show me the leaderboard and what the winner changed."* | `leaderboard`, then `candidate` for the winning row |
+| *"Keep the winner as a package called my_tuned."* | `adopt`, input untouched |
+| *"This run is for making the count land exactly; keep the step small."* | `steer`: the note reaches the run's intent ledger |
+| *"Create a mode that drafts a blurb with an agent and checks it."* | `create`, the same authoring mode as `ceo --mode create` |
+| *"Show me the packages, then disable annealing_pack."* | `registry` with `list`, then `disable` |
+
+<a id="gui-gates"></a>
+### A gate a person owns is still a person's
+
+If a mode reaches a `user` gate (create-v2's plan approval is one), the runtime asks **you**: the terminal in `refactory run`, a dialog in the GUI. The CEO cannot answer it, and neither can the model. To run unattended, state the answer up front: `--approve gate_strategy=proceed`.
+
+[The GUI tutorial](refactory/docs/tutorials/05-drive-it-from-the-gui.md) walks the conversation surface, and [the panel tutorial](refactory/docs/tutorials/07-pick-and-watch-from-the-panel.md) covers the widget.
 
 ## Documentation
 

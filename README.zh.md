@@ -138,21 +138,160 @@ uv run refactory package add|import|remove|enable|disable …
 
 ---
 
-## GUI：用问的，而不是打命令
+## 命令行
+
+每条命令都是 `uv run refactory <动词>`。这里是参考；[QUICKSTART.md](QUICKSTART.md) 是同一件事的走查版，而 `uv run refactory <动词> --help` 永远是一个动词当前的事实来源。
+
+<a id="cli-create"></a>
+### 创建与构建
+
+| 命令 | 作用 |
+|---|---|
+| `refactory ceo "<你想要什么>" --mode create` | 由一段简述构建一个模式包：调研、由你批准的策略、构建、三路并行评审、审计，然后注册并冒烟运行（20–30 分钟） |
+| `refactory ceo "<你想要什么>" --mode design --check "<命令>"` | 设计一个带校验的产物，而不是包；`--check` 是判定它是否管用的命令（这是默认模式） |
+| `refactory ceo "<你想要什么>" --mode edit --revise <包>/<模式>` | 修订一个已有模式并拒绝变差；`--revise` 指明它改自什么 |
+| `refactory ceo <包>/<模式>` | 直接运行那个模式，而不创作任何东西 |
+
+| 选项 | 作用 |
+|---|---|
+| `--name <名字>` | 包或产物的名字；不给就用你说的话当名字 |
+| `--check "<命令>"` | 仅 design：在产物目录里运行；门会反复重跑，直到它退出码为 0 |
+| `--revise <包>/<模式>` | 仅 edit：被修订的那个模式 |
+| `--approve <门>=<值>` | 事先给出某道门的答案，例如 `gate_strategy=proceed`，用于无人值守的运行 |
+| `--workdir <目录>` | 运行的证据落在哪里（默认 `.factory/interactive/<包>-<模式>`） |
+
+<a id="cli-manage"></a>
+### 管理模式包
+
+| 命令 | 作用 |
+|---|---|
+| `refactory list` | 这个检出能跑的每个包与模式 |
+| `refactory list modes --json` | 同一份目录的 JSON，带每个模式的 `action`、参数与说明 |
+| `refactory package verify <包>` | 导入每个模式并校验它的图；某个工具不在不算问题 |
+| `refactory package show <包>/<模式>` | 描述一个模式 |
+| `refactory package tools <包>` | 它声明的工具，以及这台机器有没有 |
+| `refactory package add <目录>` | 从目录安装一个包（`--as` 改名） |
+| `refactory package import <目录或 git URL>` | 导入一个，并记录它来自哪里（`--ref`、`--as`） |
+| `refactory package remove <包>` | 移除它 |
+| `refactory package enable/disable <包>` | 纳入目录，或把它排除在外 |
+
+<a id="cli-run"></a>
+### 运行与使用一个模式
+
+| 命令 | 作用 |
+|---|---|
+| `refactory run <包>/<模式> --intent "<它是干什么的>"` | 在 DSH 上运行这个模式，接上你的终端，所以门能到你这儿 |
+| `refactory run <包>/<模式> --knob name=value` | 为这次运行设置这个模式的一个旋钮 |
+| `refactory run <包>/<模式> --workdir <目录>` | 运行的证据落在哪里 |
+| `refactory run <包>/<模式> --timeout <秒>` | 在门前等多久；`0` 表示等你 |
+| `refactory run <包>/<模式> --approve <门>=<值>` | 在运行前而不是运行中回答一道门 |
+| `refactory package smoke <包>/<模式>` | 在沙箱里跑一次，不用模型（免费） |
+| `refactory package smoke <包>/<模式> --model` | 给图里有 `agent` 节点的模式打分，办法是提供一个模型 |
+
+<a id="cli-optimize"></a>
+### 优化它
+
+`refactory optimize <包>/<模式>` 搜索一个模式的架构与旋钮：提出带类型的编辑、校验、评估，留下有改进的。
+
+| 选项 | 作用 | 默认 |
+|---|---|---|
+| `--epochs <n>` | 提出 → 校验 → 评估 → 选择的轮数 | 2 |
+| `--batch-size <n>` | 每轮提出的候选数 | 4 |
+| `--optimizer <名字>` | 候选怎么提出来：`random`、`hill_climb`、`evolutionary`、`archive`、`islands`、`map_elites`、`autoresearch` | `autoresearch` |
+| `--strategy <名字>` | 驱动搜索的外循环：`default`、`best_of_n`、`reflective`、`reflective_sampler`、`tree_search`、`staged_curriculum`、`staged_v1`、`adaptive_meta`、`autoscientists`、`research_then_optimize` | 用 harness 自己的（`default`） |
+| `--evaluator walker\|dsh` | 用哪个运行时给候选打分：进程内的快，或者真正发布的那个 | `walker` |
+| `--preset <名字>` | 允许哪些编辑：`broad`、`structure`、`conservative`、`knob_only` | `broad` |
+| `--seed <n>` | 精确复现一次搜索 | 0 |
+| `--elite <n>` | 每轮拿多少个父代来对照提出候选 | 3 |
+| `--max-evaluations <n>` | 评估过的候选数的硬上限 | 64 |
+| `--attempts <n>` | 一批被拒后重试几次 | 3 |
+| `--runs-root <目录>` | 运行目录本身；用 `--run <这个路径>` 读回来 | `.factory/loop` |
+| `--intent "<话>"` | 这次运行是为什么；它给 agent 读的账本做种子 | 空 |
+| `--model <名字>` | 推理优化器要问的模型（不是模式自己的 agent） | 配置好的路由 |
+
+<a id="cli-read"></a>
+### 读一次运行，并引导它
+
+| 命令 | 作用 |
+|---|---|
+| `refactory runs` | 根目录下的每次运行，最新在前 |
+| `refactory status --run <id>` | 它在哪，以及某个偏移之后的事件 |
+| `refactory leaderboard --run <id>` | 按分数排的候选，每个都带它与父代的差异 |
+| `refactory candidate <id> --run <id>` | 一个候选，精确到它改了什么 |
+| `refactory best --run <id>` | 胜者，带打出那个分数的状态 |
+| `refactory artifacts --run <id> [--contents]` | 它在磁盘上留下了什么 |
+| `refactory adopt --run <id> --as <包>` | 把胜者写成一个新包，输入原封不动 |
+| `refactory steer --run <id> --note "<话>" [--kind info\|correction\|constraint]` | 把你说的加进这次运行的意图账本 |
+| `refactory steer --run <id> --verdict <门>=<值>` | 记下某道门的答案，好让恢复运行时重放它 |
+| `refactory stop --run <id>` | 请一次运行停下来 |
+
+<a id="cli-other"></a>
+### 其余
+
+| 命令 | 作用 |
+|---|---|
+| `refactory doctor` | 这台机器能不能跑一个模式，不能的话要装什么 |
+| `refactory ui [--port <n>] [--no-open]` | Web GUI（见下） |
+
+## GUI：在浏览器里运行模式
+
+<a id="gui-launch"></a>
+### 启动它
 
 ```bash
 uv run refactory ui --port 3081 --no-open
 ```
 
-打开它打印出的 `http://127.0.0.1:3081/?token=…`——token 是每进程一次的，不带它的裸地址会返回 `401`。
+它只打印一行——打开那个 URL，令牌就在里面：
 
-- **对话**里带着 `refactory` 工具：*"我能跑哪些模式？"*、*"用 random 优化器启动一次 counting_pack/fixed_step"*、*"把排行榜给我看看"*、*"把胜者保留成一个叫 my_tuned 的包"*、 *"这次运行是为了让计数正好落点"*。CEO 的编码工具是被故意禁用的：它可以选择、启动、读取、 引导与创作，但不能跑偏去自己实现什么东西。
-- **面板**（右侧栏 → **Modes**）是同一批选项的点选版本：模式、外循环、优化器与评估器全是 从同一个控制台读来的、**带描述的**选项，按下 **Start** 会指名它开启的那次运行。
-- **只有人才能回答的 gate 依然属于人。** 运行时来问你——`refactory run` 里是终端，GUI 里是对话框。 模型无法回答它。
+```
+dsh web: http://127.0.0.1:3081/?token=<per-process token>
+```
 
-[GUI 教程](refactory/docs/tutorials/05-drive-it-from-the-gui.md)带你走一遍， [面板教程](refactory/docs/tutorials/07-pick-and-watch-from-the-panel.md)讲那个控件。
+令牌是每进程一次的；不带它的裸地址 `http://127.0.0.1:3081/` 会返回 `401`。去掉 `--no-open`，浏览器就会替你打开。
 
----
+<a id="gui-first-run"></a>
+### 第一次运行
+
+1. **选工作区。** 选这个检出。下次它会记住。
+2. **发一条消息。** 什么都行——"hello"。得先有会话，标题栏里 Sidebar 的展开控件才会出现，这一步最容易卡住人。
+3. **打开面板：** 按对话标题栏里的展开控件（它的提示是 `Open the sidebar`），再切到 **Modes** 标签。
+
+<a id="gui-panel"></a>
+### 从面板运行一个模式
+
+| 控件 | 它做什么 |
+|---|---|
+| **Mode** | 目录列出的每个模式，各带运行它的动词 |
+| **Outer loop**、**Optimizer**、**Evaluator** | 第二层的三个选择，各带控制台自己的描述；`Use the default` 就留用控制台的默认 |
+| **Start** | 在它自己的进程里启动选中的模式，面板会指名它开启的那次运行 |
+| **Run status** | 状态、最好分数与评估次数；**Refresh status** 读下一帧，**Stop the run** 请它停下 |
+| **Packages of modes** | 按包：**Enable**、**Disable**、**Remove**，以及从目录或 git URL **Import a package** |
+
+面板读的控制台和 CLI、模型读的是同一个，所以在这里开启的运行，就是 `refactory status --run <id>` 读回来的那次运行，产物也一样。
+
+<a id="gui-ceo"></a>
+### 在对话里运行与创作
+
+用话问就行；CEO 会调用 `refactory` 工具，那是同一个控制台。它的编码工具是被故意禁用的：它可以选择、启动、读取、引导与创作，但不能跑偏去自己实现什么东西。
+
+| 你说 | 会发生什么 |
+|---|---|
+| *"我能跑哪些模式？"* | 目录，带每个模式的参数 |
+| *"用 random 优化器启动一次 counting_pack/fixed_step。"* | 一次运行开始了；CEO 用运行 id 回答 |
+| *"那次运行在哪？把最好分数给我看看。"* | `status` 然后 `best`，用话回答 |
+| *"把排行榜和胜者改了什么给我看看。"* | `leaderboard`，再对胜出那行来一次 `candidate` |
+| *"把胜者保留成一个叫 my_tuned 的包。"* | `adopt`，输入原封不动 |
+| *"这次运行是为了让计数正好落点；步子留小点。"* | `steer`：这句话进入运行的意图账本 |
+| *"创建一个用 agent 写文案并检查它的模式。"* | `create`，和 `ceo --mode create` 同一个创作模式 |
+| *"把包列出来，然后 disable annealing_pack。"* | `registry` 先 `list`，再 `disable` |
+
+<a id="gui-gates"></a>
+### 只有人才能回答的门，依然属于人
+
+如果某个模式走到一道 `user` 门（create-v2 的计划批准就是一道），运行时来问**你**：`refactory run` 里是终端，GUI 里是对话框。CEO 回答不了它，模型也回答不了。要做到无人值守，就事先说出答案：`--approve gate_strategy=proceed`。
+
+[GUI 教程](refactory/docs/tutorials/05-drive-it-from-the-gui.md)带你走一遍对话界面，[面板教程](refactory/docs/tutorials/07-pick-and-watch-from-the-panel.md)讲那个控件。
 
 ## 文档
 
