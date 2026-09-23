@@ -655,6 +655,72 @@
       "commit": "e89a8a39b2",
       "evidence": "Fixed in two commits. The one-shot profile gained -p/--provider and --model (parsed in the startup provider, published on the startup service, wired through the row config) and both bundles now install the selection middleware with the effective selection, so a named model is the one requests route at; an unknown provider now exits 1 with NO_ADAPTER naming the route. Refactory exposes --model/--provider on run, ceo and optimize, with the module entry points taking --provider beside the existing --model. Verified by running it, not by reading: an openai-completions route pointed at a local OpenAI-compatible server through --patch answered `dsh --profile headless --provider local-test --model test-model` with that server's text and the server logged `model=test-model`; the same was repeated through the graph profile (final text = the fake server's, server log = the named model). Reverting the middleware line makes the new headless spec assert the settings default and fail. The READMEs gained a Models section (advisory catalogue, the GUI Models page, settings.yaml and the credential store, a verified local-route example, per-run flags), and an Agent Note records why the middleware's current is the authority.",
       "observed": "741 passed, 10 skipped (refactory/tests)"
+    },
+    {
+      "id": "panel-gate",
+      "issue": 60,
+      "title": "The refactory tool could not answer a user gate, so authoring from the GUI always failed",
+      "why": "`create`, `edit` and `design` pause at `gate_strategy`, a gate a person owns. The CLI (`ceo --approve`), the console (`--verdict`) and the tool's own `steer` action all had a way to state that answer; the tool's schema did not, so every authoring action from the Web GUI was a headless run that refused the gate.",
+      "verify": "pnpm exec vitest run packages/refactory/tool-refactory/tests/tool-refactory.spec.ts",
+      "status": "done",
+      "commit": "9a8d8216bc",
+      "evidence": "The tool gained `approve` (an array of `GATE=VALUE`) forwarded as repeated `--verdict` for create/edit/design, and `Console.argv` learned to emit one flag per element so a repeatable option survives the hop. The action descriptions now say the call cannot pause to ask, so the model asks the user for the plan approval first and passes it with the call. Four new specs: the verdict reaches argv for all three verbs, the failure text keeps the console's reason, the status card reports an authoring run's own progress, and the default timeout is at least 30 minutes. The GUI-facing half of the six defects is the tool's; the pipeline half is c1b9b1ded2.",
+      "observed": "53 passed (tool-refactory specs)"
+    },
+    {
+      "id": "panel-error",
+      "issue": 61,
+      "title": "A forwarded refusal lost its stderr, so an authoring failure reported exit 2 with no reason",
+      "why": "The authoring entry points report a handled refusal as `{\"error\": \u2026}` on stderr and print nothing on stdout. `console._forward` captured stdout only, so the payload was `{\"output\": \"\"}` and the tool could only render `create failed (exit 2).` \u2014 the actual error was destroyed, which is what made the root cause hard to find.",
+      "verify": "pytest refactory/tests/test_gui_loop.py -q",
+      "status": "done",
+      "commit": "9a8d8216bc",
+      "evidence": "`_forward` now captures stderr, prefers the message inside the entry point's own JSON line (`_error_from`), keeps the raw text as `stderr`, and returns it all beside the payload; `console.main` exits 2 with the reason at the top level when a forwarded call failed, so a console consumer finds it where every consumer looks. The tool's renderer prefers `result.error`, then `stderr`, then `output`. A test drives a stub entry point that writes its refusal to stderr and asserts the reason reaches both the `_forward` payload and the console's printed payload, with exit 2.",
+      "observed": "37 passed (test_gui_loop.py)"
+    },
+    {
+      "id": "panel-watch",
+      "issue": 62,
+      "title": "Authoring verbs were synchronous and capped at ten minutes, with no run id to watch or resume",
+      "why": "A real creation spends most of ten minutes before it writes a line of code. The tool's console timeout was 10 minutes and the authoring run happened in-process, so a long run was killed mid-flight, reported a timeout as its result, and could not be watched or resumed. The tool's own `start` action documents the opposite posture for searches.",
+      "verify": "pnpm exec vitest run packages/refactory/tool-refactory/tests/tool-refactory.spec.ts",
+      "status": "done",
+      "commit": "9a8d8216bc",
+      "evidence": "The console's default timeout is 45 minutes (the config ceiling stays 60), and the tool's descriptions say authoring runs for many minutes inside the call. `status` reads an authoring run's own `.refactory/spine-status.json` and `facts.json` and reports the nodes done, the nodes due, the error and the run's facts, with `state` mapped from the spine (`done` -> finished, `ready` -> running, `failed`/`refused` -> failed) and `finished` true when the spine says done; the tool renders that as a sentence, so `status --run .factory/create/<name>` answers \"where is it\" while the call is still in flight. The console's authoring verbs take `--workdir` and forward it. Resume is NOT implemented: watching is what this delivers, and the note says so. Verified on the real run: `status` reported the create run's node-by-node progress while it ran.",
+      "observed": "53 passed (tool-refactory specs) + 37 (test_gui_loop.py)"
+    },
+    {
+      "id": "research-checked",
+      "issue": 63,
+      "title": "The research stage produced nothing, and nothing noticed",
+      "why": "`research-plan.json`'s only contract was `writes=(\"research-plan.json\",)`, which any bytes satisfy. Two independent runs wrote a prose status message about subagents \"running in the background\" and left `research/` empty, and the design proceeded on unverified assumptions. The reason the subagents wrote nothing is the real defect: a node's model call runs on the one-shot profile, whose spawn subagent tool defaults to `backgroundMode: continuable`, so the agent ended its turn with its researchers still running.",
+      "verify": "pytest refactory/tests/test_create.py -q",
+      "status": "done",
+      "commit": "c1b9b1ded2",
+      "evidence": "Two changes, both required. (1) `DshModelClient` runs the one-shot profile with a checked-in overlay (`refactory_dsh/patches/agent-node.yml`) that patches the spawn subagent row to `backgroundMode: one-shot` and `enableRunInBackground: false` \u2014 the decision the graph profile already made for the CEO. (2) `record_findings` writes each direction's finding to `research/<slug>.md` when no subagent left one, and `gate_research` requires a JSON array of `{focus, slug, finding}` (three to five, non-empty, unique slugs) whose files exist, relooping with the reasons in `research-review.txt` and the `research_review` fact the node's prompt now reads; the design pipeline carries the same pair. Verified on a real run: before the overlay, two attempts produced the prose status message with `research/` empty and the gate caught both (research-review.txt named the file's first 200 characters); after the overlay the same prompt produced five findings files and a valid plan, and the gate wrote `ok`.",
+      "observed": "43 passed (test_create.py)"
+    },
+    {
+      "id": "authoring-workdir",
+      "issue": 64,
+      "title": "All create runs shared one fixed workdir, so concurrent runs collided",
+      "why": "`--workdir` defaulted to the fixed `.factory/create`, so a second creation wrote its brief, research and strategy over the first one's, and a cancelled run's leftovers were what the next run read. Nothing distinguished two packages' state, and the console's create forwarder never passed a workdir at all.",
+      "verify": "pytest refactory/tests/test_create.py -q",
+      "status": "done",
+      "commit": "c1b9b1ded2",
+      "evidence": "The three authoring entry points default to `.factory/create/<name>`, `.factory/design/<name>` and `.factory/edit/<name>`; the console's create/edit/design verbs take `--workdir` and forward it when a caller gives one. Tests assert two names get two directories and that the default path ends in (`create`, `<name>`), and that the console forwards `--workdir` for all three verbs. The real run this session wrote to `.factory/create/buildroot_pack` and left its own research, strategy and staging there.",
+      "observed": "43 passed (test_create.py) + 37 (test_gui_loop.py)"
+    },
+    {
+      "id": "emit-paths",
+      "issue": 65,
+      "title": "materialise nested a project-relative path under the package root, and validate reported a misleading missing manifest",
+      "why": "The emit prompt asked for a `===FILE: <relative path>===` and never said relative to what, so the model wrote `refactory/refactory_packages/<name>/__init__.py`. Joined onto the package root that nested the package inside itself; the `is_relative_to` guard passed because the nested path really is inside the root; and `validate` reported `__init__.py is missing` four directories away, with a retry prompt that said nothing about paths, so every attempt repeated it.",
+      "verify": "pytest refactory/tests/test_create.py -q",
+      "status": "done",
+      "commit": "c1b9b1ded2",
+      "evidence": "The emit prompt states the convention (`__init__.py` means exactly `__init__.py`, not `<name>/__init__.py`, not `refactory/refactory_packages/<name>/__init__.py`, not `.factory/packages/<name>/__init__.py`). `_package_relative` strips a leading prefix that merely restates the package root, keeps a legitimate subdirectory, and refuses an absolute or `..` path by name. `sandbox.missing_init` names the root it looked in, what that root holds, and the convention, so the retry is actionable. Tests cover four prefixes, a subdirectory, the two refusals, and the message.",
+      "observed": "43 passed (test_create.py)"
     }
   ],
   "verification": {

@@ -479,3 +479,29 @@ def test_status_reads_an_authoring_runs_own_spine(tmp_path, capsys):
     assert console.main(["status", "--run", str(workdir)]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["state"] == "finished" and payload["finished"] is True
+
+
+def test_the_console_forwards_a_workdir_to_an_authoring_run(monkeypatch, capsys):
+    """`--workdir` on the authoring verbs reaches the entry point (#64).
+
+    The entry points namespace their own default by name, so this is for a caller
+    that wants a specific directory — a second attempt, or a run kept apart from the
+    package's own history.
+    """
+    from refactory_dsh import console
+
+    seen: list[list[str]] = []
+    monkeypatch.setattr(
+        console, "_forward",
+        lambda module, argv: (seen.append(argv), {"verb": module, "exit_code": 0, "ok": True, "result": {}})[1],
+    )
+    monkeypatch.setattr(console, "_design_review", lambda project, name: "")
+    for verb, extra in (
+        ("create", ["--name", "p", "--brief", "b"]),
+        ("edit", ["--mode", "counting_pack/fixed_step", "--name", "p", "--brief", "b"]),
+        ("design", ["--name", "a", "--brief", "b", "--check", "true"]),
+    ):
+        assert console.main([verb, *extra, "--workdir", "/tmp/somewhere"]) == 0
+        argv = seen[-1]
+        assert "--workdir" in argv and "/tmp/somewhere" in argv, verb
+    capsys.readouterr()
