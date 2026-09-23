@@ -77,10 +77,21 @@ The same tool reaches the rest of the system, so none of it needs a terminal.
 
 Authoring is model-driven and slow (minutes):
 
-> Use the refactory tool with action `create`, name `gui_made`, brief "count up to a
-> target in deterministic steps and score the count reached".
+> Ask the CEO: *"what does the plan look like?"* It shows the strategy the run would
+> build. Approve it, then:
 
-It returns the package it wrote **and the design review** — which approaches it
+> Use the refactory tool with action `create`, name `gui_made`, brief "count up to a
+> target in deterministic steps and score the count reached", approve
+> `["gate_strategy=proceed"]`.
+
+The approval has to be part of the call: the tool runs the authoring mode for minutes
+inside that call and cannot pause to ask you, and a headless run refuses a gate it was
+not told the answer to. While it runs, the run directory reports its own progress:
+
+> Use the refactory tool with action `status`, run `.factory/create/gui_made`.
+
+The answer names the nodes done, the nodes still due, and what the run has validated so
+far. It returns the package it wrote **and the design review** — which approaches it
 considered, which it chose, and what the review refused — so the choice is visible
 rather than only its result. `edit` revises a mode and returns the before/after
 scores, refusing a regression unless you pass `allowRegression`; `design` takes a
@@ -88,7 +99,7 @@ scores, refusing a regression unless you pass `allowRegression`; `design` takes 
 
 Managing packages is the registry's own verbs, passed through:
 
-> Use the refactory tool with action `registry`, packages `disable`, target `phase_pack`.
+> Use the refactory tool with action `registry`, packages `disable`, target `annealing_pack`.
 > Then action `registry`, packages `list`.
 
 A refusal comes back as the console's own error, so removing a package another one

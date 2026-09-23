@@ -408,3 +408,74 @@ def test_the_catalogue_names_the_action_that_runs_each_mode():
     assert entries["default_pack/create"]["scored"] is False
     assert entries["circle_packing/adaptive"]["action"] == "start"
     assert entries["circle_packing/adaptive"]["scored"] is True
+
+
+# ── the console's authoring forwards (#61, #62, #64) ───────────────────────
+#
+# The tool calls the console, and the console forwards the authoring entry points
+# in-process. What the forwarded call says has to survive that hop: the entry points
+# report a handled refusal as JSON on *stderr*, and `_forward` captured stdout only,
+# so the Web GUI saw `create failed (exit 2)` with an empty payload and no reason.
+
+
+def test_a_forwarded_refusal_keeps_the_reason_it_wrote_to_stderr(monkeypatch, capsys):
+    """An authoring entry point reports a refusal as JSON on stderr (#61).
+
+    `_forward` captured stdout only, so the payload was `{"output": ""}` and the tool
+    could only say `create failed (exit 2)` — with the actual reason destroyed.
+    """
+    import sys
+    import types
+
+    from refactory_dsh import console
+
+    stub = types.ModuleType("refactory_dsh.stub_authoring")
+
+    def main(argv: list[str]) -> int:
+        print(json.dumps({"error": "the gate needs a person"}), file=sys.stderr)
+        return 2
+
+    stub.main = main  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "refactory_dsh.stub_authoring", stub)
+
+    payload = console._forward("stub_authoring", ["--name", "x"])
+    assert payload["ok"] is False and payload["exit_code"] == 2
+    assert payload["result"]["error"] == "the gate needs a person"
+    assert "the gate needs a person" in payload["stderr"]
+
+    # A console caller gets the reason at the top level, and a failing exit.
+    monkeypatch.setattr(console, "_forward", lambda module, argv: payload)
+    code = console.main(["create", "--name", "x", "--brief", "y"])
+    printed = json.loads(capsys.readouterr().out)
+    assert code == 2, "a failed forward must be a failed console call, not a successful one"
+    assert printed["error"] == "the gate needs a person"
+
+
+def test_status_reads_an_authoring_runs_own_spine(tmp_path, capsys):
+    """`status --run .factory/create/<name>` says where a creation is (#62).
+
+    An authoring run is synchronous and writes no `progress.jsonl`, so before this
+    there was nothing to watch: the only signal was the call returning.
+    """
+    from refactory_dsh import console
+
+    workdir = tmp_path / "create" / "demo_pack"
+    (workdir / ".refactory").mkdir(parents=True)
+    (workdir / ".refactory" / "spine-status.json").write_text(json.dumps({
+        "status": "ready", "nodes": ["strategy_director"], "completed": ["prepare", "survey"],
+    }))
+    (workdir / "facts.json").write_text(json.dumps({
+        "name": "demo_pack", "validation": "(no validation has run yet)",
+    }))
+    assert console.main(["status", "--run", str(workdir)]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["state"] == "running"
+    assert payload["authoring"]["spine"] == "ready"
+    assert payload["authoring"]["nodes_due"] == ["strategy_director"]
+    assert payload["authoring"]["name"] == "demo_pack"
+    assert payload["finished"] is False
+
+    (workdir / ".refactory" / "spine-status.json").write_text(json.dumps({"status": "done"}))
+    assert console.main(["status", "--run", str(workdir)]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["state"] == "finished" and payload["finished"] is True

@@ -13,7 +13,7 @@ import type {
 } from '@deepseek-ai/dsh-subprocess'
 
 import * as tool from '../src/index.ts'
-import { Console } from '../src/console.ts'
+import { CONSOLE_DEFAULTS, Console } from '../src/console.ts'
 
 /**
  * Drives the real plugin body over a scriptable subprocess service: the tool
@@ -534,4 +534,71 @@ it('tells the model which action runs which kind of mode', async () => {
   const definition = ctx.tools.get('refactory')
   expect(definition?.description).toContain('the action that runs it')
   expect(definition?.description).toContain('authoring mode by its own verb')
+})
+
+describe('authoring from the Web GUI', () => {
+  it('forwards a person\'s gate answers to the authoring run', async () => {
+    // Without a verdict a headless authoring run refuses `gate_strategy`, so every
+    // creation from the GUI failed with exit 2 and no way to answer.
+    const { ctx, subprocess } = await setup()
+    subprocess.handler = () => runResult(JSON.stringify({ ok: true, exit_code: 0, result: {} }))
+    await call(ctx, {
+      action: 'create',
+      name: 'p',
+      brief: 'count',
+      approve: ['gate_strategy=proceed', 'gate_qa=proceed'],
+    })
+    const argv = subprocess.spawns[0]!.argv
+    expect(argv).toContain('--verdict')
+    expect(argv.filter(part => part === '--verdict')).toHaveLength(2)
+    expect(argv).toContain('gate_strategy=proceed')
+    expect(argv).toContain('gate_qa=proceed')
+
+    await call(ctx, { action: 'edit', mode: 'counting_pack/fixed_step', name: 'p', brief: 'x', approve: ['gate_strategy=proceed'] })
+    expect(subprocess.spawns[1]!.argv).toContain('gate_strategy=proceed')
+
+    await call(ctx, { action: 'design', name: 'a', brief: 'x', check: 'true', approve: ['gate_strategy=proceed'] })
+    expect(subprocess.spawns[2]!.argv).toContain('gate_strategy=proceed')
+  })
+
+  it('shows the reason a failed authoring call gave, stderr included', async () => {
+    // `create failed (exit 2)` with an empty payload was all the model or the user
+    // saw: the entry point writes its refusal to stderr and the console dropped it.
+    const { ctx, subprocess } = await setup()
+    subprocess.handler = () => runResult(JSON.stringify({
+      verb: 'create',
+      exit_code: 2,
+      ok: false,
+      result: { error: 'the strategy gate is answered by a person' },
+      stderr: '{"error": "the strategy gate is answered by a person"}',
+    }))
+    const rendered = text(await call(ctx, { action: 'create', name: 'p', brief: 'count' }))
+    expect(rendered).toContain('the strategy gate is answered by a person')
+  })
+
+  it('reports an authoring run\'s own progress from status', async () => {
+    const { ctx, subprocess } = await setup()
+    subprocess.handler = () => runResult(JSON.stringify({
+      run_id: 'demo_pack',
+      state: 'running',
+      counters: { epoch: 0, generation: 0, evaluations: 0 },
+      authoring: {
+        spine: 'ready',
+        completed: ['prepare', 'survey', 'research_director'],
+        nodes_due: ['strategy_director'],
+        name: 'demo_pack',
+        validation: '(no validation has run yet)',
+      },
+    }))
+    const rendered = text(await call(ctx, { action: 'status', run: '.factory/create/demo_pack' }))
+    expect(rendered).toContain('demo_pack')
+    expect(rendered).toContain('3 node(s) done')
+    expect(rendered).toContain('strategy_director')
+  })
+
+  it('gives an authoring call long enough to finish', () => {
+    // The old ceiling was ten minutes; a real creation spends most of that before it
+    // writes a line of code, and a killed run reported a timeout as its result.
+    expect(CONSOLE_DEFAULTS.timeoutMs).toBeGreaterThanOrEqual(30 * 60 * 1000)
+  })
 })

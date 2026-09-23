@@ -290,13 +290,14 @@ dsh web: http://127.0.0.1:3081/?token=<per-process token>
 | *"把排行榜和胜者改了什么给我看看。"* | `leaderboard`，再对胜出那行来一次 `candidate` |
 | *"把胜者保留成一个叫 my_tuned 的包。"* | `adopt`，输入原封不动 |
 | *"这次运行是为了让计数正好落点；步子留小点。"* | `steer`：这句话进入运行的意图账本 |
-| *"创建一个用 agent 写文案并检查它的模式。"* | `create`，和 `ceo --mode create` 同一个创作模式 |
+| *"创建一个用 agent 写文案并检查它的模式。"* | `create`，和 `ceo --mode create` 同一个创作模式——CEO 会先请你批准计划，并把你的回答随调用一起传过去 |
+| *"那次创作进行到哪了？"* | 对运行目录（`.factory/create/<名字>`）用 `status`，它会报出创作运行自己的逐节点进度 |
 | *"把包列出来，然后 disable annealing_pack。"* | `registry` 先 `list`，再 `disable` |
 
 <a id="gui-gates"></a>
 ### 只有人才能回答的门，依然属于人
 
-如果某个模式走到一道 `user` 门（create-v2 的计划批准就是一道），运行时来问**你**：`refactory run` 里是终端，GUI 里是对话框。CEO 回答不了它，模型也回答不了。要做到无人值守，就事先说出答案：`--approve gate_strategy=proceed`。
+如果某个模式走到一道 `user` 门（create-v2 的计划批准就是一道），运行时来问**你**：`refactory run` 里是终端，GUI 里是对话框。CEO 回答不了它，模型也回答不了。要做到无人值守，就事先说出答案：`--approve gate_strategy=proceed`——注意从对话里发起的创作调用会在这次工具调用内部跑上好几分钟，所以批准必须在它开始之前给出，而不是等它停下来问。
 
 [GUI 教程](refactory/docs/tutorials/05-drive-it-from-the-gui.md)带你走一遍对话界面，[面板教程](refactory/docs/tutorials/07-pick-and-watch-from-the-panel.md)讲那个控件。
 
@@ -375,7 +376,7 @@ HTML 教程、API 参考与配置目录都是**从代码生成的**，而本 REA
 
 ## 有什么
 
-**模式。** `default_pack` 是创作包：`create`（create-v2）、`design`（design-v2）与 `edit`， 每个都有一个由人回答的计划批准 gate。其余是测试夹具——刻意做得小、确定性、离线， 这样整个系统不需要 provider 就能被测试与搜索：`circle_packing`、`counting_pack`、`sympy_pack`、 `lean_pack`、`review_pack`、`phase_pack`、`annealing_pack`、`loop_mode`， 以及 `dataset_probe`（一个绑定 Task 的 data 节点）。
+**模式。** `default_pack` 是创作包：`create`（create-v2）、`design`（design-v2）与 `edit`， 每个都有一个由人回答的计划批准 gate。其余是测试夹具——刻意做得小、确定性、离线， 这样整个系统不需要 provider 就能被测试与搜索：`circle_packing`、`counting_pack`、`sympy_pack`、 `lean_pack`、`review_pack`、`annealing_pack`、`loop_mode`， 以及 `dataset_probe`（一个绑定 Task 的 data 节点）。
 
 **外循环。** 十种策略（SRF 自身循环的移植：`default`、`best_of_n`、`reflective`、`tree_search`、 `staged_curriculum` 等）、七种优化器（`random`、`hill_climb`、`evolutionary`、`archive`、`islands`、 `map_elites`、`autoresearch`）与两种评估器（`walker`、`dsh`）。
 

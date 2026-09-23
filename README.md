@@ -290,13 +290,14 @@ Ask in words; the CEO calls the `refactory` tool, which is the same console. Its
 | *"Show me the leaderboard and what the winner changed."* | `leaderboard`, then `candidate` for the winning row |
 | *"Keep the winner as a package called my_tuned."* | `adopt`, input untouched |
 | *"This run is for making the count land exactly; keep the step small."* | `steer`: the note reaches the run's intent ledger |
-| *"Create a mode that drafts a blurb with an agent and checks it."* | `create`, the same authoring mode as `ceo --mode create` |
+| *"Create a mode that drafts a blurb with an agent and checks it."* | `create`, the same authoring mode as `ceo --mode create` — the CEO asks you to approve the plan first, and passes your answer with the call |
+| *"Where is that creation up to?"* | `status` on the run directory (`.factory/create/<name>`), which reports the authoring run's own node-by-node progress |
 | *"Show me the packages, then disable annealing_pack."* | `registry` with `list`, then `disable` |
 
 <a id="gui-gates"></a>
 ### A gate a person owns is still a person's
 
-If a mode reaches a `user` gate (create-v2's plan approval is one), the runtime asks **you**: the terminal in `refactory run`, a dialog in the GUI. The CEO cannot answer it, and neither can the model. To run unattended, state the answer up front: `--approve gate_strategy=proceed`.
+If a mode reaches a `user` gate (create-v2's plan approval is one), the runtime asks **you**: the terminal in `refactory run`, a dialog in the GUI. The CEO cannot answer it, and neither can the model. To run unattended, state the answer up front: `--approve gate_strategy=proceed` — and note that an authoring call from the conversation runs for minutes *inside* the tool call, so the approval has to be given before it starts rather than while it waits.
 
 [The GUI tutorial](refactory/docs/tutorials/05-drive-it-from-the-gui.md) walks the conversation surface, and [the panel tutorial](refactory/docs/tutorials/07-pick-and-watch-from-the-panel.md) covers the widget.
 
@@ -375,7 +376,7 @@ The HTML tour, the API reference and the config catalog are **generated from the
 
 ## What ships
 
-**The modes.** `default_pack` is the authoring package: `create` (create-v2), `design` (design-v2) and `edit`, each with a plan-approval gate a person answers. The rest are fixtures — small, deterministic and offline on purpose, so the whole system can be tested and searched without a provider: `circle_packing`, `counting_pack`, `sympy_pack`, `lean_pack`, `review_pack`, `phase_pack`, `annealing_pack`, `loop_mode`, and `dataset_probe` (a Task-bound data node).
+**The modes.** `default_pack` is the authoring package: `create` (create-v2), `design` (design-v2) and `edit`, each with a plan-approval gate a person answers. The rest are fixtures — small, deterministic and offline on purpose, so the whole system can be tested and searched without a provider: `circle_packing`, `counting_pack`, `sympy_pack`, `lean_pack`, `review_pack`, `annealing_pack`, `loop_mode`, and `dataset_probe` (a Task-bound data node).
 
 **The loop.** Ten strategies (ports of SRF's own loops: `default`, `best_of_n`, `reflective`, `tree_search`, `staged_curriculum`, …), seven optimizers (`random`, `hill_climb`, `evolutionary`, `archive`, `islands`, `map_elites`, `autoresearch`) and two evaluators (`walker`, `dsh`).
 

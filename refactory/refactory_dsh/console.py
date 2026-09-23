@@ -210,28 +210,78 @@ def _run_id(mode: str) -> str:
 # ── watching one ───────────────────────────────────────────────────────────
 
 
+#: The graph spine's own status file. Its presence is what makes a run directory an
+#: authoring run, as opposed to a search: a search writes `progress.jsonl`, and an
+#: authoring run writes this.
+SPINE_STATUS = Path(".refactory") / "spine-status.json"
+
+#: The spine's states, in the words a reader of `status` already has.
+SPINE_STATES = {"done": "finished", "ready": "running", "failed": "failed", "refused": "failed"}
+
+
+def _spine(run_root: Path) -> dict[str, Any]:
+    """What the graph spine last recorded, or ``{}`` when this is not an authoring run."""
+    path = run_root / SPINE_STATUS
+    if not path.exists():
+        return {}
+    try:
+        loaded = json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _authoring(run_root: Path, spine: dict[str, Any]) -> dict[str, Any]:
+    """An authoring run's own progress: the nodes done, the nodes due, and its facts."""
+    facts = _read_json(run_root / "facts.json")
+    return {
+        "spine": spine.get("status"),
+        "completed": spine.get("completed") or [],
+        "nodes_due": spine.get("nodes") or [],
+        "error": spine.get("error"),
+        "name": facts.get("name"),
+        "validation": facts.get("validation"),
+        "package_path": facts.get("package_path"),
+        "files": facts.get("files") or [],
+        "before_score": facts.get("before_score"),
+        "after_score": facts.get("after_score"),
+    }
+
+
 def status(run_root: Path, *, after: int = 0) -> dict[str, Any]:
     """Where the run is, and what is new since the reader last looked.
 
     ``after`` is a line count, not a timestamp: a reader polling this wants the
     events it has not seen, and a clock cannot tell it which those are.
+
+    A search run's progress is `progress.jsonl`. An authoring run is driven by the
+    graph spine and has none, so its own status file is read instead — without that,
+    a creation could only be waited on by waiting for the call to return.
     """
     run_root = Path(run_root)
     if not run_root.is_dir():
         raise ConsoleError(f"{run_root} is not a run directory")
     events = observe.progress(run_root, after=after)
     console = _console(run_root)
+    spine = _spine(run_root)
+    finished = (run_root / "report.json").exists() or spine.get("status") == "done"
+    state = _state(run_root, events, console)
+    if spine:
+        state = SPINE_STATES.get(str(spine.get("status")), state)
+        if finished:
+            state = "finished"
     return {
         "run_id": run_root.name,
         "root": str(run_root),
         "mode": console.get("mode"),
-        "state": _state(run_root, events, console),
+        "state": state,
         "events": events,
         "cursor": after + len(events),
         "counters": _counters(events),
         "best_score": _best(run_root, events),
-        "finished": (run_root / "report.json").exists(),
-        "running": _running(run_root, console),
+        "finished": finished,
+        "running": _running(run_root, console) or (bool(spine) and not finished),
+        "authoring": _authoring(run_root, spine) if spine else None,
     }
 
 
@@ -681,6 +731,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     make.add_argument("--task", default=None, metavar="TASK_REF", dest="task_ref",
                       help="a Task class the produced mode must satisfy")
+    make.add_argument("--workdir", default="", help="the run directory (default: .factory/create/<name>)")
     make.add_argument(
         "--verdict", action="append", default=[], metavar="GATE=VALUE",
         help="answer a gate a person owns, as <gate>=<value> (repeatable); "
@@ -693,6 +744,7 @@ def _parser() -> argparse.ArgumentParser:
     revise.add_argument("--brief", required=True)
     revise.add_argument("--allow-regression", action="store_true")
     revise.add_argument("--attempts", type=int, default=3)
+    revise.add_argument("--workdir", default="", help="the run directory (default: .factory/edit/<name>)")
     revise.add_argument(
         "--verdict", action="append", default=[], metavar="GATE=VALUE",
         help="answer a gate a person owns, as <gate>=<value> (repeatable)",
@@ -703,6 +755,7 @@ def _parser() -> argparse.ArgumentParser:
     artifact.add_argument("--brief", required=True)
     artifact.add_argument("--check", default="", help="the command that proves the artifact works")
     artifact.add_argument("--attempts", type=int, default=3)
+    artifact.add_argument("--workdir", default="", help="the run directory (default: .factory/design/<name>)")
     artifact.add_argument(
         "--verdict", action="append", default=[], metavar="GATE=VALUE",
         help="answer a gate a person owns, as <gate>=<value> (repeatable)",
@@ -726,14 +779,59 @@ def _forward(module: str, argv: list[str]) -> dict[str, Any]:
 
     entry = importlib.import_module(f"refactory_dsh.{module}")
     buffer = io.StringIO()
-    with contextlib.redirect_stdout(buffer):
+    errors = io.StringIO()
+    with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(errors):
         code = int(entry.main(argv) or 0)
     text = buffer.getvalue().strip()
+    stderr = errors.getvalue().strip()
     try:
         payload: Any = json.loads(text)
     except json.JSONDecodeError:
         payload = {"output": text}
-    return {"verb": module, "exit_code": code, "ok": code == 0, "result": payload}
+    if code != 0 and not (isinstance(payload, dict) and payload.get("error")):
+        # The authoring entry points report a handled refusal as its own JSON on
+        # *stderr* and print nothing on stdout. Capturing stdout alone made the
+        # payload `{"output": ""}`, so the tool could only say "failed (exit 2)".
+        payload = {
+            "error": _error_from(stderr) or payload.get("output") or f"exited with {code}"
+        }
+    return {
+        "verb": module, "exit_code": code, "ok": code == 0,
+        "result": payload, "stderr": stderr,
+    }
+
+
+def _error_from(stderr: str) -> str:
+    """The message inside a stderr line an entry point wrote, or the line itself.
+
+    Those entry points print `{"error": "..."}` to stderr. Handing a caller that line
+    verbatim shows it a JSON fragment where a sentence belongs, so the message inside
+    is preferred; anything else on stderr is passed through as it stands.
+    """
+    text = stderr.strip()
+    if not text:
+        return ""
+    if text.startswith("{"):
+        try:
+            loaded = json.loads(text)
+        except json.JSONDecodeError:
+            return text
+        if isinstance(loaded, dict) and isinstance(loaded.get("error"), str):
+            return loaded["error"].strip()
+    return text
+
+
+def _forward_error(payload: dict[str, Any]) -> str:
+    """Why a forwarded entry point failed, preferring the words it chose."""
+    result = payload.get("result")
+    if isinstance(result, dict):
+        if isinstance(result.get("error"), str) and result["error"].strip():
+            return result["error"].strip()
+        if isinstance(result.get("output"), str) and result["output"].strip():
+            return result["output"].strip()
+    if isinstance(payload.get("stderr"), str) and payload["stderr"].strip():
+        return payload["stderr"].strip()
+    return f"the {payload.get('verb')} entry point failed (exit {payload.get('exit_code')})"
 
 
 def _root_for(args: argparse.Namespace, project: Path) -> Path:
@@ -803,6 +901,8 @@ def main(argv: list[str] | None = None) -> int:
             payload = _forward("registry", forwarded)
         elif args.verb == "create":
             forwarded = ["--name", args.name, "--brief", args.brief, "--attempts", str(args.attempts)]
+            if args.workdir:
+                forwarded += ["--workdir", args.workdir]
             if args.extends:
                 forwarded += ["--extends", args.extends]
             if args.data_node:
@@ -821,6 +921,8 @@ def main(argv: list[str] | None = None) -> int:
                 "--mode", args.mode, "--name", args.name, "--brief", args.brief,
                 "--attempts", str(args.attempts),
             ]
+            if args.workdir:
+                forwarded += ["--workdir", args.workdir]
             if args.allow_regression:
                 forwarded.append("--allow-regression")
             for pair in args.verdict:
@@ -828,6 +930,8 @@ def main(argv: list[str] | None = None) -> int:
             payload = _forward("edit", forwarded)
         elif args.verb == "design":
             forwarded = ["--name", args.name, "--brief", args.brief, "--attempts", str(args.attempts)]
+            if args.workdir:
+                forwarded += ["--workdir", args.workdir]
             if args.check:
                 forwarded += ["--check", args.check]
             for pair in args.verdict:
@@ -837,6 +941,11 @@ def main(argv: list[str] | None = None) -> int:
             raise ConsoleError(f"unknown verb {args.verb!r}")
     except (ConsoleError, LoopError, PackageError) as error:
         print(json.dumps({"error": str(error)}), file=sys.stdout)
+        return 2
+    if isinstance(payload, dict) and payload.get("ok") is False:
+        # The forwarded call failed and said why; the caller gets the reason at the top
+        # level as well, because that is where every console consumer looks for it.
+        print(json.dumps({**payload, "error": _forward_error(payload)}, indent=2, default=str))
         return 2
     print(json.dumps(payload, indent=2, default=str))
     return 0

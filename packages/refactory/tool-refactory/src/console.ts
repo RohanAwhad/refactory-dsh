@@ -18,8 +18,11 @@ export interface ConsoleInvocation {
   verb: string
   /** Positional arguments after the verb, e.g. a mode id. */
   positional?: readonly string[]
-  /** Long options, already spelled without the leading `--`. */
-  options?: Readonly<Record<string, string | number | boolean | undefined>>
+  /**
+   * Long options, already spelled without the leading `--`. An array is one flag per
+   * element, which is how a repeatable option (`--verdict`) is passed.
+   */
+  options?: Readonly<Record<string, string | number | boolean | readonly string[] | undefined>>
 }
 
 /** Resolved deployment settings for reaching the console. */
@@ -68,8 +71,15 @@ export interface ConsoleConfig {
  * default from here: a cap can only change in one place.
  */
 export const CONSOLE_DEFAULTS = {
-  /** Wall-clock ceiling for one console call. */
-  timeoutMs: 10 * 60 * 1000,
+  /**
+   * Wall-clock ceiling for one console call.
+   *
+   * 45 minutes because the authoring verbs are the long ones: a creation spends
+   * minutes researching and strategising *before* it writes any code, then builds,
+   * reviews, audits and smoke-scores what it wrote. The old 10-minute ceiling killed
+   * real runs mid-flight, and a killed run reported a timeout as its result.
+   */
+  timeoutMs: 45 * 60 * 1000,
   /** Per-stream collection cap in bytes. */
   collectBytes: 4 * 1024 * 1024,
 } as const
@@ -147,7 +157,9 @@ export class Console {
       if (value === undefined || value === false) continue
       const flag = `--${name.replaceAll('_', '-')}`
       if (value === true) argv.push(flag)
-      else argv.push(flag, String(value))
+      else if (Array.isArray(value)) {
+        for (const element of value) argv.push(flag, String(element))
+      } else argv.push(flag, String(value))
     }
     argv.push(...positional)
     return argv

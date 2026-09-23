@@ -63,9 +63,9 @@ const VERBS = {
   best: 'The winner of a run, with the state that scored it.',
   adopt: 'Write a run\'s winner as a new package, leaving the run and its source untouched.',
   registry: 'List packages of modes, or verify, smoke, add, import, remove, enable or disable one.',
-  create: 'Create a package of modes from a brief (model-driven).',
-  edit: 'Revise an existing mode from a brief (model-driven), refusing a regression.',
-  design: 'Design, emit and check a software artifact from a brief (model-driven).',
+  create: 'Create a package of modes from a brief (model-driven); it runs for many minutes and needs the strategy gate answered through "approve".',
+  edit: 'Revise an existing mode from a brief (model-driven), refusing a regression; it runs for many minutes and needs the strategy gate answered through "approve".',
+  design: 'Design, emit and check a software artifact from a brief (model-driven); it runs for many minutes and needs the strategy gate answered through "approve".',
   stop: 'Ask a run to stop.',
 } as const
 
@@ -88,6 +88,8 @@ const DESCRIPTION = [
   'The loop runs in its own process, so a run continues after the call returns and after the session ends; watch it with action "status" and an "after" offset. Prefer this tool over running the loop in a shell: it is the same console the Web view renders, and a run started in a shell will not appear in the view unless it lives under the run root.',
   '',
   'Which action to use: "modes" answers with each mode\'s id and the action that runs it (a scored mode is run by "start"; an authoring mode by its own verb, "create", "edit" or "design"), so read that field rather than trying "start" and reading the refusal. "strategies" names every outer loop, optimizer and evaluator before you choose settings. Start with "modes", then "start" for a scored mode or the named authoring verb, then "status" until it finishes, then "leaderboard", "candidate", "artifacts" and "best".',
+  '',
+  'The authoring verbs behave differently from "start": they run for many minutes inside the call, they cannot pause to ask the user anything, and they stop at the strategy gate unless the answer is passed as "approve". So ask the user for that approval first, pass it with the call, and watch the run meanwhile with action "status" and the run directory (an authoring run reports its own node-by-node progress there).',
 ].join('\n')
 
 /** Input the tool accepts, after the registry's schema check. */
@@ -115,6 +117,7 @@ interface Args {
   extends?: string
   check?: string
   allowRegression?: boolean
+  approve?: string[]
   attempts?: number
   dataNode?: boolean
   task?: string
@@ -137,12 +140,12 @@ function settingsOf(args: Args): Readonly<Record<string, string | number>> {
 export function invocationFor(args: Args): {
   verb: Verb
   positional: readonly string[]
-  options: Readonly<Record<string, string | number | boolean | undefined>>
+  options: Readonly<Record<string, string | number | boolean | readonly string[] | undefined>>
 } {
   if (RUN_SCOPED.includes(args.action) && args.run === undefined) {
     throw new Error(`action "${args.action}" needs \`run\`: the run id or directory to read`)
   }
-  const run: Record<string, string | number | boolean | undefined> = {
+  const run: Record<string, string | number | boolean | readonly string[] | undefined> = {
     run: args.run,
     'runs-root': args.runsRoot,
   }
@@ -202,7 +205,7 @@ export function invocationFor(args: Args): {
         positional: [],
         options: {
           name: args.name, brief: args.brief, extends: args.extends, attempts: args.attempts,
-          'data-node': args.dataNode, task: args.task,
+          'data-node': args.dataNode, task: args.task, verdict: args.approve,
         },
       }
     }
@@ -216,6 +219,7 @@ export function invocationFor(args: Args): {
         options: {
           mode: args.mode, name: args.name, brief: args.brief,
           'allow-regression': args.allowRegression, attempts: args.attempts,
+          verdict: args.approve,
         },
       }
     }
@@ -226,7 +230,10 @@ export function invocationFor(args: Args): {
       return {
         verb: args.action,
         positional: [],
-        options: { name: args.name, brief: args.brief, check: args.check, attempts: args.attempts },
+        options: {
+          name: args.name, brief: args.brief, check: args.check, attempts: args.attempts,
+          verdict: args.approve,
+        },
       }
     }
     case 'modes':
@@ -308,6 +315,16 @@ export function renderResult(args: Args, value: unknown): ContentBlock[] {
       lines.push(`Watch it with action "status" and run "${scalar(data.run_id)}".`)
       break
     case 'status': {
+      // An authoring run is driven by the graph spine and writes no progress lines, so
+      // its own status file is what says where it is.
+      const authoring = isRecord(data.authoring) ? data.authoring : undefined
+      if (authoring !== undefined) {
+        const due = Array.isArray(authoring.nodes_due) ? authoring.nodes_due.map(String) : []
+        const done = Array.isArray(authoring.completed) ? authoring.completed.length : 0
+        lines.push(`Authoring run ${scalar(authoring.name)} is ${scalar(authoring.spine)}: ${done} node(s) done${due.length === 0 ? '' : `, ${due.length} due (${due.join(', ')})`}.`)
+        if (typeof authoring.error === 'string' && authoring.error !== '') lines.push(`error: ${authoring.error}`)
+        if (typeof authoring.validation === 'string' && authoring.validation !== '') lines.push(`validation: ${authoring.validation}`)
+      }
       lines.push(`Run ${scalar(data.run_id)} is ${scalar(data.state)}; ${score(data.best_score)}.`)
       const counters = isRecord(data.counters) ? data.counters : {}
       lines.push(
@@ -373,10 +390,16 @@ export function renderResult(args: Args, value: unknown): ContentBlock[] {
     case 'create':
     case 'edit':
     case 'design': {
-      // These forward to another entry point; its own JSON is the answer.
+      // These forward to another entry point; its own JSON is the answer, and on a
+      // failure the reason it wrote — stderr included — is the only useful part.
       lines.push(`${args.action} ${data.ok === true ? 'succeeded' : 'failed'} (exit ${scalar(data.exit_code)}).`)
       const inner = isRecord(data.result) ? data.result : {}
-      lines.push(scalar(inner.output) || JSON.stringify(inner))
+      const reason = typeof inner.error === 'string' && inner.error !== ''
+        ? inner.error
+        : typeof data.stderr === 'string' && data.stderr !== ''
+          ? data.stderr
+          : scalar(inner.output) || JSON.stringify(inner)
+      lines.push(reason)
       break
     }
     default:
@@ -480,6 +503,11 @@ export function apply(ctx: Context, config: Config): void {
       extends: { type: 'string', description: 'For action "create": a <package>/<mode> to use as a reference.' },
       check: { type: 'string', description: 'For action "design": the command that decides whether the artifact works. Required by "design".' },
       allowRegression: { type: 'boolean', description: 'For action "edit": allow a revision that scores worse than the mode it came from.' },
+      approve: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'For "create"/"edit"/"design": a person\'s answers to the gates the run pauses at, as "GATE=VALUE" (e.g. "gate_strategy=proceed"). A headless authoring run refuses a gate it was not told the answer to, so ask the user first — this call cannot pause to ask them itself.',
+      },
       attempts: { type: 'integer', description: 'For "create"/"edit"/"design": how many times the model may retry before the run fails.' },
       dataNode: { type: 'boolean', description: 'For action "create": build the mode as a DataNode that runs its subgraph once per item (a dataset mode). The run is refused if the produced mode does not declare one.' },
       task: { type: 'string', description: 'For action "create": a Task class (module:Class or a registered name) the produced mode must satisfy — it supplies the per-item prompts and judges each pass. The run is refused if the produced mode is not bound to it.' },
