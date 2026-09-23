@@ -271,6 +271,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--intent", default="", help="what this run is for, in your words")
     run.add_argument("--workdir", default="", help="the run directory")
     run.add_argument("--knob", action="append", default=[], metavar="NAME=VALUE", help="set a knob for this run")
+    run.add_argument(
+        "--approve", action="append", default=[], metavar="GATE=VALUE",
+        help="state a gate's answer before the run, e.g. approve=proceed (repeatable)",
+    )
     run.add_argument("--timeout", type=int, default=0, help="seconds; 0 waits for you")
 
     optimize = sub.add_parser("optimize", help="search a mode's architecture and knobs")
@@ -344,6 +348,8 @@ def main(argv: list[str] | None = None) -> int:
             forwarded += ["--workdir", args.workdir]
         for pair in args.knob:
             forwarded += ["--knob", pair]
+        for pair in args.approve:
+            forwarded += ["--approve", pair]
         if args.timeout:
             forwarded += ["--timeout", str(args.timeout)]
         return _forward("refactory_dsh.interactive", forwarded)

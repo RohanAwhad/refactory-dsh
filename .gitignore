@@ -54,5 +54,9 @@ refactory/workdirs/
 # Where generated packages and a project's run state land. A run writes here, so it
 # must not be a reason the checkout is dirty.
 .factory/
+# A run's node work belongs inside its work directory. The CEO's subagents are the
+# one place a relative path could land in the checkout instead, so the directory they
+# would create is ignored rather than committed by accident.
+/reviews/
 refactory/**/*.egg-info/
 refactory/**/*.pyc

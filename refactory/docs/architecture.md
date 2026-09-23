@@ -212,7 +212,7 @@ reason is reported (`summarise_reasons`, `I:` first).
 Confirmed by running the running example:
 
 ```bash
-cd refactory && ../.venv/bin/python -m refactory_dsh.loop circle_packing/adaptive \
+uv run refactory optimize circle_packing/adaptive \
   --epochs 2 --batch-size 4 --optimizer random --seed 5 --runs-root /tmp/walk
 ```
 
@@ -257,9 +257,18 @@ read the journal. That is a known gap; see §11.
 A debug runtime that disagrees with the real one is worse than none, so
 `refactory/tests/test_equivalence.py` runs the same mode both ways and compares.
 
+**A run that stops is a failure with a name, on both.** On DSH the graph runner reads
+the cursor's own status after the CEO's turn: anything but `done` writes a line naming
+the status and the nodes still due and exits non-zero, so an abandoned graph cannot
+report a score as if it had run. The CEO cannot abandon one in the first place — the
+graph profile mounts the subagent tool foreground-only, because backgrounding a node's
+subagent is what abandoning a graph looks like from the inside. On the walker the same
+rule is structural: a node that fails ends the run with `exit_ok` false and the node's
+name in `error`.
+
 ```bash
-.venv/bin/python -m pytest refactory/tests/test_equivalence.py -q --run-integration
-# 6 passed
+uv run python -m pytest refactory/tests/test_equivalence.py -q --run-integration
+# 7 passed
 ```
 
 **The tower.** `refactory_packages/loop_mode` expresses the loop itself as a mode:
@@ -278,7 +287,7 @@ deterministic on seed 0, a wider batch reaches a better inner score — so a run
 the tower has something to find:
 
 ```bash
-.venv/bin/python -m refactory_dsh.loop loop_mode/loop --epochs 1 --batch-size 3 \
+uv run refactory optimize loop_mode/loop --epochs 1 --batch-size 3 \
   --optimizer random --seed 0 --runs-root /tmp/tower
 # seed 0.875 -> best 1.04, by `set_knob batch_size 4 -> 8`
 ```
@@ -409,7 +418,7 @@ remaining gap, stated in §12.
 mode declared a gate a person answers, so the path had nothing to exercise it.
 
 ```bash
-.venv/bin/python -m refactory_dsh.interactive review_pack/review \
+uv run refactory run review_pack/review \
   --intent "draft a note about circle packing and let me approve it"
 ```
 
