@@ -60,37 +60,57 @@ fi
 PNPM_PIN="$(sed -n 's/.*"packageManager"[[:space:]]*:[[:space:]]*"pnpm@\([^"]*\)".*/\1/p' "$HERE/package.json" | head -1)"
 PNPM_PIN="${PNPM_PIN:-latest}"
 
-# One way to run pnpm, out of three, in the order that needs the least from the
-# reader: the shim if it is on PATH; else corepack, which runs the pin without
-# anything being enabled; else npx, which needs only the npm that ships with Node.
-# Corepack is *not* bundled from Node 25 on, so npx is the route that always exists.
-PNPM=(pnpm)
+# Get `pnpm` onto PATH, by whichever route this machine allows, in the order that
+# asks the least of the reader:
+#
+#   1. the `pnpm` already on PATH;
+#   2. corepack, which runs package.json's pin with nothing enabled — but corepack is
+#      *not* bundled from Node 25 on, so it is not the reliable one;
+#   3. `npm install -g pnpm@<pin>`, which needs only the npm that ships with Node.
+#
+# It must end up as a real `pnpm` on PATH and not merely as an array this script
+# expands: the build runs `pnpm run build:lib:host` from *inside* another pnpm
+# script, so a bare `pnpm` has to resolve in a child shell too. (That is what broke
+# the first version of this: `sh: pnpm: command not found` from the build's own
+# subshell.) `npx pnpm` is deliberately absent — when it has to download the package
+# rather than use a warm cache, its bin re-executes `pnpm` by name and fails.
+PNPM_DIR=""
 if ! command -v pnpm >/dev/null 2>&1; then
   if command -v corepack >/dev/null 2>&1; then
     echo "  pnpm:  not on PATH; using corepack with the pinned pnpm@$PNPM_PIN"
-    PNPM=(corepack pnpm)
-  elif command -v npx >/dev/null 2>&1; then
-    echo "  pnpm:  neither pnpm nor corepack is on PATH; using npx to run pnpm@$PNPM_PIN"
-    PNPM=(npx --yes "pnpm@$PNPM_PIN")
+    PNPM_DIR="$(mktemp -d)"
+    printf '#!/bin/sh\nexec corepack pnpm "$@"\n' > "$PNPM_DIR/pnpm"
+    chmod +x "$PNPM_DIR/pnpm"
+  elif [ "${REFACTORY_SKIP_GLOBAL_PNPM:-}" != "1" ] && command -v npm >/dev/null 2>&1; then
+    echo "  pnpm:  not on PATH and no corepack; installing pnpm@$PNPM_PIN with npm"
+    echo "         (skip this with REFACTORY_SKIP_GLOBAL_PNPM=1)"
+    npm install -g "pnpm@$PNPM_PIN"
+    # The global prefix is not always on PATH — an nvm or homebrew Node puts its bin
+    # there, a system Node does not — so use the directory npm itself reports.
+    PNPM_DIR="$(npm prefix -g)/bin"
   else
-    echo "  error: no way to run pnpm: neither pnpm, nor corepack, nor npx is on PATH." >&2
+    echo "  error: no way to run pnpm: neither pnpm, corepack, nor npm is on PATH." >&2
     echo "         Install it once, then run this script again:" >&2
     echo "           npm install -g pnpm@$PNPM_PIN" >&2
     exit 1
   fi
 fi
-"${PNPM[@]}" --version >/dev/null 2>&1 || {
-  echo "  error: \`${PNPM[*]}\` did not run. Install it once with:" >&2
+if [ -n "$PNPM_DIR" ]; then
+  export PATH="$PNPM_DIR:$PATH"
+fi
+command -v pnpm >/dev/null 2>&1 || {
+  echo "  error: pnpm is still not runnable after installing it. Try:" >&2
   echo "           npm install -g pnpm@$PNPM_PIN" >&2
   exit 1
 }
+echo "  pnpm:  $(pnpm --version)"
 
 # 1. vendored dependencies (the language + the reference modes) as git submodules.
 git -C "$HERE" submodule update --init --recursive
 
 # 2. Node side: install the pnpm workspace (DSH), then build the client/host
 #    bundles the web GUI serves at launch.
-(cd "$HERE" && "${PNPM[@]}" install --frozen-lockfile && "${PNPM[@]}" run build)
+(cd "$HERE" && pnpm install --frozen-lockfile && pnpm run build)
 
 # 3. Python side: **one project, one lockfile, one command**. `uv sync` reads the
 #    root `pyproject.toml`, creates `.venv`, installs the three local packages in
