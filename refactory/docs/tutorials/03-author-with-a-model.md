@@ -81,7 +81,7 @@ is a decision, not a side effect.
 
 ```bash
 uv run refactory ceo "restart from a jittered sample when the search stalls" \
-  --mode edit --name revised_pack --approve gate_strategy=proceed
+  --mode edit --revise circle_packing/adaptive --name revised_pack --approve gate_strategy=proceed
 ```
 
 `EditMode` is `CreateMode`'s graph with a different intent. Two differences that

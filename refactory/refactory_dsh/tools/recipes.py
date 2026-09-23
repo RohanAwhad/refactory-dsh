@@ -249,7 +249,8 @@ RECIPES: tuple[Recipe, ...] = (
         title="Revise a mode, refusing a regression",
         command=(
             "uv run refactory ceo \"ask for fewer steps\" --mode edit \\\n"
-            "  --name counting_revised --approve gate_strategy=proceed"
+            "  --revise counting_pack/fixed_step --name counting_revised \\\n"
+            "  --approve gate_strategy=proceed"
         ),
         expect="a revision with a before/after score, refused when it gets worse",
         tier=MODEL,

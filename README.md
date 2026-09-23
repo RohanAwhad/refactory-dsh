@@ -77,7 +77,8 @@ uv run refactory ceo "one agent drafts a product blurb; one op checks its length
 `create` is remote-factory's **create-v2**: a research phase, a strategy phase **you approve**, a build, three reviews in parallel, an audit of their evidence, then registration and a smoke run. It writes a Python package under `.factory/packages/<name>` and registers it.
 
 - `--mode design` (the default) designs a checked **artifact** instead of a package. It needs `--check "<command that proves it works>"`.
-- `--mode edit` revises an existing mode and refuses a regression.
+- `--mode edit` revises an existing mode and refuses a regression; it needs the mode
+  to revise: `--mode edit --revise <package>/<mode>`.
 - A name is optional: without `--name`, your words become the name.
 - Ask for a model call in what you say ("one agent drafts …") and the created mode has an `agent` node. Otherwise it is deterministic — which is a feature: an offline mode is one a search can evaluate hundreds of times.
 - A `data` node and a `Task` are asked for the same way, and the validate gate *checks* you got one: `--data-node` and `--task my_pack.tasks:MyTask`.

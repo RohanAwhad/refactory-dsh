@@ -86,6 +86,13 @@ class CreateMode(Mode):
                 "", "str",
                 description="what the package should do, in the asker's words",
             ),
+            # `--mode edit`'s subject: the mode being revised. The walker passes it in
+            # the run's task; a run on DSH carries it here, and without it an "edit"
+            # is a creation that never compares itself to anything.
+            "revision_of": Knob(
+                "", "str",
+                description="for an edit: the <package>/<mode> being revised",
+            ),
         }
 
     def build(self) -> Graph:
@@ -95,7 +102,7 @@ class CreateMode(Mode):
             # What to build (`name`, `brief`) and create-v2's two directives
             # (`task_ref`, `data_node`) are read here and published as facts. The
             # walker passes the first two in the run's task; on DSH they are knobs.
-            knobs=("name", "brief", "task_ref", "data_node"),
+            knobs=("name", "brief", "task_ref", "data_node", "revision_of"),
             writes=("brief.json",),
             produces=("name", "brief", "extends", "revision_of", "intent", "validation",
                       "design_review", "api", "reference", "task_ref", "data_node"),

@@ -127,7 +127,7 @@ def prepare(ctx: Any) -> dict[str, Any]:
             "task (the walker) or the `name`/`brief` knobs (a run on DSH)"
         )
     extends = str(task.get("extends") or "").strip()
-    revision = str(task.get("mode") or "").strip()
+    revision = str(task.get("mode") or ctx.knob("revision_of", "") or "").strip()
     intent = str(task.get("intent") or "Make a new package of modes.").strip()
     # The two create-v2 directives (its `--task` and `--data-node` flags): a Task
     # class the produced mode must satisfy, and whether the produced graph is a

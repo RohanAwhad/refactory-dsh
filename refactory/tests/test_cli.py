@@ -79,6 +79,17 @@ def test_a_name_is_derived_from_what_was_asked_for():
     assert len(cli.slug("a " * 40)) <= 40
 
 
+def test_edit_refuses_to_run_without_the_mode_it_revises():
+    """`--mode edit` without `--revise` is a creation, not a revision.
+
+    A revision is judged by what changed, so a run that never said what it started
+    from cannot be one. The CLI refuses rather than quietly creating a mode.
+    """
+    result = _run("ceo", "fewer steps please", "--mode", "edit", "--name", "x")
+    assert result.returncode == 2
+    assert "--revise <package>/<mode>" in result.stderr
+
+
 def test_the_authoring_modes_are_the_ones_the_catalogue_offers():
     """`--mode create|design|edit` names real modes, with real authoring actions."""
     from refactory_dsh import console

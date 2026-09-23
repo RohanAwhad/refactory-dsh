@@ -105,9 +105,18 @@ def cmd_ceo(args: argparse.Namespace) -> int:
         )
         return 2
 
+    if authoring == "edit" and not args.revise:
+        print(
+            "refactory: --mode edit needs --revise <package>/<mode> — the mode to revise; "
+            "without it an \"edit\" is a creation that cannot report what changed",
+            file=sys.stderr,
+        )
+        return 2
     knobs = [f"brief={target}", f"name={args.name or slug(target)}"]
     if check:
         knobs.append(f"check={check}")
+    if args.revise:
+        knobs.append(f"revision_of={args.revise}")
     forwarded = [identifier, "--intent", target]
     for pair in knobs:
         forwarded += ["--knob", pair]
@@ -260,6 +269,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ceo.add_argument("--name", default="", help="the package or artifact name (default: from what you said)")
     ceo.add_argument("--check", default="", help="design only: the command that decides whether it works")
+    ceo.add_argument("--revise", default="", metavar="PKG/MODE", help="edit only: the mode to revise")
     ceo.add_argument("--workdir", default="", help="the run directory")
     ceo.add_argument(
         "--approve", dest="verdict", action="append", default=[], metavar="GATE=VALUE",

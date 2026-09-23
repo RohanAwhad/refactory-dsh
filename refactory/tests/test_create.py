@@ -124,6 +124,20 @@ def test_prepare_reads_the_knobs_a_run_on_dsh_carries(tmp_path):
     assert published["brief"] == "from the knobs"
 
 
+def test_prepare_reads_the_mode_to_revise_from_the_knobs(tmp_path):
+    """`--mode edit`'s subject travels as a knob, because a DSH run has no task."""
+    from refactory_dsh import create_ops
+    from refactory_dsh.nn import RunContext
+
+    ctx = RunContext(
+        tmp_path,
+        knobs={"name": "revised", "brief": "fewer steps", "revision_of": "counting_pack/fixed_step"},
+        facts={},
+        task={},
+    )
+    assert create_ops.prepare(ctx)["revision_of"] == "counting_pack/fixed_step"
+
+
 def test_prepare_refuses_a_run_with_nothing_to_build(tmp_path):
     from refactory_dsh import create_ops
     from refactory_dsh.nn import RunContext
