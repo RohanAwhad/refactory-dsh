@@ -559,6 +559,7 @@ create-mode: a mode whose output is a whole package.
 | class | `CreateResult` | `(package: 'str', mode: 'str', path: 'Path', files: 'list[str]' = <factory>, smoke_score: 'float \| None' = None, iterations: 'int' = 0, duration_s: 'float' = 0.0) -> None` |
 | function | `create` | `(config: 'CreateConfig', client: 'Any' = None) -> 'CreateResult'` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
+| function | `parse_verdicts` | `(pairs: 'list[str]') -> 'dict[str, str]'` |
 | function | `result_from_run` | `(run: 'RunResult') -> 'dict[str, Any]'` |
 
 - **`CreateConfig`** — What to create, and how hard to try.
@@ -567,6 +568,7 @@ create-mode: a mode whose output is a whole package.
 - **`CreateResult`** — What the run produced.
 - **`create`** — Run create-mode once. Returns what was created, or raises why it was not.
 - **`main`** — ``python -m refactory_dsh.create --name <n> --brief <text> [--extends <mode>]``.
+- **`parse_verdicts`** — The gate verdicts a headless authoring run was given, as ``gate=value``.
 - **`result_from_run`** — The facts of a create-mode run, for a caller that drove the executor itself.
 
 

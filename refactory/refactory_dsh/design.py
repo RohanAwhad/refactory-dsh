@@ -319,6 +319,10 @@ def main(argv: list[str] | None = None) -> int:
         "--model-timeout", type=int, default=DEFAULT_TIMEOUT_S, dest="model_timeout_s",
         help="seconds one model completion may take before it is called hung",
     )
+    parser.add_argument(
+        "--verdict", action="append", default=[], metavar="GATE=VALUE",
+        help="answer a gate a person owns, as <gate>=<value> (repeatable)",
+    )
     args = parser.parse_args(argv)
 
     from refactory_dsh.model import DshModelClient
@@ -327,10 +331,13 @@ def main(argv: list[str] | None = None) -> int:
     state = mode.state_dict()
     state["knobs"]["check_attempts"]["value"] = int(args.attempts)
     mode.load_state_dict(state)
+    from refactory_dsh.create import parse_verdicts
+
     result = mode.run(
         Path(args.workdir),
         model=DshModelClient(timeout_s=int(args.model_timeout_s), model=args.model),
         task={"name": args.name, "brief": args.brief, "check": args.check},
+        verdicts=parse_verdicts(args.verdict),
     )
     if not result.exit_ok:
         print(json.dumps({"error": result.error}), file=sys.stderr)

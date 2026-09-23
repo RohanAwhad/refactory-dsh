@@ -20,7 +20,9 @@ from pathlib import Path
 from typing import Any
 
 from refactory_dsh import registry
-from refactory_dsh.create import CreateConfig, CreateError, CreateMode, CreateResult, create
+from refactory_dsh.create import (
+    CreateConfig, CreateError, CreateMode, CreateResult, create, parse_verdicts,
+)
 from refactory_dsh.model import DEFAULT_TIMEOUT_S
 
 
@@ -190,6 +192,10 @@ def main(argv: list[str] | None = None) -> int:
         "--model-timeout", type=int, default=DEFAULT_TIMEOUT_S, dest="model_timeout_s",
         help="seconds one model completion may take before it is called hung",
     )
+    parser.add_argument(
+        "--verdict", action="append", default=[], metavar="GATE=VALUE",
+        help="answer a gate a person owns, as <gate>=<value> (repeatable)",
+    )
     args = parser.parse_args(argv)
 
     from refactory_dsh.model import DshModelClient
@@ -204,6 +210,7 @@ def main(argv: list[str] | None = None) -> int:
                 allow_regression=args.allow_regression,
                 workdir=Path(args.workdir),
                 model_timeout_s=int(args.model_timeout_s),
+                verdicts=parse_verdicts(args.verdict),
             ),
             client=DshModelClient(timeout_s=int(args.model_timeout_s), model=args.model),
         )

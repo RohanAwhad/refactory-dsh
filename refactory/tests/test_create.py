@@ -49,6 +49,23 @@ def _clean_package():
     shutil.rmtree(root, ignore_errors=True)
 
 
+def test_the_command_line_carries_the_persons_approval():
+    """`--verdict gate=value` is how a headless create is told the person's answer.
+
+    Without it the run stops at `gate_strategy`; the flag is the same spelling
+    `console steer --verdict` uses, so one answer can be stated up front or recorded
+    on a paused run.
+    """
+    from refactory_dsh.create import parse_verdicts
+
+    assert parse_verdicts(["gate_strategy=proceed"]) == {"gate_strategy": "proceed"}
+    assert parse_verdicts(["a=1", "b=reloop"]) == {"a": "1", "b": "reloop"}
+    assert parse_verdicts([]) == {}
+    for bad in ("proceed", "gate_strategy=", "=proceed", ""):
+        with pytest.raises(ValueError, match="--verdict takes"):
+            parse_verdicts([bad])
+
+
 def test_parse_files_splits_marked_blocks():
     answer = (
         "===FILE: __init__.py===\nvalue = 1\n"

@@ -21,6 +21,38 @@ works.
 
 ---
 
+## The shape of it: create → use → optimize → use it again
+
+Four steps, four commands, one mode. This is the whole system; the tutorials below
+are the detail behind each step.
+
+| step | command | what you have at the end |
+|---|---|---|
+| **create** | `.venv/bin/python -m refactory_dsh.create --name my_pack --brief "<what it does>" --verdict gate_strategy=proceed` | a package on disk, registered, its mode smoke-scored |
+| **use** | `.venv/bin/python -m refactory_dsh.interactive my_pack/<mode> --intent "<what you want>"` | the mode ran, with its own artifacts, and a person answered any gate |
+| **optimize** | `.venv/bin/python -m refactory_dsh.loop my_pack/<mode> --epochs 4 --batch-size 6 --optimizer random --seed 5 --runs-root /tmp/run` | a leaderboard, a report, and the edits that improved it |
+| **use it again** | `.venv/bin/python -m refactory_dsh.console adopt --run /tmp/run --as my_tuned` | the winner as a mode of its own, `registry smoke my_tuned/<mode>` scoring it |
+
+Two things decide whether a step costs money, and they are worth knowing before you
+start:
+
+- **`create`, `edit` and `design` call a model; nothing else in the box does.** Every
+  other shipped mode — `circle_packing/adaptive`, `counting_pack/*`,
+  `review_pack/review`, `lean_pack/prover`, … — is deterministic ops and gates, built
+  to be testable offline. They are fixtures, not examples of what a mode looks like.
+- **A mode calls a model when its graph has `agent` nodes**, and only the brief decides
+  that. Ask for one ("the first node is an agent that drafts …") and the created mode
+  makes that call; don't, and you get a deterministic mode. A mode with an `agent` node
+  needs a model *at eval time*, so `registry smoke` is not how you use it: it fails
+  with `agent node '…' needs a model client`. Use it through `interactive`, the panel,
+  or the CEO, which all supply one.
+
+The panel ([tutorial 7](07-pick-and-watch-from-the-panel.md)) is this same four steps
+with the choices offered instead of typed: pick the mode, press **Start**, read the
+run, then **adopt** the winner.
+
+---
+
 ## The five-minute tour
 
 Everything below runs offline and deterministically. Run it from the repository

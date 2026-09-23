@@ -448,6 +448,25 @@ class CreateResult:
         }
 
 
+def parse_verdicts(pairs: list[str]) -> dict[str, str]:
+    """The gate verdicts a headless authoring run was given, as ``gate=value``.
+
+    ``create``, ``edit`` and ``design`` each contain a gate a person answers
+    (``gate_strategy``), and a headless run must be *given* that answer rather than
+    invent one: a creation that approved its own plan is not a reviewed creation. The
+    spelling matches ``console steer --verdict``, so the same answer can be recorded
+    on a paused run and stated up front on a new one.
+    """
+    verdicts: dict[str, str] = {}
+    for pair in pairs:
+        gate, separator, value = str(pair).partition("=")
+        gate, value = gate.strip(), value.strip()
+        if not separator or not gate or not value:
+            raise ValueError(f"--verdict takes <gate>=<value>, not {pair!r}")
+        verdicts[gate] = value
+    return verdicts
+
+
 def create(config: CreateConfig, client: Any = None) -> CreateResult:
     """Run create-mode once. Returns what was created, or raises why it was not."""
     mode = CreateMode()
@@ -533,6 +552,11 @@ def main(argv: list[str] | None = None) -> int:
         "--model-timeout", type=int, default=DEFAULT_TIMEOUT_S, dest="model_timeout_s",
         help="seconds one model completion may take before it is called hung",
     )
+    parser.add_argument(
+        "--verdict", action="append", default=[], metavar="GATE=VALUE",
+        help="answer a gate a person owns, as <gate>=<value> (repeatable); "
+             "gate_strategy is one, so a headless run must be told the answer",
+    )
     args = parser.parse_args(argv)
 
     from refactory_dsh.model import DshModelClient
@@ -548,6 +572,7 @@ def main(argv: list[str] | None = None) -> int:
                 data_node=bool(args.data_node),
                 task_ref=str(args.task_ref or ""),
                 model_timeout_s=int(args.model_timeout_s),
+                verdicts=parse_verdicts(args.verdict),
             ),
             client=DshModelClient(timeout_s=int(args.model_timeout_s), model=args.model),
         )

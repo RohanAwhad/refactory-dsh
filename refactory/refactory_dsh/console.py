@@ -681,6 +681,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     make.add_argument("--task", default=None, metavar="TASK_REF", dest="task_ref",
                       help="a Task class the produced mode must satisfy")
+    make.add_argument(
+        "--verdict", action="append", default=[], metavar="GATE=VALUE",
+        help="answer a gate a person owns, as <gate>=<value> (repeatable); "
+             "gate_strategy is one, so a headless create is told the answer",
+    )
 
     revise = sub.add_parser("edit", help="revise a mode from a brief (model-driven)")
     revise.add_argument("--mode", required=True)
@@ -688,12 +693,20 @@ def _parser() -> argparse.ArgumentParser:
     revise.add_argument("--brief", required=True)
     revise.add_argument("--allow-regression", action="store_true")
     revise.add_argument("--attempts", type=int, default=3)
+    revise.add_argument(
+        "--verdict", action="append", default=[], metavar="GATE=VALUE",
+        help="answer a gate a person owns, as <gate>=<value> (repeatable)",
+    )
 
     artifact = sub.add_parser("design", help="design and check a software artifact (model-driven)")
     artifact.add_argument("--name", required=True)
     artifact.add_argument("--brief", required=True)
     artifact.add_argument("--check", default="", help="the command that proves the artifact works")
     artifact.add_argument("--attempts", type=int, default=3)
+    artifact.add_argument(
+        "--verdict", action="append", default=[], metavar="GATE=VALUE",
+        help="answer a gate a person owns, as <gate>=<value> (repeatable)",
+    )
 
     return parser
 
@@ -796,6 +809,8 @@ def main(argv: list[str] | None = None) -> int:
                 forwarded.append("--data-node")
             if args.task_ref:
                 forwarded += ["--task", args.task_ref]
+            for pair in args.verdict:
+                forwarded += ["--verdict", pair]
             payload = _forward("create", forwarded)
             review = _design_review(project, args.name)
             if review:
@@ -808,11 +823,15 @@ def main(argv: list[str] | None = None) -> int:
             ]
             if args.allow_regression:
                 forwarded.append("--allow-regression")
+            for pair in args.verdict:
+                forwarded += ["--verdict", pair]
             payload = _forward("edit", forwarded)
         elif args.verb == "design":
             forwarded = ["--name", args.name, "--brief", args.brief, "--attempts", str(args.attempts)]
             if args.check:
                 forwarded += ["--check", args.check]
+            for pair in args.verdict:
+                forwarded += ["--verdict", pair]
             payload = _forward("design", forwarded)
         else:  # pragma: no cover - argparse rejects an unknown verb first
             raise ConsoleError(f"unknown verb {args.verb!r}")

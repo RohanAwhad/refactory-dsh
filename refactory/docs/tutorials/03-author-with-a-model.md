@@ -20,8 +20,15 @@ is untouched.
 .venv/bin/python -m refactory_dsh.create \
   --name annealing_pack \
   --brief "hill-climb a greedy circle packing by accepting non-worsening moves" \
-  --extends circle_packing/adaptive
+  --extends circle_packing/adaptive \
+  --verdict gate_strategy=proceed
 ```
+
+`--verdict` is the person's answer to `gate_strategy`, carried over from create-v2:
+the strategy is a decision a person owns, and a headless run is **told** it rather
+than approving its own plan. Drop the flag and the run stops at that gate with the
+message saying so. `console steer --verdict gate_strategy=proceed` records the same
+answer on a paused run, and a resumed run replays it instead of asking again.
 
 What happens, in order — and the gates are the point:
 
