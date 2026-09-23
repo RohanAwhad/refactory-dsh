@@ -1689,13 +1689,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--project", default=str(project_root()))
     parser.add_argument("--model", default="", help="model name for the reasoning optimizer")
+    parser.add_argument(
+        "--provider", default="", help="provider route that model is on (default: the settings default)"
+    )
     args = parser.parse_args(argv)
 
     model = None
     if args.optimizer == "autoresearch":
         from refactory_dsh.model import DshModelClient
 
-        model = DshModelClient(model=args.model)
+        model = DshModelClient(model=args.model, provider=args.provider)
 
     config = LoopConfig(
         epochs=args.epochs,

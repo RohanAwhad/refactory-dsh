@@ -122,6 +122,10 @@ def cmd_ceo(args: argparse.Namespace) -> int:
     forwarded = [identifier, "--intent", target]
     for pair in knobs:
         forwarded += ["--knob", pair]
+    if args.provider:
+        forwarded += ["--provider", str(args.provider)]
+    if args.model:
+        forwarded += ["--model", str(args.model)]
     if args.workdir:
         forwarded += ["--workdir", str(args.workdir)]
     # The person answers `gate_strategy` at the terminal. `--approve` is for a run
@@ -278,6 +282,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ceo.add_argument("--workdir", default="", help="the run directory")
     ceo.add_argument(
+        "--provider", default="",
+        help="provider route for this run's model (default: the settings default)",
+    )
+    ceo.add_argument(
+        "--model", default="",
+        help="model id for this run, e.g. deepseek-v4-pro (default: the settings default)",
+    )
+    ceo.add_argument(
         "--approve", dest="verdict", action="append", default=[], metavar="GATE=VALUE",
         help="state a gate's answer up front, e.g. gate_strategy=proceed, for an unattended run",
     )
@@ -292,6 +304,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="state a gate's answer before the run, e.g. approve=proceed (repeatable)",
     )
     run.add_argument("--timeout", type=int, default=0, help="seconds; 0 waits for you")
+    run.add_argument(
+        "--provider", default="",
+        help="provider route for this run's model (default: the settings default)",
+    )
+    run.add_argument(
+        "--model", default="",
+        help="model id for this run, e.g. deepseek-v4-pro (default: the settings default)",
+    )
 
     optimize = sub.add_parser("optimize", help="search a mode's architecture and knobs")
     optimize.add_argument("mode", help="the mode, as <package>/<name>")
@@ -309,6 +329,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("--runs-root", "the run directory to write"),
         ("--intent", "what the run is for, in your words"),
         ("--model", "the model the reasoning optimizer asks"),
+        ("--provider", "the provider route that model is on"),
     ):
         optimize.add_argument(flag, default=None, help=help_text)
 
@@ -368,6 +389,10 @@ def main(argv: list[str] | None = None) -> int:
             forwarded += ["--approve", pair]
         if args.timeout:
             forwarded += ["--timeout", str(args.timeout)]
+        if args.provider:
+            forwarded += ["--provider", str(args.provider)]
+        if args.model:
+            forwarded += ["--model", str(args.model)]
         return _forward("refactory_dsh.interactive", forwarded)
     if args.verb == "optimize":
         forwarded = [args.mode]

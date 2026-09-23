@@ -242,7 +242,7 @@
                                       [--extends EXTENDS]
                                       [--attempts ATTEMPTS] [--data-node]
                                       [--task TASK_REF] [--workdir WORKDIR]
-                                      [--model MODEL]
+                                      [--model MODEL] [--provider PROVIDER]
                                       [--model-timeout MODEL_TIMEOUT_S]
                                       [--verdict GATE=VALUE]
 
@@ -260,6 +260,7 @@ options:
                         produced mode must satisfy
   --workdir WORKDIR
   --model MODEL
+  --provider PROVIDER   provider route that model is on
   --model-timeout MODEL_TIMEOUT_S
                         seconds one model completion may take before it is
                         called hung
@@ -320,6 +321,7 @@ options:
                                     [--attempts ATTEMPTS]
                                     [--runs-root RUNS_ROOT] [--intent INTENT]
                                     [--project PROJECT] [--model MODEL]
+                                    [--provider PROVIDER]
                                     mode
 
 Run the optimizer loop on a mode.
@@ -352,6 +354,8 @@ options:
                         interactive run reads
   --project PROJECT
   --model MODEL         model name for the reasoning optimizer
+  --provider PROVIDER   provider route that model is on (default: the settings
+                        default)
 </code></pre></details>
       <details><summary>What the config defaults to</summary><table><thead><tr><th>LoopConfig field</th><th>default</th></tr></thead><tbody><tr><td><code>epochs</code></td><td>default 2</td></tr><tr><td><code>batch_size</code></td><td>default 4</td></tr><tr><td><code>optimizer</code></td><td>default &#x27;autoresearch&#x27;</td></tr><tr><td><code>edit_preset</code></td><td>default &#x27;broad&#x27;</td></tr><tr><td><code>seed</code></td><td>default 0</td></tr><tr><td><code>elite</code></td><td>default 3</td></tr><tr><td><code>max_evaluations</code></td><td>default 64</td></tr><tr><td><code>attempts</code></td><td>default 3</td></tr><tr><td><code>evaluator</code></td><td>default &#x27;walker&#x27;</td></tr><tr><td><code>dsh_timeout_s</code></td><td>default 900</td></tr></tbody></table></details>
 

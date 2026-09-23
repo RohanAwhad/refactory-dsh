@@ -127,7 +127,9 @@ def test_the_readme_reference_matches_the_command_line():
     """
     readme = (REPO_ROOT / "README.md").read_text()
     start = readme.index("## The command line")
-    reference = readme[start:readme.index("## Documentation", start)]
+    # Up to the GUI section: this test is about the reference tables, and the later
+    # sections legitimately name `dsh`'s own flags (`--profile`), which no verb here has.
+    reference = readme[start:readme.index("## The GUI", start)]
 
     verbs = re.search(r"\{([a-z,]+)\}", _run("--help").stdout)
     assert verbs, "`refactory --help` no longer lists its verbs, so this test proves nothing"
@@ -172,3 +174,30 @@ def test_ceo_passes_a_persons_knob_to_the_authoring_run(monkeypatch):
     assert forwarded[0] == "default_pack/edit"
     assert "--knob" in forwarded and "allow_regression=1" in forwarded
     assert "revision_of=counting_pack/fixed_step" in forwarded
+
+
+def test_the_model_a_run_names_is_passed_to_the_runtime(monkeypatch):
+    """`--model`/`--provider` reach the graph profile, which is what runs the CEO.
+
+    The flags are only useful if they arrive: the profile takes them for the agent it
+    creates, and the mode's own agent nodes run through that same agent.
+    """
+    seen: list[list[str]] = []
+    monkeypatch.setattr(cli, "_forward", lambda module, argv: seen.append(argv) or 0)
+    assert cli.main([
+        "run", "counting_pack/fixed_step", "--intent", "count",
+        "--model", "deepseek-v4-pro", "--provider", "deepseek-official",
+    ]) == 0
+    forwarded = seen[0]
+    assert "--model" in forwarded and "deepseek-v4-pro" in forwarded
+    assert "--provider" in forwarded and "deepseek-official" in forwarded
+
+    seen.clear()
+    assert cli.main([
+        "ceo", "an idea", "--mode", "create",
+        "--model", "deepseek-v4-pro", "--provider", "deepseek-official",
+    ]) == 0
+    authored = seen[0]
+    assert authored[0] == "default_pack/create"
+    assert "--model" in authored and "deepseek-v4-pro" in authored
+    assert "--provider" in authored and "deepseek-official" in authored

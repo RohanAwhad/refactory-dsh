@@ -48,7 +48,7 @@ This state is model-visible replay input and therefore follows the existing [rec
 
 ### Propagate the target through every request producer
 
-Every model-selection path carries provider and model together: declarative agents, ACP and stdio app config, the JSON-RPC initialize request, subagent overrides and inheritance, workflow child overrides, and direct compaction summarization. Subagents inherit both fields from their parent before applying request overrides. The system-prompt variable set gains `provider` beside `model`.
+Every model-selection path carries provider and model together: declarative agents, ACP and stdio app config, the JSON-RPC initialize request, subagent overrides and inheritance, workflow child overrides, and direct compaction summarization. Which of those a command-line run ends up using is decided by the selection `installModelSelection` is seeded with — a bundle that seeded it from the settings default discarded the model the invocation named, see [A run's model is the one the invocation named](2026-09-23-a-run-uses-the-model-it-named.md). Subagents inherit both fields from their parent before applying request overrides. The system-prompt variable set gains `provider` beside `model`.
 
 Compaction configuration gains `summarizationProvider` beside `summarizationModel`. Both are empty to inherit, or both are non-empty to select an explicit target; a half-configured pair fails load. Inheritance uses the last logged request target when one exists and falls back to the agent's creation options. `compaction/summary` records both fields with the existing model-call envelope.
 

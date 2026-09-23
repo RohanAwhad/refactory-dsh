@@ -48,7 +48,7 @@ pi-ai 回放状态用其成功 `AssistantMessage` 的带版本最小投影填充
 
 ### 在所有请求生产方中传播目标
 
-每条模型选择路径都同时携带 provider 与 model：声明式 agent、ACP（Agent Client Protocol）和 stdio 应用配置、JSON-RPC initialize 请求、subagent 覆盖与继承、工作流子 agent 覆盖，以及直接压缩摘要。subagent 先从父 agent 继承两个字段，再应用请求覆盖。系统提示词变量集合在 `model` 之外增加 `provider`。
+每条模型选择路径都同时携带 provider 与 model：声明式 agent、ACP（Agent Client Protocol）和 stdio 应用配置、JSON-RPC initialize 请求、subagent 覆盖与继承、工作流子 agent 覆盖，以及直接压缩摘要。一次命令行运行最终用到哪一个，由播种给 `installModelSelection` 的那个选择决定——从设置默认值播种的 bundle 会丢掉这次调用点名的模型，见 [A run's model is the one the invocation named](2026-09-23-a-run-uses-the-model-it-named.zh.md)。subagent 先从父 agent 继承两个字段，再应用请求覆盖。系统提示词变量集合在 `model` 之外增加 `provider`。
 
 压缩配置在 `summarizationModel` 之外增加 `summarizationProvider`。两个值均为空时继承，均非空时选择显式目标；只配置其中一个会导致加载失败。继承优先使用最近一次记录的请求目标，没有时回退到 agent 创建选项。`compaction/summary` 使用现有模型调用 envelope 记录两个字段。
 

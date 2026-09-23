@@ -581,6 +581,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--workdir", default=".factory/create")
     parser.add_argument("--model", default="")
+    parser.add_argument("--provider", default="", help="provider route that model is on")
     parser.add_argument(
         "--model-timeout", type=int, default=DEFAULT_TIMEOUT_S, dest="model_timeout_s",
         help="seconds one model completion may take before it is called hung",
@@ -607,7 +608,9 @@ def main(argv: list[str] | None = None) -> int:
                 model_timeout_s=int(args.model_timeout_s),
                 verdicts=parse_verdicts(args.verdict),
             ),
-            client=DshModelClient(timeout_s=int(args.model_timeout_s), model=args.model),
+            client=DshModelClient(
+                timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
+            ),
         )
     except CreateError as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)

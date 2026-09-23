@@ -644,6 +644,17 @@
       "commit": "c0aeb99c57",
       "evidence": "Fixed by `Loop._carry_ledger`: the run's ledger is copied into each candidate directory before the evaluator runs it, so both runtimes fold it in (the walker in `execute`, DSH as the lowering transform) and the candidate directory keeps a record of what the person had said when it was evaluated. Two tests, each shown failing before the fix and passing after: the candidate's agent prompt contains the ledger and the intent, and a note appended between two evaluations reaches the second candidate and not the first. The README's read-and-steer table now says what steering does and how it arrives, tutorial 06 covers a search as well as a run, and architecture.md records why the copy exists.",
       "observed": "740 passed, 10 skipped (refactory/tests)"
+    },
+    {
+      "id": "model-choice",
+      "issue": 31,
+      "title": "A run could not choose its model, and a route that did not exist was not an error",
+      "why": "Found by answering \"how do I configure models?\". Three defects in one path: the graph profile's --model/--provider were parsed and then discarded, because the model-selection middleware installed on the CLI-created agent was seeded from agentDefaultModel's settings default and rewrites every request from it; the one-shot profile had no --model at all, so `refactory optimize --model X` (documented) ran `dsh --profile headless --model X` and got `unknown option '--model'`, failing every autoresearch proposal; and an unknown provider answered from the default model instead of failing, so a run attributed to one model was produced by another. Per-run model choice is part of ship readiness (#31): without it a stranger can only change the global default.",
+      "verify": "pytest refactory/tests/test_cli.py -q",
+      "status": "done",
+      "commit": "PENDING",
+      "evidence": "Fixed in two commits. The one-shot profile gained -p/--provider and --model (parsed in the startup provider, published on the startup service, wired through the row config) and both bundles now install the selection middleware with the effective selection, so a named model is the one requests route at; an unknown provider now exits 1 with NO_ADAPTER naming the route. Refactory exposes --model/--provider on run, ceo and optimize, with the module entry points taking --provider beside the existing --model. Verified by running it, not by reading: an openai-completions route pointed at a local OpenAI-compatible server through --patch answered `dsh --profile headless --provider local-test --model test-model` with that server's text and the server logged `model=test-model`; the same was repeated through the graph profile (final text = the fake server's, server log = the named model). Reverting the middleware line makes the new headless spec assert the settings default and fail. The READMEs gained a Models section (advisory catalogue, the GUI Models page, settings.yaml and the credential store, a verified local-route example, per-run flags), and an Agent Note records why the middleware's current is the authority.",
+      "observed": "741 passed, 10 skipped (refactory/tests)"
     }
   ],
   "verification": {

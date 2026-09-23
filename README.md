@@ -157,6 +157,8 @@ Every command is `uv run refactory <verb>`. This is the reference; [QUICKSTART.m
 | `--name <name>` | the package or artifact name; without it your words become the name |
 | `--check "<command>"` | design only: run inside the artifact directory; the gate reloops until it exits 0 |
 | `--revise <package>/<mode>` | edit only: the mode being revised |
+| `--model <id>` | the model this run uses, e.g. `deepseek-v4-pro` (default: your settings default) |
+| `--provider <route>` | the provider route that model is on, e.g. `deepseek-official` or `openai` |
 | `--knob name=value` | set one of the authoring mode's knobs for this run, e.g. `allow_regression=1` to accept a revision that scores lower |
 | `--approve <gate>=<value>` | state a gate's answer up front, e.g. `gate_strategy=proceed`, for an unattended run |
 | `--workdir <dir>` | where the run's evidence lands (default `.factory/interactive/<package>-<mode>`) |
@@ -185,6 +187,7 @@ Every command is `uv run refactory <verb>`. This is the reference; [QUICKSTART.m
 | `refactory run <package>/<mode> --knob name=value` | set one of the mode's knobs for this run |
 | `refactory run <package>/<mode> --workdir <dir>` | where the run's evidence lands |
 | `refactory run <package>/<mode> --timeout <seconds>` | how long to wait at a gate; `0` waits for you |
+| `refactory run <package>/<mode> --model <id> [--provider <route>]` | the model this run uses |
 | `refactory run <package>/<mode> --approve <gate>=<value>` | answer a gate before the run instead of at it |
 | `refactory package smoke <package>/<mode>` | run it once, in a sandbox, without a model (free) |
 | `refactory package smoke <package>/<mode> --model` | score a mode whose graph has an `agent` node, by supplying a model |
@@ -209,6 +212,7 @@ Every command is `uv run refactory <verb>`. This is the reference; [QUICKSTART.m
 | `--runs-root <dir>` | the run directory itself; read it back with `--run <this path>` | `.factory/loop` |
 | `--intent "<words>"` | what the run is for; seeds the ledger the agents read | empty |
 | `--model <name>` | the model the reasoning optimizer asks (not the mode's own agents) | the configured route |
+| `--provider <route>` | the provider route that model is on | your settings default |
 
 <a id="cli-read"></a>
 ### Read the run, and steer it
@@ -295,6 +299,62 @@ Ask in words; the CEO calls the `refactory` tool, which is the same console. Its
 If a mode reaches a `user` gate (create-v2's plan approval is one), the runtime asks **you**: the terminal in `refactory run`, a dialog in the GUI. The CEO cannot answer it, and neither can the model. To run unattended, state the answer up front: `--approve gate_strategy=proceed`.
 
 [The GUI tutorial](refactory/docs/tutorials/05-drive-it-from-the-gui.md) walks the conversation surface, and [the panel tutorial](refactory/docs/tutorials/07-pick-and-watch-from-the-panel.md) covers the widget.
+
+## Models
+
+<a id="models-list"></a>
+### Where the list comes from
+
+The adapter's catalogue is **advisory**: it is what pickers offer, not what the route accepts. The DeepSeek route ships `deepseek-v4-flash`, `deepseek-v4-pro` and `deepseek-v4-flash-vision-exp`, and it will send any id you name — so a model that is not listed still works, it just is not offered. Which routes exist and which models each offers is your **settings document**, `~/.dsh/settings.yaml`, which is hot-reloaded: nothing needs a restart.
+
+<a id="models-gui"></a>
+### In the GUI
+
+**Settings → Models.** Add a provider, paste its API key, optionally a base URL, and list the models — or press **Fetch available models** and pick from what the provider reports. **Add a custom provider** takes an id, a display name, one of three wire protocols (`openai-completions`, `openai-responses`, `anthropic-messages`) and a base URL, which is how a local server (Ollama, LM Studio, vLLM) is reached. The page writes the settings document and the credential store for you; the composer's model picker then offers the new models.
+
+<a id="models-terminal"></a>
+### In the terminal
+
+The same file, by hand:
+
+```yaml
+# ~/.dsh/settings.yaml
+agent-default-model:
+  provider: deepseek-official
+  model: deepseek-v4-pro          # the default for every run that names none
+
+llm-pi-ai:
+  providers:
+    openai:
+      apiKeyEnv: OPENAI_API_KEY   # the *name* of the variable, never the key
+    anthropic:
+      apiKeyEnv: ANTHROPIC_API_KEY
+      models:
+        - id: claude-sonnet-4-5
+          contextWindow: 200000
+    ollama:                       # a local OpenAI-compatible server
+      displayName: Ollama
+      api: openai-completions
+      baseURL: http://127.0.0.1:11434/v1
+      models:
+        - id: qwen3-coder
+          contextWindow: 262144
+```
+
+Keys are read from the environment (`DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, …, including a `.env` at the checkout root) or from the managed store at `~/.dsh/.credentials.yaml` that the Models page writes. A `llm-deepseek:` section overrides the direct DeepSeek route the same way: `models:`, `baseURL:`, `apiKeyEnv:`, `thinking:`, `reasoningEffort:`.
+
+A local OpenAI-compatible server works through the same route, and still needs *a* key — pi-ai's OpenAI protocol asks for one, so name a dummy variable and export any value (`apiKeyEnv: LOCAL_TEST_KEY`, then `LOCAL_TEST_KEY=dummy`), or set an `Authorization` header. This was verified by running it: an `openai-completions` route pointed at a local server answered a headless run, and the request the server logged named the model the run had chosen.
+
+<a id="models-one-run"></a>
+### One run, one model
+
+```bash
+uv run refactory run counting_pack/fixed_step --model deepseek-v4-pro
+uv run refactory ceo "an idea" --mode create --model deepseek-v4-pro
+uv run refactory optimize circle_packing/adaptive --provider deepseek-official --model deepseek-v4-pro
+```
+
+`--model` names the id and `--provider` the route; both fall back to `agent-default-model` in your settings, and neither writes anything back, so choosing a model for one run does not change the next. A route that does not exist is a loud failure (`NO_ADAPTER: no adapter registered for provider …`), not a quiet return to the default. The same two flags exist one level down, on `dsh --profile headless|graph`, which is what `refactory` calls.
 
 ## Documentation
 

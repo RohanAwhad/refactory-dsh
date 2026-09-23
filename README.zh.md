@@ -157,6 +157,8 @@ uv run refactory package add|import|remove|enable|disable …
 | `--name <名字>` | 包或产物的名字；不给就用你说的话当名字 |
 | `--check "<命令>"` | 仅 design：在产物目录里运行；门会反复重跑，直到它退出码为 0 |
 | `--revise <包>/<模式>` | 仅 edit：被修订的那个模式 |
+| `--model <id>` | 这次运行用的模型，例如 `deepseek-v4-pro`（默认：你设置里的默认） |
+| `--provider <路由>` | 那个模型所在的服务路由，例如 `deepseek-official` 或 `openai` |
 | `--knob name=value` | 为这次运行设置创作模式的一个旋钮，例如 `allow_regression=1` 接受一个分数更低的修订 |
 | `--approve <门>=<值>` | 事先给出某道门的答案，例如 `gate_strategy=proceed`，用于无人值守的运行 |
 | `--workdir <目录>` | 运行的证据落在哪里（默认 `.factory/interactive/<包>-<模式>`） |
@@ -185,6 +187,7 @@ uv run refactory package add|import|remove|enable|disable …
 | `refactory run <包>/<模式> --knob name=value` | 为这次运行设置这个模式的一个旋钮 |
 | `refactory run <包>/<模式> --workdir <目录>` | 运行的证据落在哪里 |
 | `refactory run <包>/<模式> --timeout <秒>` | 在门前等多久；`0` 表示等你 |
+| `refactory run <包>/<模式> --model <id> [--provider <路由>]` | 这次运行用的模型 |
 | `refactory run <包>/<模式> --approve <门>=<值>` | 在运行前而不是运行中回答一道门 |
 | `refactory package smoke <包>/<模式>` | 在沙箱里跑一次，不用模型（免费） |
 | `refactory package smoke <包>/<模式> --model` | 给图里有 `agent` 节点的模式打分，办法是提供一个模型 |
@@ -209,6 +212,7 @@ uv run refactory package add|import|remove|enable|disable …
 | `--runs-root <目录>` | 运行目录本身；用 `--run <这个路径>` 读回来 | `.factory/loop` |
 | `--intent "<话>"` | 这次运行是为什么；它给 agent 读的账本做种子 | 空 |
 | `--model <名字>` | 推理优化器要问的模型（不是模式自己的 agent） | 配置好的路由 |
+| `--provider <路由>` | 那个模型所在的服务路由 | 你设置里的默认 |
 
 <a id="cli-read"></a>
 ### 读一次运行，并引导它
@@ -295,6 +299,62 @@ dsh web: http://127.0.0.1:3081/?token=<per-process token>
 如果某个模式走到一道 `user` 门（create-v2 的计划批准就是一道），运行时来问**你**：`refactory run` 里是终端，GUI 里是对话框。CEO 回答不了它，模型也回答不了。要做到无人值守，就事先说出答案：`--approve gate_strategy=proceed`。
 
 [GUI 教程](refactory/docs/tutorials/05-drive-it-from-the-gui.md)带你走一遍对话界面，[面板教程](refactory/docs/tutorials/07-pick-and-watch-from-the-panel.md)讲那个控件。
+
+## 模型
+
+<a id="models-list"></a>
+### 名单是从哪来的
+
+adapter 的目录是**建议性**的：它是选择器会展示的东西，不是路由会接受的东西。DeepSeek 路由自带 `deepseek-v4-flash`、`deepseek-v4-pro` 与 `deepseek-v4-flash-vision-exp`，而它会把你点名的任何 id 发出去——所以没被列出的模型照样能用，只是不会被摆出来。有哪些路由、每个路由提供哪些模型，由你的**设置文档** `~/.dsh/settings.yaml` 决定，它是热重载的：什么都不用重启。
+
+<a id="models-gui"></a>
+### 在 GUI 里
+
+**Settings → Models。** 加一个 provider，粘贴它的 API key，需要的话填 base URL，然后列出模型——或者按 **Fetch available models**，从 provider 报回来的清单里挑。**Add a custom provider** 要一个 id、一个显示名、三种线上协议之一（`openai-completions`、`openai-responses`、`anthropic-messages`）和一个 base URL，本机服务器（Ollama、LM Studio、vLLM）就是这样接进来的。这个页面会替你写设置文档和凭据库；之后输入框旁的模型选择器就会提供新的模型。
+
+<a id="models-terminal"></a>
+### 在终端里
+
+同一个文件，手写：
+
+```yaml
+# ~/.dsh/settings.yaml
+agent-default-model:
+  provider: deepseek-official
+  model: deepseek-v4-pro          # the default for every run that names none
+
+llm-pi-ai:
+  providers:
+    openai:
+      apiKeyEnv: OPENAI_API_KEY   # the *name* of the variable, never the key
+    anthropic:
+      apiKeyEnv: ANTHROPIC_API_KEY
+      models:
+        - id: claude-sonnet-4-5
+          contextWindow: 200000
+    ollama:                       # a local OpenAI-compatible server
+      displayName: Ollama
+      api: openai-completions
+      baseURL: http://127.0.0.1:11434/v1
+      models:
+        - id: qwen3-coder
+          contextWindow: 262144
+```
+
+key 从环境里读（`DEEPSEEK_API_KEY`、`OPENAI_API_KEY`……包括检出根目录的 `.env`），或从 Models 页面写的托管凭据库 `~/.dsh/.credentials.yaml` 里读。`llm-deepseek:` 段以同样的方式覆盖直连 DeepSeek 路由：`models:`、`baseURL:`、`apiKeyEnv:`、`thinking:`、`reasoningEffort:`。
+
+本机的 OpenAI 兼容服务器走同一条路由，而且仍然需要*一个* key——pi-ai 的 OpenAI 协议会要一个，所以起一个占位变量名并随便导出个值（`apiKeyEnv: LOCAL_TEST_KEY`，然后 `LOCAL_TEST_KEY=dummy`），或者自己设一个 `Authorization` 头。这一点是跑出来的：一条指向本机服务器的 `openai-completions` 路由回答了一次 headless 运行，服务器记下的请求里点名的正是这次运行所选的模型。
+
+<a id="models-one-run"></a>
+### 一次运行，一个模型
+
+```bash
+uv run refactory run counting_pack/fixed_step --model deepseek-v4-pro
+uv run refactory ceo "an idea" --mode create --model deepseek-v4-pro
+uv run refactory optimize circle_packing/adaptive --provider deepseek-official --model deepseek-v4-pro
+```
+
+`--model` 给 id，`--provider` 给路由；两者都回落到你设置里的 `agent-default-model`，而且都不写回任何东西，所以为一次运行选的模型不会改变下一次。不存在的路由是响亮的失败（`NO_ADAPTER: no adapter registered for provider …`），而不是悄悄退回默认模型。再往下一层，`dsh --profile headless|graph` 也有同样两个开关，`refactory` 调用的就是它们。
 
 ## 文档
 

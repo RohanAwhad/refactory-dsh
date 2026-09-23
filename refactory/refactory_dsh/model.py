@@ -1,5 +1,9 @@
 """A :class:`ModelClient` backed by a one-shot DSH run.
 
+The profile's own model selection (`--provider`, `--model`) is per invocation, so a
+caller that names one gets that model for the completions it makes and nothing else
+changes.
+
 The outer loop's optimizers need exactly one thing from a model: text in, text
 out. DSH already exposes that as ``dsh --profile headless "<task>"``, which is
 the same mechanism the inner loop uses to run a mode, so nothing new is
@@ -33,9 +37,15 @@ class DshModelClient:
     Implements ``factory.outer_loop.optimizers.ModelClient``.
     """
 
-    def __init__(self, timeout_s: int = DEFAULT_TIMEOUT_S, model: str = "") -> None:
+    def __init__(
+        self,
+        timeout_s: int = DEFAULT_TIMEOUT_S,
+        model: str = "",
+        provider: str = "",
+    ) -> None:
         self._timeout_s = timeout_s
         self._model = model
+        self._provider = provider
 
     def complete(self, prompt: str, *, system: str = "") -> str:
         """Return the model's answer to ``prompt``.
@@ -58,6 +68,11 @@ class DshModelClient:
             "--profile",
             "headless",
         ]
+        # The headless profile takes these for one invocation only: nothing is
+        # written back to settings, so one optimized run against another model cannot
+        # change what the next one uses.
+        if self._provider:
+            cmd += ["--provider", self._provider]
         if self._model:
             cmd += ["--model", self._model]
         cmd.append(task)

@@ -101,10 +101,12 @@ def command(
     name: str,
     knobs: list[str] | None = None,
     project: Path | None = None,
+    provider: str = "",
+    model: str = "",
 ) -> list[str]:
     """The DSH run whose stdin is the person's terminal."""
     _, mode_name = identifier.split("/", 1)
-    return [
+    argv = [
         str(node_bin()), "--import", "tsx/esm", "apps/cli/src/bin.ts",
         "--profile", "graph", "run",
         "--mode", name,
@@ -122,6 +124,13 @@ def command(
             )
         )[lowering.KNOBS_ENV],
     ]
+    # The graph profile takes these for the CEO agent it creates; the mode's own
+    # agent nodes run through that same agent, so this is *the* model a run uses.
+    if provider:
+        argv += ["--provider", provider]
+    if model:
+        argv += ["--model", model]
+    return argv
 
 
 def run(
@@ -133,6 +142,8 @@ def run(
     timeout_s: int | None = None,
     knobs: list[str] | None = None,
     approve: list[str] | None = None,
+    provider: str = "",
+    model: str = "",
 ) -> int:
     """Lower, then run the mode under the CEO with the terminal attached.
 
@@ -154,6 +165,7 @@ def run(
         steering.Ledger(workdir).verdict(gate.strip(), value.strip())
     argv = command(
         identifier, workdir=workdir, graphs=graphs, name=name, knobs=knobs, project=project,
+        provider=provider, model=model,
     )
     # stdin is inherited on purpose: the graph profile's answerer reads the person's
     # answer from the terminal, and a captured stdin is not a person.
@@ -224,6 +236,14 @@ def main(argv: list[str] | None = None) -> int:
              "(repeatable); without it the run asks you at the terminal",
     )
     parser.add_argument("--timeout", type=int, default=0, help="seconds; 0 waits for the person")
+    parser.add_argument(
+        "--provider", default="",
+        help="provider route for this run's model (default: the settings default)",
+    )
+    parser.add_argument(
+        "--model", default="",
+        help="model id for this run, e.g. deepseek-v4-pro (default: the settings default)",
+    )
     args = parser.parse_args(argv)
 
     workdir = Path(args.workdir) if args.workdir else None
@@ -235,6 +255,8 @@ def main(argv: list[str] | None = None) -> int:
             knobs=args.knob,
             approve=args.approve,
             timeout_s=args.timeout or None,
+            provider=args.provider,
+            model=args.model,
         )
     except Exception as exc:  # a failed run must be a message, not a traceback
         print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
