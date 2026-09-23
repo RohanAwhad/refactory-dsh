@@ -148,6 +148,11 @@ export function apply(ctx: Context): void {
       SRF_KNOBS: String(options.knobs),
       SRF_BUDGET: String(budget),
       REFACTORY_WORKDIR: workdir,
+      // The node commands run *in the work directory*, so `Path.cwd()` inside one of
+      // them is the run, not the checkout. The project — where `.factory/packages`
+      // and the packages of modes live — has to be said out loud, and this is where
+      // the checkout is known: the directory the profile was started in.
+      REFACTORY_PROJECT: process.cwd(),
       REFACTORY_INTENT: taskName,
       PATH: ambientPath === '' ? pythonBin : `${pythonBin}:${ambientPath}`,
     }

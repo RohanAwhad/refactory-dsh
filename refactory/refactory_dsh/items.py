@@ -31,6 +31,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from refactory_dsh.paths import project_root, project_for_nodes
 from refactory_dsh.nn import Node
 from refactory_dsh.nn.executor import CURRENT_ITEM, load_items
 from refactory_dsh.task import Task, TaskError, instance_of, load_task
@@ -213,7 +214,7 @@ def main(argv: list[str] | None = None) -> int:
         print(usage, file=sys.stderr)
         return 2
     verb = argv[0]
-    workdir = Path(os.environ.get(WORKDIR_ENV) or Path.cwd())
+    workdir = Path(os.environ.get(WORKDIR_ENV) or project_for_nodes())
     try:
         from refactory_dsh.run import install_workspace_packages
 

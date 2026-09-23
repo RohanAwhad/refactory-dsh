@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from refactory_dsh import registry
+from refactory_dsh.paths import project_root, project_for_nodes
 
 #: Ceilings for one sandboxed run.
 DEFAULT_TIMEOUT_S = 180
@@ -77,7 +78,7 @@ class SandboxResult:
 # ── validation without execution ───────────────────────────────────────────
 def ast_check(name: str, project: Path | None = None) -> list[str]:
     """Everything wrong with a package that can be seen without importing it."""
-    project = Path(project or Path.cwd())
+    project = Path(project or project_for_nodes())
     root = registry.where(name, project)
     problems: list[str] = []
     if root is None:
@@ -154,7 +155,7 @@ def scrub(env: dict[str, str] | None = None) -> dict[str, str]:
     subprocess with none of the caller's environment, and "run the tests" means the
     interpreter that has the project installed.
     """
-    from refactory_dsh.paths import venv_bin
+    from refactory_dsh.paths import venv_bin, project_root
 
     source = dict(os.environ if env is None else env)
     out: dict[str, str] = {}
@@ -336,7 +337,7 @@ def smoke(identifier: str, workdir: Path, *, project: Path | None = None, **kwar
     machine -- which is how the Lean mode came to score 1.0 one way and 0.0 the
     other.
     """
-    project = Path(project or Path.cwd())
+    project = Path(project or project_for_nodes())
     code = (
         "import json\n"
         "from pathlib import Path\n"
@@ -373,7 +374,7 @@ def verify_sandboxed(
     Answers in one call what would otherwise be three: there is no read-only way
     to ask whether model-written code is a usable mode.
     """
-    project = Path(project or Path.cwd())
+    project = Path(project or project_for_nodes())
     code = (
         "import json\n"
         "import importlib\n"
@@ -442,7 +443,7 @@ def describe_package(name: str, *, project: Path | None = None, **kwargs: Any) -
     report what was registered, or to choose a mode to smoke — should not have to
     run the package in the driver to find out.
     """
-    project = Path(project or Path.cwd())
+    project = Path(project or project_for_nodes())
     code = (
         "import json\n"
         "from pathlib import Path\n"
@@ -493,7 +494,7 @@ def main(argv: list[str] | None = None) -> int:
     (firejail, gvisor, a container) without changing anything above it.
     """
     argv = list(sys.argv[1:] if argv is None else argv)
-    project = Path.cwd()
+    project = project_for_nodes()
     workdir = Path(os.environ.get("REFACTORY_WORKDIR") or project)
     if argv[:1] in (["-h"], ["--help"]):
         # Asking for help is not a failure: usage goes to stdout and the exit

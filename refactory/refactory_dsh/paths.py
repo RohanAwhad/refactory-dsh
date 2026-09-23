@@ -40,6 +40,17 @@ def project_root() -> Path:
     return Path(os.environ.get("REFACTORY_PROJECT") or REPO_ROOT)
 
 
+def project_for_nodes() -> Path:
+    """The project a **node command** resolves packages against.
+
+    A node command's working directory is the run it belongs to, not the checkout, so
+    the runtime states the project out loud (`REFACTORY_PROJECT`, set by the graph
+    bundle). Where it is unset — the walker, a test, a person at a shell — the working
+    directory is the project, which is what it has always been.
+    """
+    return Path(os.environ.get("REFACTORY_PROJECT") or Path.cwd())
+
+
 def node_bin() -> str:
     """The Node binary that runs DSH. Resolves to an absolute path so it works
     even under a restricted command PATH. Order: ``NODE_BIN`` override, the nvm

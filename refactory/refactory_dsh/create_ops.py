@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from refactory_dsh import registry
+from refactory_dsh.paths import project_root, project_for_nodes
 from refactory_dsh.nn import Package, PackageError, validate_state
 
 STAGING = "staging"
@@ -156,10 +157,10 @@ def prepare(ctx: Any) -> dict[str, Any]:
 def _revision_source(identifier: str) -> str:
     """The source of the mode being revised, so a revision starts from it."""
     try:
-        package, mode_class = registry.resolve(Path.cwd(), identifier)
+        package, mode_class = registry.resolve(project_for_nodes(), identifier)
     except PackageError as exc:
         raise ValueError(f"cannot revise {identifier!r}: {exc}") from exc
-    root = registry.where(package.name, Path.cwd())
+    root = registry.where(package.name, project_for_nodes())
     if root is None:
         raise ValueError(f"cannot find the source of {identifier!r}")
     blocks = [
@@ -181,7 +182,7 @@ def _reference(extends: str) -> str:
     if not extends:
         return "(no reference package was requested; design from the brief)"
     package_name = extends.split("/", 1)[0]
-    root = registry.where(package_name, Path.cwd()) or registry.packages_root() / package_name
+    root = registry.where(package_name, project_for_nodes()) or registry.packages_root() / package_name
     if not root.is_dir():
         return f"(the requested reference package {package_name!r} does not exist)"
     blocks = [
@@ -228,9 +229,9 @@ def survey(ctx: Any) -> dict[str, Any]:
     the only reuse channel and it is manual.
     """
     installed: list[dict[str, Any]] = []
-    for name in registry.discover_names(Path.cwd()):
+    for name in registry.discover_names(project_for_nodes()):
         try:
-            package = registry.load(name, Path.cwd())
+            package = registry.load(name, project_for_nodes())
         except PackageError as exc:
             installed.append({"package": name, "problem": str(exc)})
             continue
@@ -356,9 +357,9 @@ def _review(raw: str) -> list[str]:
 def ctx_existing() -> list[str]:
     """The installed mode ids, for a design to be compared against."""
     ids: list[str] = []
-    for name in registry.discover_names(Path.cwd()):
+    for name in registry.discover_names(project_for_nodes()):
         try:
-            package = registry.load(name, Path.cwd())
+            package = registry.load(name, project_for_nodes())
         except PackageError:
             continue
         ids.extend(package.ids())
@@ -377,7 +378,7 @@ def materialise(ctx: Any) -> dict[str, Any]:
     name = str(ctx.facts["name"])
     # The workspace, not the install tree: a run must not write generated code into
     # the checkout, and the workspace is also the boundary a sandbox needs.
-    root = registry.workspace_root(Path.cwd()) / name
+    root = registry.workspace_root(project_for_nodes()) / name
     if root.exists():
         shutil.rmtree(root)
     root.mkdir(parents=True)
@@ -404,7 +405,7 @@ def materialise(ctx: Any) -> dict[str, Any]:
             indent=2,
         )
     )
-    registry.install_workspace(Path.cwd())
+    registry.install_workspace(project_for_nodes())
     ctx.write_json(f"{STAGING}/manifest.json", {"package": name, "files": sorted(written)})
     return {"package_path": str(root), "files": sorted(written)}
 
@@ -485,8 +486,8 @@ def check_package(
     """
     from refactory_dsh import sandbox
 
-    registry.install_workspace(Path.cwd())
-    root = registry.workspace_root(Path.cwd()) / name
+    registry.install_workspace(project_for_nodes())
+    root = registry.workspace_root(project_for_nodes()) / name
     if not root.is_dir():
         return [f"no directory at {root}"]
     problems: list[str] = []
@@ -496,14 +497,14 @@ def check_package(
     if problems:
         return problems
 
-    problems.extend(sandbox.ast_check(name, Path.cwd()))
+    problems.extend(sandbox.ast_check(name, project_for_nodes()))
     if any("does not parse" in problem for problem in problems):
         # Nothing further can be learned from a file that is not valid Python.
         return problems
 
     checked = sandbox.verify_sandboxed(
         name,
-        project=Path.cwd(),
+        project=project_for_nodes(),
         requires_data_node=requires_data_node,
         requires_task_ref=requires_task_ref,
     )
@@ -516,15 +517,15 @@ def check_package(
 def register(ctx: Any) -> dict[str, Any]:
     """Confirm the registry now sees the package under its own name."""
     name = str(ctx.facts["name"])
-    registry.install_workspace(Path.cwd())
+    registry.install_workspace(project_for_nodes())
     importlib.invalidate_caches()
-    if name not in registry.discover_names(Path.cwd()):
+    if name not in registry.discover_names(project_for_nodes()):
         raise ValueError(f"the registry does not list a package named {name!r}")
     # Read the manifest where it is safe to load it. Reporting what was registered
     # must not run the package in the driver's process to find out.
     from refactory_dsh import sandbox
 
-    described = sandbox.describe_package(name, project=Path.cwd())
+    described = sandbox.describe_package(name, project=project_for_nodes())
     if not described.ok:
         raise ValueError(
             f"the package is registered but not readable: {described.problem()}"
@@ -541,11 +542,11 @@ def smoke(ctx: Any) -> dict[str, Any]:
     # reading which mode to run is done out of process.
     from refactory_dsh import sandbox
 
-    described = sandbox.describe_package(name, project=Path.cwd())
+    described = sandbox.describe_package(name, project=project_for_nodes())
     if not described.ok:
         raise ValueError(f"the package could not be read: {described.problem()}")
     identifier = described.payload["ids"][0]
-    result = sandbox.smoke(identifier, workdir, project=Path.cwd())
+    result = sandbox.smoke(identifier, workdir, project=project_for_nodes())
     if not result.ok:
         raise ValueError(f"the new mode did not finish a run: {result.problem()}")
     score = float(result.payload.get("score") or 0.0)

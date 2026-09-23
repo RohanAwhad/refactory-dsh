@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from refactory_dsh import registry
+from refactory_dsh.paths import project_root, project_for_nodes
 from refactory_dsh.create_ops import STRATEGY_SCHEMA
 from refactory_dsh.model import DEFAULT_TIMEOUT_S
 from refactory_dsh.nn import Graph, Knob, Mode, Node, RunResult
@@ -509,7 +510,7 @@ def create(config: CreateConfig, client: Any = None) -> CreateResult:
         raise CreateError(f"creating {config.name!r} failed: {run.error}")
 
     name = str(run.facts.get("name") or config.name)
-    package = registry.load(name, Path.cwd())
+    package = registry.load(name, project_for_nodes())
     (workdir / "create.json").write_text(
         json.dumps(
             {"package": name, "smoke_score": run.facts.get("smoke_score"),
@@ -521,7 +522,7 @@ def create(config: CreateConfig, client: Any = None) -> CreateResult:
     return CreateResult(
         package=name,
         mode=package.ids()[0],
-        path=registry.where(name, Path.cwd()) or registry.workspace_root(Path.cwd()) / name,
+        path=registry.where(name, project_for_nodes()) or registry.workspace_root(project_for_nodes()) / name,
         files=list(run.facts.get("files") or []),
         smoke_score=run.facts.get("smoke_score"),
         iterations=run.iterations,

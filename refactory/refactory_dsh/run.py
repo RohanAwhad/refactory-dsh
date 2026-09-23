@@ -88,7 +88,7 @@ def _memory_store(directory: Path) -> Any:
     declared = read_memory_declarations(directory)
     if not declared:
         return None
-    project = Path(os.environ.get("REFACTORY_PROJECT") or Path.cwd())
+    project = Path(os.environ.get("REFACTORY_PROJECT") or project_for_nodes())
     global_root = os.environ.get("REFACTORY_MEMORY_HOME")
     return MemoryStore(
         declared,
@@ -137,9 +137,9 @@ def install_workspace_packages() -> None:
     Idempotent, so an in-process caller that already installed the root pays nothing.
     """
     from refactory_dsh import registry
-    from refactory_dsh.paths import project_root
+    from refactory_dsh.paths import project_root, project_for_nodes
 
-    registry.install_workspace(project_root())
+    registry.install_workspace(project_for_nodes())
 
 
 def run_node(
@@ -154,7 +154,7 @@ def run_node(
     """
     install_workspace_packages()
     manifest = _manifest()
-    directory = Path(workdir or os.environ.get(WORKDIR_ENV) or Path.cwd())
+    directory = Path(workdir or os.environ.get(WORKDIR_ENV) or project_for_nodes())
     node_id = str(node_id or manifest.get("id") or "")
     if not node_id:
         raise RunnerError(

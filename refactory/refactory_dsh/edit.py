@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from refactory_dsh import registry
+from refactory_dsh.paths import project_root, project_for_nodes
 from refactory_dsh.create import (
     CreateConfig, CreateError, CreateMode, CreateResult, create, parse_verdicts,
 )
@@ -83,7 +84,7 @@ def edit(config: EditConfig, client: Any = None) -> dict[str, Any]:
         raise CreateError(
             "a revision needs the mode to revise, e.g. --mode circle_packing/adaptive"
         )
-    project = Path.cwd()
+    project = project_for_nodes()
     # Resolved once, here: the state being revised is read from the mode as it is
     # now, and it is recorded below so the revision can be reproduced against the
     # exact state it started from rather than against "whatever that mode was".
