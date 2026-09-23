@@ -12,7 +12,6 @@ import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
-import type { ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { Session, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
@@ -98,15 +97,17 @@ async function run(ctx: Context, io: Io): Promise<void> {
   if (startup === undefined || agents === undefined || defaultModel === undefined || sessions === undefined) return
 
   const selection = defaultModel.currentSelection()
-  const provider = startup.provider ?? selection.provider
-  const model = startup.model ?? selection.model
+  const provider = startup.provider || selection.provider
+  const model = startup.model || selection.model
   const { agent } = await agents.create({
     sessionId: brandString<SessionId>(`session-${randomUUID()}`),
     meta: { cwd: startup.workdir },
     agentOptions: { provider, model },
     setup: (agentCtx) => {
-      const selected: ModelSelectionRef = { current: selection, assembled: undefined }
-      installModelSelection(agentCtx, selected)
+      // The selection the middleware rewrites each request from has to be the
+      // effective one: installing the settings default here pinned every run to it
+      // and discarded `--provider`/`--model` without saying so.
+      installModelSelection(agentCtx, { current: { provider, model }, assembled: undefined })
     },
   })
   await agent.whenIdle()

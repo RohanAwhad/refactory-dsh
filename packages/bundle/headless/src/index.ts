@@ -13,7 +13,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
-import type { Agent, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
@@ -34,10 +34,16 @@ export const inject = ['agentDefaultModel', 'agents', 'sessions']
 export interface Config {
   /** The prompt text for the single run. */
   task: string
+  /** Provider route for the run's agent; omitted uses the runtime default. */
+  provider?: string
+  /** Model id for the run's agent; omitted uses the provider route default. */
+  model?: string
 }
 
 export const Config: z<Config> = z.object({
   task: z.string().required(),
+  provider: z.string(),
+  model: z.string(),
 })
 
 /** Outcome of one owned run interval. */
@@ -163,10 +169,10 @@ function fail(io: HeadlessIo, error: unknown): void {
 /**
  * Run one task through a freshly created Agent and request process exit.
  * @param ctx - plugin context carrying the Agent, default model, Session, and launcher IO services.
- * @param task - one-shot task text.
+ * @param config - the one-shot task, and the model selection this invocation named.
  * @param io - process-facing effects.
  */
-async function run(ctx: Context, task: string, io: HeadlessIo): Promise<void> {
+async function run(ctx: Context, config: Config, io: HeadlessIo): Promise<void> {
   // Loader siblings mount concurrently. Await the complete application before
   // creating an Agent so its scoped tools and adapters are not half-composed.
   await ctx.get('loader')?.await()
@@ -177,6 +183,18 @@ async function run(ctx: Context, task: string, io: HeadlessIo): Promise<void> {
   if (agents === undefined || defaultModel === undefined || sessions === undefined) return
 
   const selection = defaultModel.currentSelection()
+  // `--provider`/`--model` pick the route for this invocation only; nothing is
+  // written back to settings, so one run against another model cannot change what
+  // the next one uses.
+  const provider = config.provider || selection.provider
+  const model = config.model || selection.model
+  // The model-selection middleware rewrites every request from its own `current`,
+  // so a selection installed from the settings default would pin the run there and
+  // quietly discard `agentOptions`. A named model therefore has to become the
+  // selection itself; an inherited effort belongs to the model it came with and is
+  // dropped when another one is named.
+  const named = (config.provider ?? '') !== '' || (config.model ?? '') !== ''
+  const current = named ? { provider, model } : selection
   // This bundle composes no preset roster, so the model-facing rows sit in the
   // host plane and the agent reads them from the global layer. A deployment
   // that DOES configure one has to join it here first
@@ -184,10 +202,9 @@ async function run(ctx: Context, task: string, io: HeadlessIo): Promise<void> {
   const { agent } = await agents.create({
     sessionId: brandString<SessionId>(`session-${randomUUID()}`),
     meta: { cwd: process.cwd() },
-    agentOptions: { provider: selection.provider, model: selection.model },
+    agentOptions: { provider, model },
     setup: (agentCtx) => {
-      const selected: ModelSelectionRef = { current: selection, assembled: undefined }
-      installModelSelection(agentCtx, selected)
+      installModelSelection(agentCtx, { current, assembled: undefined })
     },
   })
   await agent.whenIdle()
@@ -195,7 +212,7 @@ async function run(ctx: Context, task: string, io: HeadlessIo): Promise<void> {
   const stopReasoning = streamReasoning(ctx, agent, io.stderr)
   try {
     agent.followup(createUserMessage({
-      content: [{ type: 'text', text: task }],
+      content: [{ type: 'text', text: config.task }],
       source: { kind: 'user' },
     }))
     await agent.whenIdle()
@@ -214,7 +231,7 @@ async function run(ctx: Context, task: string, io: HeadlessIo): Promise<void> {
 /**
  * Mount the one-shot direct driver.
  * @param ctx - plugin context carrying core services and the launcher-provided exit request.
- * @param config - validated task config.
+ * @param config - validated task and model-selection config.
  */
 export function apply(ctx: Context, config: Config): void {
   // Read through the global service store, not the property proxy: appExit is
@@ -224,5 +241,5 @@ export function apply(ctx: Context, config: Config): void {
     throw new Error('headless-runner: the launcher must provide ctx.appExit before the tree mounts')
   }
   const io: HeadlessIo = { stdout: internals.stdout, stderr: internals.stderr, exit }
-  void run(ctx, config.task, io).catch((error: unknown) => { fail(io, error) })
+  void run(ctx, config, io).catch((error: unknown) => { fail(io, error) })
 }

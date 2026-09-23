@@ -101,6 +101,17 @@ describe('headless command-line provider', () => {
     expect(observed.exits).toEqual([1])
   })
 
+  it('publishes the model selection this invocation named', async () => {
+    const { task } = await bootStartup(['--provider', 'other-route', '--model', 'other-model', 'do', 'the', 'thing'])
+    expect(task).toMatchObject({ provider: 'other-route', model: 'other-model' })
+  })
+
+  it('leaves the model selection absent when the invocation names none', async () => {
+    const { task } = await bootStartup(['do', 'the', 'thing'])
+    expect(task?.provider).toBeUndefined()
+    expect(task?.model).toBeUndefined()
+  })
+
   it('prints its own help and leaves the runner pending', async () => {
     const { task, observed } = await bootStartup(['--help'])
     expect(observed.out).toContain('dsh --profile headless')

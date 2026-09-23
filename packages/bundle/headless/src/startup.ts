@@ -1,7 +1,8 @@
 /**
- * The one-shot app's command-line provider: it parses the task positional and
- * `--help`, then publishes {@link HEADLESS_STARTUP_SERVICE}. The runner is an
- * ordinary consumer whose lazy config waits for that service.
+ * The one-shot app's command-line provider: it parses the task positional, the
+ * optional model selection, and `--help`, then publishes
+ * {@link HEADLESS_STARTUP_SERVICE}. The runner is an ordinary consumer whose lazy
+ * config waits for that service.
  * @module @deepseek-ai/dsh-headless/startup
  */
 
@@ -22,6 +23,10 @@ export const HEADLESS_STARTUP_SERVICE = 'headlessStartup'
 export interface HeadlessStartupValues {
   /** The task text this invocation asked for. */
   task: string
+  /** Provider route for this run's agent (absent = the runtime default). */
+  provider: string | undefined
+  /** Model id for this run's agent (absent = the provider route default). */
+  model: string | undefined
 }
 
 /**
@@ -34,9 +39,12 @@ function headlessCommand(): Command {
     .description('Answer one task, stream reasoning to stderr, print the final assistant message, and exit.')
     .helpOption('-h, --help', 'show this help')
     .argument('[task...]', 'the task text; multiple words are joined by spaces')
+    .option('-p, --provider <provider>', 'provider route for this run (default: the runtime default)')
+    .option('--model <model>', 'model id for this run (defaults to the provider route default)')
     .addHelpText('after', `
 Examples:
   dsh --profile headless "run the tests"     answer one task and exit
+  dsh --profile headless --model deepseek-v4-pro "review this diff"
 `)
 }
 
@@ -51,7 +59,12 @@ export function apply(ctx: Context): void {
   program.action(() => {
     const task = program.args.join(' ')
     if (task.trim() === '') program.error('error: a task is required, for example: dsh --profile headless "run the tests"')
-    ctx.provide(HEADLESS_STARTUP_SERVICE, { task } satisfies HeadlessStartupValues)
+    const options = program.opts()
+    ctx.provide(HEADLESS_STARTUP_SERVICE, {
+      task,
+      provider: options.provider as string | undefined,
+      model: options.model as string | undefined,
+    } satisfies HeadlessStartupValues)
   })
   parseCmdline(ctx, program)
 }

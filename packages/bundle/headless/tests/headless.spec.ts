@@ -5,12 +5,13 @@ import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent, AgentHandle, AssistantStreamFrame, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import AgentDefaultModelConfig from '@deepseek-ai/dsh-agent-default-model'
+import { agentEvents } from '@deepseek-ai/dsh-agent'
 import { LlmAttemptId, createAssistantMessage, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import SessionStore from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import type { Session, UserMessage } from '@deepseek-ai/dsh-session'
 import { createInboxStub } from '@deepseek-ai/dsh-agent-loop-testkit'
-import { apply, Config, internals } from '../src/index.ts'
+import { apply, Config, internals, type Config as HeadlessConfig } from '../src/index.ts'
 
 const originalInternals = { ...internals }
 afterEach(() => { Object.assign(internals, originalInternals) })
@@ -74,8 +75,12 @@ function appendTurn(
 }
 
 /** Mount the real registries around a small scripted Agent factory. */
-async function bench(script: Script): Promise<{
+async function bench(script: Script, config: HeadlessConfig = { task: 'do the thing' }): Promise<{
   ctx: Context
+  /** The model selection each created agent was given. */
+  selections(): Array<{ provider?: string; model?: string }>
+  /** The agents this invocation created, for asking what a request would route at. */
+  agents(): Agent[]
   output(): { out: string; err: string; order: string[] }
   run(): Promise<{ code: number; out: string; err: string; order: string[] }>
 }> {
@@ -87,8 +92,11 @@ async function bench(script: Script): Promise<{
   await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(AgentDefaultModelConfig, { provider: 'test-provider', model: 'test-model' })
+  const selections: Array<{ provider?: string; model?: string }> = []
+  const created: Agent[] = []
   ctx.agents.setFactory({
     async createAgent(ownerCtx: Context, options: CreateAgentOptions): Promise<AgentHandle> {
+      selections.push(options.agentOptions ?? {})
       const session = ctx.sessions.create(options.sessionId, {
         ...options.meta === undefined ? {} : { meta: options.meta },
       })
@@ -118,6 +126,7 @@ async function bench(script: Script): Promise<{
       })
       await options.setup?.(agentCtx)
       script.before?.(session)
+      created.push(agent)
       ctx.agents.register(agent)
       return { agent, dispose: () => Promise.resolve() }
     },
@@ -125,6 +134,8 @@ async function bench(script: Script): Promise<{
   })
   return {
     ctx,
+    selections: () => [...selections],
+    agents: () => [...created],
     output: () => ({ out, err, order: [...order] }),
     run: async () => {
       ctx.on('session/flush', () => { order.push('flush') })
@@ -133,13 +144,62 @@ async function bench(script: Script): Promise<{
       const exited = new Promise<number>((resolve) => {
         ctx.provide('appExit', (code: number) => { order.push('exit'); resolve(code) })
       })
-      apply(ctx, { task: 'do the thing' })
+      apply(ctx, config)
       return { code: await exited, out, err, order }
     },
   }
 }
 
 describe('headless runner', () => {
+  it('runs the agent on the model this invocation named', async () => {
+    // `--model`/`--provider` are per invocation: the setting they override is the
+    // user's default, and one run against another model must not change the next.
+    const test = await bench(
+      { afterPrompt(session, message) { appendTurn(session, 1, message, 'ok', true) } },
+      { task: 'do the thing', provider: 'other-route', model: 'other-model' },
+    )
+    const result = await test.run()
+    expect(result.code).toBe(0)
+    expect(test.selections()).toEqual([{ provider: 'other-route', model: 'other-model' }])
+    await test.ctx.fiber.dispose()
+  })
+
+  it('routes requests at the model this invocation named, not at the settings default', async () => {
+    // The model-selection middleware rewrites every request from its own `current`.
+    // Installing it from the settings default pinned the run there and discarded the
+    // invocation's model without saying so — which is how `--model` reached
+    // `agentOptions` and nothing else.
+    const test = await bench(
+      { afterPrompt(session, message) { appendTurn(session, 1, message, 'ok', true) } },
+      { task: 'do the thing', provider: 'other-route', model: 'other-model' },
+    )
+    await test.run()
+    const agent = test.agents()[0]!
+    // Prompt assembly is what snapshots the selection a request is routed at. The
+    // listener lives on the agent's scoped context, so the dispatch goes through it.
+    const scoped = (agent as unknown as { ctx: { waterfall(...args: unknown[]): Promise<unknown> } }).ctx
+    await scoped.waterfall(
+      'system-prompt/assemble',
+      { variables: {} },
+      {},
+      () => Promise.resolve({ variables: {} }),
+    )
+    const routed = await agentEvents(scoped as unknown as Context, agent).waterfall(
+      'agent/request',
+      { turn: 1, step: 0, signal: new AbortController().signal },
+      () => Promise.resolve({ provider: 'seed', model: 'seed' }),
+    )
+    expect(routed).toMatchObject({ provider: 'other-route', model: 'other-model' })
+    await test.ctx.fiber.dispose()
+  })
+
+  it('keeps the default model when the invocation names none', async () => {
+    const test = await bench({ afterPrompt(session, message) { appendTurn(session, 1, message, 'ok', true) } })
+    await test.run()
+    expect(test.selections()).toEqual([{ provider: 'test-provider', model: 'test-model' }])
+    await test.ctx.fiber.dispose()
+  })
+
   it('aggregates the final text across the complete idle-to-idle interval and flushes before exit', async () => {
     const test = await bench({
       before(session) {
