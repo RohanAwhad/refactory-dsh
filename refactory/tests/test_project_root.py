@@ -19,6 +19,7 @@ import pytest
 
 from refactory_dsh import console, registry
 from refactory_dsh.paths import REPO_ROOT, project_root
+from refactory_dsh.tools import gen_tutorial
 
 #: Modules whose command line takes a `--project`.
 CLI_ENTRY_POINTS = ("refactory_dsh.loop", "refactory_dsh.registry")
@@ -70,3 +71,38 @@ def test_the_running_example_resolves_from_any_working_directory(tmp_path, monke
     package, mode_class = registry.resolve(project_root(), "circle_packing/adaptive")
     assert package.name == "circle_packing"
     assert mode_class.name == "adaptive"
+
+
+def test_no_shipped_mode_has_left_its_artifacts_in_the_checkout():
+    """A mode's declared files belong to a run, not to the repository.
+
+    Six of them were committed at the root — `annealing_pack`'s `best.json`,
+    `candidate.json`, `current.json`, `history.json` and `progress.json`, and
+    `counting_pack`'s `result.json` — because a node's command ran with the checkout
+    as its working directory. The run directory is resolved absolutely now, so this
+    reads the names back from the shipped modes' own graphs and asserts the checkout
+    carries none of them.
+    """
+    declared = {
+        name
+        for entry in gen_tutorial.catalogue(REPO_ROOT)
+        for node in gen_tutorial.mode_shape(entry["id"], REPO_ROOT)["nodes"]
+        for name in tuple(getattr(node, "writes", ()) or ())
+    }
+    assert declared, "no shipped mode declares a write, so this test proves nothing"
+    stray = sorted(name for name in declared if (REPO_ROOT / name).exists())
+    assert stray == [], f"these are a run's output files, not the repository's: {stray}"
+
+
+def test_a_run_writes_where_that_test_says_and_nowhere_else(tmp_path, monkeypatch):
+    """The other direction: the declared names appear in the run directory."""
+    monkeypatch.chdir(tmp_path)
+    mode = registry.resolve(REPO_ROOT, "counting_pack/fixed_step")[1]()
+    result = mode.evaluate(tmp_path / "run")
+    assert result.error is None, result.error
+    landed = sorted(path.name for path in (tmp_path / "run").iterdir())
+    assert "result.json" in landed, landed
+    assert [path.name for path in tmp_path.iterdir()] == ["run"], (
+        "the run wrote outside its own directory, which is how `result.json` reached "
+        "the repository root"
+    )
