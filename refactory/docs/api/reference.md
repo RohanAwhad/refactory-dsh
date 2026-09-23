@@ -439,7 +439,7 @@ Discover, list and resolve packages of modes.
 | function | `render_catalogue` | `(project: 'Path') -> 'str'` |
 | function | `resolve` | `(project: 'Path', identifier: 'str') -> 'tuple[Package, type]'` |
 | function | `set_enabled` | `(project: 'Path', name: 'str', enabled: 'bool') -> 'None'` |
-| function | `smoke` | `(project: 'Path', identifier: 'str') -> 'dict[str, Any]'` |
+| function | `smoke` | `(project: 'Path', identifier: 'str', *, model: 'bool' = False) -> 'dict[str, Any]'` |
 | function | `tool_report` | `(project: 'Path \| None' = None, name: 'str \| None' = None) -> 'dict[str, list[dict[str, Any]]]'` |
 | function | `tools` | `(name: 'str', project: 'Path \| None' = None)` |
 | function | `verify` | `(project: 'Path', name: 'str \| None' = None) -> 'dict[str, list[str]]'` |
@@ -527,7 +527,7 @@ Running code we did not write.
 | function | `run_command` | `(command: 'str', *, workdir: 'Path', timeout_s: 'int' = 180, memory_mb: 'int' = 2048, cpu_s: 'int' = 120, file_mb: 'int' = 64, env: 'dict[str, str] \| None' = None) -> 'SandboxResult'` |
 | function | `run_sandboxed` | `(code: 'str', *, workdir: 'Path', timeout_s: 'int' = 180, memory_mb: 'int' = 2048, cpu_s: 'int' = 120, file_mb: 'int' = 64, env: 'dict[str, str] \| None' = None, forwarded: 'dict[str, str] \| None' = None) -> 'SandboxResult'` |
 | function | `scrub` | `(env: 'dict[str, str] \| None' = None) -> 'dict[str, str]'` |
-| function | `smoke` | `(identifier: 'str', workdir: 'Path', *, project: 'Path \| None' = None, **kwargs: 'Any') -> 'SandboxResult'` |
+| function | `smoke` | `(identifier: 'str', workdir: 'Path', *, project: 'Path \| None' = None, model: 'bool' = False, **kwargs: 'Any') -> 'SandboxResult'` |
 | function | `usage` | `() -> 'str'` |
 | function | `verify_sandboxed` | `(name: 'str', *, project: 'Path \| None' = None, requires_data_node: 'bool' = False, requires_task_ref: 'str' = '', **kwargs: 'Any') -> 'SandboxResult'` |
 

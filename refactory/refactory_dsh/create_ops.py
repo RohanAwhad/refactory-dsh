@@ -555,23 +555,49 @@ def smoke(ctx: Any) -> dict[str, Any]:
     # "this was not measured", so the score is absent and the reason is stated.
     agent_nodes = _agent_nodes(name)
     if agent_nodes:
+        # A mode with an agent node cannot be scored without a model, and almost every
+        # mode worth shipping has one — so supply a model rather than declining to
+        # measure the common case. The client reaches one exactly as every other path
+        # does, so the sandbox needs no credential of its own.
+        scored = sandbox.smoke(
+            identifier, workdir, project=project_for_nodes(), model=True,
+        )
+        if scored.ok:
+            score = float(scored.payload.get("score") or 0.0)
+            ctx.write_json(
+                "smoke.json",
+                {
+                    "mode": identifier,
+                    "score": score,
+                    "iterations": scored.payload.get("iterations"),
+                    "sandboxed": True,
+                    "model": "used",
+                },
+            )
+            return {"smoke_score": score, "smoke_ok": True, "smoke_model": "used"}
+        if not _could_not_reach_a_model(scored):
+            raise ValueError(f"the new mode did not finish a run: {scored.problem()}")
+        # No model on this machine: say "not measured" and name the command that does
+        # score it, rather than reporting a zero nobody should read as a score.
         ctx.write_json(
             "smoke.json",
             {
                 "mode": identifier,
                 "score": None,
-                "reason": "the mode calls a model and the smoke runs without one",
+                "reason": "no model was reachable, and this mode calls one",
                 "agent_nodes": agent_nodes,
-                "iterations": result.payload.get("iterations"),
+                "detail": scored.problem(),
                 "sandboxed": True,
+                "model": "unavailable",
             },
         )
         return {
             "smoke_score": None,
             "smoke_ok": True,
             "smoke_reason": (
-                f"not measured: {identifier} calls a model ({', '.join(agent_nodes)}), and the "
-                "smoke runs keyless; use `refactory run " + identifier + "` to score it"
+                f"not measured: {identifier} calls a model ({', '.join(agent_nodes)}) and no "
+                "model was reachable; set the provider credentials and use "
+                "`refactory run " + identifier + "` to score it"
             ),
         }
     score = float(result.payload.get("score") or 0.0)
@@ -585,6 +611,19 @@ def smoke(ctx: Any) -> dict[str, Any]:
         },
     )
     return {"smoke_score": score, "smoke_ok": True}
+
+
+def _could_not_reach_a_model(result: Any) -> bool:
+    """Whether a smoke failed because there was no model, rather than because of the mode.
+
+    The two are different facts: a mode that cannot reach a model is unmeasured, and a
+    mode that ran and failed is a defect the emit step has to fix.
+    """
+    problem = result.problem().lower()
+    return any(
+        marker in problem
+        for marker in ("needs a model client", "model completion failed", "no model", "credentials", "api key")
+    )
 
 
 def _agent_nodes(name: str) -> list[str]:

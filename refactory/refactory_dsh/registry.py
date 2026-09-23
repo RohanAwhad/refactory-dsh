@@ -312,14 +312,23 @@ def render_catalogue(project: Path) -> str:
     return "\n".join(lines) + "\n" if lines else "no packages installed\n"
 
 
-def smoke(project: Path, identifier: str) -> dict[str, Any]:
-    """Run one mode once, so a package can be checked rather than merely imported."""
+def smoke(project: Path, identifier: str, *, model: bool = False) -> dict[str, Any]:
+    """Run one mode once, so a package can be checked rather than merely imported.
+
+    ``model`` supplies a model client to the run: a mode with an `agent` node cannot be
+    scored without one, and most modes have one.
+    """
     import tempfile
 
     package, mode_class = resolve(Path(project), identifier)
     mode = mode_class()
+    client = None
+    if model:
+        from refactory_dsh.model import DshModelClient
+
+        client = DshModelClient()
     with tempfile.TemporaryDirectory(prefix="refactory-smoke-") as tmp:
-        result = mode.evaluate(Path(tmp))
+        result = mode.evaluate(Path(tmp), model=client)
     return {
         "mode": identifier,
         "package": package.name,
@@ -588,6 +597,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("target", nargs="?", help="a <package>/<name> mode, or a package")
     parser.add_argument("--project", default=str(project_root()))
     parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "--model", action="store_true",
+        help="for 'smoke': score a mode that calls a model, by supplying one",
+    )
     parser.add_argument("--as", dest="as_name", default="", help="rename on add or import")
     parser.add_argument("--ref", default="", help="a git ref, for import")
     parser.add_argument("--force", action="store_true", help="override a refusal")
@@ -629,7 +642,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.verb == "smoke":
             if not args.target:
                 return fail("'smoke' needs a <package>/<name> mode")
-            result = smoke(project, args.target)
+            result = smoke(project, args.target, model=bool(args.model))
             print(json.dumps(result, indent=2, default=str))
             return 0 if result["exit_ok"] else 1
         if args.verb == "add":

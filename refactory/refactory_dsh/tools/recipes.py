@@ -130,6 +130,15 @@ RECIPES: tuple[Recipe, ...] = (
         files=(".factory/interactive/counting_pack-fixed_step/facts.json",),
     ),
     Recipe(
+        id="use-smoke-a-model-mode",
+        group="use",
+        title="Score a mode that calls a model",
+        command="uv run refactory package smoke default_pack/create --model --json",
+        expect="a real score, because the smoke supplies the model the mode needs",
+        tier=MODEL,
+        contains=('"exit_ok"',),
+    ),
+    Recipe(
         id="use-smoke-refuses-a-model-mode",
         group="use",
         title="Smoke says so, rather than failing deep inside the run",

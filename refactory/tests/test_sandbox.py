@@ -230,3 +230,27 @@ def test_the_sandbox_cli_reports_problems_as_a_failure(tmp_path, capsys, monkeyp
 def test_the_sandbox_cli_needs_an_instruction(capsys):
     assert sandbox.main([]) == 2
     assert "usage" in capsys.readouterr().err
+
+
+def test_smoke_can_supply_a_model_client(tmp_path, monkeypatch):
+    """A mode with an agent node is the common case, so smoke can score it.
+
+    Without a model the run raises `agent node … needs a model client`, which is
+    "not measured" rather than a score — so the option exists, and what it builds is
+    the same client every other path uses.
+    """
+    from refactory_dsh import sandbox
+
+    seen: dict[str, str] = {}
+
+    def fake_run_sandboxed(code: str, **_kwargs: object):
+        seen["code"] = code
+        return sandbox.SandboxResult(ok=True, payload={}, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(sandbox, "run_sandboxed", fake_run_sandboxed)
+    sandbox.smoke("circle_packing/adaptive", tmp_path / "w", project=Path("."), model=True)
+    assert "DshModelClient" in seen["code"]
+    assert "model=DshModelClient()" in seen["code"]
+
+    sandbox.smoke("circle_packing/adaptive", tmp_path / "w2", project=Path("."))
+    assert "DshModelClient" not in seen["code"]

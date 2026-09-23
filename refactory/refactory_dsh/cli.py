@@ -224,8 +224,8 @@ def _smoke_without_a_model(identifier: str) -> str:
         return ""
     return (
         f"refactory: {identifier} calls a model ({len(agents)} agent node(s): "
-        f"{', '.join(agents)}), and `package smoke` runs without one on purpose.\n"
-        f"           use `refactory run {identifier}` — it runs the mode on DSH and supplies a model."
+        f"{', '.join(agents)}), and `package smoke` supplies none by default.\n"
+        f"           add --model to score it, or use `refactory run {identifier}` to run it on DSH."
     )
 
 
@@ -338,7 +338,7 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] in READ_VERBS:
         return _forward("refactory_dsh.console", argv)
     if argv and argv[0] == "package" and len(argv) >= 2:
-        if argv[1] == "smoke" and len(argv) >= 3:
+        if argv[1] == "smoke" and len(argv) >= 3 and "--model" not in argv:
             problem = _smoke_without_a_model(argv[2])
             if problem:
                 print(problem, file=sys.stderr)

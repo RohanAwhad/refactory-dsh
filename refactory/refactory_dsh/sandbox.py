@@ -328,7 +328,14 @@ def run_command(
     )
 
 
-def smoke(identifier: str, workdir: Path, *, project: Path | None = None, **kwargs: Any) -> SandboxResult:
+def smoke(
+    identifier: str,
+    workdir: Path,
+    *,
+    project: Path | None = None,
+    model: bool = False,
+    **kwargs: Any,
+) -> SandboxResult:
     """Run one mode once, in a sandbox, and report what it scored.
 
     The package's declared tools have their environment forwarded, so a mode whose
@@ -336,14 +343,28 @@ def smoke(identifier: str, workdir: Path, *, project: Path | None = None, **kwar
     Without that, this path and the walker disagree about the same mode on the same
     machine -- which is how the Lean mode came to score 1.0 one way and 0.0 the
     other.
+
+    ``model`` supplies a model client. Almost every mode worth shipping has an
+    `agent` node, and a smoke without a model cannot score one at all -- it would
+    report "not measured" for the common case, which makes the check vacuous exactly
+    where it matters. The client reaches a model the same way every other path does
+    (`DshModelClient`, which runs the one-shot DSH profile from the checkout), so the
+    contained process needs no credential of its own.
     """
     project = Path(project or project_for_nodes())
+    client = (
+        "from refactory_dsh.model import DshModelClient\n"
+        if model
+        else ""
+    )
+    call = "model=DshModelClient()" if model else ""
     code = (
         "import json\n"
         "from pathlib import Path\n"
         "from refactory_dsh import registry\n"
+        f"{client}"
         f"package, mode = registry.resolve(Path({str(project)!r}), {identifier!r})\n"
-        f"result = mode().evaluate(Path({str(Path(workdir))!r}))\n"
+        f"result = mode().evaluate(Path({str(Path(workdir))!r}){', ' + call if call else ''})\n"
         "print(json.dumps({'exit_ok': result.exit_ok, 'error': result.error,"
         " 'score': result.score, 'iterations': result.iterations}))\n"
     )
