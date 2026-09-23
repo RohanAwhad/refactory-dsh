@@ -732,6 +732,28 @@
       "commit": "aaf249b70a",
       "evidence": "`DshModelClient.complete` takes the directory to run in and spawns the completion there; the walker passes the node's run directory (`_ask_model`, which asks a client without the argument plainly because the vendored `ModelClient` protocol is still text in, text out); a caller with no run directory gets the scratch directory rather than the checkout, and the launcher path is absolute now that the child's cwd is not the repository. Tests: the client records the run directory it was told to use and the artifact lands there; a minimal client without the argument still works; a full create run's completions all run in the run directory and its reviews are there rather than in the checkout. The stray `reviews/` the real run left is deleted, and the workspace-hygiene test is what keeps a regression visible.",
       "observed": "760 passed, 10 skipped (refactory/tests)"
+    },
+    {
+      "id": "panel-run-once",
+      "issue": 66,
+      "title": "The tool could optimize a mode but not use it once",
+      "why": "The tool's only execute action was `start`, the optimizer. `refactory run` existed as a CLI verb with no console verb, and the tool forwards to the console, so from the GUI a person who had just created a mode could not run it once and see its result.",
+      "verify": "pytest refactory/tests/test_gui_loop.py -q",
+      "status": "done",
+      "commit": "31f141e337",
+      "evidence": "The console gained a `run` verb forwarding to the interactive entry point (`--intent`, `--knob`, `--verdict`, `--workdir`, `--timeout`, `--provider`, `--model`), and the tool gained a `run` action named like the CLI's rather than like `start`. Because the one-shot runner prints its report from the child process \u2014 the terminal's stdout, not the console's buffer \u2014 the console reads the run directory back (`status` plus `facts.json`) and the tool reports where the run is, how it ended and what it recorded. Verified by running the real verb: `python -m refactory_dsh.console run counting_pack/fixed_step --intent \"count to five from the GUI path\"` completed all four nodes and returned exit 0. Tests: the console forwards every argument to `interactive`, a run without a mode is a usage error, the tool forwards the mode/intent/verdict/model, and the render names the run directory and the recorded facts.",
+      "observed": "39 passed (test_gui_loop.py) + 57 (tool-refactory specs)"
+    },
+    {
+      "id": "brief-inputs",
+      "issue": 67,
+      "title": "A mode could ignore the brief's central input and still pass validate",
+      "why": "`validate` proved a package was structurally a mode, not that it did what was asked. A brief whose entire subject was a Python package produced a mode that took no package at all \u2014 it built a fixture hardcoded in `ops.py` \u2014 and passed every check, because the pipeline had no representation of \"the brief says this mode consumes X\".",
+      "verify": "pytest refactory/tests/test_create.py -q",
+      "status": "done",
+      "commit": "31f141e337",
+      "evidence": "The inputs a brief declares are now first-class: `requires_input` is a knob (`--input NAME` on `python -m refactory_dsh.create`, `--input` on the console's create, `inputs` on the tool's create action, `--knob requires_input=\u2026` from `ceo`); `declared_inputs` refuses a name too short to check; `prepare` publishes the list as a fact, and the design and emit prompts carry it, so the requirement reaches the code and not only the gate; and `validate` passes it to `sandbox.verify_sandboxed`, which refuses a produced mode with no declared knob named after the input and no read under that name, with a reason that says both ways to satisfy it. Tests cover the refusal, the pass (a knob named after the input), the too-short name, the prompts, and the console/tool forwarding. LIMIT, stated rather than implied: `validate` cannot read English, so a brief that never declares its inputs is unchecked \u2014 whether the work satisfies the brief stays a review judgement (the strategy review refuses a design that drops an ask, and the reviews read the brief). The issue's other suggestion \u2014 a reference artifact built independently of the mode's own writer \u2014 is a design change, not a fix, and is not implemented.",
+      "observed": "766 passed, 10 skipped (refactory/tests)"
     }
   ],
   "verification": {
