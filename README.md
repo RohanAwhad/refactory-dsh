@@ -26,7 +26,7 @@ Two runtimes execute the same graph and are kept honest by running one mode on b
 <a id="run-from-source"></a>
 ## Install
 
-**Prerequisites:** [uv](https://docs.astral.sh/uv), Node ≥ 22.19 + pnpm (corepack), git, and a DeepSeek API key in `.env` for anything that calls a model.
+**Prerequisites:** [uv](https://docs.astral.sh/uv), Node `^22.19` or `>=24` (npm comes with it — the script finds pnpm itself), git, and a DeepSeek API key in `.env` for anything that calls a model.
 
 ```bash
 git clone <this-repo> --recurse-submodules
@@ -37,7 +37,7 @@ cd <this-repo>
 `install.sh` does four things, in order:
 
 1. `git submodule update --init --recursive` — the vendored language (`factory`) and reference modes (`srf`).
-2. `pnpm install --frozen-lockfile && pnpm run build` — the DSH workspace and the client/host bundles the Web view serves.
+2. `pnpm install --frozen-lockfile && pnpm run build` — the DSH workspace and the client/host bundles the Web view serves. This is the step that needs pnpm, and if the machine has none the script puts the pinned version on PATH first: `corepack` when it is there, otherwise `npm install -g pnpm@<pin>`, so Node and npm are enough (opt out with `REFACTORY_SKIP_GLOBAL_PNPM=1`).
 3. `uv sync` — **one** Python project at the root: it creates `.venv`, installs the three local packages in editable mode and puts the `refactory` command on `.venv/bin`, pinned by `uv.lock`.
 4. Creates the DSH profile a mode runs on (`dsh plugin --profile graph add …`). A profile is machine state, so this is a once-per-machine step; skip it with `REFACTORY_SKIP_DSH_PROFILE=1`.
 

@@ -26,7 +26,7 @@ uv run refactory ceo "a mode that drafts a haiku and checks the syllable count" 
 <a id="run-from-source"></a>
 ## 安装
 
-**前提：**[uv](https://docs.astral.sh/uv)、Node ≥ 22.19 + pnpm（corepack）、git，以及 在 `.env` 里放一个 DeepSeek API key（任何会调用模型的东西都需要它）。
+**前提：**[uv](https://docs.astral.sh/uv)、Node `^22.19` 或 `>=24`（npm 随它一起来——脚本会自己找到 pnpm）、git，以及 在 `.env` 里放一个 DeepSeek API key（任何会调用模型的东西都需要它）。
 
 ```bash
 git clone <this-repo> --recurse-submodules
@@ -37,7 +37,7 @@ cd <this-repo>
 `install.sh` 依次做四件事：
 
 1. `git submodule update --init --recursive` —— 取回 vendored 的语言（`factory`）与参考模式（`srf`）。
-2. `pnpm install --frozen-lockfile && pnpm run build` —— DSH 工作区，以及 Web 视图所服务的 client/host 包。
+2. `pnpm install --frozen-lockfile && pnpm run build` —— DSH 工作区，以及 Web 视图所服务的 client/host 包。这一步需要 pnpm； 机器上没有时，脚本会先把固定版本放到 PATH 上：有 `corepack` 就用它，否则用 `npm install -g pnpm@<pin>`， 所以只要有 Node 和 npm 就够了（用 `REFACTORY_SKIP_GLOBAL_PNPM=1` 可以跳过）。
 3. `uv sync` —— 根目录下**唯一**一个 Python 项目：它创建 `.venv`、以可编辑方式安装那三个本地包， 并把 `refactory` 命令放进 `.venv/bin`，由 `uv.lock` 锁定。
 4. 创建模式运行所需的 DSH profile（`dsh plugin --profile graph add …`）。profile 是机器状态， 所以这一步每台机器只需一次；用 `REFACTORY_SKIP_DSH_PROFILE=1` 可以跳过。
 
