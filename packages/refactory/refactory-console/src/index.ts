@@ -113,7 +113,7 @@ export class RefactoryConsole extends TypertRemoteService {
   static Config: z<Config> = z.object({
     repoRoot: z.string().default(process.cwd()),
     pythonBin: z.string().default(''),
-    timeoutMs: z.natural().min(1).max(60 * 60 * 1000).default(CONSOLE_DEFAULTS.timeoutMs),
+    timeoutMs: z.natural().min(1).max(120 * 60 * 1000).default(CONSOLE_DEFAULTS.timeoutMs),
     collectBytes: z.natural().min(1024).default(CONSOLE_DEFAULTS.collectBytes),
   })
 

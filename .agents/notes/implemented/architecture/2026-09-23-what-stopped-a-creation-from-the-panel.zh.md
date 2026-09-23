@@ -30,7 +30,7 @@ Status: implemented
 
 **研究阶段被校验，而且它的发现必须存在。** 没有子 agent 留下笔记时，`record_findings` 会把每条方向的 finding 写进 `research/<slug>.md`；`gate_research` 要求一个 `{focus, slug, finding}` 的 JSON 数组，三到五条、字段非空、slug 唯一，并且文件都在盘上。失败时它写下 `research-review.txt`、设置 `research_review`，并回到会读它的那个提示词——这正是设计评审对策略做的事。
 
-**创作运行相互隔离、可观察，并且给了足够长的时间。** 三个入口点把工作目录默认成 `.factory/create/<名字>`、`.factory/design/<名字>` 与 `.factory/edit/<名字>`；console 在调用方给了 `--workdir` 时转发它；`status` 会读运行的 `.refactory/spine-status.json`，报出已完成的节点、还欠的节点、错误与运行自己的事实；console 的超时是 45 分钟，因为创作动词就是那些长的。
+**创作运行相互隔离、可观察，并且给了足够长的时间。** 三个入口点把工作目录默认成 `.factory/create/<名字>`、`.factory/design/<名字>` 与 `.factory/edit/<名字>`；console 在调用方给了 `--workdir` 时转发它；`status` 会读运行的 `.refactory/spine-status.json`，报出已完成的节点、还欠的节点、错误与运行自己的事实；console 的超时是 90 分钟，因为创作动词就是那些长的——在这个检出上，一次真实的创建花了 48 分钟，它杀死了最初的 10 分钟上限，也会在离终点三分钟的地方杀死一个 45 分钟的上限。
 
 **emit 的提示词写明路径约定，而重新声明包根的前缀会被剥掉。** 路径相对于包自己的根——`__init__.py` 就意味着 `__init__.py`——而 `_package_relative` 会剥掉开头的 `<名字>/`、`refactory/refactory_packages/<名字>/`、`refactory_packages/<名字>/` 或 `.factory/packages/<名字>/`，对绝对路径或越界路径点名拒绝。`sandbox.missing_init` 现在会说出它查的是哪个根、那个根里有什么、以及约定是什么，好让重试能据此行动。
 

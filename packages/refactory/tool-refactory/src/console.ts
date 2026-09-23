@@ -74,12 +74,14 @@ export const CONSOLE_DEFAULTS = {
   /**
    * Wall-clock ceiling for one console call.
    *
-   * 45 minutes because the authoring verbs are the long ones: a creation spends
-   * minutes researching and strategising *before* it writes any code, then builds,
-   * reviews, audits and smoke-scores what it wrote. The old 10-minute ceiling killed
-   * real runs mid-flight, and a killed run reported a timeout as its result.
+   * 90 minutes because the authoring verbs are the long ones, and because the
+   * number this replaced was measured rather than guessed: a real creation on this
+   * checkout took 48 minutes (37 inner runs, one overwatch reloop that sent the
+   * build back to `emit`), which a 10-minute ceiling killed mid-flight and a
+   * 45-minute one would have killed three minutes from the end. A quick verb
+   * returns in seconds, so the ceiling only decides how long a hung call may hang.
    */
-  timeoutMs: 45 * 60 * 1000,
+  timeoutMs: 90 * 60 * 1000,
   /** Per-stream collection cap in bytes. */
   collectBytes: 4 * 1024 * 1024,
 } as const

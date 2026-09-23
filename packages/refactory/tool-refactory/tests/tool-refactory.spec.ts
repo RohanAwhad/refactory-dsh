@@ -597,8 +597,9 @@ describe('authoring from the Web GUI', () => {
   })
 
   it('gives an authoring call long enough to finish', () => {
-    // The old ceiling was ten minutes; a real creation spends most of that before it
-    // writes a line of code, and a killed run reported a timeout as its result.
-    expect(CONSOLE_DEFAULTS.timeoutMs).toBeGreaterThanOrEqual(30 * 60 * 1000)
+    // Measured, not guessed: a real creation on this checkout took 48 minutes (37
+    // inner runs, one overwatch reloop), so the ceiling has to clear that with room
+    // for one more reloop.
+    expect(CONSOLE_DEFAULTS.timeoutMs).toBeGreaterThanOrEqual(90 * 60 * 1000)
   })
 })
