@@ -315,3 +315,204 @@ def test_a_revision_records_the_state_it_came_from(tmp_path):
     from refactory_dsh.optim.base import candidate_id
 
     assert recorded["revision_of_digest"] == candidate_id(state)
+
+
+# ── the comparison, on the path a person actually runs ─────────────────────
+#
+# `refactory ceo "…" --mode edit` lowers `default_pack/edit` and runs its nodes on
+# DSH; it does not call `edit.edit()`. The comparison therefore belongs to the
+# `smoke` node, which is the step that has just scored the new mode, and these hold
+# it there. Before this existed the CLI recorded `revision_of` and nothing else: no
+# before score, no after score, no refusal — the documented behaviour of `--mode
+# edit`, implemented only in a function the CLI never reached.
+
+#: The declarations lowering writes for the smoke node of an edit run.
+_SMOKE_DECLARATIONS = {
+    "smoke": {
+        "reads": [],
+        "writes": ["smoke.json", "revision.json"],
+        "produces": ["smoke_score", "smoke_ok", "before_score", "after_score",
+                     "regressed", "revision_note"],
+    },
+}
+
+
+def _smoke_run(tmp_path, monkeypatch, *, scores, revision="counting_pack/fixed_step",
+               package_path=None, allow=False):
+    """A run directory the smoke node can be invoked in, as the runtime invokes it.
+
+    `counting_pack` is a shipped, deterministic package, so the node's own smoke of
+    the new mode is real; only the two scores the comparison reads are stubbed, so
+    what is under test is the comparison rather than a search for a mode whose
+    numbers happen to differ.
+    """
+    from refactory_dsh import lowering, sandbox
+    from refactory_dsh.sandbox import SandboxResult
+
+    workdir = tmp_path / "run"
+    (workdir / ".refactory").mkdir(parents=True)
+    (workdir / ".refactory" / "declarations.json").write_text(
+        json.dumps(_SMOKE_DECLARATIONS)
+    )
+    facts = {"name": "phase_pack", "revision_of": revision}
+    if package_path is not None:
+        facts["package_path"] = str(package_path)
+    (workdir / "facts.json").write_text(json.dumps(facts))
+
+    def stub(identifier, workdir_, *, project=None, model=False, **kwargs):
+        return SandboxResult(ok=True, payload={"score": scores[identifier], "iterations": 2})
+
+    monkeypatch.setattr(sandbox, "smoke", stub)
+    if allow:
+        monkeypatch.setenv(lowering.KNOBS_ENV, json.dumps({"allow_regression": True}))
+    return workdir
+
+
+def test_the_smoke_node_refuses_a_revision_that_scores_lower(tmp_path, monkeypatch):
+    """A regression is refused on the path the CLI takes, and the run says both scores."""
+    from refactory_dsh.run import run_node
+
+    workdir = _smoke_run(tmp_path, monkeypatch, scores={
+        "phase_pack/countup": 0.4,
+        "counting_pack/fixed_step": 0.9,
+    })
+    with pytest.raises(ValueError, match="scores 0.4 where counting_pack/fixed_step scores 0.9"):
+        run_node("refactory_dsh.create_ops:smoke", workdir=workdir, node_id="smoke")
+    # The evidence outlives the refusal: a person reading the run can see both numbers.
+    recorded = json.loads((workdir / "revision.json").read_text())
+    assert recorded["before_score"] == 0.9
+    assert recorded["after_score"] == 0.4
+    assert recorded["regressed"] is True
+
+
+def test_the_smoke_node_accepts_the_same_revision_when_the_trade_is_intended(
+    tmp_path, monkeypatch
+):
+    """`allow_regression=1` is the person saying the score is not the whole story."""
+    from refactory_dsh.run import run_node
+
+    package = tmp_path / "counting_pack"
+    package.mkdir()
+    workdir = _smoke_run(
+        tmp_path, monkeypatch, allow=True,
+        package_path=package,
+        scores={"phase_pack/countup": 0.4, "counting_pack/fixed_step": 0.9},
+    )
+    produced = run_node("refactory_dsh.create_ops:smoke", workdir=workdir, node_id="smoke")
+    assert produced["regressed"] is True
+    assert (produced["before_score"], produced["after_score"]) == (0.9, 0.4)
+    recorded = json.loads((package / ".origin.json").read_text())
+    assert recorded["revision_of"] == "counting_pack/fixed_step"
+    assert recorded["before_score"] == 0.9 and recorded["after_score"] == 0.4
+    assert recorded["revision_of_digest"], "the provenance names no state"
+
+
+def test_an_improvement_is_not_a_regression(tmp_path, monkeypatch):
+    from refactory_dsh.run import run_node
+
+    workdir = _smoke_run(tmp_path, monkeypatch, scores={
+        "phase_pack/countup": 1.0,
+        "counting_pack/fixed_step": 0.9,
+    })
+    produced = run_node("refactory_dsh.create_ops:smoke", workdir=workdir, node_id="smoke")
+    assert produced["regressed"] is False
+    assert produced["revision_note"] == "compared with counting_pack/fixed_step: 0.9 → 1.0"
+
+
+def test_a_revision_of_an_unscored_mode_is_recorded_as_uncompared(tmp_path, monkeypatch):
+    """There is no number to compare against, and saying so beats inventing one."""
+    from refactory_dsh.run import run_node
+
+    workdir = _smoke_run(
+        tmp_path, monkeypatch, revision="default_pack/design",
+        scores={"phase_pack/countup": 0.4},
+    )
+    produced = run_node("refactory_dsh.create_ops:smoke", workdir=workdir, node_id="smoke")
+    assert produced["before_score"] is None
+    assert produced["regressed"] is False
+    assert "unscored" in produced["revision_note"]
+
+
+def test_a_revision_of_a_mode_that_calls_a_model_is_not_refused_on_one_sample(
+    tmp_path, monkeypatch
+):
+    """One smoke score of a model call is a sample, not a measurement.
+
+    Refusing a revision on one sample would refuse the wrong thing, so a revision of a
+    mode that calls a model is recorded as not compared rather than as passing.
+    """
+    from refactory_dsh import registry
+    from refactory_dsh.run import run_node
+
+    source = registry.workspace_root(Path(".")) / "agent_probe"
+    shutil.rmtree(source, ignore_errors=True)
+    source.mkdir(parents=True)
+    (source / "__init__.py").write_text(
+        "from refactory_dsh.nn import Package\n"
+        "from .mode import Drafting\n\n"
+        "PACKAGE = Package(name='agent_probe', description='drafts with an agent',\n"
+        "                  modes=(Drafting,), ops=('refactory_packages.agent_probe.ops',))\n"
+    )
+    (source / "ops.py").write_text(
+        "def finish(ctx):\n"
+        "    ctx.write_json('out.json', {'done': True})\n"
+        "    return {'done': True}\n"
+    )
+    (source / "mode.py").write_text(
+        "from refactory_dsh import nn\n\n"
+        "OPS = 'refactory_packages.agent_probe.ops'\n\n\n"
+        "class Drafting(nn.Mode):\n"
+        "    name = 'draft'\n"
+        "    description = 'one agent writes a line'\n\n"
+        "    def build(self):\n"
+        "        graph = nn.Graph()\n"
+        "        graph.add(nn.Node('draft', 'agent', prompt_template='write a line',\n"
+        "                          writes=('line.txt',), produces=('line',)))\n"
+        "        graph.add(nn.Node('finish', 'op', call=f'{OPS}:finish',\n"
+        "                          reads=('line.txt',), writes=('out.json',),\n"
+        "                          produces=('done',)))\n"
+        "        graph.connect('draft', 'finish')\n"
+        "        return graph\n\n"
+        "    def score(self, run):\n"
+        "        return 1.0 if run.facts.get('done') else 0.0\n"
+    )
+    try:
+        workdir = _smoke_run(
+            tmp_path, monkeypatch, revision="agent_probe/draft",
+            scores={"phase_pack/countup": 0.4},
+        )
+        produced = run_node("refactory_dsh.create_ops:smoke", workdir=workdir, node_id="smoke")
+        assert produced["before_score"] is None
+        assert "calls a model" in produced["revision_note"]
+    finally:
+        shutil.rmtree(source, ignore_errors=True)
+
+
+def test_the_run_summary_reports_what_a_revision_recorded(tmp_path):
+    """`ceo`/`run` end with what the run recorded, not only DSH's final word."""
+    from refactory_dsh.interactive import run_summary
+
+    workdir = tmp_path / "run"
+    workdir.mkdir()
+    (workdir / "facts.json").write_text(json.dumps({
+        "name": "counting_revised",
+        "revision_of": "counting_pack/fixed_step",
+        "before_score": 0.5,
+        "after_score": 1.0,
+        "regressed": False,
+        "package_path": "/tmp/nowhere",
+    }))
+    line = run_summary(workdir)
+    assert line.startswith("refactory: what the run recorded")
+    for wanted in ("revision_of", "before_score", "after_score", "regressed"):
+        assert wanted in line
+
+
+def test_the_run_summary_says_nothing_when_there_is_nothing_to_say(tmp_path):
+    from refactory_dsh.interactive import run_summary
+
+    workdir = tmp_path / "run"
+    workdir.mkdir()
+    assert run_summary(workdir) == ""
+    (workdir / "facts.json").write_text("{ not json")
+    assert run_summary(workdir) == ""

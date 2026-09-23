@@ -153,3 +153,22 @@ def test_the_readme_reference_matches_the_command_line():
         for verb in _TABULATED if declared[verb] - named
     }
     assert undocumented == {}, f"the README reference omits options the parser accepts: {undocumented}"
+
+
+def test_ceo_passes_a_persons_knob_to_the_authoring_run(monkeypatch):
+    """`--knob allow_regression=1` is how a person says a lower score is intended.
+
+    The refusal it answers lives in the run's smoke step, so before this flag there
+    was no way to say "yes, trade the score" from the command line at all.
+    """
+    seen: list[list[str]] = []
+    monkeypatch.setattr(cli, "_forward", lambda module, argv: seen.append(argv) or 0)
+    code = cli.main([
+        "ceo", "make it smaller", "--mode", "edit",
+        "--revise", "counting_pack/fixed_step", "--knob", "allow_regression=1",
+    ])
+    assert code == 0
+    forwarded = seen[0]
+    assert forwarded[0] == "default_pack/edit"
+    assert "--knob" in forwarded and "allow_regression=1" in forwarded
+    assert "revision_of=counting_pack/fixed_step" in forwarded

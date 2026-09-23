@@ -157,6 +157,7 @@ uv run refactory package add|import|remove|enable|disable …
 | `--name <名字>` | 包或产物的名字；不给就用你说的话当名字 |
 | `--check "<命令>"` | 仅 design：在产物目录里运行；门会反复重跑，直到它退出码为 0 |
 | `--revise <包>/<模式>` | 仅 edit：被修订的那个模式 |
+| `--knob name=value` | 为这次运行设置创作模式的一个旋钮，例如 `allow_regression=1` 接受一个分数更低的修订 |
 | `--approve <门>=<值>` | 事先给出某道门的答案，例如 `gate_strategy=proceed`，用于无人值守的运行 |
 | `--workdir <目录>` | 运行的证据落在哪里（默认 `.factory/interactive/<包>-<模式>`） |
 

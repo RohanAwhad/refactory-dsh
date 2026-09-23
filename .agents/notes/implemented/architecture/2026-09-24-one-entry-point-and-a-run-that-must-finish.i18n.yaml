@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-24-one-entry-point-and-a-run-that-must-finish.md
-2026-09-24-one-entry-point-and-a-run-that-must-finish.md: 6511f196868d16fd9468b063d0fb39769a0df8a9
-2026-09-24-one-entry-point-and-a-run-that-must-finish.zh.md: 88d04bd1c1dc0aa4aee168c55f7c2df7a0c42d48
+2026-09-24-one-entry-point-and-a-run-that-must-finish.md: bb9b3833e6181fac61358231d83b8f41089ac819
+2026-09-24-one-entry-point-and-a-run-that-must-finish.zh.md: 731156df1b513d579d8203f21687b00236da076c

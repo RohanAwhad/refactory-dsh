@@ -142,6 +142,7 @@ def run(
     """
     if workdir is None:
         workdir = DEFAULT_ROOT / identifier.replace("/", "-")
+    workdir = Path(workdir).expanduser().resolve()
     name, graphs = prepare(
         identifier, workdir=workdir, intent=intent, project=project, knobs=knobs,
     )
@@ -156,7 +157,46 @@ def run(
     )
     # stdin is inherited on purpose: the graph profile's answerer reads the person's
     # answer from the terminal, and a captured stdin is not a person.
-    return subprocess.call(argv, cwd=str(REPO_ROOT), timeout=timeout_s)
+    code = subprocess.call(argv, cwd=str(REPO_ROOT), timeout=timeout_s)
+    if code == 0:
+        summary = run_summary(workdir)
+        if summary:
+            print(summary)
+    return code
+
+
+#: The facts worth showing a person who just ran a mode, in the order they read them.
+SUMMARY_KEYS = (
+    "name", "package_path", "files", "artifact", "check", "validation",
+    "smoke_score", "smoke_reason",
+    "revision_of", "before_score", "after_score", "regressed", "revision_note",
+)
+
+
+def run_summary(workdir: Path) -> str:
+    """One line of what a finished run recorded, read from the run's own facts.
+
+    DSH's own report is the agent's final word. The facts — where a package went, what
+    it scored, whether a revision regressed — are in `facts.json`, and a person should
+    not have to open it to find out what they just ran. Only keys that are present are
+    shown, so a mode that records none of them prints nothing extra.
+    """
+    import json
+
+    facts = Path(workdir) / "facts.json"
+    if not facts.exists():
+        return ""
+    try:
+        recorded = json.loads(facts.read_text())
+    except (OSError, json.JSONDecodeError):
+        return ""
+    shown = {
+        key: recorded[key] for key in SUMMARY_KEYS
+        if recorded.get(key) not in (None, "", [])
+    }
+    if not shown:
+        return ""
+    return "refactory: what the run recorded — " + json.dumps(shown, default=str)
 
 
 def main(argv: list[str] | None = None) -> int:

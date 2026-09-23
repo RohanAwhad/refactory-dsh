@@ -90,8 +90,16 @@ matter:
 - **prepare hands the model the source it is revising**, and the result records
   `revision_of`.
 - **a regression is refused by default.** The revision is scored before and after;
-  if it got worse, the run fails. Pass `--allow-regression` when you want a
-  revision that trades score for something else.
+  if it got worse, the run fails, naming both scores. Pass
+  `--knob allow_regression=1` (or `--allow-regression` on
+  `python -m refactory_dsh.edit`) when you want a revision that trades score for
+  something else.
+
+  Two modes can only be compared when a single smoke run measures both: a source
+  mode with no `score()`, or one whose graph calls a model, is recorded as **not
+  compared** with the reason, because one sample of a model call is not a score to
+  refuse on. `revision.json` in the run directory, and `revision_of`, `before_score`
+  and `after_score` in the package's `.origin.json`, say which of the two happened.
 
 Note what it does *not* do: it writes a **new** package. `circle_packing` is
 unchanged, so "did the revision help?" stays a question you can still ask.

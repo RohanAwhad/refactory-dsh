@@ -105,6 +105,9 @@ def edit(config: EditConfig, client: Any = None) -> dict[str, Any]:
     state["knobs"]["attempts"]["value"] = int(config.attempts)
     state["knobs"]["task_ref"]["value"] = config.task_ref
     state["knobs"]["data_node"]["value"] = bool(config.data_node)
+    # The graph's smoke step is what compares before and after, so the person's
+    # answer to "may it regress" has to travel as the knob that step reads.
+    state["knobs"]["allow_regression"]["value"] = bool(config.allow_regression)
     mode.load_state_dict(state)
     run = mode.run(
         run_workdir,

@@ -117,6 +117,8 @@ def cmd_ceo(args: argparse.Namespace) -> int:
         knobs.append(f"check={check}")
     if args.revise:
         knobs.append(f"revision_of={args.revise}")
+    # Last, so a person's own setting wins over the one derived from the flags above.
+    knobs.extend(str(pair) for pair in args.knob)
     forwarded = [identifier, "--intent", target]
     for pair in knobs:
         forwarded += ["--knob", pair]
@@ -270,6 +272,10 @@ def build_parser() -> argparse.ArgumentParser:
     ceo.add_argument("--name", default="", help="the package or artifact name (default: from what you said)")
     ceo.add_argument("--check", default="", help="design only: the command that decides whether it works")
     ceo.add_argument("--revise", default="", metavar="PKG/MODE", help="edit only: the mode to revise")
+    ceo.add_argument(
+        "--knob", action="append", default=[], metavar="NAME=VALUE",
+        help="set one of the authoring mode's knobs for this run, e.g. allow_regression=1",
+    )
     ceo.add_argument("--workdir", default="", help="the run directory")
     ceo.add_argument(
         "--approve", dest="verdict", action="append", default=[], metavar="GATE=VALUE",

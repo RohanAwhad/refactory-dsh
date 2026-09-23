@@ -93,6 +93,14 @@ class CreateMode(Mode):
                 "", "str",
                 description="for an edit: the <package>/<mode> being revised",
             ),
+            # The escape hatch from the smoke step's regression refusal. A person may
+            # intend to trade score for something the score does not measure, and that
+            # has to be sayable before the run rather than discovered as a failure.
+            "allow_regression": Knob(
+                False, "bool",
+                description="for an edit: accept a revision whose smoke score is lower "
+                            "than the mode it revises",
+            ),
         }
 
     def build(self) -> Graph:
@@ -384,9 +392,12 @@ class CreateMode(Mode):
         ))
         graph.add(Node(
             "smoke", "op", call=f"{OPS}:smoke",
-            writes=("smoke.json",),
-            produces=("smoke_score", "smoke_ok"),
-            notes="run the new mode once; a mode that cannot score is not finished",
+            knobs=("allow_regression",),
+            writes=("smoke.json", "revision.json"),
+            produces=("smoke_score", "smoke_ok", "before_score", "after_score",
+                      "regressed", "revision_note"),
+            notes="run the new mode once, and compare a revision with the mode it "
+                  "revises; a mode that cannot score is not finished",
         ))
         graph.add(Node(
             "report", "op", call=f"{OPS}:write_result",

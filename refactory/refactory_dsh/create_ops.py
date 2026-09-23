@@ -535,8 +535,16 @@ def register(ctx: Any) -> dict[str, Any]:
 
 
 def smoke(ctx: Any) -> dict[str, Any]:
-    """Run the new mode once. A mode that cannot score is not a deliverable."""
+    """Run the new mode once, and compare a revision with what it revises.
+
+    A mode that cannot score is not a deliverable, and a revision that scores lower
+    than the mode it came from is not an improvement. The comparison happens here
+    rather than in the driver because this is the only step that has just scored the
+    new mode; the driver's own comparison only ran for `python -m refactory_dsh.edit`,
+    which is not the path a person takes.
+    """
     name = str(ctx.facts["name"])
+    revision = str(ctx.facts.get("revision_of") or "").strip()
     workdir = ctx.workdir / "smoke"
     # Sandboxed: the smoke run is a real execution of code a model wrote, and even
     # reading which mode to run is done out of process.
@@ -574,7 +582,16 @@ def smoke(ctx: Any) -> dict[str, Any]:
                     "model": "used",
                 },
             )
-            return {"smoke_score": score, "smoke_ok": True, "smoke_model": "used"}
+            revised = _revision(
+                ctx, revision, score,
+                not_comparable=(
+                    f"{identifier} calls a model ({', '.join(agent_nodes)}), and one "
+                    "sample of a model call is not a score to refuse a revision on"
+                ),
+            )
+            return {
+                "smoke_score": score, "smoke_ok": True, "smoke_model": "used", **revised,
+            }
         if not _could_not_reach_a_model(scored):
             raise ValueError(f"the new mode did not finish a run: {scored.problem()}")
         # No model on this machine: say "not measured" and name the command that does
@@ -591,6 +608,13 @@ def smoke(ctx: Any) -> dict[str, Any]:
                 "model": "unavailable",
             },
         )
+        revised = _revision(
+            ctx, revision, None,
+            not_comparable=(
+                f"{identifier} calls a model and none was reachable, so there is "
+                "nothing to compare"
+            ),
+        )
         return {
             "smoke_score": None,
             "smoke_ok": True,
@@ -599,6 +623,7 @@ def smoke(ctx: Any) -> dict[str, Any]:
                 "model was reachable; set the provider credentials and use "
                 "`refactory run " + identifier + "` to score it"
             ),
+            **revised,
         }
     score = float(result.payload.get("score") or 0.0)
     ctx.write_json(
@@ -610,7 +635,86 @@ def smoke(ctx: Any) -> dict[str, Any]:
             "sandboxed": True,
         },
     )
-    return {"smoke_score": score, "smoke_ok": True}
+    return {"smoke_score": score, "smoke_ok": True, **_revision(ctx, revision, score)}
+
+
+def _revision(
+    ctx: Any, revision: str, after: float | None, *, not_comparable: str = "",
+) -> dict[str, Any]:
+    """Score the mode a revision came from, and refuse a revision that scores lower.
+
+    The comparison is only meaningful between two modes a single smoke run can be
+    repeated on: one sample of a mode that calls a model is not a score to refuse on,
+    and a source mode with no ``score()`` has no number to compare against. Both cases
+    are recorded with the reason, because "not compared" and "compared and fine" must
+    not read alike.
+
+    The provenance is written next to the revision rather than kept in the run: what a
+    package came from, at which state, and what it scored are facts about the package
+    that outlive the run directory. ``revision_of_state`` is the source's state dict at
+    the moment of the revision, so "revised from X" means a state and not a name that
+    may have moved since.
+    """
+    if not revision:
+        return {}
+    from refactory_dsh import registry, sandbox
+
+    project = project_for_nodes()
+    try:
+        package, mode_class = registry.resolve(project, revision)
+    except Exception as exc:
+        raise ValueError(f"cannot revise {revision!r}: {exc}") from exc
+    source = mode_class()
+    reason = not_comparable
+    if not reason and getattr(mode_class, "unscored_reason", ""):
+        reason = f"{revision} is unscored, so there is no score to compare against"
+    if not reason and [n for n in source.build().nodes.values() if n.kind == "agent"]:
+        reason = f"{revision} calls a model, and one sample of it is not a score"
+
+    before: float | None = None
+    if not reason:
+        scored = sandbox.smoke(
+            revision, ctx.workdir / "smoke-source", project=project,
+        )
+        if scored.ok:
+            before = float(scored.payload.get("score") or 0.0)
+        else:
+            reason = f"{revision} could not be scored: {scored.problem()}"
+
+    state = source.state_dict()
+    from refactory_dsh.optim.base import candidate_id
+
+    regressed = before is not None and after is not None and after < before
+    allowed = bool(ctx.knob("allow_regression", 0))
+    recorded = {
+        "revision_of": revision,
+        "revision_of_state": state,
+        "revision_of_digest": candidate_id(state),
+        "before_score": before,
+        "after_score": after,
+        "regressed": regressed,
+        "allow_regression": allowed,
+        "note": reason,
+    }
+    ctx.write_json("revision.json", recorded)
+    path = Path(str(ctx.facts.get("package_path") or "")) / ".origin.json"
+    if path.parent.is_dir():
+        current = json.loads(path.read_text()) if path.exists() else {}
+        current.update({key: value for key, value in recorded.items() if key != "note"})
+        path.write_text(json.dumps(current, indent=2, default=str))
+    if regressed and not allowed:
+        raise ValueError(
+            f"the revision scores {after} where {revision} scores {before}, so it is not "
+            "an improvement; pass `--knob allow_regression=1` if that is intended"
+        )
+    return {
+        "before_score": before,
+        "after_score": after,
+        "regressed": regressed,
+        "revision_note": (
+            reason or f"compared with {revision}: {before} → {after}"
+        ),
+    }
 
 
 def _could_not_reach_a_model(result: Any) -> bool:
@@ -653,6 +757,14 @@ def write_result(ctx: Any) -> dict[str, Any]:
         "registered": ctx.facts.get("registered"),
         "smoke_score": ctx.facts.get("smoke_score"),
     }
+    if ctx.facts.get("revision_of"):
+        payload.update({
+            "revision_of": ctx.facts.get("revision_of"),
+            "before_score": ctx.facts.get("before_score"),
+            "after_score": ctx.facts.get("after_score"),
+            "regressed": ctx.facts.get("regressed"),
+            "revision_note": ctx.facts.get("revision_note"),
+        })
     ctx.write_json("create.json", payload)
     return {"created": json.dumps(payload, default=str)}
 

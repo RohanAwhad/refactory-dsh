@@ -157,6 +157,7 @@ Every command is `uv run refactory <verb>`. This is the reference; [QUICKSTART.m
 | `--name <name>` | the package or artifact name; without it your words become the name |
 | `--check "<command>"` | design only: run inside the artifact directory; the gate reloops until it exits 0 |
 | `--revise <package>/<mode>` | edit only: the mode being revised |
+| `--knob name=value` | set one of the authoring mode's knobs for this run, e.g. `allow_regression=1` to accept a revision that scores lower |
 | `--approve <gate>=<value>` | state a gate's answer up front, e.g. `gate_strategy=proceed`, for an unattended run |
 | `--workdir <dir>` | where the run's evidence lands (default `.factory/interactive/<package>-<mode>`) |
 

@@ -10,7 +10,7 @@ Status: implemented
 
 **它没有入口。** 所有东西都能用——模式、外循环、控制台、GUI——但要够到任何一样，都得知道解释器路径与模块名（`.venv/bin/python -m refactory_dsh.loop …`），而 README 开篇是一张架构图，而不是一个人实际要做的事。这个项目所移植自的那个项目恰好相反：`factory ceo "<一个想法>" --mode design`，一条命令，模式是一个标志。我们自己 README 里的四步是四种不同的模块调用，而且其中一条（`interactive`）根本不能用：它的默认运行根目录是相对路径，而 DSH 拒绝相对的会话工作目录，所以一个人「使用模式」时要跑的那条命令在图开始之前就停下了。
 
-**一次运行可以被半途丢弃，却看起来像已经完成。** DSH 上的 `refactory ceo … --mode create` 跑到 QA fork，CEO 把三个评审子 agent **放到后台**启动，结束了自己的回合，图运行器看到静止（quiescence）便以 0 退出，`best_score: 0`。spine 自己的状态文件一直写着 `ready`——还有三个节点没跑——但没有人被告知。walker 在进程内运行 agent 节点，所以同一个模式在那里能跑完；而这正是本仓库存在的意义所要消除的那类运行时差异。
+**一次运行可以被半途丢弃，却看起来像已经完成。** DSH 上的 `refactory ceo … --mode create` 跑到 QA fork，CEO 把三个评审子 agent **放到后台**启动，结束了自己的回合，图运行器看到静止（quiescence）便以 0 退出，`best_score: 0`——这个分数运行器已经不再凭空造出，见[A revision is compared, or it says why it was not](2026-09-23-revision-comparison-lives-in-the-run.zh.md)。spine 自己的状态文件一直写着 `ready`——还有三个节点没跑——但没有人被告知。walker 在进程内运行 agent 节点，所以同一个模式在那里能跑完；而这正是本仓库存在的意义所要消除的那类运行时差异。
 
 ## 决定
 
