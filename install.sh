@@ -27,16 +27,54 @@ fi
 echo "== refactory-dsh install =="
 echo "  repo:  $HERE"
 
+# ── prerequisites ────────────────────────────────────────────────────────────
+# The script satisfies what it can instead of asking the reader to: Node has to be
+# there (it is a runtime, not a shim), but pnpm is pinned by `packageManager` in
+# package.json, and corepack can run that pin *without* the reader enabling anything.
+#
+# The failure this exists for: a machine with Node 22 and corepack but no `pnpm` on
+# PATH stopped at "pnpm not found — install Node >=22.19 + corepack", which is advice
+# the reader had already followed.
+if ! command -v node >/dev/null 2>&1; then
+  echo "  error: no node on PATH. Install Node >=22.19 (https://nodejs.org, or nvm:" >&2
+  echo "         nvm install 22 && nvm use 22) and run this script again." >&2
+  exit 1
+fi
+NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
+NODE_MINOR="$(node -p 'process.versions.node.split(".")[1]')"
+if [ "$NODE_MAJOR" -lt 22 ] || { [ "$NODE_MAJOR" -eq 22 ] && [ "$NODE_MINOR" -lt 19 ]; }; then
+  echo "  error: node $(node --version) is too old; this workspace needs >=22.19 or >=24." >&2
+  echo "         nvm install 22 && nvm use 22" >&2
+  exit 1
+fi
+echo "  node:  $(node --version)"
+
+# One way to run pnpm, whichever is available: the shim if it is on PATH, else
+# corepack running package.json's pin directly.
+PNPM=(pnpm)
+if ! command -v pnpm >/dev/null 2>&1; then
+  if command -v corepack >/dev/null 2>&1; then
+    echo "  pnpm:  not on PATH; using corepack with package.json's pin"
+    PNPM=(corepack pnpm)
+  else
+    echo "  error: neither pnpm nor corepack is on PATH. With Node >=16.9 corepack is" >&2
+    echo "         bundled, so this is usually a PATH problem. Either:" >&2
+    echo "           corepack enable pnpm          # then re-run this script" >&2
+    echo "           npm install -g pnpm@11.7.0    # or install pnpm globally" >&2
+    exit 1
+  fi
+fi
+"${PNPM[@]}" --version >/dev/null 2>&1 || {
+  echo "  error: \`${PNPM[*]}\` did not run. Try: corepack install -g pnpm@11.7.0" >&2
+  exit 1
+}
+
 # 1. vendored dependencies (the language + the reference modes) as git submodules.
 git -C "$HERE" submodule update --init --recursive
 
 # 2. Node side: install the pnpm workspace (DSH), then build the client/host
 #    bundles the web GUI serves at launch.
-if ! command -v pnpm >/dev/null 2>&1; then
-  echo "  error: pnpm not found — install Node >=22.19 + corepack, then retry" >&2
-  exit 1
-fi
-(cd "$HERE" && pnpm install --frozen-lockfile && pnpm run build)
+(cd "$HERE" && "${PNPM[@]}" install --frozen-lockfile && "${PNPM[@]}" run build)
 
 # 3. Python side: **one project, one lockfile, one command**. `uv sync` reads the
 #    root `pyproject.toml`, creates `.venv`, installs the three local packages in
@@ -44,7 +82,9 @@ fi
 #    `refactory` console script on `.venv/bin` — which is why every documented
 #    command is `uv run refactory …` rather than an interpreter path.
 if ! command -v uv >/dev/null 2>&1; then
-  echo "  error: uv not found — install it (https://docs.astral.sh/uv), then retry" >&2
+  echo "  error: uv not found. Install it with:" >&2
+  echo "           curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
+  echo "         (or: brew install uv, or pipx install uv) and run this script again." >&2
   exit 1
 fi
 (cd "$HERE" && uv sync)
