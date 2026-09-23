@@ -633,6 +633,17 @@
       "commit": "2195b411d5",
       "evidence": "Fixed and verified end to end. The `smoke` node now scores the mode being revised as well, compares the two, and fails the run naming both scores; `before_score`/`after_score`/`regressed` are recorded in the run's `revision.json` and, with `revision_of` and the source's whole state plus digest, in the package's `.origin.json`. Two modes are compared only when one smoke run measures both: an unscored source, or one whose graph calls a model, is recorded as not compared with the reason, so it cannot be read as a pass. `allow_regression` is a declared knob reachable as `ceo --knob allow_regression=1`. `interactive.run` prints one line of the run's own facts when it finishes, which is what makes the recipe's promise checkable and was verified by running the documented command at the model tier (`check_recipes --tier model --only edit-mode`). A run of the new suite also exposed the guard this file records: with no `package_path` in its facts the comparison wrote `.origin.json` into the working directory. Reproduce: pytest refactory/tests/test_edit_design.py -q",
       "observed": "26 passed (test_edit_design.py)"
+    },
+    {
+      "id": "steer-search",
+      "issue": 36,
+      "title": "A search wrote an intent ledger that no node read",
+      "why": "`optimize --intent \"\u2026\"` and `refactory steer --run <search> --note \"\u2026\"` both write the run's ledger, and `console steer` reports it back \u2014 but the loop evaluates each candidate in `runs/<id>/` and the steering transform reads the ledger of the directory it is handed, so nothing in a search ever saw the intent or a mid-run note. Found by running it: with a scripted model, the candidate's prompt contained neither the ledger nor the intent.",
+      "verify": "pytest refactory/tests/test_loop.py -q",
+      "status": "done",
+      "commit": "PENDING",
+      "evidence": "Fixed by `Loop._carry_ledger`: the run's ledger is copied into each candidate directory before the evaluator runs it, so both runtimes fold it in (the walker in `execute`, DSH as the lowering transform) and the candidate directory keeps a record of what the person had said when it was evaluated. Two tests, each shown failing before the fix and passing after: the candidate's agent prompt contains the ledger and the intent, and a note appended between two evaluations reaches the second candidate and not the first. The README's read-and-steer table now says what steering does and how it arrives, tutorial 06 covers a search as well as a run, and architecture.md records why the copy exists.",
+      "observed": "740 passed, 10 skipped (refactory/tests)"
     }
   ],
   "verification": {

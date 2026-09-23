@@ -226,6 +226,8 @@ Every command is `uv run refactory <verb>`. This is the reference; [QUICKSTART.m
 | `refactory steer --run <id> --verdict <gate>=<value>` | record a gate's answer, so a resume replays it |
 | `refactory stop --run <id>` | ask a run to stop |
 
+**Steering is context, not structure.** A note goes into the run's `intent-ledger.md`, and every agent node's prompt names that file and tells the node to read it before acting — so `--kind constraint` ("must be respected"), `info` and `correction` reach the nodes that run *after* the note, in a `run` and in a search alike. The mode's graph never changes; searching the graph is `optimize`'s job. A `user` gate is the other half: the runtime asks you, records your answer as a `verdict` entry, and a resumed run replays it rather than asking twice.
+
 <a id="cli-other"></a>
 ### Everything else
 

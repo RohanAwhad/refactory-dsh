@@ -226,6 +226,8 @@ uv run refactory package add|import|remove|enable|disable …
 | `refactory steer --run <id> --verdict <门>=<值>` | 记下某道门的答案，好让恢复运行时重放它 |
 | `refactory stop --run <id>` | 请一次运行停下来 |
 
+**引导是上下文，不是结构。** 说的一句话会写进运行的 `intent-ledger.md`，而每个 agent 节点的提示词都会点名那个文件、并要求它在动手前先读一遍——所以 `--kind constraint`（必须被遵守）、`info` 与 `correction` 会到达在这句话之后才运行的节点，`run` 与搜索都一样。模式的图从不改变；搜索图是 `optimize` 的活。`user` 门是另一半：运行时来问你，把你的回答记成一条 `verdict`，恢复运行时重放它，而不是再问一次。
+
 <a id="cli-other"></a>
 ### 其余
 

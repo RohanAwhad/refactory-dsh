@@ -101,6 +101,11 @@ The instruction in every agent node names the live ledger, so a note added mid-r
 reaches the nodes that run afterwards rather than only the ones that had already
 started.
 
+The same works for a search. `refactory optimize <mode> --intent "…"` seeds the
+run's ledger at the run root, and each candidate is evaluated with a copy of it in its
+own directory, so `refactory steer --run .factory/loop/<run> --note "no numpy"
+--kind constraint` reaches the mode's agent nodes from the next candidate onwards.
+
 ## What to take away
 
 - **Who answers a gate is part of the architecture**, not a convention: the IR

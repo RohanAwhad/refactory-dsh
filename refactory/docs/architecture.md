@@ -389,6 +389,14 @@ steering work — which is also why this is a transform over the IR and not a fi
 any of it. A note added to the ledger mid-run therefore reaches the agent nodes that
 run afterwards, which is what `console steer --note` is for.
 
+**A search carries the ledger into each candidate.** `for_run` folds in the ledger of
+the work directory it is handed, and the loop evaluates a candidate in
+`runs/<id>/` while the ledger sits at the run root, so `Loop._carry_ledger` copies it
+down before each evaluation. Without that copy an `optimize --intent` or a
+`steer --note` was written, reported by `steer`, and read by nothing — in the one
+place steering is most wanted, because a search is what runs for hours. The copy is
+per candidate so the directory says what the person had said when it ran.
+
 **A gate a person answers is recorded, and a resume replays it.** `wf_*`/the walker
 routes the verdict a person gave; `Ledger.verdict(gate, value)` writes it down, and
 `execute` reads `Ledger.verdicts()` back into the run so a resumed run is the same

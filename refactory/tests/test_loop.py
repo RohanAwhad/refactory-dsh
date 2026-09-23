@@ -442,3 +442,89 @@ def test_the_best_candidates_edits_match_its_lineage(tmp_path):
             assert recorded["edits"] == best["edits"][-len(recorded["edits"]):] or (
                 recorded["edits"] == best["edits"]
             ), "the proposal record disagrees with the lineage it belongs to"
+
+
+class _Agentic(nn.Mode):
+    """A scored mode whose graph calls a model, so a ledger has somewhere to land."""
+
+    name = "agentic"
+
+    @classmethod
+    def declare(cls) -> dict[str, nn.Knob]:
+        return {"step": nn.Knob(2, "int", lo=1, hi=4, description="a bounded counter")}
+
+    def build(self) -> nn.Graph:
+        graph = nn.Graph()
+        graph.add(nn.Node("draft", "agent", prompt_template="draft a line",
+                          writes=("draft.txt",), produces=("draft",)))
+        graph.add(nn.Node("only", "op", call="loop_ops:write_number",
+                          knobs=("step",), reads=("draft.txt",),
+                          writes=("number.json",), produces=("value",)))
+        graph.connect("draft", "only")
+        return graph
+
+    def score(self, run: nn.RunResult) -> float:
+        return float(run.facts["value"])
+
+
+def test_a_search_carries_its_ledger_to_the_mode_it_is_searching(tmp_path):
+    """`optimize --intent …` and `steer --note …` reach the mode's own agent nodes.
+
+    The loop seeds the run's ledger at the run root and evaluates each candidate in
+    `runs/<id>/`, and the steering transform folds in the ledger of the directory it
+    is handed. Nothing read across that gap, so the intent a person gave, and every
+    note they added while the search was going, was written, reported by `steer`, and
+    seen by no node. Found by running it: the prompts a scripted model received
+    contained neither the ledger nor the intent.
+    """
+    from tests_support import FakeModel
+
+    model = FakeModel(["a line"] * 50)
+    with _patch_mode(_Agentic):
+        loop = Loop(
+            "agentic/only",
+            _config(tmp_path, epochs=1, batch_size=1, intent="the number must be four"),
+            project=Path("."),
+            model=model,
+        )
+        loop.init()
+        loop.run()
+
+    prompts = "\n".join(model.prompts)
+    assert "What the user has said" in prompts, prompts[:400]
+    assert "the number must be four" in prompts
+    # The candidate keeps a copy, so the directory says what was true when it ran.
+    assert list((tmp_path / "runs").glob("*/intent-ledger.md")), sorted(
+        str(path) for path in (tmp_path / "runs").iterdir()
+    )
+
+
+def test_a_note_steers_the_candidates_that_run_after_it(tmp_path):
+    """Steering a search is the same act as steering a run: append, and the next
+    candidate sees it. The note lands in the ledger between two evaluations."""
+    from refactory_dsh.steering import Ledger
+    from tests_support import FakeModel
+
+    seen: list[str] = []
+    model = FakeModel([""] * 50)
+
+    class Watching(FakeModel):  # type: ignore[misc]
+        def complete(self, prompt: str, *, system: str = "") -> str:
+            seen.append(prompt)
+            return super().complete(prompt, system=system)
+
+    with _patch_mode(_Agentic):
+        loop = Loop(
+            "agentic/only",
+            _config(tmp_path, epochs=1, batch_size=2, intent="the number must be two"),
+            project=Path("."),
+            model=Watching([""] * 50),
+        )
+        loop.init()
+        first = loop.population[:1]
+        loop._evaluate(first[0])
+        Ledger(tmp_path).note("constraint", "never print the number")
+        loop._evaluate(loop.population[1])
+
+    assert "never print the number" not in seen[0], "the note reached a candidate that had already run"
+    assert "never print the number" in seen[1], seen[1][:400]

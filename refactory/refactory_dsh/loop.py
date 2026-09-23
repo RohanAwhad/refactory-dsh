@@ -405,6 +405,31 @@ class Loop(OuterLoop):
             )
         return len(batch)
 
+    def _carry_ledger(self, workdir: Path) -> None:
+        """Put the run's ledger where the candidate's own nodes look for it.
+
+        The run's ledger lives at the run root; a candidate is evaluated in
+        ``runs/<id>/``; and the steering transform folds in the ledger of the work
+        directory it is handed. Without this the ledger a person seeded with
+        ``--intent``, or appended to with ``refactory steer --note`` while the search
+        was going, was written, reported by ``steer``, and read by no node — in the one
+        place steering is most wanted, because a search is what runs for hours.
+
+        Copied rather than searched for up the tree, so each candidate directory stays
+        a self-contained record of what the person had said when it was evaluated. A
+        note added while a candidate is running reaches the next candidate, exactly as
+        it reaches the next node of an interactive run.
+        """
+        import shutil
+
+        from refactory_dsh.steering import LEDGER
+
+        source = self.root / LEDGER
+        if not source.exists():
+            return
+        workdir.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, workdir / LEDGER)
+
     def _evaluate(self, candidate: Candidate) -> None:
         """Run one candidate through the evaluator, and record what it scored.
 
@@ -414,6 +439,7 @@ class Loop(OuterLoop):
         for the two that ship and what makes them agree.
         """
         workdir = self.root / "runs" / candidate.id
+        self._carry_ledger(workdir)
         mode = self.mode_class(state=candidate.state)
         result = self.evaluator.evaluate(mode, candidate.state, workdir)
         candidate.score = result.score
