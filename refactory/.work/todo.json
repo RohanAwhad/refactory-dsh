@@ -641,7 +641,7 @@
       "why": "`optimize --intent \"\u2026\"` and `refactory steer --run <search> --note \"\u2026\"` both write the run's ledger, and `console steer` reports it back \u2014 but the loop evaluates each candidate in `runs/<id>/` and the steering transform reads the ledger of the directory it is handed, so nothing in a search ever saw the intent or a mid-run note. Found by running it: with a scripted model, the candidate's prompt contained neither the ledger nor the intent.",
       "verify": "pytest refactory/tests/test_loop.py -q",
       "status": "done",
-      "commit": "PENDING",
+      "commit": "c0aeb99c57",
       "evidence": "Fixed by `Loop._carry_ledger`: the run's ledger is copied into each candidate directory before the evaluator runs it, so both runtimes fold it in (the walker in `execute`, DSH as the lowering transform) and the candidate directory keeps a record of what the person had said when it was evaluated. Two tests, each shown failing before the fix and passing after: the candidate's agent prompt contains the ledger and the intent, and a note appended between two evaluations reaches the second candidate and not the first. The README's read-and-steer table now says what steering does and how it arrives, tutorial 06 covers a search as well as a run, and architecture.md records why the copy exists.",
       "observed": "740 passed, 10 skipped (refactory/tests)"
     }
