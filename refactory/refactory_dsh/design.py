@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from refactory_dsh.create_ops import API
+from refactory_dsh.create_ops import API, RESEARCH_SCHEMA
 from refactory_dsh.model import DEFAULT_TIMEOUT_S
 from refactory_dsh.nn import Graph, Knob, Mode, Node, RunResult
 
@@ -34,6 +34,11 @@ class DesignMode(Mode):
     @classmethod
     def declare(cls) -> dict[str, Knob]:
         return {
+            "research_attempts": Knob(
+                3, "int", lo=1, hi=8,
+                description="how many times the research step may be retried when its "
+                            "plan is not a plan or its findings were never written",
+            ),
             "check_attempts": Knob(
                 2, "int", lo=1, hi=5,
                 description="how many times the emit step may be retried when the "
@@ -71,15 +76,34 @@ class DesignMode(Mode):
                 "this artifact can be designed: between three and five questions, each "
                 "answerable by reading this checkout or by running something here. Spawn "
                 "one subagent per question and have each write its findings to "
-                "`research/<slug>.md` under the run directory. Then write "
-                "`research-plan.json` as an array of `{\"focus\", \"slug\", "
-                "\"finding\"}` objects. A direction whose finding is empty did not "
-                "answer its question: say so."
+                "`research/<slug>.md` under the run directory, then write "
+                "`research-plan.json` yourself.\n\n"
+                "## What was wrong with the last plan\n{{research_review}}\n\n"
+                "## The plan's shape\n" + RESEARCH_SCHEMA
             ),
-            reads=("brief.json",),
+            reads=("brief.json", "research-review.txt"),
             writes=("research-plan.json",),
             produces=("research",),
             notes="choose the research directions and have a subagent answer each one",
+        ))
+        # The same pair the create graph carries, for the same reason: the plan's
+        # `writes` contract is satisfied by any bytes, so the stage that grounds the
+        # design could narrate its intent and pass.
+        graph.add(Node(
+            "record_findings", "op", call="refactory_dsh.create_ops:record_findings",
+            reads=("research-plan.json",),
+            writes=("research/",),
+            produces=("findings_recorded",),
+            notes="write each direction's finding where the reviews will look for it",
+        ))
+        graph.add(Node(
+            "gate_research", "gate", evaluator="refactory_dsh.create_ops:gate_research",
+            reads=("research-plan.json",),
+            writes=("research-review.txt",),
+            produces=("research_review", "research_attempts_used"),
+            knobs=("research_attempts",),
+            max_iterations=8,
+            notes="proceed only when the plan is a plan and its findings exist",
         ))
         graph.add(Node(
             "strategy_director", "agent",
@@ -280,7 +304,10 @@ class DesignMode(Mode):
         ))
 
         graph.connect("prepare", "research_director")
-        graph.connect("research_director", "strategy_director")
+        graph.connect("research_director", "record_findings")
+        graph.connect("record_findings", "gate_research")
+        graph.connect("gate_research", "research_director", condition="reloop")
+        graph.connect("gate_research", "strategy_director", condition="proceed")
         graph.connect("strategy_director", "synthesize_strategy")
         graph.connect("synthesize_strategy", "design_doc")
         graph.connect("design_doc", "gate_strategy")
@@ -319,7 +346,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", required=True,
                         help="the command that decides whether it works")
     parser.add_argument("--attempts", type=int, default=2)
-    parser.add_argument("--workdir", default=".factory/design")
+    # Per artifact name, for the same reason a creation is: one fixed directory
+    # means runs overwrite each other's state.
+    parser.add_argument("--workdir", default="")
     parser.add_argument("--model", default="")
     parser.add_argument("--provider", default="", help="provider route that model is on")
     parser.add_argument(
@@ -341,7 +370,7 @@ def main(argv: list[str] | None = None) -> int:
     from refactory_dsh.create import parse_verdicts
 
     result = mode.run(
-        Path(args.workdir),
+        Path(args.workdir or f".factory/design/{args.name}"),
         model=DshModelClient(
             timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
         ),

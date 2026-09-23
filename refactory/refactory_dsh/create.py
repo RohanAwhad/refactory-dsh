@@ -25,7 +25,7 @@ from typing import Any
 
 from refactory_dsh import registry
 from refactory_dsh.paths import project_root, project_for_nodes
-from refactory_dsh.create_ops import STRATEGY_SCHEMA
+from refactory_dsh.create_ops import RESEARCH_SCHEMA, STRATEGY_SCHEMA
 from refactory_dsh.model import DEFAULT_TIMEOUT_S
 from refactory_dsh.nn import Graph, Knob, Mode, Node, RunResult
 
@@ -56,6 +56,11 @@ class CreateMode(Mode):
                 3, "int", lo=1, hi=8,
                 description="how many times the emit step may be retried with the "
                             "validator's reasons",
+            ),
+            "research_attempts": Knob(
+                3, "int", lo=1, hi=8,
+                description="how many times the research step may be retried when its "
+                            "plan is not a plan or its findings were never written",
             ),
             "design_attempts": Knob(
                 2, "int", lo=1, hi=5,
@@ -138,16 +143,36 @@ class CreateMode(Mode):
                 "this package can be designed: between three and five questions, each "
                 "one answerable from this checkout, from the reference package, or from "
                 "the API below. Spawn one subagent per question and have each write its "
-                "findings to `research/<slug>.md` under the run directory. Then write "
-                "`research-plan.json` as an array of `{\"focus\", \"slug\", "
-                "\"finding\"}` objects. A direction whose finding is empty did not "
-                "answer its question: say so rather than writing something plausible.\n\n"
+                "findings to `research/<slug>.md` under the run directory, then write "
+                "`research-plan.json` yourself.\n\n"
+                "## What was wrong with the last plan\n{{research_review}}\n\n"
+                "## The plan's shape\n" + RESEARCH_SCHEMA + "\n"
                 "## API\n{{api}}\n\n## Reference package\n{{reference}}\n"
             ),
-            reads=("brief.json", "survey.json"),
+            reads=("brief.json", "survey.json", "research-review.txt"),
             writes=("research-plan.json",),
             produces=("research",),
             notes="choose the research directions and have a subagent answer each one",
+        ))
+        # The plan says what was learned; these two make sure it is a plan at all, and
+        # that the findings it names exist before the strategy stage reads them. A
+        # node's `writes` contract is satisfied by any bytes, so the stage that was
+        # supposed to ground the design could narrate its intent and pass.
+        graph.add(Node(
+            "record_findings", "op", call=f"{OPS}:record_findings",
+            reads=("research-plan.json",),
+            writes=("research/",),
+            produces=("findings_recorded",),
+            notes="write each direction's finding where the reviews will look for it",
+        ))
+        graph.add(Node(
+            "gate_research", "gate", evaluator=f"{OPS}:gate_research",
+            reads=("research-plan.json",),
+            writes=("research-review.txt",),
+            produces=("research_review", "research_attempts_used"),
+            knobs=("research_attempts",),
+            max_iterations=8,
+            notes="proceed only when the plan is a plan and its findings exist",
         ))
         graph.add(Node(
             "strategy_director", "agent",
@@ -249,7 +274,12 @@ class CreateMode(Mode):
                 "## Data iteration\n{{data_node}}\n\n"
                 "Answer with file blocks, each introduced by a line of exactly:\n"
                 "===FILE: <relative path>===\n"
-                "followed by the file's contents. Emit `__init__.py` (with "
+                "followed by the file's contents. Every path is relative to the "
+                "**package's own root**: the manifest is exactly `__init__.py`, not "
+                "`{{name}}/__init__.py`, not `refactory/refactory_packages/{{name}}/"
+                "__init__.py`, and not `.factory/packages/{{name}}/__init__.py`. The "
+                "package is written where it belongs; a path that repeats its "
+                "directory buries the package inside itself. Emit `__init__.py` (with "
                 "`PACKAGE = nn.Package(...)`), the ops module, and any module the "
                 "ops or the mode need. Use the declared ops module path in every "
                 "`call` and `evaluator`. When a Task is named, the mode must accept "
@@ -408,7 +438,10 @@ class CreateMode(Mode):
 
         graph.connect("prepare", "survey")
         graph.connect("survey", "research_director")
-        graph.connect("research_director", "strategy_director")
+        graph.connect("research_director", "record_findings")
+        graph.connect("record_findings", "gate_research")
+        graph.connect("gate_research", "research_director", condition="reloop")
+        graph.connect("gate_research", "strategy_director", condition="proceed")
         graph.connect("strategy_director", "synthesize_strategy")
         graph.connect("synthesize_strategy", "review")
         graph.connect("review", "synthesize_strategy", condition="reloop")
@@ -579,7 +612,11 @@ def main(argv: list[str] | None = None) -> int:
         "--task", default=None, metavar="TASK_REF", dest="task_ref",
         help="a Task class (module:Class or a registered name) the produced mode must satisfy",
     )
-    parser.add_argument("--workdir", default=".factory/create")
+    # Per package name, not one fixed directory. Two runs for different packages
+    # used to write `brief.json`, `research/` and the strategy documents into the
+    # same place, so each overwrote the other's state and a cancelled run's
+    # leftovers were read by the next one. A run is addressed by this directory.
+    parser.add_argument("--workdir", default="")
     parser.add_argument("--model", default="")
     parser.add_argument("--provider", default="", help="provider route that model is on")
     parser.add_argument(
@@ -602,7 +639,7 @@ def main(argv: list[str] | None = None) -> int:
                 brief=args.brief,
                 extends=args.extends,
                 attempts=args.attempts,
-                workdir=Path(args.workdir),
+                workdir=Path(args.workdir or f".factory/create/{args.name}"),
                 data_node=bool(args.data_node),
                 task_ref=str(args.task_ref or ""),
                 model_timeout_s=int(args.model_timeout_s),

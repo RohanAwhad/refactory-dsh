@@ -154,6 +154,120 @@ def prepare(ctx: Any) -> dict[str, Any]:
     }
 
 
+def _plan(text: str) -> list[dict[str, str]]:
+    """The plan's entries, or an empty list when the answer is not a plan.
+
+    Tolerant about the fences and prose around the array — a model that writes
+    "here is the plan:" before it has still written a plan — and intolerant about
+    everything else, because the alternative is a downstream stage that runs on a
+    stage which did nothing.
+    """
+    start, end = text.find("["), text.rfind("]")
+    if start < 0 or end < start:
+        return []
+    try:
+        payload = json.loads(text[start : end + 1])
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, list):
+        return []
+    entries: list[dict[str, str]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        entries.append({
+            key: str(item.get(key) or "").strip() for key in ("focus", "slug", "finding")
+        })
+    return entries
+
+
+def _excerpt(text: str, limit: int = 200) -> str:
+    """The start of an answer, on one line, for a retry prompt to read."""
+    flat = " ".join(str(text).split())
+    return f"{flat[:limit]}{'…' if len(flat) > limit else ''}" if flat else "(empty)"
+
+
+def record_findings(ctx: Any) -> dict[str, Any]:
+    """Put every direction's answer on disk, so the evidence exists before it is used.
+
+    The research director's subagents write `research/<slug>.md` themselves; this fills
+    in a direction that has no note from the finding the plan carries. It is what makes
+    the plan's `finding` field load-bearing rather than decorative, and it is why a
+    walker run — where the agent's answer *is* the plan, and no subagent exists — leaves
+    the same artifacts a DSH run does.
+    """
+    recorded: list[str] = []
+    for entry in _plan(ctx.read_text("research-plan.json")):
+        slug = entry["slug"]
+        if not slug or not RESEARCH_SLUG.fullmatch(slug):
+            continue
+        path = f"research/{slug}.md"
+        if ctx.exists(path) and ctx.read_text(path).strip():
+            continue
+        ctx.write_text(path, f"# {entry['focus']}\n\n{entry['finding']}\n")
+        recorded.append(path)
+    return {"findings_recorded": recorded}
+
+
+def gate_research(ctx: Any) -> str:
+    """Proceed only when the plan is a plan and its findings are on disk.
+
+    The stage exists to ground the design in facts, and a node that narrates its
+    intent instead of producing the array satisfies ``writes=("research-plan.json",)``
+    with any bytes at all: two real runs wrote a prose status message about subagents
+    "running in the background", left ``research/`` empty, and the design proceeded on
+    unverified assumptions. The reasons go to `research-review.txt` and back into the
+    next attempt's prompt, exactly as the design review's do.
+    """
+    raw = ctx.read_text("research-plan.json")
+    allowed = int(ctx.knob("research_attempts", 3))
+    problems: list[str] = []
+    entries = _plan(raw)
+    if not entries:
+        problems.append(
+            "research-plan.json is not a JSON array of {focus, slug, finding} objects; "
+            f"it holds: {_excerpt(raw)}"
+        )
+    else:
+        if not 3 <= len(entries) <= 5:
+            problems.append(
+                f"the plan has {len(entries)} direction(s); three to five are required"
+            )
+        seen: set[str] = set()
+        for index, entry in enumerate(entries):
+            label = entry["slug"] or f"entry {index + 1}"
+            for field in ("focus", "slug", "finding"):
+                if not entry[field]:
+                    problems.append(f"{label}: `{field}` is empty")
+            slug = entry["slug"]
+            if slug and not RESEARCH_SLUG.fullmatch(slug):
+                problems.append(
+                    f"{label}: `slug` must be lower-case letters, digits and dashes"
+                )
+            if slug and slug in seen:
+                problems.append(f"{label}: `slug` is used twice")
+            seen.add(slug)
+            path = f"research/{slug}.md"
+            if slug and RESEARCH_SLUG.fullmatch(slug) and not (
+                ctx.exists(path) and ctx.read_text(path).strip()
+            ):
+                problems.append(f"{label}: {path} is missing or empty")
+    used = int(ctx.facts.get("research_attempts_used", 0)) + 1
+    report = "\n".join(f"- {problem}" for problem in problems)
+    ctx.write_text("research-review.txt", report or "ok\n")
+    ctx.set_fact(
+        "research_review", report or "(every direction is answered and written down)"
+    )
+    if not problems:
+        return "proceed"
+    if used >= allowed:
+        raise ValueError(
+            f"the research is still not usable after {used} attempt(s):\n{report}"
+        )
+    ctx.set_fact("research_attempts_used", used)
+    return "reloop"
+
+
 def _revision_source(identifier: str) -> str:
     """The source of the mode being revised, so a revision starts from it."""
     try:
@@ -219,6 +333,27 @@ Rules:
 - Every read must be written by some node, and every declared knob consumed.
 - `closest_existing` must name a mode from the survey, or be 'none' if none is close.
 """
+
+
+RESEARCH_SCHEMA = """\
+Write one JSON array and nothing else, one object per direction:
+
+[{"focus": "<the question this direction answers>",
+  "slug": "<a file-name-safe name for it>",
+  "finding": "<what the answer is, in one paragraph>"}]
+
+Rules:
+- Between three and five directions. Fewer than three is not research.
+- `slug` is lower-case letters, digits and dashes only, and `research/<slug>.md` is
+  where that direction's long form belongs.
+- `finding` states what the answer *is*. A direction nobody could answer says so in
+  the finding ("not answered: <why>") rather than being dropped or invented.
+- A plan that says subagents are still working is not a plan: by the time you answer,
+  the work is either done or it is not.
+"""
+
+#: A slug a research file can be named by.
+RESEARCH_SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
 
 def survey(ctx: Any) -> dict[str, Any]:
@@ -366,6 +501,47 @@ def ctx_existing() -> list[str]:
     return ids
 
 
+def _package_relative(relative: str, name: str) -> str:
+    """One emit path, as a path inside the package's own directory.
+
+    The prompt asks for a path relative to the package root, and a model that reads
+    "relative" as "relative to the checkout" answers with
+    `refactory/refactory_packages/<name>/mode.py`. Joined onto the package root, that
+    nests the package inside itself and the mistake surfaces four directories away as
+    "__init__.py is missing". The prefix is stripped rather than accepted as a nesting,
+    and a path that cannot be made package-relative is refused by name instead of
+    written somewhere nobody looks.
+    """
+    from pathlib import PurePosixPath
+
+    raw = str(relative).replace("\\", "/").strip()
+    parts = [part for part in PurePosixPath(raw).parts if part not in ("", ".")]
+    if raw.startswith("/") or not parts:
+        raise ValueError(
+            f"the emit answer names {relative!r}, which is not a path inside the "
+            f"package; write it relative to the package root, e.g. `mode.py`"
+        )
+    # Longest first, so `refactory/refactory_packages/<name>/x.py` loses the whole
+    # prefix and `<name>/x.py` only its own.
+    for prefix in (
+        ("refactory", "refactory_packages", name),
+        (".factory", "packages", name),
+        ("refactory_packages", name),
+        ("refactory", "refactory_packages"),
+        (".factory", "packages"),
+        (name,),
+    ):
+        if tuple(parts[: len(prefix)]) == prefix:
+            parts = parts[len(prefix):]
+            break
+    if not parts or ".." in parts:
+        raise ValueError(
+            f"the emit answer names {relative!r}, which does not resolve to a file "
+            f"inside the package root; write paths relative to it, e.g. `mode.py`"
+        )
+    return str(PurePosixPath(*parts))
+
+
 def materialise(ctx: Any) -> dict[str, Any]:
     """Turn the emit agent's answer into a package directory."""
     answer = ctx.read_text("emit.txt")
@@ -384,12 +560,13 @@ def materialise(ctx: Any) -> dict[str, Any]:
     root.mkdir(parents=True)
     written: list[str] = []
     for relative, content in files.items():
-        target = root / relative
+        inside = _package_relative(relative, name)
+        target = root / inside
         if not target.resolve().is_relative_to(root.resolve()):
             raise ValueError(f"{relative!r} escapes the package directory")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content)
-        written.append(relative)
+        written.append(inside)
     # What the writer records about where this came from, which outranks anything a
     # generated manifest claims about itself.
     (root / ".origin.json").write_text(
@@ -493,7 +670,11 @@ def check_package(
     problems: list[str] = []
     for required in REQUIRED_FILES:
         if not (root / required).exists():
-            problems.append(f"{required} is missing; a package needs one")
+            problems.append(
+                sandbox.missing_init(root)
+                if required == "__init__.py"
+                else f"{required} is missing from the package root {root}; a package needs one"
+            )
     if problems:
         return problems
 

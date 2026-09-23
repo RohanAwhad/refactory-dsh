@@ -76,6 +76,22 @@ class SandboxResult:
 
 
 # ── validation without execution ───────────────────────────────────────────
+def missing_init(root: Path) -> str:
+    """Why a package root has no `__init__.py`, and what it holds instead.
+
+    A package emitted with project-relative paths nests inside itself, and the
+    failure then reads as a missing file four directories away from the mistake. The
+    message therefore names the root it looked in, what that root holds, and the
+    convention the answer was supposed to follow.
+    """
+    found = sorted(entry.name for entry in root.iterdir())[:8]
+    return (
+        f"__init__.py is missing from the package root {root}; it holds "
+        f"{', '.join(found) if found else 'nothing'}. Paths in an emit answer are "
+        "relative to the package root, so `__init__.py` means exactly `__init__.py`."
+    )
+
+
 def ast_check(name: str, project: Path | None = None) -> list[str]:
     """Everything wrong with a package that can be seen without importing it."""
     project = Path(project or project_for_nodes())
@@ -85,7 +101,7 @@ def ast_check(name: str, project: Path | None = None) -> list[str]:
         return [f"no package {name!r} in either root"]
     files = sorted(root.glob("*.py"))
     if not (root / "__init__.py").exists():
-        return ["__init__.py is missing; a package needs one"]
+        return [missing_init(root)]
 
     parsed: dict[str, ast.Module] = {}
     for path in files:

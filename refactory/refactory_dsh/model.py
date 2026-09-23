@@ -21,6 +21,11 @@ from pathlib import Path
 
 from refactory_dsh.paths import dsh_root, node_bin
 
+#: The overlay that keeps a node's completion from backgrounding its own work. Checked
+#: in rather than generated, so what a node's model call is configured with is
+#: reviewable in the repository.
+NODE_PATCH = Path(__file__).resolve().parent / "patches" / "agent-node.yml"
+
 #: Wall-clock ceiling for one completion, before the subprocess is called hung.
 #:
 #: It is a hang detector rather than a budget: the authoring modes' agent nodes are
@@ -67,6 +72,11 @@ class DshModelClient:
             "apps/cli/src/bin.ts",
             "--profile",
             "headless",
+            # A node is one completion whose answer is the node's output, so a model
+            # that backgrounds its subagents and ends its turn has not done the node's
+            # work. See the overlay for why the base profile's default is wrong here.
+            "--patch",
+            str(NODE_PATCH),
         ]
         # The headless profile takes these for one invocation only: nothing is
         # written back to settings, so one optimized run against another model cannot

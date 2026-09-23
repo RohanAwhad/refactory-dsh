@@ -190,7 +190,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--brief", required=True)
     parser.add_argument("--attempts", type=int, default=3)
     parser.add_argument("--allow-regression", action="store_true")
-    parser.add_argument("--workdir", default=".factory/edit")
+    # Per package name, for the same reason a creation is: one fixed directory
+    # means runs overwrite each other's state.
+    parser.add_argument("--workdir", default="")
     parser.add_argument("--model", default="")
     parser.add_argument("--provider", default="", help="provider route that model is on")
     parser.add_argument(
@@ -213,7 +215,7 @@ def main(argv: list[str] | None = None) -> int:
                 mode=args.mode,
                 attempts=args.attempts,
                 allow_regression=args.allow_regression,
-                workdir=Path(args.workdir),
+                workdir=Path(args.workdir or f".factory/edit/{args.name}"),
                 model_timeout_s=int(args.model_timeout_s),
                 verdicts=parse_verdicts(args.verdict),
             ),

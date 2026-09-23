@@ -1,0 +1,16 @@
+# A node's model call must not background the work the node's contract depends on.
+#
+# The base profile's spawn subagent tool defaults to `backgroundMode: continuable`,
+# which is right for an agent that fans out and collects later, and wrong for a
+# refactory agent node: one node is one completion whose answer (or artifact) *is*
+# the node's output. An agent that spawns its researchers and then ends its turn
+# leaves the node with a sentence about subagents "running in the background" — which
+# is exactly what the research stage produced twice, with `research/` empty, before
+# this patch. The graph profile applies the same decision to the CEO for the same
+# reason; this applies it to every one-shot completion an agent node makes.
+- id: tool-subagent
+  config:
+    provider: spawn
+    toolName: subagent
+    backgroundMode: one-shot
+    enableRunInBackground: false

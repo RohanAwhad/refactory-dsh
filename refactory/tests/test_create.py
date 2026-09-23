@@ -18,6 +18,7 @@ from refactory_dsh import create_ops, sandbox
 from refactory_dsh.create_ops import parse_files
 from tests_support import (
     FakeModel,
+    RESEARCH_ANSWER,
     REVIEW_ANSWERS,
     create_answers,
     create_script,
@@ -86,10 +87,10 @@ def test_create_mode_is_itself_a_mode():
     graph = mode.graph()
     assert sorted(graph.nodes) == [
         "code_reviewer", "design", "emit", "fork_qa", "gate_overwatch", "gate_qa",
-        "gate_strategy", "health_checker", "join_qa", "materialise", "overwatch",
-        "prepare", "qa_director", "register", "report", "research_director", "review",
-        "smoke", "strategy_director", "survey", "synthesize_qa", "synthesize_strategy",
-        "validate",
+        "gate_research", "gate_strategy", "health_checker", "join_qa", "materialise",
+        "overwatch", "prepare", "qa_director", "record_findings", "register", "report",
+        "research_director", "review", "smoke", "strategy_director", "survey",
+        "synthesize_qa", "synthesize_strategy", "validate",
     ], "the graph is create-v2's phases, not v1's"
     assert {node.kind for node in graph.nodes.values()} == {
         "op", "agent", "gate", "fork", "join",
@@ -372,7 +373,7 @@ def test_the_gate_reloops_then_fails_loudly(tmp_path):
     """A design that never holds together is refused, with its reasons."""
     bad = _coherent()
     bad["considered"] = []
-    model = FakeModel([json.dumps(bad), json.dumps(bad), json.dumps(bad),
+    model = FakeModel([RESEARCH_ANSWER, json.dumps(bad), json.dumps(bad), json.dumps(bad),
                        "a design", render(good_files(NAME))])
     with pytest.raises(CreateError, match="design is still not coherent"):
         create_module.create(
@@ -526,3 +527,164 @@ def test_a_creation_asked_for_a_data_node_is_checked_for_one():
         )
     finally:
         _shutil.rmtree(root, ignore_errors=True)
+
+
+# ── the path convention (#65) ──────────────────────────────────────────────
+#
+# An emit answer is written relative to the package's own root, and a model that
+# reads "relative path" as relative to the checkout writes
+# `refactory/refactory_packages/<name>/mode.py`. Joined onto the package root that
+# nested the package inside itself, and the run then failed with "__init__.py is
+# missing" four directories away from the mistake — with the guard passing, because
+# the nested path really is inside the root.
+
+
+@pytest.mark.parametrize("prefix", [
+    "{name}/",
+    "refactory/refactory_packages/{name}/",
+    "refactory_packages/{name}/",
+    ".factory/packages/{name}/",
+])
+def test_a_leading_package_prefix_is_stripped(tmp_path, prefix):
+    from refactory_dsh.nn import RunContext
+
+    workdir = tmp_path / "run"
+    workdir.mkdir()
+    stem = prefix.format(name=NAME)
+    (workdir / "emit.txt").write_text(
+        f"===FILE: {stem}__init__.py===\nfrom refactory_dsh.nn import Package\n"
+        f"===FILE: {stem}ops.py===\n"
+    )
+    ctx = RunContext(workdir, facts={"name": NAME}, task={})
+    ctx._declared = ("staging/manifest.json",)
+    ctx._declared_facts = ("package_path", "files")
+    produced = create_ops.materialise(ctx)
+    assert sorted(produced["files"]) == ["__init__.py", "ops.py"], (
+        "the prefix restates the package root, so it must not become a directory"
+    )
+    root = Path(produced["package_path"])
+    assert (root / "__init__.py").exists()
+    assert not (root / "refactory").exists()
+
+
+def test_an_emit_path_that_cannot_be_package_relative_is_refused():
+    for bad in ("/etc/passwd", "../outside.py", ""):
+        with pytest.raises(ValueError, match="relative"):
+            create_ops._package_relative(bad, NAME)
+    # A subdirectory inside the package is legitimate and stays one.
+    assert create_ops._package_relative("modes/counter.py", NAME) == "modes/counter.py"
+
+
+def test_the_missing_manifest_reason_names_the_root_and_what_is_there(tmp_path):
+    """The retry prompt has to say something the model can act on.
+
+    "…is missing; a package needs one" is true and useless when the mistake is a
+    path four directories long.
+    """
+    from refactory_dsh import sandbox
+
+    nested = tmp_path / "pkg" / "refactory" / "refactory_packages" / "pkg"
+    nested.mkdir(parents=True)
+    (nested / "mode.py").write_text("X = 1\n")
+    message = sandbox.missing_init(tmp_path / "pkg")
+    assert str(tmp_path / "pkg") in message
+    assert "refactory" in message, "the message must say what the root holds instead"
+    assert "relative to the package root" in message
+
+
+def test_each_package_gets_its_own_run_directory(monkeypatch, capsys):
+    """Two creations must not share one workdir (#64).
+
+    `--workdir` defaulted to the fixed `.factory/create`, so a second run wrote its
+    `brief.json`, research and strategy documents over the first one's — and a
+    cancelled run's leftovers were what the next run read.
+    """
+    seen: list[Path] = []
+
+    class Result:
+        def describe(self) -> dict:
+            return {}
+
+    monkeypatch.setattr("refactory_dsh.model.DshModelClient", lambda **kwargs: None)
+    monkeypatch.setattr(
+        create_module, "create",
+        lambda config, client=None: (seen.append(Path(config.workdir)), Result())[1],
+    )
+    for name in ("one_pack", "two_pack"):
+        assert create_module.main(["--name", name, "--brief", "count"]) == 0
+    assert seen[0] != seen[1], "two packages shared one run directory"
+    assert seen[0].parts[-2:] == ("create", "one_pack")
+    assert seen[1].parts[-2:] == ("create", "two_pack")
+    capsys.readouterr()
+
+
+# ── the research stage (#63) ───────────────────────────────────────────────
+#
+# The stage that grounds the design in facts produced nothing, twice, in independent
+# runs: `research/` was empty and `research-plan.json` held a prose status message
+# about subagents "running in the background". `writes=("research-plan.json",)` is
+# satisfied by any bytes, so nothing noticed.
+
+
+def _research_ctx(workdir: Path, plan: str) -> object:
+    from refactory_dsh.nn import RunContext
+
+    workdir.mkdir(parents=True, exist_ok=True)
+    (workdir / "research-plan.json").write_text(plan)
+    ctx = RunContext(workdir, knobs={"research_attempts": 2}, facts={}, task={})
+    ctx._declared = ("research/", "research-review.txt")
+    ctx._declared_facts = ("findings_recorded",)
+    return ctx
+
+
+def test_the_research_gate_refuses_prose_in_the_plan(tmp_path):
+    ctx = _research_ctx(tmp_path, "research: the subagents are running in the background")
+    assert create_ops.gate_research(ctx) == "reloop"
+    review = (tmp_path / "research-review.txt").read_text()
+    assert "not a JSON array" in review
+    assert "running in the background" in review, (
+        "the retry must be shown what it wrote, or it writes the same thing again"
+    )
+    assert "running in the background" in ctx.facts["research_review"]
+
+
+def test_a_plan_whose_findings_were_never_written_is_refused(tmp_path):
+    plan = json.dumps([
+        {"focus": "one", "slug": "one", "finding": "answered"},
+        {"focus": "two", "slug": "two", "finding": "answered"},
+        {"focus": "three", "slug": "three", "finding": "answered"},
+    ])
+    ctx = _research_ctx(tmp_path, plan)
+    # `record_findings` is what puts them on disk; without it the gate refuses.
+    assert create_ops.gate_research(ctx) == "reloop"
+    assert "research/one.md is missing or empty" in (tmp_path / "research-review.txt").read_text()
+    create_ops.record_findings(ctx)
+    assert create_ops.gate_research(ctx) == "proceed"
+    assert (tmp_path / "research/one.md").read_text().strip().endswith("answered")
+
+
+def test_a_finding_a_subagent_already_wrote_is_left_alone(tmp_path):
+    plan = json.dumps([
+        {"focus": "one", "slug": "one", "finding": "the short version"},
+    ])
+    ctx = _research_ctx(tmp_path, plan)
+    (tmp_path / "research").mkdir()
+    (tmp_path / "research/one.md").write_text("the long form a subagent wrote\n")
+    produced = create_ops.record_findings(ctx)
+    assert produced["findings_recorded"] == []
+    assert "long form" in (tmp_path / "research/one.md").read_text()
+
+
+def test_a_plan_that_stops_being_a_plan_fails_loudly(tmp_path):
+    ctx = _research_ctx(tmp_path, "still prose")
+    assert create_ops.gate_research(ctx) == "reloop"
+    with pytest.raises(ValueError, match="still not usable after 2 attempt"):
+        create_ops.gate_research(ctx)
+
+
+def test_the_research_prompt_states_the_shape_and_the_retry(tmp_path):
+    """The model has to be told the array it owes, and what was wrong last time."""
+    prompt = CreateMode().build().nodes["research_director"].prompt_template
+    assert "research-plan.json" in prompt
+    assert '"slug"' in prompt and '"finding"' in prompt
+    assert "{{research_review}}" in prompt

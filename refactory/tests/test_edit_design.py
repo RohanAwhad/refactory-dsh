@@ -22,6 +22,7 @@ from refactory_dsh.design_ops import ARTIFACTS
 from refactory_dsh.edit import EditConfig, EditMode
 from refactory_dsh.run import run_node
 from tests_support import (
+    RESEARCH_ANSWER,
     REVIEW_ANSWERS,
     FakeModel,
     create_answers,
@@ -163,7 +164,9 @@ def test_a_revision_of_a_mode_that_does_not_run_is_refused(monkeypatch):
 def _design_answers(emit: list[str]) -> list[str]:
     """Every answer design-v2's agents need, in the order the graph asks."""
     return [
-        "research: what has to be learned before this artifact is designed",
+        # The research answer is the plan array its gate checks, for the same reason
+        # create's fixture is: a prose answer is the failure the gate catches.
+        RESEARCH_ANSWER,
         "perspectives: the simplest thing that passes the check",
         "one plan: the files, and how the check exercises them",
         "the design document",
@@ -176,9 +179,9 @@ def test_the_design_graph_is_a_different_shape_from_a_package_one():
     graph = DesignMode().graph()
     assert sorted(graph.nodes) == [
         "check", "code_reviewer", "design_doc", "emit", "fork_qa", "gate_overwatch",
-        "gate_qa", "gate_strategy", "health_checker", "join_qa", "materialise",
-        "overwatch", "prepare", "qa_director", "report", "research_director",
-        "strategy_director", "synthesize_qa", "synthesize_strategy",
+        "gate_qa", "gate_research", "gate_strategy", "health_checker", "join_qa",
+        "materialise", "overwatch", "prepare", "qa_director", "record_findings", "report",
+        "research_director", "strategy_director", "synthesize_qa", "synthesize_strategy",
     ], "the graph is design-v2's phases, not v1's"
     assert graph.nodes["check"].evaluator.endswith("check_artifact")
     assert "register" not in graph.nodes, "an artifact is not a package"
@@ -354,7 +357,9 @@ def _smoke_run(tmp_path, monkeypatch, *, scores, revision="counting_pack/fixed_s
     (workdir / ".refactory" / "declarations.json").write_text(
         json.dumps(_SMOKE_DECLARATIONS)
     )
-    facts = {"name": "phase_pack", "revision_of": revision}
+    # A shipped, deterministic package, so the node under test does not depend on
+    # anything this machine happened to have created.
+    facts = {"name": "circle_packing", "revision_of": revision}
     if package_path is not None:
         facts["package_path"] = str(package_path)
     (workdir / "facts.json").write_text(json.dumps(facts))
@@ -373,7 +378,7 @@ def test_the_smoke_node_refuses_a_revision_that_scores_lower(tmp_path, monkeypat
     from refactory_dsh.run import run_node
 
     workdir = _smoke_run(tmp_path, monkeypatch, scores={
-        "phase_pack/countup": 0.4,
+        "circle_packing/adaptive": 0.4,
         "counting_pack/fixed_step": 0.9,
     })
     with pytest.raises(ValueError, match="scores 0.4 where counting_pack/fixed_step scores 0.9"):
@@ -396,7 +401,7 @@ def test_the_smoke_node_accepts_the_same_revision_when_the_trade_is_intended(
     workdir = _smoke_run(
         tmp_path, monkeypatch, allow=True,
         package_path=package,
-        scores={"phase_pack/countup": 0.4, "counting_pack/fixed_step": 0.9},
+        scores={"circle_packing/adaptive": 0.4, "counting_pack/fixed_step": 0.9},
     )
     produced = run_node("refactory_dsh.create_ops:smoke", workdir=workdir, node_id="smoke")
     assert produced["regressed"] is True
@@ -411,7 +416,7 @@ def test_an_improvement_is_not_a_regression(tmp_path, monkeypatch):
     from refactory_dsh.run import run_node
 
     workdir = _smoke_run(tmp_path, monkeypatch, scores={
-        "phase_pack/countup": 1.0,
+        "circle_packing/adaptive": 1.0,
         "counting_pack/fixed_step": 0.9,
     })
     produced = run_node("refactory_dsh.create_ops:smoke", workdir=workdir, node_id="smoke")
@@ -425,7 +430,7 @@ def test_a_revision_of_an_unscored_mode_is_recorded_as_uncompared(tmp_path, monk
 
     workdir = _smoke_run(
         tmp_path, monkeypatch, revision="default_pack/design",
-        scores={"phase_pack/countup": 0.4},
+        scores={"circle_packing/adaptive": 0.4},
     )
     produced = run_node("refactory_dsh.create_ops:smoke", workdir=workdir, node_id="smoke")
     assert produced["before_score"] is None
@@ -479,7 +484,7 @@ def test_a_revision_of_a_mode_that_calls_a_model_is_not_refused_on_one_sample(
     try:
         workdir = _smoke_run(
             tmp_path, monkeypatch, revision="agent_probe/draft",
-            scores={"phase_pack/countup": 0.4},
+            scores={"circle_packing/adaptive": 0.4},
         )
         produced = run_node("refactory_dsh.create_ops:smoke", workdir=workdir, node_id="smoke")
         assert produced["before_score"] is None
@@ -532,7 +537,7 @@ def test_a_comparison_with_no_package_path_writes_no_provenance(tmp_path, monkey
     stray.unlink(missing_ok=True)
     workdir = _smoke_run(
         tmp_path, monkeypatch, revision="default_pack/design",
-        scores={"phase_pack/countup": 0.4},
+        scores={"circle_packing/adaptive": 0.4},
     )
     run_node("refactory_dsh.create_ops:smoke", workdir=workdir, node_id="smoke")
     assert not stray.exists(), "the comparison wrote provenance into the working directory"

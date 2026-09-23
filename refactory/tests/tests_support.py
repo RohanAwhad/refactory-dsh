@@ -6,6 +6,8 @@ package rather than two copies that drift apart.
 
 from __future__ import annotations
 
+import json
+
 _INIT = '''\
 """A generated package."""
 from refactory_dsh.nn import Package
@@ -143,7 +145,27 @@ def strategy_answer(name: str) -> str:
 
 
 #: The answers create-v2's non-emit agents give, in the order the graph asks.
-RESEARCH_ANSWER = "research: the questions that matter, and what the checkout answers"
+#:
+#: The research answer is the plan array the gate checks, not a sentence about having
+#: researched: a prose answer is exactly the failure the gate exists to catch, so a
+#: fixture that fed one would be testing the bug.
+RESEARCH_ANSWER = json.dumps([
+    {
+        "focus": "which API surface the package builds against",
+        "slug": "api-surface",
+        "finding": "the mode API in the checkout: nn.Mode, nn.Graph, ctx.knob/read_json/write_json",
+    },
+    {
+        "focus": "what already exists that this resembles",
+        "slug": "existing-modes",
+        "finding": "circle_packing/adaptive is the closest existing mode and is not this",
+    },
+    {
+        "focus": "the acceptance criteria the brief asks for",
+        "slug": "acceptance",
+        "finding": "the mode must count to a target and score how close it landed",
+    },
+])
 PERSPECTIVES_ANSWER = "perspectives: the simplest thing that works, and the criteria"
 DESIGN_ANSWER = "a design"
 #: The three reviews and the overwatch pass. Overwatch states its verdict because

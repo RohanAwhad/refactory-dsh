@@ -37,15 +37,22 @@ What happens, in order — and the gates are the point:
 
 1. **survey** — what already exists, so the model can build on it rather than
    duplicate it. The survey names the installed modes.
-2. **strategy** — the model considers **three** approaches and picks one, with a
+2. **research** — between three and five questions the design has to answer, each one
+   answered and written to `research/<slug>.md`, collected in `research-plan.json` as
+   an array of `{focus, slug, finding}`. A **gate** checks that the plan is a plan and
+   that every finding it names is on disk, and reloops with the reasons otherwise: the
+   stage exists to ground the design in facts, and a node whose contract is
+   `writes=("research-plan.json",)` is satisfied by any bytes at all, including a
+   sentence about subagents still working.
+3. **strategy** — the model considers **three** approaches and picks one, with a
    reason and a score. The prompt carries the survey, the JSON schema, and the
    distinction between a gate and an op.
-3. **review** — a gate that *refuses* a thin design and reloops with its reasons:
+4. **review** — a gate that *refuses* a thin design and reloops with its reasons:
    one approach only, no chosen/why/score, a `closest_existing` that is not
    installed, a design with no knobs, a graph that does not hold together (V2), a
    gate declared with a `call` instead of an `evaluator`, or an answer that is not
    JSON.
-4. **emit** → **materialise** → **validate** → **register** → **smoke**.
+5. **emit** → **materialise** → **validate** → **register** → **smoke**.
 
 `annealing_pack` in this repository is the output of exactly that command, and its
 `__init__.py` records what it was built on:
