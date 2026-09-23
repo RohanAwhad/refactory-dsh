@@ -144,6 +144,9 @@ def _walk(graph: Any) -> list[tuple[int, Node]]:
         if node.kind == "fork":
             for target in node.targets:
                 visit(target, depth + 1)
+        if node.kind == "data":
+            # The subgraph is reached through the node, not through an edge.
+            visit(node.subgraph_entry, depth + 1)
         for target in outgoing.get(node_id, []):
             visit(target, depth)
 
@@ -215,17 +218,19 @@ def render_pipeline(shape: dict[str, Any]) -> str:
             detail = code(f"{node.gate_kind} gate")
             if node.gate_kind == "user":
                 detail += ' <strong>— a person answers this one</strong>'
-        elif node.kind == "fork":
-            branches: list[str] = []
+        elif node.kind in ("fork", "data"):
+            nested: list[str] = []
             index += 1
             while index < len(walk) and walk[index][0] > depth:
-                branch_depth, branch = walk[index]
-                branches.append(f'<li>{node_row(branch, branch_depth - depth)}</li>')
+                nested_depth, nested_node = walk[index]
+                nested.append(f'<li>{node_row(nested_node, nested_depth - depth)}</li>')
                 index += 1
+            label = "branches, together" if node.kind == "fork" else "each item runs this"
+            detail = f' <span class="muted">— {esc(label)}</span>'
             rows.append(
-                f'<li class="phase phase-fork"><div class="phase-head">{kind_chip("fork")}'
-                f'<span class="phase-id">{esc(node.id)}</span></div>'
-                f'<ul class="branches">{"".join(branches)}</ul></li>'
+                f'<li class="phase phase-{esc(node.kind)}"><div class="phase-head">{kind_chip(node.kind)}'
+                f'<span class="phase-id">{esc(node.id)}</span>{detail}</div>'
+                f'<ul class="branches">{"".join(nested)}</ul></li>'
             )
             continue
         rows.append(node_row(node, depth, detail))
@@ -392,6 +397,48 @@ def render_recipes() -> str:
     return "".join(blocks)
 
 
+def render_task_hooks() -> str:
+    """The Task protocol's four hooks, from the class that declares them."""
+    from refactory_dsh.task import Task
+
+    rows = []
+    for name in ("instances", "setup", "prompt", "verify"):
+        hook = getattr(Task, name)
+        doc = (hook.__doc__ or "").strip().splitlines()
+        rows.append((f"{name}()", doc[0] if doc else ""))
+    return render_named(rows, "hook", "what it is for")
+
+
+def render_ledger_kinds() -> str:
+    """The intent ledger's entry kinds, from the module that owns them."""
+    from refactory_dsh import steering
+
+    kinds = [
+        ("seed", steering.SEED_KIND if hasattr(steering, "SEED_KIND") else "seed",
+         "what the run is for, in the asker's words; written once, before the lowering"),
+        ("note", "info | correction | constraint",
+         "something said while it runs; a constraint must be respected, not merely known"),
+        ("verdict", "verdict",
+         "the answer a gate was routed on, so a resumed run replays it instead of asking again"),
+    ]
+    return render_named([(k, f"{what} — {why}") for k, what, why in kinds], "entry", "what it carries")
+
+
+def render_drift_gates() -> str:
+    """Which gate proves what, so a reader knows what "tested" means here."""
+    rows = (
+        ("uv run python -m pytest refactory/tests -q", "the glue: the language, the modes, the loop, the console"),
+        ("pnpm run test", "the runtime: the spine, the bundles, the client"),
+        ("uv run python -m pytest refactory/tests -q --run-integration", "one mode on both runtimes, compared fact by fact"),
+        ("uv run python -m refactory_dsh.tools.check_recipes", "every command this page shows, executed"),
+        ("uv run python -m refactory_dsh.tools.gen_tutorial --check", "this page matches the code it describes"),
+        ("uv run python -m refactory_dsh.tools.gen_api_reference --check", "the API reference matches the signatures"),
+        ("pnpm run verify-config-catalog", "every config field is documented and matches its schema"),
+        ("pnpm run test:docs", "the documentation gates"),
+    )
+    return render_named(rows, "gate", "what it proves")
+
+
 def render(project: Path | None = None) -> str:
     """The whole page."""
     project = Path(project or REPO_ROOT)
@@ -427,6 +474,12 @@ def render(project: Path | None = None) -> str:
         steps=render_steps(),
         console_verbs=render_console_verbs(),
         recipes=render_recipes(),
+        dataset_pipeline=render_pipeline(
+            next(entry for entry in entries if entry["id"] == "dataset_probe/dataset")
+        ),
+        task_hooks=render_task_hooks(),
+        ledger_kinds=render_ledger_kinds(),
+        drift_gates=render_drift_gates(),
         ceo_verbs=render_ceo_verbs(),
         loop_help=esc(loop_help),
         create_help=esc(create_help),
@@ -578,9 +631,13 @@ TEMPLATE = """<!DOCTYPE html>
       <li><a href="#shape">The four steps</a></li>
       <li><a href="#mode">What a mode is</a></li>
       <li><a href="#modes">Every mode</a></li>
+      <li><a href="#semantics">How it runs</a></li>
       <li><a href="#create">create-v2</a></li>
       <li><a href="#design">design-v2</a></li>
       <li><a href="#loop">The outer loop</a></li>
+      <li><a href="#dataset">Datasets and Tasks</a></li>
+      <li><a href="#steer">Steering</a></li>
+      <li><a href="#drift">Keeping it honest</a></li>
       <li><a href="#read">Reading a run</a></li>
       <li><a href="#gui">Asking the CEO (GUI)</a></li>
       <li><a href="#commands">Every command</a></li>
@@ -811,6 +868,117 @@ TEMPLATE = """<!DOCTYPE html>
         <strong>A person's gate is still a person's.</strong> If a mode has a <code>user</code> gate (create's
         <code>gate_strategy</code> is one), the runtime asks <em>you</em> — the terminal answerer in
         <code>interactive</code>, or the GUI's own dialog. The CEO cannot answer it, and neither can the model.
+      </div>
+    </section>
+
+    <section id="semantics">
+      <h2>How a mode becomes something that runs</h2>
+      <p class="lede">One page of semantics, because everything else follows from it: a
+      mode is data, the data is lowered to one IR, and two runtimes execute that IR.</p>
+      <svg viewBox="0 0 900 260" role="img" aria-label="A mode is lowered to an IR, which two runtimes execute and report facts from" style="width:100%;height:auto;margin:1rem 0">
+        <defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="currentColor"/></marker></defs>
+        <g fill="none" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow)" opacity="0.7">
+          <path d="M210,70 H290"/><path d="M450,70 H530"/>
+          <path d="M490,120 V160"/><path d="M490,200 V232"/>
+        </g>
+        <g font-size="13" fill="currentColor">
+          <rect x="20" y="30" width="190" height="80" rx="10" fill="var(--card)" stroke="var(--line)"/>
+          <text x="34" y="56" font-weight="700">a mode (Python)</text>
+          <text x="34" y="76">nodes · knobs · score()</text>
+          <text x="34" y="96" opacity="0.7">state_dict() → JSON</text>
+
+          <rect x="300" y="30" width="150" height="80" rx="10" fill="var(--card)" stroke="var(--line)"/>
+          <text x="314" y="56" font-weight="700">the IR</text>
+          <text x="314" y="76">Workflow.to_dict()</text>
+          <text x="314" y="96" opacity="0.7">lowering.py</text>
+
+          <rect x="540" y="18" width="170" height="46" rx="10" fill="var(--card)" stroke="var(--line)"/>
+          <text x="554" y="46">walker — in-process</text>
+          <rect x="540" y="76" width="170" height="46" rx="10" fill="var(--card)" stroke="var(--line)"/>
+          <text x="554" y="104">DSH — the one that ships</text>
+
+          <rect x="360" y="160" width="260" height="40" rx="10" fill="var(--card)" stroke="var(--line)"/>
+          <text x="374" y="185">facts.json — what the run produced</text>
+          <rect x="360" y="212" width="260" height="40" rx="10" fill="var(--card)" stroke="var(--line)"/>
+          <text x="374" y="237">score(facts) — the number</text>
+        </g>
+      </svg>
+      <ul>
+        <li><strong>The mode is data.</strong> Its architecture and its parameters are one
+        serializable dict, so an optimizer can propose <code>set_knob</code> or
+        <code>duplicate</code> as a typed edit, and a candidate is a value you can diff —
+        not a code change somebody has to read.</li>
+        <li><strong>The IR is the one interface.</strong> <code>lowering.py</code> turns the
+        state into <code>Workflow.to_dict()</code>; the runtime knows nothing about
+        <code>Mode</code>, <code>Knob</code> or <code>score()</code>. That is why the same
+        graph runs on both runtimes and why &quot;a mode means the same thing&quot; is a
+        testable claim rather than a hope.</li>
+        <li><strong>Facts, then a number.</strong> A node declares what it reads, writes and
+        produces; the executor enforces it, and <code>score()</code> reads the facts. A run
+        that lied about its artifacts fails instead of scoring.</li>
+      </ul>
+    </section>
+
+    <section id="dataset">
+      <h2>Datasets, Tasks and data nodes</h2>
+      <p class="lede">A mode can walk a subgraph once per <em>item</em> — one benchmark
+      instance, one row of a file, one directory — and a <strong>Task</strong> can supply
+      those items and judge each pass.</p>
+      {dataset_pipeline}
+      <p>Each pass writes the item to <code>current_item.json</code> in the run directory, so
+      an op or an agent node reads the item it is working on rather than being told it in a
+      prompt. Items come from <code>inline_items</code>, a <code>source_path</code> read as
+      <code>directory</code>/<code>jsonl</code>/<code>csv</code>, or the bound Task's
+      <code>instances()</code>; <code>limit</code> caps them; a named source that is missing is
+      refused by name, because an empty selection and an unbound source must not look alike.
+      The verdicts are recorded as <code>item_scores</code>, and <code>score()</code> reads
+      what the Task decided instead of a number the graph guessed.</p>
+      <h3>The Task protocol</h3>
+      {task_hooks}
+      <p>Both runtimes load items through one implementation
+      (<code>nn.executor.load_items</code>), so the items a mode selects do not depend on which
+      runtime is running it, and the equivalence test runs one data-driven mode on each and
+      compares the facts. <a href="../docs/datasets.md">datasets.md</a> is the long form.</p>
+    </section>
+
+    <section id="steer">
+      <h2>Steering a run</h2>
+      <p class="lede">A run is accountable to what it was asked for. The <strong>intent
+      ledger</strong> is where that lives: it is seeded before the lowering, folded into every
+      agent node's prompt, and read back when the run is judged.</p>
+      <figure class="example">
+        <figcaption>steering is a console verb, so the CEO does the same thing when you ask in words</figcaption>
+        <div class="cmd"><pre><code>uv run refactory run blurb/writer --intent "a blurb about teapots"
+uv run refactory steer --run &lt;id&gt; --note "keep the step small" --kind constraint
+uv run refactory steer --run &lt;id&gt; --verdict gate_strategy=proceed</code></pre>
+        <button class="copy" type="button" data-copy>copy</button></div>
+      </figure>
+      {ledger_kinds}
+      <ul>
+        <li><strong>The seed is written before the lowering</strong>, because the lowering is
+        what carries it into the prompts; seeding afterwards would produce a run nobody steered.</li>
+        <li><strong>A verdict is a decision the run routed on.</strong> Writing it down is what
+        makes a resumed run the same run: re-asking would produce a second answer to a question
+        already answered, and inventing one would produce a result nobody can account for.</li>
+        <li><strong>Fidelity is checked, not assumed.</strong> A ledger that is missing, empty or
+        holding the placeholder is reported, and given the run's agent outputs, a node that cited
+        no entry — or a dangling one — is caught. Whether the work <em>satisfies</em> the intent
+        still needs somebody to read it; that is what the gates are for.</li>
+      </ul>
+    </section>
+
+    <section id="drift">
+      <h2>Keeping it honest</h2>
+      <p class="lede">Two runtimes, generated documents and a page of commands are three ways
+      for a repository to start lying. Each one has a gate, and the gate is the answer to
+      &quot;is this tested?&quot;.</p>
+      {drift_gates}
+      <div class="callout">
+        <strong>The equivalence test is the interesting one.</strong> It runs the same mode on
+        the walker and on DSH and compares the facts, not the score: the two runtimes may differ
+        in <em>how</em> they run a graph — one process against many, sequential branches against
+        concurrent — and must not differ in what the run produced. Where they do differ, it is
+        written down in the spine's README and the Agent Notes rather than discovered later.
       </div>
     </section>
 
