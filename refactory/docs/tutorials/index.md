@@ -1,6 +1,6 @@
 # Tutorials
 
-Six walkthroughs, in the order a person meets the system. Each one is a sequence
+Seven walkthroughs, in the order a person meets the system. Each one is a sequence
 of commands that were run against this checkout, with the output they produced.
 
 The example running through all of them is **circle packing**: place circles on a
@@ -17,6 +17,7 @@ works.
 | 4 | [Ship it on DSH](04-ship-it-on-dsh.md) | the same mode scored by the runtime that ships |
 | 5 | [Drive it from the GUI](05-drive-it-from-the-gui.md) | a run started, authored, managed and steered from the conversation |
 | 6 | [Run it with a person](06-run-it-with-a-person.md) | a run paused at a gate only a person can answer |
+| 7 | [Pick and watch from the panel](07-pick-and-watch-from-the-panel.md) | a run chosen, started and watched from the browser |
 
 ---
 
@@ -32,22 +33,45 @@ root.
 ```
 
 ```
+adopted_exact/  The winner of a run of sympy_pack/exact, as a mode of its own.
+  adopted_exact/exact                    establish closed forms of sums with sympy and score what checked out
 annealing_pack/  Hill-climb a greedy circle packing by accepting non-worsening single-circle moves.
   annealing_pack/anneal                  hill-climb a greedy circle packing by accepting non-worsening moves
 circle_packing/  A population search over circle placements, and the task it scores.
   circle_packing/adaptive                population search over circle placements with a budget gate
-lean_pack/  Prove theorems in Lean 4 and score what the proof checker accepted.  [needs lean]
+counting_pack/  Two counting modes that score how close the count reached lands to a target.  [generated]
+  counting_pack/fixed_step               count up to a target in fixed steps; no RNG, so no seed knob
+  counting_pack/random_walk              count up to a target in reproducible random steps, one draw per step
+counting_tuned/  The winner of a run of counting_pack/fixed_step, as a mode of its own.
+  counting_tuned/fixed_step              count up to a target in fixed steps; no RNG, so no seed knob
+dataset_probe/  a probe mode that iterates a Task's items
+  dataset_probe/dataset                  iterate a Task's items and score the passes it verified
+default_pack/  Create a package, revise one, or design an artifact — from a brief.
+  default_pack/create                    design, emit and validate a whole package from a brief
+  default_pack/design                    design, emit and check a software artifact from a brief
+  default_pack/edit                      revise an existing mode from a brief, and check it did not regress
+lean_pack/  Prove theorems in Lean 4 and score what the proof checker accepted.
   lean_pack/prover                       prove a theorem in Lean and score what the Lean checker accepted
 loop_mode/  The optimizer loop itself as a graph of eight steps, runnable and searchable.
   loop_mode/loop                         The optimizer loop's eight steps as a runnable, searchable graph.
+phase_pack/  Count up to a target in reproducible random steps and score the count reached.  [generated]
+  phase_pack/countup                     count up to a target in reproducible random steps and score the count reached
+review_pack/  Draft a short note, check it, and let a person approve it before it is published.
+  review_pack/review                     draft, check, and let a person approve before publishing
+revised_pack/  A population search over circle placements that restarts from a jittered sample when it stalls.  [generated]
+  revised_pack/adaptive                  population search over circle placements with a budget gate
 sympy_pack/  Establish closed forms of sums exactly with sympy, and score what checked out.
   sympy_pack/exact                       establish closed forms of sums with sympy and score what checked out
 ```
 
-`[needs lean]` is the toolchain declaration doing its job: `lean_pack` declares the
-Lean proof checker in its `tools.py`, this machine does not have one, and the listing
-says so instead of hiding the package. The mode still loads, and running it fails at
-its first step with the command that installs Lean — see
+Marks in that listing say what is worth knowing before you run something. `[generated]`
+is trust: the package was written by `create`-mode rather than by hand, so it is a
+candidate to read before you rely on it. A package that declares a tool this machine
+lacks is marked in the `[needs …]` position: `lean_pack` declares the Lean proof
+checker in its `tools.py`, and a machine without one sees `lean_pack/  …  [needs lean]` instead of being left to
+discover it from a failed run. This machine *has* Lean (`~/.elan/bin/lean`), so the
+listing above carries no marker — the mark says what is missing here, not what the
+package needs. Installing and declaring a tool that is not Python is
 [packing a tool that is not Python](../packing-tools.md).
 
 **Run one inner run** — a mode, evaluated once:
