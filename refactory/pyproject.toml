@@ -12,6 +12,14 @@ dependencies = ["pydantic>=2", "PyYAML>=6", "structlog>=24"]
 [project.scripts]
 refactory = "refactory_dsh.cli:main"
 
+# The same test dependencies the root project declares, so `uv run python -m pytest
+# tests -q` also works from inside this directory: `uv run` uses the nearest
+# pyproject.toml, and without this a reader who `cd refactory` gets a second
+# environment with no pytest in it. Every *documented* command runs from the
+# repository root, where the one project lives.
+[dependency-groups]
+dev = ["pytest>=8", "sympy>=1.12"]
+
 [tool.setuptools.packages.find]
 include = ["refactory_dsh*", "refactory_packages*"]
 
