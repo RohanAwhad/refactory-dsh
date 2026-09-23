@@ -21,6 +21,11 @@ works.
 
 ---
 
+**Prefer one page in a browser?** [`docs/tutorial.html`](../tutorial.html) is the same
+material as a generated HTML tour: every mode, both v2 pipelines, the outer loop and
+all of its options, and how to ask the CEO. It is built from the code by
+`python -m refactory_dsh.tools.gen_tutorial`, so it cannot drift.
+
 ## The shape of it: create → use → optimize → use it again
 
 Four steps, four commands, one mode. This is the whole system; the tutorials below
