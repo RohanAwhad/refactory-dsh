@@ -26,8 +26,15 @@ export const name = 'graph-runner'
 /** Core services required before the CEO turn can start. */
 export const inject = ['agentDefaultModel', 'agents', 'sessions', GRAPH_STARTUP_SERVICE]
 
-/** The best score recorded by the mode's ops, or 0 when nothing was accepted. */
-function bestScore(workdir: string, mode: string): number {
+/**
+ * The best score the mode's ops recorded, or `null` when none recorded one.
+ *
+ * `null` rather than `0`: an authoring mode has no `score()`, and a run whose state
+ * file was never written measured nothing. Reporting either as `0` says "this scored
+ * zero", which is a different fact from "this was not measured" and the one a reader
+ * would act on.
+ */
+function bestScore(workdir: string, mode: string): number | null {
   const name = STATE_FILES[mode]
   const candidates = name ? [join(workdir, name)] : []
   for (const file of readdirSync(workdir)) {
@@ -40,7 +47,7 @@ function bestScore(workdir: string, mode: string): number {
       if (typeof data.best_score === 'number') return data.best_score
     } catch { /* not JSON yet */ }
   }
-  return 0
+  return null
 }
 
 /** What the spine last recorded about the cursor, or `undefined` when it recorded nothing. */

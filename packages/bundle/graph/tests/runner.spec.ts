@@ -159,9 +159,12 @@ describe('graph runner', () => {
     expect((JSON.parse(harness.out()) as { best_score: number }).best_score).toBe(2)
   })
 
-  it('scores zero when the only candidate is not JSON', async () => {
+  it('reports no score rather than zero when nothing recorded one', async () => {
+    // `gepa` names `gepa_state.json`; the file is absent and the sweep finds no other
+    // score. An authoring mode has no `score()` at all, so zero would say "scored zero"
+    // where the truth is "not measured".
     const harness = await bench({ mode: 'gepa', workdir: workdir({ 'broken.json': 'not json' }) })
-    expect((JSON.parse(harness.out()) as { best_score: number }).best_score).toBe(0)
+    expect((JSON.parse(harness.out()) as { best_score: number | null }).best_score).toBeNull()
   })
 
   it('reports empty final text when the turn produced none', async () => {
