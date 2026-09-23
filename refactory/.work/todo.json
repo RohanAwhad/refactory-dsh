@@ -721,6 +721,17 @@
       "commit": "c1b9b1ded2",
       "evidence": "The emit prompt states the convention (`__init__.py` means exactly `__init__.py`, not `<name>/__init__.py`, not `refactory/refactory_packages/<name>/__init__.py`, not `.factory/packages/<name>/__init__.py`). `_package_relative` strips a leading prefix that merely restates the package root, keeps a legitimate subdirectory, and refuses an absolute or `..` path by name. `sandbox.missing_init` names the root it looked in, what that root holds, and the convention, so the retry is actionable. Tests cover four prefixes, a subdirectory, the two refusals, and the message.",
       "observed": "43 passed (test_create.py)"
+    },
+    {
+      "id": "node-workdir",
+      "issue": 63,
+      "title": "A node's model call ran in the checkout, so an agent's artifacts landed in the repository",
+      "why": "The reviewing nodes are completions that spawn an agent with tools, and `DshModelClient` ran every completion with the checkout as its working directory. Relative paths the agent wrote therefore landed in the repository: the real create run left `reviews/code-review.md`, `reviews/health-check.md`, `reviews/qa.md`, `reviews/overwatch.md` and `reviews/overwatch-evidence/` at the checkout root while the run's own `reviews/` stayed empty. `synthesize_qa` reads the run directory, so it merged zero reviews, and the overwatch gate sent the build back to `emit` \u2014 a fifteen-minute reloop that looked like a model-quality problem. Found by the real run that proved the other five fixes.",
+      "verify": "pytest refactory/tests/test_executor.py refactory/tests/test_create.py -q",
+      "status": "done",
+      "commit": "aaf249b70a",
+      "evidence": "`DshModelClient.complete` takes the directory to run in and spawns the completion there; the walker passes the node's run directory (`_ask_model`, which asks a client without the argument plainly because the vendored `ModelClient` protocol is still text in, text out); a caller with no run directory gets the scratch directory rather than the checkout, and the launcher path is absolute now that the child's cwd is not the repository. Tests: the client records the run directory it was told to use and the artifact lands there; a minimal client without the argument still works; a full create run's completions all run in the run directory and its reviews are there rather than in the checkout. The stray `reviews/` the real run left is deleted, and the workspace-hygiene test is what keeps a regression visible.",
+      "observed": "760 passed, 10 skipped (refactory/tests)"
     }
   ],
   "verification": {
