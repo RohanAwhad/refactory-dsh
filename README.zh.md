@@ -77,8 +77,7 @@ uv run refactory ceo "one agent drafts a product blurb; one op checks its length
 `create` 就是 remote-factory 的 **create-v2**：研究阶段、**由你批准**的策略阶段、构建、 三个并行评审、对它们证据的审计，然后注册并做一次 smoke 运行。它会在 `.factory/packages/<name>` 写下一个 Python 包并注册它。
 
 - `--mode design`（默认）设计一个会被检查的**产物**，而不是包。它需要 `--check "<证明它能工作的命令>"`。
-- `--mode edit` 修订一个已有模式，并拒绝变差；它需要指名被修订的模式：
-  `--mode edit --revise <package>/<mode>`。
+- `--mode edit` 修订一个已有模式，并拒绝变差；它需要指名被修订的模式：`--mode edit --revise <package>/<mode>`。
 - 名字可以省略：不给 `--name` 时，你说的话就变成名字。
 - 在你说的话里要一次模型调用（"一个 agent 起草……"），生成的模式就会有一个 `agent` 节点； 否则它是确定性的——这是好事：离线的模式可以被搜索评估成百上千次。
 - `data` 节点与 `Task` 也用同样的方式提出，而 validate gate 会**检查**你确实拿到了它们： `--data-node` 与 `--task my_pack.tasks:MyTask`。
