@@ -66,21 +66,17 @@ root.
 **What can this checkout run?**
 
 ```bash
-.venv/bin/python -m refactory_dsh.registry list
+uv run refactory list
 ```
 
 ```
-adopted_exact/  The winner of a run of sympy_pack/exact, as a mode of its own.
-  adopted_exact/exact                    establish closed forms of sums with sympy and score what checked out
 annealing_pack/  Hill-climb a greedy circle packing by accepting non-worsening single-circle moves.
   annealing_pack/anneal                  hill-climb a greedy circle packing by accepting non-worsening moves
 circle_packing/  A population search over circle placements, and the task it scores.
   circle_packing/adaptive                population search over circle placements with a budget gate
-counting_pack/  Two counting modes that score how close the count reached lands to a target.  [generated]
+counting_pack/  Two counting modes that score how close the count reached lands to a target.
   counting_pack/fixed_step               count up to a target in fixed steps; no RNG, so no seed knob
   counting_pack/random_walk              count up to a target in reproducible random steps, one draw per step
-counting_tuned/  The winner of a run of counting_pack/fixed_step, as a mode of its own.
-  counting_tuned/fixed_step              count up to a target in fixed steps; no RNG, so no seed knob
 dataset_probe/  a probe mode that iterates a Task's items
   dataset_probe/dataset                  iterate a Task's items and score the passes it verified
 default_pack/  Create a package, revise one, or design an artifact — from a brief.
@@ -91,12 +87,8 @@ lean_pack/  Prove theorems in Lean 4 and score what the proof checker accepted.
   lean_pack/prover                       prove a theorem in Lean and score what the Lean checker accepted
 loop_mode/  The optimizer loop itself as a graph of eight steps, runnable and searchable.
   loop_mode/loop                         The optimizer loop's eight steps as a runnable, searchable graph.
-phase_pack/  Count up to a target in reproducible random steps and score the count reached.  [generated]
-  phase_pack/countup                     count up to a target in reproducible random steps and score the count reached
 review_pack/  Draft a short note, check it, and let a person approve it before it is published.
   review_pack/review                     draft, check, and let a person approve before publishing
-revised_pack/  A population search over circle placements that restarts from a jittered sample when it stalls.  [generated]
-  revised_pack/adaptive                  population search over circle placements with a budget gate
 sympy_pack/  Establish closed forms of sums exactly with sympy, and score what checked out.
   sympy_pack/exact                       establish closed forms of sums with sympy and score what checked out
 ```

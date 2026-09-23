@@ -34,7 +34,9 @@ def test_the_tutorial_matches_the_code():
 def test_the_tutorial_names_every_mode():
     """A mode nobody can find in the tutorial is a mode nobody uses."""
     page = TUTORIAL.read_text()
-    missing = [entry["id"] for entry in console.catalogue(project=PROJECT) if entry["id"] not in page]
+    # The page documents what a clone *ships*: `gen_tutorial.catalogue` leaves out the
+    # packages a machine made for itself, or the page would differ per machine.
+    missing = [entry["id"] for entry in gen_tutorial.catalogue(PROJECT) if entry["id"] not in page]
     assert missing == [], f"the tutorial does not document: {missing}"
 
 
@@ -90,9 +92,20 @@ def test_a_mode_the_registry_lists_is_not_claimed_to_call_a_model():
     """The page's central claim: only the agent-node modes make model calls."""
     page = TUTORIAL.read_text()
     deterministic = 0
-    for entry in console.catalogue(project=PROJECT):
+    for entry in gen_tutorial.catalogue(PROJECT):
         shape = gen_tutorial.mode_shape(entry["id"], PROJECT)
         if shape["agents"] == 0:
             deterministic += 1
-    assert deterministic >= 10, "the fixture modes went missing, so the claim is untested"
+    assert deterministic >= 6, "the fixture modes went missing, so the claim is untested"
     assert "deterministic" in page
+
+
+def test_the_tutorials_index_quotes_the_shipped_listing():
+    """The index's transcript is the shipped packages, not this machine's."""
+    index = (Path(__file__).resolve().parent.parent / "docs" / "tutorials" / "index.md").read_text()
+    listing = gen_tutorial.committed_listing().rstrip("\n")
+    assert f"```\n{listing}\n```" in index, (
+        "the index's `registry list` transcript is not what a fresh clone prints; "
+        "regenerate it with `python -m refactory_dsh.tools.gen_tutorial` (the listing is "
+        "`gen_tutorial.committed_listing()`)"
+    )

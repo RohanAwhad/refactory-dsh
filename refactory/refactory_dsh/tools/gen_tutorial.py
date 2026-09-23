@@ -34,6 +34,12 @@ from refactory_dsh.paths import REPO_ROOT
 
 OUT = Path(__file__).resolve().parents[2] / "docs" / "tutorial.html"
 
+#: Where the packages this repository *ships* live. The registry also discovers the
+#: packages a person created in `.factory/packages`, and a page generated from those
+#: would differ on every machine — so the tutorial documents what a clone contains,
+#: not what this checkout happens to have made.
+COMMITTED = Path(__file__).resolve().parents[2] / "refactory_packages"
+
 #: The tool whose verb table the "ask the CEO" section documents.
 TOOL_SOURCE = REPO_ROOT / "packages" / "refactory" / "tool-refactory" / "src" / "index.ts"
 
@@ -155,12 +161,40 @@ def _walk(graph: Any) -> list[tuple[int, Node]]:
 
 
 def catalogue(project: Path) -> list[dict[str, Any]]:
-    """Every mode, with the console's own entry and the shape the graph section needs."""
+    """Every *shipped* mode, with the console's own entry and its graph's shape.
+
+    Workspace packages (what `create` wrote into `.factory/packages`) are left out on
+    purpose: the page is committed, so it has to be the same page on every machine.
+    """
     entries: list[dict[str, Any]] = []
     for entry in console.catalogue(project=project):
+        where = registry.where(str(entry["package"]), Path(project))
+        if where is None or not Path(where).resolve().is_relative_to(COMMITTED.resolve()):
+            continue
         shape = mode_shape(entry["id"], project)
         entries.append({**entry, **shape})
     return entries
+
+
+def committed_listing() -> str:
+    """`registry list`, restricted to the packages this repository ships.
+
+    The tutorials index quotes the listing; quoting a machine's own output means the
+    page is wrong on the next machine, so the quote is this function's output and a
+    test keeps the two equal.
+    """
+    lines: list[str] = []
+    for name in sorted(registry.installed_names(COMMITTED.parent)):
+        try:
+            package = registry.load(name, COMMITTED.parent)
+        except Exception:
+            continue
+        if Path(registry.where(name, COMMITTED.parent) or "").resolve() != (COMMITTED / name).resolve():
+            continue
+        lines.append(f"{name}/  {package.description}")
+        for mode in sorted(package.modes, key=lambda m: m.name):
+            lines.append(f"  {f'{name}/{mode.name}':<38} {getattr(mode, 'description', '')}")
+    return "\n".join(lines) + "\n"
 
 
 def named_registry(module: Any, attribute: str) -> list[tuple[str, str]]:

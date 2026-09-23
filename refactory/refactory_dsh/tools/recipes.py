@@ -133,10 +133,10 @@ RECIPES: tuple[Recipe, ...] = (
         id="use-smoke-refuses-a-model-mode",
         group="use",
         title="Smoke says so, rather than failing deep inside the run",
-        command="uv run refactory package smoke blurb/writer",
+        command="uv run refactory package smoke default_pack/create",
         expect="a refusal naming the agent node and the command that does supply a model",
-        contains=("calls a model", "refactory run blurb/writer"),
-        script="uv run refactory package smoke blurb/writer || true",
+        contains=("calls a model", "refactory run default_pack/create"),
+        script="uv run refactory package smoke default_pack/create || true",
     ),
     Recipe(
         id="optimize-loop",
