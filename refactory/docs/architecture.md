@@ -278,7 +278,7 @@ further loop can search the loop's own settings. It reaches the same best score 
 evaluation count as `Loop` on the same seed, and runs end to end on DSH:
 
 ```bash
-.venv/bin/python -m pytest refactory/tests/test_loop_as_mode.py -q --run-integration
+uv run python -m pytest refactory/tests/test_loop_as_mode.py -q --run-integration
 # 21 passed
 ```
 
@@ -305,9 +305,9 @@ All three produce something **new** and never mutate their input.
 
 | mode | also an entry point | input | output |
 |---|---|---|---|
-| `default_pack/create` | `python -m refactory_dsh.create` | a brief | a package: `__init__.py`, `mode.py`, `ops.py` |
-| `default_pack/edit` | `python -m refactory_dsh.edit` | a brief + an existing mode | a revised package, recording `revision_of` **and the state it came from** |
-| `default_pack/design` | `python -m refactory_dsh.design` | a brief | a checked software artifact |
+| `default_pack/create` | `uv run refactory ceo "…" --mode create` | a brief | a package: `__init__.py`, `mode.py`, `ops.py` |
+| `default_pack/edit` | `uv run refactory ceo "…" --mode edit` | a brief + an existing mode | a revised package, recording `revision_of` **and the state it came from** |
+| `default_pack/design` | `uv run refactory ceo "…" --mode design` | a brief | a checked software artifact |
 
 They are discovered and validated like any other mode, and they are also entry
 points because a creation is a thing you run once from a shell as often as from a
@@ -372,9 +372,9 @@ The carrier is the **intent ledger** — an append-only, timestamped file in the
 directory, seeded from `--intent` and appended to while the run goes:
 
 ```bash
-python -m refactory_dsh.loop circle_packing/adaptive --intent "make it better, no new deps"
-python -m refactory_dsh.console steer --run <run> --note "no numpy" --kind constraint
-python -m refactory_dsh.console steer --run <run>          # read it back
+uv run refactory optimize circle_packing/adaptive --intent "make it better, no new deps"
+uv run refactory steer --run <run> --note "no numpy" --kind constraint
+uv run refactory steer --run <run>          # read it back
 ```
 
 Three kinds, because they are not the same act: `info` (context), `correction`

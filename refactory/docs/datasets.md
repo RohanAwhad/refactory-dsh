@@ -64,7 +64,7 @@ A package with one data node bound to a two-item Task, whose subgraph is one op 
 appends the current item's id, scores the mean of the Task's verdicts:
 
 ```bash
-.venv/bin/python -m refactory_dsh.registry smoke dataset_probe/dataset
+uv run refactory package smoke dataset_probe/dataset
 ```
 
 ```json
@@ -81,10 +81,12 @@ its own item on disk, each judged by the Task.
 than hand-written:
 
 ```bash
-.venv/bin/python -m refactory_dsh.create --name my_pack \
-  --brief "solve the counting instances" \
-  --data-node --task my_pack.tasks:CountingTask
+uv run refactory ceo "solve the counting instances" --mode create --name my_pack
 ```
+A created mode is asked for a data node and a Task through the same brief: say that it
+iterates a Task's items, and name the Task class (`my_pack.tasks:CountingTask`). The
+validate gate checks that the package really has a `DataNode` bound to that Task
+rather than taking the prompt's word for it.
 
 The validate gate **checks** both: a package that declares no DataNode when one was
 asked for, or is not bound to the Task that was named, is refused and told which one

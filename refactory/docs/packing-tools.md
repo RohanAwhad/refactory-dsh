@@ -82,7 +82,7 @@ a way to refuse to start without one.
 Three readers, one answer each, all of them static:
 
 ```bash
-.venv/bin/python -c "
+uv run python -c "
 from refactory_dsh import toolchain
 for status in toolchain.report('lean_pack'):
     print(status)
@@ -95,7 +95,7 @@ lake: not on PATH as 'lake'
 mathlib: missing: MATHLIB_PATH is not set, so $MATHLIB_PATH names nothing
 ```
 
-`.venv/bin/python -m refactory_dsh.registry tools lean_pack` is the same answer as
+`uv run refactory package tools lean_pack` is the same answer as
 JSON, with a `fix` field per entry holding the sentence the failure is built from:
 `the tool 'lean' is not on PATH as 'lean'; the proof checker that decides whether a
 candidate solution is a proof. Install it with: curl https://elan.lean-lang.org/elan-init.sh -sSf | sh`.
@@ -155,7 +155,7 @@ task_input -> tool_check -> scaffold -> attempt -> verify -> repair_gate
 failure and it has to happen at step two:
 
 ```bash
-.venv/bin/python -c "
+uv run python -c "
 from pathlib import Path
 from refactory_dsh import registry
 r = registry.resolve(Path('.'), 'lean_pack/prover')[1]().evaluate(Path('/tmp/pack-absent'))
@@ -243,7 +243,7 @@ points and is wrong is rejected. The seed checks one conjecture per identity and
 every first conjecture is wrong, so it scores zero, and `candidates` is the lever:
 
 ```bash
-.venv/bin/python -c "
+uv run python -c "
 from pathlib import Path
 from refactory_dsh import registry
 mode_class = registry.resolve(Path('.'), 'sympy_pack/exact')[1]

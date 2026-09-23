@@ -24,7 +24,7 @@ works.
 **Prefer one page in a browser?** [`docs/tutorial.html`](../tutorial.html) is the same
 material as a generated HTML tour: every mode, both v2 pipelines, the outer loop and
 all of its options, and how to ask the CEO. It is built from the code by
-`python -m refactory_dsh.tools.gen_tutorial`, so it cannot drift.
+`uv run python -m refactory_dsh.tools.gen_tutorial`, so it cannot drift.
 
 ## The shape of it: create → use → optimize → use it again
 
@@ -106,7 +106,7 @@ package needs. Installing and declaring a tool that is not Python is
 **Run one inner run** — a mode, evaluated once:
 
 ```bash
-.venv/bin/python -c "
+uv run python -c "
 from pathlib import Path
 from refactory_dsh import registry
 mode = registry.resolve(Path('.'), 'circle_packing/adaptive')[1]()
@@ -122,7 +122,7 @@ score 0.875 exit_ok True iterations 21
 **Optimize it** — the outer loop searching the mode's architecture and parameters:
 
 ```bash
-.venv/bin/python -m refactory_dsh.loop circle_packing/adaptive \
+uv run refactory optimize circle_packing/adaptive \
   --epochs 2 --batch-size 4 --optimizer random --seed 5 --runs-root /tmp/tour/run
 ```
 
@@ -141,7 +141,7 @@ score 0.875 exit_ok True iterations 21
 *and* duplicating a node:
 
 ```bash
-.venv/bin/python -m refactory_dsh.console leaderboard --run /tmp/tour/run
+uv run refactory leaderboard --run /tmp/tour/run
 ```
 
 Each row carries the candidate, its score, and a **diff against its parent** — so
@@ -160,7 +160,7 @@ the table says what changed, not just which number is bigger:
 And every refusal it did *not* pay for:
 
 ```bash
-.venv/bin/python -c "
+uv run python -c "
 import json
 from refactory_dsh import history
 print(json.loads(open('/tmp/tour/run/report.json').read())['rejection_codes'])

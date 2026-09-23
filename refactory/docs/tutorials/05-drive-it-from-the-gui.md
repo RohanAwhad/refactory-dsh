@@ -130,11 +130,11 @@ reader in the browser and a reader in a shell are reading one answer.
 If you would rather not use the GUI, the console is the same surface:
 
 ```bash
-.venv/bin/python -m refactory_dsh.console modes
-.venv/bin/python -m refactory_dsh.console start circle_packing/adaptive \
+uv run refactory modes
+uv run refactory start circle_packing/adaptive \
   --run-id gui-tour --epochs 2 --batch-size 4 --optimizer random --seed 5 \
   --runs-root /tmp/gui-tour
-.venv/bin/python -m refactory_dsh.console status --run /tmp/gui-tour/gui-tour --after 0
+uv run refactory status --run /tmp/gui-tour/gui-tour --after 0
 ```
 
 ## Changing what the card shows

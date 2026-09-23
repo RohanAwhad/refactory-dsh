@@ -19,7 +19,7 @@ carries no evaluator at all, because a program must not be able to answer it. It
 says so:
 
 ```bash
-.venv/bin/python -c "
+uv run python -c "
 from pathlib import Path
 from refactory_dsh import lowering, registry
 state = registry.resolve(Path('.'), 'review_pack/review')[1]().state_dict()
@@ -37,7 +37,7 @@ approve user None
 ## A headless run refuses
 
 ```bash
-.venv/bin/python -m refactory_dsh.registry smoke review_pack/review
+uv run refactory package smoke review_pack/review
 ```
 
 ```
@@ -53,7 +53,7 @@ from one a person gave, so it must not be invented.
 ## Run it with a person
 
 ```bash
-.venv/bin/python -m refactory_dsh.interactive review_pack/review \
+uv run refactory run review_pack/review \
   --intent "draft a note about circle packing and let me approve it"
 ```
 
@@ -80,7 +80,7 @@ the run's ledger.
 ## The answer is durable
 
 ```bash
-.venv/bin/python -m refactory_dsh.console steer --run .factory/interactive/review_pack-review
+uv run refactory steer --run .factory/interactive/review_pack-review
 ```
 
 The ledger shows the intent and the answer, and `verdicts` reports
@@ -93,7 +93,7 @@ What the person says *while using* a mode is the ledger, and it never changes th
 graph:
 
 ```bash
-.venv/bin/python -m refactory_dsh.console steer \
+uv run refactory steer \
   --run .factory/interactive/review_pack-review --note "no numpy" --kind constraint
 ```
 

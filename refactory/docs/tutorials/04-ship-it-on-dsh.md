@@ -14,7 +14,7 @@ vocabulary, and DSH's `workflow-spine` already executes it. So the seam is a
 **translation of data**, not a reimplementation:
 
 ```bash
-.venv/bin/python -c "
+uv run python -c "
 import json
 from pathlib import Path
 from refactory_dsh import lowering, registry
@@ -64,7 +64,7 @@ cat /tmp/tour/work/facts.json
 ## The gate: both runtimes must agree
 
 ```bash
-.venv/bin/python -m pytest refactory/tests/test_equivalence.py -q --run-integration
+uv run python -m pytest refactory/tests/test_equivalence.py -q --run-integration
 ```
 
 ```
@@ -94,7 +94,7 @@ result = evaluate_on_dsh(mode, state, workdir, timeout_s=900)
 Then the loop selects its evaluator with a flag:
 
 ```bash
-.venv/bin/python -m refactory_dsh.loop circle_packing/adaptive \
+uv run refactory optimize circle_packing/adaptive \
   --epochs 1 --batch-size 2 --optimizer random --seed 5 \
   --evaluator dsh --runs-root /tmp/tour/dsh-run
 ```
@@ -107,7 +107,7 @@ is the one that ships.
 The loop is also a mode — `loop_mode/loop` — so the same machinery runs it:
 
 ```bash
-.venv/bin/python -m pytest refactory/tests/test_loop_as_mode.py -q --run-integration
+uv run python -m pytest refactory/tests/test_loop_as_mode.py -q --run-integration
 ```
 
 ```

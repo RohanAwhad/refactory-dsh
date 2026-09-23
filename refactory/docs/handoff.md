@@ -38,7 +38,7 @@ This is the shape to preserve. Each is a base class, a `REGISTRY` keyed by `name
 `create(name, ...)` that fails loud, and a `register()` for a new implementation:
 
 ```bash
-.venv/bin/python -c "
+uv run python -c "
 from refactory_dsh import evaluators, optim, strategies
 print('evaluators', evaluators.names())    # ['dsh', 'walker']
 print('optimizers', optim.names())         # 7
@@ -61,13 +61,13 @@ From the repo root. The venv is at the **repo root**, not under `refactory/`.
 
 ```bash
 # the whole Python side, including the DSH integration suites
-.venv/bin/python -m pytest refactory/tests/ -q --run-integration
+uv run python -m pytest refactory/tests/ -q --run-integration
 
 # without the DSH suites (fast)
-.venv/bin/python -m pytest refactory/tests/ -q
+uv run python -m pytest refactory/tests/ -q
 
 # the work gate: fails while a tracked item is open, or names a commit git cannot resolve
-.venv/bin/python -m pytest refactory/tests/test_work_complete.py -q
+uv run python -m pytest refactory/tests/test_work_complete.py -q
 
 # documentation gates
 pnpm run test:docs
@@ -96,7 +96,7 @@ external tool is marked `toolchain`, and one command reports which ran, which sk
 and why, and **fails** if any did not run:
 
 ```bash
-.venv/bin/python -m pytest refactory/tests -q --toolchain-gate
+uv run python -m pytest refactory/tests -q --toolchain-gate
 # verified against real tools: lean: 4, sympy: 3
 # UNVERIFIED: [mathlib] ...test_the_mathlib_problem_is_checked_by_the_real_proof_checker:
 #   skipped -- mathlib is not installed (set MATHLIB_PATH to a built mathlib4 checkout)
@@ -159,7 +159,7 @@ capability recorded as present:
   executor replays it, so a resumed run is the same run rather than a second question.
 - **There was no mode with a `user` gate to run.** `review_pack/review` is one:
   `task_input -> draft -> check(fn) -> approve(user) -> publish|reject`, driven by
-  `python -m refactory_dsh.interactive review_pack/review --intent "…"`.
+  `uv run refactory run review_pack/review --intent "…"`.
 
 ## The GUI, and what it found
 

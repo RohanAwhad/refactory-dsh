@@ -8,7 +8,7 @@ Prerequisite: nothing. `circle_packing/adaptive` ships.
 ## Run it
 
 ```bash
-.venv/bin/python -m refactory_dsh.loop circle_packing/adaptive \
+uv run refactory optimize circle_packing/adaptive \
   --epochs 2 --batch-size 4 --optimizer random --seed 5 --runs-root /tmp/tour/run
 ```
 
@@ -54,7 +54,7 @@ inspection shows the same eight steps a PyTorch loop has:
 ## Read the leaderboard
 
 ```bash
-.venv/bin/python -m refactory_dsh.console leaderboard --run /tmp/tour/run
+uv run refactory leaderboard --run /tmp/tour/run
 ```
 
 Each row carries the candidate, its score, and a **diff against its parent**:
@@ -75,7 +75,7 @@ number is bigger and nothing about why.
 ## Read one candidate in full
 
 ```bash
-.venv/bin/python -m refactory_dsh.console candidate --run /tmp/tour/run 6061dbf4589f
+uv run refactory candidate --run /tmp/tour/run 6061dbf4589f
 ```
 
 The `rendered` field is the human-readable form of the same diff, and the row also
@@ -104,7 +104,7 @@ much as the wins.
 A run is a directory of files, so you can read it *while* it runs:
 
 ```bash
-.venv/bin/python -m refactory_dsh.console status --run /tmp/tour/run --after 0
+uv run refactory status --run /tmp/tour/run --after 0
 ```
 
 `--after` takes a line count, not a timestamp: a reader polling wants the events it
@@ -118,7 +118,7 @@ can be an hour.
 The walker is the debug runtime. The same mode on the runtime that ships:
 
 ```bash
-.venv/bin/python -m pytest refactory/tests/test_equivalence.py -q --run-integration
+uv run python -m pytest refactory/tests/test_equivalence.py -q --run-integration
 ```
 
 ```

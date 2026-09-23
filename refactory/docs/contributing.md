@@ -10,9 +10,9 @@ if you move something, and how to check your work.
 Run from the repository root (`/Users/akash/cursor/refactory-fresh-test`).
 
 ```bash
-.venv/bin/python -m pytest refactory/tests/ -q                    # the suite
-.venv/bin/python -m pytest refactory/tests/ -q --run-integration  # ... plus the real-DSH runs
-.venv/bin/python -m refactory_dsh.tools.gen_api_reference --check # docs match the code
+uv run python -m pytest refactory/tests/ -q                    # the suite
+uv run python -m pytest refactory/tests/ -q --run-integration  # ... plus the real-DSH runs
+uv run python -m refactory_dsh.tools.gen_api_reference --check # docs match the code
 ```
 
 The DSH side, when you touch `packages/`:
@@ -133,7 +133,7 @@ Each of these happened, and the shape of the code is the response.
 ## Documentation
 
 - The [API reference](api/reference.md) is **generated**; never edit it. Run
-  `python -m refactory_dsh.tools.gen_api_reference`. `tests/test_docs_api.py`
+  `uv run python -m refactory_dsh.tools.gen_api_reference`. `tests/test_docs_api.py`
   fails when it is stale, when a documented symbol has no prose, or when a
   document names a module that does not import.
 - The architecture overview's rule table is checked against `nn.RULES`, so adding

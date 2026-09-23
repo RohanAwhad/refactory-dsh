@@ -104,7 +104,7 @@ break it:
 The registry scans `refactory_packages/`, so the package is found by name:
 
 ```bash
-.venv/bin/python -m refactory_dsh.registry list
+uv run refactory package list
 ```
 
 ```
@@ -113,7 +113,7 @@ counter/  count up to a target, and score the count reached
 ```
 
 ```bash
-.venv/bin/python -c "
+uv run python -c "
 from pathlib import Path
 from refactory_dsh import registry
 package, mode_class = registry.resolve(Path('.'), 'counter/counter')
@@ -137,7 +137,7 @@ Validation is what makes a search cheap: an invalid candidate is refused before 
 costs a run.
 
 ```bash
-.venv/bin/python -c "
+uv run python -c "
 from pathlib import Path
 from refactory_dsh import nn, registry
 mode = registry.resolve(Path('.'), 'counter/counter')[1]()
@@ -153,7 +153,7 @@ An empty list means runnable and scoreable. Now break it deliberately — point 
 node at a file nothing produces:
 
 ```bash
-.venv/bin/python -c "
+uv run python -c "
 from pathlib import Path
 from refactory_dsh import nn, registry
 from refactory_dsh.nn import edits
@@ -177,7 +177,7 @@ why none of them cost evaluation budget.
 The catalogue of edits is discoverable, so you never guess a field name:
 
 ```bash
-.venv/bin/python -c "
+uv run python -c "
 from refactory_dsh.nn import edits
 for op in edits.catalogue():
     print(op['op'], op['fields'])

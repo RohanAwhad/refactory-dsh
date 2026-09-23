@@ -46,14 +46,14 @@ git clone <repo> --recurse-submodules
 列出各个包及其拥有的模式：
 
 ```bash
-.venv/bin/python -m refactory_dsh.registry list
-.venv/bin/python -m refactory_dsh.registry show circle_packing/adaptive
+uv run refactory package list
+uv run refactory package show circle_packing/adaptive
 ```
 
 优化一个模式。`autoresearch` 读取 trace 并向模型询问下一次编辑；`random` 从编辑目录中采样。两者运行的都是同一个带校验的循环，因此一个无法运行的提案只会消耗 token，而不会消耗预算。
 
 ```bash
-.venv/bin/python -m refactory_dsh.loop circle_packing/adaptive \
+uv run refactory optimize circle_packing/adaptive \
     --epochs 2 --batch-size 4 --optimizer autoresearch
 
 # what came out of it
@@ -63,16 +63,14 @@ cat .factory/loop/report.md
 根据一段简述创建模式包。设计与生成是模型步骤；gate 则是确定性的——包会被导入、其图会被构建、它命名的每个调用都会被解析，并且在注册之前它会先被运行一次。
 
 ```bash
-.venv/bin/python -m refactory_dsh.create \
-    --name my_pkg \
-    --brief "what the package should do" \
-    --extends circle_packing/adaptive
+uv run refactory ceo "what the package should do" \
+    --mode create --name my_pkg --approve gate_strategy=proceed
 ```
 
 ## 测试
 
 ```bash
-.venv/bin/python -m pytest refactory/tests -q
+uv run python -m pytest refactory/tests -q
 ```
 
 `tests/test_registry.py::test_every_installed_package_mode_validates` 断言的是这个库对并非由它编写的包所能做出的最强陈述：每个已安装包的每个模式都能构建出一张图，且该图在所有调用都被解析的情况下通过校验。

@@ -46,14 +46,14 @@ git clone <repo> --recurse-submodules
 List the packages and the modes they own:
 
 ```bash
-.venv/bin/python -m refactory_dsh.registry list
-.venv/bin/python -m refactory_dsh.registry show circle_packing/adaptive
+uv run refactory package list
+uv run refactory package show circle_packing/adaptive
 ```
 
 Optimize a mode. `autoresearch` reads the traces and asks a model for the next edit; `random` samples the edit catalogue. Both run the same validating loop, so a proposal that cannot run costs tokens and not budget.
 
 ```bash
-.venv/bin/python -m refactory_dsh.loop circle_packing/adaptive \
+uv run refactory optimize circle_packing/adaptive \
     --epochs 2 --batch-size 4 --optimizer autoresearch
 
 # what came out of it
@@ -63,16 +63,14 @@ cat .factory/loop/report.md
 Create a package of modes from a brief. Design and emit are model steps; the gate is deterministic — the package is imported, its graph is built, every call it names is resolved, and it is run once before it is registered.
 
 ```bash
-.venv/bin/python -m refactory_dsh.create \
-    --name my_pkg \
-    --brief "what the package should do" \
-    --extends circle_packing/adaptive
+uv run refactory ceo "what the package should do" \
+    --mode create --name my_pkg --approve gate_strategy=proceed
 ```
 
 ## Test
 
 ```bash
-.venv/bin/python -m pytest refactory/tests -q
+uv run python -m pytest refactory/tests -q
 ```
 
 `tests/test_registry.py::test_every_installed_package_mode_validates` asserts the strongest statement the library can make about a package it did not write: every mode of every installed package builds a graph that validates with all of its calls resolved.

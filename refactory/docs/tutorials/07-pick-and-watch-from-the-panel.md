@@ -9,7 +9,7 @@ What you end with: a run chosen, started and watched from the right Sidebar, and
 same run readable from the shell by the id the panel showed you.
 
 **The panel reads the console, so it is the CLI's surface in a different shape.** If a
-choice is not in `python -m refactory_dsh.console modes`, it is not in the picker; if
+choice is not in `uv run refactory modes`, it is not in the picker; if
 the console refuses something, the panel shows the console's own reason.
 
 ---
@@ -80,7 +80,7 @@ The frame names the run it is reading, in full. Copy that path and read it from 
 shell — the same commands the other tutorials use:
 
 ```bash
-.venv/bin/python -m refactory_dsh.console status --run /tmp/tour2/run
+uv run refactory status --run /tmp/tour2/run
 ```
 
 ```json
@@ -97,7 +97,7 @@ shell — the same commands the other tutorials use:
 ```
 
 ```bash
-.venv/bin/python -m refactory_dsh.console leaderboard --run /tmp/tour2/run
+uv run refactory leaderboard --run /tmp/tour2/run
 ```
 
 ```json
@@ -111,7 +111,7 @@ shell — the same commands the other tutorials use:
 And the winner becomes a mode of its own, exactly as it would from the shell:
 
 ```bash
-.venv/bin/python -m refactory_dsh.console adopt --run /tmp/tour2/run --as my_tuned
+uv run refactory adopt --run /tmp/tour2/run --as my_tuned
 ```
 
 ```json
@@ -135,7 +135,7 @@ The panel is a picker over JSON you can read yourself, which is the fastest way 
 out what is on offer before opening a browser:
 
 ```bash
-.venv/bin/python -m refactory_dsh.console modes | head -14
+uv run refactory modes | head -14
 ```
 
 ```json
@@ -176,6 +176,6 @@ out what is on offer before opening a browser:
   refresh the page.
 - **The panel loads but every read fails.** The console could not be reached: the
   message the Host reports carries the console's own words and the argv it ran, so
-  `python -m refactory_dsh.console modes` by hand from the same directory reproduces it.
+  `uv run refactory modes` by hand from the same directory reproduces it.
 - **A package you just imported is missing.** Press the reload control at the top of
   the panel; the catalogue is read once per open.

@@ -17,18 +17,15 @@ is untouched.
 ## create: a brief becomes a package
 
 ```bash
-.venv/bin/python -m refactory_dsh.create \
-  --name annealing_pack \
-  --brief "hill-climb a greedy circle packing by accepting non-worsening moves" \
-  --extends circle_packing/adaptive \
-  --verdict gate_strategy=proceed
+uv run refactory ceo "hill-climb a greedy circle packing by accepting non-worsening moves" \
+  --mode create --name annealing_pack --approve gate_strategy=proceed
 ```
 
-`--verdict` is the person's answer to `gate_strategy`, carried over from create-v2:
+`--approve` is the person's answer to `gate_strategy`, carried over from create-v2:
 the strategy is a decision a person owns, and a headless run is **told** it rather
 than approving its own plan. Drop the flag and the run stops at that gate with the
-message saying so. `console steer --verdict gate_strategy=proceed` records the same
-answer on a paused run, and a resumed run replays it instead of asking again.
+message saying so. `uv run refactory steer --run <id> --verdict gate_strategy=proceed` records the
+same answer on a paused run, and a resumed run replays it instead of asking again.
 
 What happens, in order — and the gates are the point:
 
@@ -66,7 +63,7 @@ dependent names it, instead of leaving a package that fails at import.
 Check what came out:
 
 ```bash
-.venv/bin/python -m refactory_dsh.registry show annealing_pack/anneal
+uv run refactory package show annealing_pack/anneal
 .venv/bin/python -m refactory_dsh.sandbox --smoke annealing_pack/anneal
 ```
 
@@ -77,10 +74,8 @@ is a decision, not a side effect.
 ## edit: revise a mode from a brief
 
 ```bash
-.venv/bin/python -m refactory_dsh.edit \
-  --mode circle_packing/adaptive \
-  --name revised_pack \
-  --brief "restart from a jittered sample when the search stalls"
+uv run refactory ceo "restart from a jittered sample when the search stalls" \
+  --mode edit --name revised_pack --approve gate_strategy=proceed
 ```
 
 `EditMode` is `CreateMode`'s graph with a different intent. Two differences that
@@ -98,10 +93,8 @@ unchanged, so "did the revision help?" stays a question you can still ask.
 ## design: an artifact, checked by running it
 
 ```bash
-.venv/bin/python -m refactory_dsh.design \
-  --name wordcount \
-  --brief "count words, lines and characters in a text file" \
-  --check "python wordcount.py sample.txt"
+uv run refactory ceo "count words, lines and characters in a text file" \
+  --mode design --name wordcount --check "python wordcount.py sample.txt"
 ```
 
 `--check` is required, and that is the design decision: the artifact is judged by
@@ -120,8 +113,8 @@ tools are the same:
 
 ```bash
 # The console's run root is <project>/.factory/loop, so point it at this run.
-.venv/bin/python -m refactory_dsh.console runs --runs-root .factory/loop
-.venv/bin/python -m refactory_dsh.console status --run <run-id>
+uv run refactory runs --runs-root .factory/loop
+uv run refactory status --run <run-id>
 ```
 
 And the analysis the model wrote is kept per generation, which is what makes a
