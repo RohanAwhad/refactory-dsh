@@ -549,6 +549,31 @@ def smoke(ctx: Any) -> dict[str, Any]:
     result = sandbox.smoke(identifier, workdir, project=project_for_nodes())
     if not result.ok:
         raise ValueError(f"the new mode did not finish a run: {result.problem()}")
+    # A mode with an agent node cannot be scored here: the smoke runs keyless on
+    # purpose, so the agent node has no model and the mode's own score() never sees a
+    # real run. Recording that as 0.0 would say "this scored zero" when the truth is
+    # "this was not measured", so the score is absent and the reason is stated.
+    agent_nodes = _agent_nodes(name)
+    if agent_nodes:
+        ctx.write_json(
+            "smoke.json",
+            {
+                "mode": identifier,
+                "score": None,
+                "reason": "the mode calls a model and the smoke runs without one",
+                "agent_nodes": agent_nodes,
+                "iterations": result.payload.get("iterations"),
+                "sandboxed": True,
+            },
+        )
+        return {
+            "smoke_score": None,
+            "smoke_ok": True,
+            "smoke_reason": (
+                f"not measured: {identifier} calls a model ({', '.join(agent_nodes)}), and the "
+                "smoke runs keyless; use `refactory run " + identifier + "` to score it"
+            ),
+        }
     score = float(result.payload.get("score") or 0.0)
     ctx.write_json(
         "smoke.json",
@@ -560,6 +585,24 @@ def smoke(ctx: Any) -> dict[str, Any]:
         },
     )
     return {"smoke_score": score, "smoke_ok": True}
+
+
+def _agent_nodes(name: str) -> list[str]:
+    """The agent nodes of a package's first mode, or an empty list.
+
+    Read from the package rather than from a prompt: "does this mode call a model" is
+    a property of its graph.
+    """
+    from refactory_dsh import registry
+
+    try:
+        package = registry.load(name, project_for_nodes())
+        mode = package.modes[0]()
+        return [node.id for node in mode.build().nodes.values() if node.kind == "agent"]
+    except Exception:
+        # A package that will not build is the validate gate's finding, not this
+        # one's; saying nothing here keeps the two failures distinguishable.
+        return []
 
 
 def write_result(ctx: Any) -> dict[str, Any]:

@@ -21,6 +21,12 @@ uv run refactory ceo "hill-climb a greedy circle packing by accepting non-worsen
   --mode create --name annealing_pack --approve gate_strategy=proceed
 ```
 
+The run ends with a **keyless smoke**: the new package is read out of process, its
+first mode is run once, and the score is recorded. A mode that calls a model cannot be
+scored that way — the smoke has no model on purpose, so the agent node never runs — and
+the report says so (`score: null`, with the agent nodes named and the command that does
+score it) rather than reporting `0.0`, which would read as "this scored nothing".
+
 `--approve` is the person's answer to `gate_strategy`, carried over from create-v2:
 the strategy is a decision a person owns, and a headless run is **told** it rather
 than approving its own plan. Drop the flag and the run stops at that gate with the
