@@ -10,7 +10,7 @@ git clone <this-repo> --recurse-submodules && cd <this-repo>
 uv run refactory ceo "a mode that drafts a haiku and checks the syllable count" --mode create
 ```
 
-That is the whole product. Everything below is what it is made of.
+That is the whole product. **[QUICKSTART.md](QUICKSTART.md)** is the six commands in order, with what each costs and what to do when one fails. Everything below is what it is made of.
 
 | layer | what it owns |
 |---|---|

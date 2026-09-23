@@ -10,7 +10,7 @@ git clone <this-repo> --recurse-submodules && cd <this-repo>
 uv run refactory ceo "a mode that drafts a haiku and checks the syllable count" --mode create
 ```
 
-这就是产品的全部。下面都是它的组成部分。
+这就是产品的全部。**[QUICKSTART.md](QUICKSTART.md)** 是按顺序排列的六条命令，附上各自的代价与出错时怎么办。下面都是它的组成部分。
 
 | 层 | 它负责什么 |
 |---|---|
