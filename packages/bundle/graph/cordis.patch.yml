@@ -21,6 +21,19 @@
   config:
     mode: !!js process.env.DSH_TOOLS_MODE
 
+# A node's work happens in a subagent the CEO waits for. The base profile defaults
+# subagents to background-and-continuable, which is right for an agent that wants to
+# fan out and collect later — and wrong here: a CEO that backgrounds a node and
+# finishes its turn abandons the graph, and the run ends with a cursor still due.
+# Foreground-only is the enforcement; the spine's prompt asks, and this is what makes
+# asking unnecessary.
+- id: tool-subagent
+  config:
+    provider: spawn
+    toolName: subagent
+    backgroundMode: one-shot
+    enableRunInBackground: false
+
 - insert:
     - id: code-runtime
       name: '@deepseek-ai/dsh-code-runtime-worker-thread'

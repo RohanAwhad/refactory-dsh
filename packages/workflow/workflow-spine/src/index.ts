@@ -177,9 +177,20 @@ export function apply(ctx: Context, config: Config): void {
     try {
       const dir = join(config.workdir, '.refactory')
       mkdirSync(dir, { recursive: true })
+      // The cursor travels with the status: a reader of a finished run wants the
+      // score, and a reader of an abandoned one wants to know which nodes never ran.
+      const state = spine.state()
       writeFileSync(
         join(dir, 'spine-status.json'),
-        JSON.stringify({ status, ...(detail === undefined ? {} : { error: detail }) }, null, 2),
+        JSON.stringify(
+          {
+            status,
+            ...(detail === undefined ? {} : { error: detail }),
+            ...(status === 'ready' ? { nodes: state.cursor as string[], completed: state.completed as string[] } : {}),
+          },
+          null,
+          2,
+        ),
       )
     } catch {
       // The work directory belongs to the caller; a status write must never be the

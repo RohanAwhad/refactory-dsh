@@ -43,6 +43,19 @@ function bestScore(workdir: string, mode: string): number {
   return 0
 }
 
+/** What the spine last recorded about the cursor, or `undefined` when it recorded nothing. */
+function spineStatus(workdir: string): { status: string; nodes?: string[]; error?: string } | undefined {
+  const path = join(workdir, '.refactory', 'spine-status.json')
+  if (!existsSync(path)) return undefined
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')) as { status: string; nodes?: string[]; error?: string }
+  } catch {
+    // A status file that is not JSON is a status this runner cannot read; the run's
+    // own report stands rather than being replaced by a parse error.
+    return undefined
+  }
+}
+
 /** The final assistant text of the turn. */
 function finalText(session: Session, firstSeq: SessionLogOffset): string {
   let text = ''
@@ -112,6 +125,24 @@ async function run(ctx: Context, io: Io): Promise<void> {
     final: finalText(agent.session, firstSeq).slice(0, 400),
   }
   io.stdout.write(JSON.stringify(result, null, 2) + '\n')
+
+  // Quiescence is not completion. The cursor's own status on disk is what says
+  // whether the graph finished, and a run that stopped with nodes still due (the CEO
+  // backgrounded a subagent and ended its turn, or a gate could not be answered) must
+  // not report a score as if it had run: "the graph finished" and "the graph was
+  // abandoned" have to be different outcomes to whoever started it.
+  const status = spineStatus(startup.workdir)
+  if (status !== undefined && status.status !== 'done') {
+    const due = status.nodes === undefined || status.nodes.length === 0
+      ? ''
+      : `: ${status.nodes.join(', ')} still due`
+    io.stderr.write(
+      `dsh: the graph did not finish (${status.status}${due})`
+      + `${status.error === undefined ? '' : ` — ${status.error}`}\n`,
+    )
+    io.exit(1)
+    return
+  }
   io.exit(0)
 }
 

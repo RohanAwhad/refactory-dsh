@@ -135,7 +135,7 @@ describe('the cursor status a run leaves behind', () => {
     const { ctx } = await mount({ workdir })
     await call(ctx, 'wf_next')
     expect(JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8')))
-      .toEqual({ status: 'ready' })
+      .toEqual({ status: 'ready', nodes: ['a'], completed: [] })
 
     await call(ctx, 'wf_done', { node: 'a' })
     await call(ctx, 'wf_next')

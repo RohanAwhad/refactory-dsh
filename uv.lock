@@ -2529,6 +2529,7 @@ source = { editable = "refactory" }
 dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
+    { name = "remote-factory" },
     { name = "structlog" },
 ]
 
@@ -2536,7 +2537,14 @@ dependencies = [
 requires-dist = [
     { name = "pydantic", specifier = ">=2" },
     { name = "pyyaml", specifier = ">=6" },
+    { name = "remote-factory", editable = "refactory/vendor/remote-factory" },
     { name = "structlog", specifier = ">=24" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8" },
+    { name = "sympy", specifier = ">=1.12" },
 ]
 
 [[package]]

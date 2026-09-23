@@ -6,9 +6,9 @@
  * budget, the work directory, the best score and the CEO's last words — is the run
  * as far as the Python side is concerned.
  */
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apply as applyRunner } from '../src/index.ts'
@@ -25,7 +25,10 @@ afterEach(() => {
 function workdir(files: Record<string, string> = {}): string {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-graph-run-'))
   dirs.push(dir)
-  for (const [name, body] of Object.entries(files)) writeFileSync(join(dir, name), body)
+  for (const [name, body] of Object.entries(files)) {
+    mkdirSync(dirname(join(dir, name)), { recursive: true })
+    writeFileSync(join(dir, name), body)
+  }
   return dir
 }
 
@@ -104,6 +107,35 @@ async function bench(options: {
 }
 
 describe('graph runner', () => {
+  it('refuses to call an unfinished graph finished', async () => {
+    // The CEO can reach quiescence with nodes still due — it backgrounded a subagent
+    // and ended its turn, or a gate could not be answered. Reporting a score for that
+    // is the failure this guards: the run must fail, and name what never ran.
+    const harness = await bench({
+      workdir: workdir({
+        '.refactory/spine-status.json': JSON.stringify({
+          status: 'ready', nodes: ['join_qa', 'overwatch'], completed: ['prepare', 'survey'],
+        }),
+      }),
+      events: [{ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'done' }] } } }],
+    })
+    expect(harness.exits).toEqual([1])
+    expect(harness.err()).toContain('the graph did not finish')
+    expect(harness.err()).toContain('join_qa, overwatch still due')
+  })
+
+  it('reports a graph the spine marked refused, with its reason', async () => {
+    const harness = await bench({
+      workdir: workdir({
+        '.refactory/spine-status.json': JSON.stringify({
+          status: 'refused', error: 'gate gate_strategy is answered by a person and nobody could be asked',
+        }),
+      }),
+    })
+    expect(harness.exits).toEqual([1])
+    expect(harness.err()).toContain('nobody could be asked')
+  })
+
   it('drives the agent, reports the run, and exits zero', async () => {
     const harness = await bench({
       workdir: workdir({ 'probe_state.json': JSON.stringify({ best_score: 1.25 }) }),
