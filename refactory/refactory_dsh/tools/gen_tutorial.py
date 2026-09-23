@@ -405,6 +405,19 @@ def render(project: Path | None = None) -> str:
             )],
             "LoopConfig field", "default",
         ),
+        use_example=example_block(
+            "the same step on the runtime that ships: a real DSH run, its artifacts on disk",
+            ".venv/bin/python -m refactory_dsh.interactive counting_pack/fixed_step \\\n"
+            '  --intent "count up to five"',
+            '{\n  "mode": "counting_pack-fixed_step",\n  "session_id": "session-a48dee17-…",\n'
+            '  "workdir": "<checkout>/.factory/interactive/counting_pack-fixed_step",\n'
+            '  "final": "The workflow graph is already at **done** — all four nodes\n'
+            '            (`start`, `step`, `check`, `finish`) completed, with the\n'
+            '            `check` gate retrying twice and then proceeding."\n}\n\n'
+            '// .factory/interactive/counting_pack-fixed_step/result.json\n'
+            '{\n  "final_count": 6,\n  "steps_taken": 3,\n  "closeness": 0.5\n}\n'
+            "// plus facts.json, trace.json, state.json, intent-ledger.md and graphs/",
+        ),
         counter_example=example_block(
             "counting_pack/fixed_step, one epoch of four candidates — seconds, no model",
             ".venv/bin/python -m refactory_dsh.loop counting_pack/fixed_step \\\n"
@@ -564,6 +577,12 @@ TEMPLATE = """<!DOCTYPE html>
               <td>the winner as a mode of its own, smoke-scored by the registry</td></tr>
         </tbody>
       </table>
+      {use_example}
+      <p class="muted"><code>interactive</code> runs the mode on DSH under the CEO, with your terminal
+      attached so a <code>user</code> gate reaches <em>you</em>; the run's directory holds
+      <code>facts.json</code>, <code>trace.json</code>, <code>state.json</code> and the intent ledger.
+      <code>--workdir</code> is optional and is resolved to an absolute path, because DSH takes it as the
+      session's working directory.</p>
       <div class="callout warn">
         <strong>The one thing that trips everybody up.</strong> Apart from <code>create</code>,
         <code>edit</code> and <code>design</code>, every mode in the box is deterministic <code>op</code> and

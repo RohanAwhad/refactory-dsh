@@ -51,7 +51,10 @@ def prepare(
     mode = Mode()
     state = mode.state_dict()
 
-    workdir = Path(workdir)
+    # Absolute, because this directory becomes DSH's session cwd and DSH refuses a
+    # relative one: `interactive <mode>` with no `--workdir` used to fail before the
+    # graph started, on the default root that is relative by design.
+    workdir = Path(workdir).expanduser().resolve()
     workdir.mkdir(parents=True, exist_ok=True)
     if intent.strip() and not steering.Ledger(workdir).exists():
         steering.Ledger.seed(workdir, intent)
@@ -78,7 +81,8 @@ def command(identifier: str, *, workdir: Path, graphs: Path, name: str) -> list[
         "--task", TASK,
         "--budget", "1",
         "--graphs", str(graphs),
-        "--workdir", str(workdir),
+        # DSH takes this as the session cwd and refuses a relative one.
+        "--workdir", str(Path(workdir).expanduser().resolve()),
         "--python-bin", str(venv_bin()),
         # Already the JSON string `--knobs` wants; see `run_on_dsh`.
         "--knobs", lowering.knob_environment(

@@ -112,3 +112,17 @@ def test_a_run_the_spine_finished_is_scored(tmp_path, monkeypatch):
     result = dsh_runtime.evaluate_on_dsh(mode, mode.state_dict(), work)
     assert result.exit_ok is True, result.error
     assert result.score == 42.0
+
+
+def test_the_work_directory_reaches_dsh_as_an_absolute_path(tmp_path):
+    """The default root is relative, and DSH refuses a relative session cwd.
+
+    `interactive <mode>` with no `--workdir` used to stop before the graph started
+    with "session header cwd must be an absolute path", so the one command a person
+    runs to *use* a mode did not work out of the box.
+    """
+    name, graphs = interactive.prepare(WITH_A_GATE, workdir=Path(".factory/probe-relative"))
+    argv = interactive.command(WITH_A_GATE, workdir=Path(".factory/probe-relative"), graphs=graphs, name=name)
+    workdir = Path(argv[argv.index("--workdir") + 1])
+    assert workdir.is_absolute(), f"DSH was handed the relative workdir {workdir}"
+    assert Path(argv[argv.index("--graphs") + 1]).is_absolute()
