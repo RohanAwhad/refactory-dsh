@@ -870,6 +870,16 @@
       "status": "done",
       "commit": "1a99bdaac1",
       "evidence": "One field per declared knob, shaped by kind, all travelling as NAME=VALUE; a new @Remote run(...) reports the spine status, the nodes still due and the facts; Run once is offered exactly when the catalogue's own action is start. pnpm run test:gui: 340 files, 4762 passed, 1 skipped. pnpm run typecheck passed (regenerating the Typert face with run). verify-client-ui-i18n passed. Narrowed instrumented coverage put every touched file at 100%."
+    },
+    {
+      "id": "run-time-source",
+      "issue": 79,
+      "title": "A run names the items a data node should read",
+      "why": "A harness for a class of work is built once and fed many times; the only ways to feed it were to edit the mode or to invent an environment variable in its Task, and the panel could do neither.",
+      "verify": "pytest refactory/tests/test_items.py refactory/tests/test_gui_loop.py -q",
+      "status": "done",
+      "commit": "cf7093bdc9",
+      "evidence": "Ran the shipped java harness against items it had never seen: `refactory run java_build_pack/build --source /tmp/rf-src-check --workdir /tmp/rf-src-run` wrote items.json {\"*\": {source_format: directory, source_path: /tmp/rf-src-check}}, iterated the one item there and scored it 1.0 (facts.json item_scores [{'id': 'one', 'passed': True, 'score': 1.0}]). 823 passed, 10 skipped."
     }
   ],
   "verification": {
