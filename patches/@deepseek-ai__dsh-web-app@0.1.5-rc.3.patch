@@ -1,0 +1,70 @@
+diff --git a/cordis.patch.yml b/cordis.patch.yml
+index cf4603031f6f452891a4d7da420869b6472fb333..100c522e2a1f5018e6b908de7ef27ca4b3a39d35 100644
+--- a/cordis.patch.yml
++++ b/cordis.patch.yml
+@@ -105,6 +105,15 @@
+     - id: session-controller
+       name: '@deepseek-ai/dsh-api-session-controller'
+ 
++    # The refactory console over Typert Remote: the same process boundary the
++    # model-facing tool uses, so the Web picker and the model read one JSON.
++    # `repoRoot` is the checkout holding `refactory/` and `.venv/`, which is the
++    # launcher's working directory.
++    - id: refactory-console
++      name: '@deepseek-ai/dsh-refactory-console'
++      config:
++        repoRoot: !!js process.cwd()
++
+     # Workspace file service: bounded read, directory listing, and the
+     # agent-write change feed inside the session workspace root.
+     - id: workspace-files
+@@ -234,6 +243,11 @@
+     - id: ui-sidebar-files
+       name: '@deepseek-ai/dsh-client-ui-sidebar-files'
+ 
++    # The right Sidebar's refactory picker: the console's described choices,
++    # started and read through the refactoryConsole endpoint.
++    - id: ui-refactory
++      name: '@deepseek-ai/dsh-client-ui-refactory'
++
+     - id: ui-settings
+       name: '@deepseek-ai/dsh-client-ui-settings'
+ 
+@@ -255,9 +269,14 @@
+     - id: ui-chat
+       name: '@deepseek-ai/dsh-client-ui-chat'
+ 
+-    # Official occupants for the generic sidebar and conversation brand slots.
++    # Disabled: the re:factory brand replaces the DeepSeek whale.
+     - id: ui-brand-official
+       name: '@deepseek-ai/dsh-client-ui-brand-official'
++      disabled: true
++
++    # re:factory occupants for the generic brand slots.
++    - id: ui-brand-refactory
++      name: '@deepseek-ai/dsh-client-ui-brand-refactory'
+ 
+     - id: ui-attachment
+       name: '@deepseek-ai/dsh-client-ui-attachment'
+@@ -481,4 +500,4 @@
+     - id: agent-presets
+       name: '@deepseek-ai/dsh-agent-presets'
+       config:
+-        default: standard
++        default: ceo
+diff --git a/package.json b/package.json
+index edf0061c6c67cc6f3c04fc5e69594f4f3062d995..c678fd18fb72457c4d29c8f90226aa42faa8ba4a 100644
+--- a/package.json
++++ b/package.json
+@@ -124,7 +124,10 @@
+     "@deepseek-ai/cordis": "4.0.2",
+     "@deepseek-ai/dsh-system-prompt": "^0.1.5-rc.3",
+     "@deepseek-ai/dsh-shell-env": "^0.1.5-rc.3",
+-    "@deepseek-ai/cordis-plugin-loader": "1.0.3"
++    "@deepseek-ai/cordis-plugin-loader": "1.0.3",
++    "@deepseek-ai/dsh-refactory-console": "0.1.5-rc.3",
++    "@deepseek-ai/dsh-client-ui-refactory": "0.1.5-rc.3",
++    "@deepseek-ai/dsh-client-ui-brand-refactory": "0.1.5-rc.3"
+   },
+   "devDependencies": {
+     "@deepseek-ai/cordis": "4.0.2",

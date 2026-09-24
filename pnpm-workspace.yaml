@@ -46,4 +46,6 @@ allowBuilds:
   msgpackr-extract: false
 
 patchedDependencies:
+  '@deepseek-ai/dsh-agent-presets@0.1.5-rc.3': patches/@deepseek-ai__dsh-agent-presets@0.1.5-rc.3.patch
   '@deepseek-ai/dsh-headless@0.1.5-rc.3': patches/@deepseek-ai__dsh-headless@0.1.5-rc.3.patch
+  '@deepseek-ai/dsh-web-app@0.1.5-rc.3': patches/@deepseek-ai__dsh-web-app@0.1.5-rc.3.patch
