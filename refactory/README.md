@@ -35,7 +35,8 @@ refactory-dsh               the launcher (opens DSH web)
 ## Install
 
 ```bash
-git clone <repo>
+git clone https://github.com/akashgit/refactory-dsh.git
+cd refactory-dsh
 ./install.sh
 ```
 

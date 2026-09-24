@@ -10,7 +10,8 @@
 #   uv run refactory list        what can this checkout run?
 #   uv run refactory ceo "an idea" --mode design
 #
-#   git clone <repo>
+#   git clone https://github.com/akashgit/refactory-dsh.git
+#   cd refactory-dsh
 #   ./install.sh
 #   uv run refactory ceo "a mode that drafts a haiku and counts its syllables" --mode create
 set -euo pipefail
