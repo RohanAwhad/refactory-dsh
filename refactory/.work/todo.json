@@ -776,6 +776,28 @@
       "commit": "28428a1c44",
       "evidence": "`--sample NAME=VALUE` (repeatable; `sample` on the tool; a JSON array in the `sample_knobs` knob so a path with `=`, a comma or a space survives) supplies real knob values to the smoke, so the run exercises the input path rather than the declared defaults, and the message on failure names the samples it ran with. Independently, `artifact_problems` judges whatever the run produced by its own format: a `.whl` must contain `METADATA` and `WHEEL` beside its `RECORD`, and an unreadable `.zip`/`.whl` is refused by name \u2014 which is the check that would have caught the reported defect. `sandbox.smoke` gained the `knobs` override it needed. Tests: a wheel missing METADATA/WHEEL is refused with both named, a valid wheel passes, a non-archive is refused, a sample reaches the smoke's knobs, and a malformed sample is a usage error. LIMIT: a brief that declares no inputs, and a caller who gives no sample, still exercise only the default path; the format check covers archives, not arbitrary artifact kinds.",
       "observed": "52 passed (test_create.py)"
+    },
+    {
+      "id": "qa-marker",
+      "issue": 70,
+      "title": "A bolded BLOCKING finding was invisible to the QA gate",
+      "why": "Found by the hard sanity create run for a security-patch mode: its overwatch pass refused to state PASS and named the counter. `synthesize_qa` and `gate_qa` looked for lines that `startswith(\"BLOCKING\")`, so a reviewer that bolded its marker was not counted \u2014 the synthesis said `0 blocking finding(s)` and the gate said `proceed` while the same body carried four blockers.",
+      "verify": "pytest refactory/tests/test_create.py -q",
+      "status": "done",
+      "commit": "c7cc7c5aaf",
+      "evidence": "`marks(line, marker)` strips the decoration a markdown finding carries (bullets, emphasis, quotes, headings, leading whitespace) before comparing, case-insensitively; `synthesize_qa`, `gate_qa` and the overwatch verdict all use it. The test drives the synthesis over four spellings of the marker (`BLOCKING:`, `**BLOCKING:**`, `- **BLOCKING**`, `* BLOCKING:`) and asserts each counts as one blocking finding, that the header says so, and that the gate returns reloop.",
+      "observed": "775 passed, 10 skipped (refactory/tests)"
+    },
+    {
+      "id": "smoke-not-measured",
+      "issue": 71,
+      "title": "A mode that raised inside the smoke was recorded as a measured 0.0",
+      "why": "Same run, same overwatch pass. `sandbox.smoke` returns ok when the sandbox process exits 0, which it does even when the mode raises inside it, so `create_ops.smoke` read the payload's 0.0 score and recorded a measured score \u2014 reporting \"it works badly\" where the truth was \"it does not run\". The keyless path already distinguished not-measured from scored-nothing; the model and deterministic paths did not.",
+      "verify": "pytest refactory/tests/test_create.py -q",
+      "status": "done",
+      "commit": "c7cc7c5aaf",
+      "evidence": "Both paths now check the payload's `exit_ok` and raise, naming the run's own error: the model path before accepting a score, the deterministic path after the model retry (so the keyless first attempt of an agent mode, which legitimately fails without a model, still reaches the retry). Test: a stub smoke returning `exit_ok: False` with a 0.0 score is refused with `did not finish a run with a model`.",
+      "observed": "775 passed, 10 skipped (refactory/tests)"
     }
   ],
   "verification": {
