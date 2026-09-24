@@ -23,7 +23,7 @@ from typing import Any
 
 from refactory_dsh import lowering, registry, steering
 from refactory_dsh.dsh_runtime import TASK
-from refactory_dsh.paths import REPO_ROOT, node_bin, venv_bin
+from refactory_dsh.paths import REPO_ROOT, dsh_command, venv_bin
 
 #: Where an interactive run lives when no work directory is named.
 DEFAULT_ROOT = Path(".factory/interactive")
@@ -110,7 +110,7 @@ def command(
     """The DSH run whose stdin is the person's terminal."""
     _, mode_name = identifier.split("/", 1)
     argv = [
-        str(node_bin()), "--import", "tsx/esm", "apps/cli/src/bin.ts",
+        *dsh_command(),
         "--profile", "graph", "run",
         "--mode", name,
         "--task", TASK,

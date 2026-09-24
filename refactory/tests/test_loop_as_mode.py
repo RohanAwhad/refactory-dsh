@@ -321,7 +321,7 @@ def test_it_runs_end_to_end_on_the_runtime_that_ships(tmp_path):
     import subprocess
 
     from refactory_dsh import lowering
-    from refactory_dsh.paths import REPO_ROOT, node_bin, venv_bin
+    from refactory_dsh.paths import REPO_ROOT, dsh_command, venv_bin
     from refactory_dsh.run import FACTS
 
     state = registry.resolve(Path("."), MODE)[1]().state_dict()
@@ -338,7 +338,7 @@ def test_it_runs_end_to_end_on_the_runtime_that_ships(tmp_path):
 
     result = subprocess.run(
         [
-            str(node_bin()), "--import", "tsx/esm", "apps/cli/src/bin.ts",
+            *dsh_command(),
             "--profile", "graph", "run",
             "--mode", "loop",
             "--task", "Call wf_next repeatedly until it reports done. Do nothing else.",

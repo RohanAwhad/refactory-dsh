@@ -19,7 +19,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from refactory_dsh.paths import dsh_root, node_bin
+from refactory_dsh.paths import dsh_command
 
 #: The overlay that keeps a node's completion from backgrounding its own work. Checked
 #: in rather than generated, so what a node's model call is configured with is
@@ -137,13 +137,10 @@ class DshModelClient:
         simply has no better version.
         """
         task = f"{system}\n\n{prompt}" if system else prompt
-        # Absolute, because the child's working directory is the node's, not the
-        # checkout's.
+        # The launcher resolves its own entry; the child's working directory stays
+        # the node's, not the checkout's.
         cmd = [
-            str(node_bin()),
-            "--import",
-            "tsx/esm",
-            str(dsh_root() / "apps" / "cli" / "src" / "bin.ts"),
+            *dsh_command(),
             "--profile",
             "headless",
             # A node is one completion whose answer is the node's output, so a model

@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from refactory_dsh import lowering, registry
-from refactory_dsh.paths import REPO_ROOT, node_bin, venv_bin
+from refactory_dsh.paths import REPO_ROOT, dsh_command, venv_bin
 from refactory_dsh.run import FACTS
 
 MODE = "circle_packing/adaptive"
@@ -48,7 +48,7 @@ def _run_on_dsh(
 
     result = subprocess.run(
         [
-            str(node_bin()), "--import", "tsx/esm", "apps/cli/src/bin.ts",
+            *dsh_command(),
             "--profile", "graph", "run",
             "--mode", name,
             "--task", TASK,

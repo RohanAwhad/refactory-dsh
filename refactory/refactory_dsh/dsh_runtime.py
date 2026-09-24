@@ -26,7 +26,7 @@ from typing import Any
 
 from refactory_dsh import lowering
 from refactory_dsh.nn import RunResult
-from refactory_dsh.paths import REPO_ROOT, node_bin, venv_bin
+from refactory_dsh.paths import REPO_ROOT, dsh_command, venv_bin
 from refactory_dsh.run import FACTS
 
 #: What the CEO is asked to do. A deterministic mode needs the CEO only to advance
@@ -94,7 +94,7 @@ def run_on_dsh(
     lowering.write_declarations(state, workdir)
 
     command = [
-        str(node_bin()), "--import", "tsx/esm", "apps/cli/src/bin.ts",
+        *dsh_command(),
         "--profile", "graph", "run",
         "--mode", name,
         "--task", TASK,
