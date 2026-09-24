@@ -61,3 +61,5 @@ refactory/workdirs/
 refactory/**/*.egg-info/
 refactory/**/*.pyc
 /.pytest_cache/
+# The root project owns the lock. A stray one appears when uv runs inside refactory/.
+/refactory/uv.lock
