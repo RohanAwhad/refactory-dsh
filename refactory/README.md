@@ -73,6 +73,8 @@ uv run python -m pytest refactory/tests -q
 
 `tests/test_registry.py::test_every_installed_package_mode_validates` asserts the strongest statement the library can make about a package it did not write: every mode of every installed package builds a graph that validates with all of its calls resolved.
 
+`tests/test_ir_parity.py` holds `refactory_dsh/ir.py` against the reference graph language over every shipped mode, serializing both byte for byte. The reference is a test-time oracle, not a runtime dependency: run `uv sync --group reference` to install it, and without it those tests skip with a reason.
+
 ## Not yet wired
 
 The DSH agent presets that used to drive the JSON graphs are not regenerated any more, because creating and optimizing are now Python entry points. Wiring them back onto `refactory_dsh.create` and `refactory_dsh.loop` for the GUI is the next piece of work; see `docs/plans/pythonic-modes.md`.

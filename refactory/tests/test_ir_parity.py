@@ -6,9 +6,10 @@ once building the reference's, with only the IR classes swapped -- and the two
 `to_dict()` results must serialize to the same bytes. The reference's NetworkX
 validator must also accept the graph our copy serialized.
 
-The reference is a dev-only test oracle, so every test here skips with a reason
-when `factory` is not importable, and the `toolchain` marker makes
-`--toolchain-gate` report that skip as unverified rather than as a pass.
+The reference is a test-time oracle installed from the non-default `reference`
+group, so every test here skips with a reason when `factory` is not importable, and
+the `toolchain` marker makes `--toolchain-gate` report that skip as unverified
+rather than as a pass.
 """
 
 from __future__ import annotations
@@ -51,12 +52,14 @@ def _serialized(workflow: Any) -> bytes:
 
 #: The shipped modes the reference validator refuses, with the issue it reports.
 #:
-#: Both are limits of that validator rather than defects in the lowering, which
-#: the byte-parity test above shows is identical to the reference's:
+#: Both are limits of that validator, not defects in the lowering: the byte-parity
+#: test above runs the same `lowering.to_workflow` against the reference's own
+#: classes and shows the two graphs serialize identically, so the difference is the
+#: validator's reading and not ours.
 #:
 #: - `sympy_pack/exact` is a read-modify-write loop. `derive` reads and writes
-#:   `state.json`, and the reference's data-dependency check unions only the
-#:   writes of a node's ancestors, so a node's own writes never count.
+#:   `state.json`, and `_validate_data_dependencies` unions only the writes of a
+#:   node's `nx.ancestors`, so a node's own writes never count.
 #: - `java_build_pack/build` writes `build.sh` inside the `items` data node's
 #:   subgraph. The reference adds `data_node -> entry` edges only, so a subgraph
 #:   write is never seen as available to the data node's successor.

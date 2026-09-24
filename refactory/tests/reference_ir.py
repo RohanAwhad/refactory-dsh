@@ -2,9 +2,9 @@
 
 The nine node and workflow types this package lowers into live in
 `refactory_dsh.ir`. The reference they were copied from, remote-factory's
-`factory`, is no longer a runtime dependency: it is in the `dev` dependency group
-and reached only from tests, where it answers the questions a copy cannot answer
-about itself.
+`factory`, is no longer a runtime dependency: it lives in the non-default
+`reference` dependency group and is reached only from tests, where it answers the
+questions a copy cannot answer about itself.
 
 `reference_lowering` runs the real `lowering.to_workflow` with the reference's own
 classes bound in place of ours, so one lowering produces the two graphs the parity
@@ -44,7 +44,8 @@ needs_factory = pytest.mark.skipif(
     not HAS_FACTORY,
     reason=(
         "the reference graph language ('factory', remote-factory) is not installed; "
-        "it is a dev-only test oracle, so install the dev group to verify this path"
+        "it is a test-time oracle, so run `uv sync --group reference` to verify "
+        "this path"
     ),
 )
 

@@ -254,8 +254,9 @@ read the journal. That is a known gap; see §11.
   state to the IR `refactory_dsh/ir.py` owns and writes `<mode>.graph.json` for the
   science bundle, which mounts `workflow-spine` and runs each node. The reference
   that IR was copied from is a test-time oracle: `tests/test_ir_parity.py` compares
-  the two byte for byte over every shipped mode, and it is installed only with
-  `uv sync --group reference`.
+  the two byte for byte over every shipped mode and asks the reference's validator
+  to accept the result, recording the two modes it refuses as limits of that
+  validator. It is installed only with `uv sync --group reference`.
 
 A debug runtime that disagrees with the real one is worse than none, so
 `refactory/tests/test_equivalence.py` runs the same mode both ways and compares.
