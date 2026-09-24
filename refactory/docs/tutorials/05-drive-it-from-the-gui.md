@@ -34,7 +34,7 @@ One action per console verb, so the tool and a shell are the same surface:
 | `best` | `run` | the winner, and with `state` its whole state dict |
 | `adopt` | `run`, `as` | the new package the winner was written to |
 | `registry` | `packages`, `target`, `args` | the registry's own JSON for `list`, `show`, `verify`, `smoke`, `add`, `import`, `remove`, `enable`, `disable` |
-| `create` | `name`, `brief`, and optionally `extends`, `dataNode`, `task` | the package it produced, and the design review it wrote; with `dataNode` the mode iterates a dataset, with `task` it is bound to a Task that supplies and judges the items |
+| `create` | `name`, `brief`, and exactly one of `task` (the class of work, which implies the `data` node) or `singleShot` (the one-off special case); optionally `extends`, `dataNode` | the package it produced, and the design review it wrote; with `task` the mode is bound to a Task that lists and judges the items, and naming neither is refused before any model call |
 | `edit` | `mode`, `name`, `brief` | the revision, its before/after scores, and whether it regressed |
 | `design` | `name`, `brief`, `check` | the artifact, and whether its check command passed |
 | `stop` | `run` | whether the run was asked to stop |

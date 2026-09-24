@@ -56,10 +56,12 @@ uv run refactory doctor
   ok    import factory        the vendored graph language (refactory/vendor/remote-factory)
   ok    import refactory_dsh  this package
   ok    DSH profile 'graph'   /Users/you/.dsh/profiles/graph
-  ok    packages of modes     14 package(s)
+  ok    packages of modes     16 package(s) under /Users/you/re-factory
 
 refactory doctor: ready — try `refactory list`, or `refactory ceo "an idea" --mode design`
 ```
+
+包的数量是唯一一行属于你而不属于工具的输出：它数的是检出里带的，加上你在 `.factory/packages` 下创建的那些，所以全新克隆会报 11。
 
 ---
 
@@ -73,7 +75,7 @@ refactory doctor: ready — try `refactory list`, or `refactory ceo "an idea" --
 
 ```bash
 uv run refactory ceo "one agent drafts a product blurb; one op checks its length and cliches" \
-  --mode create --name blurb
+  --mode create --name blurb --single
 ```
 
 `create` 就是 remote-factory 的 **create-v2**：研究阶段、**由你批准**的策略阶段、构建、 三个并行评审、对它们证据的审计，然后注册并做一次 smoke 运行。它会在 `.factory/packages/<name>` 写下一个 Python 包并注册它。
@@ -82,7 +84,7 @@ uv run refactory ceo "one agent drafts a product blurb; one op checks its length
 - `--mode edit` 修订一个已有模式，并拒绝变差；它需要指名被修订的模式：`--mode edit --revise <package>/<mode>`。
 - 名字可以省略：不给 `--name` 时，你说的话就变成名字。
 - 在你说的话里要一次模型调用（"一个 agent 起草……"），生成的模式就会有一个 `agent` 节点； 否则它是确定性的——这是好事：离线的模式可以被搜索评估成百上千次。
-- `data` 节点与 `Task` 也用同样的方式提出，而 validate gate 会**检查**你确实拿到了它们： `--data-node` 与 `--task my_pack.tasks:MyTask`。
+- 命名一个 `Task`（`--task my_pack.tasks:MyTask`）本身就是数据集模式的全部指令：它蕴含 `data` 节点，而 validate gate 会**检查**包里确实有一个绑定到该 Task 的节点。`--single` 表示你要造的是那个只做一次的特例；单独给 `--data-node` 是在此之上的额外要求，而不是指令。
 
 ###
 2. 使用它
@@ -282,7 +284,9 @@ dsh web: http://127.0.0.1:3081/?token=<per-process token>
 |---|---|
 | **Mode** | 目录列出的每个模式，各带运行它的动词 |
 | **Outer loop**、**Optimizer**、**Evaluator** | 第二层的三个选择，各带控制台自己的描述；`Use the default` 就留用控制台的默认 |
-| **Start** | 在它自己的进程里启动选中的模式，面板会指名它开启的那次运行 |
+| **模式的旋钮** | 选中的模式声明几个旋钮就画几个字段，形状由声明的类型决定——声明了取值的旋钮是一个选择，数字受声明区间的约束，只有开放的文本旋钮才需要键入。字段显示什么，运行就发送什么，包括停留在默认值的旋钮，因为模式的输入*就是*它的旋钮 |
+| **Start** | 在它自己的进程里启动选中的模式（搜索），面板会指名它开启的那次运行 |
+| **Run once** | 用这些旋钮值把该模式用一次，并报告发生了什么：运行自己的状态字、仍然欠着的节点、以及它留下的事实。停在只有人才能回答的门前时会说明这一点——面板不代替人回答门 |
 | **Run status** | 状态、最好分数与评估次数；**Refresh status** 读下一帧，**Stop the run** 请它停下 |
 | **Packages of modes** | 按包：**Enable**、**Disable**、**Remove**，以及从目录或 git URL **Import a package** |
 
@@ -301,8 +305,8 @@ dsh web: http://127.0.0.1:3081/?token=<per-process token>
 | *"把排行榜和胜者改了什么给我看看。"* | `leaderboard`，再对胜出那行来一次 `candidate` |
 | *"把胜者保留成一个叫 my_tuned 的包。"* | `adopt`，输入原封不动 |
 | *"这次运行是为了让计数正好落点；步子留小点。"* | `steer`：这句话进入运行的意图账本 |
-| *"创建一个用 agent 写文案并检查它的模式。"* | `create`，和 `ceo --mode create` 同一个创作模式——CEO 会先请你批准计划，并把你的回答随调用一起传过去 |
-| *"那次创作进行到哪了？"* | 对运行目录（`.factory/create/<名字>`）用 `status`，它会报出创作运行自己的逐节点进度 |
+| *"创建一个用 agent 写文案并检查它的模式。"* | `create`，和 `ceo --mode create` 同一个创作模式。它必须知道你要造的是哪一种：`task` 命名那一类工作，`single: true` 是只做一次的特例，两者都不给会被拒绝 |
+| *"那次创作进行到哪了？"* | 对运行目录用 `status`——经 `ceo` 起的创作运行在 `.factory/interactive/<包>-<模式>`，`create` 入口程序的在 `.factory/create/<名字>`——它会报出这次运行自己的逐节点进度 |
 | *"把那个模式跑一次给我看看。"* | `run`，就是 CLI 的 `refactory run`：它在 DSH 上使用这个模式，并报出运行目录与它记录下来的东西 |
 | *"那次创作被网络抖动弄死了——接着跑。"* | 对运行目录用 `resume`：它从失败的那个节点继续，已经完成的节点全部保留 |
 | *"把包列出来，然后 disable annealing_pack。"* | `registry` 先 `list`，再 `disable` |
@@ -366,7 +370,7 @@ key 从环境里读（`DEEPSEEK_API_KEY`、`OPENAI_API_KEY`……包括检出根
 
 ```bash
 uv run refactory run counting_pack/fixed_step --model deepseek-v4-pro
-uv run refactory ceo "an idea" --mode create --model deepseek-v4-pro
+uv run refactory ceo "an idea" --mode create --single --model deepseek-v4-pro
 uv run refactory optimize circle_packing/adaptive --provider deepseek-official --model deepseek-v4-pro
 ```
 

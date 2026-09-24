@@ -34,7 +34,7 @@ cd refactory && ../.venv/bin/python -m refactory_dsh.loop circle_packing/adaptiv
   --epochs 2 --batch-size 4 --optimizer random --seed 5 --runs-root /tmp/decisions
 ```
 
-seed `0.875` → best `0.955`, 1 structural win, rejections across `V2 V3 V4 V5 V6 V7
+seed `0.795` → best `0.875` raw `0.955`, 1 structural win, rejections across `V2 V3 V4 V5 V6 V7
 V10`, `I:fact_produced`, `E-shape`.
 
 ## Non-goals
@@ -83,7 +83,7 @@ deliberate divergence stated there. It is not repeated here.
 Kept because the lesson generalizes, and because the same mistake is easy to make
 again.
 
-The first real 2-epoch run produced **no improvement**: seed `0.875`, best `0.875`.
+The first real 2-epoch run produced **no improvement**: seed `0.875`, best `0.875` (raw, before the size cost existed).
 It was correct in every structural sense and useless as a search. Three defects,
 all in the loop rather than the library:
 

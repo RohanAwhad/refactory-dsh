@@ -134,10 +134,14 @@ graph` is the headless run the DSH evaluator and the equivalence tests use.
 by hand, the interactive run was executed with a person at the gate, and the Web view
 was driven in a real browser. Everything below was found by running it, not by reading.
 
-The one open item is **#49**, the first-class picker: the GUI can do everything #28
-asked for, through the `refactory` tool in the conversation, but the strategy/mode/
-package choice is a described catalogue the model picks from rather than a dropdown.
-A dropdown needs a host RPC seam that does not exist yet.
+The picker landed (#49): the panel is a dropdown over the console's own catalogue, it
+draws one field per knob the chosen mode declares, and it offers **Run once** beside
+**Start** (#73). The frame the product is named for landed with it — `create` asks which
+of the two things it is building, a Task names the class of work, the outer loop is graded
+on the items it was not tuned on, and a harness is fed at run time rather than edited to
+be fed (#75, #76, #79). One item is open: **#81**, where the model smoke passes inside
+`create` and fails from `package smoke --model`, with an error that names a Node version
+instead of a cause.
 
 ## Level 3, and what it found
 
@@ -183,8 +187,8 @@ capability recorded as present:
 
 | # | what |
 |---|---|
-| **49** | A first-class picker for the mode, the loop and the packages, instead of the conversation — the only open issue |
-| — | Everything else (#17, #28, #40–#48) is closed, with its evidence on the issue |
+| **81** | The model smoke passes inside `create` and fails standalone, and its error is truncated — the only open issue |
+| — | Everything else (#17, #28, #40–#80) is closed, with its evidence on the issue and in `refactory/.work/todo.json` |
 
 ## The walkthrough, and what it found
 

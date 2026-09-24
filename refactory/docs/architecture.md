@@ -216,7 +216,7 @@ uv run refactory optimize circle_packing/adaptive \
   --epochs 2 --batch-size 4 --optimizer random --seed 5 --runs-root /tmp/walk
 ```
 
-seed `0.875` → best `0.955`, bound `epochs`, 8 inner runs, 1 structural win
+seed `0.795` → best `0.875` (`raw_best_score` `0.955`: the compared score is the raw one minus `0.01` per node), bound `epochs`, 8 inner runs, 1 structural win
 (`set_knob grid=18` + `duplicate accept`), and refusals across
 `V2 V3 V4 V5 V6 V7 V10`, `I:fact_produced`, `E-shape` — none of which cost a run.
 
@@ -289,7 +289,7 @@ the tower has something to find:
 ```bash
 uv run refactory optimize loop_mode/loop --epochs 1 --batch-size 3 \
   --optimizer random --seed 0 --runs-root /tmp/tower
-# seed 0.875 -> best 1.04, by `set_knob batch_size 4 -> 8`
+# seed 0.705 -> best 0.87, raw 0.96, by `set_knob batch_size 4 -> 8`
 ```
 
 That is D14's claim demonstrated rather than described: the loop's own settings are a
@@ -305,7 +305,7 @@ All three produce something **new** and never mutate their input.
 
 | mode | also an entry point | input | output |
 |---|---|---|---|
-| `default_pack/create` | `uv run refactory ceo "…" --mode create` | a brief | a package: `__init__.py`, `mode.py`, `ops.py` |
+| `default_pack/create` | `uv run refactory ceo "…" --mode create --task <module:Class>\|--single` | a brief, and which of the two things it is building | a package: `__init__.py`, `mode.py`, `ops.py` |
 | `default_pack/edit` | `uv run refactory ceo "…" --mode edit` | a brief + an existing mode | a revised package, recording `revision_of` **and the state it came from** |
 | `default_pack/design` | `uv run refactory ceo "…" --mode design` | a brief | a checked software artifact |
 

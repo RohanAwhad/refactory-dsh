@@ -66,7 +66,7 @@ cat .factory/loop/report.md
 
 ```bash
 uv run refactory ceo "what the package should do" \
-    --mode create --name my_pkg --approve gate_strategy=proceed
+    --mode create --name my_pkg --single --approve gate_strategy=proceed
 ```
 
 ## 测试

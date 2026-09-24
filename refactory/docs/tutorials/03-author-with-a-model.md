@@ -18,7 +18,7 @@ is untouched.
 
 ```bash
 uv run refactory ceo "hill-climb a greedy circle packing by accepting non-worsening moves" \
-  --mode create --name annealing_pack --approve gate_strategy=proceed
+  --mode create --name annealing_pack --single --approve gate_strategy=proceed
 ```
 
 The run ends with a **smoke of the new package**: it is read out of process, its first

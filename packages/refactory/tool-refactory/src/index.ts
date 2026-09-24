@@ -128,6 +128,7 @@ interface Args {
   attempts?: number
   dataNode?: boolean
   task?: string
+  singleShot?: boolean
 }
 
 /** One run's setting, as the console's `--<flag> value` pair. */
@@ -228,7 +229,8 @@ export function invocationFor(args: Args): {
         positional: [],
         options: {
           name: args.name, brief: args.brief, extends: args.extends, attempts: args.attempts,
-          'data-node': args.dataNode, task: args.task, verdict: args.approve,
+          'data-node': args.dataNode, task: args.task, single: args.singleShot,
+          verdict: args.approve,
           input: args.inputs, provider: args.provider, model: args.model, resume: args.resume,
           sample: args.sample,
         },
@@ -561,8 +563,9 @@ export function apply(ctx: Context, config: Config): void {
         description: 'For "create"/"edit"/"design": a person\'s answers to the gates the run pauses at, as "GATE=VALUE" (e.g. "gate_strategy=proceed"). A headless authoring run refuses a gate it was not told the answer to, so ask the user first — this call cannot pause to ask them itself.',
       },
       attempts: { type: 'integer', description: 'For "create"/"edit"/"design": how many times the model may retry before the run fails.' },
-      dataNode: { type: 'boolean', description: 'For action "create": build the mode as a DataNode that runs its subgraph once per item (a dataset mode). The run is refused if the produced mode does not declare one.' },
-      task: { type: 'string', description: 'For action "create": a Task class (module:Class or a registered name) the produced mode must satisfy — it supplies the per-item prompts and judges each pass. The run is refused if the produced mode is not bound to it.' },
+      dataNode: { type: 'boolean', description: 'For action "create": require that the produced mode declares a DataNode that runs its subgraph once per item. A requirement on top of `task` rather than a directive of its own: `task` already implies the data node, and the run is refused if the produced mode does not declare one.' },
+      task: { type: 'string', description: 'For action "create": the class of work, as a Task class (module:Class or a registered name). The produced package binds a data node to it, runs its subgraph once per item, and is judged per item; the run is refused if the produced mode is not bound to it. Naming neither `task` nor `singleShot` is refused, because a harness built for one hardcoded example is the special case.' },
+      singleShot: { type: 'boolean', description: 'For action "create": build a harness for one run of one thing, with no Task binding. One of `task` or `singleShot` is required.' },
       sample: {
         type: 'array',
         items: { type: 'string' },

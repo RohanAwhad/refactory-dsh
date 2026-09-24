@@ -19,8 +19,12 @@ uv run refactory optimize circle_packing/adaptive \
   "evaluator": "walker",
   "bound": "epochs",
   "evaluations": 8,
-  "seed_score": 0.875,
-  "best_score": 0.955,
+  "seed_score": 0.795,
+  "best_score": 0.875,
+  "raw_best_score": 0.955,
+  "scoring": {"compared": "penalized", "parsimony": 0.01, ...},
+  "holdout": {"train": 0.955, "holdout": null, "overfit": false,
+              "note": "the mode has no data node, so it iterates no items and there is nothing to hold out"},
   "structural_wins": 1,
   "rejection_codes": {"E-shape": 1, "I:fact_produced": 4, "V10": 2, "V2": 3, ...},
   "report": "/tmp/tour/run/report.md"
@@ -31,7 +35,8 @@ Three things to notice:
 
 - **A bound is always named.** `"bound": "epochs"` — a run never ends for an
   unstated reason. The other bound is `max_evaluations`.
-- **The score improved**: `0.875` → `0.955`, in 8 inner runs.
+- **The score improved**: seed `0.795` → best `0.875`, in 8 inner runs. Those are the numbers the search compares: the raw score with `0.01` taken off for each node of the candidate's graph. The unpenalised pair is beside them (`0.875` → `0.955`), so a harness that won on merit can be told from one that won on size. Here every candidate has 8 nodes, and the `duplicate` the search tried next has 9 — which is why it scores `0.865` raw `0.955` and loses to its parent.
+- **Nothing is held out when there is nothing to hold out.** `circle_packing/adaptive` has no data node and iterates no items, so the audit records `holdout: null` and says why instead of inventing a number. A mode bound to a Task is audited on the items it was not tuned on.
 - **Refusals cost nothing.** `rejection_codes` lists every proposal the validator
   rejected *before* it could be evaluated.
 
@@ -61,10 +66,12 @@ Each row carries the candidate, its score, and a **diff against its parent**:
 
 ```json
 [
-  {"id": "4caa88db3dbc", "parent": "b6f0d3c9e601", "score": 0.955, "structural": false,
+  {"id": "4caa88db3dbc", "parent": "b6f0d3c9e601", "score": 0.875, "raw_score": 0.955,
+   "nodes": 8, "size_cost": 0.08, "structural": false,
    "edits": [{"op": "set_knob", "name": "grid", "value": 18}],
    "diff": {"knobs": {"grid": {"before": 10, "after": 18}}, ...}},
-  {"id": "6061dbf4589f", "parent": "4caa88db3dbc", "score": 0.955, "structural": true,
+  {"id": "6061dbf4589f", "parent": "4caa88db3dbc", "score": 0.865, "raw_score": 0.955,
+   "nodes": 9, "size_cost": 0.09, "structural": true,
    "edits": [{"op": "set_knob", "name": "grid", "value": 18}, {"op": "duplicate", "target": "accept"}]}
 ]
 ```
@@ -92,7 +99,7 @@ cat /tmp/tour/run/report.md
 
 Optimizer `random`, 2 epoch(s) of 2, batch 4, 8 inner run(s). Stopped because **epochs** bound the run.
 
-Seed score **0.875** → best **0.955**.
+Seed score **0.795** → best **0.875** (raw 0.875 → 0.955). The compared score is the raw one minus 0.01 per node of the candidate's graph.
 ```
 
 The markdown carries a leaderboard, the structural candidates that scored, and a

@@ -56,10 +56,12 @@ uv run refactory doctor
   ok    import factory        the vendored graph language (refactory/vendor/remote-factory)
   ok    import refactory_dsh  this package
   ok    DSH profile 'graph'   /Users/you/.dsh/profiles/graph
-  ok    packages of modes     14 package(s)
+  ok    packages of modes     16 package(s) under /Users/you/re-factory
 
 refactory doctor: ready — try `refactory list`, or `refactory ceo "an idea" --mode design`
 ```
+
+The package count is the one line that is yours rather than the tool's: it counts what the checkout ships plus whatever you have created under `.factory/packages`, so a fresh clone reports eleven.
 
 ---
 
@@ -73,7 +75,7 @@ Four steps, four commands.
 
 ```bash
 uv run refactory ceo "one agent drafts a product blurb; one op checks its length and cliches" \
-  --mode create --name blurb
+  --mode create --name blurb --single
 ```
 
 `create` is remote-factory's **create-v2**: a research phase, a strategy phase **you approve**, a build, three reviews in parallel, an audit of their evidence, then registration and a smoke run. It writes a Python package under `.factory/packages/<name>` and registers it.
@@ -82,7 +84,7 @@ uv run refactory ceo "one agent drafts a product blurb; one op checks its length
 - `--mode edit` revises an existing mode and refuses a regression; it needs the mode to revise: `--mode edit --revise <package>/<mode>`.
 - A name is optional: without `--name`, your words become the name.
 - Ask for a model call in what you say ("one agent drafts …") and the created mode has an `agent` node. Otherwise it is deterministic — which is a feature: an offline mode is one a search can evaluate hundreds of times.
-- A `data` node and a `Task` are asked for the same way, and the validate gate *checks* you got one: `--data-node` and `--task my_pack.tasks:MyTask`.
+- Naming a `Task` (`--task my_pack.tasks:MyTask`) is the whole directive for a dataset mode: it implies the `data` node, and the validate gate *checks* the package really has one bound to that Task. `--single` says you are building the one-off special case instead; `--data-node` on its own is a requirement on top, not a directive.
 
 ###
 2. Use it
@@ -282,7 +284,9 @@ The token is per-process; the bare `http://127.0.0.1:3081/` answers `401`. Leave
 |---|---|
 | **Mode** | every mode the catalogue lists, each with the verb that runs it |
 | **Outer loop**, **Optimizer**, **Evaluator** | the three level-two choices, each with the console's own description; `Use the default` leaves the console's default in place |
-| **Start** | starts the chosen mode in its own process, and the panel names the run it began |
+| **The mode's knobs** | one field per knob the chosen mode declares, shaped by the kind it declares — a knob with declared values is a choice, a number is bounded by its declared range, only an open text knob is typed. What the fields show is what the run sends, including a knob left at its default, because a mode's inputs *are* its knobs |
+| **Start** | starts the chosen mode in its own process (the search), and the panel names the run it began |
+| **Run once** | uses the mode once with those knob values and reports what happened: the run's own status word, the nodes still due, and the facts it left. A run stopped at a gate a person owns says so — the panel does not answer gates |
 | **Run status** | state, best score and evaluations; **Refresh status** reads the next frame, **Stop the run** asks it to stop |
 | **Packages of modes** | per package: **Enable**, **Disable**, **Remove**, and **Import a package** from a directory or a git URL |
 
@@ -301,8 +305,8 @@ Ask in words; the CEO calls the `refactory` tool, which is the same console. Its
 | *"Show me the leaderboard and what the winner changed."* | `leaderboard`, then `candidate` for the winning row |
 | *"Keep the winner as a package called my_tuned."* | `adopt`, input untouched |
 | *"This run is for making the count land exactly; keep the step small."* | `steer`: the note reaches the run's intent ledger |
-| *"Create a mode that drafts a blurb with an agent and checks it."* | `create`, the same authoring mode as `ceo --mode create` — the CEO asks you to approve the plan first, and passes your answer with the call |
-| *"Where is that creation up to?"* | `status` on the run directory (`.factory/create/<name>`), which reports the authoring run's own node-by-node progress |
+| *"Create a mode that drafts a blurb with an agent and checks it."* | `create`, the same authoring mode as `ceo --mode create`. It needs to know which of the two things it is building: a `task` names the class of work, `single: true` is the one-off special case, and neither is refused |
+| *"Where is that creation up to?"* | `status` on the run directory — `.factory/interactive/<package>-<mode>` for an authoring run started through `ceo`, `.factory/create/<name>` for the `create` entry point — which reports the run's own node-by-node progress |
 | *"Run that mode once and show me."* | `run`, the CLI's `refactory run`: it uses the mode on DSH and reports the run directory and what it recorded |
 | *"That creation died on a network blip — pick it up."* | `resume` with the run directory: it continues at the node that failed, keeping every node that finished |
 | *"Show me the packages, then disable annealing_pack."* | `registry` with `list`, then `disable` |
@@ -366,7 +370,7 @@ A local OpenAI-compatible server works through the same route, and still needs *
 
 ```bash
 uv run refactory run counting_pack/fixed_step --model deepseek-v4-pro
-uv run refactory ceo "an idea" --mode create --model deepseek-v4-pro
+uv run refactory ceo "an idea" --mode create --single --model deepseek-v4-pro
 uv run refactory optimize circle_packing/adaptive --provider deepseek-official --model deepseek-v4-pro
 ```
 

@@ -636,6 +636,39 @@ describe('the brief\'s declared inputs', () => {
   })
 })
 
+describe('creating a harness from the conversation', () => {
+  it('forwards the creation directive, so a one-off is askable at all', async () => {
+    // `create` refuses a request that names neither a class of work nor the one-off
+    // special case, and the tool is the third caller beside the CLI and the console:
+    // without this argument the only creation reachable from the conversation is one
+    // bound to a Task.
+    const { ctx, subprocess } = await setup()
+    subprocess.handler = () => runResult(JSON.stringify({ ok: true, exit_code: 0, result: {} }))
+    await call(ctx, {
+      action: 'create',
+      name: 'haiku_pack',
+      brief: 'one agent drafts a haiku, one op counts syllables',
+      singleShot: true,
+    })
+    const argv = subprocess.spawns[0]!.argv
+    expect(argv.slice(0, 4)).toEqual([
+      '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'create',
+    ])
+    expect(argv).toContain('--single')
+
+    subprocess.spawns.length = 0
+    await call(ctx, {
+      action: 'create',
+      name: 'my_harness',
+      brief: 'for any item a Task lists, record it',
+      task: 'refactory_packages.dataset_probe.tasks:CountingTask',
+    })
+    expect(subprocess.spawns[0]!.argv[subprocess.spawns[0]!.argv.indexOf('--task') + 1]).toBe(
+      'refactory_packages.dataset_probe.tasks:CountingTask',
+    )
+  })
+})
+
 describe('running a mode once from the panel', () => {
   it('forwards a single run to the console\'s run verb, with the gate answers', async () => {
     // `start` is the optimizer; a person who has just created a mode needs to *use*

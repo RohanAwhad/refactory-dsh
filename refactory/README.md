@@ -66,7 +66,7 @@ Create a package of modes from a brief. Design and emit are model steps; the gat
 
 ```bash
 uv run refactory ceo "what the package should do" \
-    --mode create --name my_pkg --approve gate_strategy=proceed
+    --mode create --name my_pkg --single --approve gate_strategy=proceed
 ```
 
 ## Test
