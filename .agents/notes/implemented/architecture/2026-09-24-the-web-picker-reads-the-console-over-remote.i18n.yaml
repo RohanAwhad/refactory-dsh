@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-24-the-web-picker-reads-the-console-over-remote.md
-2026-09-24-the-web-picker-reads-the-console-over-remote.md: 673e967f11f985c0f6a62cc3d5defd33e20fcd9a
-2026-09-24-the-web-picker-reads-the-console-over-remote.zh.md: b17e0a6d71d1128ab5dd1af4a6cbbd3fd4b05540
+2026-09-24-the-web-picker-reads-the-console-over-remote.md: ea0cacaab9ba67eed0c454a86ee293ac2f22dafe
+2026-09-24-the-web-picker-reads-the-console-over-remote.zh.md: 0d4d7c913e99b7cf6c186bc658a8f7e198dcd528

@@ -16,7 +16,7 @@ Status: implemented
 
 **研究阶段从来没有被检查过。** `research-plan.json` 唯一的契约是 `writes=("research-plan.json",)`，任何字节都能满足它。两次独立的运行都写了一段说明子 agent「正在后台运行」的散文，`research/` 里空无一物，而设计就建立在未经核实的假设上继续了（issue #63）。真正要紧的原因是子 agent 为什么什么都没写：一个节点的模型调用跑在一次性 profile 上，它的 spawn subagent 工具默认 `backgroundMode: continuable`——于是 agent 在自己的研究者还在跑的时候就结束了回合，节点的产出变成了一句关于它们的话。
 
-**面板能优化一个模式，却不能用它。** 工具唯一的执行动作是 `start`，那是外循环；`refactory run` 只作为 CLI 动词存在，没有 console 动词，因此也没有工具动作，所以刚创建完一个模式的人无法把它跑一次看看它做什么。
+**面板能优化一个模式，却不能用它。** 工具唯一的执行动作是 `start`，那是外循环；`refactory run` 只作为 CLI 动词存在，没有 console 动词，因此也没有工具动作，所以刚创建完一个模式的人无法把它跑一次看看它做什么。 console 后来补上了 `run` 动词；这个手势、旋钮字段与读回是在[面板能设置模式的旋钮并把它用一次](2026-09-24-the-panel-can-set-a-modes-knobs-and-use-it-once.zh.md)里做完的。
 
 **没有任何东西检查这个模式是否做了简述要求的事。** `validate` 证明的是一个包在结构上是一个模式：它能导入、声明了合法的图、满足给它的那些可选绑定。一个整篇都在讲某个 Python 包的简述，产出的模式却完全不接受包——它在 `ops.py` 里硬编码了一个 fixture——并且通过了所有检查。流水线里没有「简述说这个模式消费 X」的表示。
 

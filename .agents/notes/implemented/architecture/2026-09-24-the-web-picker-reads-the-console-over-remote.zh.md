@@ -10,13 +10,13 @@ Issue #49 要求两种抵达 refactory 运行的方式：人用语言请 CEO 去
 
 ## Decision
 
-**第二个 Host 读者，形态是 Typert Remote 服务。** `@deepseek-ai/dsh-refactory-console` 继承 `TypertRemoteService`，注入 `subprocess` 与 `typert`，并注册 `ctx.refactoryConsole`。它的方法就是选择器的词汇：`modes`、`strategies`、`runs`、`packages`、`start`、`status`、`stop`，以及三个包变更方法，每个都以当下的注册表目录作答。
+**第二个 Host 读者，形态是 Typert Remote 服务。** `@deepseek-ai/dsh-refactory-console` 继承 `TypertRemoteService`，注入 `subprocess` 与 `typert`，并注册 `ctx.refactoryConsole`。它的方法就是选择器的词汇：`modes`、`strategies`、`runs`、`packages`、`start`、`run`、`status`、`stop`，以及三个包变更方法，每个都以当下的注册表目录作答。
 
-**一个进程边界，两个调用者。** 服务持有与工具同一个 `Console`，来自 `@deepseek-ai/dsh-tool-refactory/console`，并经共享的 `resolveConsoleSettings` 解析四项部署设置，因此工具与服务不会在检出位置、解释器或时限上产生分歧。`startInvocation` 与 `registryInvocation` 出于同样理由移入该模块：控制台的各种旗标只有一个归属。工具保留自己的 `Config` schema 与自己的字段，因为 schemastery 唯一的对象组合方式是会原地修改的 `set`；共享的默认值表（`CONSOLE_DEFAULTS`）是让各项上限只有一份来源的东西。
+**一个进程边界，两个调用者。** 服务持有与工具同一个 `Console`，来自 `@deepseek-ai/dsh-tool-refactory/console`，并经共享的 `resolveConsoleSettings` 解析四项部署设置，因此工具与服务不会在检出位置、解释器或时限上产生分歧。`startInvocation`、`runInvocation` 与 `registryInvocation` 出于同样理由移入该模块：控制台的各种旗标只有一个归属。工具保留自己的 `Config` schema 与自己的字段，因为 schemastery 唯一的对象组合方式是会原地修改的 `set`；共享的默认值表（`CONSOLE_DEFAULTS`）是让各项上限只有一份来源的东西。
 
 **「有描述的可选项」就是控制台的，不改写。** 目录的 `action` 字段决定运行一个模式的动作，所以 `start` 读它而不是重新推导：创作模式在任何进程启动之前就被拒绝，并附上运行它的动作。不声明任何模式的包报告 `enabled: null` 而非猜测，因为注册表把该状态报告在它的每个模式上。
 
-**浏览器半边是一个右侧面板 tab 类型。** `@deepseek-ai/dsh-client-ui-refactory` 把 kind `refactory` 注册进 `ctx.sidebarRightTabs`，并把正文注册进以键寻址的 `sidebar.right.pane.tab` 坑位——与 `ui-sidebar-files` 相同的两段式路径。正文只画有描述的可选项：模式、策略、优化器与评估器都是选出来的，绝不键入。唯一的自由文本字段是导入来源，那是任何目录都提供不了的。
+**浏览器半边是一个右侧面板 tab 类型。** `@deepseek-ai/dsh-client-ui-refactory` 把 kind `refactory` 注册进 `ctx.sidebarRightTabs`，并把正文注册进以键寻址的 `sidebar.right.pane.tab` 坑位——与 `ui-sidebar-files` 相同的两段式路径。正文只画有描述的可选项：模式、策略、优化器与评估器都是选出来的，绝不键入；所选模式自己声明的旋钮也由声明画出——声明了取值范围的旋钮是一个选择，数字受其声明区间的约束，只有开放的 `str` 旋钮才需要键入。另一个自由文本字段是导入来源，那是任何目录都提供不了的。
 
 ## Consequences
 
