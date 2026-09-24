@@ -899,3 +899,38 @@ def test_a_mode_that_raises_is_not_reported_as_a_measured_zero(monkeypatch, tmp_
     ctx._declared_facts = ("smoke_score", "smoke_ok")
     with pytest.raises(ValueError, match="did not finish a run with a model"):
         create_ops.smoke(ctx)
+
+
+def test_a_review_that_reloops_the_build_says_why_into_the_rebuild(tmp_path):
+    """A gate that sends the build back has to hand its reasons to the next attempt.
+
+    The hard sanity run burned two full review rounds (~an hour) refusing the same
+    findings, because `gate_qa` and `gate_overwatch` wrote their reasons to a file for
+    a reader and set no fact the emit prompt reads: the rebuild re-emitted the same
+    design. `review_design` and `validate` already feed theirs back.
+    """
+    from refactory_dsh.nn import RunContext
+
+    graph = CreateMode().build()
+    prompt = graph.nodes["emit"].prompt_template
+    assert "{{qa_gate}}" in prompt and "{{overwatch_review}}" in prompt
+    assert "qa_gate" in graph.nodes["gate_qa"].produces
+    assert "overwatch_review" in graph.nodes["gate_overwatch"].produces
+
+    (tmp_path / "reviews").mkdir()
+    (tmp_path / "reviews/qa-synthesized.md").write_text(
+        "# QA synthesis\n\n- **BLOCKING:** adding pytest.ini makes it score 1.0\n"
+    )
+    ctx = RunContext(tmp_path, knobs={}, facts={}, task={})
+    ctx._declared = ("reviews/qa-gate.txt",)
+    ctx._declared_facts = ("qa_gate",)
+    assert create_ops.gate_qa(ctx) == "reloop"
+    assert "adding pytest.ini" in ctx.facts["qa_gate"]
+
+    (tmp_path / "reviews/overwatch.md").write_text(
+        "Wrote the audit.\n\nVERDICT: FAIL\n\nThe scorer can be gamed by deleting the test.\n"
+    )
+    ctx._declared = ("reviews/overwatch-gate.txt",)
+    ctx._declared_facts = ("overwatch_review",)
+    assert create_ops.gate_overwatch(ctx) == "reloop"
+    assert "deleting the test" in ctx.facts["overwatch_review"]

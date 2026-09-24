@@ -1189,12 +1189,22 @@ def gate_qa(ctx: Any) -> str:
     """Proceed only when every review ran and none named a blocking finding."""
     text = ctx.read_text("reviews/qa-synthesized.md")
     if "WARNING: NO REVIEW FROM" in text:
-        ctx.write_text("reviews/qa-gate.txt", "reloop: a review did not run\n")
+        reason = "reloop: a review did not run"
+        ctx.write_text("reviews/qa-gate.txt", reason + "\n")
+        ctx.set_fact("qa_gate", reason)
         return "reloop"
-    if any(marks(line, BLOCKING_MARK) for line in text.splitlines()):
-        ctx.write_text("reviews/qa-gate.txt", f"reloop: a {BLOCKING_MARK} finding\n")
+    blocking = [line.strip() for line in text.splitlines() if marks(line, BLOCKING_MARK)]
+    if blocking:
+        reason = "reloop: " + "\n".join(blocking)
+        ctx.write_text("reviews/qa-gate.txt", reason + "\n")
+        # A gate that reloops to `emit` has to say *why* into the prompt that rebuilds:
+        # the file is for a reader, the fact is for the next attempt. Without it the
+        # rebuild re-emits the same design — the hard sanity run burned two full review
+        # rounds (~an hour) refusing the same findings because nothing fed them back.
+        ctx.set_fact("qa_gate", reason)
         return "reloop"
     ctx.write_text("reviews/qa-gate.txt", "proceed: no blocking finding\n")
+    ctx.set_fact("qa_gate", "(the reviews found nothing blocking)")
     return "proceed"
 
 
@@ -1203,9 +1213,14 @@ def gate_overwatch(ctx: Any) -> str:
     text = ctx.read_text("reviews/overwatch.md")
     if any(marks(line, PASS_MARK) for line in text.splitlines()) or PASS_MARK in text.upper():
         ctx.write_text("reviews/overwatch-gate.txt", "proceed: overwatch passed\n")
+        ctx.set_fact("overwatch_review", "(overwatch passed)")
         return "proceed"
-    ctx.write_text(
-        "reviews/overwatch-gate.txt",
-        f"reloop: overwatch did not state {PASS_MARK!r}\n",
+    # The audit's own findings are the most useful thing a rebuild can be given, so
+    # they travel both ways: the file for a reader, the fact for the next attempt.
+    reason = (
+        "reloop: overwatch did not state " + repr(PASS_MARK) + ". What it found:\n"
+        + _excerpt(text, 2000)
     )
+    ctx.write_text("reviews/overwatch-gate.txt", reason + "\n")
+    ctx.set_fact("overwatch_review", reason)
     return "reloop"

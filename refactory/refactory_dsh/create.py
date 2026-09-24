@@ -289,6 +289,7 @@ class CreateMode(Mode):
                 "## API\n{{api}}\n\n"
                 "## Reference package\n{{reference}}\n\n"
                 "## What went wrong last time\n{{validation}}\n\n"
+                "## What the reviews refused\n{{qa_gate}}\n{{overwatch_review}}\n\n"
                 "## A Task this mode must satisfy\n{{task_ref}}\n\n"
                 "## Data iteration\n{{data_node}}\n\n"
                 "Answer with file blocks, each introduced by a line of exactly:\n"
@@ -401,6 +402,7 @@ class CreateMode(Mode):
             "gate_qa", "gate", evaluator=f"{OPS}:gate_qa",
             reads=("reviews/qa-synthesized.md",),
             writes=("reviews/qa-gate.txt",),
+            produces=("qa_gate",),
             max_iterations=4,
             notes="proceed only when every review ran and none is blocking",
         ))
@@ -429,6 +431,7 @@ class CreateMode(Mode):
             "gate_overwatch", "gate", evaluator=f"{OPS}:gate_overwatch",
             reads=("reviews/overwatch.md",),
             writes=("reviews/overwatch-gate.txt",),
+            produces=("overwatch_review",),
             max_iterations=4,
             notes="proceed only on a stated PASS verdict",
         ))
