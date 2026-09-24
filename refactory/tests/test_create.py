@@ -6,6 +6,7 @@ Phase 7 gate of ``docs/plans/pythonic-modes.md``.
 from __future__ import annotations
 
 import json
+import tempfile
 import shutil
 from pathlib import Path
 
@@ -841,3 +842,60 @@ def test_the_smoke_runs_the_knobs_a_sample_names(tmp_path, monkeypatch):
 def test_a_sample_must_be_name_value():
     with pytest.raises(ValueError, match="--sample takes NAME=VALUE"):
         create_ops._sample_knobs(["target"])
+
+
+# ── what the hard run found in the pipeline ────────────────────────────────
+#
+# Two defects the sanity check surfaced, both in the pipeline rather than in the
+# mode it produced. The overwatch pass refused to state PASS and named them.
+
+
+def test_a_bolded_blocking_finding_is_not_invisible_to_the_qa_gate():
+    """`**BLOCKING:** x` is a blocking finding, and `startswith` did not see it.
+
+    A real run merged three reviews into a synthesis that said "0 blocking
+    finding(s)" and let the gate say `proceed`, while the same body held four bolded
+    blockers. The overwatch pass caught it; the counter should not have needed it to.
+    """
+    from refactory_dsh.nn import RunContext
+
+    for marker in ("BLOCKING: the test is deleted", "**BLOCKING:** the test is deleted",
+                   "- **BLOCKING** x", "  * BLOCKING: x"):
+        workdir = Path(tempfile.mkdtemp())
+        (workdir / "reviews").mkdir()
+        (workdir / "reviews/qa.md").write_text(f"# QA\n\n{marker}\n")
+        (workdir / "reviews/health-check.md").write_text("# Health\nok\n")
+        (workdir / "reviews/code-review.md").write_text("# Code\nok\n")
+        ctx = RunContext(workdir, knobs={}, facts={}, task={})
+        ctx._declared = ("reviews/qa-synthesized.md",)
+        ctx._declared_facts = ("qa", "qa_blocking", "qa_missing")
+        produced = create_ops.synthesize_qa(ctx)
+        assert produced["qa_blocking"] == 1, f"{marker!r} counted as {produced['qa_blocking']}"
+        assert "1 blocking finding(s)" in produced["qa"]
+        ctx._declared = ("reviews/qa-gate.txt",)
+        assert create_ops.gate_qa(ctx) == "reloop"
+
+
+def test_a_mode_that_raises_is_not_reported_as_a_measured_zero(monkeypatch, tmp_path):
+    """The sandbox exiting 0 while the mode failed is "not measured", not "0.0"."""
+    from refactory_dsh import sandbox as sandbox_module
+    from refactory_dsh.nn import RunContext
+
+    monkeypatch.setattr(
+        sandbox_module, "describe_package",
+        lambda name, **kwargs: sandbox_module.SandboxResult(ok=True, payload={"ids": [f"{name}/counter"]}),
+    )
+    monkeypatch.setattr("refactory_dsh.create_ops._agent_nodes", lambda name: ["draft"])
+    monkeypatch.setattr(
+        sandbox_module, "smoke",
+        lambda *args, **kwargs: sandbox_module.SandboxResult(
+            ok=True, payload={"exit_ok": False, "error": "the mode raised", "score": 0.0},
+        ),
+    )
+    workdir = tmp_path / "smoke"
+    workdir.mkdir()
+    ctx = RunContext(workdir, knobs={}, facts={"name": NAME}, task={})
+    ctx._declared = ("smoke.json",)
+    ctx._declared_facts = ("smoke_score", "smoke_ok")
+    with pytest.raises(ValueError, match="did not finish a run with a model"):
+        create_ops.smoke(ctx)

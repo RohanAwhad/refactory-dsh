@@ -874,6 +874,14 @@ def smoke(ctx: Any) -> dict[str, Any]:
             identifier, workdir, project=project_for_nodes(), model=True,
             knobs=samples or None,
         )
+        if scored.ok and scored.payload.get("exit_ok") is False:
+            # The sandbox exited 0 while the *mode* failed: it ran and raised, so its
+            # score is not a measurement of anything. Reporting 0.0 would say "this
+            # scored zero" where the truth is "this did not finish".
+            raise ValueError(
+                "the new mode did not finish a run with a model: "
+                f"{scored.payload.get('error') or 'it failed without saying why'}"
+            )
         if scored.ok:
             score = float(scored.payload.get("score") or 0.0)
             ctx.write_json(
@@ -929,6 +937,15 @@ def smoke(ctx: Any) -> dict[str, Any]:
             ),
             **revised,
         }
+    if result.payload.get("exit_ok") is False:
+        # The sandbox exited 0 while the *mode* failed: it ran and raised, so its
+        # score measures nothing. Reporting 0.0 would say "this scored zero" where
+        # the truth is "this did not finish".
+        with_samples = f" (with {samples})" if samples else ""
+        raise ValueError(
+            f"the new mode did not finish a run{with_samples}: "
+            f"{result.payload.get('error') or 'it failed without saying why'}"
+        )
     score = float(result.payload.get("score") or 0.0)
     _check_artifacts(workdir, samples)
     ctx.write_json(
@@ -1115,6 +1132,20 @@ QA_REVIEWS = (
 #: How a review marks a finding it will not pass with.
 BLOCKING_MARK = "BLOCKING"
 
+
+def marks(line: str, marker: str) -> bool:
+    """Whether a line states the marker, however a markdown author decorated it.
+
+    A reviewer that writes `**BLOCKING:** the test is deleted` has marked a blocking
+    finding, and `line.startswith("BLOCKING")` does not see it. That is not
+    hypothetical: a real run merged three reviews into a synthesis that said "0
+    blocking finding(s)" and let the QA gate say `proceed` while the same body held
+    four bolded blockers — and it was the overwatch pass, refusing to state PASS,
+    that caught it.
+    """
+    cleaned = line.strip().lstrip("*-+>#\t ").lstrip("*_` ")
+    return cleaned.upper().startswith(marker.upper())
+
 #: How the overwatch pass states its own verdict.
 PASS_MARK = "VERDICT: PASS"
 
@@ -1140,7 +1171,7 @@ def synthesize_qa(ctx: Any) -> dict[str, Any]:
     blocking = sum(
         1
         for section in sections
-        if any(line.strip().startswith(BLOCKING_MARK) for line in section.splitlines())
+        if any(marks(line, BLOCKING_MARK) for line in section.splitlines())
     )
     header = (
         "# QA synthesis\n\n"
@@ -1160,7 +1191,7 @@ def gate_qa(ctx: Any) -> str:
     if "WARNING: NO REVIEW FROM" in text:
         ctx.write_text("reviews/qa-gate.txt", "reloop: a review did not run\n")
         return "reloop"
-    if any(line.strip().startswith(BLOCKING_MARK) for line in text.splitlines()):
+    if any(marks(line, BLOCKING_MARK) for line in text.splitlines()):
         ctx.write_text("reviews/qa-gate.txt", f"reloop: a {BLOCKING_MARK} finding\n")
         return "reloop"
     ctx.write_text("reviews/qa-gate.txt", "proceed: no blocking finding\n")
@@ -1170,7 +1201,7 @@ def gate_qa(ctx: Any) -> str:
 def gate_overwatch(ctx: Any) -> str:
     """Proceed only when the overwatch pass stated a PASS verdict."""
     text = ctx.read_text("reviews/overwatch.md")
-    if PASS_MARK in text.upper():
+    if any(marks(line, PASS_MARK) for line in text.splitlines()) or PASS_MARK in text.upper():
         ctx.write_text("reviews/overwatch-gate.txt", "proceed: overwatch passed\n")
         return "proceed"
     ctx.write_text(
