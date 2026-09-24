@@ -708,6 +708,14 @@ def _parser() -> argparse.ArgumentParser:
     single.add_argument("--intent", default="", help="what this run is for, in your words")
     single.add_argument("--workdir", default="", help="the run directory")
     single.add_argument(
+        "--source", default="", metavar="PATH",
+        help="read the items from here instead of the source the mode declares",
+    )
+    single.add_argument(
+        "--source-format", default="", choices=["", "directory", "jsonl", "csv"],
+        help="how to read --source (default: the runner's own directory form)",
+    )
+    single.add_argument(
         "--knob", action="append", default=[], metavar="NAME=VALUE",
         help="set one of the mode's knobs for this run (repeatable)",
     )
@@ -999,6 +1007,10 @@ def main(argv: list[str] | None = None) -> int:
                 forwarded += ["--intent", args.intent]
             if args.workdir:
                 forwarded += ["--workdir", args.workdir]
+            if args.source:
+                forwarded += ["--source", args.source]
+            if args.source_format:
+                forwarded += ["--source-format", args.source_format]
             for pair in args.knob:
                 forwarded += ["--knob", pair]
             for pair in args.verdict:

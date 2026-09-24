@@ -190,6 +190,7 @@ uv run refactory package add|import|remove|enable|disable …
 |---|---|
 | `refactory run <包>/<模式> --intent "<它是干什么的>"` | 在 DSH 上运行这个模式，接上你的终端，所以门能到你这儿 |
 | `refactory run <包>/<模式> --knob name=value` | 为这次运行设置这个模式的一个旋钮 |
+| `refactory run <包>/<模式> --source <目录>` | 从这个位置读条目，而不是模式声明的那个来源，从而把为某一类工作造的 harness 指向它没见过的条目；`--source-format directory\|jsonl\|csv` 说明怎么读 |
 | `refactory run <包>/<模式> --workdir <目录>` | 运行的证据落在哪里 |
 | `refactory run <包>/<模式> --timeout <秒>` | 在门前等多久；`0` 表示等你 |
 | `refactory run <包>/<模式> --model <id> [--provider <路由>]` | 这次运行用的模型 |

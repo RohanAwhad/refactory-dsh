@@ -564,6 +564,28 @@ def test_the_console_forwards_a_single_run_of_a_mode(monkeypatch, capsys):
     capsys.readouterr()
 
 
+def test_the_console_forwards_the_items_a_run_should_read(monkeypatch, capsys):
+    """`--source` reaches the runner, so the panel can feed a harness its own items."""
+    from refactory_dsh import console
+
+    seen: list[list[str]] = []
+    monkeypatch.setattr(
+        console, "_forward",
+        lambda module, argv: (seen.append(argv), {
+            "verb": module, "exit_code": 0, "ok": True, "result": {},
+        })[1],
+    )
+    monkeypatch.setattr(console, "status", lambda directory: {})
+    assert console.main([
+        "run", "java_build_pack/build", "--source", "/tmp/trees",
+        "--source-format", "directory", "--workdir", "/tmp/somewhere",
+    ]) == 0
+    argv = seen[-1]
+    assert argv[argv.index("--source") + 1] == "/tmp/trees"
+    assert argv[argv.index("--source-format") + 1] == "directory"
+    capsys.readouterr()
+
+
 def test_a_single_run_is_read_back_from_the_directory_the_runner_chose(monkeypatch, capsys):
     """Without `--workdir`, the console must read the run the runner actually made.
 

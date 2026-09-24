@@ -34,7 +34,7 @@ from typing import Any
 
 from refactory_dsh.paths import project_root, project_for_nodes
 from refactory_dsh.nn import Node
-from refactory_dsh.nn.executor import CURRENT_ITEM, load_items
+from refactory_dsh.nn.executor import CURRENT_ITEM, ITEMS_OVERRIDE, load_items
 from refactory_dsh.task import Task, TaskError, instance_of, load_task
 
 #: The working directory a node command runs in, when the runtime says so.
@@ -50,6 +50,54 @@ SCORES_FACT = "item_scores"
 
 #: The declaration key the data node's own fields travel under.
 DATA_KEY = "data"
+
+#: The key an override uses to mean "every data node of this run".
+ANY_NODE = "*"
+
+
+def source_override(workdir: Path, node_id: str) -> dict[str, Any]:
+    """What this run says the data node should read, or an empty answer.
+
+    The mode's graph declares the source it was built with; a run may name another,
+    which is what makes a harness for a class of work usable on items it has never
+    seen without editing the mode. An entry for the node wins over the ``*`` entry, so
+    a run can point one node somewhere specific and the rest somewhere general.
+    """
+    path = workdir / ITEMS_OVERRIDE
+    if not path.exists():
+        return {}
+    try:
+        declared = json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(declared, dict):
+        return {}
+    entry = declared.get(node_id, declared.get(ANY_NODE, {}))
+    return dict(entry) if isinstance(entry, dict) else {}
+
+
+def write_source(
+    workdir: Path, *, source_path: str, source_format: str = "directory", node_id: str = ANY_NODE,
+) -> Path:
+    """Point a data node of this run at a source, before the graph starts.
+
+    Written whole, because the override is the run's answer for every node it names:
+    a caller that points one node at a directory is not also asking to keep a path
+    another caller wrote for a different node.
+    """
+    workdir.mkdir(parents=True, exist_ok=True)
+    path = workdir / ITEMS_OVERRIDE
+    declared: dict[str, Any] = {}
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            loaded = {}
+        if isinstance(loaded, dict):
+            declared = loaded
+    declared[node_id] = {"source_path": str(source_path), "source_format": str(source_format)}
+    path.write_text(json.dumps(declared, indent=2, sort_keys=True) + "\n")
+    return path
 
 
 class ItemsError(RuntimeError):

@@ -190,6 +190,7 @@ Every command is `uv run refactory <verb>`. This is the reference; [QUICKSTART.m
 |---|---|
 | `refactory run <package>/<mode> --intent "<what it is for>"` | run the mode on DSH with your terminal attached, so a gate reaches you |
 | `refactory run <package>/<mode> --knob name=value` | set one of the mode's knobs for this run |
+| `refactory run <package>/<mode> --source <dir>` | read the items from here instead of the source the mode declares, so a harness built for a class of work is pointed at items it has never seen; `--source-format directory\|jsonl\|csv` says how to read it |
 | `refactory run <package>/<mode> --workdir <dir>` | where the run's evidence lands |
 | `refactory run <package>/<mode> --timeout <seconds>` | how long to wait at a gate; `0` waits for you |
 | `refactory run <package>/<mode> --model <id> [--provider <route>]` | the model this run uses |

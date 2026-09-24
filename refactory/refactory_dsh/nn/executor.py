@@ -192,6 +192,11 @@ def render(template: str, ctx: RunContext) -> str:
 #: The file a data node's current item is written to, for the pass that reads it.
 CURRENT_ITEM = "current_item.json"
 
+#: Where a run says which items a data node should read, when they are not the ones
+#: the mode's own graph declares. A harness for a class of work is built once and fed
+#: many times, so the source is run configuration rather than graph structure.
+ITEMS_OVERRIDE = "items.json"
+
 
 def load_items(node: Node, workdir: Path) -> list[dict[str, Any]]:
     """The items a data node iterates, in the order it declares them.
@@ -225,42 +230,70 @@ def full_items(node: Node, workdir: Path) -> list[dict[str, Any]]:
 
 
 def declared_items(node: Node, workdir: Path) -> list[dict[str, Any]]:
-    """The items the node's own source declares, before any Task or selection."""
-    items: list[dict[str, Any]] = [dict(item) for item in node.inline_items]
-    if not items and node.source_path:
-        source = workdir / node.source_path
+    """The items the node's own source declares, before any Task or selection.
+
+    A run directory may name a different source for this node, which is how a harness
+    built for a class of work is pointed at items it has never seen: the graph stays
+    what it was, and the run carries which items to read.
+    """
+    from refactory_dsh.items import source_override
+
+    override = source_override(workdir, node.id)
+    source_path = str(override.get("source_path") or node.source_path or "")
+    source_format = str(override.get("source_format") or node.source_format or "directory")
+    items: list[dict[str, Any]] = [] if override else [dict(item) for item in node.inline_items]
+    if not items and source_path:
+        source = workdir / source_path
         if not source.exists():
-            source = Path(node.source_path)
+            source = Path(source_path)
         if not source.exists():
             raise ExecutionError(
-                f"data node {node.id!r} names source_path {node.source_path!r}, "
+                f"data node {node.id!r} names source_path {source_path!r}, "
                 "which does not exist; bind the source before the run"
             )
-        if node.source_format == "jsonl":
+        if source_format == "jsonl":
             for index, line in enumerate(source.read_text().splitlines()):
                 if not line.strip():
                     continue
                 payload = json.loads(line)
                 items.append(payload if isinstance(payload, dict) else {"value": payload})
                 items[-1].setdefault("id", str(index))
-        elif node.source_format == "csv":
+        elif source_format == "csv":
             import csv
 
             with source.open(newline="") as handle:
                 items = [dict(row) for row in csv.DictReader(handle)]
-        elif node.source_format == "directory":
-            items = [
-                {"id": child.name, "path": str(child)}
-                for child in sorted(source.iterdir())
-                if child.is_dir()
-            ]
+        elif source_format == "directory":
+            items = []
+            for child in sorted(source.iterdir()):
+                if not child.is_dir():
+                    continue
+                # An item is a directory, and it may describe itself in `item.json`:
+                # those fields reach the pass the same way a Task's metadata does. The
+                # directory's name stays the id, so a described item cannot rename
+                # itself out of the selection it was listed in.
+                item: dict[str, Any] = {"id": child.name, "path": str(child)}
+                described = child / "item.json"
+                if described.exists():
+                    try:
+                        loaded = json.loads(described.read_text())
+                    except json.JSONDecodeError as exc:
+                        raise ExecutionError(
+                            f"item {child.name!r} of data node {node.id!r} carries an "
+                            f"item.json that is not JSON: {exc}"
+                        ) from exc
+                    if isinstance(loaded, dict):
+                        for key, value in loaded.items():
+                            item.setdefault(key, value)
+                items.append(item)
         else:
             raise ExecutionError(
                 f"data node {node.id!r} declares source_format "
-                f"{node.source_format!r}; known: directory, jsonl, csv"
+                f"{source_format!r}; known: directory, jsonl, csv"
             )
-    if node.limit:
-        items = items[: int(node.limit)]
+    limit = override.get("limit") or node.limit
+    if limit:
+        items = items[: int(limit)]
     return items
 
 

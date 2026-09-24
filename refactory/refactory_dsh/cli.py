@@ -323,6 +323,15 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("mode", help="the mode, as <package>/<name>")
     run.add_argument("--intent", default="", help="what this run is for, in your words")
     run.add_argument("--workdir", default="", help="the run directory")
+    run.add_argument(
+        "--source", default="", metavar="PATH",
+        help="read the items from here instead of the source the mode declares, so a "
+             "harness built for a class of work is pointed at items it has not seen",
+    )
+    run.add_argument(
+        "--source-format", default="", choices=["", "directory", "jsonl", "csv"],
+        help="how to read --source (default: a directory of one item per subdirectory)",
+    )
     run.add_argument("--knob", action="append", default=[], metavar="NAME=VALUE", help="set a knob for this run")
     run.add_argument(
         "--approve", action="append", default=[], metavar="GATE=VALUE",
@@ -410,6 +419,10 @@ def main(argv: list[str] | None = None) -> int:
             forwarded += ["--intent", args.intent]
         if args.workdir:
             forwarded += ["--workdir", args.workdir]
+        if args.source:
+            forwarded += ["--source", args.source]
+        if args.source_format:
+            forwarded += ["--source-format", args.source_format]
         for pair in args.knob:
             forwarded += ["--knob", pair]
         for pair in args.approve:

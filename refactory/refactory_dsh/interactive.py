@@ -150,6 +150,8 @@ def run(
     identifier: str,
     *,
     workdir: Path | None = None,
+    source: str = "",
+    source_format: str = "directory",
     intent: str = "",
     project: Path | None = None,
     timeout_s: int | None = None,
@@ -167,6 +169,12 @@ def run(
     if workdir is None:
         workdir = default_workdir(identifier)
     workdir = Path(workdir).expanduser().resolve()
+    if source:
+        from refactory_dsh.items import write_source
+
+        # The harness's input port, fed at run time: the mode keeps the Task it was
+        # built for and this run says which items to read instead.
+        write_source(workdir, source_path=source, source_format=source_format or "directory")
     name, graphs = prepare(
         identifier, workdir=workdir, intent=intent, project=project, knobs=knobs,
     )
@@ -240,6 +248,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--workdir", default="", help="the run directory")
     parser.add_argument(
+        "--source", default="", metavar="PATH",
+        help="read the items from here instead of the source the mode declares, so a "
+             "harness built for a class of work is pointed at items it has not seen",
+    )
+    parser.add_argument(
+        "--source-format", default="directory", choices=["directory", "jsonl", "csv"],
+        help="how to read --source (default: a directory of one item per subdirectory)",
+    )
+    parser.add_argument(
         "--knob", action="append", default=[], metavar="NAME=VALUE",
         help="set one of the mode's knobs for this run (repeatable)",
     )
@@ -264,6 +281,8 @@ def main(argv: list[str] | None = None) -> int:
         code = run(
             args.mode,
             workdir=workdir,
+            source=args.source,
+            source_format=args.source_format,
             intent=args.intent,
             knobs=args.knob,
             approve=args.approve,

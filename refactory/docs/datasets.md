@@ -38,6 +38,18 @@ one object per line; `csv` — a header row); or the bound Task's `instances()`.
 node's `limit` caps what is used. A source that is named and missing is refused by
 name, because an empty selection and an unbound source must not look alike.
 
+## Feeding it at run time
+
+The graph declares the source the mode was built with, and a run may name another. That is what makes a harness usable on items it has never seen without editing the mode:
+
+```bash
+uv run refactory run java_build_pack/build --source /path/to/my/trees
+```
+
+The runner writes the choice into the run directory as `items.json`, and `load_items` reads it on both runtimes, so the walker and DSH iterate the same items. `--source-format` says how to read it (`directory` by default, or `jsonl`/`csv`), and an entry keyed `*` applies to every data node of the run while an entry keyed by node id wins for that node.
+
+An item in a `directory` source is a subdirectory, and it may describe itself in an `item.json` beside its content — those fields reach the pass the way a Task's metadata does, which is how a harness learns an item's entry point. The directory's own name stays the id, so a described item cannot rename itself out of the selection it was listed in.
+
 ## The Task
 
 A Task is three optional hooks, resolved by `module:Class` or by a name registered with

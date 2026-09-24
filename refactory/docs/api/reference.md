@@ -709,6 +709,8 @@ The per-item half of a data node, from the command line.
 | function | `data_node` | `(workdir: 'Path', node_id: 'str') -> 'Node'` |
 | function | `items_of` | `(node: 'Node', workdir: 'Path') -> 'list[dict[str, Any]]'` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
+| function | `source_override` | `(workdir: 'Path', node_id: 'str') -> 'dict[str, Any]'` |
+| function | `write_source` | `(workdir: 'Path', *, source_path: 'str', source_format: 'str' = 'directory', node_id: 'str' = '*') -> 'Path'` |
 
 - **`ItemsError`** — A data node cannot be iterated: named, because the node id alone is not a reason.
 - **`command_begin`** — Materialise one item and prepare the workspace for its pass.
@@ -716,3 +718,5 @@ The per-item half of a data node, from the command line.
 - **`command_list`** — How many items the node iterates, and what they are called.
 - **`data_node`** — The data node the declarations describe, as the graph language's own node.
 - **`items_of`** — The data node's items, loaded the one way both runtimes load them.
+- **`source_override`** — What this run says the data node should read, or an empty answer.
+- **`write_source`** — Point a data node of this run at a source, before the graph starts.

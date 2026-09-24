@@ -329,3 +329,61 @@ def test_both_runtimes_iterate_the_part_the_run_directory_names(tmp_path):
         assert json.loads((driven / "facts.json").read_text())["item_scores"] == (
             result.facts["item_scores"]
         ), "the runtimes disagree about the part they iterated"
+
+
+def test_a_run_can_point_a_data_node_at_items_the_mode_never_saw(tmp_path):
+    """The input port, fed at run time.
+
+    A harness for a class of work is built once and fed many times. The graph declares
+    the source it was built with, and the run may name another; without this the only
+    way to use a produced harness on your own items is to edit the mode.
+    """
+    _probe_task()
+    graph = _data_graph(task_ref="counting")
+    workdir = tmp_path / "run"
+    workdir.mkdir()
+    (workdir / "current_item.json").write_text("{}")
+
+    mine = tmp_path / "mine"
+    for name in ("gamma", "delta"):
+        (mine / name).mkdir(parents=True)
+
+    # The Task would supply alpha and beta; this run says otherwise.
+    items.write_source(workdir, source_path=str(mine), source_format="directory")
+    assert [item["id"] for item in load_items(_declared(graph, workdir), workdir)] == (
+        ["delta", "gamma"]
+    ), "the run's own source is what the node reads"
+
+
+def test_an_item_directory_describes_itself_through_item_json(tmp_path):
+    """A directory of items may carry each item's fields beside its content.
+
+    The fields reach the pass the way a Task's metadata does, and the directory's own
+    name stays the id, so a described item cannot rename itself out of the selection.
+    """
+    _probe_task()
+    graph = _data_graph(task_ref="counting")
+    workdir = tmp_path / "run"
+    workdir.mkdir()
+    (workdir / "current_item.json").write_text("{}")
+    mine = tmp_path / "mine"
+    (mine / "one").mkdir(parents=True)
+    (mine / "one" / "item.json").write_text(json.dumps({"main_class": "A", "id": "renamed"}))
+
+    items.write_source(workdir, source_path=str(mine), source_format="directory")
+    loaded = load_items(_declared(graph, workdir), workdir)
+    assert loaded == [{"id": "one", "path": str(mine / "one"), "main_class": "A"}]
+
+
+def test_a_run_can_point_one_node_somewhere_and_the_rest_nowhere_specific(tmp_path):
+    """An entry for the node wins over the `*` entry."""
+    workdir = tmp_path / "run"
+    workdir.mkdir()
+    items.write_source(workdir, source_path="/general")
+    (workdir / "items.json").write_text(json.dumps({
+        "*": {"source_path": "/general", "source_format": "jsonl"},
+        "items": {"source_path": "/specific", "source_format": "csv"},
+    }))
+    assert items.source_override(workdir, "items")["source_path"] == "/specific"
+    assert items.source_override(workdir, "other")["source_path"] == "/general"
+    assert items.source_override(tmp_path / "elsewhere", "items") == {}
