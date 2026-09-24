@@ -754,6 +754,28 @@
       "commit": "31f141e337",
       "evidence": "The inputs a brief declares are now first-class: `requires_input` is a knob (`--input NAME` on `python -m refactory_dsh.create`, `--input` on the console's create, `inputs` on the tool's create action, `--knob requires_input=\u2026` from `ceo`); `declared_inputs` refuses a name too short to check; `prepare` publishes the list as a fact, and the design and emit prompts carry it, so the requirement reaches the code and not only the gate; and `validate` passes it to `sandbox.verify_sandboxed`, which refuses a produced mode with no declared knob named after the input and no read under that name, with a reason that says both ways to satisfy it. Tests cover the refusal, the pass (a knob named after the input), the too-short name, the prompts, and the console/tool forwarding. LIMIT, stated rather than implied: `validate` cannot read English, so a brief that never declares its inputs is unchecked \u2014 whether the work satisfies the brief stays a review judgement (the strategy review refuses a design that drops an ask, and the reviews read the brief). The issue's other suggestion \u2014 a reference artifact built independently of the mode's own writer \u2014 is a design change, not a fix, and is not implemented.",
       "observed": "766 passed, 10 skipped (refactory/tests)"
+    },
+    {
+      "id": "author-retry-resume",
+      "issue": 68,
+      "title": "One transport blip discarded a whole authoring run",
+      "why": "A 35-minute edit run died at `code_reviewer` on `dsh: TRANSPORT: DeepSeek API request ... failed` and everything already finished \u2014 research, strategy, design, emit, a passing validation \u2014 was unrecoverable: `DshModelClient` did one `subprocess.run` and raised on any non-zero exit, the graph's retry edges are domain-level gate reloops, and nothing could resume from the run directory. The error message also buried the cause under the model's trailing prose, so a transport failure read like a code-review defect.",
+      "verify": "pytest refactory/tests/test_executor.py -q",
+      "status": "done",
+      "commit": "28428a1c44",
+      "evidence": "Three changes. (1) `DshModelClient` retries a completion that failed on the wire (`is_transport_failure`: `TRANSPORT:`, socket-level spellings, rate limits, 5xx) up to three times with exponential backoff, and raises immediately for anything a model, a key or a prompt caused, so retrying cannot spend three completions on the same answer. (2) `failure_cause` reports the cause line rather than the last 500 characters of the model's reasoning. (3) The executor records how far it got in `.refactory/progress.json` \u2014 the next node after each success, the failing node with its error \u2014 and `Mode.resume` continues there with the recorded facts, knobs and task; `--resume <run dir>` is on `create`/`edit`/`design`, the console's three authoring verbs and the tool's three actions. Tests: the failing node is recorded with its error and the predecessor's facts; a resumed run continues at the failed node and does not rewrite an artifact that already existed (`number.json` doctored to 99 stays 99); a directory with no record is refused by name; transport-vs-content classification and the cause line. LIMIT: resume covers the in-process walker (the path the panel takes). A run driven by the DSH graph profile still has no resume plumbed through `interactive`.",
+      "observed": "773 passed, 10 skipped (refactory/tests)"
+    },
+    {
+      "id": "input-path-checked",
+      "issue": 69,
+      "title": "validate and smoke exercised only the default knob path",
+      "why": "A revision whose new input path emitted a `.dist-info` holding only `RECORD` \u2014 not a wheel \u2014 scored 1.0 on the built-in fixture and was accepted, because neither validate nor smoke ever supplied the input the brief asked for, and nothing looked at what the run produced.",
+      "verify": "pytest refactory/tests/test_create.py -q",
+      "status": "done",
+      "commit": "28428a1c44",
+      "evidence": "`--sample NAME=VALUE` (repeatable; `sample` on the tool; a JSON array in the `sample_knobs` knob so a path with `=`, a comma or a space survives) supplies real knob values to the smoke, so the run exercises the input path rather than the declared defaults, and the message on failure names the samples it ran with. Independently, `artifact_problems` judges whatever the run produced by its own format: a `.whl` must contain `METADATA` and `WHEEL` beside its `RECORD`, and an unreadable `.zip`/`.whl` is refused by name \u2014 which is the check that would have caught the reported defect. `sandbox.smoke` gained the `knobs` override it needed. Tests: a wheel missing METADATA/WHEEL is refused with both named, a valid wheel passes, a non-archive is refused, a sample reaches the smoke's knobs, and a malformed sample is a usage error. LIMIT: a brief that declares no inputs, and a caller who gives no sample, still exercise only the default path; the format check covers archives, not arbitrary artifact kinds.",
+      "observed": "52 passed (test_create.py)"
     }
   ],
   "verification": {
