@@ -5,8 +5,6 @@ kind: "package-group"
 
 # packages/refactory
 
-English | [中文](README.zh.md)
-
 ## Summary
 
 The refactory group holds the DeepSeek Harness side of a refactory outer-loop run: the optimizer that proposes edits to a Python mode, evaluates them, and keeps what improves the score. Its two packages are the two DSH-side readers of that console: `tool-refactory` registers the model-facing `refactory` tool, which lists the modes a checkout can run, starts a run in its own process, watches that run, and reads back its leaderboard, candidates, and artifacts; `refactory-console` exposes the same console over Typert Remote as the described choices the Web picker offers. A preset row mounts the tool, and the Web view renders each call as a run card instead of a generic tool row. The run itself is a Python program outside this group: the group owns the call across the process boundary and the JSON it returns, while the loop's own repository owns everything inside a run directory.

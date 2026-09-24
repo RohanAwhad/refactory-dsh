@@ -2,8 +2,6 @@
 
 Status: implemented
 
-English | [中文](2026-09-23-what-stopped-a-creation-from-the-panel.zh.md)
-
 ## Problem
 
 Creating a mode from the Web GUI failed with `create failed (exit 2).` and nothing else. Six issues were filed from that one attempt, and each hid the next.

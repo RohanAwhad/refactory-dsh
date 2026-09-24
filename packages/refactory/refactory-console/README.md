@@ -5,8 +5,6 @@ kind: "package-reference"
 
 # @deepseek-ai/dsh-refactory-console
 
-English | [中文](README.zh.md)
-
 ## Summary
 
 `dsh-refactory-console` exposes the refactory console over Typert Remote: it lists the choices a run can be made from — the modes a checkout can start with the knobs each declares, the outer loops, optimizers and evaluators a run's settings choose between, and the packages of modes the registry knows — and it starts, uses once, reads and stops a run. It is the Web picker's Host half: it holds the same `Console` the model-facing `tool-refactory` holds, mounts the same deployment settings, and runs the same `python -m refactory_dsh.console` invocations, so a choice a person makes in the panel is the choice the model makes through the tool. Its cost is a configured Python interpreter and a checkout that holds `refactory/`; because it reimplements nothing, the choices and refusals it reports are exactly the console's.

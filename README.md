@@ -1,7 +1,5 @@
 # re:factory
 
-English | [中文](README.zh.md)
-
 **Describe a class of work; a graph of typed nodes builds a harness for it, then searches the harness.**
 
 ```bash

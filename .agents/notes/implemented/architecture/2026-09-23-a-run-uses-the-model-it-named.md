@@ -2,8 +2,6 @@
 
 Status: implemented
 
-English | [中文](2026-09-23-a-run-uses-the-model-it-named.zh.md)
-
 ## Problem
 
 Choosing a model did not work, in three places at once, and each hid the others.

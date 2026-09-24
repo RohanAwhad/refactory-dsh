@@ -83,7 +83,7 @@ dsh --profile graph run --mode gepa --task circle_packing --budget 20
 
 - [dsh-base](../base/README.zh.md)——本层所修补的共享核心。
 - [workflow-spine](../../workflow/workflow-spine/README.zh.md)——spine 行与 CEO 驱动的 `wf_*` 工具。
-- [refactory glue](../../../refactory/README.zh.md)——节点命令所运行的 Python 模式、图与 op。
+- [refactory glue](../../../refactory/README.md)——节点命令所运行的 Python 模式、图与 op。
 - [Bundle 包地图](../README.zh.md)——其他可安装的 profile 层。
 
 -----

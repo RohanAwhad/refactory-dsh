@@ -2,8 +2,6 @@
 
 Status: implemented
 
-English | [中文](2026-09-21-user-gate-answered-by-the-runtime.zh.md)
-
 ## Problem
 
 `Node.gate_kind` types a gate as `fn`, `user`, or `agent`, and the spine handed a `user` gate to the driving agent with a prompt instruction to present it with `ask_user_question`. Nothing enforced the presentation: `wf_verdict` routed whatever label the model passed. A headless run of a mode with a person's gate therefore invented a verdict — `review_pack/review` reported *approved by the person* with nobody asked — and an invented verdict is indistinguishable in the run's artifacts from one a person gave. The Python walker refused the same gate, so the two runtimes disagreed about what a run had done.

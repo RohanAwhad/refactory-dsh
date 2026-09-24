@@ -2,8 +2,6 @@
 
 Status: implemented
 
-English | [中文](2026-09-24-the-web-picker-reads-the-console-over-remote.zh.md)
-
 ## Problem
 
 Issue #49 asked for two ways to reach a refactory run: a person asks the CEO in words, and a person picks from the Web. The conversation half shipped as the `refactory` tool. The picker half had no way to exist: every DSH-side reader of the console was a tool, and a tool is reached by a model call, so a person pressing a button had nothing to press. The console's own answer is the right set of choices — modes carry the `action` that runs them, the level-two registries carry names with their own descriptions, the registry carries each package's enabled state — but none of it crossed the Host/browser boundary.

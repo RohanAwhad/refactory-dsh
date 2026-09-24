@@ -2,8 +2,6 @@
 
 Status: implemented
 
-English | [中文](2026-09-24-a-harness-is-for-a-class-of-work.zh.md)
-
 ## Problem
 
 **The code did not say what the system produces.** The product is an agentic harness for a class of work — "write the build script for any Java source tree", not "write the script for this tree" — and nothing a run acted on said so. `create` produced a single-shot mode by default, and naming a Task was an optional second flag that did not by itself produce a per-item harness, so a harness could be tuned until one hardcoded example passed and shipped as if it generalised. Every shipped example package was single-instance or deterministic, so nothing in the catalogue contradicted the reading.

@@ -2,8 +2,6 @@
 
 Status: implemented
 
-English | [中文](2026-09-24-the-panel-can-set-a-modes-knobs-and-use-it-once.zh.md)
-
 ## Problem
 
 **The panel's whole gesture was pick a mode and press Start.** `packages/client/ui-refactory` could pick a mode, choose the outer loop, optimizer and evaluator, and press **Start**. It could not set the mode's declared knobs, and it could not use a mode once.

@@ -1,7 +1,5 @@
 # refactory-dsh
 
-English | [中文](README.zh.md)
-
 Modes are Python classes. Their architecture and parameters are a serializable state dict. Optimizers propose typed updates to that state, and every proposal is validated before it can cost an inner run.
 
 A mode is an **agentic harness for a class of work**: a graph of typed nodes over a `Task`, which lists the items, prepares each one, says what to ask for and judges each pass — so the mode's `score()` is a claim about the class rather than about the one example that was tried. `create` produces that harness, naming the Task is what makes the per-item binding real, and `--single` is the explicit special case. [docs/datasets.md](docs/datasets.md) is the whole story.

@@ -2,8 +2,6 @@
 
 Status: implemented
 
-English | [中文](2026-09-22-v2-modes-and-the-workflow-vocabulary.zh.md)
-
 ## Problem
 
 The default package's `create`, `edit` and `design` modes were a single pass: survey, choose, review, emit, validate. remote-factory's `create-v2` and `design-v2` do more, and the parts they add — a research phase that chooses its own directions, a strategy phase that records which asks each perspective covers, a person's approval before anything is built, three reviews in parallel, and an overwatch pass that audits the evidence behind them — could not be expressed at all. The mode vocabulary had exactly three node kinds (`op`, `agent`, `gate`): no barrier, and no iteration. The runtime had executed `ForkNode`, `JoinNode` and `DataNode` since it was written, but a mode could not declare one.

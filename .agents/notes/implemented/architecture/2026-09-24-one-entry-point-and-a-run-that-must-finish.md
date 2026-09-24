@@ -2,8 +2,6 @@
 
 Status: implemented
 
-English | [中文](2026-09-24-one-entry-point-and-a-run-that-must-finish.zh.md)
-
 ## Problem
 
 Two things made this repository hard to hand to somebody else.

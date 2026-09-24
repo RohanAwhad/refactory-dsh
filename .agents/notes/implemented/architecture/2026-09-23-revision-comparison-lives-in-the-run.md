@@ -2,8 +2,6 @@
 
 Status: implemented
 
-English | [中文](2026-09-23-revision-comparison-lives-in-the-run.zh.md)
-
 ## Problem
 
 `refactory ceo "…" --mode edit` documents a revision that "refuses a regression". Running it showed that it does not. The run recorded `revision_of` in `facts.json` and nothing else: no before score, no after score, and the package's `.origin.json` said only `origin: create-mode`. The comparison, the refusal, and the digest of the state the revision came from all lived in `edit.edit()` — a function the console script never called. Only `python -m refactory_dsh.edit` reached it, and no document told anybody to run that.

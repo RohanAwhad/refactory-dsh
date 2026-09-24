@@ -5,8 +5,6 @@ kind: "package-reference"
 
 # @deepseek-ai/dsh-tool-refactory
 
-English | [中文](README.zh.md)
-
 ## Summary
 
 `dsh-tool-refactory` gives the agent one tool, `refactory`, that starts and reads a refactory outer-loop run: an optimizer proposes edits to a Python mode, evaluates them, and keeps what improves the score. Use it to list the modes a checkout can run, start a run in its own process, watch that run while it is still going, and read back its leaderboard, per-candidate diffs, and on-disk artifacts. The loop is a Python program and stays one: every action runs `python -m refactory_dsh.console <verb>` through the host subprocess capability and returns that console's JSON unchanged, so the tool, the browser card, and a shell all read one answer. Its cost is a configured Python interpreter and a checkout that holds `refactory/`; because the tool reimplements nothing, the actions and artifacts it offers are exactly the ones the console exposes.

@@ -2,8 +2,6 @@
 
 Status: implemented
 
-English | [中文](2026-09-21-refactory-web-surface.zh.md)
-
 ## Problem
 
 The Web view could run the outer loop and read a run, and could do nothing else. Authoring a mode, managing a package, steering a run and reading its winner were Python entry points with no tool action, so the two things the product exists for — creating a mode and searching one — could not be reached from the page at all. The tool exposed eight of the console's thirteen verbs.

@@ -3,4 +3,4 @@
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/subsystems/refactory.md
 refactory.md: f629df584144f8a7c616392c6fb6560d007b99f1
-refactory.zh.md: 7e0d6361b2df4f4699e3ea994ba397f14757dd34
+refactory.zh.md: d42cd03ed8ad1ca61d3a5b1434daaf6afe8c1d2c

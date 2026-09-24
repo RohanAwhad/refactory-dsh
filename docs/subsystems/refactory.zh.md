@@ -2,7 +2,7 @@
 
 [English](refactory.md) | 中文
 
-refactory seam 是 refactory 外循环运行在 DeepSeek Harness 一侧的部分：该优化器对 Python 模式提出编辑、评估这些编辑，并保留能提升得分的部分。循环本身是本仓库包树之外的 Python 程序，DSH 侧的两个读者都经过同一个进程边界——`python -m refactory_dsh.console`——因此工具与浏览器读到同一份 JSON 契约。面向模型的 Consumer 是 [dsh-tool-refactory](../../packages/refactory/tool-refactory/README.zh.md)（`ctx.tools`）；Web 选择器的 Host 半边是 [dsh-refactory-console](../../packages/refactory/refactory-console/README.zh.md)（`ctx.refactoryConsole`），它把该控制台经 [Typert Remote](typert.zh.md) 暴露出来。循环自己的词汇、步骤与产物见[refactory 架构总览](../../refactory/docs/architecture.md)。
+refactory seam 是 refactory 外循环运行在 DeepSeek Harness 一侧的部分：该优化器对 Python 模式提出编辑、评估这些编辑，并保留能提升得分的部分。循环本身是本仓库包树之外的 Python 程序，DSH 侧的两个读者都经过同一个进程边界——`python -m refactory_dsh.console`——因此工具与浏览器读到同一份 JSON 契约。面向模型的 Consumer 是 [dsh-tool-refactory](../../packages/refactory/tool-refactory/README.md)（`ctx.tools`）；Web 选择器的 Host 半边是 [dsh-refactory-console](../../packages/refactory/refactory-console/README.md)（`ctx.refactoryConsole`），它把该控制台经 [Typert Remote](typert.zh.md) 暴露出来。循环自己的词汇、步骤与产物见[refactory 架构总览](../../refactory/docs/architecture.md)。
 
 源码：[`packages/refactory/refactory-console/src/index.ts`](../../packages/refactory/refactory-console/src/index.ts)
 

@@ -2,8 +2,6 @@
 
 Status: implemented
 
-English | [中文](2026-09-23-a-data-node-iterates-on-both-runtimes.zh.md)
-
 ## Problem
 
 A mode could declare a `data` node and the walker executed it, but DSH did not: the spine handed the node's view to the driving agent and the cursor moved on to the data node's successor, so the subgraph was never entered. A dataset mode on the shipping runtime therefore selected nothing, iterated nothing, and still reported that it had finished. remote-factory's `WorkflowExecutor._execute_data` iterates the subgraph once per item, and that difference between the runtimes is what the port exists to remove.

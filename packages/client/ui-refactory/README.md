@@ -5,8 +5,6 @@ kind: "package-reference"
 
 # @deepseek-ai/dsh-client-ui-refactory
 
-English | [中文](README.zh.md)
-
 ## Summary
 
 The right Sidebar's picker tab type: choose a mode from the console's catalogue, set the knobs its own declaration gives it, choose the outer loop, optimizer and evaluator a run is started with, manage the packages of modes, start a run or use the mode once, and read where it got to. It is a page type reached from the guide and claims no address. Every choice it offers is a described choice the Host listed over the `refactoryConsole` Remote namespace — a mode, a strategy and a package are never typed — and the only free text it draws is what no catalogue can offer: a package import's source, and a knob whose declaration names no set of accepted values. Nothing in `ui-sidebar-right` knows this package.
