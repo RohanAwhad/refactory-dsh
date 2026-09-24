@@ -122,6 +122,7 @@ interface Args {
   inputs?: string[]
   resume?: string
   sample?: string[]
+  knobs?: string[]
   provider?: string
   model?: string
   attempts?: number
@@ -165,6 +166,7 @@ export function invocationFor(args: Args): {
         runId: args.runId,
         runsRoot: args.runsRoot,
         settings: settingsOf(args),
+        knobs: args.knobs,
       })
       return { verb: args.action, positional, options }
     }
@@ -528,6 +530,11 @@ export function apply(ctx: Context, config: Config): void {
       contents: { type: 'boolean', description: 'For action "artifacts": include each artifact\'s contents.' },
       limit: { type: 'integer', description: 'For action "leaderboard": how many rows to return.' },
       runsRoot: { type: 'string', description: 'Directory holding the runs (default: <repoRoot>/.factory/loop).' },
+      knobs: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'For action "start": knob values the search starts from, as "NAME=VALUE" (repeatable). A mode whose inputs are frozen knobs (an input path, a command) cannot be searched without one — every candidate would run the defaults and score the same thing.',
+      },
       settings: {
         type: 'object',
         additionalProperties: true,

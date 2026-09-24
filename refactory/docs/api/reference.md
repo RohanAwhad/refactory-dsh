@@ -124,6 +124,7 @@ The edit algebra: every structural change is typed data.
 | function | `apply` | `(edit: 'dict', state: 'Mapping[str, Any]') -> 'State'` |
 | function | `apply_many` | `(edits: 'Iterable[dict]', state: 'Mapping[str, Any]') -> 'State'` |
 | function | `catalogue` | `(preset: 'str' = 'broad') -> 'list[dict[str, Any]]'` |
+| function | `configure` | `(state: 'Mapping[str, Any]', name: 'str', value: 'Any') -> 'State'` |
 | function | `enabled` | `(preset: 'str' = 'broad') -> 'list[str]'` |
 | function | `is_macro` | `(name: 'str') -> 'bool'` |
 | function | `names` | `() -> 'list[str]'` |
@@ -134,6 +135,7 @@ The edit algebra: every structural change is typed data.
 - **`EditSpec`** — One operation in the catalogue.
 - **`apply`** — Apply ``edit`` and return a new state, leaving ``state`` untouched.
 - **`catalogue`** — The enabled operations, described for an optimizer's prompt.
+- **`configure`** — Set a knob for the run being made, refusing a bad name or value but not a freeze.
 - **`enabled`** — The operations a preset allows. An unknown preset is an error.
 - **`precheck`** — The reason ``edit`` cannot be applied, for the checks that need no state.
 - **`random_edit`** — A random edit from the enabled set, or ``None`` if none can be built.
@@ -345,7 +347,7 @@ The optimizer loop, named like one.
 |---|---|---|
 | class | `EpochSummary` | `(epoch: 'int', evaluated: 'int', best: 'float \| None', mean: 'float \| None', improved: 'bool', proposed: 'int', accepted: 'int', rejected: 'int', structural_accepted: 'int') -> None` |
 | class | `Loop` | `(mode_id: 'str', config: 'LoopConfig \| None' = None, *, project: 'Path \| None' = None, model: 'Any' = None, optimizer: 'Optimizer \| None' = None) -> 'None'` |
-| class | `LoopConfig` | `(epochs: 'int' = 2, batch_size: 'int' = 4, optimizer: 'str' = 'autoresearch', edit_preset: 'str' = 'broad', seed: 'int' = 0, elite: 'int' = 3, max_evaluations: 'int' = 64, runs_root: 'Path' = PosixPath('.factory/loop'), max_steps: 'int' = 2000, attempts: 'int' = 3, frozen: 'tuple[str, ...]' = (), intent: 'str' = '', history_limit: 'int' = 200, prior_runs: 'int' = 3, memory_global_root: 'Path \| None' = None, evaluator: 'str' = 'walker', dsh_timeout_s: 'int' = 900, resume: 'bool' = False, progress: 'bool' = True) -> None` |
+| class | `LoopConfig` | `(epochs: 'int' = 2, batch_size: 'int' = 4, optimizer: 'str' = 'autoresearch', edit_preset: 'str' = 'broad', seed: 'int' = 0, elite: 'int' = 3, max_evaluations: 'int' = 64, runs_root: 'Path' = PosixPath('.factory/loop'), max_steps: 'int' = 2000, attempts: 'int' = 3, frozen: 'tuple[str, ...]' = (), intent: 'str' = '', knobs: 'dict[str, Any]' = <factory>, history_limit: 'int' = 200, prior_runs: 'int' = 3, memory_global_root: 'Path \| None' = None, evaluator: 'str' = 'walker', dsh_timeout_s: 'int' = 900, resume: 'bool' = False, progress: 'bool' = True) -> None` |
 | class | `LoopError` | `` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
 | function | `run` | `(mode_id: 'str', *, config: 'LoopConfig \| None' = None, project: 'Path \| None' = None, model: 'Any' = None) -> 'dict[str, Any]'` |

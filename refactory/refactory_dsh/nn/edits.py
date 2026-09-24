@@ -695,6 +695,69 @@ def apply(edit: dict, state: Mapping[str, Any]) -> State:
     return spec.apply(dict(state), edit)
 
 
+#: What a person's `NAME=VALUE` says for a bool knob.
+_BOOL_TEXT = {"1": True, "true": True, "yes": True, "on": True,
+              "0": False, "false": False, "no": False, "off": False}
+
+
+def _from_text(knob: Any, raw: str) -> Any:
+    """A command line's text as the value this knob's kind wants.
+
+    The editor's values are already typed (the optimizer proposes typed edits); a
+    command line's are not, so `--knob target=7` has to become the integer 7 or every
+    numeric knob is unsettable from the CLI. A value that will not parse is left for
+    `coerce` to refuse, with the same message it would have given.
+    """
+    text = raw.strip()
+    try:
+        if knob.kind == "int":
+            return int(text)
+        if knob.kind == "float":
+            return float(text)
+        if knob.kind == "bool":
+            if text.lower() in _BOOL_TEXT:
+                return _BOOL_TEXT[text.lower()]
+            return raw
+        if knob.kind == "enum":
+            for member in knob.enum:
+                if str(member) == text or member == raw:
+                    return member
+            if all(isinstance(member, int) for member in knob.enum):
+                return int(text)
+            if all(isinstance(member, float) for member in knob.enum):
+                return float(text)
+    except ValueError:
+        return raw
+    return raw
+
+
+def configure(state: Mapping[str, Any], name: str, value: Any) -> State:
+    """Set a knob for the run being made, refusing a bad name or value but not a freeze.
+
+    `set_knob` is the *optimizer's* edit, and a frozen knob is frozen against the
+    search — that is why it refuses one. A person saying what this run's input is is
+    not the search: `refactory run <mode> --knob source_root=…` is how a mode whose
+    input is a frozen knob gets used at all, and routing it through the editor made
+    every such mode unusable ("knob 'source_root' is frozen and cannot be moved").
+    Everything else about the refusal is kept: the name must exist and the value must
+    be one the knob accepts.
+    """
+    from .knob import Knob, KnobError
+
+    entries = dict(state.get("knobs") or {})
+    if not isinstance(name, str) or name not in entries:
+        known = ", ".join(sorted(entries)) or "none"
+        raise EditError(f"no knob {name!r}; declared knobs: {known}", code="E-knob")
+    knob = Knob.from_spec(entries[name]["spec"])
+    try:
+        coerced = knob.coerce(_from_text(knob, value) if isinstance(value, str) else value)
+    except KnobError as exc:
+        raise EditError(f"knob {name!r}: {exc}", code="E-knob") from exc
+    out = _finish(state, _graph(state))
+    out["knobs"][name]["value"] = coerced
+    return out
+
+
 def apply_many(edits: Iterable[dict], state: Mapping[str, Any]) -> State:
     out = dict(state)
     for edit in edits:

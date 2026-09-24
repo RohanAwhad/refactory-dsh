@@ -702,3 +702,21 @@ describe('checking the input path and the artifact', () => {
     expect(argv[argv.indexOf('--resume') + 1]).toBe('/repo/.factory/edit/p')
   })
 })
+
+describe('seeding a search with the knobs a mode needs', () => {
+  it('forwards knob values to start, one --knob per value', async () => {
+    // A mode whose inputs are frozen knobs cannot be searched at all without them:
+    // every candidate would run the declared defaults and score the same thing.
+    const { ctx, subprocess } = await setup()
+    subprocess.handler = () => runResult(JSON.stringify({ ok: true, exit_code: 0, result: {} }))
+    await call(ctx, {
+      action: 'start',
+      mode: 'cve_patch_pack/patch',
+      knobs: ['source_root=/tmp/demo_pkg', 'test_command=pytest -q'],
+    })
+    const argv = subprocess.spawns[0]!.argv
+    expect(argv.filter(part => part === '--knob')).toHaveLength(2)
+    expect(argv).toContain('source_root=/tmp/demo_pkg')
+    expect(argv).toContain('test_command=pytest -q')
+  })
+})

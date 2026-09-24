@@ -333,8 +333,8 @@ options:
                                     [--max-evaluations MAX_EVALUATIONS]
                                     [--attempts ATTEMPTS]
                                     [--runs-root RUNS_ROOT] [--intent INTENT]
-                                    [--project PROJECT] [--model MODEL]
-                                    [--provider PROVIDER]
+                                    [--project PROJECT] [--knob NAME=VALUE]
+                                    [--model MODEL] [--provider PROVIDER]
                                     mode
 
 Run the optimizer loop on a mode.
@@ -366,6 +366,9 @@ options:
                         run&#x27;s intent ledger, which every agent node of an
                         interactive run reads
   --project PROJECT
+  --knob NAME=VALUE     a knob value the search starts from (repeatable);
+                        required for a mode whose inputs are frozen knobs,
+                        which the search itself may not move
   --model MODEL         model name for the reasoning optimizer
   --provider PROVIDER   provider route that model is on (default: the settings
                         default)

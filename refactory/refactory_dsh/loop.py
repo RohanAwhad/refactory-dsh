@@ -85,6 +85,11 @@ class LoopConfig:
     #: that default is BUG-05, and a ledger holding one is a ledger a fidelity check
     #: cannot check. See :mod:`refactory_dsh.steering`.
     intent: str = ""
+    #: Knob values the search starts from, as `NAME=VALUE`. A mode whose inputs are
+    #: frozen knobs (`source_root`, `test_command`) cannot be searched at all without
+    #: this: every candidate would run with the declared defaults, score the same
+    #: thing, and the run would report a search that found nothing.
+    knobs: dict[str, Any] = dataclasses.field(default_factory=dict)
     #: How many evaluated candidates the optimizer is shown. Bounded on purpose:
     #: an unbounded history in a prompt is how a search stops thinking.
     history_limit: int = 200
@@ -254,6 +259,14 @@ class Loop(OuterLoop):
     def init(self) -> None:
         """Seed the population and refuse to search a mode that cannot be run."""
         seed_state = self.mode.state_dict()
+        for name, value in self.config.knobs.items():
+            # `configure`, not the editor: the search may not move a frozen knob, but
+            # the caller deciding what this run operates on is not the search.
+            seed_state = nn_edits.configure(seed_state, name, value)
+        if self.config.knobs:
+            # The loop's own mode is what the report and the seed candidate's parent
+            # read, so it has to carry the same configuration as the population.
+            self.mode.load_state_dict(seed_state)
         issues = validate_state(
             seed_state, invariants=self.invariants, resolve_calls=True
         )
@@ -1688,6 +1701,11 @@ def main(argv: list[str] | None = None) -> int:
              "ledger, which every agent node of an interactive run reads",
     )
     parser.add_argument("--project", default=str(project_root()))
+    parser.add_argument(
+        "--knob", action="append", default=[], metavar="NAME=VALUE",
+        help="a knob value the search starts from (repeatable); required for a mode "
+             "whose inputs are frozen knobs, which the search itself may not move",
+    )
     parser.add_argument("--model", default="", help="model name for the reasoning optimizer")
     parser.add_argument(
         "--provider", default="", help="provider route that model is on (default: the settings default)"
@@ -1712,6 +1730,8 @@ def main(argv: list[str] | None = None) -> int:
         attempts=args.attempts,
         runs_root=Path(args.runs_root),
         intent=args.intent,
+        knobs={name.strip(): value.strip() for pair in args.knob
+               for name, _, value in [pair.partition("=")] if name.strip()},
     )
     try:
         loop = strategies.create(

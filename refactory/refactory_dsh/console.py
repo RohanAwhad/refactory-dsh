@@ -190,7 +190,11 @@ def _spawn(mode: str, root: Path, config: dict[str, Any], *, project: Path) -> s
         if value is None or value is False:
             continue
         flag = "--" + key.replace("_", "-")
-        argv += [flag] if value is True else [flag, str(value)]
+        if isinstance(value, (list, tuple)):
+            for element in value:
+                argv += [flag, str(element)]
+        else:
+            argv += [flag] if value is True else [flag, str(value)]
     log = (root / f"{root.name}.log").open("wb")
     return subprocess.Popen(
         argv,
@@ -690,6 +694,11 @@ def _parser() -> argparse.ArgumentParser:
     single.add_argument("--provider", default="", help="provider route for this run's model")
     single.add_argument("--model", default="", help="model id for this run")
 
+    begin.add_argument(
+        "--knob", action="append", default=[], metavar="NAME=VALUE",
+        help="a knob value the search starts from (repeatable); a mode whose inputs "
+             "are frozen knobs needs one or every candidate scores the same",
+    )
     watch = add(sub.add_parser("status", help="where a run is"))
     watch.add_argument("--after", type=int, default=0)
 
@@ -899,6 +908,7 @@ def main(argv: list[str] | None = None) -> int:
                 project=project,
                 runs_root=args.runs_root,
                 run_id=args.run_id,
+                knobs=list(args.knob),
                 **{
                     setting: getattr(args, setting)
                     for setting, _help, _kind in SETTINGS

@@ -35,10 +35,13 @@ def with_knobs(state: dict[str, Any], overrides: list[str]) -> dict[str, Any]:
     """One state with `NAME=VALUE` knob overrides applied.
 
     The CLI's spelling for something a person changes about *this* run: which
-    package to create, what to check, how many attempts. Applied through the editor
-    (`nn.edits`) rather than written into the dict, so a wrong name is refused by
-    name and an out-of-range value is refused by range, exactly as the optimizer's
-    own edits are.
+    package to create, what to check, how many attempts, and the inputs the mode
+    operates on. Applied through `nn.edits.configure` rather than the editor's
+    `set_knob`: a wrong name is still refused by name and an out-of-range value by
+    range, but a *frozen* knob is settable — frozen means the search may not move it,
+    not that the person running the mode may not say what it is. Refusing that made
+    every input-taking mode unusable from the CLI (`--knob source_root=…` failed with
+    "knob 'source_root' is frozen and cannot be moved").
     """
     from refactory_dsh import nn
 
@@ -47,7 +50,7 @@ def with_knobs(state: dict[str, Any], overrides: list[str]) -> dict[str, Any]:
         name, value = name.strip(), value.strip()
         if not separator or not name:
             raise ValueError(f"--knob takes NAME=VALUE, not {pair!r}")
-        state = nn.edits.apply({"op": "set_knob", "name": name, "value": value}, state)
+        state = nn.edits.configure(state, name, value)
     return state
 
 

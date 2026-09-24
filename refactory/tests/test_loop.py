@@ -528,3 +528,76 @@ def test_a_note_steers_the_candidates_that_run_after_it(tmp_path):
 
     assert "never print the number" not in seen[0], "the note reached a candidate that had already run"
     assert "never print the number" in seen[1], seen[1][:400]
+
+
+def test_the_search_can_be_seeded_with_the_knobs_a_mode_needs(tmp_path):
+    """A mode whose inputs are frozen knobs cannot be searched without them (#see 69).
+
+    Frozen means the *search* may not move a knob. It does not mean a caller may not
+    say what the run operates on — and without that, every candidate of an input-taking
+    mode runs with the declared defaults, scores the same thing, and the run reports a
+    search that found nothing.
+    """
+    class NeedsInput(nn.Mode):
+        name = "needs_input"
+
+        @classmethod
+        def declare(cls):
+            return {
+                "source": nn.Knob("", "str", frozen=True, description="what to read"),
+                "step": nn.Knob(2, "int", lo=1, hi=4, description="a counter"),
+            }
+
+        def build(self):
+            graph = nn.Graph()
+            graph.add(nn.Node("only", "op", call="loop_ops:write_number",
+                              knobs=("step", "source"), writes=("number.json",),
+                              produces=("value",)))
+            return graph
+
+        def score(self, run):
+            return float(run.facts["value"])
+
+    with _patch_mode(NeedsInput):
+        loop = Loop(
+            "needs_input/only",
+            _config(tmp_path, epochs=1, batch_size=1, knobs={"step": "3"}),
+            project=Path("."),
+        )
+        loop.init()
+    assert loop.mode.values()["step"] == 3, (
+        "the seeded knob value did not reach the loop's own mode"
+    )
+    assert loop.population[0].state["knobs"]["step"]["value"] == 3, (
+        "the seeded knob value did not reach the seed candidate"
+    )
+
+
+def test_a_knob_a_person_sets_from_the_command_line_is_parsed_by_kind():
+    """`--knob target=7` is text, and an int knob has to receive the integer 7."""
+    from refactory_dsh import nn as nn_module
+
+    state = nn_module.Mode().state_dict() if False else {
+        "version": 1,
+        "graph": {"start": "", "nodes": {}, "edges": []},
+        "knobs": {
+            "count": {"value": 0, "spec": {"kind": "int", "default": 0, "frozen": False,
+                                           "lo": 0, "hi": 10, "enum": [], "description": ""}},
+            "flag": {"value": False, "spec": {"kind": "bool", "default": False,
+                                              "frozen": True, "enum": [], "description": ""}},
+            "label": {"value": "", "spec": {"kind": "str", "default": "", "frozen": False,
+                                            "enum": [], "description": ""}},
+        },
+        "ports": [],
+        "memory": [],
+    }
+    from refactory_dsh.nn import edits as edits_module
+
+    out = edits_module.configure(state, "count", "7")
+    assert out["knobs"]["count"]["value"] == 7
+    out = edits_module.configure(out, "flag", "1")
+    assert out["knobs"]["flag"]["value"] is True, "a frozen knob is settable by the caller"
+    out = edits_module.configure(out, "label", "hello")
+    assert out["knobs"]["label"]["value"] == "hello"
+    with pytest.raises(edits_module.EditError, match="expected a number"):
+        edits_module.configure(state, "count", "seven")

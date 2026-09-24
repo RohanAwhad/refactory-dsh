@@ -114,6 +114,8 @@ export interface StartRequest {
   readonly runsRoot?: string | undefined
   /** Run settings, passed through as `--<name> <value>` flags; `undefined` is skipped. */
   readonly settings?: Readonly<Record<string, string | number | boolean | undefined>> | undefined
+  /** Knob values the search starts from, as `NAME=VALUE`; one `--knob` per element. */
+  readonly knobs?: readonly string[] | undefined
 }
 
 /**
@@ -126,7 +128,12 @@ export function startInvocation(request: StartRequest): ConsoleInvocation {
   return {
     verb: 'start',
     positional: [request.mode],
-    options: { 'run-id': request.runId, 'runs-root': request.runsRoot, ...request.settings },
+    options: {
+      'run-id': request.runId,
+      'runs-root': request.runsRoot,
+      knob: request.knobs,
+      ...request.settings,
+    },
   }
 }
 
