@@ -31,6 +31,10 @@ pnpm run lint                  # oxlint
 pnpm run typecheck
 ```
 
+The gates the harness copy carried are gone with it. [Verification](verification.md)
+names what replaced each one, what a contributor runs before pushing, and what is not
+covered.
+
 `.work/todo.json` tracks the work, and `tests/test_work_complete.py` **fails while
 any item is open**. Each item records its issue number, the command that verifies
 it, and the observed result; that test also checks the command names files that
