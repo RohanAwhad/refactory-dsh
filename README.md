@@ -3,7 +3,7 @@
 **Describe a class of work; a graph of typed nodes builds a harness for it, then searches the harness.**
 
 ```bash
-git clone <this-repo> --recurse-submodules && cd <this-repo>
+git clone <this-repo> && cd <this-repo>
 ./install.sh
 uv run refactory ceo "a mode that drafts a haiku and checks the syllable count" --mode create --single
 ```
@@ -29,17 +29,16 @@ That is the whole product. **[QUICKSTART.md](QUICKSTART.md)** is the six command
 **Prerequisites:** [uv](https://docs.astral.sh/uv), Node `^22.19` or `>=24` (npm comes with it — the script finds pnpm itself), git, and a DeepSeek API key in `.env` for anything that calls a model.
 
 ```bash
-git clone <this-repo> --recurse-submodules
+git clone <this-repo>
 cd <this-repo>
 ./install.sh
 ```
 
-`install.sh` does four things, in order:
+`install.sh` does three things, in order:
 
-1. `git submodule update --init --recursive` — the vendored language (`factory`). If you cloned without `--recurse-submodules`, run that yourself before `uv sync`: without the submodules, `uv sync` fails with uv's own *"does not appear to be a Python project"*, which does not say why.
-2. `pnpm install --frozen-lockfile && pnpm run build` — the DSH workspace and the client/host bundles the Web view serves. This is the step that needs pnpm, and if the machine has none the script puts the pinned version on PATH first: `corepack` when it is there, otherwise `npm install -g pnpm@<pin>`, so Node and npm are enough (opt out with `REFACTORY_SKIP_GLOBAL_PNPM=1`).
-3. `uv sync` — **one** Python project at the root: it creates `.venv`, installs the three local packages in editable mode and puts the `refactory` command on `.venv/bin`, pinned by `uv.lock`.
-4. Creates the DSH profile a mode runs on (`dsh plugin --profile graph add …`). A profile is machine state, so this is a once-per-machine step; skip it with `REFACTORY_SKIP_DSH_PROFILE=1`.
+1. `pnpm install --frozen-lockfile && pnpm run build` — the DSH workspace and the client/host bundles the Web view serves. This is the step that needs pnpm, and if the machine has none the script puts the pinned version on PATH first: `corepack` when it is there, otherwise `npm install -g pnpm@<pin>`, so Node and npm are enough (opt out with `REFACTORY_SKIP_GLOBAL_PNPM=1`).
+2. `uv sync` — **one** Python project at the root: it creates `.venv`, installs the local `refactory-dsh` package in editable mode and puts the `refactory` command on `.venv/bin`, pinned by `uv.lock`.
+3. Creates the DSH profile a mode runs on (`dsh plugin --profile graph add …`). A profile is machine state, so this is a once-per-machine step; skip it with `REFACTORY_SKIP_DSH_PROFILE=1`.
 
 Then check the machine, not the docs:
 
@@ -51,7 +50,6 @@ uv run refactory doctor
   ok    python >= 3.12        3.13.2
   ok    uv                    /Users/you/.local/bin/uv
   ok    node >= 22.19         /Users/you/.nvm/versions/node/v22.23.2/bin/node
-  ok    import factory        the vendored graph language (refactory/vendor/remote-factory)
   ok    import refactory_dsh  this package
   ok    DSH profile 'graph'   /Users/you/.dsh/profiles/graph
   ok    packages of modes     16 package(s) under /Users/you/re-factory
@@ -410,7 +408,6 @@ refactory/                   the glue — the modes, the loop, the console
   refactory_dsh/               cli.py is the entry point; nn/ is the language; tools/ generates docs
   refactory_packages/          the packages of modes
   docs/                        the HTML tour, tutorials, architecture, API reference
-  vendor/remote-factory/       the language (git submodule)
 pyproject.toml               the one Python project (`uv sync`, `uv run refactory …`)
 uv.lock                      the pinned environment
 install.sh                   one-command install
@@ -440,7 +437,7 @@ uv run python -m refactory_dsh.tools.check_recipes --tier model
 
 ### Rebasing on upstream DSH
 
-This repo is a **fork of `deepseek-ai/deepseek-harness`**. Our changes are isolated deltas so they re-apply after a rebase: new packages/files, one-line wiring edits (`cordis.patch.yml` rows, `tsconfig` references, `paths` mappings), and two locale strings. `factory` is a git **submodule**, so it rebases independently.
+This repo is a **fork of `deepseek-ai/deepseek-harness`**. Our changes are isolated deltas so they re-apply after a rebase: new packages/files, one-line wiring edits (`cordis.patch.yml` rows, `tsconfig` references, `paths` mappings), and two locale strings.
 
 ---
 

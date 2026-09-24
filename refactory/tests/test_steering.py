@@ -21,6 +21,8 @@ import pytest
 from refactory_dsh import registry, steering
 from refactory_dsh.steering import Ledger, SteeringError
 
+from reference_ir import needs_factory, validate_reference
+
 ROOT = Path(__file__).resolve().parent.parent.parent
 #: A mode with agent nodes, so the transform has something to reach.
 MODE = "default_pack/create"
@@ -173,14 +175,14 @@ def test_the_gate_reports_a_defaulted_ledger(tmp_path):
 
 
 # ── what the transform produces is still a valid workflow ──────────────────
+@pytest.mark.toolchain("factory")
+@needs_factory
 def test_the_annotated_workflow_is_still_valid_ir(tmp_path):
     """A transform that produced an unloadable graph would be worse than none."""
-    from refactory_dsh import lowering
-
     workflow = steering.interactive(
         _state(), tmp_path, request="build a mode for circle packing"
     )[0]
-    assert lowering.validate_ir(workflow) == []
+    assert validate_reference(workflow) == []
 
 
 # ── the ledger as a run artifact ───────────────────────────────────────────

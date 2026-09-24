@@ -188,10 +188,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     checks.append(("python >= 3.12", sys.version_info >= (3, 12), version))
     checks.append(("uv", shutil.which("uv") is not None, shutil.which("uv") or "install from https://docs.astral.sh/uv"))
     checks.append(("node >= 22.19", _node_ok(), node_bin()))
-    for module, why in (
-        ("factory", "the vendored graph language (refactory/vendor/remote-factory)"),
-        ("refactory_dsh", "this package"),
-    ):
+    for module, why in (("refactory_dsh", "this package"),):
         try:
             __import__(module)
             checks.append((f"import {module}", True, why))

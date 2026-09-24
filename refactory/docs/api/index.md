@@ -194,7 +194,6 @@ path, workflow = lowering.write_mode_graph(state, graphs_dir, name="circle_packi
   refactory's IR, `<name>.graph.json`, for the science bundle.
 - **`lowering.write_declarations(state, workdir)`** — the facts each node
   produces, which the IR has no field for.
-- **`lowering.validate_ir(workflow)`** — refactory's own check, before DSH sees it.
 - **`dsh_runtime.evaluate_on_dsh(mode, state, workdir, timeout_s=…)`** — one
   candidate evaluated by DSH instead of the walker.
 

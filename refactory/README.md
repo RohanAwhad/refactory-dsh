@@ -28,8 +28,6 @@ refactory/                  the glue
   docs/tutorials/             seven walkthroughs, run against this checkout
   docs/packing-tools.md       packing a tool that is not Python, such as Lean
   docs/plans/pythonic-modes.md  the design and its acceptance gates
-  vendor/remote-factory/      refactory (git submodule)
-  vendor/srf/                 SRF (git submodule)
 install.sh                  one-command install
 refactory-dsh               the launcher (opens DSH web)
 ```
@@ -37,7 +35,7 @@ refactory-dsh               the launcher (opens DSH web)
 ## Install
 
 ```bash
-git clone <repo> --recurse-submodules
+git clone <repo>
 ./install.sh
 ```
 

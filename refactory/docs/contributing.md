@@ -13,7 +13,14 @@ Run from the repository root.
 uv run python -m pytest refactory/tests/ -q                    # the suite
 uv run python -m pytest refactory/tests/ -q --run-integration  # ... plus the real-DSH runs
 uv run python -m refactory_dsh.tools.gen_api_reference --check # docs match the code
+uv sync --group reference                                      # add the test-time oracle
 ```
+
+`tests/test_ir_parity.py` compares `refactory_dsh/ir.py` with the reference graph
+language over every shipped mode. That reference is a **test-time oracle** and not
+a runtime dependency: it lives in the non-default `reference` group, so a plain
+`uv sync` does not install it and the parity tests skip with a reason
+`--toolchain-gate` reports.
 
 The DSH side, when you touch `packages/`:
 
@@ -104,8 +111,11 @@ The walker is a debug runtime; DSH ships. `tests/test_equivalence.py` runs the
 same mode both ways and compares the score.
 
 - If you change the executor, change nothing that makes a node behave differently
-  on DSH. The lowering in `lowering.py` is the seam; `validate_ir` is refactory's
-  check before DSH sees the graph.
+  on DSH. The lowering in `lowering.py` is the seam, and `refactory_dsh/ir.py` owns
+  the IR it lowers into. `tests/test_ir_parity.py` holds that copy against the
+  reference over every shipped mode: the serialization is byte-identical, and the
+  reference's validator accepts the result except for two modes whose refusal is a
+  limit of that validator, both recorded in `REFERENCE_REFUSALS` there.
 - The IR has **no field for the facts a node produces**, so `write_declarations`
   writes them beside the graph and the runner reads them from the run directory.
   That is a known wart, not an oversight to "clean up" silently.

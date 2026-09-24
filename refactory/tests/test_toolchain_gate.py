@@ -16,7 +16,7 @@ import conftest as gate
 TESTS = Path(__file__).resolve().parent
 
 #: The decorators that gate a test on a real external tool.
-NEEDS = {"needs_lean", "needs_mathlib", "needs_sympy"}
+NEEDS = {"needs_lean", "needs_mathlib", "needs_sympy", "needs_factory"}
 
 
 def _decorated_functions(path: Path):

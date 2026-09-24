@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
 # refactory-dsh — one-command install for the self-contained single repo.
 #
-# The repo is a DSH fork: the DSH source sits at the repo root, the glue at
-# `refactory/`, and the vendored language (`factory`)
-# are git submodules under `refactory/vendor/`. This script sets up the Node side
-# (pnpm) and the Python side (one `uv sync` over the root project), so after it:
+# The repo is a DSH fork: the DSH source sits at the repo root and the glue at
+# `refactory/`. This script sets up the Node side (pnpm) and the Python side (one
+# `uv sync` over the root project), so after it:
 #
 #   uv run refactory doctor      is this machine ready?
 #   uv run refactory list        what can this checkout run?
 #   uv run refactory ceo "an idea" --mode design
 #
-#   git clone <repo> --recurse-submodules
+#   git clone <repo>
 #   ./install.sh
 #   uv run refactory ceo "a mode that drafts a haiku and counts its syllables" --mode create
 set -euo pipefail
@@ -105,18 +104,15 @@ command -v pnpm >/dev/null 2>&1 || {
 }
 echo "  pnpm:  $(pnpm --version)"
 
-# 1. vendored dependencies (the language + the reference modes) as git submodules.
-git -C "$HERE" submodule update --init --recursive
-
-# 2. Node side: install the pnpm workspace (DSH), then build the client/host
+# 1. Node side: install the pnpm workspace (DSH), then build the client/host
 #    bundles the web GUI serves at launch.
 (cd "$HERE" && pnpm install --frozen-lockfile && pnpm run build)
 
-# 3. Python side: **one project, one lockfile, one command**. `uv sync` reads the
-#    root `pyproject.toml`, creates `.venv`, installs the three local packages in
-#    editable mode (`refactory-dsh` and the vendored `factory`) and puts the
-#    `refactory` console script on `.venv/bin` — which is why every documented
-#    command is `uv run refactory …` rather than an interpreter path.
+# 2. Python side: **one project, one lockfile, one command**. `uv sync` reads the
+#    root `pyproject.toml`, creates `.venv`, installs the local `refactory-dsh`
+#    package in editable mode and puts the `refactory` console script on
+#    `.venv/bin` — which is why every documented command is `uv run refactory …`
+#    rather than an interpreter path.
 if ! command -v uv >/dev/null 2>&1; then
   echo "  error: uv not found. Install it with:" >&2
   echo "           curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
@@ -125,7 +121,7 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 (cd "$HERE" && uv sync)
 
-# 4. the DSH profile a mode runs on. A profile is **machine state** — it is
+# 3. the DSH profile a mode runs on. A profile is **machine state** — it is
 #    created by `dsh plugin --profile graph add <package>`, not derived from the
 #    bundle — so a fresh clone that skips this can run every mode through the
 #    walker and still fail the first time anything reaches DSH. Idempotent: a
@@ -141,7 +137,7 @@ else
   node --import tsx/esm apps/cli/src/bin.ts plugin --profile graph add "$HERE/packages/bundle/graph"
 fi
 
-# 5. say what happened, in the words the docs use.
+# 4. say what happened, in the words the docs use.
 echo
 "$VENV/bin/refactory" doctor || true
 

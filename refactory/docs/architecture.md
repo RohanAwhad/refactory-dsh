@@ -251,8 +251,11 @@ read the journal. That is a known gap; see §11.
 - The **walker** (`refactory_dsh/nn/executor.py`) is a debug runtime: it executes a
   graph in-process.
 - **DSH** is the runtime that ships. `refactory_dsh/lowering.py` lowers a mode
-  state to refactory's IR and writes `<mode>.graph.json` for the science bundle,
-  which mounts `workflow-spine` and runs each node.
+  state to the IR `refactory_dsh/ir.py` owns and writes `<mode>.graph.json` for the
+  science bundle, which mounts `workflow-spine` and runs each node. The reference
+  that IR was copied from is a test-time oracle: `tests/test_ir_parity.py` compares
+  the two byte for byte over every shipped mode, and it is installed only with
+  `uv sync --group reference`.
 
 A debug runtime that disagrees with the real one is worse than none, so
 `refactory/tests/test_equivalence.py` runs the same mode both ways and compares.

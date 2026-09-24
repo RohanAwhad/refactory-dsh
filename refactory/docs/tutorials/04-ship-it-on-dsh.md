@@ -32,8 +32,10 @@ nodes: 8 edges: 8 start: task_input
 
 Two details worth knowing:
 
-- **`lowering.validate_ir(workflow)`** runs refactory's own check before DSH ever
-  sees the graph. A graph that cannot lower is caught on the Python side.
+- **The reference check is a test-time oracle, not a runtime step.**
+  `tests/test_ir_parity.py` lowers every shipped mode through both `refactory_dsh/ir.py`
+  and the reference and compares the bytes, so a graph that cannot lower is caught
+  on the Python side. Install the reference with `uv sync --group reference`.
 - **The IR has no field for the facts a node produces.** So
   `lowering.write_declarations(state, workdir)` writes them alongside the graph and
   the node runner reads them back from the run directory. That is a known wart of

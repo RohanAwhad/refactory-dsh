@@ -383,6 +383,45 @@ Reading a finished run: the past an optimizer is allowed to learn from.
 - **`read_run`** — Read one run directory. Raises when there is nothing readable there.
 
 
+<a id="refactory_dsh-ir"></a>
+
+## `refactory_dsh.ir`
+
+The workflow IR this package owns and lowers a mode state into.
+
+| kind | name | signature |
+|---|---|---|
+| class | `AgentConfig` | `(*, role: refactory_dsh.ir.AgentRole, model: str, timeout: int = 600) -> None` |
+| class | `AgentNode` | `(*, id: str, reads: set[str] = <factory>, writes: set[str] = <factory>, blocking: bool = True, role: refactory_dsh.ir.AgentRole, model: str = '', prompt_template: str = '', tools: list[str] = <factory>, timeout: int \| None = None, max_iterations: int = 1, post_checks: list[refactory_dsh.ir.ArtifactCheck] = <factory>) -> None` |
+| class | `AgentRole` | `(*values)` |
+| class | `ArtifactCheck` | `(*, path: str, must_exist: bool = True, min_size: int = 0, must_contain: list[str] = <factory>) -> None` |
+| class | `DataItem` | `(*, id: str, path: str \| None = None, metadata: dict[str, typing.Any] = <factory>, prompt: str = '') -> None` |
+| class | `DataNode` | `(*, id: str, reads: set[str] = <factory>, writes: set[str] = <factory>, blocking: bool = True, task_ref: str \| None = None, source_path: str \| None = None, source_format: Optional[Literal['directory', 'jsonl', 'csv']] = None, inline_items: list[refactory_dsh.ir.DataItem] = <factory>, subgraph_entry: str, subgraph_exit: str, parallelism: Annotated[int, Ge(ge=1)] = 1, split: Literal['train', 'val', 'test', 'all'] = 'all', shuffle: bool = False, shuffle_seed: int \| None = None, limit: int \| None = None, max_items: int = 500) -> None` |
+| class | `Edge` | `(*, source: str, target: str, condition: refactory_dsh.ir.VerdictType \| str \| None = None) -> None` |
+| class | `FnNode` | `(*, id: str, reads: set[str] = <factory>, writes: set[str] = <factory>, blocking: bool = True, command: str = '', callable_name: str \| None = None, notes: str = '') -> None` |
+| class | `ForkNode` | `(*, id: str, reads: set[str] = <factory>, writes: set[str] = <factory>, blocking: bool = True, targets: list[str]) -> None` |
+| class | `GateNode` | `(*, id: str, reads: set[str] = <factory>, writes: set[str] = <factory>, blocking: bool = True, evaluator_type: Literal['agent', 'fn', 'user'] = 'agent', evaluator_role: refactory_dsh.ir.AgentRole \| None = None, evaluator_command: str \| None = None, gate_prompt: str = '', max_iterations: int \| None = None) -> None` |
+| class | `JoinNode` | `(*, id: str, reads: set[str] = <factory>, writes: set[str] = <factory>, blocking: bool = True, sources: list[str]) -> None` |
+| class | `Node` | `(*, id: str, reads: set[str] = <factory>, writes: set[str] = <factory>, blocking: bool = True) -> None` |
+| class | `VerdictType` | `(*values)` |
+| class | `Workflow` | `(*, name: str, nodes: dict[str, refactory_dsh.ir.AgentNode \| refactory_dsh.ir.FnNode \| refactory_dsh.ir.GateNode \| refactory_dsh.ir.ForkNode \| refactory_dsh.ir.JoinNode \| refactory_dsh.ir.DataNode], edges: list[refactory_dsh.ir.Edge], start_node: str, terminal: bool = False, task: str \| None = None, knob_values: dict[str, str \| float] = <factory>, knob_bounds: dict[str, list[str \| float]] = <factory>, knob_expandable: dict[str, str] = <factory>, knob_specs: dict[str, dict[str, typing.Any]] = <factory>, declared_capabilities: frozenset[str] = frozenset()) -> None` |
+
+- **`AgentConfig`** — Configuration for an agent in the pool.
+- **`AgentNode`** — Node that invokes an agent.
+- **`AgentRole`** — Every role an agent node may declare.
+- **`ArtifactCheck`** — Validation rule for an agent-produced artifact.
+- **`DataItem`** — Standardized data payload for per-item workflow iteration.
+- **`DataNode`** — Node that loads data items and drives per-item execution of a subgraph.
+- **`Edge`** — Directed edge in the workflow graph with an optional labelled condition.
+- **`FnNode`** — Node that runs a deterministic shell command or Python callable.
+- **`ForkNode`** — Parallel execution node that launches all targets concurrently.
+- **`GateNode`** — Decision node that produces a verdict.
+- **`JoinNode`** — Barrier node that waits for all sources to complete.
+- **`Node`** — Base node in the workflow graph.
+- **`VerdictType`** — The three labels a gate verdict uses.
+- **`Workflow`** — A directed graph of typed nodes with labeled edges.
+
+
 <a id="refactory_dsh-lowering"></a>
 
 ## `refactory_dsh.lowering`
@@ -399,7 +438,6 @@ Lower a mode state to refactory's IR, so DSH can run it.
 | function | `read_declarations` | `(workdir: 'Path') -> 'dict[str, Any]'` |
 | function | `read_memory_declarations` | `(workdir: 'Path') -> 'list[Any]'` |
 | function | `to_workflow` | `(state: 'dict[str, Any]', *, name: 'str' = '', description: 'str' = '') -> 'Workflow'` |
-| function | `validate_ir` | `(workflow: 'Workflow') -> 'list[str]'` |
 | function | `write_declarations` | `(state: 'dict[str, Any]', workdir: 'Path') -> 'Path'` |
 | function | `write_mode_graph` | `(state: 'dict[str, Any]', out_dir: 'Path', *, name: 'str', description: 'str' = '', transform: 'Any' = None) -> 'tuple[Path, Workflow]'` |
 
@@ -410,7 +448,6 @@ Lower a mode state to refactory's IR, so DSH can run it.
 - **`read_declarations`** — The declarations the lowering left in the run directory, keyed by node id.
 - **`read_memory_declarations`** — The mode's memory declarations, as the runner reads them back.
 - **`to_workflow`** — The refactory `Workflow` for a mode state.
-- **`validate_ir`** — refactory's own validation of a lowered graph.
 - **`write_declarations`** — Leave the declarations where the runner will look for them.
 - **`write_mode_graph`** — Write ``<out_dir>/<name>.graph.json`` the way the science bundle loads it.
 

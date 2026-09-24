@@ -29,7 +29,7 @@ def test_doctor_reports_every_prerequisite():
     """One command that answers "is this machine ready", and says what is missing."""
     result = _run("doctor")
     assert result.returncode == 0, result.stdout + result.stderr
-    for wanted in ("python", "uv", "node", "import factory", "DSH profile 'graph'", "refactory doctor: ready"):
+    for wanted in ("python", "uv", "node", "DSH profile 'graph'", "refactory doctor: ready"):
         assert wanted in result.stdout, f"doctor does not check {wanted!r}"
 
 

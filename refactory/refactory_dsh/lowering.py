@@ -1,7 +1,7 @@
 """Lower a mode state to refactory's IR, so DSH can run it.
 
 The IR is the seam. A mode's state dict stays the optimizer's write surface; the
-IR is what runs. Building real `factory.workflow` objects rather than emitting JSON
+IR is what runs. Building real `refactory_dsh.ir` objects rather than emitting JSON
 by hand means pydantic validates the result, so an IR that lowers is an IR that
 loads.
 
@@ -26,7 +26,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from factory.workflow.primitives import (
+from refactory_dsh.ir import (
     AgentNode,
     AgentRole,
     DataNode,
@@ -37,7 +37,6 @@ from factory.workflow.primitives import (
     JoinNode,
     Workflow,
 )
-
 from refactory_dsh.nn import Graph, Knob
 
 #: How a node names the operation it runs. Resolved by the runtime, so no package
@@ -170,8 +169,8 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
             nodes[node_id] = FnNode(
                 **common,
                 # Both fields, and both for a reason. `callable_name` is
-                # refactory's own way of naming what an `FnNode` runs
-                # (`factory/workflow/primitives.py`), and it is what makes the IR
+                # the language's own way of naming what an `FnNode` runs
+                # (`refactory_dsh/ir.py`), and it is what makes the IR
                 # legible to refactory's tooling. DSH's spine does not model it —
                 # its `WorkflowNode` has `command` and nothing else — so a graph
                 # carrying only `callable_name` would be a node that never runs.
@@ -277,16 +276,6 @@ def knob_environment(state: dict[str, Any], *, extra: dict[str, str] | None = No
     env = {KNOBS_ENV: json.dumps(values, default=str)}
     env.update(extra or {})
     return env
-
-
-def validate_ir(workflow: Workflow) -> list[str]:
-    """refactory's own validation of a lowered graph.
-
-    A second opinion on purpose: the spine refuses a graph its walk cannot follow,
-    and this is the language's own check. A state that passes our validator and
-    fails this one is a lowering bug, not a bad candidate.
-    """
-    return list(workflow.validate_graph())
 
 
 def write_mode_graph(
