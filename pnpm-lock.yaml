@@ -33,9 +33,6 @@ importers:
       '@testing-library/react':
         specifier: ^16.3.2
         version: 16.3.3(@testing-library/dom@10.4.2)(@types/react-dom@18.3.7(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
-      '@types/mdast':
-        specifier: ^4.0.4
-        version: 4.0.4
       '@types/node':
         specifier: ^22.20.0
         version: 22.20.4
@@ -99,9 +96,6 @@ importers:
       micromark-util-symbol:
         specifier: ^2.0.1
         version: 2.0.1
-      micromark-util-types:
-        specifier: ^2.0.2
-        version: 2.0.2
       oxlint:
         specifier: 1.76.0
         version: 1.76.0
