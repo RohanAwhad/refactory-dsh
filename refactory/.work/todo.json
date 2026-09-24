@@ -880,6 +880,16 @@
       "status": "done",
       "commit": "cf7093bdc9",
       "evidence": "Ran the shipped java harness against items it had never seen: `refactory run java_build_pack/build --source /tmp/rf-src-check --workdir /tmp/rf-src-run` wrote items.json {\"*\": {source_format: directory, source_path: /tmp/rf-src-check}}, iterated the one item there and scored it 1.0 (facts.json item_scores [{'id': 'one', 'passed': True, 'score': 1.0}]). 823 passed, 10 skipped."
+    },
+    {
+      "id": "exam-guards",
+      "issue": 80,
+      "title": "A search may not bake its items in or rebind the Task it is graded on",
+      "why": "create refuses a produced package that bakes items in and requires the Task that names the class of work; the edit algebra allowed both, so a candidate could memorise the items or choose its own exam.",
+      "verify": "pytest refactory/tests/test_loop_holdout.py -q",
+      "status": "done",
+      "commit": "950a076893",
+      "evidence": "Probed before the fix: set_node_field on inline_items, task_ref and source_path were all accepted by edits.apply. After it: inline_items raises EditError with code E-items from the shared finisher every primitive returns through, and Loop.step rejects a data node whose task_ref/source_path/source_format differ from the seed with E-exam. Both covered by new tests; 825 passed, 10 skipped."
     }
   ],
   "verification": {
