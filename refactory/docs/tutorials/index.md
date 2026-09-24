@@ -33,7 +33,8 @@ are the detail behind each step.
 
 | step | command | what you have at the end |
 |---|---|---|
-| **create** | `uv run refactory ceo "<what it does>" --mode create --name my_pack` | a package on disk, registered, its mode smoke-scored |
+| **create** | `uv run refactory ceo "<what it does for any item of the class>" --mode create --name my_pack --task <module:Class>` | a package on disk, registered, bound to that Task, smoke-scored per item |
+| **create, for one thing** | `uv run refactory ceo "<what it does>" --mode create --name my_pack --single` | the special case: a harness that runs once, for one input |
 | **use** | `uv run refactory run my_pack/<mode> --intent "<what you want>"` | the mode ran on DSH, with its own artifacts, and a person answered any gate |
 | **optimize** | `uv run refactory optimize my_pack/<mode> --epochs 4 --batch-size 6 --optimizer random --seed 5` | a leaderboard, a report, and the edits that improved it |
 | **use it again** | `uv run refactory adopt --run <run id> --as my_tuned` | the winner as a mode of its own, smoked by the registry |
@@ -41,10 +42,14 @@ are the detail behind each step.
 Two things decide whether a step costs money, and they are worth knowing before you
 start:
 
-- **`create`, `edit` and `design` call a model; nothing else in the box does.** Every
-  other shipped mode — `circle_packing/adaptive`, `counting_pack/*`,
-  `review_pack/review`, `lean_pack/prover`, … — is deterministic ops and gates, built
-  to be testable offline. They are fixtures, not examples of what a mode looks like.
+- **`create`, `edit` and `design` call a model, and so does any mode whose graph has an
+  `agent` node.** The deterministic shipped modes — `circle_packing/adaptive`,
+  `counting_pack/*`, `review_pack/review`, `lean_pack/prover`, … — are fixtures: built
+  to be testable offline, not examples of what a harness looks like.
+  **`java_build_pack/build` is the shipped example of the real thing**: a Task lists
+  three Java source trees, one agent node writes `build.sh` for whichever item is on
+  disk, and the Task runs that script and compares what the program printed. Point it
+  at your own trees with `--source <dir>`.
 - **A mode calls a model when its graph has `agent` nodes**, and only the brief decides
   that. Ask for one ("the first node is an agent that drafts …") and the created mode
   makes that call; don't, and you get a deterministic mode. A mode with an `agent` node
