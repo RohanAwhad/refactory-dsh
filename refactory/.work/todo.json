@@ -907,7 +907,9 @@
       "title": "Own the IR, and make remote-factory a pinned test-only reference",
       "why": "Nine imported names cost 141 installed distributions, 459 MB of venv, 12 MB and 831 files in the repository. The reference is still worth keeping as the test-time oracle that catches our lowering bugs.",
       "verify": "pytest refactory/tests/test_lowering.py -q",
-      "status": "doing"
+      "status": "done",
+      "commit": "aa6dc12599",
+      "evidence": "ir.py owns the IR (314 lines) with the reference's serialization reproduced byte for byte; no production module imports factory any more. Verified by running it: plain `uv sync` went from 142 installed distributions / 501 MB to 16 / 81 MB with `factory` absent; the suite without the oracle is 819 passed / 38 skipped and the toolchain gate reports the parity path unverified rather than passing silently; `uv sync --group reference` then makes tests/test_ir_parity.py pass 26/26, asserting byte-identity across all 22 shipped modes with the two documented REFERENCE_REFUSALS. Doc gates 15/15, recipes 15/15."
     },
     {
       "id": "lean-pinned-harness",
