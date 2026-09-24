@@ -917,7 +917,9 @@
       "title": "Depend on a pinned harness instead of copying it",
       "why": "We carry ~47 MB and 270 packages of upstream harness to run five packages of our own, and our entire delta on upstream code is one preset, a two-line web-app change, four generated files and two test expectations.",
       "verify": "pnpm exec vitest run packages/workflow/workflow-spine/tests/composition.spec.ts",
-      "status": "todo"
+      "status": "done",
+      "commit": "dcfc6f1fc6",
+      "evidence": "The copied harness (9,644 tracked files, 270 packages) is gone; the repository declares @deepseek-ai/dsh 0.1.5-rc.3 and keeps six packages. A clean clone was installed and run, not merely inspected: 264 tracked files; ./install.sh ran pnpm install --frozen-lockfile and pnpm run build to exit 0, uv sync installed 15 distributions, and dsh plugin --profile graph add created the profile under a fresh DSH_HOME; refactory doctor reported ready with 10 packages of modes. dsh_command() returned <clone>/node_modules/.bin/dsh, because apps/cli/src/bin.ts no longer exists. A real counting_pack/fixed_step through run_on_dsh exited 0 with .refactory/spine-status.json {\"status\": \"done\"} and facts.json {\"value\": 6, \"steps\": 3, \"done\": true, \"final_count\": 6, \"steps_taken\": 3, \"closeness\": 0.5}. The clone's pnpm run test passed 357 tests in 20 files. Install counts: one copy each of dsh-session, dsh-tools and dsh-shell, all 0.1.5-rc.3; 237 @deepseek-ai/dsh-* packages at 0.1.5-rc.3; one cordis@4.0.2. The three behavioural gaps the pin exposes (web picker rows, the console's generated Remote face, --provider/--model on the headless completion client) are issue #85."
     },
     {
       "id": "lean-our-gates",
@@ -925,7 +927,9 @@
       "title": "Decide what our own verification becomes once the harness copy is gone",
       "why": "Removing the copied harness removes the doc gates, the snapshot suite and the bilingual pairing gate with it, so the replacement has to be chosen before the deletion rather than after.",
       "verify": "pnpm exec vitest run packages/client/ui-refactory/tests/body.client.spec.tsx",
-      "status": "todo"
+      "status": "done",
+      "commit": "8436381238",
+      "evidence": "refactory/docs/verification.md is the decision, written before the deletion and linked from contributing.md: the six packages' typecheck, build, vitest and lint; the glue's pytest suite with --run-integration as the end-to-end gate, the two generated-document --check commands and check_recipes; what replaced each deleted gate; what a contributor runs before pushing; and the three paths the surviving gates do not cover, now issue #85. The pairing gate's replacement is refactory/tests/test_docs_english_only.py, which fails on a .zh.md side or a README.i18n.yaml under refactory/ or the six packages; the three stale pairs under graph, workflow-spine and ui-brand-refactory are removed for it. Observed: the new test passes, the ledger's verify-path check passes after gui-42 stopped naming a deleted harness spec, and the clean clone's pnpm run test passed 357 tests in 20 files."
     }
   ],
   "verification": {
