@@ -809,6 +809,17 @@
       "commit": "2e8383e4b2",
       "evidence": "`nn.edits.configure(state, name, value)` sets a knob for the run being made: it refuses an unknown name and a value the knob will not accept, and does not apply the freeze, because the caller deciding what this run operates on is not the search. `_from_text` parses a command line's text by the knob's kind (int/float/bool/numeric enum), so `--knob target=7` is the integer 7 and `--knob allow_regression=1` is True. `LoopConfig.knobs` seeds the starting state (the loop's own mode and the seed candidate), carried by `optimize --knob`, the console's `start --knob` (whose `_spawn` now emits one flag per list element) and the tool's `start` `knobs`. `loop.main` builds the model client unconditionally (fbfcf393e6), because the evaluator needs one for the mode's own agent nodes. Verified end to end: a real run of `cve_patch_pack/patch` with its two inputs scored 1.0, and `optimize` with those inputs evaluated candidates for real and recorded `set_knob attempts=2` as a scored 0.0 plus six validator refusals naming why each structural proposal did not fit. Tests: a frozen knob is settable by the caller, text is parsed by kind, a bad text is refused, the search's seed and the loop's own mode carry the seeded value, the console forwards `--knob` (not `--knobs`), the tool forwards one flag per value, and a search builds a client.",
       "observed": "30 passed (test_loop.py) + 40 (test_gui_loop.py)"
+    },
+    {
+      "id": "refusal-feedback",
+      "issue": 74,
+      "title": "A review refusal relooped the build without telling it why",
+      "why": "Found by watching the hard sanity create run: its overwatch pass refused twice (correctly \u2014 the produced mode could be scored 1.0 by deleting the failing test) and each refusal sent the graph back to `emit`, which re-emitted essentially the same design because `gate_qa` and `gate_overwatch` published no fact the emit prompt reads. Two full review rounds, about an hour, on the same findings. `review_design` (via `design_review`) and `validate` (via `validation`) already fed theirs back.",
+      "verify": "pytest refactory/tests/test_create.py -q",
+      "status": "done",
+      "commit": "af9f1cbbe3",
+      "evidence": "`gate_qa` publishes `qa_gate` (the blocking lines, quoted), `gate_overwatch` publishes `overwatch_review` (the reason plus an excerpt of what the audit found), both nodes declare the fact in `produces` in the create and design graphs, and both emit prompts interpolate them under \"What the reviews refused\". Test: the emit prompt names both facts, both gate nodes declare them, and driving the gates over a synthesis with a bolded blocker and an overwatch FAIL sets facts quoting the findings.",
+      "observed": "780 passed, 10 skipped (refactory/tests)"
     }
   ],
   "verification": {
