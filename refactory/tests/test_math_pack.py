@@ -548,7 +548,9 @@ def test_the_outer_loop_improves_the_sympy_run(tmp_path):
         ),
     )
     report = loop.run()
-    assert report["seed_score"] == 0.0
+    # The compared score has the run's size cost taken off it; this preset moves knobs
+    # only, so the seed's raw score is the number the mode's own `score()` returns.
+    assert report["seed_raw_score"] == 0.0
     assert report["best_score"] > report["seed_score"], (
         "widening `candidates` must establish identities the seed could not"
     )

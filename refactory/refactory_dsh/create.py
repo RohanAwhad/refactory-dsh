@@ -25,7 +25,7 @@ from typing import Any
 
 from refactory_dsh import registry
 from refactory_dsh.paths import project_root, project_for_nodes
-from refactory_dsh.create_ops import RESEARCH_SCHEMA, STRATEGY_SCHEMA
+from refactory_dsh.create_ops import CREATION_DIRECTIVE, RESEARCH_SCHEMA, STRATEGY_SCHEMA
 from refactory_dsh.model import DEFAULT_TIMEOUT_S
 from refactory_dsh.nn import Graph, Knob, Mode, Node, RunResult
 
@@ -74,6 +74,12 @@ class CreateMode(Mode):
                 description="a Task class the produced mode must satisfy, as "
                             "`module:Class` or a registered name (empty for none)",
             ),
+            "single_shot": Knob(
+                False, "bool",
+                description="build the harness for one run of one thing, with no Task "
+                            "binding; the explicit alternative to naming a Task, and "
+                            "one of the two is required",
+            ),
             # What the brief says the mode operates on. `validate` cannot read the
             # brief, so this is how "the mode must take a Python package" becomes
             # something checked instead of something assumed.
@@ -93,7 +99,8 @@ class CreateMode(Mode):
             "data_node": Knob(
                 False, "bool",
                 description="build the package as a DataNode that runs its subgraph "
-                            "once per data item",
+                            "once per data item; naming a Task implies this, so the "
+                            "knob is only for a caller that wants to be explicit",
             ),
             # What to build, and what to call it. The walker passes these in the run's
             # task; a run on DSH has no task to pass, so they travel as knobs and the
@@ -128,14 +135,17 @@ class CreateMode(Mode):
         graph = Graph()
         graph.add(Node(
             "prepare", "op", call=f"{OPS}:prepare",
-            # What to build (`name`, `brief`) and create-v2's two directives
-            # (`task_ref`, `data_node`) are read here and published as facts. The
-            # walker passes the first two in the run's task; on DSH they are knobs.
-            knobs=("name", "brief", "task_ref", "data_node", "revision_of", "requires_input"),
+            # What to build (`name`, `brief`) and the creation directives
+            # (`task_ref`, `single_shot`, `data_node`) are read here and published as
+            # facts. The walker passes the first two in the run's task; on DSH they
+            # are knobs. Naming no Task and not asking for `single_shot` is refused
+            # here, before the first model call.
+            knobs=("name", "brief", "task_ref", "single_shot", "data_node",
+                   "revision_of", "requires_input"),
             writes=("brief.json",),
             produces=("name", "brief", "extends", "revision_of", "intent", "validation",
-                      "design_review", "api", "reference", "task_ref", "data_node",
-                      "requires_input"),
+                      "design_review", "api", "reference", "task_ref", "class_of_work",
+                      "data_node", "requires_input"),
             notes="read the brief and publish it to the prompts",
         ))
         graph.add(Node(
@@ -266,9 +276,15 @@ class CreateMode(Mode):
             prompt_template=(
                 "{{intent}}\n\n"
                 "Package name: {{name}}\nBrief: {{brief}}\n\n"
+                "## The class of work this harness is for\n{{class_of_work}}\n\n"
                 "Read the API below and write the design for the package: every "
                 "operation, every node, every knob, and what score() reads. Be concrete "
-                "and complete — the next step writes the code from your design alone.\n\n"
+                "and complete — the next step writes the code from your design alone. "
+                "Design for the whole class of work, not for one sample: when a Task is "
+                "bound, the harness reads its input from that Task's item or accepts it "
+                "as a declared input. The `data` node is the harness's input port, so "
+                "its items come from the Task it binds or from a `source_path` with a "
+                "`source_format` at run time, never from a list baked into the graph.\n\n"
                 "## The approach that was chosen\n{{strategy}}\n\n"
                 "## What this mode must take as input\n{{requires_input}}\n"
                 "## API\n{{api}}\n\n"
@@ -284,14 +300,22 @@ class CreateMode(Mode):
             prompt_template=(
                 "Write the package `{{name}}` as complete, runnable Python.\n\n"
                 "Brief: {{brief}}\n\n"
+                "## The class of work this harness is for\n{{class_of_work}}\n\n"
+                "A harness is for a class of work, not for one instance of it. When a "
+                "Task is bound, the harness reads its input from that Task's item — the "
+                "`data` node writes `current_item.json` before each pass — or accepts "
+                "it as one of the declared inputs below, and it must not hardcode a "
+                "single sample. The `data` node is the input port and stays feedable at "
+                "run time: declare `task_ref`, or `source_path` with a `source_format` "
+                "of `directory`, `jsonl` or `csv`, and never `inline_items`. Any item "
+                "of the class may arrive, with whatever path or fields it names, so "
+                "assume nothing about a particular one.\n\n"
                 "Design:\n{{design}}\n\n"
                 "## What this mode must take as input\n{{requires_input}}\n\n"
                 "## API\n{{api}}\n\n"
                 "## Reference package\n{{reference}}\n\n"
                 "## What went wrong last time\n{{validation}}\n\n"
                 "## What the reviews refused\n{{qa_gate}}\n{{overwatch_review}}\n\n"
-                "## A Task this mode must satisfy\n{{task_ref}}\n\n"
-                "## Data iteration\n{{data_node}}\n\n"
                 "Answer with file blocks, each introduced by a line of exactly:\n"
                 "===FILE: <relative path>===\n"
                 "followed by the file's contents. Every path is relative to the "
@@ -302,11 +326,11 @@ class CreateMode(Mode):
                 "directory buries the package inside itself. Emit `__init__.py` (with "
                 "`PACKAGE = nn.Package(...)`), the ops module, and any module the "
                 "ops or the mode need. Use the declared ops module path in every "
-                "`call` and `evaluator`. When a Task is named, the mode must accept "
+                "`call` and `evaluator`. When a Task is bound, the mode must accept "
                 "that Task's per-item prompt as its input and produce what its "
-                "`verify()` scores. When data iteration is asked for, the graph's "
-                "start node is a `data` node whose `subgraph_entry` and `subgraph_exit` "
-                "delimit the per-item subgraph. No prose outside the blocks.\n"
+                "`verify()` scores, and the graph's start node is a `data` node whose "
+                "`subgraph_entry` and `subgraph_exit` delimit the per-item subgraph. "
+                "No prose outside the blocks.\n"
             ),
             reads=("brief.json", "design.md", "validation.txt"),
             writes=("emit.txt",),
@@ -512,8 +536,12 @@ class CreateConfig:
     #: Knob values the validation run uses, as `NAME=VALUE` strings. They are how the
     #: brief's inputs are exercised: without one the smoke runs the defaults.
     samples: list[str] = field(default_factory=list)
-    #: Whether the produced graph is a DataNode iterating a subgraph per item.
+    #: Whether the produced graph is a DataNode iterating a subgraph per item. A
+    #: `task_ref` implies it; this is only for a caller that wants to be explicit.
     data_node: bool = False
+    #: The explicit special case: one run of one thing, with no Task binding. Without
+    #: it or a `task_ref`, `create` refuses before its first model call.
+    single_shot: bool = False
     #: Verdicts for gates a person answers. `gate_strategy` is one, so a headless
     #: run has to be given the person's answer explicitly rather than inventing it.
     verdicts: dict[str, str] = field(default_factory=dict)
@@ -564,10 +592,16 @@ def parse_verdicts(pairs: list[str]) -> dict[str, str]:
 
 def create(config: CreateConfig, client: Any = None) -> CreateResult:
     """Run create-mode once. Returns what was created, or raises why it was not."""
+    # Before the mode is loaded and long before the first model call: a creation that
+    # says neither what class of work it is for nor that it is the single-shot special
+    # case has not said what it is building.
+    if not config.task_ref and not config.single_shot:
+        raise CreateError(CREATION_DIRECTIVE)
     mode = CreateMode()
     state = mode.state_dict()
     state["knobs"]["attempts"]["value"] = int(config.attempts)
     state["knobs"]["task_ref"]["value"] = config.task_ref
+    state["knobs"]["single_shot"]["value"] = bool(config.single_shot)
     state["knobs"]["data_node"]["value"] = bool(config.data_node)
     state["knobs"]["requires_input"]["value"] = config.requires_input
     state["knobs"]["sample_knobs"]["value"] = json.dumps(list(config.samples))
@@ -583,6 +617,7 @@ def create(config: CreateConfig, client: Any = None) -> CreateResult:
             "brief": config.brief,
             "extends": config.extends,
             "task_ref": config.task_ref,
+            "single_shot": config.single_shot,
             "data_node": config.data_node,
             "requires_input": config.requires_input,
         },
@@ -597,7 +632,10 @@ def create(config: CreateConfig, client: Any = None) -> CreateResult:
     (workdir / "create.json").write_text(
         json.dumps(
             {"package": name, "smoke_score": run.facts.get("smoke_score"),
-             "files": run.facts.get("files", [])},
+             "files": run.facts.get("files", []),
+             "task_ref": run.facts.get("task_ref"),
+             "class_of_work": run.facts.get("class_of_work"),
+             "data_node": run.facts.get("data_node")},
             indent=2,
             default=str,
         )
@@ -635,10 +673,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--brief", required=True, help="what the package should do")
     parser.add_argument("--extends", default="", help="a <package>/<mode> to use as a reference")
     parser.add_argument("--attempts", type=int, default=3)
-    # create-v2's two creation directives, reachable from the shell.
+    # The two creation directives, reachable from the shell. One of them is required:
+    # a Task names the class of work, and naming one implies the data node.
     parser.add_argument(
         "--data-node", action="store_true", default=False, dest="data_node",
-        help="build the package as a DataNode that runs its subgraph once per item",
+        help="build the package as a DataNode that runs its subgraph once per item; "
+             "naming a Task implies this, so it is only for a caller that wants to be "
+             "explicit",
     )
     parser.add_argument(
         "--input", action="append", default=[], metavar="NAME", dest="inputs",
@@ -654,7 +695,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--task", default=None, metavar="TASK_REF", dest="task_ref",
-        help="a Task class (module:Class or a registered name) the produced mode must satisfy",
+        help="a Task class (module:Class or a registered name) naming the class of work "
+             "the produced harness is for; the harness gets a `data` node bound to that "
+             "Task and runs its subgraph once per item",
+    )
+    parser.add_argument(
+        "--single", action="store_true", default=False, dest="single_shot",
+        help="build a harness for one run of one thing, with no Task binding — the "
+             "explicit alternative to --task; one of the two is required",
     )
     # Per package name, not one fixed directory. Two runs for different packages
     # used to write `brief.json`, `research/` and the strategy documents into the
@@ -714,6 +762,7 @@ def main(argv: list[str] | None = None) -> int:
                 workdir=Path(args.workdir or f".factory/create/{args.name}"),
                 data_node=bool(args.data_node),
                 task_ref=str(args.task_ref or ""),
+                single_shot=bool(args.single_shot),
                 requires_input=", ".join(args.inputs),
                 samples=list(args.samples),
                 model_timeout_s=int(args.model_timeout_s),

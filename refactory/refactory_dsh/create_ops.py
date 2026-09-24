@@ -27,6 +27,26 @@ FILE_MARKER = re.compile(r"^===FILE:\s*([A-Za-z0-9_./-]+)\s*===\s*$", re.MULTILI
 
 REQUIRED_FILES = ("__init__.py",)
 
+#: The node field that would bake a data node's items into the graph. The loader reads
+#: it before the Task or the source, so setting it closes the harness's input port.
+BAKED_ITEMS_KEY = "inline_items"
+
+#: Why a creation with no Task and no `single_shot` is refused rather than defaulted.
+#:
+#: A harness is for a class of work, not for one instance of it. A Task is how a class
+#: of work is named, and naming one is what binds the produced graph's `data` node to
+#: the items the run iterates, so `create` requires the caller to say which it is
+#: instead of quietly producing a single-shot harness or inventing a Task.
+CREATION_DIRECTIVE = (
+    "create-mode needs to know what it is building. Name the class of work with a Task "
+    "— `--task <module:Class>` on the command line, or the `task_ref` knob — and the "
+    "produced harness binds a `data` node to that Task and runs its subgraph once per "
+    "item the Task lists. Or say `--single` (the `single_shot` knob) for a harness that "
+    "runs once, for one input, with no Task binding. The class of work is the default "
+    "because a harness built for one hardcoded example is the special case, not the "
+    "product, and only naming a Task makes the per-item binding real."
+)
+
 API = """\
 You are writing a package for the refactory mode library. The API is:
 
@@ -129,11 +149,17 @@ def prepare(ctx: Any) -> dict[str, Any]:
     extends = str(task.get("extends") or "").strip()
     revision = str(task.get("mode") or ctx.knob("revision_of", "") or "").strip()
     intent = str(task.get("intent") or "Make a new package of modes.").strip()
-    # The two create-v2 directives (its `--task` and `--data-node` flags): a Task
-    # class the produced mode must satisfy, and whether the produced graph is a
-    # DataNode that runs a subgraph once per item. Both reach the prompts as facts.
+    # The creation directives: a Task class the produced mode must satisfy, whether
+    # the caller asked for the single-shot special case, and whether the produced
+    # graph is a DataNode that runs a subgraph once per item. A Task names a class of
+    # work, so naming one implies the data node rather than asking for it twice.
     task_ref = str(ctx.knob("task_ref", "") or "").strip()
-    data_node = bool(ctx.knob("data_node", 0))
+    single_shot = bool(ctx.knob("single_shot", 0))
+    data_node = bool(ctx.knob("data_node", 0)) or bool(task_ref)
+    # A revision is not a creation: `edit` walks this same graph with a mode to
+    # revise, and the creation directive is about what a *new* harness is for.
+    if not revision and not task_ref and not single_shot:
+        raise ValueError(CREATION_DIRECTIVE)
     # The inputs the brief says the mode must take. Published as a fact so the design
     # and emit prompts state them, and read by `validate` so a mode that hardcodes a
     # fixture instead is refused rather than shipped.
@@ -141,7 +167,8 @@ def prepare(ctx: Any) -> dict[str, Any]:
     reference = _revision_source(revision) if revision else _reference(extends)
     ctx.write_json("brief.json", {
         "name": name, "brief": brief, "extends": extends, "mode": revision,
-        "task_ref": task_ref, "data_node": data_node, "requires_input": list(inputs),
+        "task_ref": task_ref, "single_shot": single_shot, "data_node": data_node,
+        "requires_input": list(inputs),
     })
     return {
         "name": name,
@@ -153,7 +180,18 @@ def prepare(ctx: Any) -> dict[str, Any]:
         "design_review": "(no design has been reviewed yet)",
         "api": API,
         "reference": reference,
-        "task_ref": task_ref or "(no Task class was named)",
+        "task_ref": task_ref,
+        "class_of_work": (
+            f"a harness for the class of work named by the Task {task_ref}: the graph "
+            "starts with a `data` node bound to that Task, and the executor runs the "
+            "subgraph between `subgraph_entry` and `subgraph_exit` once per item the "
+            "Task lists, folding each `verify` verdict into the run's facts. The node "
+            "is the harness's input port: it takes the items from the Task or from a "
+            "`source_path` with a `source_format` at run time, so any item of that "
+            "class may arrive and never only the items the authoring run seeded"
+        ) if task_ref else (
+            "a harness for one run of one thing, with no Task binding"
+        ),
         "data_node": "yes" if data_node else "no",
         "requires_input": (
             "The brief says this mode takes these as input: " + ", ".join(f"`{name}`" for name in inputs)
@@ -617,11 +655,14 @@ def validate(ctx: Any) -> str:
     """
     name = str(ctx.facts["name"])
     attempts = int(ctx.knob("attempts", 3))
+    task_ref = str(ctx.knob("task_ref", "") or "").strip()
     try:
         problems = check_package(
             name,
-            requires_data_node=bool(ctx.knob("data_node", 0)),
-            requires_task_ref=str(ctx.knob("task_ref", "") or "").strip(),
+            # The same implication `prepare` publishes as a fact: naming a Task is
+            # what asks for a data node, so the gate checks for one either way.
+            requires_data_node=bool(ctx.knob("data_node", 0)) or bool(task_ref),
+            requires_task_ref=task_ref,
             requires_input=declared_inputs(ctx.knob("requires_input", "")),
         )
     except Exception as exc:
@@ -679,6 +720,122 @@ def declared_inputs(raw: Any) -> tuple[str, ...]:
     return names
 
 
+def baked_item_problems(root: Path) -> list[str]:
+    """Every place a package bakes item data into its graph instead of reading it.
+
+    A data node is the harness's input port. Its items come from the Task it binds or
+    from the `source_path`/`source_format` it names, loaded at run time by
+    :func:`refactory_dsh.nn.executor.load_items`; `inline_items` is read first by that
+    loader, so a package that sets it never reads the run's items at all. That is the
+    same failure as hardcoding one sample, one level up. The check reads the source
+    because the driver must not import model-written code, and it names the file and
+    line so the emit step can act on it.
+    """
+    import ast
+
+    problems: list[str] = []
+    seen: set[tuple[str, int]] = set()
+    for path in sorted(Path(root).rglob("*.py")):
+        try:
+            tree = ast.parse(path.read_text(), filename=str(path))
+        except (SyntaxError, OSError):
+            # `ast_check` already reports a file that does not parse.
+            continue
+        for node in ast.walk(tree):
+            baked = (
+                isinstance(node, ast.keyword) and node.arg == BAKED_ITEMS_KEY
+            ) or (
+                isinstance(node, ast.Dict)
+                and any(
+                    isinstance(key, ast.Constant) and key.value == BAKED_ITEMS_KEY
+                    for key in node.keys
+                )
+            )
+            if not baked:
+                continue
+            where = (path.name, int(getattr(node, "lineno", 0)))
+            if where in seen:
+                continue
+            seen.add(where)
+            problems.append(
+                f"{where[0]}:{where[1]} bakes a fixed item list into the graph with "
+                f"`{BAKED_ITEMS_KEY}`; a data node takes the items of the class of work "
+                "from the Task it binds or from the `source_path` it names, loaded at "
+                "run time, so the harness can be fed any item and not only the ones the "
+                "authoring run seeded"
+            )
+    return problems
+
+
+def _empty_literal(value: Any) -> bool:
+    """Whether a source expression is a literal that names nothing.
+
+    A keyword the emit step writes as `task_ref=""` or `source_path=""` names no
+    source; an expression it computes at import time is left alone, because the
+    driver cannot evaluate it and the graph-level checks still run.
+    """
+    import ast
+
+    return isinstance(value, ast.Constant) and not str(value.value or "").strip()
+
+
+def _names_a_run_time_source(fields: dict[str, Any]) -> bool:
+    """Whether a data node's own fields feed it from a Task or a source."""
+    task_ref = fields.get("task_ref")
+    if task_ref is not None and not _empty_literal(task_ref):
+        return True
+    source_path = fields.get("source_path")
+    source_format = fields.get("source_format")
+    if source_path is None or source_format is None:
+        return False
+    return not _empty_literal(source_path) and not _empty_literal(source_format)
+
+
+def unfeedable_data_node_problems(root: Path) -> list[str]:
+    """Every data node that names no way to be fed at run time.
+
+    A data node is the harness's input port, and the executor feeds it from the Task
+    it binds or from the `source_path` and `source_format` it names. A node that
+    declares neither iterates nothing however much the class of work holds, so the
+    port is closed and the harness is not a harness. The check reads the source
+    because the driver must not import model-written code, and it judges only a
+    `Node(...)` call whose kind is the literal `"data"`: a node built by a helper is
+    left to the graph-level checks.
+    """
+    import ast
+
+    problems: list[str] = []
+    for path in sorted(Path(root).rglob("*.py")):
+        try:
+            tree = ast.parse(path.read_text(), filename=str(path))
+        except (SyntaxError, OSError):
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if ast.unparse(node.func).rsplit(".", 1)[-1] != "Node":
+                continue
+            kind = ""
+            if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
+                kind = str(node.args[1].value)
+            for keyword in node.keywords:
+                if keyword.arg == "kind" and isinstance(keyword.value, ast.Constant):
+                    kind = str(keyword.value.value)
+            if kind != "data":
+                continue
+            fields = {keyword.arg: keyword.value for keyword in node.keywords if keyword.arg}
+            if _names_a_run_time_source(fields):
+                continue
+            line = int(getattr(node, "lineno", 0))
+            problems.append(
+                f"{path.name}:{line} declares a `data` node that names no way to be fed "
+                "at run time; it takes the items of the class of work from `task_ref`, "
+                "or from `source_path` with a `source_format` of `directory`, `jsonl` "
+                "or `csv`, so the harness can be fed from outside the package"
+            )
+    return problems
+
+
 def check_package(
     name: str,
     *,
@@ -719,6 +876,11 @@ def check_package(
     if any("does not parse" in problem for problem in problems):
         # Nothing further can be learned from a file that is not valid Python.
         return problems
+    # Read before the graph is loaded: a harness whose items are baked in, or whose
+    # input port names nothing, is refused for the same reason a hardcoded sample is,
+    # and the emit step can fix the source.
+    problems.extend(baked_item_problems(root))
+    problems.extend(unfeedable_data_node_problems(root))
 
     checked = sandbox.verify_sandboxed(
         name,
@@ -1100,6 +1262,12 @@ def write_result(ctx: Any) -> dict[str, Any]:
         "files": ctx.facts.get("files", []),
         "registered": ctx.facts.get("registered"),
         "smoke_score": ctx.facts.get("smoke_score"),
+        # What kind of harness this run produced: the Task it is bound to, or that it
+        # is the single-shot special case. A reader of the run's own result must not
+        # have to infer that from the package.
+        "task_ref": ctx.facts.get("task_ref"),
+        "class_of_work": ctx.facts.get("class_of_work"),
+        "data_node": ctx.facts.get("data_node"),
     }
     if ctx.facts.get("revision_of"):
         payload.update({

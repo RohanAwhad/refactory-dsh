@@ -1,0 +1,310 @@
+"""The held-out audit: the search trains on one part, and the winner is examined on the rest.
+
+The failure this exists to stop is a search that rewards a harness which only works
+on the items it was tuned against, because those were the only items it was ever
+scored on. The split is deterministic, it is written into the run directory before a
+candidate is evaluated, and the item loader of both runtimes reads it, so no
+candidate can choose its own exam.
+
+``test_loop.py`` covers the size cost, which is the other half of the loop's own
+objective; these cover what the winner is measured on afterwards.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+from pathlib import Path
+
+import pytest
+
+from refactory_dsh import nn
+from refactory_dsh import task as task_module
+from refactory_dsh.loop import Loop, LoopConfig
+
+MODE = "holdout_probe/probe"
+TASK_REF = "holdout_probe_counting"
+NAMES = ("alpha", "beta", "gamma", "delta")
+
+
+class Counting(task_module.Task):
+    """Four instances, judged on whether the pass ran on a trained id.
+
+    The Task is where the gap this audit is about comes from: a pass it sees during
+    the search is rewarded, so a harness evaluated on the train part scores 1.0 and
+    the same harness on the held-out part scores 0.0.
+    """
+
+    name = TASK_REF
+
+    def instances(self) -> list[task_module.TaskInstance]:
+        return [task_module.TaskInstance(id=name) for name in NAMES]
+
+    def verify(self, instance, workspace):  # type: ignore[no-untyped-def]
+        held = {
+            row["id"]
+            for row in task_module.partition(
+                [{"id": name} for name in NAMES], task_module.DEFAULT_HOLDOUT
+            )[task_module.HOLDOUT]
+        }
+        passed = instance.id not in held
+        return task_module.VerifyResult(passed=passed, score=1.0 if passed else 0.0)
+
+
+class Single(task_module.Task):
+    """One instance, which cannot be split into a train and a holdout part."""
+
+    name = "holdout_probe_single"
+
+    def instances(self) -> list[task_module.TaskInstance]:
+        return [task_module.TaskInstance(id="only")]
+
+    def verify(self, instance, workspace):  # type: ignore[no-untyped-def]
+        return task_module.VerifyResult(passed=True, score=1.0)
+
+
+def _probe_graph(task_ref: str) -> nn.Graph:
+    graph = nn.Graph()
+    graph.add(nn.Node(
+        "data", "data", subgraph_entry="work", subgraph_exit="work",
+        task_ref=task_ref, writes=("current_item.json",), produces=("item_scores",),
+    ))
+    graph.add(nn.Node(
+        "work", "op", call="loop_ops:record_item",
+        reads=("current_item.json",), writes=("seen.json",), produces=("seen",),
+    ))
+    graph.add(nn.Node(
+        "finish", "op", call="loop_ops:write_best",
+        writes=("best.json",), produces=("best",),
+    ))
+    graph.connect("data", "finish")
+    return graph
+
+
+class Probe(nn.Mode):
+    """A scored mode whose one data node iterates a Task's items."""
+
+    name = "probe"
+
+    def build(self) -> nn.Graph:
+        return _probe_graph(TASK_REF)
+
+    def score(self, run: nn.RunResult) -> float:
+        scores = [entry["score"] for entry in run.facts.get("item_scores", [])]
+        return sum(scores) / len(scores) if scores else 0.0
+
+
+class SingleProbe(Probe):
+    """The same mode bound to a Task with one instance."""
+
+    def build(self) -> nn.Graph:
+        return _probe_graph(Single.name)
+
+
+def _patch_mode(mode_class: type[nn.Mode]):  # type: ignore[no-untyped-def]
+    """Point the registry at a local mode class for the duration of a test."""
+    import refactory_dsh.registry as registry
+
+    class FakePackage:
+        name = "fake"
+        description = ""
+
+        def mode(self, name: str) -> type[nn.Mode]:
+            return mode_class
+
+    @contextlib.contextmanager
+    def patched():  # type: ignore[no-untyped-def]
+        original = registry.resolve
+        registry.resolve = lambda project, identifier: (FakePackage(), mode_class)  # type: ignore[assignment]
+        try:
+            yield
+        finally:
+            registry.resolve = original  # type: ignore[assignment]
+
+    return patched()
+
+
+task_module.register_task(TASK_REF, Counting)
+task_module.register_task(Single.name, Single)
+
+
+def _run(tmp_path: Path, *, mode_class: type[nn.Mode] = Probe, **overrides: object):
+    base: dict[str, object] = dict(
+        epochs=1, batch_size=1, optimizer="random", seed=1, runs_root=tmp_path / "run",
+    )
+    base.update(overrides)
+    with _patch_mode(mode_class):
+        loop = Loop(MODE, LoopConfig(**base), project=Path("."))  # type: ignore[arg-type]
+        report = loop.run()
+    return loop, report
+
+
+def _held_id(holdout: float = task_module.DEFAULT_HOLDOUT) -> str:
+    return task_module.partition(
+        [{"id": name} for name in NAMES], holdout
+    )[task_module.HOLDOUT][0]["id"]
+
+
+# ── the search only ever sees the train part ────────────────────────────────
+
+
+def test_the_search_is_scored_on_the_train_part_and_never_on_the_holdout(tmp_path):
+    """Every candidate the search paid for was scored on the items it was tuned on."""
+    _loop, report = _run(tmp_path)
+    assert report["leaderboard"]
+    assert all(row["raw_score"] == pytest.approx(1.0) for row in report["leaderboard"]), (
+        "a candidate was scored on the held-out items during the search"
+    )
+    assert report["holdout"]["instances"] == {"train": 3, "holdout": 1}
+
+
+def test_the_winner_is_audited_on_the_holdout_and_the_gap_is_recorded(tmp_path):
+    """The winner is run once more, on the items no candidate saw, and the gap is kept."""
+    _loop, report = _run(tmp_path)
+    audit = report["holdout"]
+    assert audit["train"] == pytest.approx(1.0)
+    assert audit["holdout"] == pytest.approx(0.0)
+    assert audit["gap"] == pytest.approx(1.0)
+    assert audit["overfit"] is True
+    assert audit["threshold"] == 0.15
+    assert audit["instances"] == {"train": 3, "holdout": 1}
+
+
+def test_the_audit_is_written_beside_the_run_and_carried_by_the_report(tmp_path):
+    """`holdout.json` is the durable record; the in-memory payload is the same one."""
+    loop, report = _run(tmp_path)
+    root = tmp_path / "run"
+    written = json.loads((root / "holdout.json").read_text())
+    assert written == report["holdout"]
+    assert loop.holdout_audit == report["holdout"]
+
+    # The audit ran the winner in a directory of its own, on the held-out item, and
+    # the score the search recorded for that candidate is still the train one.
+    best = report["best"]["id"]
+    assert json.loads((root / "holdout" / best / "current_item.json").read_text())[
+        "id"
+    ] == _held_id()
+    assert json.loads((root / "runs" / best / "candidate.json").read_text())[
+        "raw_score"
+    ] == pytest.approx(1.0)
+
+
+def test_one_instance_cannot_be_split_and_the_run_records_that(tmp_path):
+    """A Task with one item is a fact about the Task, not a reason to fail the run."""
+    _loop, report = _run(tmp_path, mode_class=SingleProbe)
+    audit = report["holdout"]
+    assert audit["instances"] == {"train": 1, "holdout": 0}
+    assert audit["holdout"] is None
+    assert audit["gap"] is None
+    assert audit["overfit"] is False
+    assert audit["threshold"] == 0.15
+    assert "cannot be split" in audit.get("note", "")
+
+
+# ── the part is the run's setting, not the candidate's ─────────────────────
+
+
+def test_the_part_is_written_beside_the_run_and_not_into_the_mode(tmp_path):
+    """The file is what the runtime reads, and a candidate cannot reach it.
+
+    The point of a file rather than a knob is that the search cannot choose its own
+    exam: a `set_knob` moving the holdout fraction is not a legal edit, because the
+    mode declares no such knob.
+    """
+    _loop, report = _run(tmp_path, batch_size=2)
+    root = tmp_path / "run"
+    best = report["best"]["id"]
+    train = json.loads((root / "runs" / best / "subset.json").read_text())
+    assert train == {"part": "train", "holdout": 0.3}
+    held = json.loads((root / "holdout" / best / "subset.json").read_text())
+    assert held["part"] == "holdout"
+
+    state = Probe().state_dict()
+    assert "holdout" not in state["knobs"]
+    with pytest.raises(nn.edits.EditError, match="no knob"):
+        nn.edits.configure(state, "holdout", 0.0)
+
+
+def test_a_different_fraction_moves_the_split(tmp_path):
+    """The run's own setting decides both parts, and the audit is run on them.
+
+    The Task rewards three of its four ids, so the default fraction audits one item
+    and a half-held-out run audits two, and the two audits are different numbers.
+    """
+    _loop, report = _run(tmp_path, holdout=0.5)
+    assert report["holdout"]["instances"] == {"train": 2, "holdout": 2}
+    assert report["holdout"]["holdout"] == pytest.approx(0.5), (
+        "the audited score is the mean over the two items the fraction held out"
+    )
+
+
+# ── what a person is told ──────────────────────────────────────────────────
+
+
+def test_optimize_prints_one_line_about_the_held_out_audit(tmp_path, capsys):
+    """`refactory optimize` ends with a sentence about the winner, not just a number."""
+    from refactory_dsh.loop import main as loop_main
+
+    loop_main([
+        "dataset_probe/dataset", "--epochs", "1", "--batch-size", "1",
+        "--optimizer", "random", "--seed", "1",
+        "--runs-root", str(tmp_path / "run"), "--project", ".",
+    ])
+    captured = capsys.readouterr()
+    lines = [line for line in captured.err.splitlines() if line.startswith("holdout:")]
+    assert len(lines) == 1, captured.err
+    assert "train" in lines[0] and "holdout" in lines[0] and "overfit" in lines[0]
+    payload = json.loads(captured.out[captured.out.index("{"):])
+    assert payload["holdout"]["overfit"] is True
+    assert payload["raw_best_score"] is not None
+
+
+def test_best_surfaces_the_audit_of_the_winner(tmp_path):
+    """A reader asking for the winner is told the score may not travel."""
+    from refactory_dsh import console
+
+    root = _overfit_run(tmp_path)
+    payload = console._best_payload(root, keep_state=False)
+    assert payload["holdout"]["overfit"] is True
+    assert payload["overfit_finding"], "best reported an overfit winner with no finding"
+    assert "held-out" in payload["overfit_finding"]
+
+
+def test_adopting_an_overfit_winner_is_refused_unless_the_override_is_given(tmp_path):
+    """`adopt` is the one place a winner reaches the catalogue, so it is the gate."""
+    from refactory_dsh import console
+
+    root = _overfit_run(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    destination = project / ".factory" / "packages" / "taken"
+
+    assert console.main([
+        "adopt", "--run", str(root), "--as", "taken", "--project", str(project),
+    ]) == 2
+    assert not destination.exists(), "an overfit winner was adopted without the override"
+
+    assert console.main([
+        "adopt", "--run", str(root), "--as", "taken", "--project", str(project),
+        "--allow-overfit",
+    ]) == 0
+    assert (destination / "mode.py").exists()
+    recorded = json.loads((destination / ".adopted.json").read_text())
+    assert recorded["candidate"] == json.loads(
+        (root / "holdout.json").read_text()
+    )["winner"]
+
+
+def _overfit_run(tmp_path: Path) -> Path:
+    """A real run of a real Task-bound mode whose winner is overfit.
+
+    `dataset_probe/dataset` iterates `CountingTask`'s two items: the search rewards
+    alpha's pass (1.0) and the held-out item scores what the Task gives it (0.5).
+    """
+    root = tmp_path / "run"
+    Loop(
+        "dataset_probe/dataset",
+        LoopConfig(epochs=1, batch_size=1, optimizer="random", seed=1, runs_root=root),
+        project=Path("."),
+    ).run()
+    return root

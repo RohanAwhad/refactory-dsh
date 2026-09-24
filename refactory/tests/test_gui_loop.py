@@ -13,6 +13,7 @@ is wrong wherever it is rendered.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 import time
@@ -515,6 +516,27 @@ def test_the_console_forwards_a_workdir_to_an_authoring_run(monkeypatch, capsys)
 # tool action.
 
 
+def test_the_console_forwards_the_creation_directive(monkeypatch, capsys):
+    """A creation says which it is: a class of work, or the one-shot special case.
+
+    The console is the path the panel and the tool take, so the directive has to
+    survive the forward rather than being a command-line-only spelling.
+    """
+    from refactory_dsh import console
+
+    seen: list[list[str]] = []
+    monkeypatch.setattr(
+        console, "_forward",
+        lambda module, argv: (seen.append(argv), {"verb": module, "exit_code": 0, "ok": True, "result": {}})[1],
+    )
+    monkeypatch.setattr(console, "_design_review", lambda project, name: "")
+    assert console.main(["create", "--name", "p", "--brief", "b", "--single"]) == 0
+    assert "--single" in seen[-1]
+    assert console.main(["create", "--name", "p", "--brief", "b", "--task", "a.b:C"]) == 0
+    assert "--task" in seen[-1] and "a.b:C" in seen[-1]
+    capsys.readouterr()
+
+
 def test_the_console_forwards_a_single_run_of_a_mode(monkeypatch, capsys):
     from refactory_dsh import console
 
@@ -540,6 +562,35 @@ def test_the_console_forwards_a_single_run_of_a_mode(monkeypatch, capsys):
     assert argv[argv.index("--workdir") + 1] == "/tmp/somewhere"
     assert argv[argv.index("--timeout") + 1] == "60"
     capsys.readouterr()
+
+
+def test_a_single_run_is_read_back_from_the_directory_the_runner_chose(monkeypatch, capsys):
+    """Without `--workdir`, the console must read the run the runner actually made.
+
+    The run's directory is the durable answer for this gesture, because the runner
+    prints its report from the child process. A console that computed its own default
+    read a directory the run never wrote, so the panel was told the run left nothing
+    while the evidence sat one path away.
+    """
+    from refactory_dsh import console, interactive
+
+    mode = "counting_pack/fixed_step"
+    root = interactive.default_workdir(mode)
+    monkeypatch.setattr(
+        console, "_forward",
+        lambda module, argv: {"verb": module, "exit_code": 0, "ok": True, "result": {"output": ""}},
+    )
+    monkeypatch.setattr(console, "status", lambda directory: {"where": str(directory)})
+    shutil.rmtree(root, ignore_errors=True)
+    root.mkdir(parents=True)
+    (root / "facts.json").write_text(json.dumps({"value": 3}))
+    try:
+        assert console.main(["run", mode]) == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["run"]["where"] == str(root)
+        assert payload["run"]["facts"] == {"value": 3}
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def test_a_single_run_needs_the_mode_to_run():

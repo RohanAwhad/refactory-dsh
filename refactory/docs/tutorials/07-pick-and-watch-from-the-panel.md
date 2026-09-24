@@ -56,21 +56,28 @@ while you read the conversation.
 |---|---|---|
 | **Mode** | every mode the console lists, each with the verb that runs it | `console modes` |
 | **Outer loop**, **Optimizer**, **Evaluator** | the three level-two registries; each entry carries the console's own description, and `Use the default` leaves the console's default in place | `console strategies` |
-| **Start** | starts the chosen mode in its own process and names the run it began | `console start <mode> --strategy … --optimizer … --evaluator …` |
+| **The mode's knobs** | one field per knob the chosen mode declares, shaped by the kind it declares: a knob with declared values is a choice, a `bool` is a choice over `true`/`false`, a number is bounded by its declared range, an open `str` is text. What the fields show is what the run sends, including a knob left at its declared default | `console start <mode> --knob NAME=VALUE` |
+| **Start** | starts the chosen mode in its own process and names the run it began | `console start <mode> --strategy … --optimizer … --evaluator … --knob …` |
+| **Run once** | uses the chosen mode once and reports what happened: the run's own status word, the nodes still due, and the facts it left | `console run <mode> --knob NAME=VALUE` |
 | **Run status** | one frame of the run being read — state, best score, evaluations; **Refresh status** reads the next frame, **Stop the run** asks it to stop | `console status --run <id>`, `console stop --run <id>` |
 | **Packages of modes** | per package: **Enable**, **Disable**, **Remove**, and **Import a package** from a directory or git URL | `registry list`, `enable`, `disable`, `remove`, `import` |
 
 Three behaviours are worth knowing before you press something:
 
 - **Controls appear as they become usable.** The section headings are always there,
-  but **Start** appears once a mode is chosen, and **Refresh status** and **Stop the
+  but **Start** and **Run once** appear once a mode is chosen, and **Refresh status** and **Stop the
   run** appear once a run is being read. A panel that looks short is waiting for a
   choice, not broken.
 
 - **Authoring modes are refused on purpose.** `default_pack/create`, `edit` and
   `design` are not runs; choosing one and pressing Start is refused with the verb that
   does run it. The refusal is the console's `action` field, not a second list kept in
-  the browser.
+  the browser. **Run once** follows the same field, so an authoring mode offers no
+  button that would fail.
+- **A run stopped at a gate is reported as stopped.** When a run reaches a gate a
+  person owns, **Run once** says so, names the nodes still due, and stops: the panel
+  does not answer gates, because a gate with no person is the thing it must not fake.
+  Answer it from the shell (`refactory run <mode>`) and run the mode again.
 - **Status is read on demand.** There is no poll timer, so a long run does not
   animate; press **Refresh status** when you want the next frame.
 

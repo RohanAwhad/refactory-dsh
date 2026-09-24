@@ -2,24 +2,26 @@
 
 [English](README.md) | 中文
 
-**说出你想要什么；一张由带类型节点组成的图会设计它、构建它、并改进它。**
+**说出一类工作；一张由带类型节点组成的图会为它构建一个 harness，然后搜索这个 harness。**
 
 ```bash
 git clone <this-repo> --recurse-submodules && cd <this-repo>
 ./install.sh
-uv run refactory ceo "a mode that drafts a haiku and checks the syllable count" --mode create
+uv run refactory ceo "a mode that drafts a haiku and checks the syllable count" --mode create --single
 ```
 
 这就是产品的全部。**[QUICKSTART.md](QUICKSTART.md)** 是按顺序排列的六条命令，附上各自的代价与出错时怎么办。下面都是它的组成部分。
 
 | 层 | 它负责什么 |
 |---|---|
-| **模式（mode）** | 一个 Python 类：一张带类型的节点图、声明的旋钮（knob），以及 `score()`。它是你创建、运行和搜索的单位。 |
-| **外循环（outer loop）** | 对模式的搜索：提出带类型的编辑 → 校验 → 评估 → 保留有改进的，并报告它拒绝了什么。 |
+| **模式（mode）** | 某一类工作的 agentic harness：一个 Python 类，装着绑定 `Task` 的带类型节点图、声明的旋钮（knob），以及在这些条目上的 `score()`。它是你创建、运行和搜索的单位。 |
+| **外循环（outer loop）** | 对 harness 的搜索：提出带类型的编辑 → 校验 → 评估 → 保留有改进的，并报告它拒绝了什么。它只在一部分条目上被搜索，并在它没见过的另一部分上被审计，而且候选要为自身体积付一点代价。 |
 | **CEO** | 一个 agent，逐节点驱动模式的图，为每次模型调用派生一个子 agent，并在只有人才能回答的 gate 前停下。 |
 | **面板（panel）** | 浏览器里的同一批选项：选一个模式、按下 Start、读这次运行。 |
 
-两个运行时执行同一张图，并通过「把同一个模式在两边各跑一次、比较事实」来保持一致： **walker**（进程内，搜索用它）与 **DSH**（发布用的那个）。模式被降级为唯一的一份 IR—— `Workflow.to_dict()`——运行时只看到那份 JSON。
+**harness 是为某一类工作而造的。** 这里一切东西的形状都是「为任意一棵 Java 源码树写构建脚本」，而不是「为这一棵树写脚本」。`Task` 命名那一类工作：它列出条目、准备每一条、说明每条要什么、并逐条判定，所以 harness 的分数是「多少条目真的做对了」，而不是「我试过的那一个例子做对了」。只跑一次的模式是特例，`create` 会让你说清楚你在造哪一种。
+
+**harness 的含义不取决于谁来运行它。** `{graph, knobs, ports, memory}` 降级成唯一的一份 IR—— `Workflow.to_dict()`——那才是全部含义，运行时只看到那份 JSON。哪个模型作答、agent 节点可以用哪些工具、工作在哪个沙箱里发生：那是运行时的事，同一个 harness 在两边含义相同。**walker** 在进程内跑一张图，搜索用它；**DSH** 是发布用的那个；把同一个模式在两边各跑一次、比较事实，让两者保持一致。
 
 ---
 
@@ -36,7 +38,7 @@ cd <this-repo>
 
 `install.sh` 依次做四件事：
 
-1. `git submodule update --init --recursive` —— 取回 vendored 的语言（`factory`）与参考模式（`srf`）。
+1. `git submodule update --init --recursive` —— 取回 vendored 的语言（`factory`）与参考模式（`srf`）。如果你克隆时没带 `--recurse-submodules`，请在 `uv sync` 之前自己跑一遍：缺了这些 submodule，`uv sync` 会报 uv 自己的 *“does not appear to be a Python project”*，而那句话不会告诉你原因。
 2. `pnpm install --frozen-lockfile && pnpm run build` —— DSH 工作区，以及 Web 视图所服务的 client/host 包。这一步需要 pnpm； 机器上没有时，脚本会先把固定版本放到 PATH 上：有 `corepack` 就用它，否则用 `npm install -g pnpm@<pin>`， 所以只要有 Node 和 npm 就够了（用 `REFACTORY_SKIP_GLOBAL_PNPM=1` 可以跳过）。
 3. `uv sync` —— 根目录下**唯一**一个 Python 项目：它创建 `.venv`、以可编辑方式安装那三个本地包， 并把 `refactory` 命令放进 `.venv/bin`，由 `uv.lock` 锁定。
 4. 创建模式运行所需的 DSH profile（`dsh plugin --profile graph add …`）。profile 是机器状态， 所以这一步每台机器只需一次；用 `REFACTORY_SKIP_DSH_PROFILE=1` 可以跳过。
@@ -147,7 +149,8 @@ uv run refactory package add|import|remove|enable|disable …
 
 | 命令 | 作用 |
 |---|---|
-| `refactory ceo "<你想要什么>" --mode create` | 由一段简述构建一个模式包：调研、由你批准的策略、构建、三路并行评审、审计，然后注册并冒烟运行（20–30 分钟） |
+| `refactory ceo "<你想要什么>" --mode create --task <module:Class>` | 为**一类工作**构建一个 harness：Task 列出条目并逐条判定，产出的包把一个 `data` 节点绑定到它（调研、由你批准的策略、构建、三路并行评审、审计，然后注册并冒烟运行；20–30 分钟） |
+| `refactory ceo "<你想要什么>" --mode create --single` | 特例：一个只跑一次、只处理一个输入的 harness，不绑定 Task |
 | `refactory ceo "<你想要什么>" --mode design --check "<命令>"` | 设计一个带校验的产物，而不是包；`--check` 是判定它是否管用的命令（这是默认模式） |
 | `refactory ceo "<你想要什么>" --mode edit --revise <包>/<模式>` | 修订一个已有模式并拒绝变差；`--revise` 指明它改自什么 |
 | `refactory ceo <包>/<模式>` | 直接运行那个模式，而不创作任何东西 |
@@ -155,6 +158,8 @@ uv run refactory package add|import|remove|enable|disable …
 | 选项 | 作用 |
 |---|---|
 | `--name <名字>` | 包或产物的名字；不给就用你说的话当名字 |
+| `--task <module:Class>` | 仅 create：那一类工作。产出的 harness 把一个 `data` 节点绑定到该 Task，并让子图按 Task 列出的条目逐条运行，所以它以后能用在同类中的任何条目上，而不只是你试过的那一个 |
+| `--single` | 仅 create：构建一个只跑一次、只处理一个输入的 harness。`--task` 与 `--single` 必须给一个，因为为一个写死的例子构建的 harness 是特例，必须被当作特例明确要求 |
 | `--check "<命令>"` | 仅 design：在产物目录里运行；门会反复重跑，直到它退出码为 0 |
 | `--revise <包>/<模式>` | 仅 edit：被修订的那个模式 |
 | `--model <id>` | 这次运行用的模型，例如 `deepseek-v4-pro`（默认：你设置里的默认） |
@@ -208,11 +213,15 @@ uv run refactory package add|import|remove|enable|disable …
 | `--seed <n>` | 精确复现一次搜索 | 0 |
 | `--elite <n>` | 每轮拿多少个父代来对照提出候选 | 3 |
 | `--max-evaluations <n>` | 评估过的候选数的硬上限 | 64 |
+| `--holdout <比例>` | 一个 Task 的条目里有多大比例被挡在搜索之外，用来在搜索结束后审计胜者；只有一个条目时无法切分，审计会记录这件事 | 0.3 |
+| `--parsimony <代价>` | 候选图里每个节点让它分数付出多少代价：搜索比较的是 `raw_score − parsimony × 节点数` | 0.01 |
 | `--attempts <n>` | 一批被拒后重试几次 | 3 |
 | `--runs-root <目录>` | 运行目录本身；用 `--run <这个路径>` 读回来 | `.factory/loop` |
 | `--intent "<话>"` | 这次运行是为什么；它给 agent 读的账本做种子 | 空 |
 | `--model <名字>` | 推理优化器要问的模型（不是模式自己的 agent） | 配置好的路由 |
 | `--provider <路由>` | 那个模型所在的服务路由 | 你设置里的默认 |
+
+**每个候选都只在条目的训练部分上被搜索，胜者随后在留出的那部分上被重新评估。** 用哪一部分随运行目录走（每个候选旁边的 `subset.json`），而不是作为旋钮，所以一次搜索没法自己挑考卷；审计结果落在 `<运行根目录>/holdout.json`，也出现在报告里，形如 `{"train", "holdout", "gap", "overfit", "threshold", "instances"}`，当 `train − holdout` 超过 0.15 时 `overfit` 为真。搜索用来比较的分数已经扣掉了体积代价，未扣的那个数作为 `raw_score` 记在旁边，所以靠本事赢的 harness 和靠体积赢的能分得开。`refactory best` 会报告这份审计，而 `refactory adopt` 会拒绝一个过拟合的胜者，除非你传 `--allow-overfit`。
 
 <a id="cli-read"></a>
 ### 读一次运行，并引导它
@@ -223,9 +232,10 @@ uv run refactory package add|import|remove|enable|disable …
 | `refactory status --run <id>` | 它在哪，以及某个偏移之后的事件 |
 | `refactory leaderboard --run <id>` | 按分数排的候选，每个都带它与父代的差异 |
 | `refactory candidate <id> --run <id>` | 一个候选，精确到它改了什么 |
-| `refactory best --run <id>` | 胜者，带打出那个分数的状态 |
+| `refactory best --run <id>` | 胜者，带打出那个分数的状态，以及它是否在自己的训练条目之外也管用的留出审计 |
 | `refactory artifacts --run <id> [--contents]` | 它在磁盘上留下了什么 |
-| `refactory adopt --run <id> --as <包>` | 把胜者写成一个新包，输入原封不动 |
+| `refactory adopt --run <id> --as <包>` | 把胜者写成一个新包，输入原封不动；当审计说胜者过拟合时拒绝 |
+| `refactory adopt --run <id> --as <包> --allow-overfit` | 仍然采用它，并把审计记录在包旁边 |
 | `refactory steer --run <id> --note "<话>" [--kind info\|correction\|constraint]` | 把你说的加进这次运行的意图账本 |
 | `refactory steer --run <id> --verdict <门>=<值>` | 记下某道门的答案，好让恢复运行时重放它 |
 | `refactory stop --run <id>` | 请一次运行停下来 |

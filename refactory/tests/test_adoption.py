@@ -172,14 +172,27 @@ def test_a_run_with_no_journal_refuses(tmp_path):
 
 # ── adopting produces something new, and runs ──────────────────────────────
 def test_the_adopted_mode_scores_what_the_winner_scored(finished_run, tmp_path):
-    """The point of adopting: the artifact is the result, not a description of it."""
+    """The point of adopting: the artifact is the result, not a description of it.
+
+    ``adopt`` reports the score the run compared, which is the winner's raw score
+    minus the loop's size cost; running the adopted mode returns the raw score, so
+    the two are compared against the report's own two numbers rather than assumed
+    equal. What must hold is that the state carried across unchanged.
+    """
+    import json
+
+    report = json.loads((finished_run / "report.json").read_text())
     result = adopt(finished_run, as_name="adopted_one", project=tmp_path)
     _, mode_class = registry.resolve(tmp_path, result["mode"])
     scored = mode_class().evaluate(tmp_path / "run")
 
-    assert scored.score == result["score"], (
-        f"the adopted mode scores {scored.score} where the winner scored "
-        f"{result['score']}; adopting did not carry the result across"
+    assert scored.score == report["raw_best_score"], (
+        f"the adopted mode scores {scored.score} where the winner's raw score was "
+        f"{report['raw_best_score']}; adopting did not carry the result across"
+    )
+    assert result["score"] == report["best_score"], (
+        "adopt reports a score the run's own report does not, so the two disagree "
+        "about what the winner was worth"
     )
 
 

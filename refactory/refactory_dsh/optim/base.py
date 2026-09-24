@@ -126,7 +126,12 @@ class Candidate:
     parent: str | None
     state: dict[str, Any]
     edits: list[dict[str, Any]] = field(default_factory=list)
+    #: The score the search compares: the evaluator's number minus the run's size
+    #: cost. Set by the loop, which is the only place the cost is known.
     score: float | None = None
+    #: What the evaluator scored, before the size cost. Kept so a reader can tell a
+    #: candidate that won on merit from one that won on size.
+    raw_score: float | None = None
     mean_score: float | None = None
     facts: dict[str, Any] = field(default_factory=dict)
     exit_ok: bool = True
@@ -155,6 +160,7 @@ class Candidate:
             "id": self.id,
             "parent": self.parent,
             "score": self.score,
+            "raw_score": self.raw_score,
             "edits": self.edits,
             "structural": self.is_structural(),
             "exit_ok": self.exit_ok,

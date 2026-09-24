@@ -105,6 +105,108 @@ def good_files(name: str) -> dict[str, str]:
     }
 
 
+_DATA_INIT = '''\
+"""A generated package whose one mode iterates a Task's items."""
+from refactory_dsh.nn import Package
+
+from .mode import Chore
+
+PACKAGE = Package(
+    name="{name}",
+    description="process every item the Task lists",
+    modes=(Chore,),
+    ops=("refactory_packages.{name}.ops",),
+)
+'''
+
+_DATA_OPS = '''\
+"""Operations for the per-item harness."""
+
+
+def record(ctx):
+    item = ctx.read_json("current_item.json", {}) or {}
+    seen = ctx.read_json("seen.json", {"ids": []}) or {"ids": []}
+    seen.setdefault("ids", []).append(str(item.get("id")))
+    seen["min_items"] = int(ctx.knob("min_items", 1) or 1)
+    ctx.write_json("seen.json", seen)
+    return {"value": len(seen["ids"])}
+
+
+def done(ctx):
+    ctx.write_json("done.json", {"finished": True})
+    return {"finished": True}
+'''
+
+_DATA_MODE = '''\
+"""The per-item harness mode."""
+from refactory_dsh import nn
+
+OPS = "refactory_packages.{name}.ops"
+TASK = "{task_ref}"
+
+
+class Chore(nn.Mode):
+    name = "chore"
+    description = "iterate a Task's items and score the passes it verified"
+
+    @classmethod
+    def declare(cls):
+        return {{"min_items": nn.Knob(1, "int", lo=1, hi=10)}}
+
+    def build(self):
+        graph = nn.Graph()
+        graph.add(nn.Node("data", "data", subgraph_entry="work", subgraph_exit="work",
+                          task_ref=TASK, writes=("current_item.json",),
+                          produces=("item_scores",)))
+        graph.add(nn.Node("work", "op", call=OPS + ":record", knobs=("min_items",),
+                          reads=("current_item.json",), writes=("seen.json",),
+                          produces=("value",)))
+        graph.add(nn.Node("finish", "op", call=OPS + ":done", writes=("done.json",),
+                          produces=("finished",)))
+        graph.connect("data", "finish")
+        return graph
+
+    def score(self, run):
+        scores = [entry["score"] for entry in run.facts.get("item_scores", [])]
+        return sum(scores) / len(scores) if scores else 0.0
+'''
+
+
+def good_data_files(name: str, task_ref: str) -> dict[str, str]:
+    """A working generated package whose one mode is a data node bound to `task_ref`.
+
+    The Task is the one `dataset_probe` ships, whose `verify` reads what the pass
+    wrote: the package is a harness for that class of work, not for one sample.
+    """
+    return {
+        "__init__.py": _DATA_INIT.format(name=name),
+        "ops.py": _DATA_OPS,
+        "mode.py": _DATA_MODE.format(name=name, task_ref=task_ref),
+    }
+
+
+def baked_data_files(name: str, task_ref: str) -> dict[str, str]:
+    """The same package with the items baked into the graph instead of fed at run time.
+
+    `inline_items` is read before the Task, so the harness stops taking the items the
+    class of work supplies and iterates only the ones the authoring run seeded.
+    """
+    files = good_data_files(name, task_ref)
+    files["mode.py"] = files["mode.py"].replace(
+        'task_ref=TASK, writes=("current_item.json",),',
+        'task_ref=TASK, inline_items=[{"id": "alpha"}, {"id": "beta"}],\n'
+        '                          writes=("current_item.json",),',
+    )
+    return files
+
+
+def unfed_data_files(name: str) -> dict[str, str]:
+    """A data node that names no Task and no source: the input port is shut."""
+    files = good_data_files(name, "unused:Task")
+    files["mode.py"] = files["mode.py"].replace("task_ref=TASK, ", "")
+    return files
+
+
 def strategy_answer(name: str) -> str:
     """A coherent strategy answer, in the shape create-mode's review gate checks."""
     import json

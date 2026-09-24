@@ -83,6 +83,8 @@ default_pack/  Create a package, revise one, or design an artifact — from a br
   default_pack/create                    design, emit and validate a whole package from a brief
   default_pack/design                    design, emit and check a software artifact from a brief
   default_pack/edit                      revise an existing mode from a brief, and check it did not regress
+java_build_pack/  write a javac/java build script for any small Java source tree
+  java_build_pack/build                  write a build script that compiles and runs any small Java tree
 lean_pack/  Prove theorems in Lean 4 and score what the proof checker accepted.
   lean_pack/prover                       prove a theorem in Lean and score what the Lean checker accepted
 loop_mode/  The optimizer loop itself as a graph of eight steps, runnable and searchable.

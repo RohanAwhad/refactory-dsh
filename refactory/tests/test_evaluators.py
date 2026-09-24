@@ -89,9 +89,14 @@ def test_a_third_evaluator_needs_no_edit_to_the_loop(tmp_path):
         assert isinstance(loop.evaluator, Fixed), "the loop built the wrong evaluator"
         report = loop.run()
         assert Fixed.seen, "the registered evaluator was never called"
-        assert report["best_score"] == 0.5, (
+        # The loop's own size cost is taken off the number the evaluator returned, so
+        # the raw score is what says the number came from the seam.
+        assert report["raw_best_score"] == 0.5, (
             "the score did not come from the evaluator, so the loop is not reading "
             f"the seam: {report}"
+        )
+        assert report["best_score"] == pytest.approx(
+            0.5 - report["scoring"]["parsimony"] * report["best"]["nodes"]
         )
     finally:
         evaluators.REGISTRY.pop("fixed", None)

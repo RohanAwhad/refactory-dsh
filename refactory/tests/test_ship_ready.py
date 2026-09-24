@@ -126,9 +126,13 @@ def test_asking_a_module_for_help_is_not_an_error(module):
 # ── the tour runs, and produces what it promises ───────────────────────────
 
 
-@pytest.mark.parametrize("seed,expected", [("5", "0.955")])
+@pytest.mark.parametrize("seed,expected", [("5", "0.875")])
 def test_the_tour_produces_the_numbers_it_documents(tmp_path, seed, expected):
-    """The five-minute tour's headline result, run exactly as written."""
+    """The five-minute tour's headline result, run exactly as written.
+
+    The compared score is the raw one minus the loop's size cost, so the seed's
+    number moves with the cost the same way every candidate's does.
+    """
     out = tmp_path / "run"
     result = subprocess.run(
         [
@@ -140,7 +144,7 @@ def test_the_tour_produces_the_numbers_it_documents(tmp_path, seed, expected):
     )
     assert result.returncode == 0, result.stderr[-2000:]
     report = json.loads(result.stdout[result.stdout.index("{"):])
-    assert str(report["seed_score"]) == "0.875", report["seed_score"]
+    assert str(report["seed_score"]) == "0.795", report["seed_score"]
     assert str(report["best_score"]) == expected, (
         f"the tutorial documents best_score {expected} and got {report['best_score']}"
     )

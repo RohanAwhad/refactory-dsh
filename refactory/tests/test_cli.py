@@ -194,10 +194,44 @@ def test_the_model_a_run_names_is_passed_to_the_runtime(monkeypatch):
 
     seen.clear()
     assert cli.main([
-        "ceo", "an idea", "--mode", "create",
+        "ceo", "an idea", "--mode", "create", "--single",
         "--model", "deepseek-v4-pro", "--provider", "deepseek-official",
     ]) == 0
     authored = seen[0]
     assert authored[0] == "default_pack/create"
     assert "--model" in authored and "deepseek-v4-pro" in authored
     assert "--provider" in authored and "deepseek-official" in authored
+
+
+def test_ceo_refuses_a_creation_that_names_no_class_of_work(monkeypatch, capsys):
+    """Neither `--task` nor `--single` is a decision nobody made.
+
+    The mode refuses this at its own first node, which is a profile boot and a model
+    later; the command line says it in milliseconds instead, and forwards nothing.
+    """
+    seen: list[list[str]] = []
+    monkeypatch.setattr(cli, "_forward", lambda module, argv: seen.append(argv) or 0)
+    assert cli.main(["ceo", "an idea", "--mode", "create", "--name", "x"]) == 2
+    assert seen == [], "a refused creation must not reach the runtime"
+    assert "class of work" in capsys.readouterr().err
+
+
+def test_ceo_passes_the_class_of_work_as_a_knob(monkeypatch):
+    """`--task` says what class of work the produced harness is for."""
+    seen: list[list[str]] = []
+    monkeypatch.setattr(cli, "_forward", lambda module, argv: seen.append(argv) or 0)
+    assert cli.main([
+        "ceo", "an idea", "--mode", "create", "--name", "x",
+        "--task", "refactory_packages.dataset_probe.tasks:CountingTask",
+    ]) == 0
+    forwarded = seen[0]
+    assert forwarded[0] == "default_pack/create"
+    assert "task_ref=refactory_packages.dataset_probe.tasks:CountingTask" in forwarded
+
+
+def test_ceo_single_reaches_the_mode_as_the_knob_it_reads(monkeypatch):
+    """The special case travels as `single_shot`, which is the knob the mode reads."""
+    seen: list[list[str]] = []
+    monkeypatch.setattr(cli, "_forward", lambda module, argv: seen.append(argv) or 0)
+    assert cli.main(["ceo", "count to ten", "--mode", "create", "--single"]) == 0
+    assert "single_shot=1" in seen[0]

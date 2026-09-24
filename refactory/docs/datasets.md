@@ -5,6 +5,14 @@ once per *item* — one benchmark instance, one row of a file, one directory —
 item can carry its own prompt and its own verdict. That is how a benchmark or a
 dataset becomes a mode instead of a script around one.
 
+## A harness is for a class of work
+
+What this system produces is a harness for a **class** of work — "write the build config for any Java buildroot", not "write the config for this buildroot". A mode that runs once is the special case rather than the default, because a mode that was tuned until one instance passed makes no claim about the next instance.
+
+The `data` node is the harness's **input port**. What it is pointed at at run time — a bound Task's `instances()`, a directory, a JSONL or CSV file — is material rather than meaning, and a harness with its items written into the graph is a harness for exactly those items. `create` binds a Task by name and leaves the port open, and the validate gate refuses a package whose items are baked into the graph instead of read from the node at run time.
+
+A class-of-work harness scores **per item**: its `score()` aggregates the verdicts the Task's `verify` returned for each pass, and the run reports the individual verdicts under the `item_scores` fact alongside that aggregate. That is what makes the score a statement about the class rather than about the one run that produced it.
+
 ## The node
 
 ```python
@@ -32,7 +40,7 @@ name, because an empty selection and an unbound source must not look alike.
 
 ## The Task
 
-A Task is four optional hooks, resolved by `module:Class` or by a name registered with
+A Task is three optional hooks, resolved by `module:Class` or by a name registered with
 `register_task`. A reference that does not resolve is refused rather than run with
 nothing judging the items.
 
@@ -48,12 +56,11 @@ class CountingTask(Task):
     def setup(self, instance, workspace):     # before a pass
         ...
 
-    def prompt(self, instance):               # what that item's agent is asked
-        return f"process {instance.id}"
-
     def verify(self, instance, workspace):    # after a pass; None means "no opinion"
         return VerifyResult(passed=True, score=1.0)
 ```
+
+There is no hook that writes the prompt. An item is data — it reaches the pass as `current_item.json` — and what the agent for an item is asked is the mode's own business, stated in its agent node's prompt template. Two places that both decide the ask is one place too many.
 
 The verdicts are recorded as `item_scores` when the data node declares that fact, so
 `score()` reads what the Task decided rather than a number the graph guessed.
@@ -75,22 +82,28 @@ uv run refactory package smoke dataset_probe/dataset
 `0.75` is the mean of `1.0` for `alpha` and `0.5` for `beta`: two passes, each with
 its own item on disk, each judged by the Task.
 
-## Creating one
-
-`create` takes the two directives, so a mode can be authored for a dataset rather
-than hand-written:
+A two-item Task proves the shape but not the claim. `java_build_pack` is the example that does the work the product is named for: its Task lists three small Java source trees, its one agent node writes `build.sh` for whichever item is on disk, and the Task runs that script and compares what the program printed with the output recorded beside the sources. The mode's score is the share of trees it built, and pointing the same harness at a fourth tree it has never seen is what the binding buys:
 
 ```bash
-uv run refactory ceo "solve the counting instances" --mode create --name my_pack
+uv run refactory run java_build_pack/build --intent "build each Java tree the Task lists"
 ```
-A created mode is asked for a data node and a Task through the same brief: say that it
-iterates a Task's items, and name the Task class (`my_pack.tasks:CountingTask`). The
-validate gate checks that the package really has a `DataNode` bound to that Task
-rather than taking the prompt's word for it.
 
-The validate gate **checks** both: a package that declares no DataNode when one was
-asked for, or is not bound to the Task that was named, is refused and told which one
-was expected. Asking is not the same as getting.
+## Creating one
+
+`create` makes you say which of the two things you are building, before it spends anything on a model:
+
+```bash
+# a harness for a class of work: the Task supplies the items and judges each pass
+uv run refactory ceo "a harness that counts the items of any counting instance" \
+  --mode create --name my_pack --task my_pack.tasks:CountingTask
+
+# the special case: a harness for one run of one thing
+uv run refactory ceo "a harness that counts to ten" --mode create --name my_once --single
+```
+
+Naming a Task is the whole directive: the produced package gets a `data` node bound to that Task, and the validate gate checks the package really has one rather than taking the prompt's word for it. A creation that names neither a Task nor `--single` is refused with both options named, because a harness built for one hardcoded example is the special case and must be asked for as one.
+
+The validate gate refuses three shapes, each by name: a package that declares no data node when a Task was named, one whose data node is bound to a different Task, and one that closes its input port — items written into the graph as `inline_items`, or a data node that names neither a Task nor a source to read at run time. Asking is not the same as getting.
 
 ## On the runtimes
 

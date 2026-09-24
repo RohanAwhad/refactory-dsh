@@ -38,8 +38,12 @@ def test_progress_records_every_step_of_the_loop(tmp_path):
     assert steps[0] == "init"
     assert steps[-1] == "report"
     assert set(steps) == {
-        "init", "forward", "loss", "backward", "optimizer", "step", "scheduler", "report",
+        "init", "forward", "loss", "backward", "optimizer", "step", "scheduler",
+        "holdout", "report",
     }
+    # The held-out audit runs after the search and before the report, so a reader
+    # watching the file sees it happen where it did.
+    assert steps.index("scheduler") < steps.index("holdout") < steps.index("report")
 
 
 def test_progress_records_one_line_per_candidate_evaluated(tmp_path):

@@ -43,8 +43,14 @@ def _config(root: Path, **overrides: object) -> LoopConfig:
 
 # ── half one: a brief becomes a working package ────────────────────────────
 def _create_config(**overrides) -> CreateConfig:
-    """A create config with the person's strategy approval recorded (`user` gate)."""
-    return CreateConfig(verdicts={"gate_strategy": "proceed"}, **overrides)
+    """A create config with the person's strategy approval recorded (`user` gate).
+
+    `single_shot` because the running example's fixture package has no Task binding;
+    naming a Task would be the class-of-work default, and would win over it.
+    """
+    return CreateConfig(
+        verdicts={"gate_strategy": "proceed"}, single_shot=True, **overrides
+    )
 
 
 def test_a_brief_becomes_a_registered_package_that_scores(tmp_path):

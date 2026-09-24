@@ -231,12 +231,30 @@ RECIPES: tuple[Recipe, ...] = (
     Recipe(
         id="create-mode",
         group="create",
-        title="Create a mode with a model call",
+        title="Create a harness for one run of one thing",
         command=(
             'uv run refactory ceo "one agent node drafts a blurb, one op checks it" \\\n'
-            "  --mode create --name my_pack --approve gate_strategy=proceed"
+            "  --mode create --name my_pack --single --approve gate_strategy=proceed"
         ),
         expect="a package under .factory/packages, registered and smoke-scored",
+        tier=MODEL,
+        contains=("package", "smoke_score"),
+    ),
+    Recipe(
+        id="create-harness",
+        group="create",
+        title="Create a harness for a class of work",
+        command=(
+            'uv run refactory ceo "for any item a counting Task lists, a harness that records '
+            'the item and scores what it did" \\\n'
+            "  --mode create --name my_harness \\\n"
+            "  --task refactory_packages.dataset_probe.tasks:CountingTask \\\n"
+            "  --approve gate_strategy=proceed"
+        ),
+        expect=(
+            "a package whose mode binds a data node to that Task, runs its subgraph once "
+            "per item and scores per item"
+        ),
         tier=MODEL,
         contains=("package", "smoke_score"),
     ),

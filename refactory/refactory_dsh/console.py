@@ -57,7 +57,12 @@ SETTINGS: tuple[tuple[str, str, type], ...] = (
     ("attempts", "retries per batch after a refusal", int),
     ("preset", "which edits the optimizer may use", str),
     ("max_evaluations", "hard ceiling on inner runs", int),
+    ("holdout", "the fraction of the Task's items held out of the search", float),
+    ("parsimony", "what each node of a candidate's graph costs its score", float),
 )
+
+#: The audit a run writes of its winner against the items no candidate saw.
+HOLDOUT_FILE = "holdout.json"
 
 
 class ConsoleError(RuntimeError):
@@ -469,12 +474,15 @@ def _steer(
 
 
 def _best_payload(run_root: Path, *, keep_state: bool) -> dict[str, Any]:
-    """The winner, and the state that scored it.
+    """The winner, the state that scored it, and how it did on the held-out items.
 
     The state is what makes a winner usable and it is the field `leaderboard` and
     `candidate` do not have: one gives a score, the other a diff, and neither can
     be run. It is large, so it is opt-in — but it is available without reading
     `journal.jsonl` by hand, which was the only way before.
+
+    The held-out audit travels with the winner because the score alone cannot say
+    whether the harness works on anything but the items it was tuned against.
     """
     from refactory_dsh.adopt import best
 
@@ -482,7 +490,25 @@ def _best_payload(run_root: Path, *, keep_state: bool) -> dict[str, Any]:
     if not keep_state:
         winner = {key: value for key, value in winner.items() if key != "state"}
         winner["state_available"] = "pass --state"
+    winner["holdout"] = holdout(run_root)
+    if (winner["holdout"] or {}).get("overfit"):
+        winner["overfit_finding"] = _overfit_finding(winner["holdout"])
     return winner
+
+
+def holdout(run_root: Path) -> dict[str, Any] | None:
+    """The held-out audit a run recorded, or ``None`` when it recorded none."""
+    return _read_json(Path(run_root) / HOLDOUT_FILE) or None
+
+
+def _overfit_finding(audit: dict[str, Any]) -> str:
+    """What an overfit audit means for a reader who is about to keep the winner."""
+    return (
+        f"the winner scores {audit.get('train')} on the items it was searched on and "
+        f"{audit.get('holdout')} on the held-out items, a gap of {audit.get('gap')} "
+        f"over the threshold {audit.get('threshold')}; it may not work on items it "
+        "was not tuned against"
+    )
 
 
 def _measured(run_root: Path, candidate_id: str) -> dict[str, Any]:
@@ -735,6 +761,11 @@ def _parser() -> argparse.ArgumentParser:
         sub.add_parser("adopt", help="write the winner as a new package, input untouched")
     )
     take.add_argument("--as", dest="as_name", required=True, help="the new package name")
+    take.add_argument(
+        "--allow-overfit", action="store_true", dest="allow_overfit",
+        help="adopt even though the winner's held-out audit says it is overfit; "
+             "without this, adopting an overfit winner is refused",
+    )
 
     add(sub.add_parser("stop", help="ask a run to stop"))
 
@@ -759,7 +790,13 @@ def _parser() -> argparse.ArgumentParser:
         help="build the mode as a DataNode that iterates its subgraph per item",
     )
     make.add_argument("--task", default=None, metavar="TASK_REF", dest="task_ref",
-                      help="a Task class the produced mode must satisfy")
+                      help="the class of work: a Task the produced harness binds a data node "
+                           "to, so the harness runs its subgraph once per item the Task lists")
+    make.add_argument(
+        "--single", action="store_true", default=False, dest="single_shot",
+        help="build a harness for one run of one thing, with no Task binding; one of "
+             "--task or --single is required",
+    )
     make.add_argument("--workdir", default="", help="the run directory (default: .factory/create/<name>)")
     make.add_argument("--resume", default="", metavar="RUN_DIR", help="continue a failed run from its directory")
     make.add_argument(
@@ -936,9 +973,17 @@ def main(argv: list[str] | None = None) -> int:
         elif args.verb == "adopt":
             from refactory_dsh.adopt import adopt as adopt_winner
 
-            payload = adopt_winner(
-                _root_for(args, project), as_name=args.as_name, project=project
-            )
+            run_root = _root_for(args, project)
+            audit = holdout(run_root) or {}
+            if audit.get("overfit") and not args.allow_overfit:
+                # The one place a person would otherwise carry an overfit winner into
+                # the catalogue without being told the score did not travel.
+                raise ConsoleError(
+                    f"refusing to adopt an overfit winner: {_overfit_finding(audit)}. "
+                    "Pass --allow-overfit to adopt it anyway."
+                )
+            payload = adopt_winner(run_root, as_name=args.as_name, project=project)
+            payload["holdout"] = audit or None
         elif args.verb == "stop":
             payload = stop(_root_for(args, project))
         elif args.verb == "registry":
@@ -968,12 +1013,15 @@ def main(argv: list[str] | None = None) -> int:
             # The one-shot runner prints its report from the child process, whose
             # stdout is the terminal's rather than this buffer, so the JSON contract
             # would otherwise carry nothing. The run directory is the durable answer:
-            # where it is, how it ended and what it recorded.
-            root = (
-                Path(args.workdir)
-                if args.workdir
-                else project / "interactive" / args.mode.replace("/", "-")
-            )
+            # where it is, how it ended and what it recorded -- and it is the
+            # directory the runner itself chose, so this reads the run it made rather
+            # than a second guess at where a run would have gone.
+            if args.workdir:
+                root = Path(args.workdir)
+            else:
+                from refactory_dsh.interactive import default_workdir
+
+                root = default_workdir(args.mode)
             if root.is_dir():
                 payload["run"] = {
                     **status(root),
@@ -995,6 +1043,8 @@ def main(argv: list[str] | None = None) -> int:
                 forwarded.append("--data-node")
             if args.task_ref:
                 forwarded += ["--task", args.task_ref]
+            if args.single_shot:
+                forwarded.append("--single")
             for pair in args.verdict:
                 forwarded += ["--verdict", pair]
             payload = _forward("create", forwarded)

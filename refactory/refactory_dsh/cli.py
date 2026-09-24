@@ -112,7 +112,21 @@ def cmd_ceo(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+
     knobs = [f"brief={target}", f"name={args.name or slug(target)}"]
+    if authoring == "create" and not args.revise:
+        # The mode refuses this at its own first node, which is a profile boot later; a
+        # directive nobody gave is worth saying in milliseconds instead.
+        from refactory_dsh.create_ops import CREATION_DIRECTIVE
+
+        given = {pair.split("=", 1)[0] for pair in args.knob if "=" in pair}
+        if not args.task_ref and not args.single_shot and not ({"task_ref", "single_shot"} & given):
+            print(f"refactory: {CREATION_DIRECTIVE}", file=sys.stderr)
+            return 2
+        if args.task_ref:
+            knobs.append(f"task_ref={args.task_ref}")
+        if args.single_shot:
+            knobs.append("single_shot=1")
     if check:
         knobs.append(f"check={check}")
     if args.revise:
@@ -277,6 +291,17 @@ def build_parser() -> argparse.ArgumentParser:
     ceo.add_argument("--check", default="", help="design only: the command that decides whether it works")
     ceo.add_argument("--revise", default="", metavar="PKG/MODE", help="edit only: the mode to revise")
     ceo.add_argument(
+        "--task", default="", metavar="TASK_REF", dest="task_ref",
+        help="create only: the class of work, as a Task the produced harness binds a data "
+             "node to (module:Class, or a registered name); the harness then runs its "
+             "subgraph once per item the Task lists",
+    )
+    ceo.add_argument(
+        "--single", action="store_true", default=False, dest="single_shot",
+        help="create only: build a harness for one run of one thing, with no Task "
+             "binding; one of --task or --single is required",
+    )
+    ceo.add_argument(
         "--knob", action="append", default=[], metavar="NAME=VALUE",
         help="set one of the authoring mode's knobs for this run, e.g. allow_regression=1",
     )
@@ -325,6 +350,8 @@ def build_parser() -> argparse.ArgumentParser:
         ("--seed", "reproduce a search"),
         ("--elite", "how many parents each round proposes against"),
         ("--max-evaluations", "a hard ceiling on evaluated candidates"),
+        ("--holdout", "the fraction of items held out of the search and audited after it"),
+        ("--parsimony", "what each node of a candidate's graph costs its score"),
         ("--attempts", "retries per batch after a refusal"),
         ("--runs-root", "the run directory to write"),
         ("--intent", "what the run is for, in your words"),

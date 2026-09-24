@@ -22,24 +22,35 @@ from tests_support import (
     FakeModel,
     RESEARCH_ANSWER,
     REVIEW_ANSWERS,
+    baked_data_files,
     create_answers,
     create_script,
+    good_data_files,
     good_files,
     render,
     strategy_answer,
+    unfed_data_files,
 )
 
 NAME = "created_pkg"
 
+#: The Task the per-item fixture binds to: the one `dataset_probe` ships, so the
+#: binding is to a real class of work rather than to a string in a prompt.
+TASK = "refactory_packages.dataset_probe.tasks:CountingTask"
+
 
 def _config(**overrides) -> CreateConfig:
-    """A create config with the person's strategy approval recorded.
+    """A create config standing in for the person's answers.
 
     `gate_strategy` is a `user` gate, carried over from create-v2: the strategy is
     a decision the person owns. A headless run refuses it, so a test that wants a
-    package passes the approval it is standing in for.
+    package passes the approval it is standing in for. The default is `single_shot`
+    because the package these fixtures emit has no Task binding; a test that names a
+    Task overrides it, and naming a Task wins.
     """
-    return CreateConfig(verdicts={"gate_strategy": "proceed"}, **overrides)
+    return CreateConfig(
+        verdicts={"gate_strategy": "proceed"}, single_shot=True, **overrides
+    )
 
 
 
@@ -110,7 +121,12 @@ def test_a_brief_alone_names_the_package(tmp_path):
     from refactory_dsh import create_ops
     from refactory_dsh.nn import RunContext
 
-    ctx = RunContext(tmp_path, knobs={"brief": "count the teapots in a tray"}, facts={}, task={})
+    ctx = RunContext(
+        tmp_path,
+        knobs={"brief": "count the teapots in a tray", "single_shot": 1},
+        facts={},
+        task={},
+    )
     assert create_ops.prepare(ctx)["name"] == "count_the_teapots"
 
 
@@ -120,7 +136,10 @@ def test_prepare_reads_the_knobs_a_run_on_dsh_carries(tmp_path):
     from refactory_dsh.nn import RunContext
 
     ctx = RunContext(
-        tmp_path, knobs={"name": "knob_pack", "brief": "from the knobs"}, facts={}, task={},
+        tmp_path,
+        knobs={"name": "knob_pack", "brief": "from the knobs", "single_shot": 1},
+        facts={},
+        task={},
     )
     published = create_ops.prepare(ctx)
     assert published["name"] == "knob_pack"
@@ -531,6 +550,155 @@ def test_a_creation_asked_for_a_data_node_is_checked_for_one():
         _shutil.rmtree(root, ignore_errors=True)
 
 
+# ── a harness is for a class of work ───────────────────────────────────────
+#
+# A Task names a class of work, and naming one is the data-node directive: the
+# produced package binds a `data` node to that Task, and the executor runs its
+# subgraph once per item. The single-shot harness is the special case, and it has
+# to be asked for by name.
+
+
+def test_naming_only_a_task_yields_a_data_node_harness_bound_to_it(tmp_path):
+    """A Task alone is the data-node directive: no second flag is asked for."""
+    model = FakeModel(create_answers(NAME, good_data_files(NAME, TASK)))
+    run_dir = tmp_path / "run"
+    result = create_module.create(
+        _config(name=NAME, brief="process every item a Task lists", task_ref=TASK,
+                workdir=run_dir),
+        client=model,
+    )
+    assert result.package == NAME
+    # The Task's own verdicts: CountingTask scores alpha 1.0 and beta 0.5.
+    assert result.smoke_score == 0.75
+
+    problems = create_ops.check_package(
+        NAME, requires_data_node=True, requires_task_ref=TASK
+    )
+    assert problems == [], problems
+
+    _package, mode_class = registry.resolve(Path("."), f"{NAME}/chore")
+    bound = [
+        node for node in mode_class().build().nodes.values()
+        if node.kind == "data" and node.task_ref == TASK
+    ]
+    assert bound, "naming a Task did not bind a data node to it"
+    assert bound[0].subgraph_entry and bound[0].subgraph_exit
+
+    recorded = json.loads((run_dir / "create.json").read_text())
+    assert recorded["task_ref"] == TASK, "the run's own facts must name the Task"
+    assert "once per item" in recorded["class_of_work"]
+    assert recorded["data_node"] == "yes"
+    assert create_ops.baked_item_problems(result.path) == [], (
+        "the harness must take its items from the Task at run time, not from the "
+        "items the authoring run seeded"
+    )
+
+
+def test_a_harness_that_bakes_its_items_in_is_refused(tmp_path, monkeypatch):
+    """`inline_items` is read before the Task, so it closes the harness's input port.
+
+    A package whose items are baked in is the hardcoded-sample failure one level up:
+    it runs the items the authoring run seeded and never the ones the class of work
+    supplies.
+    """
+    _stage(tmp_path, NAME, baked_data_files(NAME, TASK))
+    monkeypatch.chdir(tmp_path)
+    problems = create_ops.check_package(NAME)
+    assert any("inline_items" in problem for problem in problems), problems
+    assert any("run time" in problem for problem in problems)
+
+
+def test_a_data_node_that_names_no_source_is_refused(tmp_path, monkeypatch):
+    """A data node with no Task and no source iterates nothing, so it is not a harness."""
+    _stage(tmp_path, NAME, unfed_data_files(NAME))
+    monkeypatch.chdir(tmp_path)
+    problems = create_ops.check_package(NAME)
+    assert any("no way to be fed at run time" in problem for problem in problems), problems
+
+
+def test_prepare_refuses_a_creation_that_names_no_task_and_is_not_single(tmp_path):
+    """The refusal is before the first model call: `prepare` is the first node."""
+    from refactory_dsh import create_ops
+    from refactory_dsh.nn import RunContext
+
+    ctx = RunContext(
+        tmp_path, knobs={"name": "nowhere_pack", "brief": "count"}, facts={}, task={}
+    )
+    with pytest.raises(ValueError, match="--single") as raised:
+        create_ops.prepare(ctx)
+    assert "--task" in str(raised.value)
+    assert "class of work is the default" in str(raised.value)
+
+
+def test_an_edit_is_not_a_creation_and_needs_no_directive(tmp_path):
+    """`edit` walks the same graph with a mode to revise, which is not a creation."""
+    from refactory_dsh import create_ops
+    from refactory_dsh.nn import RunContext
+
+    ctx = RunContext(tmp_path, knobs={"name": "revised", "brief": "fewer steps"}, facts={})
+    ctx.task = {"name": "revised", "brief": "fewer steps", "mode": "counting_pack/fixed_step"}
+    facts = create_ops.prepare(ctx)
+    assert facts["revision_of"] == "counting_pack/fixed_step"
+
+
+def test_neither_a_task_nor_single_is_refused_before_any_model_call(tmp_path):
+    """The default is the class of work; silence is refused, not quietly defaulted."""
+    model = FakeModel(create_answers(NAME, good_files(NAME)))
+    with pytest.raises(CreateError, match="--single") as raised:
+        create_module.create(
+            CreateConfig(
+                name=NAME, brief="count", workdir=tmp_path / "run",
+                verdicts={"gate_strategy": "proceed"},
+            ),
+            client=model,
+        )
+    message = str(raised.value)
+    assert "--task" in message and "class of work is the default" in message
+    assert model.prompts == [], "the refusal must happen before any model call"
+
+
+def test_single_still_produces_the_single_shot_package(tmp_path):
+    """`--single` is the old product, asked for by name: no Task, no data node."""
+    model = FakeModel(create_answers(NAME, good_files(NAME)))
+    result = create_module.create(
+        _config(name=NAME, brief="count", workdir=tmp_path / "run"), client=model
+    )
+    assert result.smoke_score and result.smoke_score > 0
+    assert create_ops.check_package(NAME) == []
+    _package, mode_class = registry.resolve(Path("."), f"{NAME}/counter")
+    assert not [n for n in mode_class().build().nodes.values() if n.kind == "data"]
+
+
+def test_the_command_line_carries_single_and_task(monkeypatch, capsys):
+    """The two shell spellings reach the config, and one of them is required."""
+    seen: list[CreateConfig] = []
+
+    class Result:
+        def describe(self) -> dict:
+            return {}
+
+    monkeypatch.setattr("refactory_dsh.model.DshModelClient", lambda **kwargs: None)
+    monkeypatch.setattr(
+        create_module, "create",
+        lambda config, client=None: (seen.append(config), Result())[1],
+    )
+    assert create_module.main(["--name", "one_pack", "--brief", "count", "--single"]) == 0
+    assert seen[0].single_shot is True and seen[0].task_ref == ""
+    assert create_module.main(
+        ["--name", "one_pack", "--brief", "count", "--task", TASK]
+    ) == 0
+    assert seen[1].task_ref == TASK
+    capsys.readouterr()
+
+
+def test_the_command_line_refuses_a_creation_with_neither(monkeypatch, capsys):
+    """Without `--task` or `--single`, the shell command exits with the reason."""
+    monkeypatch.setattr("refactory_dsh.model.DshModelClient", lambda **kwargs: None)
+    assert create_module.main(["--name", "nowhere_pack", "--brief", "count"]) == 2
+    reported = capsys.readouterr().err
+    assert "--task" in reported and "--single" in reported
+
+
 # ── the path convention (#65) ──────────────────────────────────────────────
 #
 # An emit answer is written relative to the package's own root, and a model that
@@ -763,8 +931,10 @@ def test_the_design_and_emit_prompts_are_told_what_the_mode_must_take(tmp_path):
     from refactory_dsh.nn import RunContext
 
     ctx = RunContext(
-        tmp_path, knobs={"name": NAME, "brief": "count", "requires_input": "package"},
-        facts={}, task={},
+        tmp_path,
+        knobs={"name": NAME, "brief": "count", "requires_input": "package", "single_shot": 1},
+        facts={},
+        task={},
     )
     published = create_ops.prepare(ctx)
     assert "takes these as input: `package`" in published["requires_input"]

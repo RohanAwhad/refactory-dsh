@@ -6,26 +6,37 @@ same split remote-factory's `factory/task.py` makes, so a mode bound to a benchm
 or a dataset carries that binding as a declaration instead of as instructions in a
 prompt.
 
-A Task is four hooks, all optional:
+A Task is three hooks, all optional:
 
 - ``instances()`` — the items. The default is one unnamed instance, which is what a
   mode that only needs to run once wants.
 - ``setup(instance, workspace)`` — prepare the workspace before the pass.
-- ``prompt(instance)`` — what the agent for that item is asked to do.
 - ``verify(instance, workspace)`` — judge the pass, or return ``None`` to say the
   Task has no opinion and the mode's own score stands.
+
+There is deliberately no hook that writes the prompt. An item is data — it reaches the
+pass as ``current_item.json`` — and what the agent for an item is asked is the mode's
+own business, stated in its agent node's prompt template. Two places that both decide
+the ask is one place too many.
 
 Resolution is by ``module:Class`` or by a name registered here, and a ref that does
 not resolve is refused by name: a mode that names a Task nobody can load must not
 silently run its items unverified.
+
+A run directory may also say which *part* of the items it evaluates. The outer loop
+writes that choice beside the run, and the loader both runtimes use reads it, so a
+search is examined on the items it was tuned against and the winner can be examined
+on the items no candidate saw. The choice is a file rather than a knob: a search
+that could set it would take its own exam.
 """
 
 from __future__ import annotations
 
 import importlib
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 
 class TaskError(ValueError):
@@ -51,7 +62,7 @@ class VerifyResult:
 
 
 class Task:
-    """The four hooks a dataset binding implements."""
+    """The three hooks a dataset binding implements."""
 
     name = ""
 
@@ -61,10 +72,6 @@ class Task:
 
     def setup(self, instance: TaskInstance, workspace: Path) -> None:
         """Prepare the workspace for one item. Nothing to do by default."""
-
-    def prompt(self, instance: TaskInstance) -> str:
-        """What the agent for this item is asked to do."""
-        return "Implement the feature. All tests must pass."
 
     def verify(self, instance: TaskInstance, workspace: Path) -> VerifyResult | None:
         """Judge one pass, or ``None`` when the Task has no opinion."""
@@ -118,3 +125,101 @@ def instance_of(item: dict[str, Any]) -> TaskInstance:
         path=str(item["path"]) if item.get("path") else None,
         metadata=metadata,
     )
+
+
+# ── the part of the items a run directory evaluates ────────────────────────
+
+#: The file in a run directory that names the part of the items it evaluates.
+SUBSET = "subset.json"
+
+#: The two parts an item selection can name.
+TRAIN = "train"
+HOLDOUT = "holdout"
+
+#: The holdout fraction used when a run directory names a part but no fraction.
+DEFAULT_HOLDOUT = 0.3
+
+
+def _item_key(item: dict[str, Any], index: int) -> str:
+    """The id an item is partitioned by, falling back to its position."""
+    return str(item.get("id") or index)
+
+
+def partition(
+    items: Sequence[dict[str, Any]], holdout: float
+) -> dict[str, list[dict[str, Any]]]:
+    """Split items into a train part and a holdout part, by sorted instance id.
+
+    The partition is deterministic, so both runtimes and the audit agree about which
+    items are which. The ids are sorted, the last ``holdout`` fraction of them is
+    held out, and at least one item stays in train whenever there are two. Fewer than
+    two items cannot be split at all, and the holdout part is then empty rather than
+    an error: one instance is a fact about the Task, not a reason to fail a run.
+    """
+    fraction = min(max(float(holdout), 0.0), 1.0)
+    order = sorted(
+        range(len(items)), key=lambda index: (_item_key(items[index], index), index)
+    )
+    if len(order) < 2 or fraction <= 0.0:
+        return {TRAIN: list(items), HOLDOUT: []}
+    count = min(len(order) - 1, max(1, int(round(len(order) * fraction))))
+    held = set(order[-count:])
+    return {
+        TRAIN: [item for index, item in enumerate(items) if index not in held],
+        HOLDOUT: [item for index, item in enumerate(items) if index in held],
+    }
+
+
+def counts(items: Sequence[dict[str, Any]], holdout: float) -> dict[str, int]:
+    """How many items each part holds, without materialising either part."""
+    parts = partition(items, holdout)
+    return {TRAIN: len(parts[TRAIN]), HOLDOUT: len(parts[HOLDOUT])}
+
+
+def _subset_file(workdir: Path) -> Path:
+    """Where a run directory records the part of the items it evaluates."""
+    return Path(workdir) / SUBSET
+
+
+def write_subset(workdir: Path, part: str, holdout: float) -> Path:
+    """Record which part of a Task's items a run directory evaluates.
+
+    The outer loop writes this before it evaluates a candidate and the item loader
+    reads it, so the part travels with the run directory rather than with the search.
+    """
+    path = _subset_file(workdir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"part": str(part), "holdout": float(holdout)}, indent=2))
+    return path
+
+
+def read_subset(workdir: Path) -> dict[str, Any]:
+    """The part a run directory names, or ``{}`` when it names none."""
+    path = _subset_file(workdir)
+    if not path.exists():
+        return {}
+    try:
+        loaded = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def select_subset(
+    items: Sequence[dict[str, Any]], workdir: Path
+) -> list[dict[str, Any]]:
+    """The part of ``items`` a run directory names, or all of them when it names none.
+
+    Called by the one item loader both runtimes use, so the walker and DSH iterate
+    the same items of the same Task. A mode run outside the outer loop has no run
+    directory naming a part and evaluates everything it has.
+    """
+    record = read_subset(workdir)
+    part = str(record.get("part") or "")
+    if part not in (TRAIN, HOLDOUT):
+        return list(items)
+    try:
+        fraction = float(record.get("holdout", DEFAULT_HOLDOUT))
+    except (TypeError, ValueError):
+        fraction = DEFAULT_HOLDOUT
+    return partition(items, fraction)[part]

@@ -347,9 +347,10 @@ The optimizer loop, named like one.
 |---|---|---|
 | class | `EpochSummary` | `(epoch: 'int', evaluated: 'int', best: 'float \| None', mean: 'float \| None', improved: 'bool', proposed: 'int', accepted: 'int', rejected: 'int', structural_accepted: 'int') -> None` |
 | class | `Loop` | `(mode_id: 'str', config: 'LoopConfig \| None' = None, *, project: 'Path \| None' = None, model: 'Any' = None, optimizer: 'Optimizer \| None' = None) -> 'None'` |
-| class | `LoopConfig` | `(epochs: 'int' = 2, batch_size: 'int' = 4, optimizer: 'str' = 'autoresearch', edit_preset: 'str' = 'broad', seed: 'int' = 0, elite: 'int' = 3, max_evaluations: 'int' = 64, runs_root: 'Path' = PosixPath('.factory/loop'), max_steps: 'int' = 2000, attempts: 'int' = 3, frozen: 'tuple[str, ...]' = (), intent: 'str' = '', knobs: 'dict[str, Any]' = <factory>, history_limit: 'int' = 200, prior_runs: 'int' = 3, memory_global_root: 'Path \| None' = None, evaluator: 'str' = 'walker', dsh_timeout_s: 'int' = 900, resume: 'bool' = False, progress: 'bool' = True) -> None` |
+| class | `LoopConfig` | `(epochs: 'int' = 2, batch_size: 'int' = 4, optimizer: 'str' = 'autoresearch', edit_preset: 'str' = 'broad', seed: 'int' = 0, elite: 'int' = 3, max_evaluations: 'int' = 64, holdout: 'float' = 0.3, parsimony: 'float' = 0.01, runs_root: 'Path' = PosixPath('.factory/loop'), max_steps: 'int' = 2000, attempts: 'int' = 3, frozen: 'tuple[str, ...]' = (), intent: 'str' = '', knobs: 'dict[str, Any]' = <factory>, history_limit: 'int' = 200, prior_runs: 'int' = 3, memory_global_root: 'Path \| None' = None, evaluator: 'str' = 'walker', dsh_timeout_s: 'int' = 900, resume: 'bool' = False, progress: 'bool' = True) -> None` |
 | class | `LoopError` | `` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
+| function | `node_count` | `(state: 'dict[str, Any]') -> 'int'` |
 | function | `run` | `(mode_id: 'str', *, config: 'LoopConfig \| None' = None, project: 'Path \| None' = None, model: 'Any' = None) -> 'dict[str, Any]'` |
 
 - **`EpochSummary`** — One epoch, as the report and the scheduler describe it.
@@ -357,6 +358,7 @@ The optimizer loop, named like one.
 - **`LoopConfig`** — How a run is shaped.
 - **`LoopError`** — The run cannot proceed. Always names what is wrong with the mode.
 - **`main`** — ``python -m refactory_dsh.loop <package>/<mode> [options]``.
+- **`node_count`** — How many nodes a candidate's graph holds, which is what the size cost counts.
 - **`run`** — Build a loop and run it to its bound.
 
 
@@ -557,7 +559,7 @@ create-mode: a mode whose output is a whole package.
 
 | kind | name | signature |
 |---|---|---|
-| class | `CreateConfig` | `(name: 'str', brief: 'str', extends: 'str' = '', attempts: 'int' = 3, workdir: 'Path' = PosixPath('.factory/create'), max_steps: 'int' = 200, seed: 'int' = 0, model_timeout_s: 'int' = 1800, task_ref: 'str' = '', requires_input: 'str' = '', samples: 'list[str]' = <factory>, data_node: 'bool' = False, verdicts: 'dict[str, str]' = <factory>) -> None` |
+| class | `CreateConfig` | `(name: 'str', brief: 'str', extends: 'str' = '', attempts: 'int' = 3, workdir: 'Path' = PosixPath('.factory/create'), max_steps: 'int' = 200, seed: 'int' = 0, model_timeout_s: 'int' = 1800, task_ref: 'str' = '', requires_input: 'str' = '', samples: 'list[str]' = <factory>, data_node: 'bool' = False, single_shot: 'bool' = False, verdicts: 'dict[str, str]' = <factory>) -> None` |
 | class | `CreateError` | `` |
 | class | `CreateMode` | `(state: 'dict[str, Any] \| None' = None) -> 'None'` |
 | class | `CreateResult` | `(package: 'str', mode: 'str', path: 'Path', files: 'list[str]' = <factory>, smoke_score: 'float \| None' = None, iterations: 'int' = 0, duration_s: 'float' = 0.0) -> None` |
@@ -584,7 +586,7 @@ Revise an existing mode from a brief.
 
 | kind | name | signature |
 |---|---|---|
-| class | `EditConfig` | `(name: 'str', brief: 'str', extends: 'str' = '', attempts: 'int' = 3, workdir: 'Path' = PosixPath('.factory/create'), max_steps: 'int' = 200, seed: 'int' = 0, model_timeout_s: 'int' = 1800, task_ref: 'str' = '', requires_input: 'str' = '', samples: 'list[str]' = <factory>, data_node: 'bool' = False, verdicts: 'dict[str, str]' = <factory>, mode: 'str' = '', allow_regression: 'bool' = False) -> None` |
+| class | `EditConfig` | `(name: 'str', brief: 'str', extends: 'str' = '', attempts: 'int' = 3, workdir: 'Path' = PosixPath('.factory/create'), max_steps: 'int' = 200, seed: 'int' = 0, model_timeout_s: 'int' = 1800, task_ref: 'str' = '', requires_input: 'str' = '', samples: 'list[str]' = <factory>, data_node: 'bool' = False, single_shot: 'bool' = False, verdicts: 'dict[str, str]' = <factory>, mode: 'str' = '', allow_regression: 'bool' = False) -> None` |
 | class | `EditMode` | `(state: 'dict[str, Any] \| None' = None) -> 'None'` |
 | function | `edit` | `(config: 'EditConfig', client: 'Any' = None) -> 'dict[str, Any]'` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
@@ -670,6 +672,7 @@ Driving a run from a GUI: the catalogue, a live run, and what it produced.
 | function | `artifacts` | `(run_root: 'Path', *, contents: 'bool' = False) -> 'dict[str, Any]'` |
 | function | `candidate` | `(run_root: 'Path', candidate_id: 'str') -> 'dict[str, Any]'` |
 | function | `catalogue` | `(*, project: 'Path \| None' = None) -> 'list[dict[str, Any]]'` |
+| function | `holdout` | `(run_root: 'Path') -> 'dict[str, Any] \| None'` |
 | function | `leaderboard` | `(run_root: 'Path', *, limit: 'int' = 20) -> 'list[dict[str, Any]]'` |
 | function | `level_two` | `() -> 'dict[str, Any]'` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
@@ -682,6 +685,7 @@ Driving a run from a GUI: the catalogue, a live run, and what it produced.
 - **`artifacts`** — What the run left, and — when asked — what is in it.
 - **`candidate`** — One candidate, with what it changed against the parent it came from.
 - **`catalogue`** — Every mode a run can be started from, with the surface it exposes.
+- **`holdout`** — The held-out audit a run recorded, or ``None`` when it recorded none.
 - **`leaderboard`** — The candidates by score, with each one's diff against its parent.
 - **`level_two`** — The three level-2 seams by name, each with what it says it is.
 - **`runs`** — Every run under the root, newest first, each with where it got to.

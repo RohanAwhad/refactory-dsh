@@ -13,6 +13,13 @@ A candidate is a state dict plus its lineage. Evaluating one is a forward pass:
 materialize the mode from the state, execute its graph, and score the run. An
 invalid candidate never reaches ``forward`` at all, so it costs no budget — it is
 refused by the optimizer's loop with a reason, and that reason is reported.
+
+Two things shape what a candidate is worth. It is evaluated on the part of its
+Task's items the run directory names, never on all of them, so the search cannot be
+examined on the items it was tuned against; and what it scores is the evaluator's
+number minus ``parsimony`` per node of its graph, so a search with no size cost does
+not grow the harness for free. Both numbers are recorded, and once the search is
+over the winner is re-evaluated on the items no candidate saw.
 """
 
 from __future__ import annotations
@@ -29,6 +36,7 @@ from typing import Any, Sequence
 
 from refactory_dsh import history as run_history
 from refactory_dsh import observe as progress_file
+from refactory_dsh import task as task_module
 from refactory_dsh.evaluators import create as create_evaluator
 from refactory_dsh import registry
 from refactory_dsh.nn import Knob, PackageError
@@ -54,6 +62,13 @@ JOURNAL = run_history.JOURNAL
 #: The offspring a proposal node found, waiting for the node that installs them.
 PENDING = "pending.json"
 
+#: The train-minus-holdout gap above which the audit calls a winner overfit. The
+#: reference's number, so a run here and a run there agree about what overfit means.
+OVERFIT_THRESHOLD = 0.15
+
+#: Where the run writes how the winner did on the items no candidate saw.
+HOLDOUT_FILE = "holdout.json"
+
 
 class LoopError(RuntimeError):
     """The run cannot proceed. Always names what is wrong with the mode."""
@@ -72,6 +87,15 @@ class LoopConfig:
     #: A hard ceiling on inner runs. ``epochs`` normally binds first; whichever
     #: does is reported, so a run never ends for an unstated reason.
     max_evaluations: int = 64
+    #: The fraction of a Task's instances held out of the search and used to audit
+    #: the winner. One instance cannot be split, which the audit records as a fact
+    #: instead of failing the run.
+    holdout: float = task_module.DEFAULT_HOLDOUT
+    #: What each node of a candidate's graph costs its score. The reference's
+    #: coefficient: without a size cost a search has no reason not to grow the
+    #: harness, and the report would not say whether a candidate won on merit or on
+    #: size.
+    parsimony: float = 0.01
     runs_root: Path = Path(".factory/loop")
     #: Wall-clock ceiling for one inner run, enforced by the executor's step cap.
     max_steps: int = 2000
@@ -234,6 +258,9 @@ class Loop(OuterLoop):
         #: only the log.
         self.strategy_decision: dict[str, Any] = {}
         self.epochs: list[EpochSummary] = []
+        #: The held-out audit of the winner, computed once by :meth:`audit_holdout`
+        #: and reported by :meth:`report`. ``None`` means it has not been computed.
+        self.holdout_audit: dict[str, Any] | None = None
 
     # ── init ───────────────────────────────────────────────────────────────
     def _seed_ledger(self) -> None:
@@ -443,6 +470,16 @@ class Loop(OuterLoop):
         workdir.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, workdir / LEDGER)
 
+    def _write_subset(self, workdir: Path, part: str) -> None:
+        """Name the part of the items this candidate is evaluated on.
+
+        Written into the candidate's own run directory before the evaluator starts,
+        and read by the item loader of either runtime. It is not a knob: a search
+        that could set it would choose its own exam, and there would be no item left
+        for the audit to hold out.
+        """
+        task_module.write_subset(workdir, part, self.config.holdout)
+
     def _evaluate(self, candidate: Candidate) -> None:
         """Run one candidate through the evaluator, and record what it scored.
 
@@ -450,12 +487,19 @@ class Loop(OuterLoop):
         candidate scored is whatever the evaluator says it scored. Which evaluator
         ran it is not this method's business -- see :mod:`refactory_dsh.evaluators`
         for the two that ship and what makes them agree.
+
+        The evaluator runs the train part of the item selection, and the loop takes
+        the size cost off afterwards. ``raw_score`` keeps the evaluator's number, so
+        the report can say whether a candidate won on merit or on size.
         """
         workdir = self.root / "runs" / candidate.id
         self._carry_ledger(workdir)
+        self._write_subset(workdir, task_module.TRAIN)
         mode = self.mode_class(state=candidate.state)
         result = self.evaluator.evaluate(mode, candidate.state, workdir)
-        candidate.score = result.score
+        nodes = node_count(candidate.state)
+        candidate.raw_score = result.score
+        candidate.score = result.score - self.config.parsimony * nodes
         candidate.mean_score = result.score
         candidate.facts = _trim(result.facts)
         candidate.exit_ok = result.exit_ok
@@ -468,6 +512,9 @@ class Loop(OuterLoop):
             "score",
             id=candidate.id,
             score=candidate.score,
+            raw_score=candidate.raw_score,
+            nodes=nodes,
+            parsimony=self.config.parsimony,
             exit_ok=candidate.exit_ok,
             error=candidate.error,
             duration_s=candidate.duration_s,
@@ -480,12 +527,19 @@ class Loop(OuterLoop):
         self, candidate: Candidate, workdir: Path, *, mode: Any = None
     ) -> None:
         workdir.mkdir(parents=True, exist_ok=True)
+        nodes = node_count(candidate.state)
         (workdir / "candidate.json").write_text(
             json.dumps(
                 {
                     "id": candidate.id,
                     "parent": candidate.parent,
+                    # Both numbers, so a reader of one candidate directory can tell
+                    # what the evaluator measured from what the search compared.
                     "score": candidate.score,
+                    "raw_score": candidate.raw_score,
+                    "nodes": nodes,
+                    "parsimony": self.config.parsimony,
+                    "size_cost": round(self.config.parsimony * nodes, 6),
                     "exit_ok": candidate.exit_ok,
                     "error": candidate.error,
                     "duration_s": candidate.duration_s,
@@ -509,16 +563,23 @@ class Loop(OuterLoop):
     # ── loss ───────────────────────────────────────────────────────────────
     def loss_step(self) -> dict[str, Any]:
         evaluated = self._evaluated()
-        scores = [c.score for c in evaluated if c.exit_ok and c.score is not None]
+        scored = [c for c in evaluated if c.exit_ok and c.score is not None]
+        scores = [c.score for c in scored]
+        raw_scores = [c.raw_score for c in scored if c.raw_score is not None]
         best = max(scores) if scores else None
         mean = (sum(scores) / len(scores)) if scores else None
         previous = self.loss.get("best")
         self.loss = {
             "epoch": self.epoch,
             "batch": len(evaluated),
+            # The scores the search compared, and the evaluator's own numbers beside
+            # them, so an epoch's numbers can be read either way.
             "scores": scores,
+            "raw_scores": raw_scores,
             "mean": mean,
             "best": best,
+            "raw_best": max(raw_scores) if raw_scores else None,
+            "parsimony": self.config.parsimony,
             "best_ever": max([s for s in (previous, best) if s is not None], default=None),
             "improved": bool(best is not None and previous is not None and best > previous),
             "run_failures": [c.id for c in self.population if c.evaluated and not c.exit_ok],
@@ -534,6 +595,7 @@ class Loop(OuterLoop):
         evaluated = [c for c in self._evaluated() if c.exit_ok and c.score is not None]
         self.gradient = {
             "epoch": self.epoch,
+            "scoring": self.scoring(),
             "knob_attribution": self._knob_attribution(evaluated),
             "cost": self._cost(),
             "run_failures": self.loss.get("run_failures", []),
@@ -541,7 +603,7 @@ class Loop(OuterLoop):
             "rejection_reasons": [r for rej in self.rejections[-8:] for r in rej.reasons],
             "accepted_op_mix": self._op_mix(),
             "structural": self._structural_stats(),
-            "leaderboard": [c.describe() for c in self.leaderboard(8)],
+            "leaderboard": [self._row(c) for c in self.leaderboard(8)],
         }
         self._write("gradient.json", self.gradient)
         self._progress(
@@ -553,6 +615,10 @@ class Loop(OuterLoop):
 
     def _knob_attribution(self, evaluated: Sequence[Candidate]) -> dict[str, Any]:
         """What each parameter value was worth, over everything evaluated so far.
+
+        The score attributed here is the one the search compares -- the evaluator's
+        number minus the run's size cost -- so a value is credited with what choosing
+        it did to the search's objective rather than to the raw measurement.
 
         ``untried`` is part of the gradient, not decoration: an optimizer reading
         only the values that have run has no way to tell a value that failed from
@@ -966,6 +1032,7 @@ class Loop(OuterLoop):
         evaluation. Overriding it is how a strategy changes how many times it asks.
         """
         accepted: list[Candidate] = []
+        accepted_ids: set[str] = set()
         wanted = self.batch_size(run)
         # `k` adapts: one more round when the last batch was refused more than it was
         # accepted, because that is the signal that the optimizer is close to
@@ -984,6 +1051,26 @@ class Loop(OuterLoop):
                 parent = next((p for p in parents if p.id == proposal.parent), parents[0])
                 outcome = run.attempt(proposal, parent)
                 if isinstance(outcome, Candidate):
+                    if outcome.id in accepted_ids:
+                        # Two proposals in one batch that reach the same state. The
+                        # population does not hold the first one yet, so the attempt
+                        # above could not see it, and `step` would drop the second
+                        # without saying why. Refused here, where the optimizer is
+                        # still listening.
+                        self.rejections.append(
+                            Rejection(
+                                attempt=rounds,
+                                edit=proposal.edit,
+                                reasons=[
+                                    "E-duplicate: this state was already accepted from "
+                                    "the same batch, so evaluating it again would spend "
+                                    "a batch slot on a point already scored"
+                                ],
+                                rationale=proposal.rationale,
+                            )
+                        )
+                        continue
+                    accepted_ids.add(outcome.id)
                     accepted.append(outcome)
             if len(accepted) >= wanted or len(self.rejections) == before:
                 break
@@ -1086,7 +1173,36 @@ class Loop(OuterLoop):
         """
         return [c.id for c in self.population if not c.evaluated]
 
+    def _row(self, candidate: Candidate) -> dict[str, Any]:
+        """One candidate as a reader sees it: both scores, and what its size cost.
+
+        The leaderboard, the lineage and the records the optimizer reads all go
+        through here, so none of them reports a score without the cost that was
+        taken off it.
+        """
+        nodes = node_count(candidate.state)
+        return {
+            **candidate.describe(),
+            "nodes": nodes,
+            "size_cost": round(self.config.parsimony * nodes, 6),
+        }
+
+    def scoring(self) -> dict[str, Any]:
+        """How a candidate's score is built, said where the numbers are recorded."""
+        return {
+            "compared": "penalized",
+            "parsimony": self.config.parsimony,
+            "detail": (
+                "candidates are ranked by raw_score - parsimony * nodes; every row "
+                "carries both, so a candidate that won on merit is told from one "
+                "that won on size"
+            ),
+        }
+
     def report(self) -> dict[str, Any]:
+        # The audit runs before the payload is built: it needs the winner, and the
+        # report is where its numbers are read.
+        audit = self.audit_holdout()
         board = self.leaderboard()
         best = board[0] if board else None
         payload = {
@@ -1100,13 +1216,16 @@ class Loop(OuterLoop):
             "evaluations": self.evaluations,
             "population": len(self.population),
             "unevaluated": self._unevaluated(),
-            "best": best.describe() if best else None,
+            "best": self._row(best) if best else None,
             "best_score": best.score if best else None,
+            "raw_best_score": best.raw_score if best else None,
             "seed_score": self.population[0].score if self.population else None,
-            "leaderboard": [c.describe() for c in board],
+            "seed_raw_score": self.population[0].raw_score if self.population else None,
+            "scoring": self.scoring(),
+            "leaderboard": [self._row(c) for c in board],
             "lineage": self._lineage(best),
             "structural_wins": [
-                c.describe() for c in board if c.is_structural() and c.exit_ok
+                self._row(c) for c in board if c.is_structural() and c.exit_ok
             ],
             "accepted_op_mix": self._op_mix(),
             "structural": self._structural_stats(),
@@ -1127,6 +1246,7 @@ class Loop(OuterLoop):
             "proposal_outcomes": self._proposal_outcomes(),
             "epochs_summary": [asdict(summary) for summary in self.epochs],
             "proposer": self._proposer_health(),
+            "holdout": audit,
         }
         self._write("report.json", payload)
         self._write_text("report.md", self._render_report(payload))
@@ -1134,10 +1254,136 @@ class Loop(OuterLoop):
         self._progress(
             "report",
             best_score=payload["best_score"],
+            raw_best_score=payload["raw_best_score"],
+            overfit=bool(audit.get("overfit")),
             evaluations=self.evaluations,
             bound=self.bound,
         )
         return payload
+
+    # ── the held-out audit ─────────────────────────────────────────────────
+    def audit_holdout(self) -> dict[str, Any]:
+        """Re-evaluate the winner on the items no candidate saw, once.
+
+        The search evaluated every candidate on the train part, so this is the only
+        place the harness meets the held-out part. The train score is the winner's own
+        recorded score and is not penalised: the size cost is a search preference,
+        while this is a measurement of the same mode on items it was not tuned
+        against. A winner that only works on its training items is reported rather
+        than rewarded.
+        """
+        if self.holdout_audit is not None:
+            return self.holdout_audit
+
+        board = self.leaderboard()
+        winner = board[0] if board else None
+        items, data_nodes = self._audit_items(
+            winner.state if winner is not None else {}
+        )
+        instances: dict[str, int | None] = (
+            dict(task_module.counts(items, self.config.holdout))
+            if items
+            else {task_module.TRAIN: None, task_module.HOLDOUT: None}
+        )
+        train = winner.raw_score if winner is not None else None
+        holdout: float | None = None
+        note = ""
+        if winner is None:
+            note = "the run evaluated no candidate, so there is no winner to audit"
+        elif not data_nodes:
+            note = (
+                "the mode has no data node, so it iterates no items and there is "
+                "nothing to hold out"
+            )
+        elif not items:
+            note = (
+                "the items this mode iterates could not be read outside a candidate's "
+                "run directory, so no holdout was scored"
+            )
+        elif instances[task_module.HOLDOUT] == 0:
+            note = (
+                "the selection holds one item or none, so it cannot be split; the "
+                "winner was searched on every item it has and no holdout exists"
+            )
+        else:
+            holdout, note = self._holdout_score(winner)
+
+        gap = (
+            train - holdout
+            if train is not None and holdout is not None
+            else None
+        )
+        audit: dict[str, Any] = {
+            "train": train,
+            "holdout": holdout,
+            "gap": gap,
+            "overfit": bool(gap is not None and gap > OVERFIT_THRESHOLD),
+            "threshold": OVERFIT_THRESHOLD,
+            "instances": instances,
+            "winner": winner.id if winner is not None else None,
+        }
+        if note:
+            audit["note"] = note
+        self.holdout_audit = audit
+        self._write(HOLDOUT_FILE, audit)
+        self._journal("holdout", **audit)
+        self._progress(
+            "holdout",
+            train=train,
+            holdout=holdout,
+            gap=gap,
+            overfit=audit["overfit"],
+        )
+        return audit
+
+    def _holdout_score(self, winner: Candidate) -> tuple[float | None, str]:
+        """Run the winner on the held-out part, in a directory of its own.
+
+        Its own directory rather than the candidate's, so the score the search
+        recorded stays what it was and a reader can still see both runs.
+        """
+        workdir = self.root / "holdout" / winner.id
+        try:
+            workdir.mkdir(parents=True, exist_ok=True)
+            self._carry_ledger(workdir)
+            self._write_subset(workdir, task_module.HOLDOUT)
+            mode = self.mode_class(state=winner.state)
+            result = self.evaluator.evaluate(mode, winner.state, workdir)
+        except Exception as exc:  # a failed audit is recorded, not raised
+            return None, f"the holdout run failed: {type(exc).__name__}: {exc}"
+        if not result.exit_ok:
+            return None, f"the holdout run failed: {result.error}"
+        return float(result.score), ""
+
+    def _audit_items(self, state: dict[str, Any]) -> tuple[list[dict[str, Any]], int]:
+        """The whole item selection, and how many data nodes the mode has.
+
+        The whole selection is loaded rather than the part this run evaluates, so the
+        counts do not depend on which part the call is made from. The first data node
+        whose items can be read from the run root supplies them; a node bound to a
+        source this directory does not have is skipped, and a mode with no data node
+        answers with no items and no nodes, which are two different facts.
+        """
+        if not state:
+            return [], 0
+        try:
+            graph = self.mode_class(state=state).build()
+        except Exception:  # a mode that cannot build has no items to count
+            return [], 0
+        from refactory_dsh.nn.executor import full_items
+
+        nodes = sorted(
+            (node for node in graph.nodes.values() if node.kind == "data"),
+            key=lambda node: node.id,
+        )
+        for node in nodes:
+            try:
+                items = full_items(node, self.root)
+            except Exception:  # a data node bound to a source this directory lacks
+                continue
+            if items:
+                return items, len(nodes)
+        return [], len(nodes)
 
     def _lineage(self, candidate: Candidate | None) -> list[dict[str, Any]]:
         if candidate is None:
@@ -1147,12 +1393,17 @@ class Loop(OuterLoop):
         seen: set[str] = set()
         while candidate is not None and candidate.id not in seen:
             seen.add(candidate.id)
-            chain.append(candidate.describe())
+            chain.append(self._row(candidate))
             candidate = by_id.get(candidate.parent or "")
         return list(reversed(chain))
 
     def _proposal_outcomes(self) -> list[dict[str, Any]]:
-        """Every accepted proposal, with what actually happened to the score."""
+        """Every accepted proposal, with what actually happened to the score.
+
+        Both the compared score and the evaluator's number are recorded, with their
+        deltas against the parent, so a proposal that grew the graph shows the size
+        cost beside the gain it bought.
+        """
         by_id = {c.id: c for c in self.population}
         out: list[dict[str, Any]] = []
         for candidate_id, record in sorted(self.proposals.items()):
@@ -1161,17 +1412,26 @@ class Loop(OuterLoop):
                 continue
             parent = by_id.get(candidate.parent or "")
             parent_score = parent.score if parent is not None else None
+            parent_raw = parent.raw_score if parent is not None else None
             delta = (
                 round((candidate.score or 0.0) - parent_score, 6)
                 if parent_score is not None and candidate.score is not None
+                else None
+            )
+            raw_delta = (
+                round((candidate.raw_score or 0.0) - parent_raw, 6)
+                if parent_raw is not None and candidate.raw_score is not None
                 else None
             )
             out.append(
                 {
                     **record,
                     "score": candidate.score,
+                    "raw_score": candidate.raw_score,
                     "parent_score": parent_score,
+                    "parent_raw_score": parent_raw,
                     "delta": delta,
+                    "raw_delta": raw_delta,
                     "exit_ok": candidate.exit_ok,
                     "error": candidate.error,
                 }
@@ -1187,15 +1447,23 @@ class Loop(OuterLoop):
             f"{payload['evaluations']} inner run(s). "
             f"Stopped because **{payload['bound']}** bound the run.",
             "",
-            f"Seed score **{payload['seed_score']}** → best **{payload['best_score']}**.",
+            f"Seed score **{payload['seed_score']}** → best **{payload['best_score']}**"
+            f" (raw {payload['seed_raw_score']} → {payload['raw_best_score']}). "
+            f"The compared score is the raw one minus "
+            f"{payload['scoring']['parsimony']} per node of the candidate's graph.",
+            "",
+            "## Held-out audit",
+            "",
+            _holdout_sentence(payload.get("holdout") or {}),
             "",
             "## Leaderboard",
             "",
             _md_table(
-                ["id", "parent", "score", "structural", "edits", "ok"],
+                ["id", "parent", "score", "raw", "nodes", "structural", "edits", "ok"],
                 [
                     [
-                        c["id"], c.get("parent"), c.get("score"), c.get("structural"),
+                        c["id"], c.get("parent"), c.get("score"), c.get("raw_score"),
+                        c.get("nodes"), c.get("structural"),
                         json.dumps(c.get("edits"), default=str), c.get("exit_ok"),
                     ]
                     for c in payload["leaderboard"]
@@ -1205,8 +1473,9 @@ class Loop(OuterLoop):
             "## Structural candidates that scored",
             "",
             _md_table(
-                ["id", "score", "edits"],
-                [[c["id"], c.get("score"), json.dumps(c.get("edits"), default=str)]
+                ["id", "score", "raw", "nodes", "edits"],
+                [[c["id"], c.get("score"), c.get("raw_score"), c.get("nodes"),
+                  json.dumps(c.get("edits"), default=str)]
                  for c in payload["structural_wins"]],
             ),
             "",
@@ -1288,11 +1557,13 @@ class Loop(OuterLoop):
             "## Proposal versus outcome",
             "",
             _md_table(
-                ["id", "origin", "parent_score", "score", "delta", "rationale"],
+                ["id", "origin", "parent_score", "score", "delta", "raw_score",
+                 "raw_delta", "rationale"],
                 [
                     [
                         p["id"], p.get("origin"), p.get("parent_score"), p.get("score"),
-                        p.get("delta"), (p.get("rationale") or "")[:80],
+                        p.get("delta"), p.get("raw_score"), p.get("raw_delta"),
+                        (p.get("rationale") or "")[:80],
                     ]
                     for p in payload["proposal_outcomes"]
                 ],
@@ -1301,8 +1572,9 @@ class Loop(OuterLoop):
             "## Lineage of the best",
             "",
             _md_table(
-                ["id", "score", "edits"],
-                [[c["id"], c.get("score"), json.dumps(c.get("edits"), default=str)]
+                ["id", "score", "raw", "nodes", "edits"],
+                [[c["id"], c.get("score"), c.get("raw_score"), c.get("nodes"),
+                  json.dumps(c.get("edits"), default=str)]
                  for c in payload["lineage"]],
             ),
             "",
@@ -1325,7 +1597,7 @@ class Loop(OuterLoop):
             ],
             nodes=described["nodes"],
             edges=described["edges"],
-            leaderboard=[c.describe() for c in board],
+            leaderboard=[self._row(c) for c in board],
             history=self._history(),
             tried=self._tried(),
             elite=int(self.config.elite),
@@ -1385,7 +1657,8 @@ class Loop(OuterLoop):
             "evaluator": self.config.evaluator,
             "optimizer": self.optimizer.name,
             "seed": self.mode.state_dict(),
-            "population": [candidate.describe() for candidate in self.population],
+            "scoring": self.scoring(),
+            "population": [self._row(candidate) for candidate in self.population],
         }
 
     def _tried(self) -> list[str]:
@@ -1394,7 +1667,7 @@ class Loop(OuterLoop):
 
     def _history(self) -> list[dict[str, Any]]:
         """The evaluated candidates, newest last, bounded."""
-        evaluated = [c.describe() for c in self.population if c.evaluated]
+        evaluated = [self._row(c) for c in self.population if c.evaluated]
         return evaluated[-self.config.history_limit :]
 
     def _history_truncated(self) -> bool:
@@ -1503,6 +1776,11 @@ class Loop(OuterLoop):
                 if candidate is None:
                     continue
                 candidate.score = record.get("score")
+                # A journal written before the size cost existed has no `raw_score`;
+                # its `score` is the evaluator's own number, which is then the raw
+                # one too.
+                raw = record.get("raw_score", record.get("score"))
+                candidate.raw_score = None if raw is None else float(raw)
                 candidate.exit_ok = bool(record.get("exit_ok", True))
                 candidate.error = record.get("error")
                 candidate.duration_s = float(record.get("duration_s") or 0.0)
@@ -1597,7 +1875,8 @@ class Loop(OuterLoop):
                 "epoch": self.epoch,
                 "generation": self.generation,
                 "evaluations": self.evaluations,
-                "population": [candidate.describe() for candidate in self.population],
+                "scoring": self.scoring(),
+                "population": [self._row(candidate) for candidate in self.population],
             },
         )
 
@@ -1609,6 +1888,45 @@ def _other_value(knob: Knob, current: Any, rng: random.Random) -> Any:
     optimizer agree about what is reachable.
     """
     return knob.sample(rng, current)
+
+
+def node_count(state: dict[str, Any]) -> int:
+    """How many nodes a candidate's graph holds, which is what the size cost counts."""
+    graph = state.get("graph") or {}
+    return len(graph.get("nodes") or {})
+
+
+def _holdout_line(audit: dict[str, Any]) -> str:
+    """One line saying what the held-out audit found, for `refactory optimize`."""
+    if not audit:
+        return "holdout: this run recorded no audit of the winner"
+    instances = audit.get("instances") or {}
+    train = audit.get("train")
+    holdout = audit.get("holdout")
+    split = (
+        f"{instances.get('train')} train / {instances.get('holdout')} holdout instance(s)"
+    )
+    if holdout is None or train is None:
+        return f"holdout: {audit.get('note') or 'no holdout score'} ({split})"
+    verdict = "overfit" if audit.get("overfit") else "holds up"
+    return (
+        f"holdout: train {train:.4f}, holdout {holdout:.4f}, "
+        f"gap {audit.get('gap'):.4f} against threshold {audit.get('threshold')} "
+        f"— {verdict} ({split})"
+    )
+
+
+def _holdout_sentence(audit: dict[str, Any]) -> str:
+    """The audit as one paragraph for the report, saying both numbers and the gap."""
+    if not audit:
+        return "_This run recorded no audit of the winner._"
+    line = _holdout_line(audit)
+    if audit.get("overfit"):
+        return (
+            f"{line}. Every candidate was searched on the train part, so the winner "
+            "may be a harness that only works on the items it was tuned against."
+        )
+    return f"{line}."
 
 
 def _yield(accepted: int, refused: int) -> str:
@@ -1686,6 +2004,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--elite", type=int, default=3, help="how many parents to propose against")
     parser.add_argument("--max-evaluations", type=int, default=64)
+    parser.add_argument(
+        "--holdout", type=float, default=task_module.DEFAULT_HOLDOUT,
+        help="the fraction of the Task's items held out of the search and used to "
+             "audit the winner; one item cannot be split, which the audit records",
+    )
+    parser.add_argument(
+        "--parsimony", type=float, default=0.01,
+        help="what each node of a candidate's graph costs its score; the search "
+             "compares raw_score - parsimony * nodes",
+    )
     parser.add_argument("--attempts", type=int, default=3, help="retries per batch after a refusal")
     parser.add_argument(
         "--runs-root",
@@ -1738,6 +2066,8 @@ def main(argv: list[str] | None = None) -> int:
         attempts=args.attempts,
         runs_root=Path(args.runs_root),
         intent=args.intent,
+        holdout=args.holdout,
+        parsimony=args.parsimony,
         knobs={name.strip(): value.strip() for pair in args.knob
                for name, _, value in [pair.partition("=")] if name.strip()},
     )
@@ -1749,6 +2079,10 @@ def main(argv: list[str] | None = None) -> int:
     except LoopError as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
         return 2
+    audit = report.get("holdout") or {}
+    # One line a person reads without opening the run directory. On stderr, because
+    # everything this command prints on stdout is the one JSON object a caller parses.
+    print(_holdout_line(audit), file=sys.stderr)
     print(
         json.dumps(
             {
@@ -1759,6 +2093,9 @@ def main(argv: list[str] | None = None) -> int:
                 "evaluations": report["evaluations"],
                 "seed_score": report["seed_score"],
                 "best_score": report["best_score"],
+                "raw_best_score": report["raw_best_score"],
+                "scoring": report["scoring"],
+                "holdout": audit,
                 "structural_wins": len(report["structural_wins"]),
                 "rejection_codes": report["rejection_codes"],
                 "accepted_op_mix": report["accepted_op_mix"],

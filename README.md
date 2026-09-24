@@ -2,24 +2,26 @@
 
 English | [中文](README.zh.md)
 
-**Describe what you want; a graph of typed nodes designs, builds and improves it.**
+**Describe a class of work; a graph of typed nodes builds a harness for it, then searches the harness.**
 
 ```bash
 git clone <this-repo> --recurse-submodules && cd <this-repo>
 ./install.sh
-uv run refactory ceo "a mode that drafts a haiku and checks the syllable count" --mode create
+uv run refactory ceo "a mode that drafts a haiku and checks the syllable count" --mode create --single
 ```
 
 That is the whole product. **[QUICKSTART.md](QUICKSTART.md)** is the six commands in order, with what each costs and what to do when one fails. Everything below is what it is made of.
 
 | layer | what it owns |
 |---|---|
-| **the mode** | a Python class: a graph of typed nodes, declared knobs, and a `score()`. The unit you create, run and search. |
-| **the outer loop** | the search over a mode: propose typed edits → validate → evaluate → keep what improves, and report what it refused. |
+| **the mode** | an agentic harness for a class of work: a Python class holding a graph of typed nodes over a `Task`, declared knobs, and a `score()` over the items. The unit you create, run and search. |
+| **the outer loop** | the search over a harness: propose typed edits → validate → evaluate → keep what improves, and report what it refused. It is graded on part of the items and audited on the part it was not shown, and a candidate pays a small cost for its size. |
 | **the CEO** | one agent that drives a mode's graph node by node, spawning a subagent per model call, and stops at the gates a person owns. |
 | **the panel** | the same choices in the browser: pick a mode, press Start, read the run. |
 
-Two runtimes execute the same graph and are kept honest by running one mode on both and comparing the facts: the **walker** (in-process, what a search uses) and **DSH** (what ships). A mode is lowered to one IR — `Workflow.to_dict()` — and that JSON is the only thing the runtime sees.
+**A harness is for a class of work.** "Write the build script for any Java source tree" is the shape of everything here — not "write the script for this tree". A `Task` names the class: it lists the items, prepares each one, says what to ask for, and judges each pass, so a harness's score is the share of items that came out right rather than a claim about the one example that was tried. A mode that runs once is the special case, and `create` makes you say which of the two you are building.
+
+**What a harness means does not depend on what runs it.** `{graph, knobs, ports, memory}`, lowered to one IR — `Workflow.to_dict()` — is the whole meaning, and that JSON is the only thing a runtime sees. Which model answers, which tools an agent node may use, which sandbox the work happens in: that is the runtime's business, and the same harness means the same thing on either one. The **walker** runs a graph in-process, which is what a search uses; **DSH** is what ships; running one mode on both and comparing the facts keeps them honest.
 
 ---
 
@@ -36,7 +38,7 @@ cd <this-repo>
 
 `install.sh` does four things, in order:
 
-1. `git submodule update --init --recursive` — the vendored language (`factory`) and reference modes (`srf`).
+1. `git submodule update --init --recursive` — the vendored language (`factory`) and reference modes (`srf`). If you cloned without `--recurse-submodules`, run that yourself before `uv sync`: without the submodules, `uv sync` fails with uv's own *"does not appear to be a Python project"*, which does not say why.
 2. `pnpm install --frozen-lockfile && pnpm run build` — the DSH workspace and the client/host bundles the Web view serves. This is the step that needs pnpm, and if the machine has none the script puts the pinned version on PATH first: `corepack` when it is there, otherwise `npm install -g pnpm@<pin>`, so Node and npm are enough (opt out with `REFACTORY_SKIP_GLOBAL_PNPM=1`).
 3. `uv sync` — **one** Python project at the root: it creates `.venv`, installs the three local packages in editable mode and puts the `refactory` command on `.venv/bin`, pinned by `uv.lock`.
 4. Creates the DSH profile a mode runs on (`dsh plugin --profile graph add …`). A profile is machine state, so this is a once-per-machine step; skip it with `REFACTORY_SKIP_DSH_PROFILE=1`.
@@ -147,7 +149,8 @@ Every command is `uv run refactory <verb>`. This is the reference; [QUICKSTART.m
 
 | command | what it does |
 |---|---|
-| `refactory ceo "<what you want>" --mode create` | build a package of modes from a brief: research, a strategy you approve, a build, three parallel reviews, an audit, then register and smoke (20–30 minutes) |
+| `refactory ceo "<what you want>" --mode create --task <module:Class>` | build a harness for a **class of work**: the Task lists the items and judges each pass, and the produced package binds a `data` node to it (research, a strategy you approve, a build, three parallel reviews, an audit, then register and smoke; 20–30 minutes) |
+| `refactory ceo "<what you want>" --mode create --single` | the special case: a harness that runs once, for one input, with no Task binding |
 | `refactory ceo "<what you want>" --mode design --check "<command>"` | design a checked artifact instead of a package; `--check` is the command that decides whether it works (this is the default mode) |
 | `refactory ceo "<what you want>" --mode edit --revise <package>/<mode>` | revise an existing mode and refuse a regression; `--revise` names what it started from |
 | `refactory ceo <package>/<mode>` | run that mode instead of authoring anything |
@@ -155,6 +158,8 @@ Every command is `uv run refactory <verb>`. This is the reference; [QUICKSTART.m
 | option | what it does |
 |---|---|
 | `--name <name>` | the package or artifact name; without it your words become the name |
+| `--task <module:Class>` | create only: the class of work. The produced harness binds a `data` node to that Task and runs its subgraph once per item the Task lists, so it is used later on any item of the class rather than on the one you tried |
+| `--single` | create only: build a harness for one run of one thing. One of `--task` or `--single` is required, because a harness built for one hardcoded example is the special case and has to be asked for as one |
 | `--check "<command>"` | design only: run inside the artifact directory; the gate reloops until it exits 0 |
 | `--revise <package>/<mode>` | edit only: the mode being revised |
 | `--model <id>` | the model this run uses, e.g. `deepseek-v4-pro` (default: your settings default) |
@@ -208,11 +213,15 @@ Every command is `uv run refactory <verb>`. This is the reference; [QUICKSTART.m
 | `--seed <n>` | reproduce a search exactly | 0 |
 | `--elite <n>` | how many parents each round proposes against | 3 |
 | `--max-evaluations <n>` | a hard ceiling on evaluated candidates | 64 |
+| `--holdout <fraction>` | the share of a Task's items kept out of the search and used to audit the winner afterwards; one item cannot be split, which the audit records | 0.3 |
+| `--parsimony <cost>` | what each node of a candidate's graph costs its score: the search compares `raw_score − parsimony × nodes` | 0.01 |
 | `--attempts <n>` | retries per batch after a refusal | 3 |
 | `--runs-root <dir>` | the run directory itself; read it back with `--run <this path>` | `.factory/loop` |
 | `--intent "<words>"` | what the run is for; seeds the ledger the agents read | empty |
 | `--model <name>` | the model the reasoning optimizer asks (not the mode's own agents) | the configured route |
 | `--provider <route>` | the provider route that model is on | your settings default |
+
+**Every candidate is searched on the train part of the items, and the winner is then re-evaluated on the held-out part.** The part travels in the run directory (`subset.json` beside each candidate), not in a knob, so a search cannot choose its own exam; the audit lands in `<run root>/holdout.json` and in the report as `{"train", "holdout", "gap", "overfit", "threshold", "instances"}`, with `overfit` true when `train − holdout` exceeds 0.15. The score the search compares has the size cost taken off it, and the unpenalised number is recorded beside it as `raw_score`, so a harness that won on merit can be told from one that won on size. `refactory best` reports the audit, and `refactory adopt` refuses an overfit winner unless you pass `--allow-overfit`.
 
 <a id="cli-read"></a>
 ### Read the run, and steer it
@@ -223,9 +232,10 @@ Every command is `uv run refactory <verb>`. This is the reference; [QUICKSTART.m
 | `refactory status --run <id>` | where it is, and the events since an offset |
 | `refactory leaderboard --run <id>` | candidates by score, each with its diff against its parent |
 | `refactory candidate <id> --run <id>` | one candidate, exactly what it changed |
-| `refactory best --run <id>` | the winner, with the state that scored it |
+| `refactory best --run <id>` | the winner, with the state that scored it and the held-out audit of whether it works beyond its training items |
 | `refactory artifacts --run <id> [--contents]` | what it left on disk |
-| `refactory adopt --run <id> --as <package>` | write the winner as a new package, input untouched |
+| `refactory adopt --run <id> --as <package>` | write the winner as a new package, input untouched; refused when the audit says the winner is overfit |
+| `refactory adopt --run <id> --as <package> --allow-overfit` | adopt it anyway, with the audit recorded beside the package |
 | `refactory steer --run <id> --note "<words>" [--kind info\|correction\|constraint]` | add what you said to the run's intent ledger |
 | `refactory steer --run <id> --verdict <gate>=<value>` | record a gate's answer, so a resume replays it |
 | `refactory stop --run <id>` | ask a run to stop |

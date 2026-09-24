@@ -4,6 +4,8 @@ English | [中文](README.zh.md)
 
 Modes are Python classes. Their architecture and parameters are a serializable state dict. Optimizers propose typed updates to that state, and every proposal is validated before it can cost an inner run.
 
+A mode is an **agentic harness for a class of work**: a graph of typed nodes over a `Task`, which lists the items, prepares each one, says what to ask for and judges each pass — so the mode's `score()` is a claim about the class rather than about the one example that was tried. `create` produces that harness, naming the Task is what makes the per-item binding real, and `--single` is the explicit special case. [docs/datasets.md](docs/datasets.md) is the whole story.
+
 The design follows PyTorch deliberately, because the analogy is the load-bearing part: a mode is an `nn.Module`, its `state_dict()` carries the parameters *and* the architecture, a knob is an `nn.Parameter`, and an optimizer is a `torch.optim.Optimizer` that may only write what the mode declares writable. `score()` and the mode's invariants are methods, so no proposal can reach them.
 
 - **DSH** is the runtime and the model client (this repo is a DSH fork).

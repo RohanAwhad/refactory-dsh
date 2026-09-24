@@ -18,9 +18,10 @@ know on its own:
   score into the run's facts.
 
 Both runtimes load items through :func:`refactory_dsh.nn.executor.load_items`, so a
-mode means the same thing on either one. The declarations the IR cannot carry (the
-node's ``task_ref``, ``source_path``, ``source_format``, ``inline_items`` and
-``limit``) travel in the run directory's declarations file, written by the lowering.
+mode means the same thing on either one, including which part of the items the run
+directory names. The declarations the IR cannot carry (the node's ``task_ref``,
+``source_path``, ``source_format``, ``inline_items`` and ``limit``) travel in the run
+directory's declarations file, written by the lowering.
 """
 
 from __future__ import annotations
@@ -100,16 +101,12 @@ def items_of(node: Node, workdir: Path) -> list[dict[str, Any]]:
     """The data node's items, loaded the one way both runtimes load them.
 
     A node bound to a Task and naming no source takes its items from the Task, which
-    is what makes ``task_ref`` a binding rather than a line in a prompt.
+    is what makes ``task_ref`` a binding rather than a line in a prompt, and the part
+    the run directory names is applied there too. Both live in
+    :func:`refactory_dsh.nn.executor.load_items` so the walker and DSH cannot select
+    different items.
     """
-    items = load_items(node, workdir)
-    if not items and node.task_ref:
-        task = load_task(node.task_ref, workdir)
-        items = [
-            {"id": instance.id, "path": instance.path, **instance.metadata}
-            for instance in task.instances()
-        ]
-    return items
+    return load_items(node, workdir)
 
 
 def _task_of(node: Node, workdir: Path) -> Task | None:

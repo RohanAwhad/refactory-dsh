@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from refactory_dsh import nn, optim
+from refactory_dsh.evaluators import Evaluator, RunResult
 from refactory_dsh.loop import Loop, LoopConfig, LoopError
 from refactory_dsh.optim import Candidate, Optimizer, Proposal
 
@@ -626,3 +627,96 @@ def test_a_search_builds_a_model_client_for_the_modes_agent_nodes(tmp_path, monk
         "--runs-root", str(tmp_path / "run"), "--project", ".",
     ])
     assert built, "the search built no model client, so an agent mode could not run"
+
+
+# ── the size cost the search compares on ───────────────────────────────────
+
+
+class _Fixed(Evaluator):
+    """Scores every candidate the same, so only its size can decide a ranking."""
+
+    name = "fixed_for_parsimony"
+
+    @classmethod
+    def from_settings(cls, *, config, model=None, project=None):  # type: ignore[no-untyped-def]
+        return cls()
+
+    def evaluate(self, mode, state, workdir):  # type: ignore[no-untyped-def]
+        return RunResult(score=0.5, facts={}, exit_ok=True)
+
+
+def _fixed_search(tmp_path, **overrides):
+    """A real mode, a size-adding scripted edit, and an evaluator with one score.
+
+    Two epochs, because the run proposes the next batch at the end of an epoch: the
+    added node is installed then and evaluated in the second one.
+    """
+    from refactory_dsh import evaluators, registry
+
+    _package, mode_class = registry.resolve(Path("."), MODE)
+    evaluators.register(_Fixed.name, _Fixed)
+    try:
+        loop = Loop(
+            MODE,
+            _config(tmp_path, epochs=2, batch_size=1, evaluator=_Fixed.name, **overrides),
+            project=Path("."),
+            optimizer=ScriptedOptimizer(_structural_edit(mode_class()), k=1),
+        )
+        return loop.run()
+    finally:
+        evaluators.REGISTRY.pop(_Fixed.name, None)
+
+
+def test_the_search_compares_the_raw_score_with_the_size_cost_taken_off(tmp_path):
+    """A candidate that costs more nodes must beat a smaller one on the raw score.
+
+    Every candidate here scores 0.5 from the evaluator, so the only difference
+    between the seed and the candidate that adds a node is that node. Ranking on the
+    raw score would keep the larger graph; ranking on the costed score keeps the
+    smaller one, and the report carries both numbers so a reader can see which.
+    """
+    report = _fixed_search(tmp_path)
+    seed = next(row for row in report["leaderboard"] if row["parent"] is None)
+    child = next(row for row in report["leaderboard"] if row["structural"])
+
+    assert seed["raw_score"] == pytest.approx(0.5)
+    assert child["raw_score"] == pytest.approx(0.5), (
+        "the structural candidate must score the same as the seed, or this is not "
+        "testing the size cost"
+    )
+    assert child["nodes"] == seed["nodes"] + 1, "the edit did not add a node"
+    assert child["score"] == pytest.approx(0.5 - 0.01 * child["nodes"])
+    assert seed["score"] == pytest.approx(0.5 - 0.01 * seed["nodes"])
+    assert report["best"]["id"] != child["id"], (
+        "the larger graph won on a score the size cost should have taken off"
+    )
+    assert report["best_score"] == pytest.approx(seed["score"])
+    assert report["raw_best_score"] == pytest.approx(0.5)
+    assert report["scoring"]["compared"] == "penalized"
+    assert report["scoring"]["parsimony"] == 0.01
+
+
+def test_a_zero_size_cost_leaves_the_raw_score_alone(tmp_path):
+    """The coefficient is a person's setting, and zero switches the cost off."""
+    report = _fixed_search(tmp_path, parsimony=0.0)
+    assert report["best_score"] == pytest.approx(0.5)
+    assert report["raw_best_score"] == pytest.approx(0.5)
+    assert report["scoring"]["parsimony"] == 0.0
+
+
+def test_every_recorded_score_carries_the_raw_one_beside_it(tmp_path):
+    """The journal is what a resumed run and an adopter read, so both live in it."""
+    loop = Loop(MODE, _config(tmp_path), project=Path("."))
+    loop.run()
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "journal.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    scored = [event for event in events if event.get("event") == "score"]
+    assert scored, "the run recorded no score"
+    for event in scored:
+        assert event["raw_score"] is not None, event
+        assert event["score"] == pytest.approx(
+            event["raw_score"] - event["parsimony"] * event["nodes"]
+        )

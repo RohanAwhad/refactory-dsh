@@ -25,13 +25,14 @@ uv run refactory list modes --json       # the same catalogue as JSON, with each
 Two kinds of entry: `action: start` is a mode you run or search; `action: create`,
 `edit` or `design` is an authoring mode, run through `ceo` below.
 
-## 2. Create a mode
+## 2. Create a harness
 
 ```bash
 uv run refactory ceo "one agent node writes a two-line haiku about the topic in the task; one op counts syllables and checks the count" \
-  --mode create --name haiku_pack
+  --mode create --name haiku_pack --single
 ```
 
+- **`--single`, or `--task`.** A harness is for a *class* of work, so `create` makes you say which you are building before it spends anything. `--single` is this one-off: a harness that runs once, for one input. `--task <module:Class>` names the class — the produced package binds a `data` node to that Task, runs its subgraph once per item the Task lists, and is judged per item, so it is used later on any item of the class. Naming neither is refused, in milliseconds, with both options named. [refactory/docs/datasets.md](refactory/docs/datasets.md) is the whole story.
 - **~20–25 minutes**, real model calls. Keep the terminal open.
 - It stops at `gate_strategy` and **asks you** to approve the plan — that gate is a
   person's, so the model cannot answer it. Type `proceed` (or pass

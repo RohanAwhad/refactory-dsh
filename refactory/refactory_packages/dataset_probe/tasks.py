@@ -13,9 +13,6 @@ class CountingTask(Task):
     def instances(self):
         return [TaskInstance(id="alpha"), TaskInstance(id="beta")]
 
-    def prompt(self, instance):
-        return f"process {instance.id}"
-
     def verify(self, instance, workspace: Path) -> VerifyResult:
         """Whether this pass did its share of the work the run asked for.
 

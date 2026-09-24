@@ -136,6 +136,16 @@ def command(
     return argv
 
 
+def default_workdir(identifier: str) -> Path:
+    """The run directory a mode gets when the caller names none.
+
+    One owner for the default, because a reader that has to find the run afterwards —
+    the console attaching the run to its JSON, a person looking for the evidence —
+    must compute the same directory this run used.
+    """
+    return (DEFAULT_ROOT / identifier.replace("/", "-")).expanduser().resolve()
+
+
 def run(
     identifier: str,
     *,
@@ -155,7 +165,7 @@ def run(
     sitting at can still be given a person's decision -- explicitly, by name.
     """
     if workdir is None:
-        workdir = DEFAULT_ROOT / identifier.replace("/", "-")
+        workdir = default_workdir(identifier)
     workdir = Path(workdir).expanduser().resolve()
     name, graphs = prepare(
         identifier, workdir=workdir, intent=intent, project=project, knobs=knobs,

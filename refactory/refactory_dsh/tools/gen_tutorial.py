@@ -432,11 +432,11 @@ def render_recipes() -> str:
 
 
 def render_task_hooks() -> str:
-    """The Task protocol's four hooks, from the class that declares them."""
+    """The Task protocol's three hooks, from the class that declares them."""
     from refactory_dsh.task import Task
 
     rows = []
-    for name in ("instances", "setup", "prompt", "verify"):
+    for name in ("instances", "setup", "verify"):
         hook = getattr(Task, name)
         doc = (hook.__doc__ or "").strip().splitlines()
         rows.append((f"{name}()", doc[0] if doc else ""))
@@ -543,7 +543,10 @@ def render(project: Path | None = None) -> str:
             "  --epochs 1 --batch-size 4 --optimizer random --seed 5 --runs-root /tmp/tour/run",
             '{\n  "mode": "counting_pack/fixed_step",\n  "optimizer": "random",\n'
             '  "evaluator": "walker",\n  "bound": "epochs",\n  "evaluations": 4,\n'
-            '  "seed_score": 0.5,\n  "best_score": 1.0,\n  "structural_wins": 1,\n'
+            '  "seed_score": 0.46,\n  "best_score": 0.96,\n  "raw_best_score": 1.0,\n'
+            '  "scoring": {"compared": "penalized", "parsimony": 0.01, ...},\n'
+            '  "holdout": {"train": 1.0, "holdout": null, "overfit": false, ...},\n'
+            '  "structural_wins": 1,\n'
             '  "rejection_codes": {"E-shape": 3, "V2": 3, "V7": 6, ...},\n'
             '  "report": "/tmp/tour/run/report.md"\n}',
         ),

@@ -18,11 +18,14 @@ import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import TYPE_CHECKING, Any, Callable, Protocol
 
 from .graph import Graph, Node
 from .mode import RunResult
 from .resolve import resolve
+
+if TYPE_CHECKING:
+    from refactory_dsh.task import Task
 
 
 class ExecutionError(RuntimeError):
@@ -196,7 +199,33 @@ def load_items(node: Node, workdir: Path) -> list[dict[str, Any]]:
     One loader, so a mode means the same thing on either runtime: the item is handed
     to the pass as JSON rather than as a template variable, because a pass is a
     subgraph of nodes and only the first of them sees a prompt.
+
+    The part the run directory names is applied last, by
+    :func:`refactory_dsh.task.select_subset`; both runtimes load through this
+    function, so both iterate the same part of the same items.
     """
+    from refactory_dsh.task import select_subset
+
+    return select_subset(full_items(node, workdir), workdir)
+
+
+def full_items(node: Node, workdir: Path) -> list[dict[str, Any]]:
+    """Every item a data node has, before the run directory's selection is applied.
+
+    A node bound to a Task and naming no source takes its items from the Task, which
+    is what makes ``task_ref`` a binding rather than a line in a prompt. Public
+    because the outer loop sizes the partition it writes from the whole selection.
+    """
+    items = declared_items(node, workdir)
+    if not items and node.task_ref:
+        from refactory_dsh.task import load_task
+
+        items = task_items(load_task(node.task_ref, workdir))
+    return items
+
+
+def declared_items(node: Node, workdir: Path) -> list[dict[str, Any]]:
+    """The items the node's own source declares, before any Task or selection."""
     items: list[dict[str, Any]] = [dict(item) for item in node.inline_items]
     if not items and node.source_path:
         source = workdir / node.source_path
@@ -233,6 +262,14 @@ def load_items(node: Node, workdir: Path) -> list[dict[str, Any]]:
     if node.limit:
         items = items[: int(node.limit)]
     return items
+
+
+def task_items(task: "Task") -> list[dict[str, Any]]:
+    """A Task's instances as the items a data node iterates."""
+    return [
+        {"id": instance.id, "path": instance.path, **instance.metadata}
+        for instance in task.instances()
+    ]
 
 
 def _ask_model(model: Any, prompt: str, *, system: str, workdir: Path) -> str:
@@ -361,12 +398,7 @@ class Executor:
                     # binding rather than a line in a prompt.
                     from refactory_dsh.task import instance_of, load_task
 
-                    task = load_task(node.task_ref) if node.task_ref else None
-                    if not items and task is not None:
-                        items = [
-                            {"id": instance.id, "path": instance.path, **instance.metadata}
-                            for instance in task.instances()
-                        ]
+                    task = load_task(node.task_ref, self.ctx.workdir) if node.task_ref else None
                 except Exception as exc:
                     error = f"{node.id}: {type(exc).__name__}: {exc}"
                     break

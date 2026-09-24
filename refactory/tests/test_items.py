@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from refactory_dsh import items, lowering, nn
+from refactory_dsh import task as task_module
 from refactory_dsh.nn.executor import CURRENT_ITEM, execute, load_items
 
 
@@ -267,3 +268,64 @@ def test_the_declarations_carry_the_data_nodes_source(tmp_path):
         "inline_items": [{"id": "a"}],
         "limit": 3,
     }
+
+
+# ── the part of the items a run directory names ───────────────────────────
+
+
+def test_the_loader_and_the_dsh_reader_select_the_same_part(tmp_path):
+    """One helper, both runtimes: the walker's loader and `items_of` agree.
+
+    The part is written beside the run rather than passed in, which is what makes it
+    the same answer whichever runtime reads it.
+    """
+    node = nn.Node(
+        "data", "data", subgraph_entry="w", subgraph_exit="w",
+        inline_items=tuple({"id": name} for name in "abcd"),
+    )
+    task_module.write_subset(tmp_path, task_module.TRAIN, 0.3)
+    assert [item["id"] for item in load_items(node, tmp_path)] == ["a", "b", "c"]
+    assert [item["id"] for item in items.items_of(node, tmp_path)] == ["a", "b", "c"]
+
+    task_module.write_subset(tmp_path, task_module.HOLDOUT, 0.3)
+    assert [item["id"] for item in load_items(node, tmp_path)] == ["d"]
+    assert [item["id"] for item in items.items_of(node, tmp_path)] == ["d"]
+
+
+def test_without_a_selection_every_item_is_iterated(tmp_path):
+    """A mode run outside the outer loop has no run directory naming a part."""
+    node = nn.Node(
+        "data", "data", subgraph_entry="w", subgraph_exit="w",
+        inline_items=({"id": "a"}, {"id": "b"}, {"id": "c"}, {"id": "d"}),
+    )
+    assert [item["id"] for item in load_items(node, tmp_path)] == ["a", "b", "c", "d"]
+
+
+def test_both_runtimes_iterate_the_part_the_run_directory_names(tmp_path):
+    """The walker and the commands DSH drives land on the same items, per part.
+
+    The commands are what DSH runs one pass at a time, so a selection that only the
+    walker honoured would make a mode mean two different things.
+    """
+    _probe_task()
+    graph = _data_graph(task_ref="counting")
+    assert [instance.id for instance in _probe_task()().instances()] == ["alpha", "beta"]
+
+    for part, expected in (("train", ["alpha"]), ("holdout", ["beta"])):
+        walked = tmp_path / f"walked-{part}"
+        task_module.write_subset(walked, part, 0.5)
+        result = execute(graph, walked)
+        assert result.exit_ok, result.error
+
+        driven = tmp_path / f"driven-{part}"
+        task_module.write_subset(driven, part, 0.5)
+        node = _declared(graph, driven)
+        ids = items.command_list(node, driven)["ids"]
+        for index in range(len(ids)):
+            items.command_begin(node, driven, index)
+            items.command_end(node, driven, index)
+
+        assert ids == expected
+        assert json.loads((driven / "facts.json").read_text())["item_scores"] == (
+            result.facts["item_scores"]
+        ), "the runtimes disagree about the part they iterated"
