@@ -293,10 +293,13 @@ dsh web: http://127.0.0.1:3081/?token=<per-process token>
 | *"创建一个用 agent 写文案并检查它的模式。"* | `create`，和 `ceo --mode create` 同一个创作模式——CEO 会先请你批准计划，并把你的回答随调用一起传过去 |
 | *"那次创作进行到哪了？"* | 对运行目录（`.factory/create/<名字>`）用 `status`，它会报出创作运行自己的逐节点进度 |
 | *"把那个模式跑一次给我看看。"* | `run`，就是 CLI 的 `refactory run`：它在 DSH 上使用这个模式，并报出运行目录与它记录下来的东西 |
+| *"那次创作被网络抖动弄死了——接着跑。"* | 对运行目录用 `resume`：它从失败的那个节点继续，已经完成的节点全部保留 |
 | *"把包列出来，然后 disable annealing_pack。"* | `registry` 先 `list`，再 `disable` |
 
 <a id="gui-gates"></a>
 ### 只有人才能回答的门，依然属于人
+
+创作调用还接受 `inputs`（简述说这个模式要操作什么）、`sample`（旋钮值，例如真实的输入，好让冒烟跑的是那条路径而不是内置 fixture）与 `resume`（要继续的运行目录）。产出物不是它自称的格式时运行会被拒绝：`.whl` 缺少与 `RECORD` 并列的 `METADATA` 与 `WHEEL`，或者压缩包打不开。
 
 如果某个模式走到一道 `user` 门（create-v2 的计划批准就是一道），运行时来问**你**：`refactory run` 里是终端，GUI 里是对话框。CEO 回答不了它，模型也回答不了。要做到无人值守，就事先说出答案：`--approve gate_strategy=proceed`——注意从对话里发起的创作调用会在这次工具调用内部跑上好几分钟，所以批准必须在它开始之前给出，而不是等它停下来问。
 

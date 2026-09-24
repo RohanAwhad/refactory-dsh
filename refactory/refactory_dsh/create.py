@@ -77,6 +77,13 @@ class CreateMode(Mode):
             # What the brief says the mode operates on. `validate` cannot read the
             # brief, so this is how "the mode must take a Python package" becomes
             # something checked instead of something assumed.
+            "sample_knobs": Knob(
+                "", "str",
+                description="knob values a validation run should use, as a JSON array "
+                            "of \"NAME=VALUE\" strings; without them the smoke runs the "
+                            "declared defaults, which for an input-taking mode is the "
+                            "built-in fixture",
+            ),
             "requires_input": Knob(
                 "", "str",
                 description="the inputs the produced mode must accept, comma-separated "
@@ -434,7 +441,7 @@ class CreateMode(Mode):
         ))
         graph.add(Node(
             "smoke", "op", call=f"{OPS}:smoke",
-            knobs=("allow_regression",),
+            knobs=("allow_regression", "sample_knobs"),
             writes=("smoke.json", "revision.json"),
             produces=("smoke_score", "smoke_ok", "before_score", "after_score",
                       "regressed", "revision_note"),
@@ -499,6 +506,9 @@ class CreateConfig:
     #: produced mode's knobs and reads, so a mode that hardcodes a fixture instead of
     #: accepting the input is refused rather than shipped.
     requires_input: str = ""
+    #: Knob values the validation run uses, as `NAME=VALUE` strings. They are how the
+    #: brief's inputs are exercised: without one the smoke runs the defaults.
+    samples: list[str] = field(default_factory=list)
     #: Whether the produced graph is a DataNode iterating a subgraph per item.
     data_node: bool = False
     #: Verdicts for gates a person answers. `gate_strategy` is one, so a headless
@@ -557,6 +567,7 @@ def create(config: CreateConfig, client: Any = None) -> CreateResult:
     state["knobs"]["task_ref"]["value"] = config.task_ref
     state["knobs"]["data_node"]["value"] = bool(config.data_node)
     state["knobs"]["requires_input"]["value"] = config.requires_input
+    state["knobs"]["sample_knobs"]["value"] = json.dumps(list(config.samples))
     mode.load_state_dict(state)
 
     workdir = Path(config.workdir)
@@ -633,6 +644,12 @@ def main(argv: list[str] | None = None) -> int:
              "under that name, or validation refuses it",
     )
     parser.add_argument(
+        "--sample", action="append", default=[], metavar="NAME=VALUE", dest="samples",
+        help="a knob value the validation run should use (repeatable). Give it when the "
+             "brief's inputs are real, so the smoke exercises the input path instead of "
+             "the built-in fixture",
+    )
+    parser.add_argument(
         "--task", default=None, metavar="TASK_REF", dest="task_ref",
         help="a Task class (module:Class or a registered name) the produced mode must satisfy",
     )
@@ -641,6 +658,11 @@ def main(argv: list[str] | None = None) -> int:
     # same place, so each overwrote the other's state and a cancelled run's
     # leftovers were read by the next one. A run is addressed by this directory.
     parser.add_argument("--workdir", default="")
+    parser.add_argument(
+        "--resume", default="", metavar="RUN_DIR",
+        help="continue a failed run from its own directory instead of starting a "
+             "new one; every node that already finished is kept",
+    )
     parser.add_argument("--model", default="")
     parser.add_argument("--provider", default="", help="provider route that model is on")
     parser.add_argument(
@@ -656,6 +678,29 @@ def main(argv: list[str] | None = None) -> int:
 
     from refactory_dsh.model import DshModelClient
 
+    client = DshModelClient(
+        timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
+    )
+    if args.resume:
+        # A resume re-runs the node that failed with the facts its predecessors
+        # produced. The knobs and the task come from the run's own record, so the
+        # command needs only the directory — nothing has to be remembered or retyped.
+        try:
+            run = CreateMode.resume(Path(args.resume), model=client, max_steps=200)
+        except Exception as exc:
+            print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), file=sys.stderr)
+            return 2
+        name = str(run.facts.get("name") or args.name)
+        print(json.dumps({
+            "resumed": str(Path(args.resume)),
+            "name": name,
+            "exit_ok": run.exit_ok,
+            "error": run.error,
+            "facts": {key: value for key, value in run.facts.items() if key in
+                      ("name", "files", "package_path", "smoke_score", "validation")},
+        }, indent=2, default=str))
+        return 0 if run.exit_ok else 2
+
     try:
         result = create(
             CreateConfig(
@@ -667,12 +712,11 @@ def main(argv: list[str] | None = None) -> int:
                 data_node=bool(args.data_node),
                 task_ref=str(args.task_ref or ""),
                 requires_input=", ".join(args.inputs),
+                samples=list(args.samples),
                 model_timeout_s=int(args.model_timeout_s),
                 verdicts=parse_verdicts(args.verdict),
             ),
-            client=DshModelClient(
-                timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
-            ),
+            client=client,
         )
     except CreateError as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)

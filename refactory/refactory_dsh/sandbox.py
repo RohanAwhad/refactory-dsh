@@ -350,6 +350,7 @@ def smoke(
     *,
     project: Path | None = None,
     model: bool = False,
+    knobs: dict[str, Any] | None = None,
     **kwargs: Any,
 ) -> SandboxResult:
     """Run one mode once, in a sandbox, and report what it scored.
@@ -366,6 +367,10 @@ def smoke(
     where it matters. The client reaches a model the same way every other path does
     (`DshModelClient`, which runs the one-shot DSH profile from the checkout), so the
     contained process needs no credential of its own.
+
+    ``knobs`` overrides the mode's declared defaults for this run. Without it a smoke
+    exercises the *default* path only, so a mode whose new input path is broken --
+    the one the brief asked for -- scores on the fixture and is accepted.
     """
     project = Path(project or project_for_nodes())
     client = (
@@ -379,8 +384,18 @@ def smoke(
         "from pathlib import Path\n"
         "from refactory_dsh import registry\n"
         f"{client}"
-        f"package, mode = registry.resolve(Path({str(project)!r}), {identifier!r})\n"
-        f"result = mode().evaluate(Path({str(Path(workdir))!r}){', ' + call if call else ''})\n"
+        f"package, mode_class = registry.resolve(Path({str(project)!r}), {identifier!r})\n"
+        "mode = mode_class()\n"
+        f"overrides = {dict(knobs or {})!r}\n"
+        "if overrides:\n"
+        "    state = mode.state_dict()\n"
+        "    for name, value in overrides.items():\n"
+        "        if name not in state['knobs']:\n"
+        "            raise ValueError(f'{name!r} is not a knob of this mode: '"
+        " + ', '.join(sorted(state['knobs'])))\n"
+        "        state['knobs'][name]['value'] = value\n"
+        "    mode.load_state_dict(state)\n"
+        f"result = mode.evaluate(Path({str(Path(workdir))!r}){', ' + call if call else ''})\n"
         "print(json.dumps({'exit_ok': result.exit_ok, 'error': result.error,"
         " 'score': result.score, 'iterations': result.iterations}))\n"
     )

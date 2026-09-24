@@ -349,6 +349,11 @@ def main(argv: list[str] | None = None) -> int:
     # Per artifact name, for the same reason a creation is: one fixed directory
     # means runs overwrite each other's state.
     parser.add_argument("--workdir", default="")
+    parser.add_argument(
+        "--resume", default="", metavar="RUN_DIR",
+        help="continue a failed run from its own directory instead of starting a "
+             "new one; every node that already finished is kept",
+    )
     parser.add_argument("--model", default="")
     parser.add_argument("--provider", default="", help="provider route that model is on")
     parser.add_argument(
@@ -362,6 +367,22 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     from refactory_dsh.model import DshModelClient
+
+    if args.resume:
+        client = DshModelClient(
+            timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
+        )
+        try:
+            run = DesignMode.resume(Path(args.resume), model=client)
+        except Exception as exc:
+            print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), file=sys.stderr)
+            return 2
+        print(json.dumps({
+            "resumed": str(Path(args.resume)), "exit_ok": run.exit_ok, "error": run.error,
+            "facts": {key: value for key, value in run.facts.items() if key in
+                      ("name", "files", "artifact", "check", "validation")},
+        }, indent=2, default=str))
+        return 0 if run.exit_ok else 2
 
     mode = DesignMode()
     state = mode.state_dict()

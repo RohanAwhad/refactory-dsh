@@ -231,6 +231,52 @@ class Mode:
             model=model, task=task, memory=memory, **kwargs,
         )
 
+    @classmethod
+    def resume(
+        cls, workdir: Path, *, model: Any = None, max_steps: int = 2000
+    ) -> "RunResult":
+        """Continue a run where it failed, from the record it left in its directory.
+
+        An authoring run's artifacts persist per node, so the expensive part of a
+        failed run is the nodes that already ran. This reads
+        ``.refactory/progress.json`` — the node that failed, the facts, the knobs and
+        the task — and starts there. A missing record is refused by name rather than
+        silently replaying the whole graph.
+        """
+        import json
+
+        from .executor import PROGRESS, execute
+
+        path = Path(workdir) / PROGRESS
+        if not path.exists():
+            raise ValueError(
+                f"no run to resume: {path} does not exist, so there is no record of "
+                "where the run got to"
+            )
+        try:
+            record = json.loads(path.read_text())
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{path} is not readable JSON: {exc}") from exc
+        node = str(record.get("node") or "").strip()
+        if not node:
+            raise ValueError(f"{path} names no node to resume at")
+        if record.get("error"):
+            # The recorded node failed; resume *at* it, because its work is what is
+            # missing. A record with no error means the run finished or was stopped
+            # between nodes, and the recorded node is the one still due.
+            pass
+        mode = cls()
+        state = mode.state_dict()
+        for name, value in (record.get("knobs") or {}).items():
+            if name in state.get("knobs", {}):
+                state["knobs"][name]["value"] = value
+        mode.load_state_dict(state)
+        return execute(
+            mode.graph(), Path(workdir), knobs=mode.values(), model=model,
+            facts=dict(record.get("facts") or {}), task=dict(record.get("task") or {}),
+            start=node, max_steps=max_steps,
+        )
+
     def evaluate(
         self,
         workdir: Path,

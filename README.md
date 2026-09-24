@@ -293,10 +293,13 @@ Ask in words; the CEO calls the `refactory` tool, which is the same console. Its
 | *"Create a mode that drafts a blurb with an agent and checks it."* | `create`, the same authoring mode as `ceo --mode create` — the CEO asks you to approve the plan first, and passes your answer with the call |
 | *"Where is that creation up to?"* | `status` on the run directory (`.factory/create/<name>`), which reports the authoring run's own node-by-node progress |
 | *"Run that mode once and show me."* | `run`, the CLI's `refactory run`: it uses the mode on DSH and reports the run directory and what it recorded |
+| *"That creation died on a network blip — pick it up."* | `resume` with the run directory: it continues at the node that failed, keeping every node that finished |
 | *"Show me the packages, then disable annealing_pack."* | `registry` with `list`, then `disable` |
 
 <a id="gui-gates"></a>
 ### A gate a person owns is still a person's
+
+An authoring call takes `inputs` (what the brief says the mode operates on), `sample` (knob values such as the real input, so the smoke exercises that path instead of the built-in fixture) and `resume` (a run directory to continue). The run is refused when the artifact it produced is not the format it claims: a `.whl` without `METADATA` and `WHEEL` beside its `RECORD`, or an archive that cannot be opened.
 
 If a mode reaches a `user` gate (create-v2's plan approval is one), the runtime asks **you**: the terminal in `refactory run`, a dialog in the GUI. The CEO cannot answer it, and neither can the model. To run unattended, state the answer up front: `--approve gate_strategy=proceed` — and note that an authoring call from the conversation runs for minutes *inside* the tool call, so the approval has to be given before it starts rather than while it waits.
 

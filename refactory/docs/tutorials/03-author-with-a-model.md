@@ -42,6 +42,13 @@ a package and one that hardcodes a fixture shaped like the brief. The design and
 prompts are told the same list, so the requirement reaches the code rather than the
 gate alone.
 
+`--sample target=7` (repeatable) is how a real input reaches the validation run:
+without one the smoke exercises the declared defaults, which for an input-taking mode is
+the fixture it already ships. The run is also refused when what it produced is not the
+format it claims — a `.whl` with no `METADATA` or `WHEEL` beside its `RECORD`, an
+archive that will not open. And `--resume .factory/edit/name` continues a run that died
+at the node it failed on, keeping every node that had already finished.
+
 What happens, in order — and the gates are the point:
 
 1. **survey** — what already exists, so the model can build on it rather than

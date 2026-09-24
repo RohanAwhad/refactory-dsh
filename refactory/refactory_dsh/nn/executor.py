@@ -257,6 +257,15 @@ def _ask_model(model: Any, prompt: str, *, system: str, workdir: Path) -> str:
     return str(model.complete(prompt, **kwargs))
 
 
+#: Where a run records how far it got, so a failure does not discard the work.
+#:
+#: Written after every node (the id of the next one) and when a node fails (the id of
+#: the one that failed, with the error). An authoring run's artifacts already persist
+#: in the run directory; this is what makes them usable by a restart instead of only
+#: by a reader.
+PROGRESS = ".refactory/progress.json"
+
+
 @dataclass
 class Executor:
     """Walk a graph from its start node to a terminal."""
@@ -267,10 +276,32 @@ class Executor:
     steps: list[Step] = field(default_factory=list)
     model_calls: int = 0
 
-    def run(self) -> RunResult:
+    def _record(self, node: str, *, error: str | None = None) -> None:
+        """Write how far the run got, so a restart can continue instead of starting over.
+
+        Best effort: a run directory that cannot be written to is the caller's
+        problem, not a reason to fail a run that is otherwise going fine.
+        """
+        import json
+
+        path = self.ctx.workdir / PROGRESS
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({
+                "node": node,
+                "error": error,
+                "facts": self.ctx.facts,
+                "knobs": self.ctx.knobs,
+                "task": self.ctx.task,
+                "steps": len(self.steps),
+            }, indent=2, default=str))
+        except OSError:  # pragma: no cover - an unwritable run directory
+            pass
+
+    def run(self, *, start: str | None = None) -> RunResult:
         started = time.time()
         visits: dict[str, int] = {}
-        current: str | None = self.graph.start or None
+        current: str | None = start or self.graph.start or None
         error: str | None = None
 
         while current is not None:
@@ -390,11 +421,14 @@ class Executor:
                          error=f"{type(exc).__name__}: {exc}")
                 )
                 error = f"{node.id}: {type(exc).__name__}: {exc}"
+                self._record(node.id, error=error)
                 current = None
                 break
             self.steps.append(
                 Step(node.id, node.kind, time.time() - step_started, verdict=verdict)
             )
+            if current is not None:
+                self._record(current)
 
         if error is None:
             for step in self.steps:
@@ -538,6 +572,7 @@ def execute(
     memory: Any = None,
     enforce_writes: bool = True,
     max_steps: int = 2000,
+    start: str | None = None,
 ) -> RunResult:
     """Build a context and run the graph once.
 
@@ -548,6 +583,11 @@ def execute(
       steered carries what they said. Inert when there is no ledger.
     - A gate a person answered is **replayed** from the ledger rather than asked
       again. An explicit ``verdicts`` argument still wins, so a caller can override.
+
+    ``start`` and ``facts`` are how a failed run continues: the node it died on, and
+    the facts the nodes before it produced. Both come from the run's own
+    ``.refactory/progress.json``; a caller that passes neither runs the graph from
+    its start with the facts it was given.
     """
     from refactory_dsh.steering import Ledger, for_run
 
@@ -565,4 +605,4 @@ def execute(
         memory=memory,
         enforce_writes=enforce_writes,
     )
-    return Executor(graph, ctx, max_steps=max_steps).run()
+    return Executor(graph, ctx, max_steps=max_steps).run(start=start)

@@ -674,3 +674,31 @@ describe('running a mode once from the panel', () => {
     expect(text(failed)).toContain('action "run" needs `mode`')
   })
 })
+
+describe('checking the input path and the artifact', () => {
+  it('forwards the sample knob values the validation run should use', async () => {
+    // The smoke runs the declared defaults, which for an input-taking mode is the
+    // built-in fixture: the path the brief asked for goes untested without a sample.
+    const { ctx, subprocess } = await setup()
+    subprocess.handler = () => runResult(JSON.stringify({ ok: true, exit_code: 0, result: {} }))
+    await call(ctx, {
+      action: 'create',
+      name: 'p',
+      brief: 'b',
+      inputs: ['package'],
+      sample: ['package=/tmp/demo_pkg'],
+      approve: ['gate_strategy=proceed'],
+    })
+    const argv = subprocess.spawns[0]!.argv
+    expect(argv).toContain('--sample')
+    expect(argv).toContain('package=/tmp/demo_pkg')
+  })
+
+  it('can continue a failed run instead of starting over', async () => {
+    const { ctx, subprocess } = await setup()
+    subprocess.handler = () => runResult(JSON.stringify({ ok: true, exit_code: 0, result: {} }))
+    await call(ctx, { action: 'edit', mode: 'p/m', name: 'p', brief: 'b', resume: '/repo/.factory/edit/p' })
+    const argv = subprocess.spawns[0]!.argv
+    expect(argv[argv.indexOf('--resume') + 1]).toBe('/repo/.factory/edit/p')
+  })
+})

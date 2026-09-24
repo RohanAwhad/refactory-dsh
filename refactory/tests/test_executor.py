@@ -366,3 +366,101 @@ def test_a_model_client_without_a_workdir_argument_is_still_asked(tmp_path):
     result = execute(graph, tmp_path / "run", model=Minimal(), max_steps=10)
     assert result.exit_ok, result.error
     assert (tmp_path / "run" / "reviews" / "qa.md").read_text() == "done\n"
+
+
+# ── resuming a failed run (#68) ────────────────────────────────────────────
+#
+# One transient transport failure used to discard an entire authoring run: every
+# completed node's artifacts sat in the run directory and none of them could be used
+# again. The executor now records how far it got, and a run resumes at the node that
+# failed with the facts its predecessors produced.
+
+
+class _Flaky:
+    """A model whose first call fails on the wire and whose second succeeds."""
+
+    def __init__(self, fail_first: bool = True) -> None:
+        self.calls = 0
+        self.fail_first = fail_first
+
+    def complete(self, prompt: str, *, system: str = "", workdir: object = None) -> str:
+        self.calls += 1
+        if self.fail_first and self.calls == 1:
+            raise RuntimeError("model completion failed on the wire 3 time(s): dsh: TRANSPORT: boom")
+        return "the second answer"
+
+
+def _two_node_graph():
+    from refactory_dsh.nn import Graph, Node
+
+    graph = Graph()
+    graph.add(Node("first", "op", call="loop_ops:write_number",
+                   knobs=("step",), writes=("number.json",), produces=("value",)))
+    graph.add(Node("second", "agent", prompt_template="say something",
+                   reads=("number.json",), writes=("answer.txt",), produces=("answer",)))
+    graph.connect("first", "second")
+    return graph
+
+
+def test_a_failed_run_records_where_it_stopped(tmp_path):
+    from refactory_dsh.nn.executor import PROGRESS, execute
+
+    result = execute(_two_node_graph(), tmp_path / "run", knobs={"step": 3},
+                     model=_Flaky(), max_steps=10)
+    assert result.exit_ok is False
+    record = json.loads((tmp_path / "run" / PROGRESS).read_text())
+    assert record["node"] == "second", "the failing node is what a resume needs"
+    assert record["error"].startswith("second:")
+    assert record["facts"]["value"] == 3, "the first node's facts must survive the failure"
+    assert record["knobs"] == {"step": 3}
+    assert (tmp_path / "run" / "number.json").exists()
+
+
+def test_a_resumed_run_continues_instead_of_starting_over(tmp_path):
+    from refactory_dsh.nn.mode import Mode
+
+    class Two(Mode):
+        name = "two"
+
+        @classmethod
+        def declare(cls):
+            from refactory_dsh.nn import Knob
+
+            return {"step": Knob(2, "int", lo=1, hi=4, description="a counter")}
+
+        def build(self):
+            return _two_node_graph()
+
+    workdir = tmp_path / "run"
+    first = Two().run(workdir, model=_Flaky(), max_steps=10)
+    assert first.exit_ok is False
+
+    # The op node's artifact is written once and must not be rewritten by the resume.
+    before = (workdir / "number.json").read_text()
+    assert '"value": 2' in before
+    (workdir / "number.json").write_text(before.replace('"value": 2', '"value": 99'))
+
+    resumed = Two.resume(workdir, model=_Flaky(fail_first=False))
+    assert resumed.exit_ok, resumed.error
+    assert (workdir / "answer.txt").read_text() == "the second answer"
+    assert json.loads((workdir / "number.json").read_text())["value"] == 99, (
+        "the resumed run re-ran the node that had already succeeded"
+    )
+    assert resumed.facts.get("answer") == "the second answer"
+
+
+def test_resuming_a_directory_with_no_record_is_refused(tmp_path):
+    from refactory_dsh.nn.mode import Mode
+
+    class Two(Mode):
+        name = "two"
+
+        @classmethod
+        def declare(cls):
+            return {}
+
+        def build(self):
+            return _two_node_graph()
+
+    with pytest.raises(ValueError, match="no run to resume"):
+        Two.resume(tmp_path / "nothing-here")

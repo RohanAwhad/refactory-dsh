@@ -752,6 +752,12 @@ def _parser() -> argparse.ArgumentParser:
     make.add_argument("--task", default=None, metavar="TASK_REF", dest="task_ref",
                       help="a Task class the produced mode must satisfy")
     make.add_argument("--workdir", default="", help="the run directory (default: .factory/create/<name>)")
+    make.add_argument("--resume", default="", metavar="RUN_DIR", help="continue a failed run from its directory")
+    make.add_argument(
+        "--sample", action="append", default=[], metavar="NAME=VALUE",
+        help="a knob value the validation run should use (repeatable), so the smoke "
+             "exercises the input path rather than the built-in fixture",
+    )
     make.add_argument(
         "--input", action="append", default=[], metavar="NAME",
         help="an input the produced mode must accept, named the way a knob or a file "
@@ -770,6 +776,11 @@ def _parser() -> argparse.ArgumentParser:
     revise.add_argument("--allow-regression", action="store_true")
     revise.add_argument("--attempts", type=int, default=3)
     revise.add_argument("--workdir", default="", help="the run directory (default: .factory/edit/<name>)")
+    revise.add_argument("--resume", default="", metavar="RUN_DIR", help="continue a failed run from its directory")
+    revise.add_argument(
+        "--sample", action="append", default=[], metavar="NAME=VALUE",
+        help="a knob value the validation run should use (repeatable)",
+    )
     revise.add_argument(
         "--verdict", action="append", default=[], metavar="GATE=VALUE",
         help="answer a gate a person owns, as <gate>=<value> (repeatable)",
@@ -781,6 +792,7 @@ def _parser() -> argparse.ArgumentParser:
     artifact.add_argument("--check", default="", help="the command that proves the artifact works")
     artifact.add_argument("--attempts", type=int, default=3)
     artifact.add_argument("--workdir", default="", help="the run directory (default: .factory/design/<name>)")
+    artifact.add_argument("--resume", default="", metavar="RUN_DIR", help="continue a failed run from its directory")
     artifact.add_argument(
         "--verdict", action="append", default=[], metavar="GATE=VALUE",
         help="answer a gate a person owns, as <gate>=<value> (repeatable)",
@@ -959,6 +971,10 @@ def main(argv: list[str] | None = None) -> int:
             forwarded = ["--name", args.name, "--brief", args.brief, "--attempts", str(args.attempts)]
             if args.workdir:
                 forwarded += ["--workdir", args.workdir]
+            if args.resume:
+                forwarded += ["--resume", args.resume]
+            for pair in args.sample:
+                forwarded += ["--sample", pair]
             for name in args.input:
                 forwarded += ["--input", name]
             if args.extends:
@@ -981,6 +997,10 @@ def main(argv: list[str] | None = None) -> int:
             ]
             if args.workdir:
                 forwarded += ["--workdir", args.workdir]
+            if args.resume:
+                forwarded += ["--resume", args.resume]
+            for pair in args.sample:
+                forwarded += ["--sample", pair]
             if args.allow_regression:
                 forwarded.append("--allow-regression")
             for pair in args.verdict:
@@ -990,6 +1010,8 @@ def main(argv: list[str] | None = None) -> int:
             forwarded = ["--name", args.name, "--brief", args.brief, "--attempts", str(args.attempts)]
             if args.workdir:
                 forwarded += ["--workdir", args.workdir]
+            if args.resume:
+                forwarded += ["--resume", args.resume]
             if args.check:
                 forwarded += ["--check", args.check]
             for pair in args.verdict:

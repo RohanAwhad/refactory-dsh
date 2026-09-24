@@ -120,6 +120,8 @@ interface Args {
   allowRegression?: boolean
   approve?: string[]
   inputs?: string[]
+  resume?: string
+  sample?: string[]
   provider?: string
   model?: string
   attempts?: number
@@ -225,7 +227,8 @@ export function invocationFor(args: Args): {
         options: {
           name: args.name, brief: args.brief, extends: args.extends, attempts: args.attempts,
           'data-node': args.dataNode, task: args.task, verdict: args.approve,
-          input: args.inputs, provider: args.provider, model: args.model,
+          input: args.inputs, provider: args.provider, model: args.model, resume: args.resume,
+          sample: args.sample,
         },
       }
     }
@@ -239,7 +242,8 @@ export function invocationFor(args: Args): {
         options: {
           mode: args.mode, name: args.name, brief: args.brief,
           'allow-regression': args.allowRegression, attempts: args.attempts,
-          verdict: args.approve, provider: args.provider, model: args.model,
+          verdict: args.approve, provider: args.provider, model: args.model, resume: args.resume,
+          sample: args.sample,
         },
       }
     }
@@ -252,7 +256,8 @@ export function invocationFor(args: Args): {
         positional: [],
         options: {
           name: args.name, brief: args.brief, check: args.check, attempts: args.attempts,
-          verdict: args.approve, provider: args.provider, model: args.model,
+          verdict: args.approve, provider: args.provider, model: args.model, resume: args.resume,
+          sample: args.sample,
         },
       }
     }
@@ -551,6 +556,12 @@ export function apply(ctx: Context, config: Config): void {
       attempts: { type: 'integer', description: 'For "create"/"edit"/"design": how many times the model may retry before the run fails.' },
       dataNode: { type: 'boolean', description: 'For action "create": build the mode as a DataNode that runs its subgraph once per item (a dataset mode). The run is refused if the produced mode does not declare one.' },
       task: { type: 'string', description: 'For action "create": a Task class (module:Class or a registered name) the produced mode must satisfy — it supplies the per-item prompts and judges each pass. The run is refused if the produced mode is not bound to it.' },
+      sample: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'For "create"/"edit"/"design": knob values the validation run should use, as "NAME=VALUE" (repeatable). Give the input the brief is about so the smoke exercises that path instead of the built-in fixture; the run is also refused when the artifact it produces is not the format it claims (a .whl without METADATA and WHEEL beside its RECORD, an unreadable .zip).',
+      },
+      resume: { type: 'string', description: 'For "create"/"edit"/"design": a run directory to continue instead of starting a new run. Every node that already finished is kept, and the run continues at the one that failed — use it after a transport failure or a killed call rather than paying for the finished work again.' },
       inputs: {
         type: 'array',
         items: { type: 'string' },

@@ -753,6 +753,84 @@ def register(ctx: Any) -> dict[str, Any]:
     return {"registered": ", ".join(described.payload["ids"])}
 
 
+#: A wheel's mandatory members, beside `RECORD`, for it to be a wheel at all.
+WHEEL_REQUIRED = ("METADATA", "WHEEL")
+
+#: How deep to look for the artifacts a run produced.
+ARTIFACT_DEPTH = 6
+
+
+def artifact_problems(root: Path) -> list[str]:
+    """What is wrong with the archives a run produced, judged by their own format.
+
+    No domain knowledge and no declaration needed: a file that says it is a wheel has
+    to *be* one. This is what the other half of #69 needed — the revision's new input
+    path emitted a `.dist-info` holding only `RECORD`, which is not a wheel, and the
+    default fixture path emitted all three, so nothing noticed.
+
+    A `.whl` or `.zip` that cannot be opened is a problem; a wheel missing `METADATA`
+    or `WHEEL` beside its `RECORD` is a problem. Both name the file so the emit step
+    can act on them.
+    """
+    import zipfile
+
+    problems: list[str] = []
+    if not Path(root).is_dir():
+        return problems
+    for path in sorted(Path(root).rglob("*")):
+        if path.suffix.lower() not in (".whl", ".zip") or not path.is_file():
+            continue
+        if len(path.relative_to(root).parts) > ARTIFACT_DEPTH:
+            continue
+        try:
+            with zipfile.ZipFile(path) as archive:
+                names = archive.namelist()
+        except (zipfile.BadZipFile, OSError) as exc:
+            problems.append(f"{path.relative_to(root)} is not a readable archive: {exc}")
+            continue
+        if path.suffix.lower() != ".whl":
+            continue
+        for required in WHEEL_REQUIRED:
+            if not any(
+                name.endswith(f".dist-info/{required}") for name in names
+            ):
+                problems.append(
+                    f"{path.relative_to(root)} is not a valid wheel: it has no "
+                    f"{required} beside its RECORD. A wheel needs the metadata that "
+                    "names the distribution and the version of the wheel format."
+                )
+    return problems
+
+
+def _sample_knobs(raw: Any) -> dict[str, str]:
+    """The knob values a validation run should use, as `NAME=VALUE` pairs.
+
+    A person states them when the brief's inputs are real: without them the smoke runs
+    the default path, and the path the brief asked for goes untested. The value travels
+    as a JSON array of strings in a knob (so a path containing `=`, a comma or a space
+    survives), or as a list when a caller passes it directly.
+    """
+    items: Any = raw
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            items = []
+        else:
+            try:
+                items = json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"the sample knobs are not a JSON array of NAME=VALUE strings: {exc}"
+                ) from exc
+    pairs: dict[str, str] = {}
+    for item in list(items or []):
+        name, separator, value = str(item).partition("=")
+        if not separator or not name.strip() or not value.strip():
+            raise ValueError(f"--sample takes NAME=VALUE, not {item!r}")
+        pairs[name.strip()] = value.strip()
+    return pairs
+
+
 def smoke(ctx: Any) -> dict[str, Any]:
     """Run the new mode once, and compare a revision with what it revises.
 
@@ -773,9 +851,15 @@ def smoke(ctx: Any) -> dict[str, Any]:
     if not described.ok:
         raise ValueError(f"the package could not be read: {described.problem()}")
     identifier = described.payload["ids"][0]
-    result = sandbox.smoke(identifier, workdir, project=project_for_nodes())
+    # A sample is how the brief's inputs are exercised at all: without one the smoke
+    # runs the default knobs, which for an input-taking mode is the built-in fixture.
+    samples = _sample_knobs(ctx.knob("sample_knobs", ""))
+    result = sandbox.smoke(
+        identifier, workdir, project=project_for_nodes(), knobs=samples or None,
+    )
     if not result.ok:
-        raise ValueError(f"the new mode did not finish a run: {result.problem()}")
+        with_samples = f" (with {samples})" if samples else ""
+        raise ValueError(f"the new mode did not finish a run{with_samples}: {result.problem()}")
     # A mode with an agent node cannot be scored here: the smoke runs keyless on
     # purpose, so the agent node has no model and the mode's own score() never sees a
     # real run. Recording that as 0.0 would say "this scored zero" when the truth is
@@ -788,6 +872,7 @@ def smoke(ctx: Any) -> dict[str, Any]:
         # does, so the sandbox needs no credential of its own.
         scored = sandbox.smoke(
             identifier, workdir, project=project_for_nodes(), model=True,
+            knobs=samples or None,
         )
         if scored.ok:
             score = float(scored.payload.get("score") or 0.0)
@@ -845,6 +930,7 @@ def smoke(ctx: Any) -> dict[str, Any]:
             **revised,
         }
     score = float(result.payload.get("score") or 0.0)
+    _check_artifacts(workdir, samples)
     ctx.write_json(
         "smoke.json",
         {
@@ -852,6 +938,7 @@ def smoke(ctx: Any) -> dict[str, Any]:
             "score": score,
             "iterations": result.payload.get("iterations"),
             "sandboxed": True,
+            **({"sample_knobs": samples} if samples else {}),
         },
     )
     return {"smoke_score": score, "smoke_ok": True, **_revision(ctx, revision, score)}
@@ -938,6 +1025,23 @@ def _revision(
             reason or f"compared with {revision}: {before} → {after}"
         ),
     }
+
+
+def _check_artifacts(workdir: Path, samples: dict[str, str]) -> None:
+    """Refuse a run whose archives are not the format they claim to be.
+
+    The score is not enough: a mode can score above zero while emitting a file that is
+    not a wheel. A sample run is the one that produces a real artifact, so this is
+    where the check belongs.
+    """
+    problems = artifact_problems(workdir)
+    if not problems:
+        return
+    with_samples = f" (run with {samples})" if samples else ""
+    detail = "\n".join(f"- {problem}" for problem in problems)
+    raise ValueError(
+        f"the run produced an artifact that is not what it claims to be{with_samples}:\n{detail}"
+    )
 
 
 def _could_not_reach_a_model(result: Any) -> bool:

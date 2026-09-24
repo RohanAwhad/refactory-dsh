@@ -768,3 +768,76 @@ def test_the_design_and_emit_prompts_are_told_what_the_mode_must_take(tmp_path):
     published = create_ops.prepare(ctx)
     assert "takes these as input: `package`" in published["requires_input"]
     assert "hardcodes a fixture" in published["requires_input"]
+
+
+# ── the input path and the artifact are checked (#69) ──────────────────────
+#
+# `validate` and smoke ran the *default* knob path, so a revision whose new input
+# path emitted a `.dist-info` holding only `RECORD` — not a wheel — scored 1.0 on the
+# built-in fixture and was accepted. Nothing supplied the input the brief asked for,
+# and nothing looked at what came out.
+
+
+def test_a_wheel_that_is_not_a_wheel_is_refused(tmp_path):
+    """A file that says it is a wheel has to be one: METADATA and WHEEL beside RECORD."""
+    import zipfile
+
+    root = tmp_path / "smoke"
+    (root / "out").mkdir(parents=True)
+    good = root / "out" / "good-1.0-py3-none-any.whl"
+    with zipfile.ZipFile(good, "w") as archive:
+        archive.writestr("good/__init__.py", "")
+        for member in ("RECORD", "METADATA", "WHEEL"):
+            archive.writestr(f"good-1.0.dist-info/{member}", "")
+    assert create_ops.artifact_problems(root) == []
+
+    bad = root / "out" / "bad-1.0-py3-none-any.whl"
+    with zipfile.ZipFile(bad, "w") as archive:
+        archive.writestr("bad/__init__.py", "")
+        archive.writestr("bad-1.0.dist-info/RECORD", "")
+    problems = create_ops.artifact_problems(root)
+    assert len(problems) == 2, problems
+    assert all("bad-1.0-py3-none-any.whl" in problem for problem in problems)
+    assert any("METADATA" in problem for problem in problems)
+    assert any("WHEEL" in problem for problem in problems)
+
+
+def test_a_file_that_is_not_an_archive_at_all_is_refused(tmp_path):
+    root = tmp_path / "smoke"
+    root.mkdir()
+    (root / "broken.whl").write_bytes(b"this is not a zip")
+    problems = create_ops.artifact_problems(root)
+    assert len(problems) == 1 and "not a readable archive" in problems[0]
+
+
+def test_the_smoke_runs_the_knobs_a_sample_names(tmp_path, monkeypatch):
+    """A sample is how the brief's inputs are exercised at all (#69)."""
+    from refactory_dsh import sandbox as sandbox_module
+    from refactory_dsh.nn import RunContext
+
+    seen: dict[str, object] = {}
+
+    def fake_smoke(identifier, workdir, *, project=None, model=False, knobs=None, **kwargs):
+        seen["knobs"] = knobs
+        return sandbox_module.SandboxResult(ok=True, payload={"score": 0.5, "iterations": 3})
+
+    monkeypatch.setattr(sandbox_module, "smoke", fake_smoke)
+    monkeypatch.setattr(sandbox_module, "describe_package", lambda name, **kwargs: (
+        sandbox_module.SandboxResult(ok=True, payload={"ids": [f"{name}/counter"]})
+    ))
+    monkeypatch.setattr("refactory_dsh.create_ops._agent_nodes", lambda name: [])
+
+    workdir = tmp_path / "smoke"
+    workdir.mkdir()
+    ctx = RunContext(workdir, knobs={}, facts={"name": NAME}, task={})
+    ctx.knobs["sample_knobs"] = json.dumps(["target=7"])
+    ctx._declared = ("smoke.json",)
+    ctx._declared_facts = ("smoke_score", "smoke_ok")
+    produced = create_ops.smoke(ctx)
+    assert produced["smoke_score"] == 0.5
+    assert seen["knobs"] == {"target": "7"}, "the smoke ran the default path instead"
+
+
+def test_a_sample_must_be_name_value():
+    with pytest.raises(ValueError, match="--sample takes NAME=VALUE"):
+        create_ops._sample_knobs(["target"])

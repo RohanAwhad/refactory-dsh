@@ -106,6 +106,13 @@ cannot do: `start` is the optimizer.
 It runs the mode once on DSH and reports the run directory, how the run ended and
 what it recorded, so the answer is the run rather than a promise about one.
 
+Two flags on the authoring actions are worth knowing. `sample` supplies a real input —
+`sample: ["package=/tmp/demo_pkg"]` — so the smoke runs the path the brief asked for
+rather than the built-in fixture, and a revision that only works on the fixture is
+refused. And `resume` continues a run that died: `resume: ".factory/edit/p"` picks up at
+the node that failed, keeping every node that finished, which is what makes a transport
+blip cost one node instead of the whole run.
+
 Managing packages is the registry's own verbs, passed through:
 
 > Use the refactory tool with action `registry`, packages `disable`, target `annealing_pack`.

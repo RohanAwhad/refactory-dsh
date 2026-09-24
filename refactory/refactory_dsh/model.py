@@ -36,10 +36,68 @@ NODE_PATCH = Path(__file__).resolve().parent / "patches" / "agent-node.yml"
 DEFAULT_TIMEOUT_S = 1800
 
 
+#: How many times one completion may be attempted before it is called failed.
+#:
+#: A transient transport failure is not the node's fault: it is the network, the
+#: provider, or a rate limit. One blip used to discard an entire authoring run — the
+#: issue that added this retried nothing and lost thirty-five minutes of finished
+#: work — so the client retries, and only a client that keeps failing fails the node.
+DEFAULT_ATTEMPTS = 3
+
+#: What the child says when the failure was on the wire rather than in the model.
+#:
+#: `dsh` wraps provider transport errors with `TRANSPORT:`, and the socket-level
+#: spellings below are what the same failure looks like when it happens lower down.
+#: Deliberately narrow: a run is retried for a *transport* failure, and anything a
+#: model or a key or a prompt caused comes back unchanged, because retrying those
+#: wastes the next three attempts and hides the real error.
+TRANSPORT_MARKERS = (
+    "transport:",
+    "econnreset",
+    "econnrefused",
+    "etimedout",
+    "enotfound",
+    "eai_again",
+    "socket hang up",
+    "fetch failed",
+    "network error",
+    "connection reset",
+    "rate limit",
+    "429",
+    "500 internal",
+    "502 bad gateway",
+    "503 service unavailable",
+    "504 gateway",
+)
+
+
+def is_transport_failure(text: str) -> bool:
+    """Whether a failed completion was a transport failure rather than a bad answer."""
+    lowered = (text or "").lower()
+    return any(marker in lowered for marker in TRANSPORT_MARKERS)
+
+
+def failure_cause(stderr: str) -> str:
+    """The line that says *why* a completion failed, not the model's last paragraph.
+
+    The child's stderr is mostly the model's own reasoning, and the cause is the last
+    line `dsh` writes. Reporting the tail of the prose made a transport failure read
+    like a code-review defect ("Confirmed non-blocking (design fault). Let me write
+    the review now."), which sends a reader looking in the wrong place.
+    """
+    lines = [line.strip() for line in (stderr or "").splitlines() if line.strip()]
+    for line in reversed(lines):
+        if line.startswith("dsh:") or is_transport_failure(line):
+            return line
+    return lines[-1] if lines else ""
+
+
 class DshModelClient:
     """One-shot completions through ``dsh --profile headless``.
 
-    Implements ``factory.outer_loop.optimizers.ModelClient``.
+    Implements ``factory.outer_loop.optimizers.ModelClient``. A completion that fails
+    on the wire is retried, bounded, with a backoff; one that fails for any other
+    reason is raised straight away with the cause named.
     """
 
     def __init__(
@@ -47,10 +105,14 @@ class DshModelClient:
         timeout_s: int = DEFAULT_TIMEOUT_S,
         model: str = "",
         provider: str = "",
+        attempts: int = DEFAULT_ATTEMPTS,
+        backoff_s: float = 1.0,
     ) -> None:
         self._timeout_s = timeout_s
         self._model = model
         self._provider = provider
+        self._attempts = max(1, int(attempts))
+        self._backoff_s = max(0.0, float(backoff_s))
 
     def complete(
         self, prompt: str, *, system: str = "", workdir: Path | None = None
@@ -102,18 +164,35 @@ class DshModelClient:
         scratch = Path(os.environ.get("REFACTORY_MODEL_SCRATCH", "/tmp")) / "refactory-model"
         run_dir = Path(workdir).expanduser().resolve() if workdir is not None else scratch
         run_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                cwd=str(run_dir),
-                timeout=self._timeout_s,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(f"model completion timed out after {self._timeout_s}s") from exc
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"model completion failed (exit {proc.returncode}): {proc.stderr[-500:]}"
-            )
-        return proc.stdout
+
+        last = ""
+        for attempt in range(1, self._attempts + 1):
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    cwd=str(run_dir),
+                    timeout=self._timeout_s,
+                )
+            except subprocess.TimeoutExpired:
+                last = f"the completion timed out after {self._timeout_s}s"
+            else:
+                if proc.returncode == 0:
+                    return proc.stdout
+                cause = failure_cause(proc.stderr)
+                if not is_transport_failure(proc.stderr):
+                    # The model answered wrongly, the key is dead, the prompt is
+                    # rejected: retrying spends two more completions on the same
+                    # answer. Fail now and keep the diagnosis accurate.
+                    raise RuntimeError(
+                        f"model completion failed (exit {proc.returncode}): {cause}"
+                    )
+                last = cause or f"exit {proc.returncode}"
+            if attempt < self._attempts:
+                import time as _time
+
+                _time.sleep(self._backoff_s * (2 ** (attempt - 1)))
+        raise RuntimeError(
+            f"model completion failed on the wire {self._attempts} time(s); last cause: {last}"
+        )
