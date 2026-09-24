@@ -23,7 +23,7 @@ import { createRefactoryStore } from './store.ts'
 export type { SidebarRefactoryKey } from './locales.ts'
 export type {
   Loadable, RefactoryChoices, RefactoryNotice, RefactorySettingName, RefactorySettings,
-  RefactoryState, RefactoryTabState,
+  RefactorySingleState, RefactoryState, RefactoryTabState,
 } from './store.ts'
 export type { RefactoryInjected, RefactoryRemote } from './face.ts'
 export type { RefactoryBodyProps } from './RefactoryBody.tsx'

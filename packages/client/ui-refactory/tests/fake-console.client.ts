@@ -14,6 +14,7 @@ import type {
   RefactoryModeChoice,
   RefactoryPackageChoice,
   RefactoryRunStatus,
+  RefactorySingleRun,
   RefactoryStartReceipt,
   RefactoryStrategies,
 } from '@deepseek-ai/dsh-api-remotes/client'
@@ -21,6 +22,25 @@ import type { RefactoryRemote } from '../src/client/face.ts'
 
 /** The three registries with nothing in them. */
 export const NO_STRATEGIES: RefactoryStrategies = { outer_loops: [], optimizers: [], evaluators: [] }
+
+/** The knobs one catalogue entry declares: one of every kind a panel draws. */
+export const PARAMETERS: RefactoryModeChoice['parameters'] = {
+  rounds: {
+    value: '3', kind: 'int', values: [], range: [1, 10], frozen: false, description: 'how many rounds',
+  },
+  temperature: {
+    value: '0.5', kind: 'float', values: [], range: [null, null], frozen: false, description: '',
+  },
+  source_root: {
+    value: '/tmp/src', kind: 'str', values: [], range: [null, null], frozen: true, description: 'the tree to patch',
+  },
+  preset: {
+    value: 'broad', kind: 'str', values: ['broad', 'narrow'], range: [null, null], frozen: false, description: 'the search preset',
+  },
+  verbose: {
+    value: 'false', kind: 'bool', values: [], range: [null, null], frozen: false, description: 'say more',
+  },
+}
 
 /** One scored mode, as the catalogue describes it. */
 export const MODE: RefactoryModeChoice = {
@@ -33,6 +53,7 @@ export const MODE: RefactoryModeChoice = {
   scored: true,
   action: 'start',
   trust: 'trusted',
+  parameters: PARAMETERS,
 }
 
 /** One authoring mode, whose `action` is the verb that runs it. */
@@ -95,6 +116,34 @@ export const RECEIPT: RefactoryStartReceipt = {
   pid: 7,
 }
 
+/** One mode used once: a search-shaped run with no graph spine. */
+export const SINGLE: RefactorySingleRun = {
+  run_id: 'p-adaptive-20260101-000000',
+  root: '/runs/single',
+  mode: 'p/adaptive',
+  state: 'finished',
+  finished: true,
+  best_score: 0.75,
+  authoring: null,
+  facts: { name: 'demo', validation: 'ok' },
+}
+
+/** One mode used once that stopped at a gate a person owns. */
+export const GATED: RefactorySingleRun = {
+  ...SINGLE,
+  state: 'running',
+  finished: false,
+  best_score: null,
+  authoring: { spine: 'ready', nodes_due: ['approve', 'overwatch'], error: '' },
+}
+
+/** One mode used once whose graph finished, with nothing recorded to show. */
+export const COMPLETED: RefactorySingleRun = {
+  ...SINGLE,
+  authoring: { spine: 'done', nodes_due: [], error: '' },
+  facts: {},
+}
+
 /** A landed Remote call. */
 export function ok<T>(value: T): RemoteResult<T> {
   return { ok: true, value }
@@ -112,6 +161,7 @@ export interface FakeConsole {
   readonly strategies: Mock
   readonly packages: Mock
   readonly start: Mock
+  readonly run: Mock
   readonly status: Mock
   readonly stop: Mock
   readonly setPackageEnabled: Mock
@@ -129,6 +179,7 @@ export function fakeConsole(): FakeConsole {
     strategies: vi.fn(async () => ok(NO_STRATEGIES)),
     packages: vi.fn(async () => ok<readonly RefactoryPackageChoice[]>([])),
     start: vi.fn(async () => ok(RECEIPT)),
+    run: vi.fn(async () => ok(SINGLE)),
     status: vi.fn(async () => ok(FRAME)),
     stop: vi.fn(async () => ok({ stopped: true })),
     setPackageEnabled: vi.fn(async () => ok<readonly RefactoryPackageChoice[]>([])),

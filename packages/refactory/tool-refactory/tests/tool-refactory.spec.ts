@@ -485,6 +485,18 @@ describe('Console', () => {
     await expect(console.run({ verb: 'modes' })).resolves.toMatchObject({ ok: false, error: 'broken pipe' })
   })
 
+  it('keeps the payload a failed call printed, which is where a stopped run reports itself', async () => {
+    // `console run` writes where the run stopped beside the reason it exited
+    // nonzero, so a caller reading that status cannot be handed only the reason.
+    const printed = { ok: false, exit_code: 1, error: 'the graph did not finish', run: { state: 'running' } }
+    const { console } = await consoleOver(runResult(JSON.stringify(printed), 2))
+    await expect(console.run({ verb: 'run', positional: ['p/adaptive'] })).resolves.toMatchObject({
+      ok: false,
+      error: 'the graph did not finish',
+      value: printed,
+    })
+  })
+
   it('names the signal when a killed console has no exit code', async () => {
     const killed: Scripted = {
       stdout: { text: '' }, stderr: { text: '' }, outcome: { exitCode: null, signal: 'SIGTERM' },

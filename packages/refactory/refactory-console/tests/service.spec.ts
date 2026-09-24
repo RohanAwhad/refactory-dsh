@@ -119,6 +119,29 @@ function mode(overrides: Record<string, unknown> = {}): Record<string, unknown> 
   }
 }
 
+/** The knob declarations one catalogue entry carries, as the wire writes them. */
+const PARAMETERS = {
+  rounds: { value: 3, kind: 'int', values: [], range: [1, 10], frozen: false, description: 'how many rounds' },
+  temperature: { value: 0.5, kind: 'float', values: [], range: [null, null], frozen: false, description: '' },
+  source_root: { value: '/tmp/src', kind: 'str', values: [], range: [null, null], frozen: true, description: 'the tree to patch' },
+  preset: { value: 'broad', kind: 'str', values: ['broad', 'narrow'], range: [null, null], frozen: false, description: '' },
+  target: { value: 7, kind: 'enum', values: [7, 8], range: [null, null], frozen: false, description: 'which target' },
+  verbose: { value: false, kind: 'bool', values: [], range: [null, null], frozen: false, description: '' },
+  // A declaration that states neither a set nor bounds: the wire omits both.
+  bare: { value: 'x', kind: 'str', frozen: false, description: '' },
+}
+
+/** Those declarations as the picker reads them: every value as its text. */
+const READ_PARAMETERS = {
+  rounds: { value: '3', kind: 'int', values: [], range: [1, 10], frozen: false, description: 'how many rounds' },
+  temperature: { value: '0.5', kind: 'float', values: [], range: [null, null], frozen: false, description: '' },
+  source_root: { value: '/tmp/src', kind: 'str', values: [], range: [null, null], frozen: true, description: 'the tree to patch' },
+  preset: { value: 'broad', kind: 'str', values: ['broad', 'narrow'], range: [null, null], frozen: false, description: '' },
+  target: { value: '7', kind: 'enum', values: ['7', '8'], range: [null, null], frozen: false, description: 'which target' },
+  verbose: { value: 'false', kind: 'bool', values: [], range: [null, null], frozen: false, description: '' },
+  bare: { value: 'x', kind: 'str', values: [], range: [null, null], frozen: false, description: '' },
+}
+
 /** One run as the console's `runs` verb lists it. */
 const RUN = { run_id: 'live', root: '/repo/.factory/loop/live', mode: 'p/adaptive', best_score: 1.5, finished: true }
 
@@ -149,9 +172,13 @@ async function failureOf(operation: Promise<unknown>): Promise<{ code: string; d
 }
 
 describe('refactoryConsole — the described choices', () => {
-  it('maps the mode catalogue to the choices the picker offers', async () => {
+  it('maps the mode catalogue to the choices the picker offers, knobs included', async () => {
     const { service, subprocess } = await setup()
-    subprocess.answer([mode(), mode({ id: 'p/gone', reason: 'no module named gone' })])
+    subprocess.answer([
+      mode({ parameters: PARAMETERS }),
+      // A mode whose package fails to import names no trust and declares nothing.
+      mode({ id: 'p/gone', reason: 'no module named gone', trust: undefined }),
+    ])
     expect(await service.modes(signal())).toEqual([
       {
         id: 'default_pack/create',
@@ -163,6 +190,7 @@ describe('refactoryConsole — the described choices', () => {
         scored: false,
         action: 'create',
         trust: 'trusted',
+        parameters: READ_PARAMETERS,
       },
       {
         id: 'p/gone',
@@ -173,11 +201,19 @@ describe('refactoryConsole — the described choices', () => {
         enabled: true,
         scored: false,
         action: 'create',
-        trust: 'trusted',
+        parameters: {},
         reason: 'no module named gone',
       },
     ])
     expect(subprocess.lastArgv).toEqual(['/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'modes'])
+  })
+
+  it('refuses a knob kind this picker cannot draw instead of rendering a wrong control', async () => {
+    const { service, subprocess } = await setup()
+    subprocess.answer([mode({ parameters: { matrix: { value: 'x', kind: 'tensor', values: [], range: [] } } })])
+    await expect(service.modes(signal())).rejects.toThrow('declares kind "tensor"')
+    subprocess.answer([mode({ parameters: { rounds: 'not an object' } })])
+    await expect(service.modes(signal())).rejects.toThrow('knob "rounds" is not an object')
   })
 
   it('maps the three level-two registries', async () => {
@@ -240,14 +276,20 @@ describe('refactoryConsole — the described choices', () => {
 })
 
 describe('refactoryConsole — starting a described mode', () => {
-  it('starts a mode whose action is start, passing the chosen settings through', async () => {
+  it('starts a mode whose action is start, passing the chosen settings and knobs through', async () => {
     const { service, subprocess } = await setup()
     subprocess.script = [
       { stdout: JSON.stringify([mode({ id: 'p/adaptive', mode: 'adaptive', scored: true, action: 'start' })]) },
       { stdout: JSON.stringify({ run_id: 'live', mode: 'p/adaptive', root: '/runs/live', started: 1.5, config: { epochs: '1' }, log: 'live.log', pid: 7 }) },
     ]
     await expect(service.start(
-      { mode: 'p/adaptive', runId: 'live', runsRoot: '/runs', settings: { optimizer: 'random', epochs: 1 } },
+      {
+        mode: 'p/adaptive',
+        runId: 'live',
+        runsRoot: '/runs',
+        settings: { optimizer: 'random', epochs: 1 },
+        knobs: ['source_root=/tmp/pkg', 'rounds=2'],
+      },
       signal(),
     )).resolves.toEqual({
       run_id: 'live',
@@ -260,7 +302,8 @@ describe('refactoryConsole — starting a described mode', () => {
     })
     expect(subprocess.lastArgv).toEqual([
       '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'start',
-      '--run-id', 'live', '--runs-root', '/runs', '--optimizer', 'random', '--epochs', '1', 'p/adaptive',
+      '--run-id', 'live', '--runs-root', '/runs', '--knob', 'source_root=/tmp/pkg', '--knob', 'rounds=2',
+      '--optimizer', 'random', '--epochs', '1', 'p/adaptive',
     ])
   })
 
@@ -302,51 +345,230 @@ describe('refactoryConsole — starting a described mode', () => {
   })
 })
 
-describe('refactoryConsole — reading a run', () => {
-  it('maps a status frame, keeping only the event fields a reader reads', async () => {
+/** One mode used once, as the console's `run` payload reports it. */
+const SINGLE = {
+  run_id: 'p-adaptive-20260101-000000',
+  root: '/repo/.factory/interactive/p-adaptive',
+  mode: 'p/adaptive',
+  state: 'finished',
+  events: [],
+  cursor: 0,
+  counters: { epoch: 0, generation: 0, evaluations: 0, steps: 0 },
+  best_score: 0.75,
+  finished: true,
+  running: false,
+  authoring: {
+    spine: 'done', completed: ['prepare'], nodes_due: [], error: null,
+    name: 'demo', validation: '(no validation has run yet)', package_path: '/packages/demo', files: ['mode.py'],
+  },
+  facts: { name: 'demo', validation: 'ok', files: ['mode.py'], empty: '', nothing: null, count: 2, nested: { a: 1 } },
+}
+
+/** The console's `run` payload: a forwarded interactive result with the run beside it. */
+function singleRun(run: unknown, overrides: Record<string, unknown> = {}): string {
+  return JSON.stringify({ verb: 'interactive', exit_code: 0, ok: true, result: {}, stderr: '', run, ...overrides })
+}
+
+describe('refactoryConsole — using one mode once', () => {
+  const ADAPTIVE = mode({ id: 'p/adaptive', mode: 'adaptive', scored: true, action: 'start' })
+
+  it('uses the mode with the knobs it was given, and reports where the run got to', async () => {
     const { service, subprocess } = await setup()
-    subprocess.answer(FRAME)
-    expect(await service.status('/runs/live', 3, signal())).toEqual({
-      run_id: 'live',
-      root: '/repo/.factory/loop/live',
+    subprocess.script = [
+      { stdout: JSON.stringify([ADAPTIVE]) },
+      { stdout: singleRun(SINGLE) },
+    ]
+    await expect(service.run(
+      { mode: 'p/adaptive', knobs: ['source_root=/tmp/pkg', 'rounds=2'] },
+      signal(),
+    )).resolves.toEqual({
+      run_id: 'p-adaptive-20260101-000000',
+      root: '/repo/.factory/interactive/p-adaptive',
       mode: 'p/adaptive',
-      state: 'running',
-      events: [{ epoch: 0, generation: 1, evaluations: 3, score: 1.25 }],
-      cursor: 4,
-      counters: { epoch: 0, generation: 1, evaluations: 3, steps: 1 },
-      best_score: 1.25,
-      finished: false,
-      running: true,
+      state: 'finished',
+      finished: true,
+      best_score: 0.75,
+      authoring: { spine: 'done', nodes_due: [], error: '' },
+      // A list is carried as the JSON the run wrote; an empty member is no fact.
+      facts: { name: 'demo', validation: 'ok', files: '["mode.py"]', count: '2', nested: '{"a":1}' },
     })
     expect(subprocess.lastArgv).toEqual([
-      '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'status', '--run', '/runs/live', '--after', '3',
+      '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'run',
+      '--knob', 'source_root=/tmp/pkg', '--knob', 'rounds=2', 'p/adaptive',
     ])
   })
 
-  it('reports a run that has not scored as no score rather than zero', async () => {
+  it('reports a run that stopped at a gate a person owns as the run it is, not as a console failure', async () => {
     const { service, subprocess } = await setup()
-    subprocess.answer({ ...FRAME, mode: null, best_score: null, events: [], counters: {}, cursor: 0 })
-    const frame = await service.status('live', 0, signal())
-    expect(frame.best_score).toBeNull()
-    expect(frame.mode).toBeNull()
-    expect(frame.counters).toEqual({ epoch: 0, generation: 0, evaluations: 0, steps: 0 })
+    // The spine stopped with work due, so the forwarded entry point exits nonzero
+    // and the console reports the same failure — with the run's own status beside it.
+    subprocess.script = [
+      { stdout: JSON.stringify([ADAPTIVE]) },
+      {
+        stdout: singleRun(
+          {
+            ...SINGLE,
+            state: 'running',
+            finished: false,
+            best_score: null,
+            authoring: { spine: 'ready', completed: ['prepare'], nodes_due: ['approve', 'overwatch'], error: null },
+          },
+          { exit_code: 1, ok: false, error: 'the graph did not finish: approve, overwatch still due' },
+        ),
+        exitCode: 2,
+      },
+    ]
+    await expect(service.run({ mode: 'p/adaptive' }, signal())).resolves.toMatchObject({
+      state: 'running',
+      finished: false,
+      best_score: null,
+      authoring: { spine: 'ready', nodes_due: ['approve', 'overwatch'], error: '' },
+    })
   })
 
-  it('asks a run to stop and reports whether it went', async () => {
+  it('reports a gate the spine refused, with the reason the spine wrote', async () => {
     const { service, subprocess } = await setup()
-    subprocess.answer({ stopped: true })
-    expect(await service.stop('live', signal())).toEqual({ stopped: true })
-    expect(subprocess.lastArgv).toEqual([
-      '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'stop', '--run', 'live',
-    ])
+    subprocess.script = [
+      { stdout: JSON.stringify([ADAPTIVE]) },
+      {
+        stdout: singleRun(
+          { ...SINGLE, state: 'failed', finished: false, authoring: { spine: 'refused', error: 'gate approve is answered by a person and nobody could be asked' } },
+          { exit_code: 1, ok: false, error: 'the graph did not finish: gate approve' },
+        ),
+        exitCode: 2,
+      },
+    ]
+    await expect(service.run({ mode: 'p/adaptive' }, signal())).resolves.toMatchObject({
+      authoring: { spine: 'refused', error: 'gate approve is answered by a person and nobody could be asked' },
+    })
   })
 
-  it('refuses an empty run address before reading anything', async () => {
+  it('reports a run with no graph spine and no facts without inventing either', async () => {
     const { service, subprocess } = await setup()
-    expect((await failureOf(service.status('', 0, signal()))).code).toBe('gateway/bad-request')
-    expect((await failureOf(service.stop('  ', signal()))).code).toBe('gateway/bad-request')
+    subprocess.script = [
+      { stdout: JSON.stringify([ADAPTIVE]) },
+      { stdout: singleRun({ ...SINGLE, mode: undefined, authoring: undefined, facts: 'not an object' }) },
+    ]
+    await expect(service.run({ mode: 'p/adaptive' }, signal())).resolves.toMatchObject({
+      mode: null,
+      authoring: null,
+      facts: {},
+    })
+  })
+
+  it('fails with the console\'s reason when the run left no run directory', async () => {
+    const { service, subprocess } = await setup()
+    subprocess.script = [
+      { stdout: JSON.stringify([ADAPTIVE]) },
+      { stdout: JSON.stringify({ error: 'the mode graph could not be lowered' }), exitCode: 2 },
+    ]
+    const failure = await failureOf(service.run({ mode: 'p/adaptive' }, signal()))
+    expect(failure.code).toBe('refactory/console-failed')
+    expect(failure.message).toBe('the mode graph could not be lowered')
+    expect(failure.details).toEqual({
+      argv: ['/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'run', 'p/adaptive'],
+    })
+  })
+
+  it('says the console left no run when it succeeded without one', async () => {
+    const { service, subprocess } = await setup()
+    subprocess.script = [
+      { stdout: JSON.stringify([ADAPTIVE]) },
+      { stdout: JSON.stringify({ verb: 'interactive', exit_code: 0, ok: true, result: {} }) },
+    ]
+    expect((await failureOf(service.run({ mode: 'p/adaptive' }, signal()))).message)
+      .toBe('the console left no run directory for "p/adaptive"')
+  })
+
+  it('fails with the console\'s own reason when a failed call printed no JSON at all', async () => {
+    const { service, subprocess } = await setup()
+    subprocess.script = [
+      { stdout: JSON.stringify([ADAPTIVE]) },
+      { stdout: 'refusing\n', stderr: 'refusing\n', exitCode: 2 },
+    ]
+    expect((await failureOf(service.run({ mode: 'p/adaptive' }, signal()))).message).toBe('refusing')
+  })
+
+  it('refuses an authoring mode with the verb that runs it', async () => {
+    const { service, subprocess } = await setup()
+    subprocess.answer([mode()])
+    const failure = await failureOf(service.run({ mode: 'default_pack/create' }, signal()))
+    expect(failure.code).toBe('refactory/authoring-mode')
+    expect(failure.details).toEqual({ mode: 'default_pack/create', action: 'create' })
+    expect(subprocess.spawns).toHaveLength(1)
+  })
+
+  it('refuses to use a mode the caller already cancelled', async () => {
+    const { service, subprocess } = await setup()
+    const controller = new AbortController()
+    controller.abort()
+    expect((await failureOf(service.run({ mode: 'p/adaptive' }, controller.signal))).code).toBe('gateway/cancelled')
     expect(subprocess.spawns).toHaveLength(0)
   })
+})
+
+describe('refactoryConsole — reading a run', () => {  it('maps a status frame, keeping only the event fields a reader reads', async () => {
+  const { service, subprocess } = await setup()
+  subprocess.answer(FRAME)
+  expect(await service.status('/runs/live', 3, signal())).toEqual({
+    run_id: 'live',
+    root: '/repo/.factory/loop/live',
+    mode: 'p/adaptive',
+    state: 'running',
+    events: [{ epoch: 0, generation: 1, evaluations: 3, score: 1.25 }],
+    cursor: 4,
+    counters: { epoch: 0, generation: 1, evaluations: 3, steps: 1 },
+    best_score: 1.25,
+    finished: false,
+    running: true,
+  })
+  expect(subprocess.lastArgv).toEqual([
+    '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'status', '--run', '/runs/live', '--after', '3',
+  ])
+})
+
+it('reports a run that has not scored as no score rather than zero', async () => {
+  const { service, subprocess } = await setup()
+  subprocess.answer({ ...FRAME, mode: null, best_score: null, events: [], counters: {}, cursor: 0 })
+  const frame = await service.status('live', 0, signal())
+  expect(frame.best_score).toBeNull()
+  expect(frame.mode).toBeNull()
+  expect(frame.counters).toEqual({ epoch: 0, generation: 0, evaluations: 0, steps: 0 })
+})
+
+it('keeps only the event fields a reader reads, and states the ones an event omits', async () => {
+  const { service, subprocess } = await setup()
+  // A progress line carries only what its step recorded: a line written before a
+  // score carries none, and that is an absence, not a zero.
+  subprocess.answer({ ...FRAME, events: [{ epoch: 0, evaluations: 2 }, { generation: 1, score: 0.5 }] })
+  const frame = await service.status('live', 0, signal())
+  expect(frame.events).toEqual([{ epoch: 0, evaluations: 2 }, { generation: 1, score: 0.5 }])
+})
+
+it('reports a start whose answer names no settings as having none', async () => {
+  const { service, subprocess } = await setup()
+  subprocess.script = [
+    { stdout: JSON.stringify([mode({ id: 'p/adaptive', mode: 'adaptive', scored: true, action: 'start' })]) },
+    { stdout: JSON.stringify({ run_id: 'live', mode: 'p/adaptive', root: '/runs/live', config: 'none' }) },
+  ]
+  expect(await service.start({ mode: 'p/adaptive' }, signal())).toMatchObject({ config: {} })
+})
+
+it('asks a run to stop and reports whether it went', async () => {
+  const { service, subprocess } = await setup()
+  subprocess.answer({ stopped: true })
+  expect(await service.stop('live', signal())).toEqual({ stopped: true })
+  expect(subprocess.lastArgv).toEqual([
+    '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'stop', '--run', 'live',
+  ])
+})
+
+it('refuses an empty run address before reading anything', async () => {
+  const { service, subprocess } = await setup()
+  expect((await failureOf(service.status('', 0, signal()))).code).toBe('gateway/bad-request')
+  expect((await failureOf(service.stop('  ', signal()))).code).toBe('gateway/bad-request')
+  expect(subprocess.spawns).toHaveLength(0)
+})
 })
 
 describe('refactoryConsole — packages', () => {

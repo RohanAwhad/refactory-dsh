@@ -4,8 +4,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { TabId } from '@deepseek-ai/dsh-client-ui-dockkit'
-import { NO_SETTINGS, createRefactoryStore } from '../src/client/store.ts'
-import { FRAME, MODE, NO_STRATEGIES, PACKAGE } from './fake-console.client.ts'
+import { NO_SETTINGS, createRefactoryStore, knobValues } from '../src/client/store.ts'
+import { FRAME, MODE, NO_STRATEGIES, PACKAGE, SINGLE } from './fake-console.client.ts'
 
 const TAB = 'tab-1' as TabId
 const OTHER = 'tab-2' as TabId
@@ -24,9 +24,11 @@ describe('createRefactoryStore', () => {
     expect(instance.getSnapshot().byTab[TAB]).toEqual({
       choices: { kind: 'loading' },
       chosen: null,
+      knobs: {},
       settings: { ...NO_SETTINGS },
       watching: null,
       frame: null,
+      single: null,
       notice: null,
       busy: false,
     })
@@ -51,9 +53,13 @@ describe('createRefactoryStore', () => {
     const instance = open()
     instance.actions.loaded(TAB, CHOICES)
     instance.actions.chose(TAB, MODE.id)
+    instance.actions.knob(TAB, 'rounds', '7')
+    instance.actions.ran(TAB, SINGLE)
     instance.actions.failed(TAB, 'the console is missing')
     expect(instance.getSnapshot().byTab[TAB]?.choices).toEqual({ kind: 'failed', message: 'the console is missing' })
     expect(instance.getSnapshot().byTab[TAB]?.chosen).toBeNull()
+    expect(instance.getSnapshot().byTab[TAB]?.knobs).toEqual({})
+    expect(instance.getSnapshot().byTab[TAB]?.single).toBeNull()
   })
 
   it('chooses one of the described modes, and can choose nothing again', () => {
@@ -62,6 +68,24 @@ describe('createRefactoryStore', () => {
     expect(instance.getSnapshot().byTab[TAB]?.chosen).toBe(MODE.id)
     instance.actions.chose(TAB, null)
     expect(instance.getSnapshot().byTab[TAB]?.chosen).toBeNull()
+  })
+
+  it('drops the knobs typed for the last mode, and its run, when another is chosen', () => {
+    const instance = open()
+    instance.actions.loaded(TAB, CHOICES)
+    instance.actions.chose(TAB, MODE.id)
+    instance.actions.knob(TAB, 'rounds', '7')
+    instance.actions.ran(TAB, SINGLE)
+    instance.actions.chose(TAB, null)
+    expect(instance.getSnapshot().byTab[TAB]?.knobs).toEqual({})
+    expect(instance.getSnapshot().byTab[TAB]?.single).toBeNull()
+  })
+
+  it('records each knob value a person changed, by name', () => {
+    const instance = open()
+    instance.actions.knob(TAB, 'rounds', '7')
+    instance.actions.knob(TAB, 'source_root', '/tmp/pkg')
+    expect(instance.getSnapshot().byTab[TAB]?.knobs).toEqual({ rounds: '7', source_root: '/tmp/pkg' })
   })
 
   it('chooses one level-two name per seam', () => {
@@ -100,6 +124,16 @@ describe('createRefactoryStore', () => {
       kind: 'failed',
       message: '/runs/live is not a run directory',
     })
+  })
+
+  it('records a one-shot run being under way, what it left, and that it was refused', () => {
+    const instance = open()
+    instance.actions.runLoading(TAB)
+    expect(instance.getSnapshot().byTab[TAB]?.single).toEqual({ kind: 'running' })
+    instance.actions.ran(TAB, SINGLE)
+    expect(instance.getSnapshot().byTab[TAB]?.single).toEqual({ kind: 'ready', value: SINGLE })
+    instance.actions.runFailed(TAB)
+    expect(instance.getSnapshot().byTab[TAB]?.single).toBeNull()
   })
 
   it('replaces the packages a package gesture answered with, keeping the choices already read', () => {
@@ -142,5 +176,33 @@ describe('createRefactoryStore', () => {
   it('refuses to write a tab it does not hold', () => {
     const instance = open()
     expect(() => { instance.actions.framed(OTHER, FRAME) }).toThrow('ui-refactory: no picker for tab "tab-2"')
+  })
+})
+
+describe('knobValues', () => {
+  /** The values as one map, which is the order and the content a gesture sends. */
+  const sent = (values: readonly { name: string; value: string }[]) =>
+    Object.fromEntries(values.map(entry => [entry.name, entry.value]))
+
+  it('takes each declaration\'s own value under anything a person changed', () => {
+    expect(sent(knobValues(MODE, { rounds: '7' }))).toEqual({
+      rounds: '7',
+      temperature: '0.5',
+      source_root: '/tmp/src',
+      preset: 'broad',
+      verbose: 'false',
+    })
+  })
+
+  it('keeps an emptied value, which is a value a str knob accepts', () => {
+    expect(sent(knobValues(MODE, { source_root: '' })).source_root).toBe('')
+  })
+
+  it('takes every declaration\'s own value before anything is typed', () => {
+    expect(sent(knobValues(MODE, undefined)).rounds).toBe('3')
+  })
+
+  it('has nothing to send before a mode is chosen', () => {
+    expect(knobValues(undefined, { rounds: '7' })).toEqual([])
   })
 })

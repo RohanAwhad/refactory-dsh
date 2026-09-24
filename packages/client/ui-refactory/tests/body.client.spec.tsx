@@ -12,10 +12,15 @@ import { cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
 import { failureLine } from '../src/client/RefactoryBody.tsx'
 import { en, zh } from '../src/client/locales.ts'
-import { AUTHORING, DISABLED, FRAME, MODE, NO_STRATEGIES, PACKAGE, RECEIPT, STRATEGIES, ok } from './fake-console.client.ts'
+import {
+  AUTHORING, COMPLETED, DISABLED, FRAME, GATED, MODE, NO_STRATEGIES, PACKAGE, RECEIPT, SINGLE, STRATEGIES, ok,
+} from './fake-console.client.ts'
 import { TAB, mountBody } from './mount.client.tsx'
 
 const CHOICES = { modes: [MODE, AUTHORING, DISABLED], strategies: STRATEGIES, packages: [PACKAGE] }
+
+/** The knob values Start and Run once send before anything is changed. */
+const KNOBS = ['rounds=3', 'temperature=0.5', 'source_root=/tmp/src', 'preset=broad', 'verbose=false']
 
 afterEach(cleanup)
 
@@ -37,7 +42,7 @@ describe('failureLine', () => {
   it('names the three refusals the Host names precisely, in the reader\'s language', () => {
     const t = makeTranslate(zh)
     expect(failureLine(t, { code: 'refactory/unknown-mode', message: 'raw' })).toBe('这个模式不在目录里，请重新读取列表再选。')
-    expect(failureLine(t, { code: 'refactory/authoring-mode', message: 'raw' })).toBe('这是创作模式，不是可以搜索的运行；请用它的创作动作。')
+    expect(failureLine(t, { code: 'refactory/authoring-mode', message: 'raw' })).toBe('这是创作模式，不是可以搜索或使用的运行；请用它的创作动作。')
     expect(failureLine(t, { code: 'refactory/package-disabled', message: 'raw' })).toBe('这个模式的包已停用，请先启用它。')
   })
 
@@ -131,7 +136,10 @@ describe('the picker with the described choices', () => {
     expect(at(view, 'data-refactory-setting-note', 'optimizer').textContent).toBe('sample uniformly')
     fireEvent.click(at(view, 'data-refactory-start'))
     await waitFor(() => { expect(console.start).toHaveBeenCalledTimes(1) })
-    expect(console.start).toHaveBeenCalledWith({ mode: MODE.id, settings: { optimizer: 'random' } }, expect.anything())
+    expect(console.start).toHaveBeenCalledWith(
+      { mode: MODE.id, settings: { optimizer: 'random' }, knobs: KNOBS },
+      expect.anything(),
+    )
     await waitFor(() => { expect(console.status).toHaveBeenCalledTimes(1) })
   })
 
@@ -224,6 +232,184 @@ describe('the run the picker is reading', () => {
     await waitFor(() => { expect(console.status).toHaveBeenCalledWith('/runs/live', FRAME.cursor, expect.anything()) })
     fireEvent.click(at(view, 'data-refactory-stop'))
     await waitFor(() => { expect(console.stop).toHaveBeenCalledWith('/runs/live', expect.anything()) })
+  })
+})
+
+describe('the knobs the chosen mode declares', () => {
+  it('draws one field per declared knob, at the value the declaration gives it', () => {
+    const { view } = mountBody({ choices: { kind: 'ready', value: CHOICES }, chosen: MODE.id })
+    expect(view.container.querySelectorAll('[data-refactory-knob-input]')).toHaveLength(5)
+    expect([...view.container.querySelectorAll('[data-refactory-knob-input]')]
+      .map(node => node.getAttribute('data-refactory-knob-input')))
+      .toEqual(['rounds', 'temperature', 'source_root', 'preset', 'verbose'])
+    expect((at(view, 'data-refactory-knob-input', 'rounds') as HTMLInputElement).value).toBe('3')
+    expect((at(view, 'data-refactory-knob-input', 'source_root') as HTMLInputElement).value).toBe('/tmp/src')
+  })
+
+  it('draws a declared set as a choice, a bool as the console\'s two words, and a number as a number', () => {
+    const { view } = mountBody({ choices: { kind: 'ready', value: CHOICES }, chosen: MODE.id })
+    const preset = at(view, 'data-refactory-knob-input', 'preset') as HTMLSelectElement
+    expect([...preset.options].map(option => option.value)).toEqual(['broad', 'narrow'])
+    const verbose = at(view, 'data-refactory-knob-input', 'verbose') as HTMLSelectElement
+    expect([...verbose.options].map(option => option.value)).toEqual(['true', 'false'])
+    const rounds = at(view, 'data-refactory-knob-input', 'rounds') as HTMLInputElement
+    expect([rounds.type, rounds.step, rounds.min, rounds.max]).toEqual(['number', '1', '1', '10'])
+    // An unbounded float takes any value, so it states no bounds at all.
+    const temperature = at(view, 'data-refactory-knob-input', 'temperature') as HTMLInputElement
+    expect([temperature.type, temperature.step, temperature.hasAttribute('min'), temperature.hasAttribute('max')])
+      .toEqual(['number', 'any', false, false])
+    expect((at(view, 'data-refactory-knob-input', 'source_root') as HTMLInputElement).type).toBe('text')
+  })
+
+  it('says what a knob is for, and marks one the search may not move', () => {
+    const { view } = mountBody({ choices: { kind: 'ready', value: CHOICES }, chosen: MODE.id })
+    expect(at(view, 'data-refactory-knob-description', 'rounds').textContent).toBe('how many rounds')
+    expect(missing(view, 'data-refactory-knob-description', 'temperature')).toBe(true)
+    expect(at(view, 'data-refactory-knob-frozen', 'source_root').textContent).toBe(zh['knob.frozen'])
+    expect(missing(view, 'data-refactory-knob-frozen', 'rounds')).toBe(true)
+  })
+
+  it('changes a knob value through the store and sends it with the run', async () => {
+    const { view, console, instance } = mountBody({ choices: { kind: 'ready', value: CHOICES }, chosen: MODE.id })
+    console.start.mockImplementation(async () => ok(RECEIPT) as never)
+    console.status.mockImplementation(async () => ok(FRAME) as never)
+    fireEvent.change(at(view, 'data-refactory-knob-input', 'rounds'), { target: { value: '7' } })
+    expect(instance.getSnapshot().byTab[TAB]?.knobs).toEqual({ rounds: '7' })
+    fireEvent.click(at(view, 'data-refactory-start'))
+    await waitFor(() => { expect(console.start).toHaveBeenCalledTimes(1) })
+    expect(console.start).toHaveBeenCalledWith({
+      mode: MODE.id,
+      settings: {},
+      knobs: ['rounds=7', 'temperature=0.5', 'source_root=/tmp/src', 'preset=broad', 'verbose=false'],
+    }, expect.anything())
+  })
+
+  it('takes a chosen value and typed text through the same store', () => {
+    const { view, instance } = mountBody({ choices: { kind: 'ready', value: CHOICES }, chosen: MODE.id })
+    fireEvent.change(at(view, 'data-refactory-knob-input', 'preset'), { target: { value: 'narrow' } })
+    fireEvent.change(at(view, 'data-refactory-knob-input', 'source_root'), { target: { value: '/tmp/other' } })
+    fireEvent.change(at(view, 'data-refactory-knob-input', 'verbose'), { target: { value: 'true' } })
+    expect(instance.getSnapshot().byTab[TAB]?.knobs).toEqual({
+      preset: 'narrow',
+      source_root: '/tmp/other',
+      verbose: 'true',
+    })
+    expect((at(view, 'data-refactory-knob-input', 'preset') as HTMLSelectElement).value).toBe('narrow')
+    expect((at(view, 'data-refactory-knob-input', 'source_root') as HTMLInputElement).value).toBe('/tmp/other')
+  })
+})
+
+describe('using the chosen mode once', () => {
+  it('offers Run once beside Start for a mode the console says start runs', () => {
+    const { view } = mountBody({ choices: { kind: 'ready', value: CHOICES }, chosen: MODE.id })
+    expect(missing(view, 'data-refactory-run-once')).toBe(false)
+    expect(missing(view, 'data-refactory-start')).toBe(false)
+  })
+
+  it('says an authoring mode cannot be run once, and offers no button that would fail', () => {
+    const { view } = mountBody({ choices: { kind: 'ready', value: CHOICES }, chosen: AUTHORING.id })
+    expect(missing(view, 'data-refactory-run-once')).toBe(true)
+    expect(at(view, 'data-refactory-authoring').textContent).toContain('create')
+  })
+
+  it('uses the mode once with the same knob values Start would send', async () => {
+    const { view, console } = mountBody({ choices: { kind: 'ready', value: CHOICES }, chosen: MODE.id })
+    console.run.mockImplementation(async () => ok(SINGLE) as never)
+    fireEvent.change(at(view, 'data-refactory-knob-input', 'rounds'), { target: { value: '7' } })
+    fireEvent.click(at(view, 'data-refactory-run-once'))
+    await waitFor(() => { expect(console.run).toHaveBeenCalledTimes(1) })
+    expect(console.run).toHaveBeenCalledWith({
+      mode: MODE.id,
+      knobs: ['rounds=7', 'temperature=0.5', 'source_root=/tmp/src', 'preset=broad', 'verbose=false'],
+    }, expect.anything())
+  })
+
+  it('says it is going while the run is in flight, and keeps the button unpressable', () => {
+    const { view } = mountBody({
+      choices: { kind: 'ready', value: CHOICES },
+      chosen: MODE.id,
+      single: { kind: 'running' },
+    })
+    expect(at(view, 'data-refactory-single', 'running').textContent).toBe(zh['single.running'])
+    expect((at(view, 'data-refactory-run-once') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('reports the run, its score and what it recorded', () => {
+    const { view } = mountBody({
+      choices: { kind: 'ready', value: CHOICES },
+      chosen: MODE.id,
+      single: { kind: 'ready', value: SINGLE },
+    })
+    expect(at(view, 'data-refactory-single', SINGLE.state)).toBeDefined()
+    expect(at(view, 'data-refactory-single-run').textContent).toBe(zh['single.ran'].replace('{run}', SINGLE.root))
+    expect(view.getByText(`${zh['status.state']}: finished`)).toBeDefined()
+    expect(at(view, 'data-refactory-single-score').textContent).toBe('最好成绩 0.75')
+    expect(at(view, 'data-refactory-fact', 'name').textContent).toBe('name: demo')
+  })
+
+  it('says a run stopped at a gate a person owns is waiting on a person, not failing', () => {
+    const { view } = mountBody({
+      choices: { kind: 'ready', value: CHOICES },
+      chosen: MODE.id,
+      single: { kind: 'ready', value: GATED },
+    })
+    expect(at(view, 'data-refactory-single-spine', 'ready').textContent)
+      .toBe(`${zh['single.spine']}: ready`)
+    expect(at(view, 'data-refactory-single-due').textContent)
+      .toBe(zh['single.due'].replace('{nodes}', 'approve, overwatch'))
+    expect(at(view, 'data-refactory-single-gate').textContent).toBe(zh['single.gate'])
+    expect(at(view, 'data-refactory-single-score').textContent).toBe(zh['status.noScore'])
+  })
+
+  it('reports a gate the spine refused with the spine\'s own reason', () => {
+    const refused = {
+      ...SINGLE,
+      state: 'failed',
+      finished: false,
+      authoring: { spine: 'refused', nodes_due: [], error: 'gate approve is answered by a person' },
+    }
+    const { view } = mountBody({
+      choices: { kind: 'ready', value: CHOICES },
+      chosen: MODE.id,
+      single: { kind: 'ready', value: refused },
+    })
+    expect(at(view, 'data-refactory-single-spine', 'refused')).toBeDefined()
+    expect(at(view, 'data-refactory-single-gate')).toBeDefined()
+    expect(at(view, 'data-refactory-single-error').textContent).toContain('gate approve is answered by a person')
+    expect(missing(view, 'data-refactory-single-due')).toBe(true)
+  })
+
+  it('draws no gate line or fact list for a run that simply finished', () => {
+    const { view } = mountBody({
+      choices: { kind: 'ready', value: CHOICES },
+      chosen: MODE.id,
+      single: { kind: 'ready', value: COMPLETED },
+    })
+    expect(at(view, 'data-refactory-single-spine', 'done')).toBeDefined()
+    expect(missing(view, 'data-refactory-single-gate')).toBe(true)
+    expect(missing(view, 'data-refactory-fact')).toBe(true)
+  })
+
+  it('draws no graph status for a run the spine did not drive', () => {
+    const { view } = mountBody({
+      choices: { kind: 'ready', value: CHOICES },
+      chosen: MODE.id,
+      single: { kind: 'ready', value: { ...SINGLE, authoring: null } },
+    })
+    expect(missing(view, 'data-refactory-single-spine')).toBe(true)
+    expect(missing(view, 'data-refactory-single-gate')).toBe(true)
+  })
+
+  it('shows a refused gesture as the notice, not as a run result', async () => {
+    const { view, console } = mountBody({ choices: { kind: 'ready', value: CHOICES }, chosen: MODE.id })
+    console.run.mockImplementation(async () => ({
+      ok: false,
+      error: { code: 'refactory/authoring-mode', message: 'raw host text' },
+    }) as never)
+    fireEvent.click(at(view, 'data-refactory-run-once'))
+    await waitFor(() => { expect(at(view, 'data-refactory-notice').textContent).toBe(zh['error.authoringMode']) })
+    expect(missing(view, 'data-refactory-single')).toBe(true)
+    expect((at(view, 'data-refactory-run-once') as HTMLButtonElement).disabled).toBe(false)
   })
 })
 

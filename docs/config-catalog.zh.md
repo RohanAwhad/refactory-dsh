@@ -821,6 +821,10 @@ export interface Config {
 export interface Config {
   /** The prompt text for the single run. */
   task: string
+  /** Provider route for the run's agent; omitted uses the runtime default. */
+  provider?: string
+  /** Model id for the run's agent; omitted uses the provider route default. */
+  model?: string
 }
 ```
 

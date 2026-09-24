@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-The right Sidebar's picker tab type: choose a mode from the console's catalogue, choose the outer loop, optimizer and evaluator a run is started with, manage the packages of modes, start a run, and read where it got to. It is a page type reached from the guide and claims no address. Every choice it offers is a described choice the Host listed over the `refactoryConsole` Remote namespace — a mode, a strategy and a package are never typed — and the one thing no catalogue can offer, a package import's source, is the only free-text field it draws. Nothing in `ui-sidebar-right` knows this package.
+The right Sidebar's picker tab type: choose a mode from the console's catalogue, set the knobs its own declaration gives it, choose the outer loop, optimizer and evaluator a run is started with, manage the packages of modes, start a run or use the mode once, and read where it got to. It is a page type reached from the guide and claims no address. Every choice it offers is a described choice the Host listed over the `refactoryConsole` Remote namespace — a mode, a strategy and a package are never typed — and the only free text it draws is what no catalogue can offer: a package import's source, and a knob whose declaration names no set of accepted values. Nothing in `ui-sidebar-right` knows this package.
 
 ## Table of Contents
 
@@ -38,13 +38,14 @@ The mount reads three lists at once over `remote.refactoryConsole`: `modes`, `st
 
 | Section | What it does |
 |---|---|
-| Start a run | A mode chosen from the catalogue (each option's own identifier), then the outer loop, optimizer and evaluator chosen from the three registries, each with the description the implementation gives itself. The button appears once a mode is chosen; the Host decides whether that mode can run, and a refusal comes back as the notice line. |
+| Start a run | A mode chosen from the catalogue (each option's own identifier), one field per knob that mode declares, then the outer loop, optimizer and evaluator chosen from the three registries, each with the description the implementation gives itself. Every declared knob is drawn, including a frozen one: frozen means the search may not move it, not that the person running the mode may not say what it is, and an input-taking mode has no other way to be given its input. A knob with declared values is a choice, a bool is the choice between the two words the console reads, a number is a number input bounded by the declaration, and the rest is text. `Start` dispatches the outer loop; `Run once` uses the mode once with the same knob values, and appears only where the console says `start` runs the mode. |
+| Run once result | What the single run left: its directory, state, best score, the graph spine's own status word, the nodes it stopped with due, and what the run recorded. A run stopped at a gate a person owns says so here — the spine's `ready` or `refused` — instead of reading as a failure or a hang. A mode the console runs through an authoring verb says it cannot be run once from here, so no button is offered for it. |
 | Run status | After a start, the run's root, state, best score (or a stated absence) and evaluation count, with a gesture to read the next frame from the cursor and one to ask the run to stop. A run that has finished offers no stop. |
 | Packages | Every package with the number of modes it declares and its enabled state, a control to enable or disable it when the registry reported a state, a control to remove it, and an import form taking a directory or git URL and an optional name. |
 
 A refusal lands in one place: the three codes the Host names precisely — an unknown mode, an authoring mode, a disabled package — have copy of their own, and every other failure shows the console's own message through `error.failed`.
 
-State lives in the type's own store, bucketed by tab id: the choices read, the chosen mode, the three chosen names, the run being read with its last frame, the last notice, and whether a package change is in flight. The owner's `signal` ends a bucket: on abort the tab is forgotten, and a read or a change that settles afterwards writes nothing.
+State lives in the type's own store, bucketed by tab id: the choices read, the chosen mode, the knob values changed for it, the three chosen names, the run being read with its last frame, the single run with its result, the last notice, and whether a package change is in flight. Choosing another mode drops the knobs and the single result that belonged to the last one. The owner's `signal` ends a bucket: on abort the tab is forgotten, and a read or a change that settles afterwards writes nothing.
 
 <a id="model-experience"></a>
 ## Model Experience
@@ -60,7 +61,9 @@ None; no Remote answer or store write reaches a model request.
 <a id="known-limitations-and-deferred-work"></a>
 
 - **Status is read on demand.** A run in flight does not update itself: the reader presses refresh (or starts a run, which reads the first frame). Live polling needs a cadence the picker does not own yet.
-- **The import source is free text** — a directory or git URL is the one choice the registry's own catalogue cannot offer, so the import form is the only typed field.
+- **`Run once` holds the call for the whole run.** The console's `run` verb is synchronous — it drives the mode to quiescence before answering — so the panel shows the run in flight until it returns. The optimizer's `start` is the gesture that returns immediately.
+- **A gate cannot be answered from the panel.** A run that stops at a gate a person owns is reported as exactly that, with the nodes still due, but the answer has to be recorded outside the panel (the run's ledger replays it on the next run of the same mode).
+- **The import source is free text**, as is a knob whose declaration names no set of accepted values — neither has a catalogue that could offer the value.
 - **Host messages are shown as the Host wrote them** — a console refusal reaches the reader in the console's English, through the localized `error.failed` line; only the three described-choice codes have copy of this package's own.
 - **No run history.** The picker reads the run it started; the `runs` listing exists on the Host and no screen offers it yet.
 - **A package change re-reads the whole catalogue** — enable, disable, remove and import each answer with the package list as it now stands, and the mode catalogue is not re-read, so a newly imported package's modes appear after a reload.

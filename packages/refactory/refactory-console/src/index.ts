@@ -11,10 +11,15 @@
  *
  * 1. Every choice is described. Modes, strategies and packages come from the
  *    console's own catalogues, so the panel never asks a person to type a name
- *    it could have offered.
- * 2. A refusal says what to do instead. `start` reads the catalogue's `action`
- *    field — the console's, not a second derivation — and names the authoring
- *    verb for a mode the loop cannot search, before shelling out.
+ *    it could have offered — a mode's declared knobs included, which is what
+ *    lets the panel supply an input the search cannot invent.
+ * 2. A refusal says what to do instead. `start` and `run` read the catalogue's
+ *    `action` field — the console's, not a second derivation — and name the
+ *    authoring verb for a mode neither can act on, before shelling out.
+ *
+ * A run stopped at a gate a person owns is not a refusal: `run` answers with the
+ * spine's own word for where the run got to, so the panel can say a person is
+ * being waited on rather than showing a failure.
  *
  * Failures are one `RemoteError` per reason: `gateway/bad-request` for an
  * address the picker must supply, `refactory/unknown-mode`,
@@ -28,11 +33,15 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-subprocess'
 import {
-  CONSOLE_DEFAULTS, Console, isRecord, registryInvocation, resolveConsoleSettings, startInvocation,
+  CONSOLE_DEFAULTS, Console, isRecord, registryInvocation, resolveConsoleSettings, runInvocation,
+  startInvocation,
 } from '@deepseek-ai/dsh-tool-refactory/console'
-import type { ConsoleConfig as ConsoleSettings, ConsoleInvocation } from '@deepseek-ai/dsh-tool-refactory/console'
+import type { ConsoleConfig as ConsoleSettings, ConsoleInvocation, ConsoleResult } from '@deepseek-ai/dsh-tool-refactory/console'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type {
+  RefactoryAuthoringProgress,
+  RefactoryKnob,
+  RefactoryKnobKind,
   RefactoryModeChoice,
   RefactoryPackageChoice,
   RefactoryPackageMode,
@@ -40,6 +49,8 @@ import type {
   RefactoryRunEvent,
   RefactoryRunStatus,
   RefactoryRunSummary,
+  RefactorySingleRun,
+  RefactorySingleRunRequest,
   RefactoryStartReceipt,
   RefactoryStartRequest,
   RefactoryStopReceipt,
@@ -106,6 +117,76 @@ function count(value: unknown): number {
   return typeof value === 'number' ? value : 0
 }
 
+/** A JSON scalar as the text a knob's value or member is read and written as. */
+function scalar(value: unknown): string {
+  return typeof value === 'string' ? value : typeof value === 'number' || typeof value === 'boolean'
+    ? String(value)
+    : ''
+}
+
+/** The knob kinds `refactory_dsh.nn.knob` declares. */
+const KNOB_KINDS: readonly RefactoryKnobKind[] = ['int', 'float', 'bool', 'str', 'enum']
+
+/**
+ * One knob as the catalogue declared it.
+ *
+ * Kinds travel as the closed set the loop declares, so a console that grew a kind
+ * this picker cannot draw fails here rather than rendering a control that writes a
+ * value the knob refuses.
+ * @param value - one entry of a mode's `parameters`.
+ * @param name - the knob's name, for the message.
+ * @returns the declared knob.
+ */
+function knob(value: unknown, name: string): RefactoryKnob {
+  const entry = objectOf(value, `knob "${name}"`)
+  const kind = text(entry.kind)
+  if (!KNOB_KINDS.includes(kind as RefactoryKnobKind)) {
+    throw new Error(`the console's knob "${name}" declares kind "${kind}", which this picker cannot draw`)
+  }
+  const bound = Array.isArray(entry.range) ? entry.range : []
+  const values = Array.isArray(entry.values) ? entry.values.map(scalar) : []
+  const low = bound[0]
+  const high = bound[1]
+  return {
+    value: scalar(entry.value),
+    kind: kind as RefactoryKnobKind,
+    values,
+    range: [typeof low === 'number' ? low : null, typeof high === 'number' ? high : null],
+    frozen: entry.frozen === true,
+    description: text(entry.description),
+  }
+}
+
+/** Every knob a catalogue entry declares, by name. */
+function knobs(value: unknown, mode: string): Readonly<Record<string, RefactoryKnob>> {
+  if (value === undefined) return {}
+  const entries = objectOf(value, `knob declarations for "${mode}"`)
+  return Object.fromEntries(Object.entries(entries).map(([name, entry]) => [name, knob(entry, name)]))
+}
+
+/** What a graph spine recorded about one run, or `null` for a run it did not drive. */
+function authoring(value: unknown): RefactoryAuthoringProgress | null {
+  if (!isRecord(value)) return null
+  return {
+    spine: text(value.spine),
+    nodes_due: Array.isArray(value.nodes_due) ? value.nodes_due.map(scalar) : [],
+    error: text(value.error),
+  }
+}
+
+/** What a run wrote to `facts.json`, each member as text. */
+function facts(value: unknown): Readonly<Record<string, string>> {
+  if (!isRecord(value)) return {}
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([name, entry]): [string, string] => [
+        name,
+        Array.isArray(entry) || isRecord(entry) ? JSON.stringify(entry) : scalar(entry),
+      ])
+      .filter(([, written]) => written !== ''),
+  )
+}
+
 /** Host Remote service over the refactory console. */
 export class RefactoryConsole extends TypertRemoteService {
   static inject = ['subprocess', 'typert']
@@ -145,6 +226,7 @@ export class RefactoryConsole extends TypertRemoteService {
       enabled: entry.enabled === true,
       scored: entry.scored === true,
       action: text(entry.action),
+      parameters: knobs(entry.parameters, text(entry.id)),
       ...entry.trust === undefined ? {} : { trust: text(entry.trust) },
       ...entry.reason === undefined ? {} : { reason: text(entry.reason) },
     }))
@@ -198,46 +280,61 @@ export class RefactoryConsole extends TypertRemoteService {
    * The mode must be one the catalogue offers and one whose `action` is `start`;
    * an authoring mode is refused by name, with the verb that runs it, because a
    * person who picked it needs the action rather than a failed process.
-   * @param request - the mode, run addressing, and settings.
+   * @param request - the mode, run addressing, settings, and starting knobs.
    * @param signal - caller cancellation.
    * @returns what the console recorded about the start.
    */
   @Remote
   async start(request: RefactoryStartRequest, signal: AbortSignal): Promise<RefactoryStartReceipt> {
-    const mode = request.mode.trim()
-    if (mode.length === 0) {
-      throw new RemoteError('gateway/bad-request', 'mode is required: the <package>/<name> to run', {})
-    }
-    const choices = await this.modes(signal)
-    const choice = choices.find(entry => entry.id === mode)
-    if (choice === undefined) {
-      throw new RemoteError(
-        'refactory/unknown-mode',
-        `"${mode}" is not in the mode catalogue; ask for the modes and choose one of them`,
-        { mode },
-      )
-    }
-    if (choice.action !== 'start') {
-      throw new RemoteError(
-        'refactory/authoring-mode',
-        `"${mode}" is an authoring mode, not a run to search; use the "${choice.action}" action`,
-        { mode, action: choice.action },
-      )
-    }
-    if (!choice.enabled) {
-      throw new RemoteError(
-        'refactory/package-disabled',
-        `"${choice.package}" is disabled, so "${mode}" cannot run; enable the package first`,
-        { mode, package: choice.package },
-      )
-    }
+    const mode = await this.runnable(request.mode, signal)
     const invocation = startInvocation({
       mode,
       runId: request.runId,
       runsRoot: request.runsRoot,
       settings: request.settings,
+      knobs: request.knobs,
     })
     return receipt(await this.call(invocation, signal))
+  }
+
+  /**
+   * Use one described mode once, with a person's knobs, and report what it left.
+   *
+   * This is the console's `run` — a person using a mode — where `start` is the
+   * outer loop searching one. It is refused for the same three reasons `start` is,
+   * because a mode the loop cannot search is one a person cannot use here either.
+   *
+   * The run is synchronous: the console drives it to quiescence before answering.
+   * A run that stopped at a gate a person owns is still a result — the answer
+   * carries the spine's own word for it — so it is reported rather than raised.
+   * @param request - the mode and the knob values it uses.
+   * @param signal - caller cancellation.
+   * @returns where the run got to, and what it recorded.
+   */
+  @Remote
+  async run(request: RefactorySingleRunRequest, signal: AbortSignal): Promise<RefactorySingleRun> {
+    const mode = await this.runnable(request.mode, signal)
+    const result = await this.consoleCall(runInvocation({ mode, knobs: request.knobs }), signal)
+    const answer = isRecord(result.value) ? result.value : {}
+    const single = answer.run
+    if (!isRecord(single)) {
+      // No run directory was left, so the console's failure is the whole answer.
+      throw new RemoteError(
+        'refactory/console-failed',
+        result.ok ? `the console left no run directory for "${mode}"` : result.error,
+        { argv: result.argv },
+      )
+    }
+    return {
+      run_id: text(single.run_id),
+      root: text(single.root),
+      mode: typeof single.mode === 'string' ? single.mode : null,
+      state: text(single.state),
+      finished: single.finished === true,
+      best_score: typeof single.best_score === 'number' ? single.best_score : null,
+      authoring: authoring(single.authoring),
+      facts: facts(single.facts),
+    }
   }
 
   /**
@@ -390,18 +487,72 @@ export class RefactoryConsole extends TypertRemoteService {
   }
 
   /**
+   * The mode one run-scoped verb may act on, or the refusal that says what to do.
+   *
+   * The catalogue's own `action` field decides which verb runs a mode, so an
+   * authoring mode is refused with the verb that runs it rather than started and
+   * reported as a failed process.
+   * @param requested - the mode the caller asked for.
+   * @param signal - caller cancellation.
+   * @returns the trimmed mode identifier to pass to the console.
+   */
+  private async runnable(requested: string, signal: AbortSignal): Promise<string> {
+    const mode = requested.trim()
+    if (mode.length === 0) {
+      throw new RemoteError('gateway/bad-request', 'mode is required: the <package>/<name> to run', {})
+    }
+    const choices = await this.modes(signal)
+    const choice = choices.find(entry => entry.id === mode)
+    if (choice === undefined) {
+      throw new RemoteError(
+        'refactory/unknown-mode',
+        `"${mode}" is not in the mode catalogue; ask for the modes and choose one of them`,
+        { mode },
+      )
+    }
+    if (choice.action !== 'start') {
+      throw new RemoteError(
+        'refactory/authoring-mode',
+        `"${mode}" is an authoring mode, not a mode to run or search; use the "${choice.action}" action`,
+        { mode, action: choice.action },
+      )
+    }
+    if (!choice.enabled) {
+      throw new RemoteError(
+        'refactory/package-disabled',
+        `"${choice.package}" is disabled, so "${mode}" cannot run; enable the package first`,
+        { mode, package: choice.package },
+      )
+    }
+    return mode
+  }
+
+  /**
    * One console call, with its refusal turned into a Remote error.
    * @param invocation - the verb, positionals, and options.
    * @param signal - caller cancellation.
    * @returns the console's decoded JSON.
    */
   private async call(invocation: ConsoleInvocation, signal: AbortSignal): Promise<unknown> {
-    if (signal.aborted) throw new RemoteError('gateway/cancelled', 'the refactory call was cancelled', {})
-    const result = await this.console.run(invocation, signal)
+    const result = await this.consoleCall(invocation, signal)
     if (!result.ok) {
       throw new RemoteError('refactory/console-failed', result.error, { argv: result.argv })
     }
     return result.value
+  }
+
+  /**
+   * One console call that keeps its answer even when the console failed.
+   *
+   * `run` reports where a run stopped in the same payload as the reason it did not
+   * finish, so a caller reading that payload cannot take the error-shaped path.
+   * @param invocation - the verb, positionals, and options.
+   * @param signal - caller cancellation.
+   * @returns the console's answer, successful or not.
+   */
+  private async consoleCall(invocation: ConsoleInvocation, signal: AbortSignal): Promise<ConsoleResult> {
+    if (signal.aborted) throw new RemoteError('gateway/cancelled', 'the refactory call was cancelled', {})
+    return this.console.run(invocation, signal)
   }
 
   /**

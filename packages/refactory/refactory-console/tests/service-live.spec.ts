@@ -74,8 +74,22 @@ describe('the picker service against the real loop', () => {
     expect(authoring.every(mode => ['create', 'edit', 'design'].includes(mode.action))).toBe(true)
   }, 120_000)
 
-  it('names the outer loops, optimizers and evaluators a run can choose between', async () => {
+  it('answers with every declared knob of a mode, as a panel draws them', async () => {
     const { service } = await setup()
+    const modes = await service.modes(signal())
+    const knobs = modes.find(mode => mode.id === 'circle_packing/adaptive')?.parameters ?? {}
+    expect(Object.keys(knobs).length).toBeGreaterThan(0)
+    // A frozen knob is still one a person running the mode may set, which is the
+    // whole reason the panel draws it.
+    expect(knobs.seed).toMatchObject({ kind: 'int', frozen: true })
+    expect(knobs.seed?.description.length).toBeGreaterThan(0)
+    expect(knobs.acceptance_mode?.values).toEqual(['strict', 'lenient', 'off'])
+    // An enum over numbers is the same choice over the text the console reads back.
+    expect(knobs.grid?.values).toEqual(['6', '10', '14', '18', '24'])
+    expect(Object.values(knobs).every(knob => ['int', 'float', 'bool', 'str', 'enum'].includes(knob.kind))).toBe(true)
+  }, 120_000)
+
+  it('names the outer loops, optimizers and evaluators a run can choose between', async () => {    const { service } = await setup()
     const strategies = await service.strategies(signal())
     expect(strategies.optimizers.map(entry => entry.name)).toContain('random')
     expect(strategies.outer_loops.length).toBeGreaterThan(0)

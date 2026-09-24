@@ -118,6 +118,25 @@
   cursor: pointer;
 }
 
+/* The run gestures: Start and Run once, side by side. */
+.gestures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* What one mode used once recorded, one fact per row. */
+.recorded {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  list-style: none;
+}
+
 .action:hover:not(:disabled) {
   background: var(--dsw-alias-interactive-bg-hover);
 }

@@ -4,18 +4,21 @@
  *
  * The choices are the Host's — a mode catalogue, three level-two registries and
  * the package list — and so is every status frame. What this store keeps is the
- * mount's own: which of the described choices is selected, the run's id, and the
- * last answer about it. Bucketed by tab id, because two picker tabs in one
- * session choose independently.
+ * mount's own: which of the described choices is selected, the knob values a
+ * person changed for it, the three chosen names, the run being read with its last
+ * answer, and the run a mode was used once in. Bucketed by tab id, because two
+ * picker tabs in one session choose independently.
  *
  * Writers run between `start` and `forget`: the owner's `signal` ends a bucket's
  * life, and the face stops dispatching once it aborts.
  */
 import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
 import type {
+  RefactoryKnob,
   RefactoryModeChoice,
   RefactoryPackageChoice,
   RefactoryRunStatus,
+  RefactorySingleRun,
   RefactoryStrategies,
 } from '@deepseek-ai/dsh-api-remotes/client'
 import type { TabId } from '@deepseek-ai/dsh-client-ui-dockkit'
@@ -28,7 +31,7 @@ export type Loadable<T> =
 
 /** Everything a picker offers to choose between, read as one. */
 export interface RefactoryChoices {
-  /** The modes a run can be started from, each with the verb that runs it. */
+  /** The modes a run can be made from, each with the verb that runs it and its declared knobs. */
   readonly modes: readonly RefactoryModeChoice[]
   /** The named outer loops, optimizers and evaluators. */
   readonly strategies: RefactoryStrategies
@@ -54,18 +57,36 @@ export interface RefactoryNotice {
   readonly message: string
 }
 
+/**
+ * The one-shot use of a mode: still going, or what it left.
+ *
+ * A refusal is not a state here — it is the gesture's notice, where the code still
+ * has the copy that names what to do instead — so a result is only ever the run
+ * that came back.
+ */
+export type RefactorySingleState =
+  | { readonly kind: 'running' }
+  | { readonly kind: 'ready'; readonly value: RefactorySingleRun }
+
 /** One tab's picker: what it read, what it chose, and where the run got to. */
 export interface RefactoryTabState {
   /** The choices, as last read. */
   choices: Loadable<RefactoryChoices>
   /** The chosen mode's catalogue id, or `null` before anything is chosen. */
   chosen: string | null
+  /**
+   * The knob values a person changed for the chosen mode, by knob name. A knob
+   * that is absent keeps the value its own declaration gives it.
+   */
+  knobs: Record<string, string>
   /** The chosen level-two names. */
   settings: RefactorySettings
   /** The run being read, or `null` when nothing is being watched. */
   watching: string | null
   /** The last status frame for `watching`; `null` before the first read. */
   frame: Loadable<RefactoryRunStatus> | null
+  /** The one-shot use of the chosen mode, and what it left; `null` before one is used. */
+  single: RefactorySingleState | null
   /** What the last refused gesture said, or `null`. */
   notice: RefactoryNotice | null
   /** Whether a package change is in flight. */
@@ -100,11 +121,15 @@ type RefactoryActions = {
   loaded: (draft: RefactoryState, tabId: TabId, choices: RefactoryChoices) => void
   failed: (draft: RefactoryState, tabId: TabId, message: string) => void
   chose: (draft: RefactoryState, tabId: TabId, id: string | null) => void
+  knob: (draft: RefactoryState, tabId: TabId, name: string, value: string) => void
   setting: (draft: RefactoryState, tabId: TabId, name: RefactorySettingName, value: string) => void
   watching: (draft: RefactoryState, tabId: TabId, run: string) => void
   frameLoading: (draft: RefactoryState, tabId: TabId) => void
   framed: (draft: RefactoryState, tabId: TabId, frame: RefactoryRunStatus) => void
   frameFailed: (draft: RefactoryState, tabId: TabId, message: string) => void
+  runLoading: (draft: RefactoryState, tabId: TabId) => void
+  ran: (draft: RefactoryState, tabId: TabId, run: RefactorySingleRun) => void
+  runFailed: (draft: RefactoryState, tabId: TabId) => void
   packages: (draft: RefactoryState, tabId: TabId, packages: readonly RefactoryPackageChoice[]) => void
   noticed: (draft: RefactoryState, tabId: TabId, notice: RefactoryNotice | null) => void
   busy: (draft: RefactoryState, tabId: TabId, busy: boolean) => void
@@ -113,6 +138,43 @@ type RefactoryActions = {
 
 /** The level-two names honestly absent, so a run takes the console's defaults for them. */
 export const NO_SETTINGS: RefactorySettings = { strategy: '', optimizer: '', evaluator: '' }
+
+/** One knob value as a gesture sends it. */
+export interface RefactoryKnobSetting {
+  /** The knob's declared name. */
+  readonly name: string
+  /** The value to send, as text. */
+  readonly value: string
+}
+
+/** One declared knob, with the value this run gives it. */
+export interface RefactoryKnobValue extends RefactoryKnobSetting {
+  /** The declaration, as the catalogue reports it. */
+  readonly knob: RefactoryKnob
+}
+
+/**
+ * Every knob the chosen mode declares, with what a person changed and each
+ * declaration's own value for the rest.
+ *
+ * This is what a gesture sends, and both gestures send the same one: a knob a
+ * person never touched still travels, so a run is the one the fields showed rather
+ * than the one some other defaulting would have made.
+ * @param mode - the chosen catalogue entry, or `undefined` when none is chosen.
+ * @param edited - the values a person changed, by knob name; absent before anything is typed.
+ * @returns one entry per declared knob, in declaration order.
+ */
+export function knobValues(
+  mode: RefactoryModeChoice | undefined,
+  edited: Readonly<Record<string, string>> | undefined,
+): readonly RefactoryKnobValue[] {
+  if (mode === undefined) return []
+  return Object.entries(mode.parameters).map(([name, knob]) => ({
+    name,
+    knob,
+    value: edited?.[name] ?? knob.value,
+  }))
+}
 
 /**
  * Declare the picker's store.
@@ -134,9 +196,11 @@ export function createRefactoryStore(): EngineStoreHandle<RefactoryState, Refact
         d.byTab[tabId] = {
           choices: { kind: 'loading' },
           chosen: null,
+          knobs: {},
           settings: { ...NO_SETTINGS },
           watching: null,
           frame: null,
+          single: null,
           notice: null,
           busy: false,
         }
@@ -169,15 +233,33 @@ export function createRefactoryStore(): EngineStoreHandle<RefactoryState, Refact
         const tab = bucket(d, tabId)
         tab.choices = { kind: 'failed', message }
         tab.chosen = null
+        tab.knobs = {}
+        tab.single = null
       },
       /**
-       * Choose one of the described modes, or nothing.
+       * Choose one of the described modes, or nothing, and start its knobs at the
+       * values they declare.
        * @param d - draft state.
        * @param tabId - the tab being drawn.
        * @param id - the chosen mode's catalogue id, or `null`.
        */
       chose: (d, tabId: TabId, id: string | null) => {
-        bucket(d, tabId).chosen = id
+        const tab = bucket(d, tabId)
+        tab.chosen = id
+        // A knob value belongs to the mode it was typed for, and so does the run
+        // that used it.
+        tab.knobs = {}
+        tab.single = null
+      },
+      /**
+       * Record one knob value a person changed.
+       * @param d - draft state.
+       * @param tabId - the tab being drawn.
+       * @param name - the knob's declared name.
+       * @param value - the value to send, as text.
+       */
+      knob: (d, tabId: TabId, name: string, value: string) => {
+        bucket(d, tabId).knobs[name] = value
       },
       /**
        * Choose one of the described level-two names.
@@ -246,6 +328,32 @@ export function createRefactoryStore(): EngineStoreHandle<RefactoryState, Refact
        */
       frameFailed: (d, tabId: TabId, message: string) => {
         bucket(d, tabId).frame = { kind: 'failed', message }
+      },
+      /**
+       * Mark the chosen mode as being used once.
+       * @param d - draft state.
+       * @param tabId - the tab being drawn.
+       */
+      runLoading: (d, tabId: TabId) => {
+        bucket(d, tabId).single = { kind: 'running' }
+      },
+      /**
+       * Record what using the chosen mode once left.
+       * @param d - draft state.
+       * @param tabId - the tab being drawn.
+       * @param run - the run, with where it got to.
+       */
+      ran: (d, tabId: TabId, run: RefactorySingleRun) => {
+        bucket(d, tabId).single = { kind: 'ready', value: run }
+      },
+      /**
+       * Stop waiting on the one-shot run: it was refused, so there is no run to
+       * show and the refusal is the gesture's notice.
+       * @param d - draft state.
+       * @param tabId - the tab being drawn.
+       */
+      runFailed: (d, tabId: TabId) => {
+        bucket(d, tabId).single = null
       },
       /**
        * Say what the last refused gesture was.

@@ -20,7 +20,7 @@ import type { RefactoryBodyProps } from '../src/client/RefactoryBody.tsx'
 import { zh } from '../src/client/locales.ts'
 import { NO_SETTINGS, createRefactoryStore } from '../src/client/store.ts'
 import type { RefactoryRunStatus } from '@deepseek-ai/dsh-api-remotes/client'
-import type { Loadable, RefactoryChoices, RefactoryNotice, RefactoryTabState } from '../src/client/store.ts'
+import type { Loadable, RefactoryChoices, RefactoryNotice, RefactorySingleState, RefactoryTabState } from '../src/client/store.ts'
 import { fakeConsole } from './fake-console.client.ts'
 import type { FakeConsole } from './fake-console.client.ts'
 
@@ -45,9 +45,12 @@ export interface TabSeed {
   readonly dictionary?: typeof zh
   readonly choices?: Loadable<RefactoryChoices>
   readonly chosen?: string | null
+  /** The knob values a person changed, by knob name. */
+  readonly knobs?: Readonly<Record<string, string>>
   readonly settings?: Partial<RefactoryTabState['settings']>
   readonly watching?: string | null
   readonly frame?: Loadable<RefactoryRunStatus> | null
+  readonly single?: RefactorySingleState | null
   readonly notice?: RefactoryNotice | null
   readonly busy?: boolean
   /** The tab record's lifetime; a spec aborts it to prove the face stops writing. */
@@ -81,6 +84,9 @@ export function mountBody(seed: TabSeed = {}): Mounted {
     else actions.failed(TAB, seed.choices.message)
   }
   if (seed.chosen !== undefined && seed.chosen !== null) actions.chose(TAB, seed.chosen)
+  for (const [knob, value] of Object.entries(seed.knobs ?? {})) {
+    actions.knob(TAB, knob, value)
+  }
   for (const [name, value] of Object.entries(seed.settings ?? {})) {
     actions.setting(TAB, name as keyof typeof NO_SETTINGS, value)
   }
@@ -88,6 +94,10 @@ export function mountBody(seed: TabSeed = {}): Mounted {
   if (seed.frame !== undefined && seed.frame !== null) {
     if (seed.frame.kind === 'ready') actions.framed(TAB, seed.frame.value)
     else if (seed.frame.kind === 'failed') actions.frameFailed(TAB, seed.frame.message)
+  }
+  if (seed.single !== undefined && seed.single !== null) {
+    if (seed.single.kind === 'ready') actions.ran(TAB, seed.single.value)
+    else actions.runLoading(TAB)
   }
   if (seed.notice !== undefined && seed.notice !== null) actions.noticed(TAB, seed.notice)
   if (seed.busy === true) actions.busy(TAB, true)

@@ -40,10 +40,15 @@ export interface ConsoleSettings {
 /**
  * What a console call produced: the decoded JSON, or the reason there is none.
  * `argv` is the exact command, so a failure can be reproduced by hand.
+ *
+ * A failed call keeps `value` when the console printed JSON: its refusal is
+ * written beside the payload it is about (`console run` reports where the run
+ * stopped in the same object as the reason it did not finish), and a caller that
+ * needs that payload cannot read it back from the error line.
  */
 export type ConsoleResult =
   | { ok: true; value: unknown; argv: string[] }
-  | { ok: false; error: string; argv: string[] }
+  | { ok: false; error: string; argv: string[]; value?: unknown }
 
 /**
  * Deployment settings for reaching the console, before they are resolved.
@@ -137,6 +142,31 @@ export function startInvocation(request: StartRequest): ConsoleInvocation {
   }
 }
 
+/** What one `run` call carries: a mode used once, and the knobs it uses. */
+export interface SingleRunRequest {
+  /** Mode to run, as `<package>/<name>`. */
+  readonly mode: string
+  /** Knob values the run uses, as `NAME=VALUE`; one `--knob` per element. */
+  readonly knobs?: readonly string[] | undefined
+}
+
+/**
+ * The console invocation that uses one mode once.
+ *
+ * `run` is the CLI's run — a person using a mode — where `startInvocation` is the
+ * outer loop searching one. They take the same `--knob` spelling, so the flag has
+ * one owner here rather than one per caller.
+ * @param request - the mode and the knob values it uses.
+ * @returns the verb, positionals, and options for one console call.
+ */
+export function runInvocation(request: SingleRunRequest): ConsoleInvocation {
+  return {
+    verb: 'run',
+    positional: [request.mode],
+    options: { knob: request.knobs },
+  }
+}
+
 /**
  * The console invocation for one package-registry verb.
  * @param action - the registry verb, e.g. `list` or `enable`.
@@ -207,13 +237,16 @@ export class Console {
     const stderrText = stderr.readFrom(0).text
     if (outcome.exitCode !== 0) {
       // The console prints its own `{"error": ...}` on a handled refusal, so a
-      // failed call still carries the reason the user needs.
+      // failed call still carries the reason the user needs — and the rest of the
+      // payload it wrote that reason beside.
       const reported = decode(stdoutText)
+      const decoded = reported.kind === 'json' ? reported.value : undefined
       return {
         ok: false,
         argv,
-        error: reported.kind === 'json' && isRecord(reported.value) && typeof reported.value.error === 'string'
-          ? reported.value.error
+        ...decoded === undefined ? {} : { value: decoded },
+        error: reported.kind === 'json' && isRecord(decoded) && typeof decoded.error === 'string'
+          ? decoded.error
           : stderrText.trim() || `exited with ${outcome.exitCode ?? outcome.signal ?? 'no status'}`,
       }
     }

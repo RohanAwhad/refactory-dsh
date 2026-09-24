@@ -19,7 +19,7 @@ import { refactoryFace } from '../src/client/face.ts'
 import { NO_SETTINGS, createRefactoryStore } from '../src/client/store.ts'
 import type { RefactoryChoices } from '../src/client/store.ts'
 import {
-  AUTHORING, FRAME, MODE, PACKAGE, RECEIPT, STRATEGIES, failure, fakeConsole, ok, settle,
+  AUTHORING, FRAME, GATED, MODE, PACKAGE, RECEIPT, SINGLE, STRATEGIES, failure, fakeConsole, ok, settle,
 } from './fake-console.client.ts'
 
 const SESSION = 's-test' as SessionId
@@ -147,20 +147,32 @@ describe('refactoryFace — reading the described choices', () => {
   it('chooses a mode and a level-two name, which it only reports', () => {
     const { instance, face } = harness()
     face.choose(TAB, MODE.id)
+    face.setKnob(TAB, 'rounds', '7')
     face.setSetting(TAB, 'optimizer', 'random')
     expect(tab(instance)?.chosen).toBe(MODE.id)
+    expect(tab(instance)?.knobs).toEqual({ rounds: '7' })
     expect(tab(instance)?.settings).toEqual({ ...NO_SETTINGS, optimizer: 'random' })
   })
 })
 
 describe('refactoryFace — starting a run', () => {
-  it('starts the chosen mode with only the settings that were chosen, then reads the run', async () => {
+  it('starts the chosen mode with only the settings that were chosen, its knobs, then reads the run', async () => {
     const { instance, scripted, face, signal } = harness()
     answer(scripted.start, ok(RECEIPT))
     answer(scripted.status, ok(FRAME))
-    face.start(TAB, MODE.id, { ...NO_SETTINGS, optimizer: 'random' }, signal)
+    face.start(
+      TAB,
+      MODE.id,
+      [{ name: 'rounds', value: '4' }, { name: 'source_root', value: '/tmp/pkg' }],
+      { ...NO_SETTINGS, optimizer: 'random' },
+      signal,
+    )
     await settle()
-    expect(scripted.start).toHaveBeenCalledWith({ mode: 'p/adaptive', settings: { optimizer: 'random' } }, signal)
+    expect(scripted.start).toHaveBeenCalledWith({
+      mode: 'p/adaptive',
+      settings: { optimizer: 'random' },
+      knobs: ['rounds=4', 'source_root=/tmp/pkg'],
+    }, signal)
     expect(tab(instance)?.watching).toBe('/runs/live')
     expect(scripted.status).toHaveBeenCalledWith('/runs/live', 0, signal)
     expect(tab(instance)?.frame).toEqual({ kind: 'ready', value: FRAME })
@@ -170,18 +182,19 @@ describe('refactoryFace — starting a run', () => {
     const { scripted, face, signal } = harness()
     answer(scripted.start, ok(RECEIPT))
     answer(scripted.status, ok(FRAME))
-    face.start(TAB, MODE.id, { strategy: 'beam', optimizer: 'random', evaluator: 'score' }, signal)
+    face.start(TAB, MODE.id, [], { strategy: 'beam', optimizer: 'random', evaluator: 'score' }, signal)
     await settle()
     expect(scripted.start).toHaveBeenCalledWith({
       mode: 'p/adaptive',
       settings: { strategy: 'beam', optimizer: 'random', evaluator: 'score' },
+      knobs: [],
     }, signal)
   })
 
   it('shows the Host\'s refusal instead of starting a run', async () => {
     const { instance, scripted, face, signal } = harness()
     answer(scripted.start, failure('refactory/authoring-mode', '"p/create" is an authoring mode'))
-    face.start(TAB, AUTHORING.id, NO_SETTINGS, signal)
+    face.start(TAB, AUTHORING.id, [], NO_SETTINGS, signal)
     await settle()
     expect(tab(instance)?.notice).toEqual({
       code: 'refactory/authoring-mode',
@@ -194,8 +207,50 @@ describe('refactoryFace — starting a run', () => {
   it('does not start a run for a tab whose record has already ended', () => {
     const { scripted, face, controller } = harness()
     controller.abort()
-    face.start(TAB, MODE.id, NO_SETTINGS, controller.signal)
+    face.start(TAB, MODE.id, [], NO_SETTINGS, controller.signal)
     expect(scripted.start).not.toHaveBeenCalled()
+  })
+})
+
+describe('refactoryFace — using one mode once', () => {
+  it('uses the chosen mode once with the same knob values, and keeps the result', async () => {
+    const { instance, scripted, face, signal } = harness()
+    answer(scripted.run, ok(SINGLE))
+    face.run(TAB, MODE.id, [{ name: 'rounds', value: '4' }, { name: 'source_root', value: '/tmp/pkg' }], signal)
+    expect(tab(instance)?.single).toEqual({ kind: 'running' })
+    await settle()
+    expect(scripted.run).toHaveBeenCalledWith({
+      mode: 'p/adaptive',
+      knobs: ['rounds=4', 'source_root=/tmp/pkg'],
+    }, signal)
+    expect(tab(instance)?.single).toEqual({ kind: 'ready', value: SINGLE })
+  })
+
+  it('keeps a run that stopped at a gate, so the body can say a person is being waited on', async () => {
+    const { instance, scripted, face, signal } = harness()
+    answer(scripted.run, ok(GATED))
+    face.run(TAB, MODE.id, [], signal)
+    await settle()
+    expect(tab(instance)?.single).toEqual({ kind: 'ready', value: GATED })
+  })
+
+  it('shows the Host\'s refusal, and stops waiting on a run that will not arrive', async () => {
+    const { instance, scripted, face, signal } = harness()
+    answer(scripted.run, failure('refactory/authoring-mode', '"p/create" is an authoring mode'))
+    face.run(TAB, AUTHORING.id, [], signal)
+    await settle()
+    expect(tab(instance)?.notice).toEqual({
+      code: 'refactory/authoring-mode',
+      message: '"p/create" is an authoring mode',
+    })
+    expect(tab(instance)?.single).toBeNull()
+  })
+
+  it('does not use a mode for a tab whose record has already ended', () => {
+    const { scripted, face, controller } = harness()
+    controller.abort()
+    face.run(TAB, MODE.id, [], controller.signal)
+    expect(scripted.run).not.toHaveBeenCalled()
   })
 })
 

@@ -3,26 +3,33 @@
  *
  * Everything the picker keeps lives in its store, keyed by tab; everything it
  * asks for goes through its injected face. The body only decides what to draw
- * for each read and what a gesture means: choosing a mode, choosing a level-two
- * name, starting the chosen mode, refreshing or stopping the run being read, and
- * enabling, disabling, removing or importing a package.
+ * for each read and what a gesture means: choosing a mode, setting one of the
+ * knobs that mode declares, choosing a level-two name, starting the chosen mode,
+ * using it once, refreshing or stopping the run being read, and enabling,
+ * disabling, removing or importing a package.
  *
- * Nothing here is free text except the two import fields, which the registry
- * itself requires: a mode, a strategy and a package are always chosen from what
+ * Nothing here is free text except the two import fields and the knobs a mode
+ * declares without a set of accepted values, which the registry and the knob
+ * itself require: a mode, a strategy and a package are always chosen from what
  * the Host listed, never typed. A mode the loop cannot search is offered but not
- * startable: the row says which action runs it, and the Host refuses what the
- * loop cannot search.
+ * started and not used once: the row says which action runs it, and the Host
+ * refuses what the loop cannot search.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { RefactoryRunStatus, RefactoryStrategyChoice } from '@deepseek-ai/dsh-api-remotes/client'
+import type {
+  RefactoryKnob,
+  RefactoryRunStatus,
+  RefactoryStrategyChoice,
+} from '@deepseek-ai/dsh-api-remotes/client'
 import type { PropsLocale, PropsRuntime, PropsStore, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import {
   IconDatabaseOutline16, IconPlayOutline16, IconRefreshOutline16, IconStopFill16,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {} from './locales.ts'
 import type { RefactoryInjected } from './face.ts'
-import type { Loadable, RefactoryNotice, RefactorySettingName, createRefactoryStore } from './store.ts'
+import type { Loadable, RefactoryNotice, RefactorySettingName, RefactorySingleState, createRefactoryStore } from './store.ts'
+import { knobValues } from './store.ts'
 import css from './RefactoryBody.module.css'
 
 /** The body's composed props: the tab it draws, its store, its face, and its copy. */
@@ -97,6 +104,147 @@ function Seam({
   )
 }
 
+/** How one declared knob is entered: from a declared set, or as free text of a kind. */
+type KnobControl =
+  | { readonly kind: 'choice'; readonly values: readonly string[] }
+  | { readonly kind: 'number'; readonly step: string; readonly min?: number; readonly max?: number }
+  | { readonly kind: 'text' }
+
+/**
+ * The control one declared knob needs.
+ *
+ * A knob that declares values is a choice whatever its kind — an `enum`'s members
+ * and a `str` knob's values are both finite sets — and a `bool` is the same kind of
+ * choice over the two words the console reads. Everything else is a number, bounded
+ * when the declaration gives bounds, or open text.
+ * @param knob - the declaration, as the catalogue reports it.
+ * @returns which control to draw for it.
+ */
+function controlOf(knob: RefactoryKnob): KnobControl {
+  if (knob.values.length > 0) return { kind: 'choice', values: knob.values }
+  if (knob.kind === 'bool') return { kind: 'choice', values: ['true', 'false'] }
+  if (knob.kind === 'int' || knob.kind === 'float') {
+    const [low, high] = knob.range
+    return {
+      kind: 'number',
+      step: knob.kind === 'int' ? '1' : 'any',
+      ...low === null ? {} : { min: low },
+      ...high === null ? {} : { max: high },
+    }
+  }
+  return { kind: 'text' }
+}
+
+/** One declared knob: its name, the value this run uses, and what it is for. */
+function KnobField({
+  name, knob, value, t, onChange,
+}: {
+  readonly name: string
+  readonly knob: RefactoryKnob
+  readonly value: string
+  readonly t: TranslateNS<'sidebarRefactory'>
+  readonly onChange: (value: string) => void
+}): ReactNode {
+  const control = controlOf(knob)
+  const id = `refactory-knob-${name}`
+  return (
+    <div className={css.field}>
+      <label className={css.label} htmlFor={id}>{name}</label>
+      {control.kind === 'choice'
+        ? (
+          <select
+            id={id}
+            className={css.control}
+            value={value}
+            data-refactory-knob-input={name}
+            onChange={(event) => { onChange(event.target.value) }}
+          >
+            {control.values.map(entry => <option key={entry} value={entry}>{entry}</option>)}
+          </select>
+        )
+        : control.kind === 'number'
+          ? (
+            <input
+              id={id}
+              className={css.input}
+              type="number"
+              step={control.step}
+              min={control.min}
+              max={control.max}
+              value={value}
+              data-refactory-knob-input={name}
+              onChange={(event) => { onChange(event.target.value) }}
+            />
+          )
+          : (
+            <input
+              id={id}
+              className={css.input}
+              type="text"
+              value={value}
+              data-refactory-knob-input={name}
+              onChange={(event) => { onChange(event.target.value) }}
+            />
+          )}
+      {knob.description !== '' && (
+        <p className={css.note} data-refactory-knob-description={name}>{knob.description}</p>
+      )}
+      {knob.frozen && <p className={css.note} data-refactory-knob-frozen={name}>{t('knob.frozen')}</p>}
+    </div>
+  )
+}
+
+/** What using the chosen mode once left, or that the run is still going. */
+function Single({
+  run, t,
+}: {
+  readonly run: RefactorySingleState
+  readonly t: TranslateNS<'sidebarRefactory'>
+}): ReactNode {
+  if (run.kind === 'running') {
+    return <p className={css.note} data-refactory-single="running">{t('single.running')}</p>
+  }
+  const single = run.value
+  const authoring = single.authoring
+  return (
+    <div className={css.status} data-refactory-single={single.state}>
+      <p className={css.statusLine} data-refactory-single-run>{t('single.ran', { run: single.root })}</p>
+      <p className={css.statusLine}>{t('status.state')}: {single.state}</p>
+      <p className={css.statusLine} data-refactory-single-score>
+        {single.best_score === null ? t('status.noScore') : t('status.best', { score: single.best_score })}
+      </p>
+      {authoring !== null && (
+        <p className={css.statusLine} data-refactory-single-spine={authoring.spine}>
+          {t('single.spine')}: {authoring.spine}
+        </p>
+      )}
+      {authoring !== null && authoring.nodes_due.length > 0 && (
+        <p className={css.statusLine} data-refactory-single-due>
+          {t('single.due', { nodes: authoring.nodes_due.join(', ') })}
+        </p>
+      )}
+      {authoring !== null && (authoring.spine === 'ready' || authoring.spine === 'refused') && (
+        <p className={css.note} data-refactory-single-gate>{t('single.gate')}</p>
+      )}
+      {authoring !== null && authoring.error !== '' && (
+        <p className={css.note} data-refactory-single-error>
+          {t('error.failed', { message: authoring.error })}
+        </p>
+      )}
+      {Object.keys(single.facts).length > 0 && (
+        <div className={css.status}>
+          <p className={css.note}>{t('single.facts')}</p>
+          <ul className={css.recorded}>
+            {Object.entries(single.facts).map(([name, written]) => (
+              <li key={name} data-refactory-fact={name}>{name}: {written}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
+
 /** The run's status, once there is a run to read. */
 function Status({
   tabId, frame, run, signal, t, refresh, stop,
@@ -158,7 +306,7 @@ function Status({
 
 /** The picker's body: the described choices, and the run they start. */
 export function RefactoryBody({
-  useTabInfo, useStore, choose, setSetting, start, load, reload, refresh, stop,
+  useTabInfo, useStore, choose, setKnob, setSetting, start, run: runOnce, load, reload, refresh, stop,
   setEnabled, remove, importPackage, t,
 }: RefactoryBodyProps): ReactNode {
   const { tab } = useTabInfo()
@@ -166,6 +314,12 @@ export function RefactoryBody({
   const state = useStore(store => store.byTab[tab.id])
   const [source, setSource] = useState('')
   const [name, setName] = useState('')
+  const chosen = state?.choices.kind === 'ready'
+    ? state.choices.value.modes.find(mode => mode.id === state.chosen)
+    : undefined
+  // What both gestures send: every declared knob, with the declaration's own value
+  // under anything a person has not changed.
+  const knobs = useMemo(() => knobValues(chosen, state?.knobs), [chosen, state?.knobs])
   useEffect(() => {
     // A bucket gone because the record aborted must not be re-seeded by a
     // component that has not unmounted yet.
@@ -185,7 +339,7 @@ export function RefactoryBody({
     )
   }
   const { modes, strategies, packages } = choices.value
-  const selected = modes.find(mode => mode.id === state.chosen)
+  const selected = chosen
   const run = state.watching
   return (
     <div className={css.root} data-refactory-state="ready">
@@ -229,6 +383,16 @@ export function RefactoryBody({
             </p>
           )}
         </div>
+        {knobs.map(({ name: knob, knob: declaration, value }) => (
+          <KnobField
+            key={knob}
+            name={knob}
+            knob={declaration}
+            value={value}
+            t={t}
+            onChange={(changed) => { setKnob(tab.id, knob, changed) }}
+          />
+        ))}
         {selected !== undefined && selected.action !== 'start' && (
           <p className={css.note} data-refactory-authoring>
             {t('mode.authoring', { action: selected.action })}
@@ -262,16 +426,31 @@ export function RefactoryBody({
           onChoose={(value) => { setSetting(tab.id, 'evaluator', value) }}
         />
         {selected !== undefined && (
-          <button
-            type="button"
-            className={css.action}
-            data-refactory-start
-            onClick={() => { start(tab.id, selected.id, state.settings, signal) }}
-          >
-            <IconPlayOutline16 />
-            {t('start')}
-          </button>
+          <div className={css.gestures}>
+            <button
+              type="button"
+              className={css.action}
+              data-refactory-start
+              onClick={() => { start(tab.id, selected.id, knobs, state.settings, signal) }}
+            >
+              <IconPlayOutline16 />
+              {t('start')}
+            </button>
+            {selected.action === 'start' && (
+              <button
+                type="button"
+                className={css.action}
+                disabled={state.single?.kind === 'running'}
+                data-refactory-run-once
+                onClick={() => { runOnce(tab.id, selected.id, knobs, signal) }}
+              >
+                <IconPlayOutline16 />
+                {t('runOnce')}
+              </button>
+            )}
+          </div>
         )}
+        {state.single !== null && <Single run={state.single} t={t} />}
       </section>
 
       <section className={css.section}>
