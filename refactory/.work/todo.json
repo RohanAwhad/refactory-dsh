@@ -798,6 +798,17 @@
       "commit": "c7cc7c5aaf",
       "evidence": "Both paths now check the payload's `exit_ok` and raise, naming the run's own error: the model path before accepting a score, the deterministic path after the model retry (so the keyless first attempt of an agent mode, which legitimately fails without a model, still reaches the retry). Test: a stub smoke returning `exit_ok: False` with a 0.0 score is refused with `did not finish a run with a model`.",
       "observed": "775 passed, 10 skipped (refactory/tests)"
+    },
+    {
+      "id": "use-and-search",
+      "issue": 72,
+      "title": "A mode with frozen input knobs could not be run or searched",
+      "why": "Found by using the mode the hard sanity create run produced. `refactory run \u2026 --knob source_root=\u2026` failed with `knob 'source_root' is frozen and cannot be moved` because a person's override went through the optimizer's editor; `--knob target=7` could not set a numeric knob at all because the editor takes typed values; `optimize` had no `--knob` to seed a search, so a mode with frozen inputs scored the same thing for every candidate; and the model client was built only for the `autoresearch` optimizer, so every candidate of an agent mode failed with `agent node 'propose' needs a model client`.",
+      "verify": "pytest refactory/tests/test_loop.py refactory/tests/test_gui_loop.py -q",
+      "status": "done",
+      "commit": "2e8383e4b2",
+      "evidence": "`nn.edits.configure(state, name, value)` sets a knob for the run being made: it refuses an unknown name and a value the knob will not accept, and does not apply the freeze, because the caller deciding what this run operates on is not the search. `_from_text` parses a command line's text by the knob's kind (int/float/bool/numeric enum), so `--knob target=7` is the integer 7 and `--knob allow_regression=1` is True. `LoopConfig.knobs` seeds the starting state (the loop's own mode and the seed candidate), carried by `optimize --knob`, the console's `start --knob` (whose `_spawn` now emits one flag per list element) and the tool's `start` `knobs`. `loop.main` builds the model client unconditionally (fbfcf393e6), because the evaluator needs one for the mode's own agent nodes. Verified end to end: a real run of `cve_patch_pack/patch` with its two inputs scored 1.0, and `optimize` with those inputs evaluated candidates for real and recorded `set_knob attempts=2` as a scored 0.0 plus six validator refusals naming why each structural proposal did not fit. Tests: a frozen knob is settable by the caller, text is parsed by kind, a bad text is refused, the search's seed and the loop's own mode carry the seeded value, the console forwards `--knob` (not `--knobs`), the tool forwards one flag per value, and a search builds a client.",
+      "observed": "30 passed (test_loop.py) + 40 (test_gui_loop.py)"
     }
   ],
   "verification": {
