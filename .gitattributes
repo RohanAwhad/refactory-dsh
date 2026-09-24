@@ -8,6 +8,11 @@
 
 *.pdf binary
 
+# A pnpm patch is a diff: every context and addition line begins with a space
+# before the patched file's own indentation, so the whitespace check would flag
+# the format itself, not a defect in the patched source.
+patches/*.patch -whitespace
+
 # Pairing records are generated from the three confirmed owner-blob pairs.
 # The worktree-local installer registers the fail-closed driver command.
 *.i18n.yaml merge=dsh-translation-pairing

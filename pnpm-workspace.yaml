@@ -44,3 +44,6 @@ allowBuilds:
   '@google/genai': false
   protobufjs: false
   msgpackr-extract: false
+
+patchedDependencies:
+  '@deepseek-ai/dsh-headless@0.1.5-rc.3': patches/@deepseek-ai__dsh-headless@0.1.5-rc.3.patch

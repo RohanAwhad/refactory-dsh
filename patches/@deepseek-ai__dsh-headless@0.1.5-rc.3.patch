@@ -1,0 +1,140 @@
+diff --git a/cordis.patch.yml b/cordis.patch.yml
+index f20194e8623755b225c89d23099ca8a83ec48da4..3a5e90570b08fc23d41a77a08f2264d66c175741 100644
+--- a/cordis.patch.yml
++++ b/cordis.patch.yml
+@@ -23,9 +23,12 @@
+     - id: headless-startup
+       name: '@deepseek-ai/dsh-headless/startup'
+ 
+-    # Reads its task from the ordinary headlessStartup provider.
++    # Reads its task and its model selection from the ordinary headlessStartup
++    # provider.
+     - id: headless-runner
+       name: '@deepseek-ai/dsh-headless'
+       inject: [headlessStartup]
+       config:
+         task: !!js ctx.headlessStartup.task
++        provider: !!js ctx.headlessStartup.provider
++        model: !!js ctx.headlessStartup.model
+diff --git a/lib/index.js b/lib/index.js
+index 740de3dc811bc33376f2d7973a75a45f1f689ec8..2fa100113b8cff9e44b62eeae7ab3f14f601b23e 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -23,7 +23,11 @@ const inject = [
+ 	"agents",
+ 	"sessions"
+ ];
+-const Config = z.object({ task: z.string().required() });
++const Config = z.object({
++	task: z.string().required(),
++	provider: z.string(),
++	model: z.string()
++});
+ /** The process streams the runner writes to; tests substitute captures. */
+ const internals = {
+ 	stdout: process.stdout,
+@@ -124,23 +128,35 @@ function fail(io, error) {
+ * @param task - one-shot task text.
+ * @param io - process-facing effects.
+ */
+-async function run(ctx, task, io) {
++async function run(ctx, config, io) {
+ 	await ctx.get("loader")?.await();
+ 	const agents = ctx.get("agents");
+ 	const defaultModel = ctx.get("agentDefaultModel");
+ 	const sessions = ctx.get("sessions");
+ 	if (agents === void 0 || defaultModel === void 0 || sessions === void 0) return;
+ 	const selection = defaultModel.currentSelection();
++	// `--provider`/`--model` pick the route for this invocation only; nothing is
++	// written back to settings, so one run against another model cannot change
++	// what the next one uses. A named model has to become the selection itself,
++	// because the model-selection middleware rewrites every request from its own
++	// `current` and would otherwise silently discard `agentOptions`.
++	const provider = config.provider || selection.provider;
++	const model = config.model || selection.model;
++	const named = (config.provider ?? "") !== "" || (config.model ?? "") !== "";
++	const current = named ? {
++		provider,
++		model
++	} : selection;
+ 	const { agent } = await agents.create({
+ 		sessionId: brandString(`session-${randomUUID()}`),
+ 		meta: { cwd: process.cwd() },
+ 		agentOptions: {
+-			provider: selection.provider,
+-			model: selection.model
++			provider,
++			model
+ 		},
+ 		setup: (agentCtx) => {
+ 			installModelSelection(agentCtx, {
+-				current: selection,
++				current,
+ 				assembled: void 0
+ 			});
+ 		}
+@@ -152,7 +168,7 @@ async function run(ctx, task, io) {
+ 		agent.followup(createUserMessage({
+ 			content: [{
+ 				type: "text",
+-				text: task
++				text: config.task
+ 			}],
+ 			source: { kind: "user" }
+ 		}));
+@@ -179,7 +195,7 @@ function apply(ctx, config) {
+ 		stderr: internals.stderr,
+ 		exit
+ 	};
+-	run(ctx, config.task, io).catch((error) => {
++	run(ctx, config, io).catch((error) => {
+ 		fail(io, error);
+ 	});
+ }
+diff --git a/lib/startup.js b/lib/startup.js
+index 1c89e45b19cb459666d0035cdb32f92e0c5b3f3d..ae268944a3f669f9e2d201d7ebbfe9f3648dc602 100644
+--- a/lib/startup.js
++++ b/lib/startup.js
+@@ -2,9 +2,10 @@ import { Command } from "commander";
+ import { parseCmdline } from "@deepseek-ai/dsh-cmdline";
+ //#region lib/types/startup.js
+ /**
+-* The one-shot app's command-line provider: it parses the task positional and
+-* `--help`, then publishes {@link HEADLESS_STARTUP_SERVICE}. The runner is an
+-* ordinary consumer whose lazy config waits for that service.
++* The one-shot app's command-line provider: it parses the task positional, the
++* optional model selection, and `--help`, then publishes
++* {@link HEADLESS_STARTUP_SERVICE}. The runner is an ordinary consumer whose lazy
++* config waits for that service.
+ * @module @deepseek-ai/dsh-headless/startup
+ */
+ /** Stable Cordis plugin name. */
+@@ -18,9 +19,10 @@ const HEADLESS_STARTUP_SERVICE = "headlessStartup";
+ * @returns a fresh program, so one process can parse more than once (tests).
+ */
+ function headlessCommand() {
+-	return new Command().name("dsh --profile headless").description("Answer one task, stream reasoning to stderr, print the final assistant message, and exit.").helpOption("-h, --help", "show this help").argument("[task...]", "the task text; multiple words are joined by spaces").addHelpText("after", `
++	return new Command().name("dsh --profile headless").description("Answer one task, stream reasoning to stderr, print the final assistant message, and exit.").helpOption("-h, --help", "show this help").argument("[task...]", "the task text; multiple words are joined by spaces").option("-p, --provider <provider>", "provider route for this run (default: the runtime default)").option("--model <model>", "model id for this run (defaults to the provider route default)").addHelpText("after", `
+ Examples:
+-  dsh --profile headless "run the tests"     answer one task and exit
++  dsh --profile headless "run the tests"                      answer one task and exit
++  dsh --profile headless --model deepseek-v4-pro "review it"  answer with a named model
+ `);
+ }
+ /**
+@@ -32,9 +34,14 @@ Examples:
+ function apply(ctx) {
+ 	const program = headlessCommand();
+ 	program.action(() => {
++		const options = program.opts();
+ 		const task = program.args.join(" ");
+ 		if (task.trim() === "") program.error("error: a task is required, for example: dsh --profile headless \"run the tests\"");
+-		ctx.provide(HEADLESS_STARTUP_SERVICE, { task });
++		ctx.provide(HEADLESS_STARTUP_SERVICE, {
++			task,
++			provider: options.provider,
++			model: options.model
++		});
+ 	});
+ 	parseCmdline(ctx, program);
+ }
