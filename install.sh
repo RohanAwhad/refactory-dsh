@@ -2,7 +2,7 @@
 # refactory-dsh — one-command install for the self-contained single repo.
 #
 # The repo is a DSH fork: the DSH source sits at the repo root, the glue at
-# `refactory/`, and the vendored language (`factory`) and reference modes (`srf`)
+# `refactory/`, and the vendored language (`factory`)
 # are git submodules under `refactory/vendor/`. This script sets up the Node side
 # (pnpm) and the Python side (one `uv sync` over the root project), so after it:
 #
@@ -114,7 +114,7 @@ git -C "$HERE" submodule update --init --recursive
 
 # 3. Python side: **one project, one lockfile, one command**. `uv sync` reads the
 #    root `pyproject.toml`, creates `.venv`, installs the three local packages in
-#    editable mode (`refactory-dsh`, the vendored `factory` and `srf`) and puts the
+#    editable mode (`refactory-dsh` and the vendored `factory`) and puts the
 #    `refactory` console script on `.venv/bin` — which is why every documented
 #    command is `uv run refactory …` rather than an interpreter path.
 if ! command -v uv >/dev/null 2>&1; then
