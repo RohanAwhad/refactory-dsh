@@ -21,7 +21,7 @@ import type {
   RefactoryKnob,
   RefactoryRunStatus,
   RefactoryStrategyChoice,
-} from '@deepseek-ai/dsh-api-remotes/client'
+} from '@deepseek-ai/dsh-refactory-console/types'
 import type { PropsLocale, PropsRuntime, PropsStore, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import {
   IconDatabaseOutline16, IconPlayOutline16, IconRefreshOutline16, IconStopFill16,

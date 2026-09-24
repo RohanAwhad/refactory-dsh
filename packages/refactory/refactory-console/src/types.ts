@@ -13,6 +13,8 @@
  * @module @deepseek-ai/dsh-refactory-console/types
  */
 
+import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
+
 /** The knob kinds `refactory_dsh.nn.knob` declares. */
 export type RefactoryKnobKind = 'int' | 'float' | 'bool' | 'str' | 'enum'
 
@@ -251,6 +253,41 @@ export interface RefactorySingleRunRequest {
   readonly mode: string
   /** Knob values this run uses, as `NAME=VALUE`; the console's default when absent. */
   readonly knobs?: readonly string[]
+}
+
+/**
+ * The Client Remote face over the console: every method the Host service marks
+ * `@Remote`, with the carrier's outcome envelope.
+ *
+ * The harness's Typert generator emits this interface into `./remote` only when
+ * its own protocol package is a project in the same workspace. The lean repo
+ * depends on the published harness instead, so the generated artifacts are not
+ * produced and this package states the face itself; the Host half that mounts it
+ * still has to select this contribution in its own assembly.
+ */
+export interface RefactoryConsoleRemote {
+  /** @param source - package source the mode comes from. @param name - mode package name. @param signal - caller cancellation. @returns the package list after the import. */
+  importPackage: (source: string, name: string, signal?: AbortSignal) => Promise<RemoteResult<readonly RefactoryPackageChoice[]>>
+  /** @param signal - caller cancellation. @returns the mode catalogue. */
+  modes: (signal?: AbortSignal) => Promise<RemoteResult<readonly RefactoryModeChoice[]>>
+  /** @param signal - caller cancellation. @returns the mode packages. */
+  packages: (signal?: AbortSignal) => Promise<RemoteResult<readonly RefactoryPackageChoice[]>>
+  /** @param name - package name to remove. @param signal - caller cancellation. @returns the package list after the removal. */
+  removePackage: (name: string, signal?: AbortSignal) => Promise<RemoteResult<readonly RefactoryPackageChoice[]>>
+  /** @param request - the mode to use once and its knob values. @param signal - caller cancellation. @returns the single run's answer. */
+  run: (request: RefactorySingleRunRequest, signal?: AbortSignal) => Promise<RemoteResult<RefactorySingleRun>>
+  /** @param signal - caller cancellation. @returns the runs the console knows about. */
+  runs: (signal?: AbortSignal) => Promise<RemoteResult<readonly RefactoryRunSummary[]>>
+  /** @param name - package name to switch. @param enabled - the state to record. @param signal - caller cancellation. @returns the package list after the change. */
+  setPackageEnabled: (name: string, enabled: boolean, signal?: AbortSignal) => Promise<RemoteResult<readonly RefactoryPackageChoice[]>>
+  /** @param request - the mode to start and its knob values. @param signal - caller cancellation. @returns the started run's receipt. */
+  start: (request: RefactoryStartRequest, signal?: AbortSignal) => Promise<RemoteResult<RefactoryStartReceipt>>
+  /** @param run - the run being read. @param after - byte offset already read. @param signal - caller cancellation. @returns the run's status frame. */
+  status: (run: string, after: number, signal?: AbortSignal) => Promise<RemoteResult<RefactoryRunStatus>>
+  /** @param run - the run to stop. @param signal - caller cancellation. @returns the stop receipt. */
+  stop: (run: string, signal?: AbortSignal) => Promise<RemoteResult<RefactoryStopReceipt>>
+  /** @param signal - caller cancellation. @returns the named outer loops, optimizers and evaluators. */
+  strategies: (signal?: AbortSignal) => Promise<RemoteResult<RefactoryStrategies>>
 }
 
 declare module '@deepseek-ai/dsh-typert-protocol' {

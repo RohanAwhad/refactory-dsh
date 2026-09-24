@@ -8,11 +8,11 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { Mock } from 'vitest'
+import type { RemoteResult } from '@deepseek-ai/dsh-api-remotes/client'
 import type {
-  RemoteResult,
   RefactoryModeChoice,
   RefactoryPackageChoice,
-} from '@deepseek-ai/dsh-api-remotes/client'
+} from '@deepseek-ai/dsh-refactory-console/types'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { TabId } from '@deepseek-ai/dsh-client-ui-dockkit'
 import { refactoryFace } from '../src/client/face.ts'

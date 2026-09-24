@@ -7,33 +7,5 @@
   "include": [
     "src"
   ],
-  "references": [
-    {
-      "path": "../../../vendor/cosmokit"
-    },
-    {
-      "path": "../../../vendor/cordis"
-    },
-    {
-      "path": "../../core/tools"
-    },
-    {
-      "path": "../../core/system-prompt"
-    },
-    {
-      "path": "../../subprocess/subprocess"
-    },
-    {
-      "path": "../../subprocess/subprocess-local"
-    },
-    {
-      "path": "../../core/agent"
-    },
-    {
-      "path": "../../core/session"
-    },
-    {
-      "path": "../../util/values"
-    }
-  ]
+  "references": []
 }

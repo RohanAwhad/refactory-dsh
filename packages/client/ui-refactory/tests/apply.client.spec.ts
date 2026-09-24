@@ -1,20 +1,46 @@
 /**
  * The plugin's registrations, and their removal when the plugin goes.
  *
- * The registry is real, because "registered" means what it says a type is; the
- * slot, locale, and Remote faces are recorders, because what matters here is
- * what was handed to them — one body seat under the type's id with its store and
- * face — and that every registration is gone after dispose, which is what makes
- * a reload safe.
+ * The registry keeps the two operations this spec observes — register a
+ * definition under its kind, read it back by kind — because a pinned install
+ * publishes the harness's registry type but not its implementation; the slot,
+ * locale, and Remote faces are recorders, because what matters here is what was
+ * handed to them — one body seat under the type's id with its store and face —
+ * and that every registration is gone after dispose, which is what makes a
+ * reload safe.
  */
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { SidebarRightTabRegistry } from '@deepseek-ai/dsh-client-ui-sidebar-right/src/client/tab-registry.ts'
+import type { SidebarRightTabDefinition } from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
 import { REFACTORY_ID, REFACTORY_KIND } from '../src/client/definition.ts'
 import { apply, inject } from '../src/client/index.ts'
 import { apply as hostApply } from '../src/index.ts'
 import { RefactoryBody } from '../src/client/RefactoryBody.tsx'
 import { en, zh } from '../src/client/locales.ts'
+
+/** Stand-in for the harness tab registry: register by kind, read back by kind. */
+class TabRegistry {
+  private readonly byKind = new Map<string, SidebarRightTabDefinition>()
+
+  /**
+   * Register one tab type.
+   * @param definition - the type to register.
+   * @returns the disposer that removes it again.
+   */
+  register(definition: SidebarRightTabDefinition): () => void {
+    this.byKind.set(definition.kind, definition)
+    return () => { this.byKind.delete(definition.kind) }
+  }
+
+  /**
+   * Read the type registered under one kind.
+   * @param kind - the kind to look up.
+   * @returns the registered definition, or undefined.
+   */
+  get(kind: string): SidebarRightTabDefinition | undefined {
+    return this.byKind.get(kind)
+  }
+}
 
 interface Recorded {
   name: string
@@ -27,7 +53,7 @@ interface Recorded {
 
 async function boot() {
   const ctx = new Context()
-  const tabs = new SidebarRightTabRegistry(ctx)
+  const tabs = new TabRegistry()
   const registered: Recorded[] = []
   const slots = {
     inject: vi.fn((_name: string, register: () => () => void) => register()),
@@ -68,7 +94,7 @@ describe('ui-refactory apply', () => {
     expect(definition?.id).toBe(REFACTORY_ID)
     expect(definition?.priority).toBe('builtin')
     expect(definition?.title('sidebar://refactory')).toBe('type.label')
-    expect(definition?.guide?.map(entry => [entry.order, entry.title(), entry.description()]))
+    expect(definition?.guide?.map(entry => [entry.order, entry.title(), entry.description?.()]))
       .toEqual([[10, 'guide.title', 'guide.description']])
     expect(dictionaries.get('sidebarRefactory')).toEqual({ zh, en })
     // The seat key is the implementation's id, not the kind: an extension may

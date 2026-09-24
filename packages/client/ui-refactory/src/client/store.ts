@@ -20,7 +20,7 @@ import type {
   RefactoryRunStatus,
   RefactorySingleRun,
   RefactoryStrategies,
-} from '@deepseek-ai/dsh-api-remotes/client'
+} from '@deepseek-ai/dsh-refactory-console/types'
 import type { TabId } from '@deepseek-ai/dsh-client-ui-dockkit'
 
 /** One read that either landed, is in flight, or failed with the Host's reason. */

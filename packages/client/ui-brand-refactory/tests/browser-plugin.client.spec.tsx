@@ -1,8 +1,7 @@
 // @vitest-environment jsdom
-import { Context } from '@deepseek-ai/cordis'
+import { Context, Service } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
-import { SlotRegistry } from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { apply, inject } from '../src/client/index.ts'
 import { RefactoryBrandMark, RefactoryBrandName, RefactoryHeroMark } from '../src/client/Brand.tsx'
 import { apply as hostApply } from '../src/index.ts'
@@ -17,10 +16,111 @@ const HOLES = [
   'conversation.hero.brand.mark',
 ] as const
 
+/** One contribution a declaration is waiting for, and what it installed. */
+interface Injection {
+  readonly contribute: () => (() => void) | Iterable<() => void>
+  readonly installed: (() => void)[]
+}
+
+/**
+ * The slice of the harness `ui-renderer` SlotRegistry these specs drive:
+ * a contribution into a declared slot installs now, one into an undeclared slot
+ * waits, collapse disposes what was installed, and a redeclaration installs it
+ * again. The published harness ships that registry only as a browser bundle, so
+ * the suite carries this stand-in; it extends Cordis `Service` for the one
+ * behaviour the bundle documents as registry-owned — install through the
+ * caller's `ctx.effect`, so plugin unload removes the contribution.
+ */
+class DeclaringSlotRegistry extends Service {
+  private readonly declared = new Set<string>()
+  private readonly injections = new Map<string, Injection[]>()
+  private readonly occupants = new Map<string, unknown[]>()
+
+  /**
+   * @param ctx - owning root context.
+   */
+  constructor(ctx: Context) {
+    super(ctx, 'slots')
+  }
+
+  /**
+   * Register one occupant, declaring the child slots it names.
+   * @param spec - the slot being filled and the children it declares.
+   * @param component - the component installed into that slot.
+   * @returns the disposer that removes the occupant and collapses its children.
+   */
+  register(spec: { name: string, children?: Record<string, unknown> }, component: unknown): () => void {
+    const occupants = this.occupants.get(spec.name) ?? []
+    occupants.push(component)
+    this.occupants.set(spec.name, occupants)
+    const children = Object.keys(spec.children ?? {})
+    for (const child of children) this.declare(child)
+    return () => {
+      const list = this.occupants.get(spec.name)
+      const index = list?.indexOf(component) ?? -1
+      if (index >= 0) list?.splice(index, 1)
+      for (const child of children) this.collapse(child)
+    }
+  }
+
+  /**
+   * Install a contribution for each declaration lifetime of one slot.
+   * @param key - the declared slot to depend on.
+   * @param contribute - what to install while the declaration stands.
+   * @returns the disposer that cancels the wait and removes the contribution.
+   */
+  inject(key: string, contribute: () => (() => void) | Iterable<() => void>): () => void {
+    return this.ctx.effect(() => {
+      const injection: Injection = { contribute, installed: [] }
+      const injections = this.injections.get(key) ?? []
+      injections.push(injection)
+      this.injections.set(key, injections)
+      if (this.declared.has(key)) this.install(injection)
+      return () => {
+        const index = injections.indexOf(injection)
+        if (index >= 0) injections.splice(index, 1)
+        this.retract(injection)
+      }
+    })
+  }
+
+  /**
+   * The occupants currently registered into one slot.
+   * @param key - the slot to read.
+   * @returns the components installed into it.
+   */
+  entries(key: string): readonly unknown[] {
+    return this.occupants.get(key) ?? []
+  }
+
+  private declare(key: string): void {
+    if (this.declared.has(key)) return
+    this.declared.add(key)
+    for (const injection of this.injections.get(key) ?? []) this.install(injection)
+  }
+
+  private collapse(key: string): void {
+    if (!this.declared.delete(key)) return
+    for (const injection of this.injections.get(key) ?? []) this.retract(injection)
+    this.occupants.delete(key)
+  }
+
+  private install(injection: Injection): void {
+    const result = injection.contribute()
+    const disposers = typeof result === 'function' ? [result] : [...result]
+    injection.installed.push(...disposers)
+  }
+
+  private retract(injection: Injection): void {
+    for (const dispose of injection.installed.reverse()) dispose()
+    injection.installed.length = 0
+  }
+}
+
 async function bench(declare = true) {
   const ctx = new Context()
-  await ctx.plugin(SlotRegistry).await()
-  const slots = ctx.get('slots') as SlotRegistry
+  await ctx.plugin(DeclaringSlotRegistry).await()
+  const slots = ctx.get('slots') as DeclaringSlotRegistry
   const declareHoles = () => slots.register({
     name: 'root',
     children: Object.fromEntries(HOLES.map(name => [name, { kind: 'single', scope: 'root' }])),

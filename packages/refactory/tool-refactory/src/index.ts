@@ -504,10 +504,13 @@ export function apply(ctx: Context, config: Config): void {
   const console = new Console(ctx.subprocess, resolveConsoleSettings(resolved))
 
   // Usage policy ships with the tool: the loop is not something to reach for
-  // unprompted, and the model needs to know a run outlives the call.
+  // unprompted, and the model needs to know a run outlives the call. The
+  // published harness owns the central section-order table and has no
+  // refactory-specific slot, so this outer-loop tool takes the workflow slot
+  // beside the workflow and ralph tools.
   ctx.systemPrompt.section({
     name: `tool:${resolved.toolName}`,
-    order: ctx.systemPrompt.getSectionOrder('TOOL_REFACTORY'),
+    order: ctx.systemPrompt.getSectionOrder('TOOL_WORKFLOW'),
     text: `Use the ${resolved.toolName} tool to run and read a refactory outer-loop run. A run starts in its own process and continues after the call returns, so start it, then watch it with the "status" action (pass an "after" offset to read only what is new) instead of blocking on it.`,
   })
 

@@ -16,6 +16,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
 import { REFACTORY_ID, refactoryDefinition } from './definition.ts'
 import { refactoryFace } from './face.ts'
+import type { RefactoryRemote } from './face.ts'
 import { RefactoryBody } from './RefactoryBody.tsx'
 import { en, zh } from './locales.ts'
 import { createRefactoryStore } from './store.ts'
@@ -47,7 +48,10 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-refactory: dictionaries')
 
   const store = createRefactoryStore()
-  const inject = refactoryFace(ctx.remote)
+  // The published Client Remote assembly selects the harness's own namespaces;
+  // this fork's console contribution is one the lean repo does not mount, so the
+  // face takes the namespace shape its package declares.
+  const inject = refactoryFace(ctx.remote as unknown as RefactoryRemote)
   ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register(
     { name: 'sidebar.right.pane.tab', key: REFACTORY_ID, locale: NS, store, inject },
     RefactoryBody,

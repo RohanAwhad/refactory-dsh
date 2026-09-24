@@ -339,7 +339,6 @@ describe('asking a person', () => {
     // A listener may reject with anything, so the plugin must report it rather than
     // crash; a rejection that is not an Error is the case under test.
     const notAnError = { toString: () => 'no answerer here' }
-    // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- see above.
     root.on('user-questions/request', () => Promise.reject(notAnError))
     await root.plugin(spinePlugin, config({
       workdir,

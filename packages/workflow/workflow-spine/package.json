@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-workflow-spine",
   "description": "Interactive drift-free workflow runner: a per-session Spine plus wf_* tools the CEO drives step by step",
-  "version": "0.1.3-alpha.2",
+  "version": "0.1.5-rc.3",
   "publishConfig": {
     "access": "public"
   },
@@ -32,25 +32,26 @@
   ],
   "license": "MIT",
   "peerDependencies": {
-    "@deepseek-ai/cordis": "workspace:^",
-    "@deepseek-ai/dsh-system-prompt": "workspace:^",
-    "@deepseek-ai/dsh-tools": "workspace:^",
-    "@deepseek-ai/dsh-user-questions": "workspace:^",
-    "@deepseek-ai/dsh-util-values": "workspace:^",
-    "@deepseek-ai/dsh-shell": "workspace:^"
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh-system-prompt": "0.1.5-rc.3",
+    "@deepseek-ai/dsh-tools": "0.1.5-rc.3",
+    "@deepseek-ai/dsh-user-questions": "0.1.5-rc.3",
+    "@deepseek-ai/dsh-util-values": "0.1.5-rc.3",
+    "@deepseek-ai/dsh-shell": "0.1.5-rc.3"
   },
   "dependencies": {
-    "@deepseek-ai/dsh-scope": "workspace:^",
-    "@deepseek-ai/schemastery": "workspace:^"
+    "@deepseek-ai/cosmokit": "1.8.5",
+    "@deepseek-ai/dsh-scope": "0.1.5-rc.3",
+    "@deepseek-ai/schemastery": "3.18.2"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "workspace:^",
-    "@deepseek-ai/dsh-agent": "workspace:^",
-    "@deepseek-ai/dsh-scope": "workspace:^",
-    "@deepseek-ai/dsh-system-prompt": "workspace:^",
-    "@deepseek-ai/dsh-tools": "workspace:^",
-    "@deepseek-ai/dsh-user-questions": "workspace:^",
-    "@deepseek-ai/dsh-util-values": "workspace:^",
-    "@deepseek-ai/dsh-shell": "workspace:^"
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh-agent": "0.1.5-rc.3",
+    "@deepseek-ai/dsh-scope": "0.1.5-rc.3",
+    "@deepseek-ai/dsh-system-prompt": "0.1.5-rc.3",
+    "@deepseek-ai/dsh-tools": "0.1.5-rc.3",
+    "@deepseek-ai/dsh-user-questions": "0.1.5-rc.3",
+    "@deepseek-ai/dsh-util-values": "0.1.5-rc.3",
+    "@deepseek-ai/dsh-shell": "0.1.5-rc.3"
   }
 }

@@ -17,7 +17,7 @@ import type {
   RefactorySingleRun,
   RefactoryStartReceipt,
   RefactoryStrategies,
-} from '@deepseek-ai/dsh-api-remotes/client'
+} from '@deepseek-ai/dsh-refactory-console/types'
 import type { RefactoryRemote } from '../src/client/face.ts'
 
 /** The three registries with nothing in them. */

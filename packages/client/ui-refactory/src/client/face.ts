@@ -20,8 +20,8 @@
  * A Remote call does not reject: the result carries the failure, which is stored
  * as the Host's code and message and turned into copy where the copy lives.
  */
-import type { ClientRemote, RemoteFailure, RemoteResult } from '@deepseek-ai/dsh-api-remotes/client'
-import type { RefactoryPackageChoice } from '@deepseek-ai/dsh-api-remotes/client'
+import type { RemoteFailure, RemoteResult } from '@deepseek-ai/dsh-api-remotes/client'
+import type { RefactoryConsoleRemote, RefactoryPackageChoice } from '@deepseek-ai/dsh-refactory-console/types'
 import type { BoundActions } from '@deepseek-ai/dsh-client-store'
 import type { TabId } from '@deepseek-ai/dsh-client-ui-dockkit'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
@@ -35,7 +35,7 @@ import type {
 /** The slice of the Client Remote face this package calls: the `refactoryConsole` namespace. */
 export type RefactoryRemote = {
   readonly refactoryConsole: Pick<
-    ClientRemote['refactoryConsole'],
+    RefactoryConsoleRemote,
     'modes' | 'strategies' | 'packages' | 'start' | 'run' | 'status' | 'stop'
       | 'setPackageEnabled' | 'removePackage' | 'importPackage'
   >

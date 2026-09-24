@@ -1,5 +1,15 @@
 import { defineConfig } from 'tsdown'
-import { typertPlugin } from './packages/typert/generator/lib/types/tsdown-plugin.js'
+import { typertPlugin } from '@deepseek-ai/dsh-typert-generator/tsdown'
+
+/** The six packages this fork owns; the published pin supplies everything else. */
+const WORKSPACE = [
+  'packages/workflow/workflow-spine',
+  'packages/bundle/graph',
+  'packages/refactory/refactory-console',
+  'packages/refactory/tool-refactory',
+  'packages/client/ui-refactory',
+  'packages/client/ui-brand-refactory',
+]
 
 function isBuildFaceClient(value: unknown): boolean {
   if (value === undefined || value === 'host') return false
@@ -16,9 +26,7 @@ function isBuildFaceClient(value: unknown): boolean {
 export default defineConfig(({ env }) => {
   const client = isBuildFaceClient(env?.DSH_BUILD_FACE)
   return {
-    workspace: client
-      ? ['vendor/*', 'packages/*/*', 'apps/cli']
-      : ['vendor/*', 'packages/*/*', 'apps/cli', 'apps/desktop', 'apps/desktop-host'],
+    workspace: WORKSPACE,
     entry: client ? '' : ['lib/types/{index,invariant,startup}.js'],
     outDir: 'lib',
     format: ['esm'],

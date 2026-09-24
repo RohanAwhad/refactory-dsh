@@ -149,7 +149,7 @@ The definition is prefix-stable while the composition and the tool's visibility 
 
 #### What the model sees
 
-The package registers one system prompt section named `tool:refactory`, placed by `ctx.systemPrompt.getSectionOrder('TOOL_REFACTORY')`, and its text follows the configured `toolName`. The section states that a run starts in its own process and continues after the call returns, so the model starts a run and then watches it instead of blocking on it.
+The package registers one system prompt section named `tool:refactory`, placed by `ctx.systemPrompt.getSectionOrder('TOOL_WORKFLOW')` — the published harness owns the central section-order table and has no refactory-specific slot, so this outer-loop tool sits beside the workflow and ralph tools — and its text follows the configured `toolName`. The section states that a run starts in its own process and continues after the call returns, so the model starts a run and then watches it instead of blocking on it.
 
 ##### tool:refactory
 

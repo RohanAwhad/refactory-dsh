@@ -7,21 +7,5 @@
   "include": [
     "src"
   ],
-  "references": [
-    {
-      "path": "../../../vendor/cordis"
-    },
-    {
-      "path": "../ui-renderer"
-    },
-    {
-      "path": "../ui-sidebar"
-    },
-    {
-      "path": "../ui-slots"
-    },
-    {
-      "path": "../ui-conversation"
-    }
-  ]
+  "references": []
 }
