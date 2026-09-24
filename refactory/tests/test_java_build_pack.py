@@ -159,36 +159,6 @@ def test_a_missing_script_is_a_failed_pass(tmp_path):
     assert "no build.sh" in verdict.details
 
 
-def test_the_task_takes_a_different_item_directory_at_run_time(tmp_path, monkeypatch):
-    """Pointing `JAVA_BUILD_ITEMS` elsewhere feeds the harness a tree it never shipped."""
-    root = tmp_path / "trees"
-    item = root / "solo"
-    (item / "src").mkdir(parents=True)
-    (item / "src" / "Solo.java").write_text(
-        "public class Solo {\n"
-        "    public static void main(String[] args) {\n"
-        '        System.out.println("solo");\n'
-        "    }\n"
-        "}\n"
-    )
-    (item / "item.json").write_text(json.dumps({"main_class": "Solo", "main_args": ""}))
-    (item / "expected.txt").write_text("solo\n")
-    monkeypatch.setenv("JAVA_BUILD_ITEMS", str(root))
-
-    items = JavaBuildTask().instances()
-    assert [entry.id for entry in items] == ["solo"]
-    result = _run(tmp_path, [_stub_script(entry) for entry in items], name="solo-run")
-    assert [row["id"] for row in result.facts["item_scores"]] == ["solo"]
-    assert result.score == pytest.approx(1.0)
-
-
-def test_a_named_item_directory_that_does_not_exist_is_refused(tmp_path, monkeypatch):
-    """An unbound source and an empty selection must not look alike."""
-    monkeypatch.setenv("JAVA_BUILD_ITEMS", str(tmp_path / "nowhere"))
-    with pytest.raises(FileNotFoundError, match="JAVA_BUILD_ITEMS"):
-        JavaBuildTask().instances()
-
-
 @pytest.mark.skipif(java_bin() is None, reason="this machine has no JDK")
 def test_a_real_build_and_run_scores_every_shipped_item(tmp_path):
     """The produced script compiles each tree and prints the recorded output."""

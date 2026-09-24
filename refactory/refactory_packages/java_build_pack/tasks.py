@@ -8,7 +8,7 @@ An item directory has three parts, and they are what a person needs to add a tre
     <item>/item.json      {"main_class": "...", "main_args": "..."}
     <item>/expected.txt   exactly what running the entry point prints
 
-`JAVA_BUILD_ITEMS` points the Task at another directory of that layout, so the harness is fed at run time rather than carrying its items in the graph.
+These three are the fixture the package ships. To run the harness on your own trees, point the run at them (`refactory run java_build_pack/build --source <dir>`): the items a harness reads are run configuration, so a Task does not need a second mechanism for it and the graph never carries them.
 """
 
 from __future__ import annotations
@@ -23,9 +23,6 @@ from refactory_dsh.task import Task, TaskInstance, VerifyResult
 
 #: The item directory a checkout ships, beside this module.
 ITEMS = Path(__file__).resolve().parent / "items"
-
-#: The environment variable that points the Task at a different directory of items.
-ITEMS_ENV = "JAVA_BUILD_ITEMS"
 
 #: How long one build script may run before the pass is judged a failure.
 BUILD_TIMEOUT_S = 120
@@ -78,20 +75,19 @@ class JavaBuildTask(Task):
     name = "java_build"
 
     def items_root(self) -> Path:
-        """Where this Task reads its items: the bundled directory, or `JAVA_BUILD_ITEMS`."""
-        override = os.environ.get(ITEMS_ENV, "").strip()
-        return Path(override).expanduser() if override else ITEMS
+        """Where this Task reads its items: the directory the package ships."""
+        return ITEMS
 
     def instances(self) -> list[TaskInstance]:
         """One instance per source tree, in id order, with its entry point as metadata.
 
-        A directory named by `JAVA_BUILD_ITEMS` that does not exist is refused by name: an unbound source and an empty selection must not look alike.
+        A missing directory is refused by name: a broken install and an empty selection must not look alike.
         """
         root = self.items_root()
         if not root.is_dir():
             raise FileNotFoundError(
-                f"the Java item directory {root} does not exist; {ITEMS_ENV} names the "
-                "directory the harness reads its source trees from"
+                f"the Java item directory {root} does not exist; the package ships it, "
+                "so this is a broken install rather than an empty selection"
             )
         listed: list[TaskInstance] = []
         for child in sorted(root.iterdir()):
