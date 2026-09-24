@@ -21,6 +21,7 @@
  * as the Host's code and message and turned into copy where the copy lives.
  */
 import type { RemoteFailure, RemoteResult } from '@deepseek-ai/dsh-api-remotes/client'
+import type { ClientConnectionRpc } from '@deepseek-ai/dsh-client-connection/client'
 import type { RefactoryConsoleRemote, RefactoryPackageChoice } from '@deepseek-ai/dsh-refactory-console/types'
 import type { BoundActions } from '@deepseek-ai/dsh-client-store'
 import type { TabId } from '@deepseek-ai/dsh-client-ui-dockkit'
@@ -39,6 +40,41 @@ export type RefactoryRemote = {
     'modes' | 'strategies' | 'packages' | 'start' | 'run' | 'status' | 'stop'
       | 'setPackageEnabled' | 'removePackage' | 'importPackage'
   >
+}
+
+/**
+ * Bind the `refactoryConsole` namespace to the Connection's generic RPC.
+ *
+ * The Host service is discovered by the gateway from its `@Remote` markers, and
+ * the gateway reads each argument by the method's declared parameter name. The
+ * pinned Client Remote assembly is a prebuilt bundle carrying the harness's own
+ * namespaces, so it mounts no `remote.refactoryConsole` service for this fork's
+ * namespace; the same `/api` channel answers `refactoryConsole/<method>`, so this
+ * sends the named arguments the SRC descriptor reads.
+ * @param rpc - the Client Connection's generic unary RPC caller.
+ * @returns the namespace face the picker calls.
+ */
+export function refactoryConsoleOverConnection(rpc: ClientConnectionRpc): RefactoryRemote {
+  const call = <T>(
+    method: string,
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<RemoteResult<T>> =>
+    rpc.call('/api', `refactoryConsole/${method}`, { args }, signal) as Promise<RemoteResult<T>>
+  return {
+    refactoryConsole: {
+      modes: (signal) => call('modes', {}, signal),
+      strategies: (signal) => call('strategies', {}, signal),
+      packages: (signal) => call('packages', {}, signal),
+      start: (request, signal) => call('start', { request }, signal),
+      run: (request, signal) => call('run', { request }, signal),
+      status: (run, after, signal) => call('status', { run, after }, signal),
+      stop: (run, signal) => call('stop', { run }, signal),
+      setPackageEnabled: (name, enabled, signal) => call('setPackageEnabled', { name, enabled }, signal),
+      removePackage: (name, signal) => call('removePackage', { name }, signal),
+      importPackage: (source, name, signal) => call('importPackage', { source, name }, signal),
+    },
+  }
 }
 
 /**

@@ -4,9 +4,9 @@
  * The registry keeps the two operations this spec observes — register a
  * definition under its kind, read it back by kind — because a pinned install
  * publishes the harness's registry type but not its implementation; the slot,
- * locale, and Remote faces are recorders, because what matters here is what was
- * handed to them — one body seat under the type's id with its store and face —
- * and that every registration is gone after dispose, which is what makes a
+ * locale, and Connection RPC faces are recorders, because what matters here is
+ * what was handed to them — one body seat under the type's id with its store and
+ * face — and that every registration is gone after dispose, which is what makes a
  * reload safe.
  */
 import { describe, expect, it, vi } from 'vitest'
@@ -72,12 +72,11 @@ async function boot() {
       return () => { dictionaries.delete(ns) }
     }),
   }
-  const refactoryConsole = { modes: vi.fn() }
+  const connection = { rpc: { call: vi.fn(async () => ({ ok: true, value: undefined })) } }
   ctx.provide('sidebarRightTabs', tabs as never)
   ctx.provide('slots', slots as never)
   ctx.provide('locale', locale as never)
-  ctx.provide('remote', { refactoryConsole } as never)
-  ctx.provide('remote.refactoryConsole', refactoryConsole as never)
+  ctx.provide('connection', connection as never)
   const fiber = ctx.plugin({ inject: [...inject], apply })
   await fiber.await()
   return { tabs, registered, dictionaries, fiber }

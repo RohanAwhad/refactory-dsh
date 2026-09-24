@@ -58,10 +58,15 @@ declares them under `patchedDependencies`:
 
 The gateway discovers the console at runtime from the `@Remote` markers on the mounted
 service and binds arguments by the method parameter names, so the console answers without
-the generated `./typert` and `./remote` artifacts. `refactory-console/src/types.ts` states
-the client face with the same parameter names. The published Typert generator emits those
-artifacts only when its own protocol package is a workspace project, which a pinned install
-does not have, so the two faces are kept in step by hand and by the vitest suites.
+the generated `./typert` and `./remote` artifacts. The picker's client face sends those
+same names through the Connection's generic RPC,
+`connection.rpc.call('/api', 'refactoryConsole/<method>', { args })`, because the pinned
+Client Remote assembly is a prebuilt bundle that mounts a namespace service only for the
+harness's own packages; `ui-refactory` therefore injects `connection`, not
+`remote.refactoryConsole`. `refactory-console/src/types.ts` states the client face, and
+`ui-refactory/tests/remote.client.spec.ts` pins each endpoint and argument name. The
+published Typert generator emits the artifacts only when its own protocol package is a
+workspace project, which a pinned install does not have.
 
 ## What a contributor runs before pushing
 
@@ -91,10 +96,14 @@ same way the documentation's reader checks it: by running the command and readin
 
 ## What this does not cover
 
-The web picker has no automated browser test. Its three layers are checked by hand against
-a running server: the boot manifest lists the client rows, `refactoryConsole/modes` over
-`/api` returns the catalogue, and `session/create` with `agentPreset: ceo` returns the
-session. A future change to the patches can break any of those without a red test.
+The web picker has no automated browser test. Its layers are checked by hand against a
+running server: the boot manifest lists the client rows, the page reports no
+`Failed to load plugins` entry (a client plugin parked on a service nothing provides is how
+one shipped), `refactoryConsole/modes` over `/api` returns the catalogue, `session/create`
+with no preset returns `agentPreset: ceo`, and expanding the right sidebar and pressing
+**Modes** renders the picker. `ui-refactory/tests/remote.client.spec.ts` covers the call
+mapping, so a wrong endpoint or argument name fails a test; a future change to the patches
+or to the harness's client assembly can still break the page without a red test.
 
 The Typert Remote faces are kept in step by hand. The generated artifacts would make that
 impossible to get wrong, and issue #85 carries why they are not generated.

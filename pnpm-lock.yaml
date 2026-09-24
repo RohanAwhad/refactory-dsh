@@ -220,6 +220,9 @@ importers:
       '@deepseek-ai/dsh-api-session-controller':
         specifier: 0.1.5-rc.3
         version: 0.1.5-rc.3(7d91fe481409e4b96b36fe44af0b8e9b)
+      '@deepseek-ai/dsh-client-connection':
+        specifier: 0.1.5-rc.3
+        version: 0.1.5-rc.3(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.5-rc.3(@deepseek-ai/cordis@4.0.2))
       '@deepseek-ai/dsh-client-locale':
         specifier: 0.1.5-rc.3
         version: 0.1.5-rc.3(@deepseek-ai/cordis@4.0.2)

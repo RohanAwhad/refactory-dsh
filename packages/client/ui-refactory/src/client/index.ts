@@ -11,12 +11,12 @@
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
+import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
 import { REFACTORY_ID, refactoryDefinition } from './definition.ts'
-import { refactoryFace } from './face.ts'
-import type { RefactoryRemote } from './face.ts'
+import { refactoryConsoleOverConnection, refactoryFace } from './face.ts'
 import { RefactoryBody } from './RefactoryBody.tsx'
 import { en, zh } from './locales.ts'
 import { createRefactoryStore } from './store.ts'
@@ -33,14 +33,14 @@ export type { RefactoryBodyProps } from './RefactoryBody.tsx'
 const NS = 'sidebarRefactory'
 
 /**
- * Required browser services: the tab registry, the keyed seat, the Remote
- * carrier and its namespace, and copy.
+ * Required browser services: the Connection's RPC caller, the tab registry, the
+ * keyed seat, and copy.
  */
-export const inject = ['slots', 'locale', 'sidebarRightTabs', 'remote', 'remote.refactoryConsole']
+export const inject = ['connection', 'slots', 'locale', 'sidebarRightTabs']
 
 /**
  * Client plugin body: register the type, its dictionaries, then its body.
- * @param ctx - client root context carrying the registry, the slots, and the Remote face.
+ * @param ctx - client root context carrying the registry, the slots, and the RPC caller.
  */
 export function apply(ctx: ClientContext): void {
   const t = ctx.locale.bind(NS)
@@ -48,10 +48,9 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-refactory: dictionaries')
 
   const store = createRefactoryStore()
-  // The published Client Remote assembly selects the harness's own namespaces;
-  // this fork's console contribution is one the lean repo does not mount, so the
-  // face takes the namespace shape its package declares.
-  const inject = refactoryFace(ctx.remote as unknown as RefactoryRemote)
+  const connection = ctx.get('connection') as ConnectionHandle | undefined
+  if (connection === undefined) throw new Error('ui-refactory: the connection service is unavailable')
+  const inject = refactoryFace(refactoryConsoleOverConnection(connection.rpc))
   ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register(
     { name: 'sidebar.right.pane.tab', key: REFACTORY_ID, locale: NS, store, inject },
     RefactoryBody,
