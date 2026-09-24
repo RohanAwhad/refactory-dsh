@@ -15,7 +15,7 @@ That is the whole product. [tutorials/](refactory/docs/tutorials/index.md) is th
 | **the mode** | an agentic harness for a class of work: a Python class holding a graph of typed nodes over a `Task`, declared knobs, and a `score()` over the items. The unit you create, run and search. |
 | **the outer loop** | the search over a harness: propose typed edits → validate → evaluate → keep what improves, and report what it refused. It is graded on part of the items and audited on the part it was not shown, and a candidate pays a small cost for its size. |
 | **the CEO** | one agent that drives a mode's graph node by node, spawning a subagent per model call, and stops at the gates a person owns. |
-| **the panel** | the same choices in the browser: pick a mode, press Start, read the run. |
+| **the panel** | the same choices in the browser: pick a mode, press Start, read the run. Its tab is not mounted on the pinned harness yet — see [Known limitations](#known-limitations). |
 
 **A harness is for a class of work.** "Write the build script for any Java source tree" is the shape of everything here — not "write the script for this tree". A `Task` names the class: it lists the items, prepares each one, says what to ask for, and judges each pass, so a harness's score is the share of items that came out right rather than a claim about the one example that was tried. A mode that runs once is the special case, and `create` makes you say which of the two you are building.
 
@@ -272,6 +272,8 @@ The token is per-process; the bare `http://127.0.0.1:3081/` answers `401`. Leave
 1. **Pick the workspace.** Choose this checkout. The app remembers it next time.
 2. **Send one message.** Any message will do — "hello". A session has to exist before the Sidebar's expand control appears in the header, which is the step that confuses people.
 3. **Open the panel:** press the expand control in the conversation header (its tooltip is `Open the sidebar`), then the **Modes** tab.
+
+**The Modes tab is not mounted on the pinned harness.** This repository no longer carries the web bundle patch that added the tab's rows to the `web` profile, so the tab described below is absent and the conversation surface at [Running and authoring from the conversation](#gui-ceo) is what a run uses. Issue #85 carries the bundle patch, the console's generated Remote face, and the pinned headless model selection. Every console verb the tab calls is reachable from `uv run refactory`.
 
 <a id="gui-panel"></a>
 ### Running a mode from the panel
