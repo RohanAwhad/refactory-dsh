@@ -930,6 +930,16 @@
       "status": "done",
       "commit": "8436381238",
       "evidence": "refactory/docs/verification.md is the decision, written before the deletion and linked from contributing.md: the six packages' typecheck, build, vitest and lint; the glue's pytest suite with --run-integration as the end-to-end gate, the two generated-document --check commands and check_recipes; what replaced each deleted gate; what a contributor runs before pushing; and the three paths the surviving gates do not cover, now issue #85. The pairing gate's replacement is refactory/tests/test_docs_english_only.py, which fails on a .zh.md side or a README.i18n.yaml under refactory/ or the six packages; the three stale pairs under graph, workflow-spine and ui-brand-refactory are removed for it. Observed: the new test passes, the ledger's verify-path check passes after gui-42 stopped naming a deleted harness spec, and the clean clone's pnpm run test passed 357 tests in 20 files."
+    },
+    {
+      "id": "lean-pinned-parity",
+      "issue": 85,
+      "title": "The web picker and the CEO preset work on the pinned harness",
+      "why": "Deleting the copied harness removed the web composition that mounted the picker and the console, the generated Typert Remote face, the headless --provider/--model options, and the ceo preset. The mode path was unaffected, but the browser could not reach the picker and the outer loop's completion client ignored a named model.",
+      "verify": "pnpm exec vitest run packages/client/ui-refactory/tests/body.client.spec.tsx",
+      "status": "done",
+      "commit": "2e6b22d324",
+      "evidence": "Three pnpm patches in patches/, declared in pnpm-workspace.yaml, add what copying upstream used to: dsh-web-app gets rows for refactory-console, ui-refactory and ui-brand-refactory, disables ui-brand-official, defaults the agent preset to ceo, and declares our three packages so the loader resolves them; dsh-agent-presets ships the ceo preset directory; dsh-headless accepts --provider/--model and makes a named selection the middleware's current one. Verified in a clean clone, not only here: 267 tracked files, ./install.sh exit 0, the three patches applied (web-app mentions refactory in 3 manifest entries, agent-presets/presets/ceo holds both files, headless/lib/startup.js has --model), pnpm run test 357 passed. Against the clone's running pinned web app: the boot manifest lists refactory-console, ui-refactory and ui-brand-refactory; POST /api/refactoryConsole/modes returned {ok: true} with the real catalogue, which the gateway produces by runtime SRC discovery because the generated ./typert artifact does not exist; and /api/session/create with agentPreset ceo returned {ok: true, agentPreset: ceo} instead of the mount failure of issue #42. A real counting_pack/fixed_step through run_on_dsh exited 0 with spine-status done and facts value 6 / steps 3. The generated ./typert and ./remote artifacts are still not produced (the published generator needs its protocol as a workspace project); the gateway's SRC discovery and the hand-stated client face in src/types.ts cover the runtime, and the README and verification.md say so."
     }
   ],
   "verification": {

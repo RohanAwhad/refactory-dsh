@@ -15,7 +15,7 @@ That is the whole product. [tutorials/](refactory/docs/tutorials/index.md) is th
 | **the mode** | an agentic harness for a class of work: a Python class holding a graph of typed nodes over a `Task`, declared knobs, and a `score()` over the items. The unit you create, run and search. |
 | **the outer loop** | the search over a harness: propose typed edits → validate → evaluate → keep what improves, and report what it refused. It is graded on part of the items and audited on the part it was not shown, and a candidate pays a small cost for its size. |
 | **the CEO** | one agent that drives a mode's graph node by node, spawning a subagent per model call, and stops at the gates a person owns. |
-| **the panel** | the same choices in the browser: pick a mode, press Start, read the run. Its tab is not mounted on the pinned harness yet — see [Known limitations](#known-limitations). |
+| **the panel** | the same choices in the browser: pick a mode, press Start, read the run. |
 
 **A harness is for a class of work.** "Write the build script for any Java source tree" is the shape of everything here — not "write the script for this tree". A `Task` names the class: it lists the items, prepares each one, says what to ask for, and judges each pass, so a harness's score is the share of items that came out right rather than a claim about the one example that was tried. A mode that runs once is the special case, and `create` makes you say which of the two you are building.
 
@@ -273,7 +273,7 @@ The token is per-process; the bare `http://127.0.0.1:3081/` answers `401`. Leave
 2. **Send one message.** Any message will do — "hello". A session has to exist before the Sidebar's expand control appears in the header, which is the step that confuses people.
 3. **Open the panel:** press the expand control in the conversation header (its tooltip is `Open the sidebar`), then the **Modes** tab.
 
-**The Modes tab is not mounted on the pinned harness.** This repository no longer carries the web bundle patch that added the tab's rows to the `web` profile, so the tab described below is absent and the conversation surface at [Running and authoring from the conversation](#gui-ceo) is what a run uses. Issue #85 carries the bundle patch, the console's generated Remote face, and the pinned headless model selection. Every console verb the tab calls is reachable from `uv run refactory`.
+The tab is mounted by a pnpm patch on the pinned `@deepseek-ai/dsh-web-app` (rows for the console and the two client packages, and the `ceo` default), so `refactory ui` carries it. The console answers over Typert Remote; `@deepseek-ai/dsh-agent-presets` is patched to ship the `ceo` preset the default names.
 
 <a id="gui-panel"></a>
 ### Running a mode from the panel
@@ -464,5 +464,5 @@ A profile is machine state, so a new harness version needs the profile rebuilt r
 
 - **A mode that calls a model costs money to run.** Nothing else does: the fixtures and the walker are offline, and the loop's `walker` evaluator never calls a model unless the mode itself has `agent` nodes.
 - **`trimul` (GPU task) needs `numpy`** — not in the project's dependencies; the math tasks do not need it.
-- **The Web GUI does not carry the Modes tab.** `refactory ui` starts the pinned harness's own `web` profile, which composes the harness's client packages; it does not compose `@deepseek-ai/dsh-client-ui-refactory` or the brand package, so the right-Sidebar tab is absent. Both packages build `lib/client.js`, and a bundle that adds them to the web composition is what puts the tab back. Every console verb the tab calls is reachable from `uv run refactory`.
+- **The console's Remote face is stated by hand, not generated.** The pinned Typert generator emits `./typert` and `./remote` only when its own protocol package is a workspace project, and a pinned install resolves that protocol from `node_modules`. The gateway discovers the console from the runtime `@Remote` markers and binds arguments by the method parameter names, and `refactory-console/src/types.ts` states the same names for the client, so the tab works; the generator would remove the chance of the two drifting.
 - **Ships as a repo + `install.sh`**, not a single binary: bundling Node and Python into one per-platform executable was considered and deferred.
