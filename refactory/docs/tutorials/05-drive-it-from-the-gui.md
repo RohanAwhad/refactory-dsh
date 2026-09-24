@@ -3,6 +3,8 @@
 The loop stays a Python process. The Web GUI drives it through one tool, and
 renders what came back. No terminal is involved once it is running.
 
+> **The pinned harness's `web` profile does not compose this repository's tool and client packages yet.** `./refactory-dsh` starts that profile, so the conversation runs and both the `refactory` tool and the Modes panel are absent. What follows is the surface those packages implement; every console verb it names is reachable today from `uv run refactory`.
+
 ## Start the GUI
 
 ```bash
@@ -12,9 +14,9 @@ renders what came back. No terminal is involved once it is running.
 It prints an authenticated URL; open it. The default preset is **ceo**, which
 mounts the `refactory` tool.
 
-> The GUI serves the client bundle from `packages/*/lib/client.js`, so a checkout
-> that has not been built serves the bundled version of each client module. Build
-> first if you have changed one: `pnpm run build:lib:client`.
+> The GUI serves each plugin's client bundle from `packages/*/*/lib/client.js`, so a
+> checkout that has not been built serves the bundled version of each client module.
+> Build first if you have changed one: `pnpm run build`.
 
 ## What the tool does
 

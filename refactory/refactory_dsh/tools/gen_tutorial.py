@@ -462,13 +462,11 @@ def render_drift_gates() -> str:
     """Which gate proves what, so a reader knows what "tested" means here."""
     rows = (
         ("uv run python -m pytest refactory/tests -q", "the glue: the language, the modes, the loop, the console"),
-        ("pnpm run test", "the runtime: the spine, the bundles, the client"),
+        ("pnpm run test", "the six packages: the spine, the graph bundle, the console and the client tab"),
         ("uv run python -m pytest refactory/tests -q --run-integration", "one mode on both runtimes, compared fact by fact"),
         ("uv run python -m refactory_dsh.tools.check_recipes", "every command this page shows, executed"),
         ("uv run python -m refactory_dsh.tools.gen_tutorial --check", "this page matches the code it describes"),
         ("uv run python -m refactory_dsh.tools.gen_api_reference --check", "the API reference matches the signatures"),
-        ("pnpm run verify-config-catalog", "every config field is documented and matches its schema"),
-        ("pnpm run test:docs", "the documentation gates"),
     )
     return render_named(rows, "gate", "what it proves")
 
@@ -895,11 +893,13 @@ TEMPLATE = """<!DOCTYPE html>
       {ceo_verbs}
 
       <h3>The panel, if you would rather click</h3>
-      <p>Start the GUI from this checkout (<code>pnpm dsh web</code>), open the printed token URL, pick the
+      <p>Start the GUI from this checkout (<code>uv run refactory ui</code>), open the printed token URL, pick the
       workspace, send one message so a session exists, then <strong>Open the sidebar → Modes</strong>. The mode,
       the three level-two names and the packages are described choices read from the same console; press
-      <strong>Start</strong> and the RUN STATUS section reads the run it names. An installed <code>dsh</code> from
-      before this work does not carry the panel.</p>
+      <strong>Start</strong> and the RUN STATUS section reads the run it names. The Modes tab belongs to
+      <code>ui-refactory</code>, which the pinned harness's own web profile does not compose, so a GUI started
+      this way shows the conversation and not the panel; every choice it offers is reachable from
+      <code>uv run refactory</code>.</p>
 
       <div class="callout warn">
         <strong>A person's gate is still a person's.</strong> If a mode has a <code>user</code> gate (create's

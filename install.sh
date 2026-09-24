@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# refactory-dsh — one-command install for the self-contained single repo.
+# refactory-dsh — one-command install for this repository.
 #
-# The repo is a DSH fork: the DSH source sits at the repo root and the glue at
-# `refactory/`. This script sets up the Node side (pnpm) and the Python side (one
-# `uv sync` over the root project), so after it:
+# The repository owns six TypeScript packages and depends on the published
+# `@deepseek-ai/dsh` pin for the harness; the Python glue lives at `refactory/`.
+# This script sets up the Node side (pnpm) and the Python side (one `uv sync`
+# over the root project), so after it:
 #
 #   uv run refactory doctor      is this machine ready?
 #   uv run refactory list        what can this checkout run?
@@ -104,8 +105,8 @@ command -v pnpm >/dev/null 2>&1 || {
 }
 echo "  pnpm:  $(pnpm --version)"
 
-# 1. Node side: install the pnpm workspace (DSH), then build the client/host
-#    bundles the web GUI serves at launch.
+# 1. Node side: install the pnpm workspace (the pinned harness plus the six
+#    packages this repo owns), then build those packages' lib/ output.
 (cd "$HERE" && pnpm install --frozen-lockfile && pnpm run build)
 
 # 2. Python side: **one project, one lockfile, one command**. `uv sync` reads the
@@ -124,17 +125,20 @@ fi
 # 3. the DSH profile a mode runs on. A profile is **machine state** — it is
 #    created by `dsh plugin --profile graph add <package>`, not derived from the
 #    bundle — so a fresh clone that skips this can run every mode through the
-#    walker and still fail the first time anything reaches DSH. Idempotent: a
-#    profile that already carries the bundle is left alone, so a user's own
-#    profile is never overwritten. `REFACTORY_SKIP_DSH_PROFILE=1` skips it for
-#    someone who only wants the Python side and does not want ~/.dsh touched.
+#    walker and still fail the first time anything reaches DSH. The launcher is
+#    the pinned harness the root manifest installed, not a copy in this repo.
+#    Idempotent: a profile that already carries the bundle is left alone, so a
+#    user's own profile is never overwritten. `REFACTORY_SKIP_DSH_PROFILE=1`
+#    skips it for someone who only wants the Python side and does not want
+#    ~/.dsh touched.
+DSH="$HERE/node_modules/.bin/dsh"
 if [ "${REFACTORY_SKIP_DSH_PROFILE:-}" = "1" ]; then
   echo "  DSH profile 'graph': skipped (REFACTORY_SKIP_DSH_PROFILE=1)"
 elif "$VENV/bin/python" -c 'from refactory_dsh import dsh_profile; raise SystemExit(0 if dsh_profile.is_ready() else 1)'; then
   echo "  DSH profile 'graph': already present"
 else
   echo "  DSH profile 'graph': creating (machine state, once per machine)"
-  node --import tsx/esm apps/cli/src/bin.ts plugin --profile graph add "$HERE/packages/bundle/graph"
+  "$DSH" plugin --profile graph add "$HERE/packages/bundle/graph"
 fi
 
 # 4. say what happened, in the words the docs use.

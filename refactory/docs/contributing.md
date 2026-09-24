@@ -25,8 +25,9 @@ a runtime dependency: it lives in the non-default `reference` group, so a plain
 The DSH side, when you touch `packages/`:
 
 ```bash
-pnpm run test:docs              # the repo's documentation gates
-./node_modules/.bin/tsx scripts/run-oxlint.ts .   # lint
+pnpm run build                 # typecheck, then the host and client bundle passes
+pnpm run test                  # the six packages' vitest suites
+pnpm run lint                  # oxlint
 pnpm run typecheck
 ```
 

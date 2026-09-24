@@ -12,16 +12,18 @@ same run readable from the shell by the id the panel showed you.
 choice is not in `uv run refactory modes`, it is not in the picker; if
 the console refuses something, the panel shows the console's own reason.
 
+> **The panel is not composed by the pinned harness's `web` profile yet.** `uv run refactory ui` starts that profile, which selects the harness's own client packages and not `packages/client/ui-refactory`, so the Modes tab does not appear. This tutorial describes the panel the package implements; every choice it offers is reachable today from `uv run refactory`.
+
 ---
 
 ## Start the GUI from this checkout
 
-The panel ships with the Web bundle **of this checkout**. An installed `dsh` from
-before this work does not carry it, because the client plugin is loaded from the
-checkout's built `lib/client.js`:
+The panel is built as `packages/client/ui-refactory/lib/client.js`, and a profile
+composes it by naming the package. The pinned harness's own `web` profile does not, so
+starting the GUI shows the conversation without the tab:
 
 ```bash
-pnpm dsh web --port 3103
+uv run refactory ui --port 3103 --no-open
 ```
 
 ```
@@ -177,10 +179,10 @@ uv run refactory modes | head -14
 
 ## When the panel is not there
 
-- **Nothing appears in the Sidebar.** You are probably on an installed `dsh` rather
-  than this checkout's `pnpm dsh web`, or the client bundle is stale: rebuild it with
-  `pnpm run build:lib:client` (and `pnpm run build:web` if the shell changed), then
-  refresh the page.
+- **Nothing appears in the Sidebar.** The profile in force does not compose
+  `@deepseek-ai/dsh-client-ui-refactory`, which is the state of the pinned harness's own
+  `web` profile; rebuilding with `pnpm run build` refreshes the artifact but does not
+  change the composition.
 - **The panel loads but every read fails.** The console could not be reached: the
   message the Host reports carries the console's own words and the argv it ran, so
   `uv run refactory modes` by hand from the same directory reproduces it.

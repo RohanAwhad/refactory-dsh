@@ -332,10 +332,9 @@ RECIPES: tuple[Recipe, ...] = (
         title="The documents that are generated from the code",
         command=(
             "uv run python -m refactory_dsh.tools.gen_api_reference --check && "
-            "uv run python -m refactory_dsh.tools.gen_tutorial --check && "
-            "pnpm run verify-config-catalog"
+            "uv run python -m refactory_dsh.tools.gen_tutorial --check"
         ),
-        expect="the API reference, the HTML tour and the config catalog all match the code",
+        expect="the API reference and the HTML tour both match the code",
         contains=("up to date",),
     ),
     Recipe(

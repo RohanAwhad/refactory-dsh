@@ -249,9 +249,8 @@ ways when the fix was made.
 
 **The second finding was in the README, not the code.** It described the layout but
 never linked `docs/architecture.md` or `docs/tutorials/`, so the entry point a
-stranger actually opens did not lead anywhere. Both READMEs now carry a Documentation
-table — architecture, tutorials, API, tool packing, hardening, contributing — and the
-pair stays line-aligned (`pnpm run verify-translation-pairing`).
+stranger actually opens did not lead anywhere. The README now carries a Documentation
+table — architecture, tutorials, API, tool packing, hardening, contributing.
 
 **Also regenerated.** `docs/api/reference.md` is generated from the code and had
 drifted from it; the new `usage()` export made that visible. `test_docs_api.py` fails
@@ -266,8 +265,8 @@ made-up hash fails the gate, and removing it passes.
 
 **The install itself was run, not inferred.** `./install.sh` is the one command a
 stranger executes, and everything above only proves the commands *after* it work. It
-was run against this checkout: submodules, `pnpm install --frozen-lockfile`,
-`pnpm run build`, the venv, the editable installs, and the registry listing all
+was run against this checkout: `pnpm install --frozen-lockfile`, `pnpm run build`,
+the venv, the editable installs, and the registry listing all
 completed with status 0. The build was then checked for the damage a build can do —
 `git status` is clean, the Python suite is unchanged, the DSH-side specs pass, and the
 doc gates pass — because "it exited 0" and "it left the tree working" are different

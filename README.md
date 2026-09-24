@@ -8,7 +8,7 @@ git clone <this-repo> && cd <this-repo>
 uv run refactory ceo "a mode that drafts a haiku and checks the syllable count" --mode create --single
 ```
 
-That is the whole product. **[QUICKSTART.md](QUICKSTART.md)** is the six commands in order, with what each costs and what to do when one fails. Everything below is what it is made of.
+That is the whole product. [tutorials/](refactory/docs/tutorials/index.md) is the same ground as a walkthrough, and [architecture.md](refactory/docs/architecture.md) says which layer owns a behaviour. Everything below is what it is made of.
 
 | layer | what it owns |
 |---|---|
@@ -36,7 +36,7 @@ cd <this-repo>
 
 `install.sh` does three things, in order:
 
-1. `pnpm install --frozen-lockfile && pnpm run build` — the DSH workspace and the client/host bundles the Web view serves. This is the step that needs pnpm, and if the machine has none the script puts the pinned version on PATH first: `corepack` when it is there, otherwise `npm install -g pnpm@<pin>`, so Node and npm are enough (opt out with `REFACTORY_SKIP_GLOBAL_PNPM=1`).
+1. `pnpm install --frozen-lockfile && pnpm run build` — the pnpm workspace: the pinned `@deepseek-ai/dsh` harness plus the six TypeScript packages this repository owns, then `lib/` for those six. This is the step that needs pnpm, and if the machine has none the script puts the pinned version on PATH first: `corepack` when it is there, otherwise `npm install -g pnpm@<pin>`, so Node and npm are enough (opt out with `REFACTORY_SKIP_GLOBAL_PNPM=1`).
 2. `uv sync` — **one** Python project at the root: it creates `.venv`, installs the local `refactory-dsh` package in editable mode and puts the `refactory` command on `.venv/bin`, pinned by `uv.lock`.
 3. Creates the DSH profile a mode runs on (`dsh plugin --profile graph add …`). A profile is machine state, so this is a once-per-machine step; skip it with `REFACTORY_SKIP_DSH_PROFILE=1`.
 
@@ -395,24 +395,40 @@ The HTML tour, the API reference and the config catalog are **generated from the
 
 **The loop.** Ten strategies (ports of SRF's own loops: `default`, `best_of_n`, `reflective`, `tree_search`, `staged_curriculum`, …), seven optimizers (`random`, `hill_climb`, `evolutionary`, `archive`, `islands`, `map_elites`, `autoresearch`) and two evaluators (`walker`, `dsh`).
 
-**The panel.** `packages/client/ui-refactory` + `packages/refactory/refactory-console`: a Typert Remote service over the same console the tool reads, and a Sidebar tab over that.
+**The panel.** `packages/refactory/refactory-console` is the Host service over the same console the tool reads, and `packages/client/ui-refactory` is the right-Sidebar tab over it. The tab's Remote namespace is stated in the console's `types.ts`; the harness's typert generator emits `./typert` and `./remote` only when its own protocol package is a project in the same workspace, which a pinned install does not have.
 
 ---
 
 ## Layout
 
 ```
-apps/                        DSH apps (CLI, web)
-packages/                    DSH packages (workflow-spine, graph bundle, ui-refactory, …)
+packages/                    the six TypeScript packages this repository owns
+  bundle/graph/                the dsh bundle a mode runs on
+  workflow/workflow-spine/     the per-session Spine and its wf_* tools
+  refactory/tool-refactory/    the model-facing refactory tool
+  refactory/refactory-console/ the Web picker's Host service
+  client/ui-refactory/         the right-Sidebar picker tab
+  client/ui-brand-refactory/   the re:factory brand occupants
 refactory/                   the glue — the modes, the loop, the console
   refactory_dsh/               cli.py is the entry point; nn/ is the language; tools/ generates docs
   refactory_packages/          the packages of modes
   docs/                        the HTML tour, tutorials, architecture, API reference
+types/                       the client build-environment ambient declaration
+package.json                 the workspace root: the pinned harness, the six packages, the scripts
+pnpm-workspace.yaml          which directories are workspace packages, and the cordis pin
+tsconfig.base.json           shared compiler settings and the six packages' source paths
+tsconfig.host.json           the Host typecheck aggregate (the typert generator finds the root here)
+tsconfig.client.json         the Client typecheck aggregate
+tsdown.config.ts             the host and client bundle passes
+tsdown.client.ts             the UI plugin client-bundle preset
+vitest.config.ts             the six packages' test run
 pyproject.toml               the one Python project (`uv sync`, `uv run refactory …`)
 uv.lock                      the pinned environment
 install.sh                   one-command install
 refactory-dsh                the GUI launcher (what `refactory ui` runs)
 ```
+
+**The harness is a dependency, not a copy.** `package.json` declares `@deepseek-ai/dsh` at one exact version, `pnpm-workspace.yaml` lists the six directories under `packages/`, and every other harness name resolves through `node_modules` to that pin. The `pnpm.overrides` table pins cordis and schemastery to the versions the pinned tree carries, so the install resolves to one copy of each.
 
 A mode is a Python class in `refactory_packages/<package>/`, not a `graph.json`; the decision record is [pythonic-modes.md](refactory/docs/plans/pythonic-modes.md).
 
@@ -422,9 +438,10 @@ A mode is a Python class in `refactory_packages/<package>/`, not a `graph.json`;
 
 ```bash
 uv run python -m pytest refactory/tests -q          # the glue: 800+ tests, offline
-pnpm run test                                        # the runtime and the client
+pnpm run build                                       # typecheck, then the host and client bundle passes
+pnpm run test                                        # the six packages' vitest suites
+pnpm run test:gui                                    # the two client packages only
 pnpm run typecheck && pnpm run lint                  # TypeScript
-pnpm run test:docs                                   # documentation gates
 uv run python -m refactory_dsh.tools.check_recipes   # the documented commands that need no model
 ```
 
@@ -435,9 +452,9 @@ uv run python -m pytest refactory/tests -q --run-integration   # one mode on bot
 uv run python -m refactory_dsh.tools.check_recipes --tier model
 ```
 
-### Rebasing on upstream DSH
+### Rebuilding the graph profile after a harness bump
 
-This repo is a **fork of `deepseek-ai/deepseek-harness`**. Our changes are isolated deltas so they re-apply after a rebase: new packages/files, one-line wiring edits (`cordis.patch.yml` rows, `tsconfig` references, `paths` mappings), and two locale strings.
+A profile is machine state, so a new harness version needs the profile rebuilt rather than migrated: `pnpm exec dsh plugin --profile graph add packages/bundle/graph`. `install.sh` does this when the profile does not already carry the bundle.
 
 ---
 
@@ -445,5 +462,5 @@ This repo is a **fork of `deepseek-ai/deepseek-harness`**. Our changes are isola
 
 - **A mode that calls a model costs money to run.** Nothing else does: the fixtures and the walker are offline, and the loop's `walker` evaluator never calls a model unless the mode itself has `agent` nodes.
 - **`trimul` (GPU task) needs `numpy`** — not in the project's dependencies; the math tasks do not need it.
-- **The panel needs the GUI from this checkout.** An installed `dsh` from before this work does not carry the client plugin; `uv run refactory ui` runs the right one.
+- **The Web GUI does not carry the Modes tab.** `refactory ui` starts the pinned harness's own `web` profile, which composes the harness's client packages; it does not compose `@deepseek-ai/dsh-client-ui-refactory` or the brand package, so the right-Sidebar tab is absent. Both packages build `lib/client.js`, and a bundle that adds them to the web composition is what puts the tab back. Every console verb the tab calls is reachable from `uv run refactory`.
 - **Ships as a repo + `install.sh`**, not a single binary: bundling Node and Python into one per-platform executable was considered and deferred.
