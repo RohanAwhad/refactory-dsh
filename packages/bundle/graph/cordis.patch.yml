@@ -39,7 +39,7 @@
       name: '@deepseek-ai/dsh-code-runtime-worker-thread'
 
     - id: graph-startup
-      name: '@deepseek-ai/dsh-graph/src/startup'
+      name: '@deepseek-ai/dsh-graph/startup'
 
     - id: workflow-spine
       name: '@deepseek-ai/dsh-workflow-spine'
@@ -67,9 +67,9 @@
           - read_image
 
     - id: graph-answerer
-      name: '@deepseek-ai/dsh-graph/src/answerer'
+      name: '@deepseek-ai/dsh-graph/answerer'
       inject: [graphStartup]
 
     - id: graph-runner
-      name: '@deepseek-ai/dsh-graph/src/index'
+      name: '@deepseek-ai/dsh-graph'
       inject: [graphStartup]
