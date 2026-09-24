@@ -908,7 +908,9 @@ def main(argv: list[str] | None = None) -> int:
                 project=project,
                 runs_root=args.runs_root,
                 run_id=args.run_id,
-                knobs=list(args.knob),
+                # `knob`, not `knobs`: the console forwards each config key as
+                # `--<key>`, and the loop's flag is the singular one.
+                knob=list(args.knob),
                 **{
                     setting: getattr(args, setting)
                     for setting, _help, _kind in SETTINGS

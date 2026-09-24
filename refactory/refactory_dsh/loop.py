@@ -1706,17 +1706,25 @@ def main(argv: list[str] | None = None) -> int:
         help="a knob value the search starts from (repeatable); required for a mode "
              "whose inputs are frozen knobs, which the search itself may not move",
     )
-    parser.add_argument("--model", default="", help="model name for the reasoning optimizer")
+    parser.add_argument(
+        "--model", default="",
+        help="model name for this run's completions: the reasoning optimizer's "
+             "proposals, and the agent nodes of the mode being evaluated",
+    )
     parser.add_argument(
         "--provider", default="", help="provider route that model is on (default: the settings default)"
     )
     args = parser.parse_args(argv)
 
-    model = None
-    if args.optimizer == "autoresearch":
-        from refactory_dsh.model import DshModelClient
+    # A client for whatever needs a model: the reasoning optimizer when it is the one
+    # proposing, and *any* mode whose graph has an agent node, because the evaluator
+    # has to supply one to run those nodes. Building it only for `autoresearch` made
+    # every agent mode unevaluable under every other optimizer — each candidate failed
+    # with `agent node 'propose' needs a model client` and the run reported a search
+    # that found nothing. Constructing it is free: it spawns nothing until asked.
+    from refactory_dsh.model import DshModelClient
 
-        model = DshModelClient(model=args.model, provider=args.provider)
+    model = DshModelClient(model=args.model, provider=args.provider)
 
     config = LoopConfig(
         epochs=args.epochs,

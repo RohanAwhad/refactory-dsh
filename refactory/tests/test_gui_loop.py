@@ -547,3 +547,49 @@ def test_a_single_run_needs_the_mode_to_run():
 
     with pytest.raises(SystemExit):
         console.main(["run"])
+
+
+def test_the_console_forwards_a_seeded_knob_as_the_loop_flag(monkeypatch):
+    """`--knob NAME=VALUE` reaches `refactory_dsh.loop --knob …` (#see 69).
+
+    The console forwards each config key as `--<key>`, so passing the list under
+    `knobs` produced `--knobs`, which the loop does not have: the run died at argv
+    parsing with "unrecognized arguments", before evaluating anything.
+    """
+    from refactory_dsh import console
+
+    captured: dict[str, list[str]] = {}
+
+    def fake_spawn(mode, root, config, *, project):
+        argv = ["python", "-m", "refactory_dsh.loop", mode, "--runs-root", str(root)]
+        for key, value in sorted(config.items()):
+            if value is None or value is False:
+                continue
+            flag = "--" + key.replace("_", "-")
+            if isinstance(value, (list, tuple)):
+                for element in value:
+                    argv += [flag, str(element)]
+            else:
+                argv += [flag] if value is True else [flag, str(value)]
+        captured["argv"] = argv
+
+        class Process:
+            pid = 4321
+
+        return Process()
+
+    monkeypatch.setattr(console, "_spawn", fake_spawn)
+    project = tmp_path = None
+    import tempfile
+    from pathlib import Path as _Path
+
+    project = _Path(tempfile.mkdtemp())
+    payload = console.start(
+        "cve_patch_pack/patch", project=project,
+        knob=["source_root=/tmp/demo_pkg", "test_command=pytest -q"],
+    )
+    argv = captured["argv"]
+    assert "--knob" in argv
+    assert argv.count("--knob") == 2, argv
+    assert "source_root=/tmp/demo_pkg" in argv
+    assert payload["run_id"]

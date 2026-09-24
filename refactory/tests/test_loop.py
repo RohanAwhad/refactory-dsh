@@ -601,3 +601,28 @@ def test_a_knob_a_person_sets_from_the_command_line_is_parsed_by_kind():
     assert out["knobs"]["label"]["value"] == "hello"
     with pytest.raises(edits_module.EditError, match="expected a number"):
         edits_module.configure(state, "count", "seven")
+
+
+def test_a_search_builds_a_model_client_for_the_modes_agent_nodes(tmp_path, monkeypatch):
+    """Every optimizer needs one, because the mode's own agent nodes do.
+
+    The client was built only for `autoresearch`, so under `random` every candidate of
+    an agent mode failed with `agent node 'propose' needs a model client` and the run
+    reported a search that found nothing.
+    """
+    from refactory_dsh import model as model_module
+    from refactory_dsh.loop import main as loop_main
+
+    built: list[tuple[str, str]] = []
+
+    def fake_client(*, model: str = "", provider: str = "", **kwargs: object) -> object:
+        built.append((model, provider))
+        return object()  # the evaluator only checks that a client exists
+
+    monkeypatch.setattr(model_module, "DshModelClient", fake_client)
+    loop_main([
+        "circle_packing/adaptive", "--epochs", "1", "--batch-size", "1",
+        "--optimizer", "random", "--seed", "1",
+        "--runs-root", str(tmp_path / "run"), "--project", ".",
+    ])
+    assert built, "the search built no model client, so an agent mode could not run"
