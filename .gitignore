@@ -60,3 +60,4 @@ refactory/workdirs/
 /reviews/
 refactory/**/*.egg-info/
 refactory/**/*.pyc
+/.pytest_cache/

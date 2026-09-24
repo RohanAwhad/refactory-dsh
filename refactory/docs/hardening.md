@@ -530,7 +530,7 @@ Recorded because the point of an audit is accuracy in both directions.
 - Listing a generated package still imports it (§1).
 - The reflective/curriculum differences need a model proposer to show (§3).
 - `post_checks` and fork/join are unused (§5).
-- The GUI is not audited here at all; see `GUI-HANDOFF.md` at the repository root.
+- The GUI is not audited here at all. Its defects were tracked as issues #60–#73, and the panel's behaviour is held by `packages/client/ui-refactory/tests/` and [tutorial 7](tutorials/07-pick-and-watch-from-the-panel.md).
 
 Two things that were on this list have moved off it, which is the point of keeping it:
 

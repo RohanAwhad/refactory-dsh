@@ -44,8 +44,8 @@ V10`, `I:fact_produced`, `E-shape`.
   legacy JSON modes.
 - **No new DSH core packages.** Everything lands under `refactory/`.
 - **No GUI work in the Python system.** The loop is a Python process; the GUI is a
-  view over its artifacts (see `GUI-HANDOFF.md` at the repo root for the state of
-  that).
+  view over its artifacts, and the panel, the console and the client specs are where
+  that view is built and held.
 
 ## Decisions
 

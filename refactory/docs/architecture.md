@@ -526,8 +526,7 @@ newcomer's first reading a description of the wrong system.
 - [Packing a tool that is not Python](packing-tools.md) — how a package declares a
   toolchain it cannot import, how that requirement is checked before a run spends
   budget, and how its absence is reported.
-- [Contributing](contributing.md) — for a coding agent or a person changing this.
-- [Handoff](handoff.md) — **where the work is, and the first thing to run**: the
-  four levels, how to run everything, and what is still open.
+- [Contributing](contributing.md) — for a coding agent or a person changing this:
+  the commands, the environment and what it hides, the invariants, and what not to do.
 - [Hardening](hardening.md) — what an adversarial audit of the finished work found,
   and what holds each fix in place.

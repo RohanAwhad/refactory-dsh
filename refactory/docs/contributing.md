@@ -7,7 +7,7 @@ if you move something, and how to check your work.
 
 ## The commands
 
-Run from the repository root (`/Users/akash/cursor/refactory-fresh-test`).
+Run from the repository root.
 
 ```bash
 uv run python -m pytest refactory/tests/ -q                    # the suite
@@ -28,6 +28,20 @@ any item is open**. Each item records its issue number, the command that verifie
 it, and the observed result; that test also checks the command names files that
 exist, because two items once named test files that never existed and nobody
 noticed.
+
+## The environment, and what it hides
+
+**Lean and mathlib are optional, and their absence is silent.** The Lean tests skip when `lean` is not on `PATH`; the mathlib tests skip when `MATHLIB_PATH` is unset. A skipped test cannot fail, so a green suite on a machine without them says nothing about the checker path — which is how two real defects hid. Every test that exercises a real external tool is marked `toolchain`, and one command reports which ran, which skipped and why, and fails if any did not run:
+
+```bash
+uv run python -m pytest refactory/tests -q --toolchain-gate
+```
+
+No per-PR job installs Lean or mathlib (mathlib is a 7.4 GB checkout, and this suite is not in the DSH CI matrix), so those paths are verified on developer machines by that gate. A machine without the tools is expected to fail it and to say what it did not verify.
+
+**A DSH profile is machine state, not a checkout artifact.** It is created with `dsh plugin --profile <name> add <package>`; `install.sh` does it idempotently and `REFACTORY_SKIP_DSH_PROFILE=1` skips it. `refactory_dsh/dsh_profile.py` is the one place that answers "is the profile there, and what fixes it" — the installer, the DSH runner and the tests all use it. Without the profile, anything that runs a mode on DSH stops at the first call.
+
+**A model key lives in the repository-root `.env`** as `DEEPSEEK_API_KEY`. Only a run that actually calls a model needs it: the deterministic modes, the search with `--optimizer random`, and every offline test do not.
 
 ## The invariants
 
