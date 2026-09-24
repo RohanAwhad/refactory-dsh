@@ -890,6 +890,16 @@
       "status": "done",
       "commit": "950a076893",
       "evidence": "Probed before the fix: set_node_field on inline_items, task_ref and source_path were all accepted by edits.apply. After it: inline_items raises EditError with code E-items from the shared finisher every primitive returns through, and Loop.step rejects a data node whose task_ref/source_path/source_format differ from the seed with E-exam. Both covered by new tests; 825 passed, 10 skipped."
+    },
+    {
+      "id": "smoke-paths-disagree",
+      "issue": 81,
+      "title": "The model smoke passes inside create and fails standalone, with an undiagnosable error",
+      "why": "Two model-smoke paths disagree about a package that works, and the failure message is the tail of a Node crash banner rather than a cause, so the path was twice read as a failure of the whole creation.",
+      "verify": "pytest refactory/tests/test_create.py -q",
+      "status": "deferred",
+      "deferred_reason": "The pipeline's smoke of java_harness_v2 scored 1.0 as `sandboxed: true, model: used` while `refactory package smoke java_harness_v2/build --model` fails repeatably in 0.152s with `model completion failed (exit 1): Node.js v22.23.2`, and the sandbox's own stderr is empty. Which of the two passes the wrong thing to the client is not visible from outside the sandbox, and it is not blocking: create completes and the produced harness runs.",
+      "deferred_to": "issue #81"
     }
   ],
   "verification": {
