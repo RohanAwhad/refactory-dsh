@@ -74,6 +74,31 @@ class LoopError(RuntimeError):
     """The run cannot proceed. Always names what is wrong with the mode."""
 
 
+
+def _item_sources(state: Mapping[str, Any]) -> dict[str, tuple[Any, ...]]:
+    """Which items each data node of a state would read.
+
+    The fields a harness's class of work lives in: the Task it binds and the source it
+    reads. Nothing else in the graph says what the run is examined on.
+    """
+    graph = state.get("graph") or {}
+    nodes = graph.get("nodes") if isinstance(graph, dict) else None
+    if isinstance(nodes, dict):
+        entries = list(nodes.values())
+    elif isinstance(nodes, list):
+        entries = nodes
+    else:
+        entries = []
+    found: dict[str, tuple[Any, ...]] = {}
+    for node in entries:
+        if not isinstance(node, dict) or node.get("kind") != "data":
+            continue
+        found[str(node.get("id"))] = (
+            node.get("task_ref"), node.get("source_path"), node.get("source_format"),
+        )
+    return found
+
+
 @dataclass
 class LoopConfig:
     """How a run is shaped."""
@@ -903,6 +928,29 @@ class Loop(OuterLoop):
                     + "\n"
                 )
 
+    def _exam_moved(self, candidate: Candidate) -> str | None:
+        """Whether a candidate changed which items it would be graded on.
+
+        The seed names the class of work. A candidate that rebinds a data node's Task
+        or source chooses a different exam, and the held-out split is derived from the
+        items a candidate actually has, so it would be graded on its own choice. A
+        person's route to other items is a run's ``--source``.
+        """
+        if not self.population:
+            return None
+        before = _item_sources(self.population[0].state)
+        after = _item_sources(candidate.state)
+        changed = sorted(
+            node for node in set(before) | set(after) if before.get(node) != after.get(node)
+        )
+        if not changed:
+            return None
+        return (
+            f"E-exam: the candidate changed which items it would be graded on "
+            f"({', '.join(changed)}); the class of work is the seed's, and a run points "
+            f"a harness at other items with --source"
+        )
+
     # ── step ───────────────────────────────────────────────────────────────
     def step(
         self, candidates: Sequence[Candidate], run: Run | None = None
@@ -911,6 +959,16 @@ class Loop(OuterLoop):
         known = {candidate.id for candidate in self.population}
         added: list[Candidate] = []
         for candidate in candidates:
+            moved = self._exam_moved(candidate)
+            if moved is not None:
+                self.rejections.append(
+                    Rejection(
+                        attempt=0,
+                        edit=candidate.edits[-1] if candidate.edits else {},
+                        reasons=[moved],
+                    )
+                )
+                continue
             if candidate.id in known:
                 # The optimizer's loop refuses these now, so reaching here means a
                 # strategy bypassed it. Record it rather than losing the slot in

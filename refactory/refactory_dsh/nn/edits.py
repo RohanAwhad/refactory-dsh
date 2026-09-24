@@ -91,10 +91,37 @@ def _graph(state: Mapping[str, Any]) -> Graph:
 
 
 def _finish(state: Mapping[str, Any], graph: Graph) -> State:
+    _refuse_baked_items(graph)
     out = dict(state)
     out["graph"] = graph.to_state()
     out["knobs"] = copy.deepcopy(dict(state.get("knobs") or {}))
     return out
+
+
+#: The node fields that decide *which* items a harness reads. A produced package is
+#: refused for baking its items in, and a search that could set these would be held to
+#: a weaker rule than the thing it edits: `inline_items` scores the items it was given,
+#: and a moved `task_ref` or `source_path` changes the exam the candidate is graded on.
+ITEM_SOURCE_FIELDS = ("task_ref", "source_path", "source_format", "inline_items")
+
+
+def _refuse_baked_items(graph: Graph) -> None:
+    """No state an edit produces bakes its items into the graph.
+
+    Every primitive returns through here, so this holds for the ops that set a field,
+    the ones that add or replace a node, and the macros built out of them. A person's
+    route to different items is a run's `--source`, not a graph that carries them.
+    """
+    baked = sorted(
+        node.id for node in graph.nodes.values() if getattr(node, "inline_items", ())
+    )
+    if baked:
+        raise EditError(
+            f"node(s) {', '.join(baked)} declare inline_items, which writes the items "
+            "into the graph; a harness for a class of work reads its items at run time, "
+            "so an edit may not bake them in",
+            code="E-items",
+        )
 
 
 def _require(graph: Graph, node_id: Any) -> Node:

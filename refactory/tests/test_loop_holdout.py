@@ -308,3 +308,66 @@ def _overfit_run(tmp_path: Path) -> Path:
         project=Path("."),
     ).run()
     return root
+
+
+def test_a_candidate_cannot_move_its_own_exam(tmp_path):
+    """The class of work is the seed's, and a search may not rebind it.
+
+    A data node's Task and source *are* the exam: the held-out split is derived from
+    the items a candidate actually has, so a candidate that rebinds the node would be
+    graded on items it chose. The seed's binding is the one that stands, and a person's
+    route to other items is a run's `--source`.
+    """
+    from refactory_dsh import loop as loop_module
+    from refactory_dsh import registry
+    from refactory_dsh.paths import project_root
+
+    _, klass = registry.resolve(project_root(), "dataset_probe/dataset")
+    state = klass().state_dict()
+    rebinding = {
+        "op": "set_node_field", "id": "data", "field": "task_ref",
+        "value": "refactory_packages.java_build_pack.tasks:JavaBuildTask",
+    }
+    from refactory_dsh.nn import edits as edit_module
+
+    moved = edit_module.apply(rebinding, state)
+
+    from refactory_dsh import optim as optim_module
+
+    run = loop_module.Loop(
+        "dataset_probe/dataset",
+        loop_module.LoopConfig(runs_root=tmp_path),
+        optimizer=optim_module.create("random"),
+    )
+    run.population = [loop_module.Candidate.from_state(state)]
+    candidate = loop_module.Candidate.from_state(moved)
+    reason = run._exam_moved(candidate)
+    assert reason is not None and reason.startswith("E-exam"), reason
+
+    same = loop_module.Candidate.from_state(state)
+    assert run._exam_moved(same) is None
+
+
+def test_an_edit_cannot_bake_the_items_into_the_graph(tmp_path):
+    """The rule create's validation enforces on a produced package holds for an edit.
+
+    `inline_items` is read before the Task or the source, so a state that carries it is
+    a harness for exactly those items. Every primitive returns through the same
+    finisher, so this holds for the ops that set a field and the ones that add a node.
+    """
+    import pytest as pytest_module
+
+    from refactory_dsh import registry
+    from refactory_dsh.nn import edits as edit_module
+    from refactory_dsh.nn.edits import EditError
+    from refactory_dsh.paths import project_root
+
+    _, klass = registry.resolve(project_root(), "dataset_probe/dataset")
+    state = klass().state_dict()
+    edit = {
+        "op": "set_node_field", "id": "data", "field": "inline_items",
+        "value": [{"id": "alpha"}, {"id": "beta"}],
+    }
+    with pytest_module.raises(EditError) as caught:
+        edit_module.apply(edit, state)
+    assert caught.value.code == "E-items"
