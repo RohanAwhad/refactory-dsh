@@ -900,6 +900,30 @@
       "status": "deferred",
       "deferred_reason": "The pipeline's smoke of java_harness_v2 scored 1.0 as `sandboxed: true, model: used` while `refactory package smoke java_harness_v2/build --model` fails repeatably in 0.152s with `model completion failed (exit 1): Node.js v22.23.2`, and the sandbox's own stderr is empty. Which of the two passes the wrong thing to the client is not visible from outside the sandbox, and it is not blocking: create completes and the produced harness runs.",
       "deferred_to": "issue #81"
+    },
+    {
+      "id": "lean-own-ir",
+      "issue": 82,
+      "title": "Own the IR, and make remote-factory a pinned test-only reference",
+      "why": "Nine imported names cost 141 installed distributions, 459 MB of venv, 12 MB and 831 files in the repository. The reference is still worth keeping as the test-time oracle that catches our lowering bugs.",
+      "verify": "pytest refactory/tests/test_lowering.py -q",
+      "status": "doing"
+    },
+    {
+      "id": "lean-pinned-harness",
+      "issue": 83,
+      "title": "Depend on a pinned harness instead of copying it",
+      "why": "We carry ~47 MB and 270 packages of upstream harness to run five packages of our own, and our entire delta on upstream code is one preset, a two-line web-app change, four generated files and two test expectations.",
+      "verify": "pnpm exec vitest run packages/workflow/workflow-spine/tests/composition.spec.ts",
+      "status": "todo"
+    },
+    {
+      "id": "lean-our-gates",
+      "issue": 84,
+      "title": "Decide what our own verification becomes once the harness copy is gone",
+      "why": "Removing the copied harness removes the doc gates, the snapshot suite and the bilingual pairing gate with it, so the replacement has to be chosen before the deletion rather than after.",
+      "verify": "pnpm exec vitest run packages/client/ui-refactory/tests/body.client.spec.tsx",
+      "status": "todo"
     }
   ],
   "verification": {
