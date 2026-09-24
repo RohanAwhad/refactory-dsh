@@ -158,6 +158,6 @@ just ask in the conversation:
 | `error: node … is too old` | Node must be `>=22.19` or `>=24`; `nvm install 22 && nvm use 22` |
 | `MISS` lines in `doctor` | exactly what is missing, and what to install |
 
-`uv run python -m refactory_dsh.tools.check_recipes` runs every command this
-repository documents and reports which ones no longer do what the docs say — the
-first thing to run after a pull.
+`uv run python -m refactory_dsh.tools.check_recipes` runs the documented commands
+that need no model and reports which ones no longer do what the docs say — the first
+thing to run after a pull. The rest are `--tier model`, which spends money.

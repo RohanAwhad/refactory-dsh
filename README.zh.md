@@ -389,7 +389,7 @@ uv run refactory optimize circle_packing/adaptive --provider deepseek-official -
 | [packing-tools.md](refactory/docs/packing-tools.md) | 模式如何声明它需要安装的工具 |
 | [contributing.md](refactory/docs/contributing.md) | 如何修改本仓库 |
 
-HTML 教程、API 参考与配置目录都是**从代码生成的**，而本 README 展示的每条命令都是一份 recipe， 由 `uv run python -m refactory_dsh.tools.check_recipes` 执行——会撒谎的文档过不了门禁，只会骗到读者。
+HTML 教程、API 参考与配置目录都是**从代码生成的**；另有两道门禁在不相信文字的前提下看住命令：教程里的命令是会由 `uv run python -m refactory_dsh.tools.check_recipes` 真正执行的 recipe，而本 README 选项表里的每个旗标都会和真实解析器对照（`refactory/tests/test_cli.py`），所以写出来的旗标是命令接受的，演示过的命令是真跑过的。两道门禁都不证明命令真的做了它旁边那句话所说的事——那是教程里逐条记录的输出负责的。
 
 ---
 
@@ -427,11 +427,11 @@ refactory-dsh                the GUI launcher (what `refactory ui` runs)
 ## 开发
 
 ```bash
-uv run python -m pytest refactory/tests -q          # the glue: 700+ tests, offline
+uv run python -m pytest refactory/tests -q          # the glue: 800+ tests, offline
 pnpm run test                                        # the runtime and the client
 pnpm run typecheck && pnpm run lint                  # TypeScript
 pnpm run test:docs                                   # documentation gates
-uv run python -m refactory_dsh.tools.check_recipes   # every command this repo documents
+uv run python -m refactory_dsh.tools.check_recipes   # the documented commands that need no model
 ```
 
 集成层会真正调用模型：

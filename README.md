@@ -389,7 +389,7 @@ uv run refactory optimize circle_packing/adaptive --provider deepseek-official -
 | [packing-tools.md](refactory/docs/packing-tools.md) | how a mode declares a tool it needs installed |
 | [contributing.md](refactory/docs/contributing.md) | how to change this repo |
 
-The HTML tour, the API reference and the config catalog are **generated from the code**, and the commands this README shows are recipes that `uv run python -m refactory_dsh.tools.check_recipes` executes — a doc that lies fails a gate rather than a reader.
+The HTML tour, the API reference and the config catalog are **generated from the code**, and two gates keep the commands honest without trusting the prose: the tour's commands are recipes that `uv run python -m refactory_dsh.tools.check_recipes` executes, and every flag in this README's option tables is checked against the real parser (`refactory/tests/test_cli.py`), so a documented flag is one the command accepts and a demonstrated command is one that ran. Neither gate proves a command does what the sentence around it says; that is what the tutorials' recorded output is for.
 
 ---
 
@@ -427,11 +427,11 @@ A mode is a Python class in `refactory_packages/<package>/`, not a `graph.json`;
 ## Development
 
 ```bash
-uv run python -m pytest refactory/tests -q          # the glue: 700+ tests, offline
+uv run python -m pytest refactory/tests -q          # the glue: 800+ tests, offline
 pnpm run test                                        # the runtime and the client
 pnpm run typecheck && pnpm run lint                  # TypeScript
 pnpm run test:docs                                   # documentation gates
-uv run python -m refactory_dsh.tools.check_recipes   # every command this repo documents
+uv run python -m refactory_dsh.tools.check_recipes   # the documented commands that need no model
 ```
 
 The integration tier makes real model calls:
