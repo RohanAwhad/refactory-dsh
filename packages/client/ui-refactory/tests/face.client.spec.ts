@@ -349,6 +349,15 @@ describe('refactoryFace — the watched run\'s ledger', () => {
     expect(tab(instance)?.steering).toEqual({ kind: 'ready', value: GATED_STEERING })
   })
 
+  it('controls the run itself rather than its ledger', async () => {
+    const { instance, scripted, face, signal } = harness()
+    answer(scripted.steer, ok(STEERED))
+    face.controlRun(TAB, '/runs/live', 'pause', signal)
+    await settle()
+    expect(scripted.steer).toHaveBeenCalledWith({ run: '/runs/live', control: 'pause' }, signal)
+    expect(tab(instance)?.steering).toEqual({ kind: 'ready', value: STEERED })
+  })
+
   it('shows a refused note as the notice, keeping the ledger that was already read', async () => {
     const { instance, scripted, face, signal } = harness()
     instance.actions.steered(TAB, STEERING)

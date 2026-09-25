@@ -166,6 +166,19 @@ export interface RefactoryInjected {
    */
   readonly readSteering: (tabId: TabId, run: string, signal: AbortSignal) => void
   /**
+   * Control the run itself: hold it, release it, or end it.
+   * @param tabId - the tab being drawn.
+   * @param run - the run id or directory.
+   * @param control - the action the loop honors at its next generation boundary.
+   * @param signal - the tab record's lifetime.
+   */
+  readonly controlRun: (
+    tabId: TabId,
+    run: string,
+    control: 'pause' | 'resume' | 'stop',
+    signal: AbortSignal,
+  ) => void
+  /**
    * Append one note to the watched run's ledger, and take the ledger it answers with.
    * @param tabId - the tab being drawn.
    * @param run - the run id or directory.
@@ -373,6 +386,18 @@ export function refactoryFace(
       },
       readSteering(tabId, run, signal) {
         loadSteering(tabId, run, signal)
+      },
+      controlRun(tabId, run, control, signal) {
+        if (signal.aborted) return
+        const generation = nextGeneration(steeringGenerations, tabId)
+        settle(steeringGenerations, tabId, generation, console.steer(
+          { run, control },
+          signal,
+        ), (steering) => {
+          actions.steered(tabId, steering)
+        }, undefined, (failure) => {
+          actions.noticed(tabId, { code: failure.code, message: failure.message })
+        })
       },
       addNote(tabId, run, note, kind, signal) {
         if (signal.aborted) return

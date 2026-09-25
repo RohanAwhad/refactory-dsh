@@ -338,6 +338,24 @@ describe('the steering the picker offers for the run it reads', () => {
     })
   })
 
+  it('offers pause, resume and stop, and sends the one pressed', async () => {
+    const { view, console } = mountBody({
+      choices: { kind: 'ready', value: CHOICES },
+      watching: '/runs/live',
+      steering: { kind: 'ready', value: STEERING },
+    })
+    console.steer.mockImplementation(async () => ok(STEERED) as never)
+    expect([...view.container.querySelectorAll('[data-refactory-control]')]
+      .map(node => node.getAttribute('data-refactory-control'))).toEqual(['pause', 'resume', 'stop'])
+    fireEvent.click(at(view, 'data-refactory-control', 'pause'))
+    await waitFor(() => {
+      expect(console.steer).toHaveBeenCalledWith(
+        { run: '/runs/live', control: 'pause' },
+        expect.anything(),
+      )
+    })
+  })
+
   it('reads the ledger again when the reader asks it to', async () => {
     const { view, console } = mountBody({
       choices: { kind: 'ready', value: CHOICES },

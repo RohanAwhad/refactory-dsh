@@ -311,7 +311,7 @@ const NOTE_KINDS: readonly RefactoryNoteKind[] = ['info', 'correction', 'constra
 
 /** The watched run's intent ledger, and the gates it is stopped at. */
 function Steering({
-  tabId, run, steering, signal, t, readSteering, addNote, answerGate,
+  tabId, run, steering, signal, t, readSteering, addNote, answerGate, controlRun,
 }: {
   readonly tabId: Parameters<RefactoryInjected['refresh']>[0]
   readonly run: string
@@ -321,6 +321,7 @@ function Steering({
   readonly readSteering: RefactoryInjected['readSteering']
   readonly addNote: RefactoryInjected['addNote']
   readonly answerGate: RefactoryInjected['answerGate']
+  readonly controlRun: RefactoryInjected['controlRun']
 }): ReactNode {
   const [said, setSaid] = useState('')
   const [kind, setKind] = useState<RefactoryNoteKind>('info')
@@ -346,6 +347,30 @@ function Steering({
         >
           <IconRefreshOutline16 />
           {t('steering.refresh')}
+        </button>
+        <button
+          type="button"
+          className={css.action}
+          data-refactory-control="pause"
+          onClick={() => { controlRun(tabId, run, 'pause', signal) }}
+        >
+          {t('control.pause')}
+        </button>
+        <button
+          type="button"
+          className={css.action}
+          data-refactory-control="resume"
+          onClick={() => { controlRun(tabId, run, 'resume', signal) }}
+        >
+          {t('control.resume')}
+        </button>
+        <button
+          type="button"
+          className={css.action}
+          data-refactory-control="stop"
+          onClick={() => { controlRun(tabId, run, 'stop', signal) }}
+        >
+          {t('control.stop')}
         </button>
       </div>
       {ledger.entries.length === 0
@@ -436,7 +461,7 @@ function Steering({
 /** The picker's body: the described choices, and the run they start. */
 export function RefactoryBody({
   useTabInfo, useStore, choose, setKnob, setSetting, start, run: runOnce, load, reload, refresh, stop,
-  readSteering, addNote, answerGate, setEnabled, remove, importPackage, t,
+  readSteering, addNote, answerGate, controlRun, setEnabled, remove, importPackage, t,
 }: RefactoryBodyProps): ReactNode {
   const { tab } = useTabInfo()
   const { signal } = tab
@@ -618,6 +643,7 @@ export function RefactoryBody({
               readSteering={readSteering}
               addNote={addNote}
               answerGate={answerGate}
+              controlRun={controlRun}
             />
           )}
       </section>

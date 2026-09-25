@@ -442,6 +442,9 @@ export class RefactoryConsole extends TypertRemoteService {
         ...note === '' ? {} : { note },
         ...request.kind === undefined ? {} : { kind: request.kind },
         ...verdicts.length === 0 ? {} : { verdict: verdicts },
+        // Control is its own flag, not a note: the loop polls it, and a pause must
+        // not have to be read as prose.
+        ...request.control === undefined ? {} : { [request.control]: true },
         // Read the waiting gates on the same call, so appending a note leaves the
         // section that offers a verdict current rather than a frame behind.
         gates: true,

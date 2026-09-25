@@ -233,6 +233,12 @@ export interface RefactorySteerRequest {
    * empty writes none, so the same call reads a ledger it did not touch.
    */
   readonly verdicts?: readonly string[]
+  /**
+   * Control the run itself rather than its ledger: `pause` holds it at its next
+   * generation boundary, `resume` releases it, and `stop` ends it with the reason
+   * recorded. Absent writes no control request.
+   */
+  readonly control?: 'pause' | 'resume' | 'stop'
 }
 
 /** One mode a package declares, as the registry's catalogue lists it. */

@@ -622,6 +622,16 @@ describe('refactoryConsole — steering a run', () => {
     ])
   })
 
+  it('sends control as the console\'s own flag, not as a note', async () => {
+    const { service, subprocess } = await setup()
+    subprocess.answer(STEERING)
+    await service.steer({ run: '/runs/live', control: 'pause' }, signal())
+    expect(subprocess.lastArgv).toEqual([
+      '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'steer', '--run', '/runs/live',
+      '--pause', '--gates',
+    ])
+  })
+
   it('omits an empty note and an empty verdict, so a read cannot write by accident', async () => {
     const { service, subprocess } = await setup()
     subprocess.answer(STEERING)
