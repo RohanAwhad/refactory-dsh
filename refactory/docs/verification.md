@@ -96,6 +96,14 @@ surface reads.
   `refactory steer --pause/--resume/--stop`, `refactoryConsole.steer` and the panel's
   Steering buttons all write the same request. The intent ledger is the other channel:
   the proposer reads it fresh before every generation, so a note steers the next one.
+- The same boundary carries the three population acts, and they are one-shot: `keep`
+  pins a candidate into `select_parents`, `reject` (with `--lineage`) takes it out of
+  `leaderboard` so it cannot be proposed from, reported best or adopted, and `adopt`
+  writes the current winner as a package without ending the search. Rejection is a
+  selection fact rather than a rewrite of history — `state.json` keeps the score — and
+  `adopt.best` reads the same journal so the two never name different winners.
+  `tests/test_control.py` pins each act, the consumption of the request, the lineage
+  walk, the resume replay and the adopter's agreement with the report.
 
 ## What a contributor runs before pushing
 

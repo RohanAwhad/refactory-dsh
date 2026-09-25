@@ -187,6 +187,9 @@ Every command is `uv run refactory <verb>`. `uv run refactory <verb> --help` is 
 | `refactory steer --run <id> --verdict <gate>=<value>` | record a gate's answer, so a resume replays it. |
 | `refactory steer --run <id> --pause` / `--resume` | hold a search at its next generation boundary, or release it. |
 | `refactory steer --run <id> --stop` | end a search at its next boundary, recording that a person asked. |
+| `refactory steer --run <id> --keep <candidate>` | follow that candidate up: it stays a parent even once a newer batch outscores it. Add `--lineage` for its descendants too. |
+| `refactory steer --run <id> --reject <candidate>` | stop searching around that candidate: it leaves the leaderboard, so it cannot be proposed from, reported best or adopted. Add `--lineage` for the whole branch. |
+| `refactory steer --run <id> --adopt [--as <package>]` | write the run's current winner as a package now, without ending the search. |
 | `refactory stop --run <id>` | ask a run to stop now. |
 
 **A search says what it is doing while it does it.** `refactory optimize` prints the meaningful events as they happen — each candidate's score, the best so far, what the optimizer kept and refused with the running rule tally, each epoch's best, and the held-out audit — while the final JSON stays on stdout for a caller to parse. `--verbose` adds every event and each candidate's own run output, and `refactory status --run <id>` shows the same records, which is what the Web panel reads.

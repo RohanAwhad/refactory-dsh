@@ -281,6 +281,17 @@ class Loop(OuterLoop):
         )
         self.population: list[Candidate] = []
         self.rejections: list[Rejection] = []
+        #: Candidates a person pinned, in the order they were pinned. A keep is not
+        #: a score: it changes which candidates the next proposals are made against,
+        #: so a good point that a newer batch outscored still gets followed up.
+        self.kept: list[str] = []
+        #: Candidates a person dismissed, in the order they dismissed them. The
+        #: population still records what they scored -- a run does not rewrite its own
+        #: history -- but nothing selects them again.
+        self.rejected: list[str] = []
+        #: What `adopt-best-now` wrote, as the payloads `adopt.adopt` returned or the
+        #: refusals it raised. Kept so the panel can show a person what their act did.
+        self.adoptions: list[dict[str, Any]] = []
         self.proposals: dict[str, dict[str, Any]] = {}
         self.epoch = 0
         self.generation = 0
@@ -1068,11 +1079,21 @@ class Loop(OuterLoop):
         Falls back to the population when nothing has been scored yet: a strategy
         that asks for parents before the first epoch must get the seed, not an empty
         list, or the only way to write a strategy is to know the order of the loop.
+
+        A kept candidate is always among them, whether or not it is still in the top
+        `n`. That is the whole of `keep`: without it, elite selection is a cull and a
+        person's "follow this one up" would be silently dropped the moment a newer
+        batch outscores it.
         """
         chosen = self.leaderboard(n)
-        if chosen:
-            return chosen
-        return self.population[:n]
+        pinned = [
+            candidate
+            for candidate in self.leaderboard()
+            if candidate.id in self.kept and candidate not in chosen
+        ]
+        if chosen or pinned:
+            return chosen + pinned
+        return [c for c in self.population[:n] if c.id not in self.rejected]
 
     def propose(self, run: Run, parents: Sequence[Candidate], n: int) -> list[Proposal]:
         """One round of proposals. The default delegates to the optimizer.
@@ -1175,24 +1196,141 @@ class Loop(OuterLoop):
                 return
 
     def _apply_control(self) -> str | None:
-        """Honor a pause or a stop another process asked for, at the boundary.
+        """Honor what another process asked for, at the boundary.
 
         A pause blocks here until the request changes, so a person can hold a search
         between generations without killing it. The poll interval is configuration
         only so a test does not have to wait a second for each step.
+
+        The population acts -- keep, reject, adopt -- are honored here too and then
+        consumed, because this is the only place a request is safe (never inside an
+        evaluation) and because one act is one act: a boundary that adopted the same
+        winner every epoch would be a bug that looks like enthusiasm.
         """
-        from refactory_dsh.control import Control
+        from refactory_dsh.control import Control, ONE_SHOT
 
         control = Control(self.root)
-        action = control.read()
-        while action == "pause":
-            self._progress("paused")
-            time.sleep(max(0.01, float(self.config.control_poll_s)))
-            action = control.read()
-        if action == "stop":
-            self._progress("control", action="stop")
-            return "stop"
-        return None
+        while True:
+            request = control.read_request()
+            if request is None:
+                return None
+            action = str(request["action"])
+            if action == "pause":
+                self._progress("paused")
+                time.sleep(max(0.01, float(self.config.control_poll_s)))
+                continue
+            if action == "resume":
+                # The pause it released is over; clearing keeps "absent means run"
+                # the only reading of the file.
+                control.clear()
+                return None
+            if action == "stop":
+                self._progress("control", action="stop")
+                return "stop"
+            outcome = self._honor(request)
+            if action in ONE_SHOT:
+                control.clear()
+            self._progress("control", **outcome)
+            return None
+
+    def _honor(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Carry out one population act, and say what it did.
+
+        Every outcome is a fact rather than an exception. A run that dies because a
+        person asked it to keep a candidate they mistyped has turned their control
+        into a way to lose the search, and the file the request travels in has no
+        way to say "that id was wrong" other than the journal.
+        """
+        action = str(request.get("action") or "")
+        target = str(request.get("target") or "")
+        lineage = bool(request.get("lineage"))
+        known = {candidate.id for candidate in self.population}
+        outcome: dict[str, Any] = {"action": action}
+        if target:
+            outcome["target"] = target
+        if lineage:
+            outcome["lineage"] = True
+
+        if action not in ("keep", "reject"):
+            return self._adopt_now(str(request.get("as") or ""), outcome)
+
+        targets = self._lineage_ids(target) if lineage else [target]
+        outcome["targets"] = targets
+        unknown = [candidate_id for candidate_id in targets if candidate_id not in known]
+        applied: list[str] = []
+        if action == "reject":
+            for candidate_id in targets:
+                if candidate_id in known and candidate_id not in self.rejected:
+                    self.rejected.append(candidate_id)
+                    applied.append(candidate_id)
+                if candidate_id in self.kept:
+                    self.kept.remove(candidate_id)
+        else:
+            # A keep is also the undo of a reject: a candidate is in and protected,
+            # or out, and two flags saying both would be a state no reader can act on.
+            for candidate_id in targets:
+                if candidate_id in self.rejected:
+                    self.rejected.remove(candidate_id)
+                if candidate_id in known and candidate_id not in self.kept:
+                    self.kept.append(candidate_id)
+                    applied.append(candidate_id)
+
+        outcome["applied"] = applied
+        if unknown:
+            outcome["unknown"] = unknown
+        self._journal("control", **outcome, kept=list(self.kept), rejected=list(self.rejected))
+        self._write_state()
+        return outcome
+
+    def _lineage_ids(self, target: str) -> list[str]:
+        """The candidate and every descendant of it, in population order.
+
+        "Stop spending budget around this branch" means the branch: rejecting one
+        point while its descendants keep proposing from it is not what a person who
+        read the lineage asked for.
+        """
+        children: dict[str, list[str]] = {}
+        for candidate in self.population:
+            if candidate.parent:
+                children.setdefault(candidate.parent, []).append(candidate.id)
+        found = [target]
+        queue = [target]
+        while queue:
+            for child in children.get(queue.pop(0), ()):
+                if child not in found:
+                    found.append(child)
+                    queue.append(child)
+        return found
+
+    def _adopt_now(self, as_name: str, outcome: dict[str, Any]) -> dict[str, Any]:
+        """Write the current winner as a package, without ending the search.
+
+        The winner is read from the journal the run is writing right now, which is
+        the only artifact that carries a candidate's *state*, so this works while the
+        run is live. A refusal is recorded as an event: adopting never overwrites, and
+        a second adopt is a person's mistake rather than a reason to lose the search.
+        """
+        from refactory_dsh.adopt import adopt as adopt_winner
+
+        name = as_name or f"{self.package}_adopted"
+        outcome["as"] = name
+        try:
+            written = adopt_winner(
+                self.root, as_name=name, project=self.project, mode=self.mode_id
+            )
+            outcome.update(
+                package=written["package"],
+                mode=written["mode"],
+                candidate=written["candidate"],
+                score=written["score"],
+                package_root=written["package_root"],
+            )
+        except Exception as exc:  # a refusal is a fact, not the end of the run
+            outcome["error"] = f"{type(exc).__name__}: {exc}"
+        self.adoptions.append(outcome)
+        self._journal("control", **outcome, kept=list(self.kept), rejected=list(self.rejected))
+        self._write_state()
+        return outcome
 
     def should_stop(self, run: Run) -> str | None:
         """A reason to stop before the bound, or ``None``. The bound is the default."""
@@ -1252,8 +1390,20 @@ class Loop(OuterLoop):
 
     # ── report ─────────────────────────────────────────────────────────────
     def leaderboard(self, limit: int | None = None) -> list[Candidate]:
+        """Everything the run kept, ranked, minus what a person rejected.
+
+        The exclusion is here rather than in the population because rejection is a
+        selection fact, not a historical one: `state.json` still records what the
+        candidate scored, and every reader that *chooses* -- the proposer's parents,
+        the report's winner, the held-out audit, the atomic adopt -- goes through
+        this one ranking, so a dismissed branch cannot come back as the best answer.
+        """
         ordered = sorted(
-            [c for c in self._evaluated() if c.score is not None],
+            [
+                c
+                for c in self._evaluated()
+                if c.score is not None and c.id not in self.rejected
+            ],
             key=lambda c: (-(c.score or 0.0), c.id),
         )
         return ordered[:limit] if limit else ordered
@@ -1321,6 +1471,9 @@ class Loop(OuterLoop):
             "seed_raw_score": self.population[0].raw_score if self.population else None,
             "scoring": self.scoring(),
             "leaderboard": [self._row(c) for c in board],
+            "kept": list(self.kept),
+            "rejected": list(self.rejected),
+            "adoptions": list(self.adoptions),
             "lineage": self._lineage(best),
             "structural_wins": [
                 self._row(c) for c in board if c.is_structural() and c.exit_ok
@@ -1924,6 +2077,11 @@ class Loop(OuterLoop):
                     for key, value in record.items()
                     if key != "event"
                 }
+            elif event == "control":
+                # Rebuilt rather than read from `state.json`: the journal is the run's
+                # durable state, and a resumed run that forgot a rejection would
+                # resurrect a branch the person had already dismissed.
+                self._replay_control(record)
 
         if not order:
             raise LoopError(f"{journal} holds no candidate, so there is nothing to resume")
@@ -1941,6 +2099,44 @@ class Loop(OuterLoop):
             }
             for candidate in self.population
         }
+
+    def _replay_control(self, record: dict[str, Any]) -> None:
+        """Restore one person's act while the journal is being replayed.
+
+        The recorded `kept`/`rejected` lists are the authority when they are present,
+        because they are the run's own ending state; the per-target branch covers a
+        journal that recorded only what was asked for.
+        """
+        if "kept" in record or "rejected" in record:
+            self.kept = [str(candidate_id) for candidate_id in record.get("kept") or ()]
+            self.rejected = [
+                str(candidate_id) for candidate_id in record.get("rejected") or ()
+            ]
+        elif record.get("action") in ("keep", "reject"):
+            action = str(record["action"])
+            asked = list(record.get("targets") or ())
+            if record.get("target"):
+                asked.append(record["target"])
+            for candidate_id in (str(value) for value in asked):
+                if action == "reject":
+                    if candidate_id not in self.rejected:
+                        self.rejected.append(candidate_id)
+                    if candidate_id in self.kept:
+                        self.kept.remove(candidate_id)
+                else:
+                    if candidate_id in self.rejected:
+                        self.rejected.remove(candidate_id)
+                    if candidate_id not in self.kept:
+                        self.kept.append(candidate_id)
+
+        if record.get("action") == "adopt":
+            self.adoptions.append(
+                {
+                    key: value
+                    for key, value in record.items()
+                    if key not in ("event", "kept", "rejected")
+                }
+            )
 
     # ── persistence ────────────────────────────────────────────────────────
     def _write(self, name: str, payload: Any) -> Path:
@@ -1985,6 +2181,11 @@ class Loop(OuterLoop):
                 "generation": self.generation,
                 "evaluations": self.evaluations,
                 "scoring": self.scoring(),
+                # A person's two lists, so a panel and a live `leaderboard` read them
+                # without replaying the journal.
+                "kept": list(self.kept),
+                "rejected": list(self.rejected),
+                "adoptions": list(self.adoptions),
                 "population": [self._row(candidate) for candidate in self.population],
             },
         )

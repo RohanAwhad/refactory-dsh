@@ -10,7 +10,8 @@ Two levels, and the difference is deliberate:
 
 - **meaningful** — the events a person watching a search wants: the run's shape,
   each candidate's score, what the optimizer kept and refused, each epoch's best,
-  the final report and the held-out audit. Printed by default.
+  the final report, the held-out audit, and what the run did with each control act
+  a person asked for. Printed by default.
 - **verbose** — everything else a run records, rendered as the raw event. Printed
   only when a caller asks, because a stream nobody can read is not streaming.
 """
@@ -29,6 +30,7 @@ MEANINGFUL = frozenset({
     "scheduler",
     "report",
     "holdout",
+    "control",
 })
 
 #: Record keys the printer owns; a verbose line shows the event's own fields only.
@@ -100,11 +102,47 @@ def render(record: dict[str, Any], *, verbose: bool = False) -> str | None:
             f"holdout {_score(record.get('holdout'))} · gap {_score(record.get('gap'))} · "
             f"overfit {record.get('overfit', '?')}"
         )
+    if step == "paused":
+        return "paused · waiting for a resume or a stop"
+    if step == "control":
+        return _control_line(record)
     if not verbose:
         return None
     fields = {key: value for key, value in record.items() if key not in _ENVELOPE}
     detail = json.dumps(fields, default=str) if fields else ""
     return f"epoch {epoch} · {step}" + (f" · {detail}" if detail else "")
+
+
+def _control_line(record: dict[str, Any]) -> str:
+    """One act a person asked for, and what it did.
+
+    A control event is the run saying back what it did with the request, which is the
+    only confirmation the person gets: the act is honored in another process and this
+    stream is where they read that it landed and what it changed.
+    """
+    action = str(record.get("action") or "?")
+    if action == "stop":
+        return "control · stop asked; the run ends at this boundary"
+    if action == "adopt":
+        line = f"control · adopt {record.get('as', '?')}"
+        if record.get("error"):
+            return line + f" · refused: {record['error']}"
+        return (
+            line + f" · candidate {record.get('candidate', '?')} "
+            f"scored {_score(record.get('score'))} · wrote {record.get('package_root', '?')}"
+        )
+    if action in ("keep", "reject"):
+        line = f"control · {action} {record.get('target', '?')}"
+        if record.get("lineage"):
+            line += " and its descendants"
+        applied = record.get("applied")
+        if isinstance(applied, list):
+            line += f" · {len(applied)} candidate(s) changed"
+        unknown = record.get("unknown")
+        if isinstance(unknown, list) and unknown:
+            line += f" · not in the population: {', '.join(str(i) for i in unknown)}"
+        return line
+    return f"control · {action}"
 
 
 class Printer:

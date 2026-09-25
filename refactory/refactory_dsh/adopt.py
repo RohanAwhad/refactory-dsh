@@ -72,6 +72,31 @@ def _score_by_id(entries: list[dict[str, Any]]) -> dict[str, float]:
     return scored
 
 
+def _rejected_ids(entries: list[dict[str, Any]]) -> set[str]:
+    """The candidates a person dismissed while the run was live.
+
+    Read from the same journal as the scores, because this function and
+    ``Loop.report`` have to name the *same* winner: a run whose best candidate was
+    rejected from the panel still records its score, and adopting it would write the
+    one answer the person had already read and refused. The last recorded list wins,
+    since the run writes its whole keep/reject state with every control act.
+    """
+    rejected: set[str] = set()
+    for entry in entries:
+        if entry.get("event") != "control":
+            continue
+        if "rejected" in entry:
+            rejected = {str(value) for value in entry.get("rejected") or ()}
+            continue
+        if entry.get("action") != "reject":
+            continue
+        for candidate_id in entry.get("targets") or ():
+            rejected.add(str(candidate_id))
+        if entry.get("target"):
+            rejected.add(str(entry["target"]))
+    return rejected
+
+
 def best(run_root: Path) -> dict[str, Any]:
     """The winner: the highest-scoring candidate whose state the run recorded.
 
@@ -82,11 +107,13 @@ def best(run_root: Path) -> dict[str, Any]:
     The order is the run report's own -- score descending, then id ascending
     (`Loop.leaderboard`) -- so this and `report.json` name the same candidate.
     Insertion order would pick the seed on a tie and adopt the baseline as the
-    result while the report named a structural winner.
+    result while the report named a structural winner. Candidates the run recorded
+    as rejected are skipped, for the same reason: the report skips them too.
     """
     run_root = Path(run_root)
     entries = _journal_entries(run_root)
     scores = _score_by_id(entries)
+    rejected = _rejected_ids(entries)
 
     scored: list[tuple[float, str, dict[str, Any], list[Any]]] = []
     for entry in entries:
@@ -96,6 +123,8 @@ def best(run_root: Path) -> dict[str, Any]:
         if not isinstance(state, dict):
             continue
         candidate_id = str(entry.get("id") or "")
+        if candidate_id in rejected:
+            continue
         score = scores.get(candidate_id)
         if score is None:
             continue

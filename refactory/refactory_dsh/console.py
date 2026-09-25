@@ -609,6 +609,9 @@ def _steer(
     verdicts: tuple[str, ...] | list[str] = (),
     with_gates: bool = False,
     control: str | None = None,
+    target: str | None = None,
+    lineage: bool = False,
+    as_name: str | None = None,
 ) -> dict[str, Any]:
     """Read the ledger, and optionally add to it.
 
@@ -650,11 +653,25 @@ def _steer(
         payload["gates"] = gates(run_root)
     if control is not None:
         # Control is not prose: the loop polls a small file at a generation boundary,
-        # so a pause or a stop works from here, from the panel, and from a process
-        # that is not the run's parent.
-        from refactory_dsh.control import Control
+        # so a pause, a stop, a keep, a reject or an adopt works from here, from the
+        # panel, and from a process that is not the run's parent. A request that
+        # cannot be honored as written (a keep with no id) is refused here, where the
+        # person can still fix it, rather than written for the loop to guess at.
+        from refactory_dsh.control import Control, ControlError
 
-        payload["control"] = Control(run_root).request(control)
+        try:
+            payload["control"] = Control(run_root).request(
+                control, target=target, lineage=lineage, as_name=as_name
+            )
+        except ControlError as error:
+            raise ConsoleError(str(error)) from error
+    elif target or lineage or as_name:
+        # `--lineage` or `--as` on their own name no act, and a flag that silently
+        # does nothing is worse than one that is refused.
+        raise ConsoleError(
+            "--keep, --reject or --adopt names the act that --lineage and --as "
+            "belong to; none of them was given"
+        )
     return payload
 
 
@@ -728,14 +745,34 @@ def leaderboard(run_root: Path, *, limit: int = 20) -> list[dict[str, Any]]:
         ]
         rows.sort(key=lambda row: (-(row.get("score") or 0.0), row.get("id") or ""))
     out: list[dict[str, Any]] = []
+    # What a person pinned or dismissed, so a reader of a *live* run sees their own
+    # acts in the table they are reading. A finished run carries the same two lists
+    # in `report.json`'s rows; a live one has them only in `state.json`.
+    kept, rejected = _person_lists(run_root)
     for row in rows[:limit]:
         record = dict(row)
+        candidate_id = str(row.get("id") or "")
+        record["kept"] = candidate_id in kept
+        record["rejected"] = candidate_id in rejected
         try:
             record["diff"] = observe.candidate_diff(run_root, row["id"])
         except FileNotFoundError:
             record["diff"] = None
         out.append(record)
     return out
+
+
+def _person_lists(run_root: Path) -> tuple[set[str], set[str]]:
+    """The candidates a person kept and rejected, from the run's own state.
+
+    Absent state is an empty answer rather than an error: a leaderboard is readable
+    before the loop has written anything, and before this existed every run's
+    leaderboard is exactly what this returns for one.
+    """
+    state = _read_json(Path(run_root) / "state.json") or {}
+    kept = {str(value) for value in state.get("kept") or ()}
+    rejected = {str(value) for value in state.get("rejected") or ()}
+    return kept, rejected
 
 
 def _readable(path: Path) -> bool:
@@ -975,6 +1012,29 @@ def _parser() -> argparse.ArgumentParser:
         "--stop", action="store_true",
         help="end the run at its next boundary, recording that a person asked",
     )
+    control.add_argument(
+        "--keep", metavar="ID",
+        help="follow this candidate up: it stays a parent even once a newer batch "
+             "outscores it, and a rejection on it is cleared",
+    )
+    control.add_argument(
+        "--reject", metavar="ID",
+        help="stop searching around this candidate: it leaves the leaderboard, so it "
+             "cannot be proposed from, reported best or adopted",
+    )
+    control.add_argument(
+        "--adopt", action="store_true",
+        help="write the run's current winner as a package now, without ending the run",
+    )
+    steer.add_argument(
+        "--lineage", action="store_true",
+        help="with --keep or --reject, act on the candidate's descendants too, so a "
+             "whole branch is followed up or dropped",
+    )
+    steer.add_argument(
+        "--as", dest="as_name", metavar="NAME",
+        help="with --adopt, the package name to write (default: <package>_adopted)",
+    )
 
     champion = add(
         sub.add_parser("best", help="the winner, with the state that scored it")
@@ -1187,12 +1247,21 @@ def main(argv: list[str] | None = None) -> int:
         elif args.verb == "candidate":
             payload = candidate(_root_for(args, project), args.candidate)
         elif args.verb == "steer":
+            # One flag, one act: the mutually exclusive group already makes "pause and
+            # adopt" unwritable, so this only names the act the flags selected.
+            asked = (
+                "pause" if args.pause else "resume" if args.resume
+                else "stop" if args.stop else "keep" if args.keep
+                else "reject" if args.reject else "adopt" if args.adopt else None
+            )
             payload = _steer(
                 _root_for(args, project),
                 seed=args.seed, note=args.note, kind=args.kind,
                 verdicts=args.verdict, with_gates=args.gates,
-                control=("pause" if args.pause else "resume" if args.resume
-                         else "stop" if args.stop else None),
+                control=asked,
+                target=args.keep or args.reject,
+                lineage=args.lineage,
+                as_name=args.as_name,
             )
         elif args.verb == "best":
             payload = _best_payload(_root_for(args, project), keep_state=args.state)

@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from refactory_dsh.adopt import best
 from refactory_dsh.control import Control, ControlError
 from refactory_dsh.loop import Loop, LoopConfig
 
@@ -102,3 +103,189 @@ def test_the_console_steer_verb_pauses_resumes_and_stops(tmp_path):
     for flag, expected in (("--pause", "pause"), ("--resume", "resume"), ("--stop", "stop")):
         assert console.main(["steer", "--run", str(tmp_path), flag]) == 0
         assert Control(tmp_path).read() == expected, flag
+
+
+# ── the population acts: keep, reject, adopt ───────────────────────────────
+def test_a_keep_and_a_reject_carry_the_candidate_they_name(tmp_path):
+    """The act names a candidate, so a request without one cannot be honored."""
+    control = Control(tmp_path)
+    with pytest.raises(ControlError, match="names a candidate"):
+        control.request("reject")
+    with pytest.raises(ControlError, match="does not take a candidate"):
+        control.request("pause", target="abc")
+    with pytest.raises(ControlError, match="does not take --lineage"):
+        control.request("adopt", lineage=True)
+    with pytest.raises(ControlError, match="does not take a destination name"):
+        control.request("keep", target="abc", as_name="pack")
+
+    assert control.request("reject", target="abc", lineage=True)["lineage"] is True
+    request = control.read_request()
+    assert request["target"] == "abc" and request["lineage"] is True
+
+    # One request at a time: the file holds one act, so a second one asked for
+    # before the loop reaches its boundary would drop the first. The loop clears
+    # the file when it honors one, so a request still here is one not yet honored.
+    with pytest.raises(ControlError, match="still waiting"):
+        control.request("adopt", as_name="pack")
+    with pytest.raises(ControlError, match="still waiting"):
+        control.request("reject", target="other")
+    # Asking for the same act again is not a second act.
+    assert control.request("reject", target="abc", lineage=True)["target"] == "abc"
+    # Pause and stop are not candidate acts: a stop must not wait its turn.
+    assert control.request("stop")["action"] == "stop"
+
+    control.clear()
+    assert control.request("adopt", as_name="pack")["as"] == "pack"
+
+
+def test_a_rejected_candidate_leaves_the_leaderboard(tmp_path):
+    """Rejection is a selection fact: the score stays recorded, the choice is gone."""
+    loop = Loop(MODE, _config(tmp_path), project=Path("."))
+    loop.run()
+    board = loop.leaderboard()
+    assert len(board) > 1, "the run produced nothing to reject"
+    victim = board[-1].id
+
+    loop._honor({"action": "reject", "target": victim})
+    remaining = [candidate.id for candidate in loop.leaderboard()]
+    assert victim not in remaining
+    assert victim in [candidate.id for candidate in loop.population], (
+        "the run rewrote its own history; the candidate's score is a fact about the run"
+    )
+    assert loop.report()["rejected"] == [victim], (
+        "the report does not say a person dismissed a candidate"
+    )
+    assert best(loop.root)["candidate"] != victim, (
+        "the adopter would write a winner the person had already dismissed"
+    )
+
+
+def test_a_keep_survives_elite_selection(tmp_path):
+    """What keep is for: a good point that a newer batch outscored still gets followed."""
+    loop = Loop(MODE, _config(tmp_path), project=Path("."))
+    loop.run()
+    board = loop.leaderboard()
+    assert len(board) > 2
+    chosen = board[-1].id
+
+    assert chosen not in [candidate.id for candidate in loop.select_parents(1)]
+    loop._honor({"action": "keep", "target": chosen})
+    assert chosen in [candidate.id for candidate in loop.select_parents(1)], (
+        "a kept candidate was culled by elite selection anyway"
+    )
+    assert loop.report()["kept"] == [chosen]
+
+
+def test_a_keep_clears_a_rejection_and_a_lineage_reject_takes_the_branch(tmp_path):
+    """One rule for both flags: a candidate is in and protected, or out. Not both."""
+    loop = Loop(MODE, _config(tmp_path), project=Path("."))
+    loop.run()
+    seed = loop.population[0].id
+    everyone = [candidate.id for candidate in loop.population]
+    assert len(everyone) > 1
+
+    loop._honor({"action": "reject", "target": seed, "lineage": True})
+    assert sorted(loop.rejected) == sorted(everyone), (
+        "a lineage reject left descendants proposing from a branch that was dropped"
+    )
+    assert loop.leaderboard() == []
+
+    loop._honor({"action": "keep", "target": seed, "lineage": True})
+    assert loop.rejected == []
+    assert loop.leaderboard(), "clearing a rejection did not bring the candidates back"
+
+
+def test_a_rejection_our_journal_recorded_survives_a_resume(tmp_path):
+    loop = Loop(MODE, _config(tmp_path), project=Path("."))
+    loop.run()
+    victim = loop.leaderboard()[-1].id
+    loop._honor({"action": "reject", "target": victim})
+
+    resumed = Loop(MODE, _config(tmp_path, resume=True), project=Path("."))
+    resumed.run()
+    assert victim in resumed.rejected, (
+        "a resumed run resurrected a branch the person had dismissed"
+    )
+    assert victim not in [candidate.id for candidate in resumed.leaderboard()]
+
+
+def test_adopt_now_writes_a_package_without_ending_the_run(tmp_path):
+    """The winner is reachable while the search is still going."""
+    loop = Loop(MODE, _config(tmp_path, epochs=1), project=tmp_path)
+    loop.run()
+    winner = loop.leaderboard()[0]
+
+    outcome = loop._honor({"action": "adopt", "as": "adopted_now"})
+    assert "error" not in outcome, outcome
+    assert outcome["candidate"] == winner.id
+    assert outcome["score"] == winner.score
+    assert (tmp_path / ".factory" / "packages" / "adopted_now" / "mode.py").exists()
+    assert loop.adoptions, "the run did not record what the person's adopt wrote"
+
+    # The refusal is an event, not the end of the search: adopting never overwrites.
+    again = loop._honor({"action": "adopt", "as": "adopted_now"})
+    assert "already exists" in str(again.get("error")), again
+
+
+def test_a_one_shot_act_is_not_repeated_at_the_next_boundary(tmp_path):
+    """A boundary that adopted the same winner every epoch is a bug, not enthusiasm."""
+    loop = Loop(MODE, _config(tmp_path), project=Path("."))
+    loop.run()
+    victim = loop.leaderboard()[-1].id
+    control = Control(tmp_path)
+    control.request("reject", target=victim)
+
+    assert loop._apply_control() is None
+    assert loop.rejected == [victim]
+    assert control.read() is None, "the act stayed in the file to be honored again"
+
+
+def test_the_console_steer_verb_carries_the_population_acts(tmp_path):
+    from refactory_dsh import console
+
+    control = Control(tmp_path)
+    # Each act is consumed the way the loop consumes it, so the next one is a first
+    # act again rather than a second request in a file that holds one.
+    assert console.main(["steer", "--run", str(tmp_path), "--reject", "abc"]) == 0
+    request = control.read_request()
+    assert request["action"] == "reject" and request["target"] == "abc"
+    control.clear()
+
+    assert console.main(["steer", "--run", str(tmp_path), "--keep", "abc", "--lineage"]) == 0
+    assert control.read_request()["lineage"] is True
+    control.clear()
+
+    assert console.main(["steer", "--run", str(tmp_path), "--adopt", "--as", "pack"]) == 0
+    assert control.read_request()["as"] == "pack"
+    control.clear()
+
+    # A flag that names no act is refused where the person can fix it, rather than
+    # written for the loop to interpret.
+    assert console.main(["steer", "--run", str(tmp_path), "--lineage"]) != 0
+    assert control.read_request() is None
+
+    # One act at a time: a second one would silently drop the first.
+    assert console.main(["steer", "--run", str(tmp_path), "--keep", "abc"]) == 0
+    assert console.main(["steer", "--run", str(tmp_path), "--reject", "abc"]) != 0
+    assert control.read_request()["action"] == "keep", (
+        "the second act replaced the first instead of being refused"
+    )
+    assert console.main(["steer", "--run", str(tmp_path), "--pause"]) == 0, (
+        "a pause is not held up behind a pending candidate act"
+    )
+
+
+def test_the_live_leaderboard_marks_what_a_person_did(tmp_path):
+    """A reader of a live run sees their own acts in the table they are reading."""
+    from refactory_dsh import console
+
+    loop = Loop(MODE, _config(tmp_path), project=Path("."))
+    loop.run()
+    board = loop.leaderboard()
+    loop._honor({"action": "keep", "target": board[0].id})
+    loop._honor({"action": "reject", "target": board[-1].id})
+
+    rows = {row["id"]: row for row in console.leaderboard(tmp_path)}
+    assert rows[board[0].id]["kept"] is True
+    assert rows[board[-1].id]["rejected"] is True
+    assert rows[board[1].id]["kept"] is False

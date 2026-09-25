@@ -106,6 +106,33 @@ run's ledger at the run root, and each candidate is evaluated with a copy of it 
 own directory, so `refactory steer --run .factory/loop/<run> --note "no numpy"
 --kind constraint` reaches the mode's agent nodes from the next candidate onwards.
 
+## Steering the search itself
+
+A note is context. The *search* is steered with control, which the loop honors at a
+generation boundary and reports back on the same stream the scores arrive on:
+
+```bash
+uv run refactory leaderboard --run .factory/loop/<run>
+uv run refactory steer --run .factory/loop/<run> --reject 3f9a2c --lineage
+uv run refactory steer --run .factory/loop/<run> --keep 1b77e0
+uv run refactory steer --run .factory/loop/<run> --adopt --as better_adaptive
+```
+
+`--reject` takes that candidate and its descendants out of the leaderboard, so the
+rest of the budget is not spent around a branch you have read and dismissed. The
+score stays in `state.json`, because a run does not rewrite its own history, and
+`refactory best` and `refactory adopt` agree with the leaderboard about who won.
+`--keep` is the opposite act and the undo for a mistyped reject: that candidate
+stays a parent even once a newer batch outscores it, so a good-but-overshadowed
+point still gets followed up. `--adopt` writes the run's current winner as a package
+*without ending the search*, so a leaderboard that is already good enough does not
+have to cost the remaining budget; a refusal (the name already exists, nothing has
+scored yet) is reported as an event rather than killing the run.
+
+`--pause`, `--resume` and `--stop` travel the same way. All of it works from a
+second terminal while `refactory optimize` is still printing, because control is a
+small file in the run directory rather than a message to the running process.
+
 ## What to take away
 
 - **Who answers a gate is part of the architecture**, not a convention: the IR
