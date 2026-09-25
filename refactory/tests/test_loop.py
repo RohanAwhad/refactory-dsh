@@ -720,3 +720,33 @@ def test_every_recorded_score_carries_the_raw_one_beside_it(tmp_path):
         assert event["score"] == pytest.approx(
             event["raw_score"] - event["parsimony"] * event["nodes"]
         )
+
+
+def test_the_run_prints_meaningful_events_while_it_goes(tmp_path, capsys):
+    """A watched search says where it is; the report is not the first thing seen."""
+    report = Loop(MODE, _config(tmp_path, epochs=1, batch_size=2, print_events=True),
+                  project=Path(".")).run()
+    err = capsys.readouterr().err
+    assert "run · optimizer random" in err
+    assert "epoch 1 · candidate" in err
+    assert "done · best" in err
+    assert "loss" not in err, "the firehose is only for --verbose"
+    assert report["best_score"] is not None
+
+
+def test_a_verbose_run_prints_more_than_the_default(tmp_path, capsys):
+    """Verbose is a superset: the events the meaningful level summarizes, shown."""
+    Loop(
+        MODE,
+        _config(tmp_path, epochs=1, batch_size=2, print_events=True, verbose=True),
+        project=Path("."),
+    ).run()
+    err = capsys.readouterr().err
+    assert "loss" in err and "backward" in err
+
+
+def test_a_library_run_prints_nothing(tmp_path, capsys):
+    """No caller asked for events, so none are printed; the file is still written."""
+    Loop(MODE, _config(tmp_path, epochs=1, batch_size=2), project=Path(".")).run()
+    assert capsys.readouterr().err == ""
+    assert (tmp_path / "progress.jsonl").exists()

@@ -164,6 +164,7 @@ Every command is `uv run refactory <verb>`. `uv run refactory <verb> --help` is 
 | `--intent "<words>"` | what the run is for; seeds the ledger the agents read | empty |
 | `--model <name>` | the model the reasoning optimizer asks (not the mode's own agents) | the configured route |
 | `--provider <route>` | the provider route that model is on | your settings default |
+| `--verbose` | print every event, and each candidate's own run output, not only the meaningful ones | off |
 
 **Every candidate is searched on the train part of the items, and the winner is then re-evaluated on the held-out part.** The part travels in the run directory (`subset.json` beside each candidate), not in a knob, so a search cannot choose its own exam; the audit lands in `<run root>/holdout.json` and in the report as `{"train", "holdout", "gap", "overfit", "threshold", "instances"}`, with `overfit` true when `train − holdout` exceeds 0.15. The score the search compares has the size cost taken off it, and the unpenalised number is recorded beside it as `raw_score`. `refactory best` reports the audit, and `refactory adopt` refuses an overfit winner unless you pass `--allow-overfit`.
 

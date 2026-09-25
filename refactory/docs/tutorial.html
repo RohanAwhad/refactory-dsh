@@ -339,7 +339,7 @@ options:
                                     [--max-evaluations MAX_EVALUATIONS]
                                     [--holdout HOLDOUT]
                                     [--parsimony PARSIMONY]
-                                    [--attempts ATTEMPTS]
+                                    [--attempts ATTEMPTS] [--verbose]
                                     [--runs-root RUNS_ROOT] [--intent INTENT]
                                     [--project PROJECT] [--knob NAME=VALUE]
                                     [--model MODEL] [--provider PROVIDER]
@@ -372,6 +372,8 @@ options:
                         what each node of a candidate&#x27;s graph costs its score;
                         the search compares raw_score - parsimony * nodes
   --attempts ATTEMPTS   retries per batch after a refusal
+  --verbose             print every event, and each candidate&#x27;s own run
+                        output, not only the meaningful ones
   --runs-root RUNS_ROOT
                         the run directory to write, read back with `console
                         --run &lt;this path&gt;`; the console&#x27;s --runs-root is a

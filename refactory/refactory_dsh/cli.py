@@ -386,6 +386,11 @@ def build_parser() -> argparse.ArgumentParser:
         ("--provider", "the provider route that model is on"),
     ):
         optimize.add_argument(flag, default=None, help=help_text)
+    optimize.add_argument(
+        "--verbose", action="store_true",
+        help="print every event, and each candidate's own run output, not only the "
+             "meaningful ones",
+    )
 
     listing = sub.add_parser("list", help="what this checkout can do")
     listing.add_argument("what", nargs="?", default="modes", choices=["modes", "packages"])
@@ -436,7 +441,14 @@ def main(argv: list[str] | None = None) -> int:
         for flag, value in vars(args).items():
             if flag in ("verb", "mode") or value is None:
                 continue
-            forwarded += [f"--{flag.replace('_', '-')}", str(value)]
+            name = f"--{flag.replace('_', '-')}"
+            # A switch forwards as itself, and only when it is on; a value-taking
+            # option forwards its value.
+            if isinstance(value, bool):
+                if value:
+                    forwarded.append(name)
+            else:
+                forwarded.extend([name, str(value)])
         return _forward("refactory_dsh.loop", forwarded)
     if args.verb == "list":
         return cmd_list(args)

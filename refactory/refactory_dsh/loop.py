@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from refactory_dsh import history as run_history
+from refactory_dsh import events
 from refactory_dsh import observe as progress_file
 from refactory_dsh import task as task_module
 from refactory_dsh.evaluators import create as create_evaluator
@@ -160,6 +161,13 @@ class LoopConfig:
     #: the file is written per candidate, not per epoch, so it is the one artifact
     #: whose cost scales with the batch.
     progress: bool = True
+    #: Print the run's events while it goes. Off for a library caller (a test, an
+    #: embedded loop): the command line turns it on, because a search that says
+    #: nothing until it finishes reads as a hang.
+    print_events: bool = False
+    #: Print every event, not only the meaningful ones, and pass a candidate's own
+    #: run output through. A caller debugging a search wants the firehose.
+    verbose: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -233,6 +241,9 @@ class Loop(OuterLoop):
         self.project = Path(project or Path("."))
         self.root = Path(self.config.runs_root)
         self.model = model
+        # One printer for the run: a caller that asked for events sees them while
+        # the search goes, and a library caller prints nothing at all.
+        self._printer = events.Printer(verbose=self.config.verbose) if self.config.print_events else None
 
         try:
             package, self.mode_class = registry.resolve(self.project, mode_id)
@@ -894,6 +905,9 @@ class Loop(OuterLoop):
             proposed=len(proposals),
             accepted=len(candidates),
             refused=len(rejections),
+            # The running tally, so a watcher sees which rule is dominating without
+            # opening the run directory. Same derivation as the report's.
+            refusal_codes=self._rejection_codes(),
             children=[c.id for c in candidates],
         )
         return candidates, rejections
@@ -1924,6 +1938,8 @@ class Loop(OuterLoop):
         }
         with (self.root / progress_file.PROGRESS).open("a") as handle:
             handle.write(json.dumps(record, default=str) + "\n")
+        if self._printer is not None:
+            self._printer(record)
 
     def _write_state(self) -> None:
         self._write(
@@ -2074,6 +2090,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--attempts", type=int, default=3, help="retries per batch after a refusal")
     parser.add_argument(
+        "--verbose", action="store_true",
+        help="print every event, and each candidate's own run output, not only the "
+             "meaningful ones",
+    )
+    parser.add_argument(
         "--runs-root",
         default=".factory/loop",
         help=(
@@ -2121,6 +2142,9 @@ def main(argv: list[str] | None = None) -> int:
         seed=args.seed,
         elite=args.elite,
         max_evaluations=args.max_evaluations,
+        # A search a person started prints what it is doing while it does it.
+        print_events=True,
+        verbose=bool(args.verbose),
         attempts=args.attempts,
         runs_root=Path(args.runs_root),
         intent=args.intent,

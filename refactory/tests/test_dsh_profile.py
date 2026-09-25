@@ -10,6 +10,7 @@ run refuses before spawning rather than letting the child produce the bare error
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -126,6 +127,35 @@ def test_run_on_dsh_hands_the_runner_the_knob_values_once(tmp_path, monkeypatch)
     knobs = json.loads(argv[argv.index("--knobs") + 1])
     assert isinstance(knobs, dict), f"--knobs must carry the values, got {knobs!r}"
     assert knobs == {key: entry["value"] for key, entry in state["knobs"].items()}
+
+
+def test_run_on_dsh_hands_each_output_line_on_while_keeping_the_parse(tmp_path, monkeypatch):
+    """A watcher sees the child while it runs, and `best_score` still parses.
+
+    Teeing is not a replacement for capturing: the runner's last JSON object is
+    where the score comes from, so both have to happen from one read of the child's
+    output.
+    """
+    home = tmp_path / "home"
+    _profile(home, "graph", ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
+    monkeypatch.setenv("DSH_HOME", str(home))
+    script = tmp_path / "stub_dsh.py"
+    script.write_text(
+        "import json\n"
+        "print('node start')\n"
+        "print('node done')\n"
+        "print(json.dumps({'best_score': 0.75}))\n"
+    )
+    monkeypatch.setattr(
+        "refactory_dsh.dsh_runtime.dsh_command", lambda: [sys.executable, str(script)],
+    )
+    state = registry.resolve(REPO_ROOT, "circle_packing/adaptive")[1]().state_dict()
+    seen: list[str] = []
+    run = run_on_dsh(state, tmp_path / "run", name="probe", on_output=seen.append)
+    assert run.best_score == 0.75, "the runner's own JSON is still what scores the run"
+    assert any("node start" in line for line in seen), seen
+    assert "node done" in run.stdout
+    assert run.stderr == ""
 
 
 def test_run_on_dsh_refuses_before_spawning_when_the_profile_is_absent(

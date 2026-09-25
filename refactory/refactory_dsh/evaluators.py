@@ -32,14 +32,19 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from refactory_dsh.memory import MemoryStore
 from refactory_dsh.nn.mode import RunResult
 
-#: Kinds a mode can be run as. A search wants the fast one; a person using a mode
+#: Kinds a mode can be run in. A search wants the fast one; a person using a mode
 #: wants the one whose result they will act on.
 DEFAULT_MAX_STEPS = 1000
+
+
+def _print_line(line: str) -> None:
+    """One line of a candidate's own output, printed without doubling its newline."""
+    print(line.rstrip("\n"), flush=True)
 
 
 class EvaluatorError(ValueError):
@@ -137,21 +142,33 @@ class DshEvaluator(Evaluator):
     name = "dsh"
     out_of_process = True
 
-    def __init__(self, *, timeout_s: int | None = None) -> None:
+    def __init__(
+        self, *, timeout_s: int | None = None, on_output: Callable[[str], None] | None = None
+    ) -> None:
         from refactory_dsh.dsh_runtime import DEFAULT_TIMEOUT_S
 
         self.timeout_s = DEFAULT_TIMEOUT_S if timeout_s is None else timeout_s
+        #: Where a candidate's own run output goes while it runs. Only a verbose
+        #: run passes one: the meaningful per-candidate line is the loop's own event.
+        self.on_output = on_output
 
     @classmethod
     def from_settings(
         cls, *, config: Any, model: Any = None, project: Path | None = None
     ) -> "DshEvaluator":
-        return cls(timeout_s=config.dsh_timeout_s)
+        watching = bool(getattr(config, "print_events", False))
+        verbose = bool(getattr(config, "verbose", False))
+        return cls(
+            timeout_s=config.dsh_timeout_s,
+            on_output=_print_line if watching and verbose else None,
+        )
 
     def evaluate(self, mode: Any, state: dict[str, Any], workdir: Path) -> RunResult:
         from refactory_dsh.dsh_runtime import evaluate_on_dsh
 
-        return evaluate_on_dsh(mode, state, workdir, timeout_s=self.timeout_s)
+        return evaluate_on_dsh(
+            mode, state, workdir, timeout_s=self.timeout_s, on_output=self.on_output,
+        )
 
 
 #: The evaluators the loop can select by name.

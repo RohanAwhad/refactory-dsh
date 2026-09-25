@@ -22,7 +22,8 @@ import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from threading import Thread
+from typing import Any, Callable
 
 from refactory_dsh import lowering
 from refactory_dsh.nn import RunResult
@@ -58,8 +59,15 @@ def run_on_dsh(
     name: str = "mode",
     timeout_s: int = DEFAULT_TIMEOUT_S,
     repo_root: Path | None = None,
+    on_output: Callable[[str], None] | None = None,
 ) -> DshRun:
-    """Lower ``state``, run it on DSH, and read back the facts it produced."""
+    """Lower ``state``, run it on DSH, and read back the facts it produced.
+
+    ``on_output`` hands each line of the child's output to a watcher as it arrives.
+    It is not a replacement for capturing: the same lines are still collected, and
+    the runner's final JSON object is still parsed out of them, because
+    ``best_score`` comes from there.
+    """
     import time
 
     from refactory_dsh import dsh_profile
@@ -108,24 +116,68 @@ def run_on_dsh(
         "--knobs", lowering.knob_environment(state)[lowering.KNOBS_ENV],
     ]
     started = time.time()
-    try:
-        result = subprocess.run(
+    if on_output is None:
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                cwd=str(repo_root or REPO_ROOT),
+                timeout=timeout_s,
+            )
+        except subprocess.TimeoutExpired:
+            return DshRun(
+                facts={},
+                workdir=workdir,
+                returncode=-1,
+                stderr=f"dsh timed out after {timeout_s}s",
+                duration_s=time.time() - started,
+            )
+        stdout, stderr, returncode = result.stdout, result.stderr, result.returncode
+    else:
+        # A watcher asked to see the child while it runs. Capturing and streaming are
+        # not alternatives here: the parse below needs the whole stdout, so the lines
+        # are collected and handed on as they arrive.
+        process = subprocess.Popen(
             command,
-            capture_output=True,
-            text=True,
             cwd=str(repo_root or REPO_ROOT),
-            timeout=timeout_s,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
         )
-    except subprocess.TimeoutExpired as exc:
-        return DshRun(
-            facts={},
-            workdir=workdir,
-            returncode=-1,
-            stderr=f"dsh timed out after {timeout_s}s",
-            duration_s=time.time() - started,
-        )
+        out_lines: list[str] = []
+        err_lines: list[str] = []
 
-    payload = _last_json_object(result.stdout)
+        def _pump(stream: Any, sink: list[str]) -> None:
+            for line in stream:
+                sink.append(line)
+                on_output(line)
+
+        readers = [
+            Thread(target=_pump, args=(process.stdout, out_lines), daemon=True),
+            Thread(target=_pump, args=(process.stderr, err_lines), daemon=True),
+        ]
+        for reader in readers:
+            reader.start()
+        try:
+            returncode = process.wait(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            for reader in readers:
+                reader.join(timeout=5)
+            return DshRun(
+                facts={},
+                workdir=workdir,
+                returncode=-1,
+                stderr=f"dsh timed out after {timeout_s}s",
+                duration_s=time.time() - started,
+            )
+        for reader in readers:
+            reader.join()
+        stdout, stderr = "".join(out_lines), "".join(err_lines)
+
+    payload = _last_json_object(stdout)
     facts_path = workdir / FACTS
     facts: dict[str, Any] = {}
     if facts_path.exists():
@@ -137,9 +189,9 @@ def run_on_dsh(
     return DshRun(
         facts=facts,
         workdir=workdir,
-        returncode=result.returncode,
-        stdout=result.stdout,
-        stderr=result.stderr,
+        returncode=returncode,
+        stdout=stdout,
+        stderr=stderr,
         duration_s=round(time.time() - started, 4),
         best_score=(
             float(payload["best_score"])
@@ -164,7 +216,8 @@ def _last_json_object(text: str) -> dict[str, Any]:
 
 
 def evaluate_on_dsh(
-    mode: Any, state: dict[str, Any], workdir: Path, *, timeout_s: int = DEFAULT_TIMEOUT_S
+    mode: Any, state: dict[str, Any], workdir: Path, *, timeout_s: int = DEFAULT_TIMEOUT_S,
+    on_output: Callable[[str], None] | None = None,
 ) -> RunResult:
     """One forward pass on DSH, scored by the mode's own `score()`.
 
@@ -174,7 +227,7 @@ def evaluate_on_dsh(
     merely scored badly.
     """
     name = f"{type(mode).__module__.split('.')[-2]}-{mode.name}"
-    run = run_on_dsh(state, workdir, name=name, timeout_s=timeout_s)
+    run = run_on_dsh(state, workdir, name=name, timeout_s=timeout_s, on_output=on_output)
     if run.returncode != 0 or not run.facts:
         detail = run.stderr.strip().splitlines()[-1] if run.stderr.strip() else "no output"
         return RunResult(
