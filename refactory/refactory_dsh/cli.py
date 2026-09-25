@@ -95,6 +95,8 @@ def _run_argv(identifier: str, args: argparse.Namespace) -> list[str]:
         forwarded += ["--provider", str(args.provider)]
     if args.model:
         forwarded += ["--model", str(args.model)]
+    if args.headless:
+        forwarded += ["--headless"]
     return forwarded
 
 
@@ -175,6 +177,8 @@ def cmd_ceo(args: argparse.Namespace) -> int:
     # with nobody sitting there, and it is an explicit act rather than a default.
     for pair in args.verdict:
         forwarded += ["--approve", pair]
+    if args.headless:
+        forwarded += ["--headless"]
     print(f"refactory: {authoring} — {target}", file=sys.stderr)
     return _forward("refactory_dsh.interactive", forwarded)
 
@@ -363,6 +367,12 @@ def build_parser() -> argparse.ArgumentParser:
     ceo.add_argument(
         "--timeout", type=int, default=0,
         help="run a mode: seconds to wait at a gate; 0 waits for you",
+    )
+    ceo.add_argument(
+        "--headless", action="store_true", default=False,
+        help="run without a conversation: one task, one report, then exit, for scripts "
+             "and CI; without it the run is live and a line you type between turns "
+             "reaches the CEO",
     )
 
     optimize = sub.add_parser("optimize", help="search a mode's architecture and knobs")

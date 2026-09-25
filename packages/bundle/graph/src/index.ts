@@ -9,9 +9,11 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { createInterface } from 'node:readline'
 import type { Context } from '@deepseek-ai/cordis'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { Session, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
@@ -78,14 +80,73 @@ function finalText(session: Session, firstSeq: SessionLogOffset): string {
   return text
 }
 
-interface Io {
+/** The terminal the run writes to and reads from; the launcher supplies the process's. */
+export interface Io {
   stdout: { write(chunk: string): unknown }
   stderr: { write(chunk: string): unknown }
+  /** The person's terminal. A gate reads it too; see {@link chat}. */
+  stdin: NodeJS.ReadableStream & { readableEnded?: boolean }
   exit(code: number): void
 }
 
 interface DefaultModelLike {
   currentSelection(): { provider: string; model: string }
+}
+
+/** One line the person typed, or `undefined` at end of input. */
+function readLine(stdin: Io['stdin'], out: Io['stdout']): Promise<string | undefined> {
+  // End of input is remembered by the stream itself: a second read after the first
+  // exhausted it must not wait for a line that can never come. (A `readline` started
+  // on an already-ended stream does not always see the `end` that already fired.)
+  if (stdin.readableEnded === true) return Promise.resolve(undefined)
+  if (process.stdin.isTTY) out.write('> ')
+  const rl = createInterface({ input: stdin, output: process.stdin.isTTY ? process.stdout : undefined })
+  return new Promise((resolve) => {
+    let settled = false
+    const done = (line: string | undefined): void => {
+      if (settled) return
+      settled = true
+      rl.close()
+      resolve(line)
+    }
+    rl.once('close', () => done(undefined))
+    rl.question('', line => done(line))
+  })
+}
+
+/**
+ * The live session: print each turn, then let the person say something back.
+ *
+ * The first turn is the driving task the runner already sent. After it reaches
+ * quiescence this prints the turn's assistant text and offers the terminal, so the
+ * CEO's report of a node, a question or a summary appears while the graph is still
+ * running rather than only in the final JSON. A line typed here is a follow-up user
+ * message: the CEO can act on it with `wf_edit` + `wf_redo`, skip a node, or route a
+ * gate. `/quit`, an empty line and end of input all end the conversation.
+ *
+ * It reads the terminal only while the agent is idle, and closes its reader before
+ * handing the turn back, so a `user` gate's own prompt owns stdin while the answerer
+ * asks — the two never read at the same time.
+ */
+async function chat(agent: Agent, startup: GraphStartupValues, io: Io, firstSeq: SessionLogOffset): Promise<void> {
+  let seqBefore = firstSeq
+  for (;;) {
+    const turn = finalText(agent.session, seqBefore)
+    if (turn !== '') io.stdout.write(`${turn}\n`)
+    // Quiescence is not completion: the cursor's own status on disk is what says the
+    // graph finished, and there is nothing left to steer once it has.
+    if (spineStatus(startup.workdir)?.status === 'done') return
+    const line = await readLine(io.stdin, io.stdout)
+    if (line === undefined) return
+    const typed = line.trim()
+    if (typed === '' || typed === '/quit') return
+    seqBefore = agent.session.seq
+    agent.followup(createUserMessage({
+      content: [{ type: 'text', text: typed }],
+      source: { kind: 'user' },
+    }))
+    await agent.whenIdle()
+  }
 }
 
 async function run(ctx: Context, io: Io): Promise<void> {
@@ -118,6 +179,9 @@ async function run(ctx: Context, io: Io): Promise<void> {
       source: { kind: 'user' },
     }))
     await agent.whenIdle()
+    // The first turn is the driving task. In chat mode the turn's own text is printed
+    // now, while the graph is still running, and the person may answer it.
+    if (startup.chat) await chat(agent, startup, io, firstSeq)
   } catch (error: unknown) {
     io.stderr.write(`dsh: ${error instanceof Error ? error.message : String(error)}\n`)
   }
@@ -158,15 +222,21 @@ async function run(ctx: Context, io: Io): Promise<void> {
  * Mount the interactive runner. The spine row (in the patch) hands this app the
  * same graph + env it runs the CEO against, through {@link GRAPH_STARTUP_SERVICE}.
  * @param ctx - plugin context carrying core services and the launcher exit request.
+ * @param io - the terminal, for tests; the process's own streams when omitted.
  */
-export function apply(ctx: Context): void {
+export function apply(ctx: Context, io?: Io): void {
   const exit = ctx.get('appExit')
   if (exit === undefined) {
     throw new Error('graph-runner: the launcher must provide ctx.appExit before the tree mounts')
   }
-  const io = { stdout: process.stdout, stderr: process.stderr, exit }
-  void run(ctx, io).catch((error: unknown) => {
-    io.stderr.write(`dsh: ${error instanceof Error ? error.message : String(error)}\n`)
-    io.exit(1)
+  const streams: Io = io ?? {
+    stdout: process.stdout,
+    stderr: process.stderr,
+    stdin: process.stdin,
+    exit,
+  }
+  void run(ctx, streams).catch((error: unknown) => {
+    streams.stderr.write(`dsh: ${error instanceof Error ? error.message : String(error)}\n`)
+    streams.exit(1)
   })
 }

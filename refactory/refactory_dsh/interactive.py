@@ -106,8 +106,16 @@ def command(
     project: Path | None = None,
     provider: str = "",
     model: str = "",
+    headless: bool = False,
 ) -> list[str]:
-    """The DSH run whose stdin is the person's terminal."""
+    """The DSH run whose stdin is the person's terminal.
+
+    The run is a live session by default: the graph profile is asked for `--chat`, so
+    each of the CEO's turns prints as it happens and a line typed between turns reaches
+    it. ``headless`` builds exactly the one-shot argv this command has always built —
+    the flag is *left out*, not set to false — because `--headless` is a promise to a
+    script that the run it gets is the run it got before.
+    """
     _, mode_name = identifier.split("/", 1)
     argv = [
         *dsh_command(),
@@ -133,6 +141,10 @@ def command(
         argv += ["--provider", provider]
     if model:
         argv += ["--model", model]
+    # A live session is the default for a person at a terminal. `--headless` is the
+    # script's run, so it must not carry the flag that starts a conversation.
+    if not headless:
+        argv.append("--chat")
     return argv
 
 
@@ -159,12 +171,17 @@ def run(
     approve: list[str] | None = None,
     provider: str = "",
     model: str = "",
+    headless: bool = False,
 ) -> int:
     """Lower, then run the mode under the CEO with the terminal attached.
 
     ``approve`` states a gate's answer before the run starts. It is the same act as
     answering at the terminal, recorded in the same ledger, so a run nobody is
     sitting at can still be given a person's decision -- explicitly, by name.
+
+    A live session is the default: the CEO's turns print as they happen and a line
+    typed between them reaches it. ``headless`` asks for the older one-shot run, which
+    is what a script or CI wants.
     """
     if workdir is None:
         workdir = default_workdir(identifier)
@@ -186,10 +203,10 @@ def run(
         steering.Ledger(workdir).verdict(gate.strip(), value.strip())
     argv = command(
         identifier, workdir=workdir, graphs=graphs, name=name, knobs=knobs, project=project,
-        provider=provider, model=model,
+        provider=provider, model=model, headless=headless,
     )
-    # stdin is inherited on purpose: the graph profile's answerer reads the person's
-    # answer from the terminal, and a captured stdin is not a person.
+    # stdin is inherited on purpose: the graph profile chats on it -- and its answerer
+    # reads a gate's answer from it -- while a captured stdin is not a person.
     code = subprocess.call(argv, cwd=str(REPO_ROOT), timeout=timeout_s)
     if code == 0:
         summary = run_summary(workdir)
@@ -274,6 +291,12 @@ def main(argv: list[str] | None = None) -> int:
         "--model", default="",
         help="model id for this run, e.g. deepseek-v4-pro (default: the settings default)",
     )
+    parser.add_argument(
+        "--headless", action="store_true", default=False,
+        help="run without a conversation: one task, one report, then exit, as scripts "
+             "and CI expect; without it the run is live and a line you type between "
+             "turns reaches the CEO",
+    )
     args = parser.parse_args(argv)
 
     workdir = Path(args.workdir) if args.workdir else None
@@ -289,6 +312,7 @@ def main(argv: list[str] | None = None) -> int:
             timeout_s=args.timeout or None,
             provider=args.provider,
             model=args.model,
+            headless=args.headless,
         )
     except Exception as exc:  # a failed run must be a message, not a traceback
         print(f"{type(exc).__name__}: {exc}", file=sys.stderr)

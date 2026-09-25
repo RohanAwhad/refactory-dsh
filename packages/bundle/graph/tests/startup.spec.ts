@@ -101,6 +101,15 @@ describe('graph command-line provider', () => {
     expect(values?.model).toBe('flash')
   })
 
+  it('is a one-shot run unless --chat asks for a conversation', () => {
+    // The flag is how `ceo` asks for the live session; its absence is the run
+    // scripts and CI have always had, so the default must say so rather than
+    // reading as "chat was not mentioned".
+    const dir = graphs('probe')
+    expect(boot(required(dir)).values?.chat).toBe(false)
+    expect(boot([...required(dir), '--chat']).values?.chat).toBe(true)
+  })
+
   it('names only the interpreter when the environment has no PATH', () => {
     const dir = graphs('probe')
     const saved = process.env.PATH

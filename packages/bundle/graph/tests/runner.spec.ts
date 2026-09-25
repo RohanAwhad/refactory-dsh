@@ -9,9 +9,10 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { Readable } from 'node:stream'
 import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { apply as applyRunner } from '../src/index.ts'
+import { apply as applyRunner, type Io } from '../src/index.ts'
 import { GRAPH_STARTUP_SERVICE, type GraphStartupValues } from '../src/startup.ts'
 
 const dirs: string[] = []
@@ -38,6 +39,13 @@ interface Harness {
   err: () => string
   createOptions: Array<{ provider?: string; model?: string }>
   setupCalls: number
+  followups: string[]
+}
+
+/** The text of one user message, for asserting what reached the agent. */
+function textOf(message: unknown): string {
+  const content = (message as { content?: Array<{ type?: string; text?: string }> }).content ?? []
+  return content.filter(block => block.type === 'text').map(block => block.text ?? '').join('')
 }
 
 /** Mount the runner over fake core services and collect what it reported. */
@@ -50,6 +58,10 @@ async function bench(options: {
   createRejects?: boolean | string
   followupThrows?: unknown
   events?: Array<unknown>
+  chat?: boolean
+  /** The assistant text of each turn, in order (turn 1 is the driving task). */
+  chatTurns?: string[]
+  stdin?: NodeJS.ReadableStream
 } = {}): Promise<Harness> {
   let out = ''
   let err = ''
@@ -58,10 +70,15 @@ async function bench(options: {
 
   const exits: number[] = []
   const state = { seq: 0 }
+  // The turn's own assistant event is written as the turn is sent, which is what
+  // `finalText` reads back: one scripted text per follow-up.
+  const events = [...(options.events ?? [])]
+  let turn = 0
+  const followups: string[] = []
   const session = {
     id: 'session-probe',
     get seq() { return state.seq },
-    eventAt: (seq: number) => options.events?.[seq],
+    eventAt: (seq: number) => events[seq],
   }
   let idleCalls = 0
   const agent = {
@@ -71,7 +88,15 @@ async function bench(options: {
       // The turn is the second quiescence; the first is the agent coming up.
       if (idleCalls === 2 && options.followupThrows !== undefined) throw options.followupThrows
     },
-    followup: () => { state.seq = Math.max(state.seq + 1, options.events?.length ?? 0) },
+    followup: (message: unknown) => {
+      followups.push(textOf(message))
+      const scripted = options.chatTurns?.[turn]
+      turn += 1
+      if (scripted !== undefined) {
+        events[state.seq] = { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: scripted }] } } }
+      }
+      state.seq = Math.max(state.seq + 1, events.length)
+    },
   }
   const createOptions: Harness['createOptions'] = []
   let setupCalls = 0
@@ -97,13 +122,20 @@ async function bench(options: {
       mode: options.mode ?? 'probe', taskName: 'circle_packing', budget: 7,
       workdir: options.workdir ?? workdir(), graph: {}, commandEnv: {},
       task: 'drive it', provider: options.provider, model: options.model, pythonBin: '/venv/bin',
+      chat: options.chat ?? false,
     } as GraphStartupValues)
   }
+  const io: Io = {
+    stdout: process.stdout,
+    stderr: process.stderr,
+    stdin: options.stdin ?? process.stdin,
+    exit: (code: number) => { exits.push(code) },
+  }
   ctx.provide('appExit', (code: number) => { exits.push(code) })
-  applyRunner(ctx)
+  applyRunner(ctx, io)
   // `apply` runs the runner without awaiting it; let the microtask queue drain.
-  for (let turn = 0; turn < 6; turn += 1) await new Promise(resolve => setImmediate(resolve))
-  return { exits, out: () => out, err: () => err, createOptions, setupCalls }
+  for (let tick = 0; tick < 30; tick += 1) await new Promise(resolve => setImmediate(resolve))
+  return { exits, out: () => out, err: () => err, createOptions, setupCalls, followups }
 }
 
 describe('graph runner', () => {
@@ -148,6 +180,32 @@ describe('graph runner', () => {
       session_id: 'session-probe', final: 'complete',
     })
     expect(harness.setupCalls).toBe(1)
+  })
+
+  it('chats when asked: each turn prints and a typed line reaches the agent', async () => {
+    // The live session's whole contract: the CEO's turn appears while the graph is
+    // still running, and what the person types between turns is a follow-up the CEO
+    // can act on rather than a line nobody reads.
+    const harness = await bench({
+      chat: true,
+      chatTurns: ['the first node is done', 'redoing that step'],
+      stdin: Readable.from(['make it count from two and redo that step\n/quit\n']),
+    })
+    expect(harness.out()).toContain('the first node is done')
+    expect(harness.out()).toContain('redoing that step')
+    expect(harness.followups).toEqual([
+      'drive it',
+      'make it count from two and redo that step',
+    ])
+    expect(harness.exits).toEqual([0])
+  })
+
+  it('does not read the terminal when chat is off', async () => {
+    // The one-shot run is a promise to scripts: no prompt, no read, no waiting on a
+    // person who is not there. A stdin that never ends would hang the run if it did.
+    const harness = await bench({ stdin: new Readable({ read: () => {} }) })
+    expect(harness.exits).toEqual([0])
+    expect(harness.followups).toEqual(['drive it'])
   })
 
   it('takes the mode\'s own state file first, then any other score it finds', async () => {

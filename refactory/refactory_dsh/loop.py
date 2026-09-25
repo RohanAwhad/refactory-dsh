@@ -168,6 +168,9 @@ class LoopConfig:
     #: Print every event, not only the meaningful ones, and pass a candidate's own
     #: run output through. A caller debugging a search wants the firehose.
     verbose: bool = False
+    #: How often a paused run re-reads its control file, in seconds. Configuration
+    #: only so a test does not have to wait a real second for each generation.
+    control_poll_s: float = 1.0
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -1161,12 +1164,35 @@ class Loop(OuterLoop):
         own -- a plateau, a convergence -- without replacing the loop.
         """
         while True:
+            if self._apply_control() == "stop":
+                run.stop("a person asked the run to stop")
+                return
             reason = self.should_stop(run)
             if reason:
                 run.stop(reason)
                 return
             if not self.epoch_step(run):
                 return
+
+    def _apply_control(self) -> str | None:
+        """Honor a pause or a stop another process asked for, at the boundary.
+
+        A pause blocks here until the request changes, so a person can hold a search
+        between generations without killing it. The poll interval is configuration
+        only so a test does not have to wait a second for each step.
+        """
+        from refactory_dsh.control import Control
+
+        control = Control(self.root)
+        action = control.read()
+        while action == "pause":
+            self._progress("paused")
+            time.sleep(max(0.01, float(self.config.control_poll_s)))
+            action = control.read()
+        if action == "stop":
+            self._progress("control", action="stop")
+            return "stop"
+        return None
 
     def should_stop(self, run: Run) -> str | None:
         """A reason to stop before the bound, or ``None``. The bound is the default."""

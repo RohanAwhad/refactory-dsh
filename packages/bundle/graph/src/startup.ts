@@ -113,9 +113,16 @@ function graphCommand(): Command {
     .option('--workdir <dir>', 'working directory for the run')
     .option('--python-bin <dir>', 'directory of the python with srf+factory installed', DEFAULT_VENV_BIN)
     .option('--knobs <json>', 'JSON object of OptKnob overrides (e.g. {"temperature":0.5})', '{}')
+    .option(
+      '--chat',
+      'keep the session live: print each turn and read what the person types between '
+      + 'turns, until /quit, end of input, or the graph reports done (default: one-shot)',
+      false,
+    )
     .addHelpText('after', `
 Examples:
   dsh --profile graph run --mode gepa --task circle_packing --budget 20
+  dsh --profile graph run --mode gepa --task circle_packing --chat
 `)
 }
 
@@ -184,6 +191,7 @@ export function apply(ctx: Context): void {
       model: options.model === undefined ? undefined : String(options.model),
       pythonBin,
       dataCommand: DATA_COMMAND,
+      chat: options.chat === true,
     } satisfies GraphStartupValues)
   })
   parseCmdline(ctx, program)

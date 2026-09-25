@@ -108,6 +108,7 @@ Every command is `uv run refactory <verb>`. `uv run refactory <verb> --help` is 
 | `--provider <route>` | the provider route that model is on, e.g. `deepseek-official`. |
 | `--model <id>` | the model this run uses, e.g. `deepseek-v4-pro`. |
 | `--approve <gate>=<value>` | state a gate's answer up front, e.g. `gate_strategy=proceed`, for an unattended run. |
+| `--headless` | run without a conversation: one task, one report, then exit, for scripts and CI. Without it the run is live — each turn prints as it happens and a line you type between turns reaches the CEO. |
 
 ### Manage packages of modes
 
