@@ -53,7 +53,7 @@ from one a person gave, so it must not be invented.
 ## Run it with a person
 
 ```bash
-uv run refactory run review_pack/review \
+uv run refactory ceo review_pack/review \
   --intent "draft a note about circle packing and let me approve it"
 ```
 

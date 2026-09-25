@@ -512,8 +512,8 @@ def test_the_console_forwards_a_workdir_to_an_authoring_run(monkeypatch, capsys)
 #
 # The tool's only "execute this mode" action was `start`, which is the outer loop:
 # from the GUI a person could create a mode and then only optimize it, never *use*
-# it. `refactory run` existed as a CLI verb with no console verb and therefore no
-# tool action.
+# it. Running a mode once was a CLI-only spelling with no console verb and
+# therefore no tool action.
 
 
 def test_the_console_forwards_the_creation_directive(monkeypatch, capsys):

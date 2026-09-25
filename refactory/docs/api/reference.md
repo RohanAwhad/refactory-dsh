@@ -709,6 +709,7 @@ Driving a run from a GUI: the catalogue, a live run, and what it produced.
 | function | `artifacts` | `(run_root: 'Path', *, contents: 'bool' = False) -> 'dict[str, Any]'` |
 | function | `candidate` | `(run_root: 'Path', candidate_id: 'str') -> 'dict[str, Any]'` |
 | function | `catalogue` | `(*, project: 'Path \| None' = None) -> 'list[dict[str, Any]]'` |
+| function | `gates` | `(run_root: 'Path') -> 'list[dict[str, Any]]'` |
 | function | `holdout` | `(run_root: 'Path') -> 'dict[str, Any] \| None'` |
 | function | `leaderboard` | `(run_root: 'Path', *, limit: 'int' = 20) -> 'list[dict[str, Any]]'` |
 | function | `level_two` | `() -> 'dict[str, Any]'` |
@@ -722,6 +723,7 @@ Driving a run from a GUI: the catalogue, a live run, and what it produced.
 - **`artifacts`** — What the run left, and — when asked — what is in it.
 - **`candidate`** — One candidate, with what it changed against the parent it came from.
 - **`catalogue`** — Every mode a run can be started from, with the surface it exposes.
+- **`gates`** — The `user` gates this run is stopped at, and the verdicts each accepts.
 - **`holdout`** — The held-out audit a run recorded, or ``None`` when it recorded none.
 - **`leaderboard`** — The candidates by score, with each one's diff against its parent.
 - **`level_two`** — The three level-2 seams by name, each with what it says it is.

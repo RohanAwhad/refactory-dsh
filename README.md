@@ -64,7 +64,7 @@ A `Task` is what makes a harness general: it lists the items, prepares each one,
 Run a mode on the runtime that ships, with your terminal attached so a gate reaches you:
 
 ```bash
-uv run refactory run counting_pack/fixed_step --intent "count to twenty"
+uv run refactory ceo counting_pack/fixed_step --intent "count to twenty"
 ```
 
 Search a mode's knobs for a better configuration. This one is offline and deterministic, and finishes with a `best_score` above its `seed_score`:
@@ -127,18 +127,20 @@ Every command is `uv run refactory <verb>`. `uv run refactory <verb> --help` is 
 
 `refactory package` also accepts `--json`, `--force` and `--project`.
 
-### Run and use a mode
+### Use a mode
+
+`refactory ceo <package>/<mode>` runs a mode you already have on DSH with your terminal attached, so a gate reaches you. It is the same `ceo` verb that authors a mode; a positional that names one is what says to run it.
 
 | command | what it does |
 |---|---|
-| `refactory run <package>/<mode> --intent "<what it is for>"` | run the mode on DSH with your terminal attached, so a gate reaches you. |
-| `refactory run <package>/<mode> --knob name=value` | set one of the mode's knobs for this run. |
-| `refactory run <package>/<mode> --source <dir>` | read the items from here instead of the source the mode declares. |
-| `refactory run <package>/<mode> --source-format directory\|jsonl\|csv` | how to read `--source` (default: a directory of one item per subdirectory). |
-| `refactory run <package>/<mode> --workdir <dir>` | where the run's evidence lands. |
-| `refactory run <package>/<mode> --timeout <seconds>` | how long to wait at a gate; `0` waits for you. |
-| `refactory run <package>/<mode> --model <id> --provider <route>` | the model this run uses. |
-| `refactory run <package>/<mode> --approve <gate>=<value>` | answer a gate before the run instead of at it. |
+| `refactory ceo <package>/<mode> --intent "<what it is for>"` | run the mode on DSH with your terminal attached, so a gate reaches you. |
+| `refactory ceo <package>/<mode> --knob name=value` | set one of the mode's knobs for this run. |
+| `refactory ceo <package>/<mode> --source <dir>` | read the items from here instead of the source the mode declares. |
+| `refactory ceo <package>/<mode> --source-format directory\|jsonl\|csv` | how to read `--source` (default: a directory of one item per subdirectory). |
+| `refactory ceo <package>/<mode> --workdir <dir>` | where the run's evidence lands. |
+| `refactory ceo <package>/<mode> --timeout <seconds>` | how long to wait at a gate; `0` waits for you. |
+| `refactory ceo <package>/<mode> --model <id> --provider <route>` | the model this run uses. |
+| `refactory ceo <package>/<mode> --approve <gate>=<value>` | answer a gate before the run instead of at it. |
 
 ### Optimize it
 

@@ -123,7 +123,7 @@ RECIPES: tuple[Recipe, ...] = (
         id="use-agent-mode",
         group="use",
         title="Use a mode whose graph calls a model",
-        command='uv run refactory run counting_pack/fixed_step --intent "count up to five"',
+        command='uv run refactory ceo counting_pack/fixed_step --intent "count up to five"',
         expect="the mode runs on DSH under the CEO, leaving facts.json, trace.json and the intent ledger",
         tier=MODEL,
         contains=("best_score", "session_id"),
@@ -144,7 +144,7 @@ RECIPES: tuple[Recipe, ...] = (
         title="Smoke says so, rather than failing deep inside the run",
         command="uv run refactory package smoke default_pack/create",
         expect="a refusal naming the agent node and the command that does supply a model",
-        contains=("calls a model", "refactory run default_pack/create"),
+        contains=("calls a model", "refactory ceo default_pack/create"),
         script="uv run refactory package smoke default_pack/create || true",
     ),
     Recipe(

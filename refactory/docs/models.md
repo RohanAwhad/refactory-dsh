@@ -45,7 +45,7 @@ A local OpenAI-compatible server works through the same route, and still needs *
 ## One run, one model
 
 ```bash
-uv run refactory run counting_pack/fixed_step --model deepseek-v4-pro
+uv run refactory ceo counting_pack/fixed_step --model deepseek-v4-pro
 uv run refactory ceo "an idea" --mode create --single --model deepseek-v4-pro
 uv run refactory optimize circle_packing/adaptive --provider deepseek-official --model deepseek-v4-pro
 ```

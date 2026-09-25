@@ -763,7 +763,7 @@ def configure(state: Mapping[str, Any], name: str, value: Any) -> State:
 
     `set_knob` is the *optimizer's* edit, and a frozen knob is frozen against the
     search — that is why it refuses one. A person saying what this run's input is is
-    not the search: `refactory run <mode> --knob source_root=…` is how a mode whose
+    not the search: `refactory ceo <mode> --knob source_root=…` is how a mode whose
     input is a frozen knob gets used at all, and routing it through the editor made
     every such mode unusable ("knob 'source_root' is frozen and cannot be moved").
     Everything else about the refusal is kept: the name must exist and the value must

@@ -430,7 +430,7 @@ remaining gap, stated in §12.
 mode declared a gate a person answers, so the path had nothing to exercise it.
 
 ```bash
-uv run refactory run review_pack/review \
+uv run refactory ceo review_pack/review \
   --intent "draft a note about circle packing and let me approve it"
 ```
 

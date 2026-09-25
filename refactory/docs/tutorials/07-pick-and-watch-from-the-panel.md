@@ -79,7 +79,7 @@ Three behaviours are worth knowing before you press something:
 - **A run stopped at a gate is reported as stopped.** When a run reaches a gate a
   person owns, **Run once** says so, names the nodes still due, and stops: the panel
   does not answer gates, because a gate with no person is the thing it must not fake.
-  Answer it from the shell (`refactory run <mode>`) and run the mode again.
+  Answer it from the shell (`refactory ceo <mode>`) and run the mode again.
 - **Status is read on demand.** There is no poll timer, so a long run does not
   animate; press **Refresh status** when you want the next frame.
 

@@ -8,7 +8,7 @@ An item directory has three parts, and they are what a person needs to add a tre
     <item>/item.json      {"main_class": "...", "main_args": "..."}
     <item>/expected.txt   exactly what running the entry point prints
 
-These three are the fixture the package ships. To run the harness on your own trees, point the run at them (`refactory run java_build_pack/build --source <dir>`): the items a harness reads are run configuration, so a Task does not need a second mechanism for it and the graph never carries them.
+These three are the fixture the package ships. To run the harness on your own trees, point the run at them (`refactory ceo java_build_pack/build --source <dir>`): the items a harness reads are run configuration, so a Task does not need a second mechanism for it and the graph never carries them.
 """
 
 from __future__ import annotations

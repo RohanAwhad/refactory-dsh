@@ -53,7 +53,7 @@ def test_smoke_refuses_a_mode_that_calls_a_model_naming_the_command_that_works()
     inside the executor with "agent node 'draft' needs a model client"."""
     problem = cli._smoke_without_a_model("default_pack/create")
     assert "calls a model" in problem
-    assert "refactory run default_pack/create" in problem
+    assert "refactory ceo default_pack/create" in problem
     assert cli._smoke_without_a_model("circle_packing/adaptive") == ""
     # An identifier nobody can resolve is the registry's error to give, not ours.
     assert cli._smoke_without_a_model("not/a_mode") == ""
@@ -114,7 +114,7 @@ def test_help_is_available_for_every_verb_a_person_starts_with(argv):
 _OPTION = re.compile(r"^\s+(--[a-z][a-z0-9-]*)", re.MULTILINE)
 
 #: The verbs whose options the README tabulates, so every one of their flags is owed a row.
-_TABULATED = ("ceo", "run", "optimize", "list", "ui", "doctor")
+_TABULATED = ("ceo", "optimize", "list", "ui", "doctor")
 
 
 def test_the_readme_reference_matches_the_command_line():
@@ -185,10 +185,12 @@ def test_the_model_a_run_names_is_passed_to_the_runtime(monkeypatch):
     seen: list[list[str]] = []
     monkeypatch.setattr(cli, "_forward", lambda module, argv: seen.append(argv) or 0)
     assert cli.main([
-        "run", "counting_pack/fixed_step", "--intent", "count",
+        "ceo", "counting_pack/fixed_step", "--intent", "count",
         "--model", "deepseek-v4-pro", "--provider", "deepseek-official",
     ]) == 0
     forwarded = seen[0]
+    assert forwarded[0] == "counting_pack/fixed_step", "a named mode must run, not be authored"
+    assert "--intent" in forwarded and "count" in forwarded
     assert "--model" in forwarded and "deepseek-v4-pro" in forwarded
     assert "--provider" in forwarded and "deepseek-official" in forwarded
 

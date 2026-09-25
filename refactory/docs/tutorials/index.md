@@ -35,7 +35,7 @@ are the detail behind each step.
 |---|---|---|
 | **create** | `uv run refactory ceo "<what it does for any item of the class>" --mode create --name my_pack --task <module:Class>` | a package on disk, registered, bound to that Task, smoke-scored per item |
 | **create, for one thing** | `uv run refactory ceo "<what it does>" --mode create --name my_pack --single` | the special case: a harness that runs once, for one input |
-| **use** | `uv run refactory run my_pack/<mode> --intent "<what you want>"` | the mode ran on DSH, with its own artifacts, and a person answered any gate |
+| **use** | `uv run refactory ceo my_pack/<mode> --intent "<what you want>"` | the mode ran on DSH, with its own artifacts, and a person answered any gate |
 | **optimize** | `uv run refactory optimize my_pack/<mode> --epochs 4 --batch-size 6 --optimizer random --seed 5` | a leaderboard, a report, and the edits that improved it |
 | **use it again** | `uv run refactory adopt --run <run id> --as my_tuned` | the winner as a mode of its own, smoked by the registry |
 

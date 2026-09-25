@@ -692,7 +692,7 @@ TEMPLATE = """<!DOCTYPE html>
               <td><code>uv run refactory ceo "&lt;what it does&gt;" --mode create --name my_pack</code></td>
               <td>a package on disk, registered, its mode smoke-scored</td></tr>
           <tr><td><strong>use it</strong></td>
-              <td><code>uv run refactory run my_pack/&lt;mode&gt; --intent "&lt;what you want&gt;"</code></td>
+              <td><code>uv run refactory ceo my_pack/&lt;mode&gt; --intent "&lt;what you want&gt;"</code></td>
               <td>the mode ran on DSH, with its artifacts, and a person answered any gate</td></tr>
           <tr><td><strong>optimize it</strong></td>
               <td><code>uv run refactory optimize my_pack/&lt;mode&gt; --epochs 4 --batch-size 6 --optimizer random --seed 5</code></td>
@@ -985,7 +985,7 @@ TEMPLATE = """<!DOCTYPE html>
       agent node's prompt, and read back when the run is judged.</p>
       <figure class="example">
         <figcaption>steering is a console verb, so the CEO does the same thing when you ask in words</figcaption>
-        <div class="cmd"><pre><code>uv run refactory run blurb/writer --intent "a blurb about teapots"
+        <div class="cmd"><pre><code>uv run refactory ceo blurb/writer --intent "a blurb about teapots"
 uv run refactory steer --run &lt;id&gt; --note "keep the step small" --kind constraint
 uv run refactory steer --run &lt;id&gt; --verdict gate_strategy=proceed</code></pre>
         <button class="copy" type="button" data-copy>copy</button></div>

@@ -43,7 +43,7 @@ name, because an empty selection and an unbound source must not look alike.
 The graph declares the source the mode was built with, and a run may name another. That is what makes a harness usable on items it has never seen without editing the mode:
 
 ```bash
-uv run refactory run java_build_pack/build --source /path/to/my/trees
+uv run refactory ceo java_build_pack/build --source /path/to/my/trees
 ```
 
 The runner writes the choice into the run directory as `items.json`, and `load_items` reads it on both runtimes, so the walker and DSH iterate the same items. `--source-format` says how to read it (`directory` by default, or `jsonl`/`csv`), and an entry keyed `*` applies to every data node of the run while an entry keyed by node id wins for that node.
@@ -97,7 +97,7 @@ its own item on disk, each judged by the Task.
 A two-item Task proves the shape but not the claim. `java_build_pack` is the example that does the work the product is named for: its Task lists three small Java source trees, its one agent node writes `build.sh` for whichever item is on disk, and the Task runs that script and compares what the program printed with the output recorded beside the sources. The mode's score is the share of trees it built, and pointing the same harness at a fourth tree it has never seen is what the binding buys:
 
 ```bash
-uv run refactory run java_build_pack/build --intent "build each Java tree the Task lists"
+uv run refactory ceo java_build_pack/build --intent "build each Java tree the Task lists"
 ```
 
 ## Creating one

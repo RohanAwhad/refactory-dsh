@@ -1095,7 +1095,7 @@ def smoke(ctx: Any) -> dict[str, Any]:
             "smoke_reason": (
                 f"not measured: {identifier} calls a model ({', '.join(agent_nodes)}) and no "
                 "model was reachable; set the provider credentials and use "
-                "`refactory run " + identifier + "` to score it"
+                "`refactory ceo " + identifier + "` to score it"
             ),
             **revised,
         }

@@ -2,7 +2,7 @@
 
     refactory ceo "an idea" --mode design     describe it; the CEO designs and builds it
     refactory ceo "an idea" --mode create     build a new package of modes
-    refactory run <package>/<mode>            use a mode, with you answering any gate
+    refactory ceo <package>/<mode>            use a mode, with you answering any gate
     refactory optimize <package>/<mode>       search a mode's architecture and knobs
     refactory list                            what this checkout can do
     refactory status|leaderboard|best|adopt … read and keep a run
@@ -69,6 +69,35 @@ def _launcher() -> Path:
     return REPO_ROOT / "refactory-dsh"
 
 
+def _run_argv(identifier: str, args: argparse.Namespace) -> list[str]:
+    """One run's arguments, as `refactory_dsh.interactive` spells them.
+
+    `ceo` is the only way to use a mode, so the run options live on this parser and
+    are forwarded only when the target actually names a mode. An option nobody gave
+    is left out, so the interactive defaults are the ones that apply.
+    """
+    forwarded = [identifier]
+    if args.intent:
+        forwarded += ["--intent", str(args.intent)]
+    if args.workdir:
+        forwarded += ["--workdir", str(args.workdir)]
+    if args.source:
+        forwarded += ["--source", str(args.source)]
+    if args.source_format:
+        forwarded += ["--source-format", str(args.source_format)]
+    for pair in args.knob:
+        forwarded += ["--knob", pair]
+    for pair in args.verdict:
+        forwarded += ["--approve", pair]
+    if args.timeout:
+        forwarded += ["--timeout", str(args.timeout)]
+    if args.provider:
+        forwarded += ["--provider", str(args.provider)]
+    if args.model:
+        forwarded += ["--model", str(args.model)]
+    return forwarded
+
+
 def cmd_ceo(args: argparse.Namespace) -> int:
     """Describe what you want: an authoring mode, or a mode to run.
 
@@ -80,14 +109,14 @@ def cmd_ceo(args: argparse.Namespace) -> int:
     target = str(args.what)
     mode = str(args.mode or "")
     if "/" in target and not mode:
-        return _forward("refactory_dsh.interactive", [target, *args.rest])
+        return _forward("refactory_dsh.interactive", _run_argv(target, args))
 
     if mode == "" or mode == "design":
         identifier, authoring = AUTHORING["design"], "design"
     elif mode in AUTHORING:
         identifier, authoring = AUTHORING[mode], mode
     elif "/" in mode:
-        return _forward("refactory_dsh.interactive", [mode, *args.rest])
+        return _forward("refactory_dsh.interactive", _run_argv(mode, args))
     else:
         print(
             f"refactory: --mode {mode!r} is not one of "
@@ -242,7 +271,7 @@ def _smoke_without_a_model(identifier: str) -> str:
     return (
         f"refactory: {identifier} calls a model ({len(agents)} agent node(s): "
         f"{', '.join(agents)}), and `package smoke` supplies none by default.\n"
-        f"           add --model to score it, or use `refactory run {identifier}` to run it on DSH."
+        f"           add --model to score it, or use `refactory ceo {identifier}` to run it on DSH."
     )
 
 
@@ -281,7 +310,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ceo.add_argument("what", help="what you want, or <package>/<mode> to run")
     ceo.add_argument(
-        "--mode", default="design",
+        "--mode", default="",
         help="design (the default), create, edit, or <package>/<mode>",
     )
     ceo.add_argument("--name", default="", help="the package or artifact name (default: from what you said)")
@@ -315,33 +344,25 @@ def build_parser() -> argparse.ArgumentParser:
         "--approve", dest="verdict", action="append", default=[], metavar="GATE=VALUE",
         help="state a gate's answer up front, e.g. gate_strategy=proceed, for an unattended run",
     )
-
-    run = sub.add_parser("run", help="use one mode, with you answering any gate")
-    run.add_argument("mode", help="the mode, as <package>/<name>")
-    run.add_argument("--intent", default="", help="what this run is for, in your words")
-    run.add_argument("--workdir", default="", help="the run directory")
-    run.add_argument(
+    ceo.add_argument(
+        "--intent", default="",
+        help="run a mode: what this run is for, in your words; authored runs take the "
+             "brief itself as the intent",
+    )
+    ceo.add_argument(
         "--source", default="", metavar="PATH",
-        help="read the items from here instead of the source the mode declares, so a "
-             "harness built for a class of work is pointed at items it has not seen",
+        help="run a mode: read the items from here instead of the source the mode "
+             "declares, so a harness built for a class of work is pointed at items it "
+             "has not seen",
     )
-    run.add_argument(
+    ceo.add_argument(
         "--source-format", default="", choices=["", "directory", "jsonl", "csv"],
-        help="how to read --source (default: a directory of one item per subdirectory)",
+        help="run a mode: how to read --source (default: a directory of one item per "
+             "subdirectory)",
     )
-    run.add_argument("--knob", action="append", default=[], metavar="NAME=VALUE", help="set a knob for this run")
-    run.add_argument(
-        "--approve", action="append", default=[], metavar="GATE=VALUE",
-        help="state a gate's answer before the run, e.g. approve=proceed (repeatable)",
-    )
-    run.add_argument("--timeout", type=int, default=0, help="seconds; 0 waits for you")
-    run.add_argument(
-        "--provider", default="",
-        help="provider route for this run's model (default: the settings default)",
-    )
-    run.add_argument(
-        "--model", default="",
-        help="model id for this run, e.g. deepseek-v4-pro (default: the settings default)",
+    ceo.add_argument(
+        "--timeout", type=int, default=0,
+        help="run a mode: seconds to wait at a gate; 0 waits for you",
     )
 
     optimize = sub.add_parser("optimize", help="search a mode's architecture and knobs")
@@ -410,27 +431,6 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.verb == "ceo":
         return cmd_ceo(args)
-    if args.verb == "run":
-        forwarded = [args.mode]
-        if args.intent:
-            forwarded += ["--intent", args.intent]
-        if args.workdir:
-            forwarded += ["--workdir", args.workdir]
-        if args.source:
-            forwarded += ["--source", args.source]
-        if args.source_format:
-            forwarded += ["--source-format", args.source_format]
-        for pair in args.knob:
-            forwarded += ["--knob", pair]
-        for pair in args.approve:
-            forwarded += ["--approve", pair]
-        if args.timeout:
-            forwarded += ["--timeout", str(args.timeout)]
-        if args.provider:
-            forwarded += ["--provider", str(args.provider)]
-        if args.model:
-            forwarded += ["--model", str(args.model)]
-        return _forward("refactory_dsh.interactive", forwarded)
     if args.verb == "optimize":
         forwarded = [args.mode]
         for flag, value in vars(args).items():
