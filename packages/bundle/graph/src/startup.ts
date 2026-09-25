@@ -87,6 +87,15 @@ export interface GraphStartupValues {
   pythonBin: string
   /** The command that selects a data node's items and opens and closes one pass. */
   dataCommand: string
+  /**
+   * Whether the runner keeps a conversation with the person after the first turn.
+   *
+   * Off is the one-shot run scripts and CI get: send the driving task, report the
+   * result, exit. On, the runner prints each turn and reads a line between turns,
+   * so a person can steer the CEO (`wf_edit` + `wf_redo`, skip, route) while the
+   * graph is still running. `ceo` asks for it unless `--headless` was given.
+   */
+  chat: boolean
 }
 
 function graphCommand(): Command {

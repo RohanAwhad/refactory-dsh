@@ -183,6 +183,10 @@ class ProposalContext:
     mode_name: str = ""
     best_score: float | None = None
     mean_score: float | None = None
+    #: The run's intent ledger, rendered, read fresh before each generation. A note a
+    #: person adds while the search runs reaches the next proposal, so a search is
+    #: steerable and not only watchable.
+    steering: str = ""
     knobs: list[dict[str, Any]] = field(default_factory=list)
     nodes: list[dict[str, Any]] = field(default_factory=list)
     edges: list[dict[str, Any]] = field(default_factory=list)
@@ -230,6 +234,7 @@ class ProposalContext:
             f"Mode: `{self.mode_name}`. Best score so far: {self.best_score}. "
             f"Batch mean: {self.mean_score}.",
             "",
+            *([self.steering, ""] if self.steering.strip() else []),
             "## Parameters you may move",
             _table(["name", "value", "kind", "values", "range", "frozen", "reachable",
                     "description"],

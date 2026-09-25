@@ -750,3 +750,27 @@ def test_a_library_run_prints_nothing(tmp_path, capsys):
     Loop(MODE, _config(tmp_path, epochs=1, batch_size=2), project=Path(".")).run()
     assert capsys.readouterr().err == ""
     assert (tmp_path / "progress.jsonl").exists()
+
+
+def test_the_proposer_reads_the_run_ledger_live(tmp_path):
+    """A note added while the search runs reaches the next proposal.
+
+    Steering a search is not only watching it: the thing that proposes edits has to
+    see what the person said since the run started.
+    """
+    from refactory_dsh.steering import Ledger
+
+    loop = Loop(MODE, _config(tmp_path, intent="keep the step small"), project=Path("."))
+    loop.init()
+    assert "keep the step small" in loop._context().render()
+    Ledger(tmp_path).note("constraint", "never add a node")
+    live = loop._context().render()
+    assert "never add a node" in live
+    assert "must be respected" in live
+
+
+def test_no_ledger_means_no_steering_section(tmp_path):
+    """A run nobody steered reads exactly as it did before the ledger existed."""
+    loop = Loop(MODE, _config(tmp_path), project=Path("."))
+    loop.init()
+    assert "What the user has said" not in loop._context().render()

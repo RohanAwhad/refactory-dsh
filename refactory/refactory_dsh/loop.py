@@ -1690,7 +1690,16 @@ class Loop(OuterLoop):
             ),
             preset=self.config.edit_preset,
             strategy=dict(self.strategy_decision),
+            # Read now, not at construction: the point of steering a search is that a
+            # note added while it runs reaches the next proposal.
+            steering=self._steering_block(),
         )
+
+    def _steering_block(self) -> str:
+        """The run's intent ledger as the proposer reads it, empty when there is none."""
+        from refactory_dsh.steering import Ledger
+
+        return Ledger(self.root).render()
 
     def _reachable(self, name: str, spec: dict[str, Any]) -> bool:
         """Whether the selected optimizer can move this knob at all."""
