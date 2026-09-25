@@ -346,7 +346,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ceo.add_argument(
         "--approve", dest="verdict", action="append", default=[], metavar="GATE=VALUE",
-        help="state a gate's answer up front, e.g. gate_strategy=proceed, for an unattended run",
+        help="answer a gate up front, e.g. gate_strategy=proceed, for a run with nobody "
+             "sitting at it; a gate a person would be asked at is theirs, so run without "
+             "this and answer it, or drive the mode node by node with wf_open",
     )
     ceo.add_argument(
         "--intent", default="",

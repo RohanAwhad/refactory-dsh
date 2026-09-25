@@ -51,7 +51,7 @@ export const Config: z<Config> = z.object({
 
 /** The verbs the tool exposes, and the one thing each needs to be addressed. */
 const VERBS = {
-  modes: 'List the modes a run can be started from, with their parameters.',
+  modes: 'List the modes a run can be started from: the verb that runs each, that wf_open can drive it node by node, its gates with a person\'s marked, and its parameters.',
   strategies: 'List the named outer loops, optimizers and evaluators, each with what it is. Choose settings.optimizer/strategy/evaluator from these names.',
   runs: 'List runs under the run root, newest first.',
   start: 'Optimize a mode: start an outer-loop run in its own process and return the run id to watch it with.',
@@ -64,9 +64,9 @@ const VERBS = {
   best: 'The winner of a run, with the state that scored it.',
   adopt: 'Write a run\'s winner as a new package, leaving the run and its source untouched.',
   registry: 'List packages of modes, or verify, smoke, add, import, remove, enable or disable one.',
-  create: 'Create a package of modes from a brief (model-driven); it runs for many minutes and needs the strategy gate answered through "approve".',
-  edit: 'Revise an existing mode from a brief (model-driven), refusing a regression; it runs for many minutes and needs the strategy gate answered through "approve".',
-  design: 'Design, emit and check a software artifact from a brief (model-driven); it runs for many minutes and needs the strategy gate answered through "approve".',
+  create: 'Create a package of modes from a brief (model-driven); runs for many minutes, and answers its gates through "approve" with "headless" (a person present is asked through wf_open instead).',
+  edit: 'Revise an existing mode from a brief (model-driven), refusing a regression; runs for many minutes, and answers its gates through "approve" with "headless" (a person present is asked through wf_open instead).',
+  design: 'Design, emit and check a software artifact from a brief (model-driven); runs for many minutes, and answers its gates through "approve" with "headless" (a person present is asked through wf_open instead).',
   stop: 'Ask a run to stop.',
 } as const
 
@@ -88,9 +88,9 @@ const DESCRIPTION = [
   '',
   'The loop runs in its own process, so a run continues after the call returns and after the session ends; watch it with action "status" and an "after" offset. Prefer this tool over running the loop in a shell: it is the same console the Web view renders, and a run started in a shell will not appear in the view unless it lives under the run root.',
   '',
-  'Which action to use: "modes" answers with each mode\'s id and the action that runs it (a scored mode is run by "start"; an authoring mode by its own verb, "create", "edit" or "design"), so read that field rather than trying "start" and reading the refusal. "strategies" names every outer loop, optimizer and evaluator before you choose settings. Start with "modes", then "start" for a scored mode or the named authoring verb, then "status" until it finishes, then "leaderboard", "candidate", "artifacts" and "best".',
+  'Which action to use: "modes" answers with each mode\'s id, the verb that runs it (a scored mode by "start", an authoring mode by its own verb "create", "edit" or "design"), that it can also be driven node by node with "wf_open", the gates it declares with the ones a person answers marked "(user)", and its knobs. Read those fields rather than trying "start" and reading the refusal. "strategies" names every outer loop, optimizer and evaluator before you choose settings. Start with "modes", then "start" for a scored mode or the named authoring verb, then "status" until it finishes, then "leaderboard", "candidate", "artifacts" and "best".',
   '',
-  'The authoring verbs behave differently from "start": they run for many minutes inside the call, they cannot pause to ask the user anything, and they stop at the strategy gate unless the answer is passed as "approve". So ask the user for that approval first, pass it with the call, and watch the run meanwhile with action "status" and the run directory (an authoring run reports its own node-by-node progress there).',
+  'Every mode has two routes, and "modes" names both. "start" (or the mode\'s own authoring verb, "create", "edit" or "design") runs it to completion in a process of its own: it cannot pause to ask anyone anything, so a gate it stops at is answered only if "approve" carries the answer, which is why "approve" requires "headless" — say with it that nobody is at the keyboard. The other route is the workflow spine: "wf_open <package>/<name>" lowers the same mode and hands it over one node at a time, and its "user" gates are put to the person by the runtime, who answers them. So when a person is here, use "wf_open" and let them answer; never pass "approve" for a gate "modes" marks "(user)", because that records an answer they never gave. An authoring run chooses its strategy at "gate_strategy", which is one of those person gates in the shipped authoring modes.',
 ].join('\n')
 
 /** Input the tool accepts, after the registry's schema check. */
@@ -119,6 +119,7 @@ interface Args {
   check?: string
   allowRegression?: boolean
   approve?: string[]
+  headless?: boolean
   inputs?: string[]
   resume?: string
   sample?: string[]
@@ -152,6 +153,21 @@ export function invocationFor(args: Args): {
 } {
   if (RUN_SCOPED.includes(args.action) && args.run === undefined) {
     throw new Error(`action "${args.action}" needs \`run\`: the run id or directory to read`)
+  }
+  // `approve` answers a gate on the person's behalf, and these verbs run headless:
+  // the call cannot pause to ask them, so an answer passed here is the only answer
+  // the run will ever see. That is right for a run nobody is sitting at and wrong
+  // for one they are: the same mode can be driven node by node with `wf_open`, and
+  // the runtime puts its `user` gates to the person itself. Requiring the caller to
+  // say which case this is makes pre-answering a person's gate impossible by
+  // accident, which is the mistake this tool used to invite (#92).
+  if ((args.approve?.length ?? 0) > 0 && args.headless !== true) {
+    throw new Error(
+      '`approve` answers a gate for a run nobody can ask, so it needs `headless: true`. '
+      + 'When a person is here, do not pre-answer their gate: open the mode with '
+      + '`wf_open <package>/<name>` and drive it — the runtime puts a `user` gate to '
+      + 'them. `modes` marks which gates those are.',
+    )
   }
   const run: Record<string, string | number | boolean | readonly string[] | undefined> = {
     run: args.run,
@@ -289,6 +305,35 @@ function scalar(value: unknown): string {
 /** `best 1.5`, or a stated absence, as the console reports a score. */
 function score(value: unknown): string {
   return typeof value === 'number' ? `best score ${String(value)}` : 'no score yet'
+}
+
+/**
+ * One mode as a line a caller can choose a route from.
+ *
+ * Everything here is the console's own answer: the verb that runs the mode
+ * (`action`), the second route the workflow spine offers (`interactive`, driven one
+ * node at a time with `wf_open`), where the run stops for a person (`gates`, a
+ * `user` gate meaning the runtime asks them and no verdict may be passed for it),
+ * and the knobs it declares. The two routes are named together on purpose: a caller
+ * shown only the headless verb picks it, and a headless authoring run pre-answers
+ * the very gate the person would have been asked at.
+ * @param mode - one catalogue entry.
+ * @returns the summary that follows the mode's id.
+ */
+function modeSummary(mode: Readonly<Record<string, unknown>>): string {
+  const parts: string[] = []
+  const action = scalar(mode.action)
+  parts.push(`run: ${action === '' ? 'unknown' : action}`)
+  if (mode.interactive === true) parts.push('or wf_open to drive it node by node')
+  const gates = (Array.isArray(mode.gates) ? mode.gates : [])
+    .filter(isRecord)
+    .map(gate => `${scalar(gate.id)}${gate.user === true ? ' (user)' : ''}`)
+    .filter(gate => gate !== '')
+  if (gates.length > 0) parts.push(`gates: ${gates.join(', ')}`)
+  const knobs = isRecord(mode.parameters) ? Object.keys(mode.parameters) : []
+  if (knobs.length > 0) parts.push(`knobs: ${knobs.join(', ')}`)
+  if (mode.startable !== true) parts.push('not startable')
+  return parts.join('; ')
 }
 
 /**

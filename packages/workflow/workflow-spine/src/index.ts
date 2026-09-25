@@ -716,7 +716,10 @@ export function apply(ctx: Context, config: Config): void {
       + '(pass the mode as <package>/<name>), then drive it with '
       + `${toolPrefix}_next, reporting each node as it completes: each call runs exactly one `
       + 'deterministic node and names it under `ran` with the outputs and facts it left in the run '
-      + `directory, so say what it produced before acting on what is due next. A FnNode, Study or `
+      + `directory, so say what it produced before acting on what is due next. Open any mode this way, `
+      + 'including an authoring one (create/edit/design): it is the route where a person is present, and '
+      + 'a gate marked `(user)` is put to them. '
+      + `A FnNode, Study or `
       + '`fn` gate listed in `nodes` is deterministic — do NOT run its command and do NOT call '
       + `${toolPrefix}_done for it; call ${toolPrefix}_next again and the runtime runs it. `
       + `${toolPrefix}_done is only for a node whose work you or a subagent did.`
@@ -733,7 +736,7 @@ export function apply(ctx: Context, config: Config): void {
   if (interactiveOpen) {
     ctx.tools.register(defineTool({
       name: `${toolPrefix}_open`,
-      description: `Open a mode's graph and claim it for this session, so it can be driven node by node. Pass the mode as \`<package>/<name>\`; the open command lowers it and this reads the graph it wrote. Returns the post-drain view, so a deterministic start node has already run and is reported under \`ran\` rather than left due. One driven run at a time is open in a session: a second open is refused until that run finishes. All the other \`${toolPrefix}_*\` tools work on the opened run, and refuse when this session has not opened one.`,
+      description: `Open a mode's graph and claim it for this session, so it can be driven node by node. Pass any mode the catalogue lists as \`<package>/<name>\` — a scored mode, or an authoring one ("create", "edit", "design") — and the open command lowers it and this reads the graph it wrote. This is the route where a person is present: the runtime puts a \`user\` gate to them with the person-questions service, and routes the answer they give, so a gate marked \`(user)\` is theirs and no verdict may be passed for it. Prefer this over a headless authoring call whenever someone can answer. Returns the post-drain view, so a deterministic start node has already run and is reported under \`ran\` rather than left due. One driven run at a time is open in a session: a second open is refused until that run finishes. All the other \`${toolPrefix}_*\` tools work on the opened run, and refuse when this session has not opened one.`,
       parameters: {
         mode: { type: 'string', required: true, description: 'The mode to run, as `<package>/<name>`.' },
         knobs: { type: 'array', items: { type: 'string' }, description: 'Knob overrides for this run, each as `NAME=VALUE` (repeatable).' },

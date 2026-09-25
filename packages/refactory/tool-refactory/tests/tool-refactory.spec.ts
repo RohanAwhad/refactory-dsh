@@ -362,6 +362,27 @@ describe('invocationFor', () => {
     expect(() => tool.invocationFor({ action: 'design', name: 'p', check: 'c' })).toThrow(/needs `name`, `brief` and `check`/)
   })
 
+  it('refuses to answer a gate unless the caller says nobody is at the keyboard', async () => {
+    // The mistake #92 names: the CEO pre-asked the person, then passed their answer
+    // to a headless call, pre-answering a gate the runtime would have put to them.
+    // `headless` is the caller saying which case this is, so it cannot be accidental.
+    const { ctx, subprocess } = await setup()
+    expect(() => tool.invocationFor({
+      action: 'create', name: 'p', brief: 'b', approve: ['gate_strategy=proceed'],
+    })).toThrow(/needs `headless: true`/)
+    expect(text(await call(ctx, {
+      action: 'create', name: 'p', brief: 'b', approve: ['gate_strategy=proceed'],
+    }))).toContain('wf_open')
+    expect(subprocess.spawns).toHaveLength(0)
+
+    // The same call, saying it: the answers reach the console as its own flags.
+    const forwarded = tool.invocationFor({
+      action: 'create', name: 'p', brief: 'b', approve: ['gate_strategy=proceed'], headless: true,
+    })
+    expect(forwarded.options.verdict).toEqual(['gate_strategy=proceed'])
+    expect(forwarded.options).not.toHaveProperty('headless')
+  })
+
   it('titles the pending call by whichever subject the action names', () => {
     expect(tool.presentCall({ action: 'modes' }).title).toBe('refactory modes')
     expect(tool.presentCall({ action: 'status', run: 'r1' }).title).toBe('refactory status r1')
@@ -385,6 +406,29 @@ describe('renderResult', () => {
     expect(rendered('modes', { not: 'an array' })).toContain('0 mode(s)')
     expect(rendered('modes', [{ id: null, startable: true }, 'nope', { id: { nested: 1 } }]))
       .toContain('- {"nested":1}')
+  })
+
+  it('names both routes, the gates that ask a person, and the knobs', () => {
+    // The console's own fields, rendered together: a caller shown only `action`
+    // picks the headless route and pre-answers the gate the person would have been
+    // asked at (#92, #93).
+    const text = rendered('modes', [{
+      id: 'default_pack/design', action: 'design', scored: false, startable: true,
+      interactive: true,
+      gates: [{ id: 'gate_research', user: false }, { id: 'gate_strategy', user: true }],
+      parameters: { brief: {}, check: {} },
+    }])
+    expect(text).toContain('1 mode(s):')
+    expect(text).toContain('run: design')
+    expect(text).toContain('or wf_open to drive it node by node')
+    expect(text).toContain('gates: gate_research, gate_strategy (user)')
+    expect(text).toContain('knobs: brief, check')
+  })
+
+  it('still says what it does not know about a mode', () => {
+    expect(rendered('modes', [{ id: 'a/b' }])).toContain('run: unknown')
+    expect(rendered('modes', [{ id: 'a/b', action: 'start', startable: false }]))
+      .toContain('not startable')
   })
 
   it('renders runs with the state each one is in', () => {
@@ -563,6 +607,7 @@ describe('authoring from the Web GUI', () => {
       name: 'p',
       brief: 'count',
       approve: ['gate_strategy=proceed', 'gate_qa=proceed'],
+      headless: true,
     })
     const argv = subprocess.spawns[0]!.argv
     expect(argv).toContain('--verdict')
@@ -570,10 +615,10 @@ describe('authoring from the Web GUI', () => {
     expect(argv).toContain('gate_strategy=proceed')
     expect(argv).toContain('gate_qa=proceed')
 
-    await call(ctx, { action: 'edit', mode: 'counting_pack/fixed_step', name: 'p', brief: 'x', approve: ['gate_strategy=proceed'] })
+    await call(ctx, { action: 'edit', mode: 'counting_pack/fixed_step', name: 'p', brief: 'x', approve: ['gate_strategy=proceed'], headless: true })
     expect(subprocess.spawns[1]!.argv).toContain('gate_strategy=proceed')
 
-    await call(ctx, { action: 'design', name: 'a', brief: 'x', check: 'true', approve: ['gate_strategy=proceed'] })
+    await call(ctx, { action: 'design', name: 'a', brief: 'x', check: 'true', approve: ['gate_strategy=proceed'], headless: true })
     expect(subprocess.spawns[2]!.argv).toContain('gate_strategy=proceed')
   })
 
@@ -631,6 +676,7 @@ describe('the brief\'s declared inputs', () => {
       name: 'buildroot_pack',
       brief: 'match a wheel against a package',
       approve: ['gate_strategy=proceed'],
+      headless: true,
       inputs: ['package', 'reference_wheel'],
     })
     const argv = subprocess.spawns[0]!.argv
@@ -684,6 +730,7 @@ describe('running a mode once from the panel', () => {
       mode: 'buildroot_pack/build',
       intent: 'discover the recipe',
       approve: ['approve=proceed'],
+      headless: true,
       model: 'deepseek-v4-pro',
     })
     const argv = subprocess.spawns[0]!.argv
@@ -737,6 +784,7 @@ describe('checking the input path and the artifact', () => {
       inputs: ['package'],
       sample: ['package=/tmp/demo_pkg'],
       approve: ['gate_strategy=proceed'],
+      headless: true,
     })
     const argv = subprocess.spawns[0]!.argv
     expect(argv).toContain('--sample')

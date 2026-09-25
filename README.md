@@ -107,7 +107,7 @@ Every command is `uv run refactory <verb>`. `uv run refactory <verb> --help` is 
 | `--workdir <dir>` | where the run's evidence lands (default `.factory/interactive/<package>-<mode>`). |
 | `--provider <route>` | the provider route that model is on, e.g. `deepseek-official`. |
 | `--model <id>` | the model this run uses, e.g. `deepseek-v4-pro`. |
-| `--approve <gate>=<value>` | state a gate's answer up front, e.g. `gate_strategy=proceed`, for an unattended run. |
+| `--approve <gate>=<value>` | answer a gate up front, e.g. `gate_strategy=proceed`, for a run with nobody at it. A gate a person would be asked at is theirs: run without this and answer it, or drive the mode node by node with the `wf_open` tool. `modes` marks a person's gate `(user)`. |
 | `--headless` | run without a conversation: one task, one report, then exit, for scripts and CI. Without it the run is live — each turn prints as it happens and a line you type between turns reaches the CEO. |
 
 ### Manage packages of modes
@@ -143,7 +143,7 @@ Every command is `uv run refactory <verb>`. `uv run refactory <verb> --help` is 
 | `refactory ceo <package>/<mode> --workdir <dir>` | where the run's evidence lands. |
 | `refactory ceo <package>/<mode> --timeout <seconds>` | how long to wait at a gate; `0` waits for you. |
 | `refactory ceo <package>/<mode> --model <id> --provider <route>` | the model this run uses. |
-| `refactory ceo <package>/<mode> --approve <gate>=<value>` | answer a gate before the run instead of at it. |
+| `refactory ceo <package>/<mode> --approve <gate>=<value>` | answer a gate before the run instead of at it, for a run nobody can ask. For a gate a person owns, leave it to them: they are asked when the run reaches it. |
 
 ### Optimize it
 
