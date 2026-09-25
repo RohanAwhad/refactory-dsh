@@ -192,6 +192,12 @@ describe('the refactory tool against the real loop', () => {
     const modes = await call(ctx, { action: 'modes' })
     const summary = text(modes)
     expect(summary).toContain('circle_packing/adaptive')
+    // The real catalogue's own fields, rendered: both routes, and the gate that
+    // belongs to a person (#92, #93). A renderer that dropped them would still
+    // list every mode and pass a test that only looked for ids.
+    expect(summary).toContain('or wf_open to drive it node by node')
+    expect(summary).toContain('gate_strategy (user)')
+    expect(summary).toContain('knobs: ')
     expect(summary.split('\n').length).toBeLessThan(40)
   }, 120_000)
 })
