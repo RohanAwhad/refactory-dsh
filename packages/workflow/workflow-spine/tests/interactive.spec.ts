@@ -82,22 +82,24 @@ describe('interactive design-v2 loop', () => {
     expect(ids(await run(ctx, 'wf_next', {}))).toEqual(['synthesize'])
     await run(ctx, 'wf_done', { node: 'synthesize' })
 
-    // USER gate: the person reloops with feedback, though the CEO asked to proceed.
+    // USER gate: the person reloops with feedback. The CEO passes no verdict — the
+    // gate is not its to decide, and a fabricated one is refused.
     expect(ids(await run(ctx, 'wf_next', {}))).toEqual(['gate_plan'])
     personSays.push('reloop')
-    await run(ctx, 'wf_verdict', { gate: 'gate_plan', verdict: 'proceed', feedback: 'also research security' })
+    await expect(run(ctx, 'wf_verdict', { gate: 'gate_plan', verdict: 'proceed' }))
+      .rejects.toThrow(/user gate/)
+    await run(ctx, 'wf_verdict', { gate: 'gate_plan', feedback: 'also research security' })
     expect(ids(await run(ctx, 'wf_next', {}))).toEqual(['research_director'])
     const state = await run(ctx, 'wf_state', {})
     expect((state as { feedback: Record<string, string> }).feedback.research_director).toBe('also research security')
 
-    // re-expand and reach the gate again: now the person proceeds, though the CEO
-    // asked to reloop.
+    // re-expand and reach the gate again: this time the person proceeds.
     await run(ctx, 'wf_expand', { director: 'research_director', entries: [{ slug: 'security', prompt: 'p3' }] })
     await run(ctx, 'wf_done', { node: 'research_director__security' })
     await run(ctx, 'wf_done', { node: 'synthesize' })
     expect(ids(await run(ctx, 'wf_next', {}))).toEqual(['gate_plan'])
     personSays.push('proceed')
-    await run(ctx, 'wf_verdict', { gate: 'gate_plan', verdict: 'reloop' })
+    await run(ctx, 'wf_verdict', { gate: 'gate_plan' })
 
     // build -> agent gate -> proceed to fork
     expect(ids(await run(ctx, 'wf_next', {}))).toEqual(['builder'])

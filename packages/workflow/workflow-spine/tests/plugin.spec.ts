@@ -50,10 +50,21 @@ describe('workflow-spine real composition', () => {
     expect(await run(ctx, 'wf_next', {})).toMatchObject({ status: 'ready', nodes: [{ id: 'a' }] })
     await run(ctx, 'wf_done', { node: 'a' })
     expect(await run(ctx, 'wf_next', {})).toMatchObject({ status: 'ready', nodes: [{ id: 'gate' }] })
-    await run(ctx, 'wf_verdict', { gate: 'gate', verdict: 'proceed' })
+    await run(ctx, 'wf_verdict', { gate: 'gate' })
     expect(await run(ctx, 'wf_next', {})).toMatchObject({ status: 'ready', nodes: [{ id: 'b' }] })
     await run(ctx, 'wf_done', { node: 'b' })
     expect(await run(ctx, 'wf_next', {})).toMatchObject({ status: 'done' })
+  })
+
+  it('refuses a verdict for a user gate instead of recording one the person never gave', async () => {
+    const ctx = await setup()
+    await run(ctx, 'wf_done', { node: 'a' })
+    await expect(run(ctx, 'wf_verdict', { gate: 'gate', verdict: 'proceed' }))
+      .rejects.toThrow(/user gate.*never gave/s)
+    // The honest call — the gate alone — is the one that routes, and it routes the
+    // person's answer, not the model's.
+    expect(await run(ctx, 'wf_verdict', { gate: 'gate' }))
+      .toMatchObject({ status: 'routed', gate: 'gate', verdict: 'proceed', answered_by: 'user' })
   })
 
   it('refuses to route a user gate when the composition can ask nobody', async () => {
@@ -64,7 +75,7 @@ describe('workflow-spine real composition', () => {
     await ctx.plugin(ToolRuntime)
     await ctx.plugin(workflowSpine, { graph, toolPrefix: 'wf', maxIterations: 3 })
     await run(ctx, 'wf_done', { node: 'a' })
-    await expect(run(ctx, 'wf_verdict', { gate: 'gate', verdict: 'proceed' }))
+    await expect(run(ctx, 'wf_verdict', { gate: 'gate' }))
       .rejects.toThrow(/gate gate is answered by a person/)
   })
 
@@ -75,7 +86,7 @@ describe('workflow-spine real composition', () => {
     await ctx.plugin(UserQuestionService)
     await ctx.plugin(workflowSpine, { graph, toolPrefix: 'wf', maxIterations: 3 })
     await run(ctx, 'wf_done', { node: 'a' })
-    await expect(run(ctx, 'wf_verdict', { gate: 'gate', verdict: 'proceed' }))
+    await expect(run(ctx, 'wf_verdict', { gate: 'gate' }))
       .rejects.toThrow(/gate gate is answered by a person and could not be asked/)
   })
 })
@@ -156,6 +167,17 @@ describe('deterministic nodes run without the driver', () => {
   it('hands the deterministic nodes over when execution is off', async () => {
     const ctx = await commandSetup({ executeCommands: false })
     expect(await run(ctx, 'wf_next', {})).toMatchObject({ status: 'ready', nodes: [{ id: 'prepare' }] })
+  })
+
+  it('requires a verdict for a gate with a command', async () => {
+    const ctx = await commandSetup({ executeCommands: false })
+    expect(await run(ctx, 'wf_next', {})).toMatchObject({ status: 'ready', nodes: [{ id: 'prepare' }] })
+    await run(ctx, 'wf_done', { node: 'prepare' })
+    expect(await run(ctx, 'wf_next', {})).toMatchObject({ status: 'ready', nodes: [{ id: 'stop' }] })
+    await expect(run(ctx, 'wf_verdict', { gate: 'stop' }))
+      .rejects.toThrow(/routes on a verdict/)
+    expect(await run(ctx, 'wf_verdict', { gate: 'stop', verdict: 'proceed' }))
+      .toMatchObject({ status: 'routed', gate: 'stop', verdict: 'proceed' })
   })
 
   it('reports a failing command and does not advance the cursor', async () => {

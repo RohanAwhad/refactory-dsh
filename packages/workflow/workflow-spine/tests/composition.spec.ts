@@ -159,7 +159,7 @@ describe('the cursor status a run leaves behind', () => {
         edges: [{ source: 'gate', target: 'gate', condition: 'proceed' }],
       },
     })
-    await expect(call(ctx, 'wf_verdict', { gate: 'gate', verdict: 'proceed' }))
+    await expect(call(ctx, 'wf_verdict', { gate: 'gate' }))
       .rejects.toThrow(/mounts no user-questions channel/)
     const recorded = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8')) as { status: string; error: string }
     expect(recorded.status).toBe('refused')
@@ -280,7 +280,7 @@ describe('asking a person', () => {
         edges: [{ source: 'gate', target: 'gate', condition: 'proceed' }],
       },
     }))
-    await expect(call(root, 'wf_verdict', { gate: 'gate', verdict: 'ignored' }))
+    await expect(call(root, 'wf_verdict', { gate: 'gate' }))
       .rejects.toThrow(/answered without a verdict/)
   })
 
@@ -307,7 +307,7 @@ describe('asking a person', () => {
     // The question service accepts only the registry's exact live root agent.
     root.provide('agents', { get: (id: string) => (id === 'agent-1' ? agent : undefined), roots: () => [agent] })
     const definition = root.tools.get('wf_verdict')
-    await definition?.execute({ gate: 'gate', verdict: 'ignored' }, { agent, signal: controller.signal } as never)
+    await definition?.execute({ gate: 'gate' }, { agent, signal: controller.signal } as never)
     expect(seen.agent).toBe(agent)
     expect(seen.signal).toBe(controller.signal)
   })
@@ -330,7 +330,7 @@ describe('asking a person', () => {
         edges: [{ source: 'gate', target: 'gate' }],
       },
     }))
-    await expect(call(root, 'wf_verdict', { gate: 'gate', verdict: 'ignored' }))
+    await expect(call(root, 'wf_verdict', { gate: 'gate' }))
       .resolves.toMatchObject({ status: 'routed', verdict: 'proceed', answered_by: 'user' })
     expect(asked.options).toBeUndefined()
   })
@@ -354,7 +354,7 @@ describe('asking a person', () => {
         edges: [{ source: 'gate', target: 'gate' }],
       },
     }))
-    await expect(call(root, 'wf_verdict', { gate: 'gate', verdict: 'ignored' }))
+    await expect(call(root, 'wf_verdict', { gate: 'gate' }))
       .rejects.toThrow(/could not be asked: no answerer here/)
     expect(JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8')))
       .toMatchObject({ status: 'refused' })
