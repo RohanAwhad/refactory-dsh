@@ -183,6 +183,8 @@ function config(): Config {
     commandTimeoutMs: 10_000,
     commandSandboxMode: 'danger-full-access',
     dataCommand: '',
+    steerCommand: '',
+    steerArgs: [],
     ceoDeny: [],
   }
 }

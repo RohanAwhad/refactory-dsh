@@ -16,6 +16,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import { spawnSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import z from '@deepseek-ai/schemastery'
@@ -64,6 +65,17 @@ export interface Config {
    * outside the graph, so a composition with no loader cannot iterate one.
    */
   dataCommand: string
+  /**
+   * The command that reads the run's steering ledger, run as
+   * `<steerCommand> <steerArgs...> <workdir>`. When non-empty (and `workdir` is
+   * set) the plugin registers `<toolPrefix>_steer`, so a person's mid-run
+   * correction reaches the driving agent. The command's owner is the ledger
+   * format's owner: the spine learns only a command to run and returns the JSON
+   * it prints, so it stays free of any knowledge of how a ledger is stored.
+   */
+  steerCommand: string
+  /** Arguments for {@link steerCommand}; the run's `workdir` is appended last. */
+  steerArgs: string[]
   /** Foreground timeout for one node command. */
   commandTimeoutMs: number
   /** Sandbox mode for node commands; graph commands are trusted ops, so full access. */
@@ -101,6 +113,8 @@ export const Config = z.object({
   workdir: z.string(),
   commandEnv: z.dict(z.string()).default({}),
   dataCommand: z.string().default(''),
+  steerCommand: z.string().default(''),
+  steerArgs: z.array(z.string()).default([]),
   commandTimeoutMs: z.natural().default(600_000),
   commandSandboxMode: z.string().default('danger-full-access'),
   ceoDeny: z.array(z.string()).default(DEFAULT_CEO_DENY),
@@ -122,6 +136,12 @@ function json(value: unknown): JsonValue {
 /** Wrap a synchronous spine result in the Promise the tool contract requires. */
 function sync<T>(value: T): Promise<T> {
   return Promise.resolve(value)
+}
+
+/** The last non-empty line of a command's output, for an error a reader can act on. */
+function lastLine(text: string | null | undefined): string {
+  const lines = (text ?? '').split('\n').map(line => line.trim()).filter(line => line !== '')
+  return lines[lines.length - 1] ?? ''
 }
 
 export function apply(ctx: Context, config: Config): void {
@@ -399,7 +419,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.systemPrompt.section({
     name: `tool:${toolPrefix}-spine`,
     order: ctx.systemPrompt.getSectionOrder('TOOL_WORKFLOW'),
-    text: `You are the CEO of a workflow run, and you are DRIVING A WORKFLOW GRAPH. Your coding tools (bash, write, edit, web, skill) are disabled — you cannot implement, edit files, or browse yourself. Advance only through the wf tools. ${toolPrefix}_next is the ONLY way to learn what is due now: call it first, and call it again after every ${toolPrefix}_done / ${toolPrefix}_verdict / ${toolPrefix}_edit / ${toolPrefix}_expand — those tools only confirm the mutation, they do not tell you what is next. For an AgentNode or LLMNode, spawn a subagent (the subagent tool) whose task is the node's prompt_template, and explicitly tell the subagent to read the node's reads files and write its result to the node's writes file (the filename in the node's writes field, e.g. candidate.py) — wait for it, then report the node with ${toolPrefix}_done. Every path in a node's reads and writes is relative to ${runDirectory}, and the subagent's own working directory is NOT that directory: give the subagent the absolute path (${runDirectory}/<the path>) for each file it must read or write, and tell it to write nowhere else. For a FnNode, follow its content and report ${toolPrefix}_done. Route a gate with ${toolPrefix}_verdict, answering with one of the verdicts the gate view lists (proceed/reloop/halt, or the gate's own named outcomes). For a user gate the runtime asks the person itself and routes the answer they give: call ${toolPrefix}_verdict with the gate id and never answer for them. Fan out a director's plan with ${toolPrefix}_expand, and apply user steering ("skip the tests") with ${toolPrefix}_edit. When a person says a step is wrong, read the run's ledger if one is configured, then use ${toolPrefix}_edit with \`set-prompt\` or \`append-prompt\` to correct that node's prompt and ${toolPrefix}_redo to run the node again with the correction. A DataNode is iterated for you: the runtime selects its items and hands you the subgraph's nodes one pass at a time, with the item being processed in the payload's item field and on disk as the node's current item file. Do not try to iterate it yourself, and do not report the data node — or the pass's last node — before its work is done. Never skip, reorder, or bypass a node — the runner refuses to advance until you report the current node complete.`,
+    text: `You are the CEO of a workflow run, and you are DRIVING A WORKFLOW GRAPH. Your coding tools (bash, write, edit, web, skill) are disabled — you cannot implement, edit files, or browse yourself. Advance only through the wf tools. ${toolPrefix}_next is the ONLY way to learn what is due now: call it first, and call it again after every ${toolPrefix}_done / ${toolPrefix}_verdict / ${toolPrefix}_edit / ${toolPrefix}_expand — those tools only confirm the mutation, they do not tell you what is next. When ${toolPrefix}_steer is available, read it before each ${toolPrefix}_next: it is what the person said about the run since you last looked. A correction from the person is applied to that node's prompt with ${toolPrefix}_edit (\`set-prompt\`/\`append-prompt\`) and the node is re-run with ${toolPrefix}_redo. For an AgentNode or LLMNode, spawn a subagent (the subagent tool) whose task is the node's prompt_template, and explicitly tell the subagent to read the node's reads files and write its result to the node's writes file (the filename in the node's writes field, e.g. candidate.py) — wait for it, then report the node with ${toolPrefix}_done. Every path in a node's reads and writes is relative to ${runDirectory}, and the subagent's own working directory is NOT that directory: give the subagent the absolute path (${runDirectory}/<the path>) for each file it must read or write, and tell it to write nowhere else. For a FnNode, follow its content and report ${toolPrefix}_done. Route a gate with ${toolPrefix}_verdict, answering with one of the verdicts the gate view lists (proceed/reloop/halt, or the gate's own named outcomes). For a user gate the runtime asks the person itself and routes the answer they give: call ${toolPrefix}_verdict with the gate id and never answer for them. Fan out a director's plan with ${toolPrefix}_expand, and apply user steering ("skip the tests") with ${toolPrefix}_edit. When a person says a step is wrong, read the run's ledger if one is configured, then use ${toolPrefix}_edit with \`set-prompt\` or \`append-prompt\` to correct that node's prompt and ${toolPrefix}_redo to run the node again with the correction. A DataNode is iterated for you: the runtime selects its items and hands you the subgraph's nodes one pass at a time, with the item being processed in the payload's item field and on disk as the node's current item file. Do not try to iterate it yourself, and do not report the data node — or the pass's last node — before its work is done. Never skip, reorder, or bypass a node — the runner refuses to advance until you report the current node complete.`,
   })
 
   ctx.tools.register(defineTool({
@@ -505,6 +525,36 @@ export function apply(ctx: Context, config: Config): void {
       return sync(json(spine.state()))
     },
   }))
+
+  // The live steering channel: a person's mid-run correction reaching the driver,
+  // not only the next agent node. The ledger's owner is the configured command, so
+  // the spine learns only a command to run and returns the JSON it prints
+  // unchanged — it never parses the ledger itself. Registered only when both a
+  // command and a work directory are configured: without them there is nothing to
+  // read, and a tool that cannot run must not be advertised as if it could.
+  if (config.steerCommand !== '' && config.workdir !== undefined) {
+    const command = config.steerCommand
+    const args = [...config.steerArgs, config.workdir]
+    ctx.tools.register(defineTool({
+      name: `${toolPrefix}_steer`,
+      description: `Read what the person said about this run since you last looked, before deciding anything. Runs the run's steering command and returns its ledger payload unchanged: the origin, every entry (a note, a correction, a constraint), recorded gate verdicts, and the fidelity problems found. Read it before each \`${toolPrefix}_next\`; when it carries a correction, apply it to that node's prompt with \`${toolPrefix}_edit\` (\`set-prompt\`/\`append-prompt\`) and re-run the node with \`${toolPrefix}_redo\`. An unreadable or unavailable ledger is reported as \`status: 'unavailable'\`, never thrown, so it cannot stop the run.`,
+      parameters: {},
+      output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
+      execute() {
+        const result = spawnSync(command, args, { encoding: 'utf8' })
+        if (result.status === 0) {
+          try {
+            return sync(json(JSON.parse(result.stdout)))
+          } catch {
+            // Exit 0 with unparseable output is as unreadable as a failure: fall
+            // through to the unavailable payload instead of throwing.
+          }
+        }
+        const reason = lastLine(result.stderr) || lastLine(result.stdout) || 'no output'
+        return sync(json({ status: 'unavailable', error: reason }))
+      },
+    }))
+  }
 
   // The drift-free guard. At `agent/created` the CEO (a top-level agent, never
   // a subagent) of THIS composition loses the coding/external tools on its own

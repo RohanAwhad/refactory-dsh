@@ -203,6 +203,8 @@ function dataConfig(overrides: Partial<Config> = {}): Config {
     commandTimeoutMs: 10_000,
     commandSandboxMode: 'danger-full-access',
     dataCommand: 'python -m refactory_dsh.items',
+    steerCommand: '',
+    steerArgs: [],
     workdir: scratch(),
     ceoDeny: [],
     ...overrides,
