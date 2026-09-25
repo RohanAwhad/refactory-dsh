@@ -17,7 +17,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import z from '@deepseek-ai/schemastery'
 import { scopeChainOf, scopeOf } from '@deepseek-ai/dsh-scope'
@@ -42,12 +42,40 @@ export const inject = ['tools', 'systemPrompt']
 
 /** Config: the workflow graph, tool naming, iteration bounds, and the CEO deny-list. */
 export interface Config {
-  /** The workflow graph (refactory's `Workflow.to_dict()` output). */
-  graph: WorkflowGraph
+  /**
+   * The workflow graph (refactory's `Workflow.to_dict()` output). Required when
+   * {@link interactiveOpen} is false: the composition's one graph, validated at
+   * mount. Omitted when {@link interactiveOpen} is true, where a graph arrives
+   * later through `<toolPrefix>_open`.
+   */
+  graph?: WorkflowGraph
   /** Tool-name prefix (default `wf`, yielding `wf_next`, `wf_done`, …). */
   toolPrefix: string
   /** Maximum reloop iterations before a gate halts. */
   maxIterations: number
+  /**
+   * Open a mode's graph after boot, owned by the session that opens it, instead
+   * of configuring one graph at mount.
+   *
+   * This is what a long-lived web chat session needs: it is one process serving
+   * many sessions, so the graph cannot be a mount-time constant. When true the
+   * spine starts with no graph, `graph` may be omitted, nothing is validated at
+   * mount, and `<toolPrefix>_open` is registered for a session to open and claim
+   * a run. When false (the default) the composition behaves exactly as before:
+   * `graph` is required, validated at mount, and one spine serves the process.
+   */
+  interactiveOpen: boolean
+  /**
+   * The command that lowers a mode and prints its JSON payload, called as
+   * `<openCommand> <openArgs...> <mode>` (with `--workdir <dir>` and one
+   * `--knob NAME=VALUE` per knob appended). The payload names the run directory
+   * (`run`), the graph name (`name`), the absolute path of the lowered graph
+   * JSON (`graph`), and the run's declarations (`declarations`). Used by
+   * `<toolPrefix>_open`; the console's `open` verb is that command.
+   */
+  openCommand: string
+  /** Arguments for {@link openCommand}, before the mode. */
+  openArgs: string[]
   /**
    * Run deterministic nodes (`FnNode`/`Study` commands and `fn` gate evaluators)
    * in-process instead of handing them to the driving agent. Requires a shell
@@ -109,6 +137,9 @@ export const Config = z.object({
   graph: z.any(),
   toolPrefix: z.string().default('wf'),
   maxIterations: z.natural().default(3),
+  interactiveOpen: z.boolean().default(false),
+  openCommand: z.string().default(''),
+  openArgs: z.array(z.string()).default([]),
   executeCommands: z.boolean().default(false),
   workdir: z.string(),
   commandEnv: z.dict(z.string()).default({}),
@@ -144,38 +175,112 @@ function lastLine(text: string | null | undefined): string {
   return lines[lines.length - 1] ?? ''
 }
 
+/** The per-call execution facts a spine tool resolves its session from. */
+interface ToolExec {
+  agent?: Agent
+  signal?: AbortSignal
+}
+
+/** A graph opened at run time, and the session that owns it. */
+interface OpenRun {
+  /** The id of the session that opened the run. */
+  session: string
+  /** The opened graph's spine. */
+  spine: Spine
+  /** The run directory the mode was lowered into: where node commands run and status is written. */
+  workdir: string
+  /** The opened graph's name, for status and reporting. */
+  name: string
+}
+
+/** The JSON `<openCommand>` prints: where it lowered the mode. */
+interface OpenPayload {
+  /** The run directory the mode was lowered into. */
+  run?: unknown
+  /** The lowered graph's name. */
+  name?: unknown
+  /** Absolute path of the lowered graph JSON the spine loads. */
+  graph?: unknown
+  /** Absolute path of the run's node declarations. */
+  declarations?: unknown
+}
+
 export function apply(ctx: Context, config: Config): void {
-  const { toolPrefix, maxIterations, ceoDeny } = config
-  // A graph accepted from configuration is a parser boundary: reject it at load
-  // rather than discovering a dead cursor mid-run.
-  const issues = validateGraph(config.graph)
-  if (issues.length > 0) {
-    const rendered = issues
-      .map(issue => (issue.node === undefined ? issue.message : `${issue.node}: ${issue.message}`))
-      .join('; ')
-    throw new Error(`invalid workflow graph: ${rendered}`)
-  }
-  // A data node's items live outside the graph, so a composition that mounts no
-  // loader hands the node to the driving agent, which cannot iterate a subgraph the
-  // cursor never enters. Refused here, at load, because both facts are config.
-  const dataNodes = Object.values(config.graph.nodes)
-    .filter(node => node._type === 'DataNode')
-    .map(node => node.id)
-  if (dataNodes.length > 0) {
-    const reason = !config.executeCommands
-      ? 'node commands are disabled (`executeCommands: false`)'
-      : config.dataCommand === ''
-        ? 'no item loader is configured (`dataCommand`)'
-        : ''
-    if (reason !== '') {
+  const { toolPrefix, maxIterations, ceoDeny, interactiveOpen } = config
+
+  // The composition's one spine, when the graph was a mount-time constant. When
+  // `interactiveOpen` is true there is none yet: a session opens a mode through
+  // `<toolPrefix>_open`, and only then is a graph validated and a spine built.
+  let configuredSpine: Spine | undefined
+  if (!interactiveOpen) {
+    if (config.graph === undefined) {
       throw new Error(
-        `this graph iterates data in ${dataNodes.join(', ')}, and ${reason}; a data node's `
-        + 'items are selected by a command outside the graph, so a composition without one '
-        + 'cannot run it',
+        'no workflow graph is configured; set `graph`, or set `interactiveOpen: true` so a '
+        + `session can open one with ${toolPrefix}_open`,
       )
     }
+    // A graph accepted from configuration is a parser boundary: reject it at load
+    // rather than discovering a dead cursor mid-run.
+    const issues = validateGraph(config.graph)
+    if (issues.length > 0) {
+      const rendered = issues
+        .map(issue => (issue.node === undefined ? issue.message : `${issue.node}: ${issue.message}`))
+        .join('; ')
+      throw new Error(`invalid workflow graph: ${rendered}`)
+    }
+    // A data node's items live outside the graph, so a composition that mounts no
+    // loader hands the node to the driving agent, which cannot iterate a subgraph the
+    // cursor never enters. Refused here, at load, because both facts are config.
+    const dataNodes = Object.values(config.graph.nodes)
+      .filter(node => node._type === 'DataNode')
+      .map(node => node.id)
+    if (dataNodes.length > 0) {
+      const reason = !config.executeCommands
+        ? 'node commands are disabled (`executeCommands: false`)'
+        : config.dataCommand === ''
+          ? 'no item loader is configured (`dataCommand`)'
+          : ''
+      if (reason !== '') {
+        throw new Error(
+          `this graph iterates data in ${dataNodes.join(', ')}, and ${reason}; a data node's `
+          + 'items are selected by a command outside the graph, so a composition without one '
+          + 'cannot run it',
+        )
+      }
+    }
+    configuredSpine = new Spine(config.graph, { maxIterations })
   }
-  const spine = new Spine(config.graph, { maxIterations })
+
+  // One in-session driven run at a time is the accepted v1: the `wf_*` tools are
+  // shared by the composition, so two sessions driving at once would each see the
+  // other's cursor. A run opened at run time is therefore claimed by its session,
+  // and every tool call resolves that claim before touching a spine.
+  let opened: OpenRun | undefined
+
+  /** The id of the session an execution belongs to, when it has an agent. */
+  function sessionIdOf(exec: ToolExec): string | undefined {
+    const session = exec.agent?.session
+    return session === undefined ? undefined : String(session.id)
+  }
+
+  /**
+   * The spine a tool call works on, and the work directory it belongs to.
+   *
+   * With a configured graph that is the composition's one spine. With
+   * `interactiveOpen` it is the run the calling session opened, and a call from
+   * any other session — or before any open — is refused rather than served
+   * against an unknown run.
+   */
+  function requireRun(exec: ToolExec): { spine: Spine; workdir: string | undefined } {
+    if (configuredSpine !== undefined) return { spine: configuredSpine, workdir: config.workdir }
+    if (opened === undefined) {
+      throw new Error(`no mode is open in this session; call ${toolPrefix}_open with a mode first`)
+    }
+    if (sessionIdOf(exec) !== opened.session) {
+      throw new Error('a run is already open in another session')
+    }
+    return { spine: opened.spine, workdir: opened.workdir }
+  }
 
   // Who answers a `user` gate. Resolved here, once, so routing one is a runtime act
   // rather than a claim the model makes: a composition without an answerer (a
@@ -184,18 +289,21 @@ export function apply(ctx: Context, config: Config): void {
   const userQuestions: UserQuestionService | undefined = ctx.get('userQuestions')
 
   /**
-   * The cursor's own status on disk, when a work directory is configured.
+   * The cursor's own status on disk, when a work directory is known.
    *
    * The runner cannot see the spine, so a run that stopped at a gate it could not
    * route used to look like a run that simply scored 0. The status file is what makes
    * "the graph finished" and "the graph refused" different facts to a reader.
+   * @param spine - the run's spine, whose cursor the status records.
+   * @param workdir - where to write: the configured run directory, or the opened
+   * run's own directory when a session opened the mode at run time.
    * @param status - `done`, `ready`, `failed`, or `refused`.
    * @param detail - the error, for a failure or refusal.
    */
-  function recordStatus(status: string, detail?: string): void {
-    if (config.workdir === undefined) return
+  function recordStatus(spine: Spine, workdir: string | undefined, status: string, detail?: string): void {
+    if (workdir === undefined) return
     try {
-      const dir = join(config.workdir, '.refactory')
+      const dir = join(workdir, '.refactory')
       mkdirSync(dir, { recursive: true })
       // The cursor travels with the status: a reader of a finished run wants the
       // score, and a reader of an abandoned one wants to know which nodes never ran.
@@ -229,8 +337,10 @@ export function apply(ctx: Context, config: Config): void {
    * same way it walks the rest of the graph, and closes the pass when its exit
    * completes — which is what makes one pass land per item on this runtime, the way
    * the walking executor gives it.
+   * @param spine - the run to advance.
+   * @param workdir - the run directory node commands run in.
    */
-  async function drain(): Promise<{ next: SpineNext; failure?: CommandFailure; item?: unknown }> {
+  async function drain(spine: Spine, workdir: string | undefined): Promise<{ next: SpineNext; failure?: CommandFailure; item?: unknown }> {
     if (!config.executeCommands) return { next: spine.next() }
     const shell = ctx.get('shell')
     if (shell === undefined) {
@@ -258,8 +368,8 @@ export function apply(ctx: Context, config: Config): void {
       env: config.commandEnv,
       timeoutMs: config.commandTimeoutMs,
       dataCommand: config.dataCommand,
-      sandboxPolicy: { mode: config.commandSandboxMode as 'danger-full-access', workspaceRoot: config.workdir ?? process.cwd() },
-      ...(config.workdir === undefined ? {} : { workdir: config.workdir }),
+      sandboxPolicy: { mode: config.commandSandboxMode as 'danger-full-access', workspaceRoot: workdir ?? process.cwd() },
+      ...(workdir === undefined ? {} : { workdir }),
     }
     /** `<node>:<index>` of the item already materialised on disk. */
     let begun: string | undefined
@@ -316,8 +426,8 @@ export function apply(ctx: Context, config: Config): void {
       if (started.failure !== undefined) return { next: state, failure: started.failure }
       const data = state.nodes.find(node => node._type === 'DataNode')
       if (data !== undefined) {
-        const opened = await openPass(data)
-        if (opened.failure !== undefined) return { next: state, failure: opened.failure }
+        const openedPass = await openPass(data)
+        if (openedPass.failure !== undefined) return { next: state, failure: openedPass.failure }
         continue
       }
       const automatic = state.nodes.filter(isDeterministic)
@@ -331,14 +441,18 @@ export function apply(ctx: Context, config: Config): void {
     }
   }
 
-  /** The `wf_next` payload: the due nodes, or the node that failed to run. */
-  async function report(): Promise<JsonValue> {
-    const { next, failure, item } = await drain()
+  /**
+   * The `wf_next` payload: the due nodes, or the node that failed to run.
+   * @param spine - the run to advance.
+   * @param workdir - the run directory its status is written to.
+   */
+  async function report(spine: Spine, workdir: string | undefined): Promise<JsonValue> {
+    const { next, failure, item } = await drain(spine, workdir)
     if (failure !== undefined) {
       // The node's own stderr is why it failed. The exit code alone sends a reader
       // back to re-run the node to find out, so the reason is recorded with it.
       const reason = failure.stderr.trim()
-      recordStatus('failed', reason === '' ? failure.error : `${failure.error}: ${reason.slice(-STATUS_DETAIL)}`)
+      recordStatus(spine, workdir, 'failed', reason === '' ? failure.error : `${failure.error}: ${reason.slice(-STATUS_DETAIL)}`)
       return json({
         status: 'failed',
         node: failure.command,
@@ -348,7 +462,7 @@ export function apply(ctx: Context, config: Config): void {
         stderr: failure.stderr,
       })
     }
-    recordStatus(next.status === 'done' ? 'done' : 'ready')
+    recordStatus(spine, workdir, next.status === 'done' ? 'done' : 'ready')
     // The item being iterated travels with the node views, so the subagent for a
     // pass is handed the item rather than being sent to find it on disk.
     return json(item === undefined ? next : { ...next, item })
@@ -362,19 +476,23 @@ export function apply(ctx: Context, config: Config): void {
    * verdict is indistinguishable from one a person gave. The gate's own outcome labels
    * are the options, so the answer is always one the graph accepts.
    * @param gate - the gate node id.
+   * @param spine - the run whose gate is being routed.
    * @param view - the gate's view, whose `verdicts` are the offered options.
    * @param exec - the tool execution, for the calling agent and its abort signal.
+   * @param workdir - the run directory a refusal is recorded in.
    * @returns the verdict the person chose.
    */
   async function askPerson(
     gate: string,
+    spine: Spine,
     view: NodeView,
-    exec: { agent?: Agent; signal?: AbortSignal },
+    exec: ToolExec,
+    workdir: string | undefined,
   ): Promise<string> {
     if (userQuestions === undefined) {
       const message = `gate ${gate} is answered by a person and this composition mounts no user-questions `
         + 'channel, so it cannot be routed here; run it where a person can be asked'
-      recordStatus('refused', message)
+      recordStatus(spine, workdir, 'refused', message)
       throw new Error(message)
     }
     const labels = spine.acceptedVerdicts(gate)
@@ -393,7 +511,7 @@ export function apply(ctx: Context, config: Config): void {
     } catch (error: unknown) {
       const detail = error instanceof Error ? error.message : String(error)
       const message = `gate ${gate} is answered by a person and could not be asked: ${detail}`
-      recordStatus('refused', message)
+      recordStatus(spine, workdir, 'refused', message)
       throw new Error(message)
     }
     const chosen = answer.answers.find(entry => entry.id === gate)
@@ -416,19 +534,121 @@ export function apply(ctx: Context, config: Config): void {
   const runDirectory = config.workdir === undefined
     ? 'the run directory the composition gave you'
     : `the run directory ${config.workdir}`
+  // Only the run-time-open composition can be asked to start a mode, so only it is
+  // told how. A composition with a configured graph has no `wf_open` to call.
+  const openInstruction = interactiveOpen
+    ? ` When the person asks you to run a mode and see each step, open it with ${toolPrefix}_open `
+      + '(pass the mode as <package>/<name>), then drive it with '
+      + `${toolPrefix}_next, reporting each node as it completes.`
+    : ''
   ctx.systemPrompt.section({
     name: `tool:${toolPrefix}-spine`,
     order: ctx.systemPrompt.getSectionOrder('TOOL_WORKFLOW'),
-    text: `You are the CEO of a workflow run, and you are DRIVING A WORKFLOW GRAPH. Your coding tools (bash, write, edit, web, skill) are disabled — you cannot implement, edit files, or browse yourself. Advance only through the wf tools. ${toolPrefix}_next is the ONLY way to learn what is due now: call it first, and call it again after every ${toolPrefix}_done / ${toolPrefix}_verdict / ${toolPrefix}_edit / ${toolPrefix}_expand — those tools only confirm the mutation, they do not tell you what is next. When ${toolPrefix}_steer is available, read it before each ${toolPrefix}_next: it is what the person said about the run since you last looked. A correction from the person is applied to that node's prompt with ${toolPrefix}_edit (\`set-prompt\`/\`append-prompt\`) and the node is re-run with ${toolPrefix}_redo. For an AgentNode or LLMNode, spawn a subagent (the subagent tool) whose task is the node's prompt_template, and explicitly tell the subagent to read the node's reads files and write its result to the node's writes file (the filename in the node's writes field, e.g. candidate.py) — wait for it, then report the node with ${toolPrefix}_done. Every path in a node's reads and writes is relative to ${runDirectory}, and the subagent's own working directory is NOT that directory: give the subagent the absolute path (${runDirectory}/<the path>) for each file it must read or write, and tell it to write nowhere else. For a FnNode, follow its content and report ${toolPrefix}_done. Route a gate with ${toolPrefix}_verdict, answering with one of the verdicts the gate view lists (proceed/reloop/halt, or the gate's own named outcomes). For a user gate the runtime asks the person itself and routes the answer they give: call ${toolPrefix}_verdict with the gate id and never answer for them. Fan out a director's plan with ${toolPrefix}_expand, and apply user steering ("skip the tests") with ${toolPrefix}_edit. When a person says a step is wrong, read the run's ledger if one is configured, then use ${toolPrefix}_edit with \`set-prompt\` or \`append-prompt\` to correct that node's prompt and ${toolPrefix}_redo to run the node again with the correction. A DataNode is iterated for you: the runtime selects its items and hands you the subgraph's nodes one pass at a time, with the item being processed in the payload's item field and on disk as the node's current item file. Do not try to iterate it yourself, and do not report the data node — or the pass's last node — before its work is done. Never skip, reorder, or bypass a node — the runner refuses to advance until you report the current node complete.`,
+    text: `You are the CEO of a workflow run, and you are DRIVING A WORKFLOW GRAPH. Your coding tools (bash, write, edit, web, skill) are disabled — you cannot implement, edit files, or browse yourself. Advance only through the wf tools.${openInstruction} ${toolPrefix}_next is the ONLY way to learn what is due now: call it first, and call it again after every ${toolPrefix}_done / ${toolPrefix}_verdict / ${toolPrefix}_edit / ${toolPrefix}_expand — those tools only confirm the mutation, they do not tell you what is next. When ${toolPrefix}_steer is available, read it before each ${toolPrefix}_next: it is what the person said about the run since you last looked. A correction from the person is applied to that node's prompt with ${toolPrefix}_edit (\`set-prompt\`/\`append-prompt\`) and the node is re-run with ${toolPrefix}_redo. For an AgentNode or LLMNode, spawn a subagent (the subagent tool) whose task is the node's prompt_template, and explicitly tell the subagent to read the node's reads files and write its result to the node's writes file (the filename in the node's writes field, e.g. candidate.py) — wait for it, then report the node with ${toolPrefix}_done. Every path in a node's reads and writes is relative to ${runDirectory}, and the subagent's own working directory is NOT that directory: give the subagent the absolute path (${runDirectory}/<the path>) for each file it must read or write, and tell it to write nowhere else. For a FnNode, follow its content and report ${toolPrefix}_done. Route a gate with ${toolPrefix}_verdict, answering with one of the verdicts the gate view lists (proceed/reloop/halt, or the gate's own named outcomes). For a user gate the runtime asks the person itself and routes the answer they give: call ${toolPrefix}_verdict with the gate id and never answer for them. Fan out a director's plan with ${toolPrefix}_expand, and apply user steering ("skip the tests") with ${toolPrefix}_edit. When a person says a step is wrong, read the run's ledger if one is configured, then use ${toolPrefix}_edit with \`set-prompt\` or \`append-prompt\` to correct that node's prompt and ${toolPrefix}_redo to run the node again with the correction. A DataNode is iterated for you: the runtime selects its items and hands you the subgraph's nodes one pass at a time, with the item being processed in the payload's item field and on disk as the node's current item file. Do not try to iterate it yourself, and do not report the data node — or the pass's last node — before its work is done. Never skip, reorder, or bypass a node — the runner refuses to advance until you report the current node complete.`,
   })
+
+  // Open a mode's graph after boot, for a caller that will drive it node by node.
+  // Registered only when `interactiveOpen` is set: a composition with a configured
+  // graph has nothing to open, and a tool that cannot run must not be advertised.
+  if (interactiveOpen) {
+    ctx.tools.register(defineTool({
+      name: `${toolPrefix}_open`,
+      description: `Open a mode's graph and claim it for this session, so it can be driven node by node. Pass the mode as \`<package>/<name>\`; the open command lowers it and this reads the graph it wrote. Returns the first view from \`${toolPrefix}_next\`, so a start node is due immediately. One driven run at a time is open in a session: a second open is refused until that run finishes. All the other \`${toolPrefix}_*\` tools work on the opened run, and refuse when this session has not opened one.`,
+      parameters: {
+        mode: { type: 'string', required: true, description: 'The mode to run, as `<package>/<name>`.' },
+        knobs: { type: 'array', items: { type: 'string' }, description: 'Knob overrides for this run, each as `NAME=VALUE` (repeatable).' },
+        workdir: { type: 'string', description: 'The run directory to lower into. When absent the open command decides where the run lands, and its payload names it; the console\'s `open` verb requires one, so it refuses when neither is given.' },
+      },
+      output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
+      execute(args, exec) {
+        const session = exec.agent?.session
+        if (session === undefined) {
+          throw new Error(`${toolPrefix}_open requires an owning agent session`)
+        }
+        // One in-session driven run at a time is the accepted v1; the claim is the
+        // session's, so a second open is refused rather than silently replacing it.
+        const owner = String(session.id)
+        if (opened !== undefined) {
+          throw new Error(opened.session === owner
+            ? 'a run is already open in this session'
+            : 'a run is already open in another session')
+        }
+        if (config.openCommand === '') {
+          throw new Error(
+            `${toolPrefix}_open needs an open command; set \`openCommand\` (for example `
+            + '`python -m refactory_dsh.console open`)',
+          )
+        }
+        const argv = [...config.openArgs, args.mode]
+        if (args.workdir !== undefined && args.workdir !== '') argv.push('--workdir', args.workdir)
+        for (const knob of args.knobs ?? []) argv.push('--knob', knob)
+        const result = spawnSync(config.openCommand, argv, { encoding: 'utf8' })
+        if (result.error !== undefined) {
+          throw new Error(`${toolPrefix}_open could not run the open command: ${result.error.message}`)
+        }
+        if (result.status !== 0) {
+          const reason = lastLine(result.stderr) || lastLine(result.stdout)
+          throw new Error(
+            `${toolPrefix}_open could not lower ${args.mode}: `
+            + (reason === '' ? `the open command exited with ${String(result.status)}` : reason),
+          )
+        }
+        let payload: OpenPayload
+        try {
+          payload = JSON.parse(result.stdout) as OpenPayload
+        } catch {
+          const said = lastLine(result.stdout)
+          throw new Error(
+            `${toolPrefix}_open: the open command printed no JSON payload (${said === '' ? 'no output' : said})`,
+          )
+        }
+        // The command's payload is the authority on where the run landed; the
+        // tool's own workdir is only the request. A command that answers with
+        // neither leaves the run with nowhere to write its status, so it is
+        // refused rather than opened half-addressed.
+        const workdir = typeof payload.run === 'string' && payload.run !== ''
+          ? payload.run
+          : (args.workdir ?? '')
+        if (workdir === '') {
+          throw new Error(`${toolPrefix}_open: the open command did not report a run directory`)
+        }
+        if (typeof payload.graph !== 'string' || payload.graph === '') {
+          throw new Error(`${toolPrefix}_open: the open command did not report where the graph was lowered`)
+        }
+        let graph: WorkflowGraph
+        try {
+          graph = JSON.parse(readFileSync(payload.graph, 'utf8')) as WorkflowGraph
+        } catch (error: unknown) {
+          const detail = error instanceof Error ? error.message : String(error)
+          throw new Error(`${toolPrefix}_open could not read the lowered graph at ${payload.graph}: ${detail}`)
+        }
+        const issues = validateGraph(graph)
+        if (issues.length > 0) {
+          const rendered = issues
+            .map(issue => (issue.node === undefined ? issue.message : `${issue.node}: ${issue.message}`))
+            .join('; ')
+          throw new Error(`invalid workflow graph: ${rendered}`)
+        }
+        const spine = new Spine(graph, { maxIterations })
+        opened = {
+          session: owner,
+          spine,
+          workdir,
+          name: typeof payload.name === 'string' && payload.name !== '' ? payload.name : graph.name,
+        }
+        return sync(json(spine.next()))
+      },
+    }))
+  }
 
   ctx.tools.register(defineTool({
     name: `${toolPrefix}_next`,
     description: 'Get the next node(s) the workflow graph says are due now. Deterministic nodes (a command an `fn` gate or an `FnNode` runs) and a data node\'s item passes are executed for you and do not appear. Returns `{ status, nodes }`: for `ready`, the node views you must act on (agent task / one-shot LLM / user gate / fork) with the fields you need, plus `item` while a data node is iterating; for `done`, the run is complete; for `failed`, a deterministic node failed and the cursor has not moved. Always call this first and act only on what it returns — never skip or reorder.',
     parameters: {},
     output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
-    execute() {
-      return report()
+    execute(_args, exec) {
+      const { spine, workdir } = requireRun(exec)
+      return report(spine, workdir)
     },
   }))
 
@@ -439,7 +659,8 @@ export function apply(ctx: Context, config: Config): void {
       node: { type: 'string', required: true, description: 'The node id to mark complete.' },
     },
     output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
-    execute(args) {
+    execute(args, exec) {
+      const { spine } = requireRun(exec)
       spine.complete(args.node)
       return sync(json({ status: 'complete', node: args.node }))
     },
@@ -455,9 +676,10 @@ export function apply(ctx: Context, config: Config): void {
     },
     output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
     async execute(args, exec) {
+      const { spine, workdir } = requireRun(exec)
       const view = spine.view(args.gate)
       if (view.evaluator_type === 'user') {
-        const verdict = await askPerson(args.gate, view, exec)
+        const verdict = await askPerson(args.gate, spine, view, exec, workdir)
         spine.verdict(args.gate, verdict, args.feedback ?? '')
         return json({ status: 'routed', gate: args.gate, verdict, answered_by: 'user' })
       }
@@ -475,7 +697,8 @@ export function apply(ctx: Context, config: Config): void {
       text: { type: 'string', description: 'The new prompt text; required for `set-prompt` and `append-prompt`.' },
     },
     output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
-    execute(args) {
+    execute(args, exec) {
+      const { spine } = requireRun(exec)
       if (args.action === 'skip') spine.skip(args.node)
       else if (args.action === 'unskip') spine.unskip(args.node)
       else {
@@ -495,7 +718,8 @@ export function apply(ctx: Context, config: Config): void {
       node: { type: 'string', required: true, description: 'The completed node id to reopen.' },
     },
     output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
-    execute(args) {
+    execute(args, exec) {
+      const { spine } = requireRun(exec)
       spine.redo(args.node)
       return sync(json({ status: 'redone', node: args.node }))
     },
@@ -509,7 +733,8 @@ export function apply(ctx: Context, config: Config): void {
       entries: { type: 'array', required: true, items: { type: 'object', additionalProperties: true }, description: 'The plan entries (each with slug + prompt fields).' },
     },
     output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
-    execute(args) {
+    execute(args, exec) {
+      const { spine } = requireRun(exec)
       const entries = args.entries as Array<Record<string, unknown>>
       const result = spine.expand(args.director, entries)
       return sync(json({ status: 'expanded', director: result.expanded, children: result.children }))
@@ -521,7 +746,8 @@ export function apply(ctx: Context, config: Config): void {
     description: 'Return the full live state: cursor, completed, skipped, gate verdicts, iteration counts, feedback, amended prompts, and the run log.',
     parameters: {},
     output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
-    execute() {
+    execute(_args, exec) {
+      const { spine } = requireRun(exec)
       return sync(json(spine.state()))
     },
   }))
@@ -529,19 +755,26 @@ export function apply(ctx: Context, config: Config): void {
   // The live steering channel: a person's mid-run correction reaching the driver,
   // not only the next agent node. The ledger's owner is the configured command, so
   // the spine learns only a command to run and returns the JSON it prints
-  // unchanged — it never parses the ledger itself. Registered only when both a
-  // command and a work directory are configured: without them there is nothing to
-  // read, and a tool that cannot run must not be advertised as if it could.
-  if (config.steerCommand !== '' && config.workdir !== undefined) {
+  // unchanged — it never parses the ledger itself. Registered when a command is
+  // configured and there will be a run directory to read: the configured one, or
+  // the one a session opens at run time. Without either there is nothing to read,
+  // and a tool that cannot run must not be advertised as if it could.
+  if (config.steerCommand !== '' && (config.workdir !== undefined || interactiveOpen)) {
     const command = config.steerCommand
-    const args = [...config.steerArgs, config.workdir]
+    const steerArgs = [...config.steerArgs]
     ctx.tools.register(defineTool({
       name: `${toolPrefix}_steer`,
       description: `Read what the person said about this run since you last looked, before deciding anything. Runs the run's steering command and returns its ledger payload unchanged: the origin, every entry (a note, a correction, a constraint), recorded gate verdicts, and the fidelity problems found. Read it before each \`${toolPrefix}_next\`; when it carries a correction, apply it to that node's prompt with \`${toolPrefix}_edit\` (\`set-prompt\`/\`append-prompt\`) and re-run the node with \`${toolPrefix}_redo\`. An unreadable or unavailable ledger is reported as \`status: 'unavailable'\`, never thrown, so it cannot stop the run.`,
       parameters: {},
       output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
-      execute() {
-        const result = spawnSync(command, args, { encoding: 'utf8' })
+      execute(_args, exec) {
+        // The ledger lives in the run directory, which for an opened run is the
+        // one its `wf_open` payload named — not the composition's configured one.
+        const run = requireRun(exec)
+        if (run.workdir === undefined) {
+          return sync(json({ status: 'unavailable', error: 'this run has no work directory to read' }))
+        }
+        const result = spawnSync(command, [...steerArgs, run.workdir], { encoding: 'utf8' })
         if (result.status === 0) {
           try {
             return sync(json(JSON.parse(result.stdout)))

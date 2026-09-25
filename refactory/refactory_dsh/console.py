@@ -216,6 +216,66 @@ def _run_id(mode: str) -> str:
     return f"{mode.replace('/', '-')}-{stamp}"
 
 
+# ── lowering a mode for a driver that walks it node by node ────────────────
+
+
+def _open_mode(
+    mode: str,
+    *,
+    project: Path | None = None,
+    workdir: Path | str | None = None,
+    knobs: list[str] | None = None,
+) -> dict[str, Any]:
+    """Lower a mode for a caller that will drive its graph one node at a time.
+
+    The web chat session drives a mode through the spine's `wf_*` tools instead
+    of the `graph` profile, which lowers its graph once at mount. This verb does
+    the lowering -- through :func:`refactory_dsh.interactive.prepare`, the same
+    owner the interactive entry point uses -- and prints where the graph landed,
+    so the spine can open it after boot.
+
+    The payload's field names are the ones the lowering already uses:
+
+    ``mode``
+        the mode asked for, as ``<package>/<name>``.
+    ``run``
+        the run directory the mode was lowered into, absolute.
+    ``name``
+        the graph name the lowering chose (``<package>-<mode>``).
+    ``graph``
+        absolute path of the lowered graph JSON the spine loads.
+    ``declarations``
+        absolute path of the run's node declarations.
+
+    ``workdir`` is required: a driven run needs one directory to own, and
+    without it there is nowhere to lower the graph or write the run's status.
+    A mode that cannot be resolved is refused by name.
+    """
+    project = Path(project or project_root())
+    if not workdir:
+        raise ConsoleError("open needs a --workdir: the directory this run is lowered into")
+    # The interactive entry point owns the lowering (ledger seeding, intent fold,
+    # declarations), so this verb delegates to it rather than reimplementing any
+    # part of it. Imported here to keep the console's module load light.
+    from refactory_dsh import interactive
+    from refactory_dsh.lowering import DECLARATIONS, SUFFIX
+
+    root = Path(workdir).expanduser().resolve()
+    try:
+        name, graphs = interactive.prepare(mode, workdir=root, project=project, knobs=knobs)
+    except ValueError as error:
+        # A malformed identifier is the caller's to fix, so it is a refusal with
+        # the reason rather than a traceback.
+        raise ConsoleError(str(error)) from error
+    return {
+        "mode": mode,
+        "run": str(root),
+        "name": name,
+        "graph": str((graphs / f"{name}{SUFFIX}").resolve()),
+        "declarations": str((root / DECLARATIONS).resolve()),
+    }
+
+
 # ── watching one ───────────────────────────────────────────────────────────
 
 
@@ -728,6 +788,22 @@ def _parser() -> argparse.ArgumentParser:
     single.add_argument("--provider", default="", help="provider route for this run's model")
     single.add_argument("--model", default="", help="model id for this run")
 
+    # `open` lowers a mode for a caller that will drive its graph node by node
+    # (a web chat session's spine), rather than running it to completion. It is
+    # deliberately not `run`: nothing is executed here, and the caller owns the
+    # driving.
+    opened = add(sub.add_parser("open", help="lower a mode for a caller that drives it node by node"))
+    opened.add_argument("mode", help="the mode to lower, as <package>/<name>")
+    opened.add_argument(
+        "--workdir", default="",
+        help="the run directory this caller drives (required); the graph, the "
+             "declarations and the run's status are written here",
+    )
+    opened.add_argument(
+        "--knob", action="append", default=[], metavar="NAME=VALUE",
+        help="set one of the mode's knobs for this run (repeatable)",
+    )
+
     begin.add_argument(
         "--knob", action="append", default=[], metavar="NAME=VALUE",
         help="a knob value the search starts from (repeatable); a mode whose inputs "
@@ -1039,6 +1115,13 @@ def main(argv: list[str] | None = None) -> int:
                     **status(root),
                     "facts": _read_json(root / "facts.json"),
                 }
+        elif args.verb == "open":
+            payload = _open_mode(
+                args.mode,
+                project=project,
+                workdir=args.workdir,
+                knobs=args.knob,
+            )
         elif args.verb == "create":
             forwarded = ["--name", args.name, "--brief", args.brief, "--attempts", str(args.attempts)]
             if args.workdir:

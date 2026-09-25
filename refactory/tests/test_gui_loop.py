@@ -666,3 +666,38 @@ def test_the_console_forwards_a_seeded_knob_as_the_loop_flag(monkeypatch):
     assert argv.count("--knob") == 2, argv
     assert "source_root=/tmp/demo_pkg" in argv
     assert payload["run_id"]
+
+
+# ── opening a mode for a driver that walks it node by node ────────────────
+#
+# A web chat session drives a mode through the spine's `wf_*` tools rather than
+# through the `graph` profile, which lowers its graph once at mount. `open` is
+# that lowering: it leaves the graph and declarations where the spine can read
+# them and returns where they are.
+
+
+def test_the_open_verb_lowers_a_mode_for_a_driver(tmp_path):
+    workdir = tmp_path / "driven"
+    payload = _cli(
+        "open", MODE,
+        "--project", str(Path(".").resolve()),
+        "--workdir", str(workdir),
+    )
+    graph_path = Path(payload["graph"])
+    assert payload["run"] == str(workdir.resolve())
+    assert payload["name"]
+    assert graph_path.exists(), payload
+    lowered = json.loads(graph_path.read_text())
+    assert lowered["start_node"] in lowered["nodes"], lowered["start_node"]
+    assert Path(payload["declarations"]).exists()
+
+
+def test_open_refuses_a_missing_workdir_without_a_traceback():
+    result = subprocess.run(
+        [sys.executable, "-m", "refactory_dsh.console", "open", MODE],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    assert "--workdir" in json.loads(result.stdout)["error"]
+    assert "Traceback" not in result.stderr
