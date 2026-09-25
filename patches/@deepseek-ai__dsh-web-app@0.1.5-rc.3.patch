@@ -58,10 +58,10 @@ index cf4603031f6f452891a4d7da420869b6472fb333..17c15da61980dfeabad2acb584f92f55
 -        default: standard
 +        default: ceo
 diff --git a/package.json b/package.json
-index edf0061c6c67cc6f3c04fc5e69594f4f3062d995..c678fd18fb72457c4d29c8f90226aa42faa8ba4a 100644
+index edf0061c6c67cc6f3c04fc5e69594f4f3062d995..c901ab9380959ca4f12ba5d30c2f93907cd47bc2 100644
 --- a/package.json
 +++ b/package.json
-@@ -124,7 +124,10 @@
+@@ -124,7 +124,11 @@
      "@deepseek-ai/cordis": "4.0.2",
      "@deepseek-ai/dsh-system-prompt": "^0.1.5-rc.3",
      "@deepseek-ai/dsh-shell-env": "^0.1.5-rc.3",
@@ -69,7 +69,8 @@ index edf0061c6c67cc6f3c04fc5e69594f4f3062d995..c678fd18fb72457c4d29c8f90226aa42
 +    "@deepseek-ai/cordis-plugin-loader": "1.0.3",
 +    "@deepseek-ai/dsh-refactory-console": "0.1.5-rc.3",
 +    "@deepseek-ai/dsh-client-ui-refactory": "0.1.5-rc.3",
-+    "@deepseek-ai/dsh-client-ui-brand-refactory": "0.1.5-rc.3"
++    "@deepseek-ai/dsh-client-ui-brand-refactory": "0.1.5-rc.3",
++    "@deepseek-ai/dsh-workflow-spine": "0.1.5-rc.3"
    },
    "devDependencies": {
      "@deepseek-ai/cordis": "4.0.2",
