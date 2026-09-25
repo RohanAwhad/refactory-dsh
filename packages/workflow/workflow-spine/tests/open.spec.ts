@@ -49,29 +49,38 @@ const AGENT_GRAPH: WorkflowGraph = {
   edges: [],
 }
 
+/** One deterministic node, so `wf_next` runs it through the shell. */
+const FN_GRAPH: WorkflowGraph = {
+  name: 't',
+  start_node: 'a',
+  nodes: { a: { _type: 'FnNode', id: 'a', command: 'true', reads: [], writes: [] } },
+  edges: [],
+}
+
 /** A lowered graph on disk, as `interactive.prepare` would leave it. */
-function lower(run: string): string {
+function lower(run: string, graph: WorkflowGraph = AGENT_GRAPH): string {
   const path = join(run, 'graphs', 't.graph.json')
   mkdirSync(join(run, 'graphs'), { recursive: true })
-  writeFileSync(path, JSON.stringify(AGENT_GRAPH))
+  writeFileSync(path, JSON.stringify(graph))
   return path
 }
 
 /** The open command's payload, as the console's `open` verb returns it. */
-function payload(run: string, graph: string): string {
+function payload(run: string, graph: string, extra: Record<string, unknown> = {}): string {
   return JSON.stringify({
     mode: 'pkg/t',
     run,
     name: 't',
     graph,
     declarations: join(run, '.refactory', 'declarations.json'),
+    ...extra,
   })
 }
 
 /** An executable that prints the payload `open` prints, for a run already lowered. */
-function openStub(run: string, graph: string, log?: string): string {
+function openStub(run: string, graph: string, log?: string, extra: Record<string, unknown> = {}): string {
   const line = log === undefined ? '' : `printf '%s\\n' "$@" > '${log}'\n`
-  return executable(`${line}printf '%s' '${payload(run, graph)}'`)
+  return executable(`${line}printf '%s' '${payload(run, graph, extra)}'`)
 }
 
 function config(overrides: Partial<Config> = {}): Config {
@@ -94,12 +103,34 @@ function config(overrides: Partial<Config> = {}): Config {
 }
 
 /** A context with the two services the plugin injects, and the plugin mounted. */
-async function mount(overrides: Partial<Config> = {}): Promise<Context> {
+async function mount(overrides: Partial<Config> = {}, shell?: object): Promise<Context> {
   const root = new Context()
   await root.plugin(SystemPrompt)
   await root.plugin(ToolRuntime)
+  if (shell !== undefined) root.provide('shell', shell)
   await root.plugin(spinePlugin, config(overrides))
   return root
+}
+
+/** A shell that records each command's environment and succeeds. */
+function captureShell(seen: Array<Record<string, string> | undefined>): object {
+  return {
+    resolve: (request: { command: string; workdir?: string; env?: Record<string, string> }) => ({
+      command: request.command,
+      workdir: request.workdir ?? process.cwd(),
+      timeoutMs: 10_000,
+      stdoutMaxBytes: 1_000_000,
+      env: request.env,
+    }),
+    run: async (spec: { env?: Record<string, string> }) => {
+      seen.push(spec.env)
+      return {
+        exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 10_000,
+        stdout: { text: '', truncated: false },
+        stderr: { text: '', truncated: false },
+      }
+    },
+  }
 }
 
 /** The execution facts a tool call is made with: the session that owns it. */
@@ -190,6 +221,77 @@ describe('opening a graph at run time', () => {
     const ctx = await mount({ openCommand: executable("echo 'no such mode' >&2\nexit 2") })
     await expect(call(ctx, 'wf_open', { mode: 'pkg/ghost' }, as('session-1')))
       .rejects.toThrow(/could not lower pkg\/ghost: no such mode/)
+  })
+
+  it('derives and creates a per-session run directory when the caller names none', async () => {
+    const run = scratch()
+    const graph = lower(run)
+    const log = join(scratch(), 'argv.txt')
+    const ctx = await mount({ openCommand: openStub(run, graph, log) })
+    // A unique session id, so the derived directory cannot collide with a real one.
+    const session = `derived-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const derived = join(process.cwd(), '.factory', 'web', session, 'pkg-t')
+    try {
+      await call(ctx, 'wf_open', { mode: 'pkg/t' }, as(session))
+      const argv = readFileSync(log, 'utf8').trim().split('\n')
+      expect(argv).toEqual(['pkg/t', '--workdir', derived])
+      expect(existsSync(derived)).toBe(true)
+    } finally {
+      rmSync(join(process.cwd(), '.factory', 'web', session), { recursive: true, force: true })
+    }
+  })
+
+  it('runs a node command in the opened run\'s own environment', async () => {
+    const run = scratch()
+    const graph = lower(run, FN_GRAPH)
+    const seen: Array<Record<string, string> | undefined> = []
+    const ctx = await mount(
+      {
+        // The composition's static environment is a decoy: the payload's must win.
+        openCommand: openStub(run, graph, undefined, {
+          commandEnv: {
+            REFACTORY_WORKDIR: run,
+            REFACTORY_PROJECT: '/project',
+            REFACTORY_KNOBS: '{"step":1}',
+            PATH: '/venv/bin',
+          },
+          dataCommand: 'python -m refactory_dsh.items',
+        }),
+        executeCommands: true,
+        commandEnv: { REFACTORY_WORKDIR: '/wrong', REFACTORY_PROJECT: '/wrong' },
+      },
+      captureShell(seen),
+    )
+
+    await call(ctx, 'wf_open', { mode: 'pkg/t' }, as('session-1'))
+    expect(await call(ctx, 'wf_next', {}, as('session-1'))).toMatchObject({ status: 'done' })
+
+    const environment = seen.find(env => env?.DSH_WORKFLOW_NODE !== undefined)
+    expect(environment?.REFACTORY_WORKDIR).toBe(run)
+    expect(environment?.REFACTORY_PROJECT).toBe('/project')
+    expect(environment?.REFACTORY_KNOBS).toBe('{"step":1}')
+    expect(environment?.PATH).toBe('/venv/bin')
+  })
+
+  it('falls back to the configured environment when the payload omits one', async () => {
+    const run = scratch()
+    const graph = lower(run, FN_GRAPH)
+    const seen: Array<Record<string, string> | undefined> = []
+    const ctx = await mount(
+      {
+        openCommand: openStub(run, graph),
+        executeCommands: true,
+        commandEnv: { REFACTORY_WORKDIR: '/configured' },
+        dataCommand: 'loader',
+      },
+      captureShell(seen),
+    )
+
+    await call(ctx, 'wf_open', { mode: 'pkg/t' }, as('session-1'))
+    await call(ctx, 'wf_next', {}, as('session-1'))
+
+    const environment = seen.find(env => env?.DSH_WORKFLOW_NODE !== undefined)
+    expect(environment?.REFACTORY_WORKDIR).toBe('/configured')
   })
 })
 

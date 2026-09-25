@@ -84,13 +84,23 @@ export interface Config {
   executeCommands: boolean
   /** Working directory for node commands; absent uses the shell executor's own. */
   workdir?: string
-  /** Extra environment entries for node commands. */
+  /**
+   * Fallback environment entries for node commands.
+   *
+   * The values are per **run** — the work directory and the mode's knobs — so a
+   * run opened at run time carries its own in the `<toolPrefix>_open` payload and
+   * this is only what it falls back to when the payload omits one. A configured
+   * graph has no payload, so this is the whole environment there and that path is
+   * unchanged.
+   */
   commandEnv: Record<string, string>
   /**
    * The command that selects a data node's items and opens and closes one pass,
    * run as `<dataCommand> <list|begin|end> --node <id> [--index <n>]`. Required
    * when the graph has a `DataNode` and `executeCommands` is on: the items live
-   * outside the graph, so a composition with no loader cannot iterate one.
+   * outside the graph, so a composition with no loader cannot iterate one. A run
+   * opened at run time may name its own in the `<toolPrefix>_open` payload; this
+   * is the fallback when it does not.
    */
   dataCommand: string
   /**
@@ -175,6 +185,25 @@ function lastLine(text: string | null | undefined): string {
   return lines[lines.length - 1] ?? ''
 }
 
+/**
+ * The run directory a session gets when the person names none.
+ *
+ * A chat has no terminal to name a directory, and the console's `open` verb
+ * refuses without one, so the spine derives a directory from the two facts it
+ * has at the call: the calling session and the mode. It is
+ * `<process.cwd()>/.factory/web/<session id>/<package>-<mode>`, where the mode's
+ * `/` becomes `-` so the leaf reads `<package>-<mode>`, and it is created here
+ * because the open command will lower into it.
+ * @param session - the id of the session opening the run.
+ * @param mode - the mode, as `<package>/<name>`.
+ * @returns the absolute run directory, created.
+ */
+function derivedWorkdir(session: string, mode: string): string {
+  const dir = join(process.cwd(), '.factory', 'web', session, mode.split('/').join('-'))
+  mkdirSync(dir, { recursive: true })
+  return dir
+}
+
 /** The per-call execution facts a spine tool resolves its session from. */
 interface ToolExec {
   agent?: Agent
@@ -191,6 +220,10 @@ interface OpenRun {
   workdir: string
   /** The opened graph's name, for status and reporting. */
   name: string
+  /** The run's own environment for node commands, from the open payload. */
+  commandEnv: Record<string, string>
+  /** The run's own item loader command, from the open payload. */
+  dataCommand: string
 }
 
 /** The JSON `<openCommand>` prints: where it lowered the mode. */
@@ -203,6 +236,27 @@ interface OpenPayload {
   graph?: unknown
   /** Absolute path of the run's node declarations. */
   declarations?: unknown
+  /**
+   * The run's own environment for node commands: the work directory, the project,
+   * the knobs and the interpreter-leading `PATH`. Per run, so it travels with the
+   * payload rather than being a mount-time constant.
+   */
+  commandEnv?: unknown
+  /** The run's own data-node item loader command. */
+  dataCommand?: unknown
+}
+
+/** The environment a payload names, or `undefined` when it is absent or malformed. */
+function payloadEnv(value: unknown): Record<string, string> | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const out: Record<string, string> = {}
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    // A non-string value is not an environment a process can be given, so the
+    // whole payload is treated as absent and the config fallback is used.
+    if (typeof entry !== 'string') return undefined
+    out[key] = entry
+  }
+  return out
 }
 
 export function apply(ctx: Context, config: Config): void {
@@ -264,22 +318,40 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   /**
-   * The spine a tool call works on, and the work directory it belongs to.
+   * The spine a tool call works on, and the per-run settings it belongs to.
    *
-   * With a configured graph that is the composition's one spine. With
-   * `interactiveOpen` it is the run the calling session opened, and a call from
-   * any other session — or before any open — is refused rather than served
-   * against an unknown run.
+   * With a configured graph that is the composition's one spine and its static
+   * configuration. With `interactiveOpen` it is the run the calling session
+   * opened — its own work directory, environment and item loader, read from the
+   * open payload — and a call from any other session, or before any open, is
+   * refused rather than served against an unknown run.
    */
-  function requireRun(exec: ToolExec): { spine: Spine; workdir: string | undefined } {
-    if (configuredSpine !== undefined) return { spine: configuredSpine, workdir: config.workdir }
+  function requireRun(exec: ToolExec): {
+    spine: Spine
+    workdir: string | undefined
+    commandEnv: Record<string, string>
+    dataCommand: string
+  } {
+    if (configuredSpine !== undefined) {
+      return {
+        spine: configuredSpine,
+        workdir: config.workdir,
+        commandEnv: config.commandEnv,
+        dataCommand: config.dataCommand,
+      }
+    }
     if (opened === undefined) {
       throw new Error(`no mode is open in this session; call ${toolPrefix}_open with a mode first`)
     }
     if (sessionIdOf(exec) !== opened.session) {
       throw new Error('a run is already open in another session')
     }
-    return { spine: opened.spine, workdir: opened.workdir }
+    return {
+      spine: opened.spine,
+      workdir: opened.workdir,
+      commandEnv: opened.commandEnv,
+      dataCommand: opened.dataCommand,
+    }
   }
 
   // Who answers a `user` gate. Resolved here, once, so routing one is a runtime act
@@ -339,8 +411,15 @@ export function apply(ctx: Context, config: Config): void {
    * the walking executor gives it.
    * @param spine - the run to advance.
    * @param workdir - the run directory node commands run in.
+   * @param commandEnv - the run's own environment for node commands.
+   * @param dataCommand - the run's own item loader command.
    */
-  async function drain(spine: Spine, workdir: string | undefined): Promise<{ next: SpineNext; failure?: CommandFailure; item?: unknown }> {
+  async function drain(
+    spine: Spine,
+    workdir: string | undefined,
+    commandEnv: Record<string, string>,
+    dataCommand: string,
+  ): Promise<{ next: SpineNext; failure?: CommandFailure; item?: unknown }> {
     if (!config.executeCommands) return { next: spine.next() }
     const shell = ctx.get('shell')
     if (shell === undefined) {
@@ -365,9 +444,9 @@ export function apply(ctx: Context, config: Config): void {
       }
     }
     const runner = {
-      env: config.commandEnv,
+      env: commandEnv,
       timeoutMs: config.commandTimeoutMs,
-      dataCommand: config.dataCommand,
+      dataCommand,
       sandboxPolicy: { mode: config.commandSandboxMode as 'danger-full-access', workspaceRoot: workdir ?? process.cwd() },
       ...(workdir === undefined ? {} : { workdir }),
     }
@@ -445,9 +524,16 @@ export function apply(ctx: Context, config: Config): void {
    * The `wf_next` payload: the due nodes, or the node that failed to run.
    * @param spine - the run to advance.
    * @param workdir - the run directory its status is written to.
+   * @param commandEnv - the run's own environment for node commands.
+   * @param dataCommand - the run's own item loader command.
    */
-  async function report(spine: Spine, workdir: string | undefined): Promise<JsonValue> {
-    const { next, failure, item } = await drain(spine, workdir)
+  async function report(
+    spine: Spine,
+    workdir: string | undefined,
+    commandEnv: Record<string, string>,
+    dataCommand: string,
+  ): Promise<JsonValue> {
+    const { next, failure, item } = await drain(spine, workdir, commandEnv, dataCommand)
     if (failure !== undefined) {
       // The node's own stderr is why it failed. The exit code alone sends a reader
       // back to re-run the node to find out, so the reason is recorded with it.
@@ -557,7 +643,7 @@ export function apply(ctx: Context, config: Config): void {
       parameters: {
         mode: { type: 'string', required: true, description: 'The mode to run, as `<package>/<name>`.' },
         knobs: { type: 'array', items: { type: 'string' }, description: 'Knob overrides for this run, each as `NAME=VALUE` (repeatable).' },
-        workdir: { type: 'string', description: 'The run directory to lower into. When absent the open command decides where the run lands, and its payload names it; the console\'s `open` verb requires one, so it refuses when neither is given.' },
+        workdir: { type: 'string', description: 'The run directory to lower into. When absent the spine derives one from this session and the mode — `<cwd>/.factory/web/<session>/<package>-<mode>` — creates it, and passes it as `--workdir`; the console\'s `open` verb requires a workdir, so one is always sent.' },
       },
       output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
       execute(args, exec) {
@@ -580,7 +666,13 @@ export function apply(ctx: Context, config: Config): void {
           )
         }
         const argv = [...config.openArgs, args.mode]
-        if (args.workdir !== undefined && args.workdir !== '') argv.push('--workdir', args.workdir)
+        // The console refuses without a workdir, so an absent one is derived from
+        // the session and the mode rather than dropped. The payload's `run` is
+        // still the authority on where the run actually landed.
+        const requested = args.workdir !== undefined && args.workdir !== ''
+          ? args.workdir
+          : derivedWorkdir(owner, args.mode)
+        argv.push('--workdir', requested)
         for (const knob of args.knobs ?? []) argv.push('--knob', knob)
         const result = spawnSync(config.openCommand, argv, { encoding: 'utf8' })
         if (result.error !== undefined) {
@@ -608,7 +700,7 @@ export function apply(ctx: Context, config: Config): void {
         // refused rather than opened half-addressed.
         const workdir = typeof payload.run === 'string' && payload.run !== ''
           ? payload.run
-          : (args.workdir ?? '')
+          : requested
         if (workdir === '') {
           throw new Error(`${toolPrefix}_open: the open command did not report a run directory`)
         }
@@ -635,6 +727,12 @@ export function apply(ctx: Context, config: Config): void {
           spine,
           workdir,
           name: typeof payload.name === 'string' && payload.name !== '' ? payload.name : graph.name,
+          // The run's own values when the payload carries them; the composition's
+          // static ones otherwise, which is what the graph profile relies on.
+          commandEnv: payloadEnv(payload.commandEnv) ?? config.commandEnv,
+          dataCommand: typeof payload.dataCommand === 'string' && payload.dataCommand !== ''
+            ? payload.dataCommand
+            : config.dataCommand,
         }
         return sync(json(spine.next()))
       },
@@ -647,8 +745,8 @@ export function apply(ctx: Context, config: Config): void {
     parameters: {},
     output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
     execute(_args, exec) {
-      const { spine, workdir } = requireRun(exec)
-      return report(spine, workdir)
+      const { spine, workdir, commandEnv, dataCommand } = requireRun(exec)
+      return report(spine, workdir, commandEnv, dataCommand)
     },
   }))
 
