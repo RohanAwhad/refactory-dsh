@@ -34,6 +34,7 @@ Mount the package in a composition that provides the `subprocess` and `typert` s
 | `start` | What the console recorded about the start: run id, root, pid, settings and log |
 | `run` | One mode used once: where the run got to, what the graph spine recorded, and what the run wrote to `facts.json` |
 | `status` | The run's state, its new progress events, the offset to read from next, its counters and its best score |
+| `steer` | The run's intent ledger — its entries and recorded verdicts — and, when the run is stopped at a `user` gate, the verdicts that gate accepts; with a note or a verdict it appends first |
 | `stop` | Whether the run's process accepted a stop signal |
 | `setPackageEnabled`, `removePackage`, `importPackage` | The package catalogue as it stands after the change |
 
@@ -62,6 +63,12 @@ A package that declares no modes reports `enabled: null` rather than a guess: th
 `start` is the outer loop: it begins a run in its own process and answers with the receipt to watch it by. `run` is a person using a mode: it drives the mode to quiescence, and answers with where the run got to. Both take the knob values as `NAME=VALUE`, and both refuse the same three ways before a process starts.
 
 A run `run` reports is not only a success. A run that stopped at a gate a person owns comes back as a result carrying the graph spine's own status word — `ready` with the nodes still due, or `refused` with the reason — because the console writes that status beside the failure it reports, and a picker that could not read it would show a person being waited on as a failed process.
+
+### Steering
+
+`steer` reads and appends to a run's intent ledger through the same console verb the model-facing tool and the graph profile's answerer use, so every caller sees one ledger format. Read with no note and no verdict and the answer is the ledger's entries; pass a `note` and its `kind` and the console appends it; pass `verdicts` as `GATE=VALUE` and the console records a gate's answer.
+
+The console owns the run's lowered graph as well as its ledger, so the same answer reports the `user` gates the run is stopped at (`gates`), each with the `verdicts` it accepts. A caller that offers those verdicts therefore offers the answer the runtime will route on, without parsing a graph or a ledger itself; a search run, whose graph lives per candidate, reports no gates.
 
 <a id="refusals"></a>
 ## Refusals

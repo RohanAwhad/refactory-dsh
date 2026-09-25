@@ -40,8 +40,10 @@ import type { ConsoleConfig as ConsoleSettings, ConsoleInvocation, ConsoleResult
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type {
   RefactoryAuthoringProgress,
+  RefactoryGate,
   RefactoryKnob,
   RefactoryKnobKind,
+  RefactoryLedgerEntry,
   RefactoryModeChoice,
   RefactoryPackageChoice,
   RefactoryPackageMode,
@@ -53,6 +55,8 @@ import type {
   RefactorySingleRunRequest,
   RefactoryStartReceipt,
   RefactoryStartRequest,
+  RefactorySteering,
+  RefactorySteerRequest,
   RefactoryStopReceipt,
   RefactoryStrategies,
   RefactoryStrategyChoice,
@@ -185,6 +189,36 @@ function facts(value: unknown): Readonly<Record<string, string>> {
       ])
       .filter(([, written]) => written !== ''),
   )
+}
+
+/** Every entry of one intent ledger, as the console parsed it back. */
+function ledgerEntries(value: unknown): readonly RefactoryLedgerEntry[] {
+  return objectList(value, 'ledger entries').map(entry => ({
+    at: text(entry.at),
+    kind: text(entry.kind),
+    text: text(entry.text),
+  }))
+}
+
+/** A list of strings one console answer carries. */
+function stringList(value: unknown, what: string): readonly string[] {
+  if (!Array.isArray(value)) throw new Error(`the console's ${what} is not a list`)
+  return value.map(scalar)
+}
+
+/** The `user` gates a console answer reports, each with the verdicts it accepts. */
+function gateList(value: unknown): readonly RefactoryGate[] {
+  return objectList(value, 'run gates').map(entry => ({
+    id: text(entry.id),
+    prompt: text(entry.prompt),
+    verdicts: Array.isArray(entry.verdicts) ? entry.verdicts.map(scalar) : [],
+  }))
+}
+
+/** The verdict recorded for each gate, by gate id. */
+function gateVerdicts(value: unknown): Readonly<Record<string, string>> {
+  if (!isRecord(value)) return {}
+  return Object.fromEntries(Object.entries(value).map(([gate, verdict]) => [gate, scalar(verdict)]))
 }
 
 /** Host Remote service over the refactory console. */
@@ -379,6 +413,51 @@ export class RefactoryConsole extends TypertRemoteService {
       'stop answer',
     )
     return { stopped: answer.stopped === true }
+  }
+
+  /**
+   * Read one run's intent ledger, and optionally append to it.
+   *
+   * This is the console's `steer`: a note, a correction, a constraint, or the verdict
+   * that answers a gate a run is stopped at. The gates travel back on the same call
+   * because the console owns both formats — the ledger's and the run's lowered graph
+   * — so the panel can offer the answer a `user` gate accepts without reading either
+   * one itself. A run nobody steered leaves the ledger absent, which is reported as
+   * an absence rather than an error.
+   * @param request - the run whose ledger is read, and what to append to it.
+   * @param signal - caller cancellation.
+   * @returns the ledger's entries, the recorded verdicts, and the gates now waiting.
+   */
+  @Remote
+  async steer(request: RefactorySteerRequest, signal: AbortSignal): Promise<RefactorySteering> {
+    const addressed = this.runAddress(request.run)
+    const note = (request.note ?? '').trim()
+    const verdicts = (request.verdicts ?? []).map(entry => entry.trim()).filter(entry => entry !== '')
+    const invocation: ConsoleInvocation = {
+      verb: 'steer',
+      options: {
+        run: addressed,
+        // An empty note is not a note: the console refuses one, and a caller that
+        // asked to read the ledger must not accidentally try to write to it.
+        ...note === '' ? {} : { note },
+        ...request.kind === undefined ? {} : { kind: request.kind },
+        ...verdicts.length === 0 ? {} : { verdict: verdicts },
+        // Read the waiting gates on the same call, so appending a note leaves the
+        // section that offers a verdict current rather than a frame behind.
+        gates: true,
+      },
+    }
+    const answer = objectOf(await this.call(invocation, signal), 'steering answer')
+    return {
+      run: text(answer.run),
+      ledger: text(answer.ledger),
+      exists: answer.exists === true,
+      entries: ledgerEntries(answer.entries),
+      constraints: stringList(answer.constraints, 'ledger constraints'),
+      verdicts: gateVerdicts(answer.verdicts),
+      gates: gateList(answer.gates),
+      problems: stringList(answer.problems, 'ledger problems'),
+    }
   }
 
   /**

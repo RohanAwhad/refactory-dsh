@@ -546,6 +546,60 @@ def candidate(run_root: Path, candidate_id: str) -> dict[str, Any]:
     return {**diff, "rendered": observe.render_diff(diff["diff"]), **record}
 
 
+def gates(run_root: Path) -> list[dict[str, Any]]:
+    """The `user` gates this run is stopped at, and the verdicts each accepts.
+
+    A run that pauses at a gate a person owns is waiting for an answer, and a
+    caller that wants to give it needs two things the ledger cannot supply: which
+    gate is due, and which outcome labels route it. Both are the run's own lowered
+    graph -- the spine's status names the due node, and that node's outgoing
+    conditional edges are the labels the spine accepts (the same derivation the
+    spine's own ``acceptedVerdicts`` performs). Reading them here keeps the graph's
+    format in the console, the way the ledger's format is, rather than making every
+    caller parse a run directory it did not lower.
+
+    Empty for a run with no status (a search, whose graph lives per candidate), for
+    a due node that is not a gate, and for a gate a machine answers: only a `user`
+    gate is a person's to route.
+    """
+    spine = _spine(run_root)
+    due = [str(node) for node in (spine.get("nodes") or [])]
+    if not due:
+        return []
+    graphs = Path(run_root) / "graphs"
+    if not graphs.is_dir():
+        return []
+    found: dict[str, dict[str, Any]] = {}
+    for path in sorted(graphs.glob("*.graph.json")):
+        try:
+            loaded = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(loaded, dict):
+            continue
+        nodes = loaded.get("nodes") or {}
+        edges = loaded.get("edges") or []
+        for node_id in due:
+            node = nodes.get(node_id) if isinstance(nodes, dict) else None
+            if not isinstance(node, dict):
+                continue
+            if node.get("_type") != "GateNode" or node.get("evaluator_type") != "user":
+                continue
+            verdicts = [
+                str(edge.get("condition")).strip().lower()
+                for edge in edges
+                if isinstance(edge, dict)
+                and edge.get("source") == node_id
+                and edge.get("condition") not in (None, "")
+            ]
+            found[node_id] = {
+                "id": node_id,
+                "prompt": str(node.get("gate_prompt") or ""),
+                "verdicts": verdicts,
+            }
+    return [found[node_id] for node_id in due if node_id in found]
+
+
 def _steer(
     run_root: Path,
     *,
@@ -553,6 +607,7 @@ def _steer(
     note: str | None = None,
     kind: str = "info",
     verdicts: tuple[str, ...] | list[str] = (),
+    with_gates: bool = False,
 ) -> dict[str, Any]:
     """Read the ledger, and optionally add to it.
 
@@ -560,6 +615,12 @@ def _steer(
     else. The graph of the running mode is untouched -- that is the outer loop's job,
     and conflating the two is how a run stops being accountable for what it was asked
     to do.
+
+    ``with_gates`` adds :func:`gates` to the payload: the `user` gates the run is
+    stopped at, so a caller that only knows this verb can offer the answer the gate
+    accepts. It is opt-in because the ledger read is what most callers want, and a
+    caller that does not route gates should not pay for reading a graph it will not
+    use.
     """
     from refactory_dsh.steering import Ledger, chain, fidelity, outputs_in
 
@@ -574,7 +635,7 @@ def _steer(
     # The chain is checkable only when the run left agent outputs beside the ledger
     # (a single mode run does; an outer-loop run keeps its candidates in subdirs).
     outputs = outputs_in(run_root) if ledger.exists() else {}
-    return {
+    payload: dict[str, Any] = {
         "run": str(run_root),
         "ledger": str(ledger.path),
         "exists": ledger.exists(),
@@ -584,6 +645,9 @@ def _steer(
         "chain": chain(ledger, outputs) if ledger.exists() else [],
         "problems": fidelity(ledger, outputs),
     }
+    if with_gates:
+        payload["gates"] = gates(run_root)
+    return payload
 
 
 def _best_payload(run_root: Path, *, keep_state: bool) -> dict[str, Any]:
@@ -888,6 +952,11 @@ def _parser() -> argparse.ArgumentParser:
         help="record a gate verdict as <gate>=<value> (repeatable); the runtime "
              "uses this so a person's answer is durable and a resume replays it",
     )
+    steer.add_argument(
+        "--gates", action="store_true",
+        help="also report the `user` gates this run is stopped at, and the verdicts "
+             "each accepts, so a caller can offer the answer the gate routes on",
+    )
 
     champion = add(
         sub.add_parser("best", help="the winner, with the state that scored it")
@@ -1103,7 +1172,7 @@ def main(argv: list[str] | None = None) -> int:
             payload = _steer(
                 _root_for(args, project),
                 seed=args.seed, note=args.note, kind=args.kind,
-                verdicts=args.verdict,
+                verdicts=args.verdict, with_gates=args.gates,
             )
         elif args.verb == "best":
             payload = _best_payload(_root_for(args, project), keep_state=args.state)

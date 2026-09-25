@@ -7,6 +7,8 @@
  * the two halves of the process boundary still agree. It reads the same console
  * a person pressing "pick a mode" in the panel reads.
  */
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
@@ -122,5 +124,40 @@ describe('the picker service against the real loop', () => {
     const failure = await failureOf(service.status(join(REPO, '.factory', 'loop', 'no-such-run'), 0, signal()))
     expect(failure.code).toBe('refactory/console-failed')
     expect(failure.message).toContain('is not a run directory')
+  }, 120_000)
+
+  it('steers a real run: a note is read back, and a `user` gate reports its verdicts', async () => {
+    const { service } = await setup()
+    const run = mkdtempSync(join(tmpdir(), 'refactory-steer-'))
+    try {
+      mkdirSync(join(run, '.refactory'), { recursive: true })
+      mkdirSync(join(run, 'graphs'), { recursive: true })
+      writeFileSync(
+        join(run, '.refactory', 'spine-status.json'),
+        JSON.stringify({ status: 'ready', nodes: ['approve'], completed: ['draft'] }),
+      )
+      writeFileSync(join(run, 'graphs', 'p-review.graph.json'), JSON.stringify({
+        nodes: { approve: { _type: 'GateNode', evaluator_type: 'user', gate_prompt: 'approve the draft' } },
+        edges: [
+          { source: 'approve', target: 'publish', condition: 'proceed' },
+          { source: 'approve', target: 'reject', condition: 'halt' },
+        ],
+      }))
+
+      const read = await service.steer({ run }, signal())
+      expect(read.exists).toBe(false)
+      expect(read.gates).toEqual([
+        { id: 'approve', prompt: 'approve the draft', verdicts: ['proceed', 'halt'] },
+      ])
+
+      const written = await service.steer({ run, note: 'keep it short', kind: 'constraint' }, signal())
+      expect(written.entries.at(-1)).toMatchObject({ kind: 'constraint', text: 'keep it short' })
+      expect(written.constraints).toEqual(['keep it short'])
+
+      const answered = await service.steer({ run, verdicts: ['approve=proceed'] }, signal())
+      expect(answered.verdicts).toEqual({ approve: 'proceed' })
+    } finally {
+      rmSync(run, { recursive: true, force: true })
+    }
   }, 120_000)
 })

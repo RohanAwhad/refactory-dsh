@@ -19,7 +19,8 @@ import { refactoryFace } from '../src/client/face.ts'
 import { NO_SETTINGS, createRefactoryStore } from '../src/client/store.ts'
 import type { RefactoryChoices } from '../src/client/store.ts'
 import {
-  AUTHORING, FRAME, GATED, MODE, PACKAGE, RECEIPT, SINGLE, STRATEGIES, failure, fakeConsole, ok, settle,
+  AUTHORING, FRAME, GATED, GATED_STEERING, MODE, PACKAGE, RECEIPT, SINGLE, STEERED, STEERING, STRATEGIES,
+  failure, fakeConsole, ok, settle,
 } from './fake-console.client.ts'
 
 const SESSION = 's-test' as SessionId
@@ -304,6 +305,80 @@ describe('refactoryFace — reading and stopping a run', () => {
     controller.abort()
     face.stop(TAB, '/runs/live', controller.signal)
     expect(scripted.stop).not.toHaveBeenCalled()
+  })
+})
+
+describe('refactoryFace — the watched run\'s ledger', () => {
+  it('reads the ledger and the gates the run is stopped at', async () => {
+    const { instance, scripted, face, signal } = harness()
+    answer(scripted.steer, ok(GATED_STEERING))
+    face.readSteering(TAB, '/runs/live', signal)
+    expect(tab(instance)?.steering).toEqual({ kind: 'loading' })
+    await settle()
+    expect(scripted.steer).toHaveBeenCalledWith({ run: '/runs/live' }, signal)
+    expect(tab(instance)?.steering).toEqual({ kind: 'ready', value: GATED_STEERING })
+  })
+
+  it('records why the ledger could not be read, where the ledger is drawn', async () => {
+    const { instance, scripted, face, signal } = harness()
+    answer(scripted.steer, failure('refactory/console-failed', 'no ledger at /runs/live'))
+    face.readSteering(TAB, '/runs/live', signal)
+    await settle()
+    expect(tab(instance)?.steering).toEqual({ kind: 'failed', message: 'no ledger at /runs/live' })
+    expect(tab(instance)?.notice).toBeNull()
+  })
+
+  it('appends a note and takes the ledger the Host answers with', async () => {
+    const { instance, scripted, face, signal } = harness()
+    answer(scripted.steer, ok(STEERED))
+    face.addNote(TAB, '/runs/live', 'try the other seed', 'correction', signal)
+    await settle()
+    expect(scripted.steer).toHaveBeenCalledWith(
+      { run: '/runs/live', note: 'try the other seed', kind: 'correction' },
+      signal,
+    )
+    expect(tab(instance)?.steering).toEqual({ kind: 'ready', value: STEERED })
+  })
+
+  it('records a verdict for the gate the run is stopped at', async () => {
+    const { instance, scripted, face, signal } = harness()
+    answer(scripted.steer, ok(GATED_STEERING))
+    face.answerGate(TAB, '/runs/live', 'approve', 'proceed', signal)
+    await settle()
+    expect(scripted.steer).toHaveBeenCalledWith({ run: '/runs/live', verdicts: ['approve=proceed'] }, signal)
+    expect(tab(instance)?.steering).toEqual({ kind: 'ready', value: GATED_STEERING })
+  })
+
+  it('shows a refused note as the notice, keeping the ledger that was already read', async () => {
+    const { instance, scripted, face, signal } = harness()
+    instance.actions.steered(TAB, STEERING)
+    answer(scripted.steer, failure('refactory/console-failed', 'an empty note records nothing'))
+    face.addNote(TAB, '/runs/live', '', 'info', signal)
+    await settle()
+    expect(tab(instance)?.notice).toEqual({
+      code: 'refactory/console-failed',
+      message: 'an empty note records nothing',
+    })
+    expect(tab(instance)?.steering).toEqual({ kind: 'ready', value: STEERING })
+  })
+
+  it('refreshes the ledger alongside the status, so a note added elsewhere appears', async () => {
+    const { scripted, face, signal } = harness()
+    answer(scripted.status, ok(FRAME))
+    answer(scripted.steer, ok(STEERING))
+    face.refresh(TAB, '/runs/live', 3, signal)
+    await settle()
+    expect(scripted.status).toHaveBeenCalledWith('/runs/live', 3, signal)
+    expect(scripted.steer).toHaveBeenCalledWith({ run: '/runs/live' }, signal)
+  })
+
+  it('does not read or write a ledger for a tab whose record has already ended', () => {
+    const { scripted, face, controller } = harness()
+    controller.abort()
+    face.readSteering(TAB, '/runs/live', controller.signal)
+    face.addNote(TAB, '/runs/live', 'no', 'info', controller.signal)
+    face.answerGate(TAB, '/runs/live', 'approve', 'proceed', controller.signal)
+    expect(scripted.steer).not.toHaveBeenCalled()
   })
 })
 

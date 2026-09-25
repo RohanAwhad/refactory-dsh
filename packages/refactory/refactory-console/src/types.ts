@@ -171,6 +171,70 @@ export interface RefactoryStopReceipt {
   readonly stopped: boolean
 }
 
+/** The kinds a note can be, as the console's ledger declares them. */
+export type RefactoryNoteKind = 'info' | 'correction' | 'constraint'
+
+/** One entry of a run's intent ledger, as the ledger's owner parses it back. */
+export interface RefactoryLedgerEntry {
+  /** When the entry was recorded, as the ledger wrote it. */
+  readonly at: string
+  /** The entry's kind: a note kind, `Initial Idea`, or `verdict`. */
+  readonly kind: string
+  /** What the entry says. */
+  readonly text: string
+}
+
+/**
+ * One `user` gate a run is stopped at, with the verdict labels it accepts.
+ *
+ * A gate a person owns is the one place a run waits on a reader, so the labels
+ * travel with it: they are the gate's own outgoing outcomes, and a verdict outside
+ * them would be refused by the runtime.
+ */
+export interface RefactoryGate {
+  /** The gate node's id. */
+  readonly id: string
+  /** What the gate asks, from the mode's own declaration; empty when it says nothing. */
+  readonly prompt: string
+  /** The verdict labels the gate routes on, in the graph's edge order. */
+  readonly verdicts: readonly string[]
+}
+
+/** A run's intent ledger, and — when asked — the gates it is stopped at. */
+export interface RefactorySteering {
+  /** Absolute path of the run directory the ledger belongs to. */
+  readonly run: string
+  /** Absolute path of the ledger file. */
+  readonly ledger: string
+  /** Whether the ledger exists and has anything in it. */
+  readonly exists: boolean
+  /** Every entry, oldest first. */
+  readonly entries: readonly RefactoryLedgerEntry[]
+  /** The text of every entry whose kind is `constraint`. */
+  readonly constraints: readonly string[]
+  /** The last verdict recorded for each gate, by gate id. */
+  readonly verdicts: Readonly<Record<string, string>>
+  /** The `user` gates the run is stopped at now, and what each accepts. */
+  readonly gates: readonly RefactoryGate[]
+  /** What is wrong with the ledger, as the console's own fidelity check reports it. */
+  readonly problems: readonly string[]
+}
+
+/** One read of, or addition to, a run's intent ledger. */
+export interface RefactorySteerRequest {
+  /** The run id or absolute run directory. */
+  readonly run: string
+  /** What the person said; absent or empty reads the ledger without writing. */
+  readonly note?: string
+  /** What the note is; the console's own default when absent. */
+  readonly kind?: RefactoryNoteKind
+  /**
+   * Gate verdicts to record, as `GATE=VALUE`; one `--verdict` per element. Absent or
+   * empty writes none, so the same call reads a ledger it did not touch.
+   */
+  readonly verdicts?: readonly string[]
+}
+
 /** One mode a package declares, as the registry's catalogue lists it. */
 export interface RefactoryPackageMode {
   /** The mode's name inside its package. */
@@ -284,6 +348,8 @@ export interface RefactoryConsoleRemote {
   start: (request: RefactoryStartRequest, signal?: AbortSignal) => Promise<RemoteResult<RefactoryStartReceipt>>
   /** @param run - the run being read. @param after - byte offset already read. @param signal - caller cancellation. @returns the run's status frame. */
   status: (run: string, after: number, signal?: AbortSignal) => Promise<RemoteResult<RefactoryRunStatus>>
+  /** @param request - the run whose ledger is read, and what to append to it. @param signal - caller cancellation. @returns the ledger, and the gates the run is stopped at. */
+  steer: (request: RefactorySteerRequest, signal?: AbortSignal) => Promise<RemoteResult<RefactorySteering>>
   /** @param run - the run to stop. @param signal - caller cancellation. @returns the stop receipt. */
   stop: (run: string, signal?: AbortSignal) => Promise<RemoteResult<RefactoryStopReceipt>>
   /** @param signal - caller cancellation. @returns the named outer loops, optimizers and evaluators. */

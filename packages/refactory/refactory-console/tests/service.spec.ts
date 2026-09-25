@@ -571,6 +571,102 @@ it('refuses an empty run address before reading anything', async () => {
 })
 })
 
+describe('refactoryConsole — steering a run', () => {
+  /** One `steer` payload, as the console answers it: the ledger, and the gates. */
+  const STEERING = {
+    run: '/runs/live',
+    ledger: '/runs/live/intent-ledger.md',
+    exists: true,
+    entries: [{ at: '2026-01-01T00:00:00+00:00', kind: 'correction', text: 'use a smaller grid' }],
+    constraints: ['no numpy'],
+    verdicts: { approve: 'proceed' },
+    gates: [{ id: 'approve', prompt: 'approve the draft', verdicts: ['proceed', 'halt'] }],
+    problems: ['no intent ledger at /runs/gone/intent-ledger.md'],
+  }
+
+  it('reads the ledger, and the gates the run is stopped at, in one call', async () => {
+    const { service, subprocess } = await setup()
+    subprocess.answer(STEERING)
+    expect(await service.steer({ run: '/runs/live' }, signal())).toEqual({
+      run: '/runs/live',
+      ledger: '/runs/live/intent-ledger.md',
+      exists: true,
+      entries: [{ at: '2026-01-01T00:00:00+00:00', kind: 'correction', text: 'use a smaller grid' }],
+      constraints: ['no numpy'],
+      verdicts: { approve: 'proceed' },
+      gates: [{ id: 'approve', prompt: 'approve the draft', verdicts: ['proceed', 'halt'] }],
+      problems: ['no intent ledger at /runs/gone/intent-ledger.md'],
+    })
+    expect(subprocess.lastArgv).toEqual([
+      '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'steer', '--run', '/runs/live', '--gates',
+    ])
+  })
+
+  it('appends a note with the kind it was given, and takes the ledger it answers with', async () => {
+    const { service, subprocess } = await setup()
+    subprocess.answer(STEERING)
+    await service.steer({ run: '/runs/live', note: 'use a smaller grid', kind: 'correction' }, signal())
+    expect(subprocess.lastArgv).toEqual([
+      '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'steer', '--run', '/runs/live',
+      '--note', 'use a smaller grid', '--kind', 'correction', '--gates',
+    ])
+  })
+
+  it('records a gate verdict as the console\'s own `GATE=VALUE`', async () => {
+    const { service, subprocess } = await setup()
+    subprocess.answer(STEERING)
+    await service.steer({ run: '/runs/live', verdicts: ['approve=proceed'] }, signal())
+    expect(subprocess.lastArgv).toEqual([
+      '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'steer', '--run', '/runs/live',
+      '--verdict', 'approve=proceed', '--gates',
+    ])
+  })
+
+  it('omits an empty note and an empty verdict, so a read cannot write by accident', async () => {
+    const { service, subprocess } = await setup()
+    subprocess.answer(STEERING)
+    await service.steer({ run: '/runs/live', note: '   ', verdicts: ['  '] }, signal())
+    expect(subprocess.lastArgv).toEqual([
+      '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'steer', '--run', '/runs/live', '--gates',
+    ])
+  })
+
+  it('reports the console\'s refusal of an unknown run, with the argv to reproduce it', async () => {
+    const { service, subprocess } = await setup()
+    subprocess.answer({ error: '/runs/absent is not a run directory' }, 2)
+    const failure = await failureOf(service.steer({ run: '/runs/absent' }, signal()))
+    expect(failure.code).toBe('refactory/console-failed')
+    expect(failure.message).toBe('/runs/absent is not a run directory')
+    expect(failure.details).toEqual({
+      argv: ['/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'steer', '--run', '/runs/absent', '--gates'],
+    })
+  })
+
+  it('reports the console\'s refusal of a note kind it does not know', async () => {
+    const { service, subprocess } = await setup()
+    subprocess.answer({ error: "unknown note kind 'nope'; known: ['info', 'correction', 'constraint']" }, 2)
+    const failure = await failureOf(service.steer(
+      { run: '/runs/live', note: 'x', kind: 'nope' as never },
+      signal(),
+    ))
+    expect(failure.code).toBe('refactory/console-failed')
+    expect(failure.message).toContain("unknown note kind 'nope'")
+  })
+
+  it('refuses an empty run address before reading anything', async () => {
+    const { service, subprocess } = await setup()
+    const failure = await failureOf(service.steer({ run: '  ' }, signal()))
+    expect(failure.code).toBe('gateway/bad-request')
+    expect(subprocess.spawns).toHaveLength(0)
+  })
+
+  it('rejects an answer whose ledger shape is not the console\'s', async () => {
+    const { service, subprocess } = await setup()
+    subprocess.answer({ ...STEERING, entries: 'not a list' })
+    await expect(service.steer({ run: '/runs/live' }, signal())).rejects.toThrow('ledger entries is not a list')
+  })
+})
+
 describe('refactoryConsole — packages', () => {
   it('enables a package, then answers with the catalogue as it now stands', async () => {
     const { service, subprocess } = await setup()

@@ -19,7 +19,7 @@ import { RefactoryBody } from '../src/client/RefactoryBody.tsx'
 import type { RefactoryBodyProps } from '../src/client/RefactoryBody.tsx'
 import { zh } from '../src/client/locales.ts'
 import { NO_SETTINGS, createRefactoryStore } from '../src/client/store.ts'
-import type { RefactoryRunStatus } from '@deepseek-ai/dsh-refactory-console/types'
+import type { RefactoryRunStatus, RefactorySteering } from '@deepseek-ai/dsh-refactory-console/types'
 import type { Loadable, RefactoryChoices, RefactoryNotice, RefactorySingleState, RefactoryTabState } from '../src/client/store.ts'
 import { fakeConsole } from './fake-console.client.ts'
 import type { FakeConsole } from './fake-console.client.ts'
@@ -50,6 +50,8 @@ export interface TabSeed {
   readonly settings?: Partial<RefactoryTabState['settings']>
   readonly watching?: string | null
   readonly frame?: Loadable<RefactoryRunStatus> | null
+  /** The watched run's ledger read, as the face would have written it. */
+  readonly steering?: Loadable<RefactorySteering> | null
   readonly single?: RefactorySingleState | null
   readonly notice?: RefactoryNotice | null
   readonly busy?: boolean
@@ -94,6 +96,10 @@ export function mountBody(seed: TabSeed = {}): Mounted {
   if (seed.frame !== undefined && seed.frame !== null) {
     if (seed.frame.kind === 'ready') actions.framed(TAB, seed.frame.value)
     else if (seed.frame.kind === 'failed') actions.frameFailed(TAB, seed.frame.message)
+  }
+  if (seed.steering !== undefined && seed.steering !== null) {
+    if (seed.steering.kind === 'ready') actions.steered(TAB, seed.steering.value)
+    else if (seed.steering.kind === 'failed') actions.steeringFailed(TAB, seed.steering.message)
   }
   if (seed.single !== undefined && seed.single !== null) {
     if (seed.single.kind === 'ready') actions.ran(TAB, seed.single.value)

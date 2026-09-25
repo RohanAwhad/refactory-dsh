@@ -16,6 +16,7 @@ import type {
   RefactoryRunStatus,
   RefactorySingleRun,
   RefactoryStartReceipt,
+  RefactorySteering,
   RefactoryStrategies,
 } from '@deepseek-ai/dsh-refactory-console/types'
 import type { RefactoryRemote } from '../src/client/face.ts'
@@ -105,6 +106,33 @@ export const FRAME: RefactoryRunStatus = {
   running: true,
 }
 
+/** A run's intent ledger, with no gate waiting. */
+export const STEERING: RefactorySteering = {
+  run: '/runs/live',
+  ledger: '/runs/live/intent-ledger.md',
+  exists: true,
+  entries: [
+    { at: '2026-01-01T00:00:00+00:00', kind: 'Initial Idea', text: 'make it better' },
+    { at: '2026-01-01T00:01:00+00:00', kind: 'correction', text: 'use a smaller grid' },
+  ],
+  constraints: [],
+  verdicts: {},
+  gates: [],
+  problems: [],
+}
+
+/** One ledger read that answered with a note the person just added. */
+export const STEERED: RefactorySteering = {
+  ...STEERING,
+  entries: [...STEERING.entries, { at: '2026-01-01T00:02:00+00:00', kind: 'info', text: 'try the other seed' }],
+}
+
+/** A run stopped at a `user` gate, with the verdicts the gate accepts. */
+export const GATED_STEERING: RefactorySteering = {
+  ...STEERING,
+  gates: [{ id: 'approve', prompt: 'the person approves the draft', verdicts: ['proceed', 'halt'] }],
+}
+
 /** What the console recorded about a start. */
 export const RECEIPT: RefactoryStartReceipt = {
   run_id: 'live',
@@ -163,6 +191,7 @@ export interface FakeConsole {
   readonly start: Mock
   readonly run: Mock
   readonly status: Mock
+  readonly steer: Mock
   readonly stop: Mock
   readonly setPackageEnabled: Mock
   readonly removePackage: Mock
@@ -181,6 +210,7 @@ export function fakeConsole(): FakeConsole {
     start: vi.fn(async () => ok(RECEIPT)),
     run: vi.fn(async () => ok(SINGLE)),
     status: vi.fn(async () => ok(FRAME)),
+    steer: vi.fn(async () => ok(STEERING)),
     stop: vi.fn(async () => ok({ stopped: true })),
     setPackageEnabled: vi.fn(async () => ok<readonly RefactoryPackageChoice[]>([])),
     removePackage: vi.fn(async () => ok<readonly RefactoryPackageChoice[]>([])),

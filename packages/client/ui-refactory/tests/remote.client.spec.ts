@@ -56,6 +56,10 @@ describe('refactoryConsoleOverConnection', () => {
     const console = refactoryConsoleOverConnection(rpc).refactoryConsole
     const controller = new AbortController()
     await console.status('run-1', 3, controller.signal)
+    await console.steer(
+      { run: 'run-1', note: 'use a smaller grid', kind: 'correction', verdicts: ['approve=proceed'] },
+      controller.signal,
+    )
     await console.stop('run-1', controller.signal)
     await console.start({ mode: 'counting_pack/fixed_step' }, controller.signal)
     await console.run({ mode: 'counting_pack/fixed_step' }, controller.signal)
@@ -64,6 +68,7 @@ describe('refactoryConsoleOverConnection', () => {
     await console.importPackage('/somewhere', 'as_name', controller.signal)
     expect(calls.map((call) => [call.endpoint, call.payload, call.signal === controller.signal])).toEqual([
       ['refactoryConsole/status', { args: { run: 'run-1', after: 3 } }, true],
+      ['refactoryConsole/steer', { args: { request: { run: 'run-1', note: 'use a smaller grid', kind: 'correction', verdicts: ['approve=proceed'] } } }, true],
       ['refactoryConsole/stop', { args: { run: 'run-1' } }, true],
       ['refactoryConsole/start', { args: { request: { mode: 'counting_pack/fixed_step' } } }, true],
       ['refactoryConsole/run', { args: { request: { mode: 'counting_pack/fixed_step' } } }, true],

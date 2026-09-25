@@ -22,7 +22,7 @@
  */
 import type { RemoteFailure, RemoteResult } from '@deepseek-ai/dsh-api-remotes/client'
 import type { ClientConnectionRpc } from '@deepseek-ai/dsh-client-connection/client'
-import type { RefactoryConsoleRemote, RefactoryPackageChoice } from '@deepseek-ai/dsh-refactory-console/types'
+import type { RefactoryConsoleRemote, RefactoryNoteKind, RefactoryPackageChoice } from '@deepseek-ai/dsh-refactory-console/types'
 import type { BoundActions } from '@deepseek-ai/dsh-client-store'
 import type { TabId } from '@deepseek-ai/dsh-client-ui-dockkit'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
@@ -37,7 +37,7 @@ import type {
 export type RefactoryRemote = {
   readonly refactoryConsole: Pick<
     RefactoryConsoleRemote,
-    'modes' | 'strategies' | 'packages' | 'start' | 'run' | 'status' | 'stop'
+    'modes' | 'strategies' | 'packages' | 'start' | 'run' | 'status' | 'steer' | 'stop'
       | 'setPackageEnabled' | 'removePackage' | 'importPackage'
   >
 }
@@ -69,6 +69,7 @@ export function refactoryConsoleOverConnection(rpc: ClientConnectionRpc): Refact
       start: (request, signal) => call('start', { request }, signal),
       run: (request, signal) => call('run', { request }, signal),
       status: (run, after, signal) => call('status', { run, after }, signal),
+      steer: (request, signal) => call('steer', { request }, signal),
       stop: (run, signal) => call('stop', { run }, signal),
       setPackageEnabled: (name, enabled, signal) => call('setPackageEnabled', { name, enabled }, signal),
       removePackage: (name, signal) => call('removePackage', { name }, signal),
@@ -158,6 +159,32 @@ export interface RefactoryInjected {
    */
   readonly refresh: (tabId: TabId, run: string, after: number, signal: AbortSignal) => void
   /**
+   * Read the watched run's intent ledger and the gates it is stopped at.
+   * @param tabId - the tab being drawn.
+   * @param run - the run id or directory.
+   * @param signal - the tab record's lifetime.
+   */
+  readonly readSteering: (tabId: TabId, run: string, signal: AbortSignal) => void
+  /**
+   * Append one note to the watched run's ledger, and take the ledger it answers with.
+   * @param tabId - the tab being drawn.
+   * @param run - the run id or directory.
+   * @param note - what the person said.
+   * @param kind - what the note is.
+   * @param signal - the tab record's lifetime.
+   */
+  readonly addNote: (tabId: TabId, run: string, note: string, kind: RefactoryNoteKind, signal: AbortSignal) => void
+  /**
+   * Record a verdict for a gate the watched run is stopped at, and take the ledger
+   * it answers with.
+   * @param tabId - the tab being drawn.
+   * @param run - the run id or directory.
+   * @param gate - the gate node the verdict answers.
+   * @param verdict - the outcome label the gate routes on.
+   * @param signal - the tab record's lifetime.
+   */
+  readonly answerGate: (tabId: TabId, run: string, gate: string, verdict: string, signal: AbortSignal) => void
+  /**
    * Ask a run to stop, then read it again.
    * @param tabId - the tab being drawn.
    * @param run - the run id or directory.
@@ -204,7 +231,12 @@ export function refactoryFace(
   ): RefactoryInjected => {
     /** Per tab: the read generation a settlement must match; the latest request wins. */
     const generations = new Map<TabId, number>()
-    const nextGeneration = (tabId: TabId): number => {
+    /**
+     * The same, for the ledger read: a status refresh and a ledger refresh are two
+     * independent reads of one run, and retiring one must not drop the other.
+     */
+    const steeringGenerations = new Map<TabId, number>()
+    const nextGeneration = (generations: Map<TabId, number>, tabId: TabId): number => {
       const generation = (generations.get(tabId) ?? 0) + 1
       generations.set(tabId, generation)
       return generation
@@ -217,6 +249,7 @@ export function refactoryFace(
      * still keep the Host's code.
      */
     const settle = <T>(
+      generations: Map<TabId, number>,
       tabId: TabId,
       generation: number,
       call: Promise<RemoteResult<T>>,
@@ -236,20 +269,29 @@ export function refactoryFace(
     /** Read one run's status into the store. */
     const readStatus = (tabId: TabId, run: string, after: number, signal: AbortSignal): void => {
       if (signal.aborted) return
-      const generation = nextGeneration(tabId)
+      const generation = nextGeneration(generations, tabId)
       actions.frameLoading(tabId)
-      settle(tabId, generation, remote.refactoryConsole.status(run, after, signal), (frame) => {
+      settle(generations, tabId, generation, remote.refactoryConsole.status(run, after, signal), (frame) => {
         actions.framed(tabId, frame)
       }, undefined, (failure) => { actions.frameFailed(tabId, failure.message) })
+    }
+    /** Read one run's intent ledger and gates into the store. */
+    const loadSteering = (tabId: TabId, run: string, signal: AbortSignal): void => {
+      if (signal.aborted) return
+      const generation = nextGeneration(steeringGenerations, tabId)
+      actions.steeringLoading(tabId)
+      settle(steeringGenerations, tabId, generation, console.steer({ run }, signal), (steering) => {
+        actions.steered(tabId, steering)
+      }, undefined, (failure) => { actions.steeringFailed(tabId, failure.message) })
     }
     /** Take the packages a package gesture answered with. */
     const takePackages = (
       tabId: TabId,
       call: Promise<RemoteResult<readonly RefactoryPackageChoice[]>>,
     ): void => {
-      const generation = nextGeneration(tabId)
+      const generation = nextGeneration(generations, tabId)
       actions.busy(tabId, true)
-      settle(tabId, generation, call, (packages) => {
+      settle(generations, tabId, generation, call, (packages) => {
         actions.packages(tabId, packages)
       }, () => { actions.busy(tabId, false) })
     }
@@ -259,7 +301,7 @@ export function refactoryFace(
      * Both callers have already refused an ended record; this only reads.
      */
     const read = (tabId: TabId, signal: AbortSignal): void => {
-      const generation = nextGeneration(tabId)
+      const generation = nextGeneration(generations, tabId)
       void Promise.all([
         console.modes(signal),
         console.strategies(signal),
@@ -300,20 +342,21 @@ export function refactoryFace(
         if (settings.strategy !== '') chosen.strategy = settings.strategy
         if (settings.optimizer !== '') chosen.optimizer = settings.optimizer
         if (settings.evaluator !== '') chosen.evaluator = settings.evaluator
-        const generation = nextGeneration(tabId)
-        settle(tabId, generation, console.start(
+        const generation = nextGeneration(generations, tabId)
+        settle(generations, tabId, generation, console.start(
           { mode, settings: chosen, knobs: knobArguments(knobs) },
           signal,
         ), (receipt) => {
           actions.watching(tabId, receipt.root)
           readStatus(tabId, receipt.root, 0, signal)
+          loadSteering(tabId, receipt.root, signal)
         })
       },
       run(tabId, mode, knobs, signal) {
         if (signal.aborted) return
-        const generation = nextGeneration(tabId)
+        const generation = nextGeneration(generations, tabId)
         actions.runLoading(tabId)
-        settle(tabId, generation, console.run({ mode, knobs: knobArguments(knobs) }, signal), (run) => {
+        settle(generations, tabId, generation, console.run({ mode, knobs: knobArguments(knobs) }, signal), (run) => {
           actions.ran(tabId, run)
         }, undefined, (failure) => {
           // A refused gesture is the notice, and the tab is no longer waiting on a
@@ -324,11 +367,38 @@ export function refactoryFace(
       },
       refresh(tabId, run, after, signal) {
         readStatus(tabId, run, after, signal)
+        // A ledger is appended to while the run goes, so a refresh of the run is
+        // also a refresh of what has been said about it.
+        loadSteering(tabId, run, signal)
+      },
+      readSteering(tabId, run, signal) {
+        loadSteering(tabId, run, signal)
+      },
+      addNote(tabId, run, note, kind, signal) {
+        if (signal.aborted) return
+        const generation = nextGeneration(steeringGenerations, tabId)
+        settle(steeringGenerations, tabId, generation, console.steer({ run, note, kind }, signal), (steering) => {
+          actions.steered(tabId, steering)
+        }, undefined, (failure) => {
+          actions.noticed(tabId, { code: failure.code, message: failure.message })
+        })
+      },
+      answerGate(tabId, run, gate, verdict, signal) {
+        if (signal.aborted) return
+        const generation = nextGeneration(steeringGenerations, tabId)
+        settle(steeringGenerations, tabId, generation, console.steer(
+          { run, verdicts: [`${gate}=${verdict}`] },
+          signal,
+        ), (steering) => {
+          actions.steered(tabId, steering)
+        }, undefined, (failure) => {
+          actions.noticed(tabId, { code: failure.code, message: failure.message })
+        })
       },
       stop(tabId, run, signal) {
         if (signal.aborted) return
-        const generation = nextGeneration(tabId)
-        settle(tabId, generation, console.stop(run, signal), () => {
+        const generation = nextGeneration(generations, tabId)
+        settle(generations, tabId, generation, console.stop(run, signal), () => {
           readStatus(tabId, run, 0, signal)
         })
       },

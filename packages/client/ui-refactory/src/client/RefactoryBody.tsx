@@ -19,7 +19,9 @@ import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type {
   RefactoryKnob,
+  RefactoryNoteKind,
   RefactoryRunStatus,
+  RefactorySteering,
   RefactoryStrategyChoice,
 } from '@deepseek-ai/dsh-refactory-console/types'
 import type { PropsLocale, PropsRuntime, PropsStore, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
@@ -304,10 +306,137 @@ function Status({
   )
 }
 
+/** One note kind, and the copy the kind selector shows for it. */
+const NOTE_KINDS: readonly RefactoryNoteKind[] = ['info', 'correction', 'constraint']
+
+/** The watched run's intent ledger, and the gates it is stopped at. */
+function Steering({
+  tabId, run, steering, signal, t, readSteering, addNote, answerGate,
+}: {
+  readonly tabId: Parameters<RefactoryInjected['refresh']>[0]
+  readonly run: string
+  readonly steering: Loadable<RefactorySteering> | null
+  readonly signal: AbortSignal
+  readonly t: TranslateNS<'sidebarRefactory'>
+  readonly readSteering: RefactoryInjected['readSteering']
+  readonly addNote: RefactoryInjected['addNote']
+  readonly answerGate: RefactoryInjected['answerGate']
+}): ReactNode {
+  const [said, setSaid] = useState('')
+  const [kind, setKind] = useState<RefactoryNoteKind>('info')
+  if (steering === null || steering.kind === 'loading') {
+    return <p className={css.note} data-refactory-steering="reading">{t('steering.reading')}</p>
+  }
+  if (steering.kind === 'failed') {
+    return (
+      <p className={css.note} data-refactory-steering="failed">
+        {t('error.failed', { message: steering.message })}
+      </p>
+    )
+  }
+  const ledger = steering.value
+  return (
+    <div className={css.status} data-refactory-steering="ready">
+      <div className={css.packageActions}>
+        <button
+          type="button"
+          className={css.action}
+          data-refactory-steering-refresh
+          onClick={() => { readSteering(tabId, run, signal) }}
+        >
+          <IconRefreshOutline16 />
+          {t('steering.refresh')}
+        </button>
+      </div>
+      {ledger.entries.length === 0
+        ? <p className={css.note} data-refactory-ledger="empty">{t('steering.empty')}</p>
+        : (
+          <ul className={css.recorded} data-refactory-ledger="entries">
+            {ledger.entries.map((entry, index) => (
+              <li key={`${entry.at}-${String(index)}`} data-refactory-entry={entry.kind}>
+                <span className={css.name}>{entry.kind}</span> {entry.text}
+              </li>
+            ))}
+          </ul>
+        )}
+      {ledger.problems.length > 0 && (
+        <ul className={css.recorded} data-refactory-ledger="problems">
+          {ledger.problems.map((problem, index) => (
+            <li key={String(index)} className={css.note} data-refactory-problem>{problem}</li>
+          ))}
+        </ul>
+      )}
+      <form
+        className={css.import}
+        onSubmit={(event) => {
+          event.preventDefault()
+          const note = said.trim()
+          if (note === '') return
+          addNote(tabId, run, note, kind, signal)
+          setSaid('')
+        }}
+      >
+        <input
+          className={css.input}
+          value={said}
+          aria-label={t('steering.note')}
+          placeholder={t('steering.note')}
+          data-refactory-note
+          onChange={(event) => { setSaid(event.target.value) }}
+        />
+        <select
+          className={css.control}
+          value={kind}
+          aria-label={t('steering.kind')}
+          data-refactory-note-kind
+          onChange={(event) => { setKind(event.target.value as RefactoryNoteKind) }}
+        >
+          {NOTE_KINDS.map(option => (
+            <option key={option} value={option}>{t(`kind.${option}`)}</option>
+          ))}
+        </select>
+        <button
+          type="submit"
+          className={css.action}
+          disabled={said.trim() === ''}
+          data-refactory-note-add
+        >
+          {t('steering.add')}
+        </button>
+      </form>
+      {ledger.gates.length > 0 && (
+        <div className={css.status} data-refactory-gates="waiting">
+          {ledger.gates.map(gate => (
+            <div key={gate.id} data-refactory-gate={gate.id}>
+              <p className={css.statusLine} data-refactory-gate-prompt>
+                {t('steering.gate', { gate: gate.id })}
+              </p>
+              {gate.prompt !== '' && <p className={css.note}>{gate.prompt}</p>}
+              <div className={css.gestures}>
+                {gate.verdicts.map(option => (
+                  <button
+                    key={option}
+                    type="button"
+                    className={css.action}
+                    data-refactory-verdict={option}
+                    onClick={() => { answerGate(tabId, run, gate.id, option, signal) }}
+                  >
+                    {option}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /** The picker's body: the described choices, and the run they start. */
 export function RefactoryBody({
   useTabInfo, useStore, choose, setKnob, setSetting, start, run: runOnce, load, reload, refresh, stop,
-  setEnabled, remove, importPackage, t,
+  readSteering, addNote, answerGate, setEnabled, remove, importPackage, t,
 }: RefactoryBodyProps): ReactNode {
   const { tab } = useTabInfo()
   const { signal } = tab
@@ -471,6 +600,24 @@ export function RefactoryBody({
               t={t}
               refresh={refresh}
               stop={stop}
+            />
+          )}
+      </section>
+
+      <section className={css.section}>
+        <h2 className={css.heading}>{t('steering.heading')}</h2>
+        {run === null
+          ? <p className={css.note} data-refactory-steering="none">{t('steering.none')}</p>
+          : (
+            <Steering
+              tabId={tab.id}
+              run={run}
+              steering={state.steering}
+              signal={signal}
+              t={t}
+              readSteering={readSteering}
+              addNote={addNote}
+              answerGate={answerGate}
             />
           )}
       </section>

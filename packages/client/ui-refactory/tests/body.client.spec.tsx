@@ -13,7 +13,8 @@ import { makeTranslate } from './translate.client.ts'
 import { failureLine } from '../src/client/RefactoryBody.tsx'
 import { en, zh } from '../src/client/locales.ts'
 import {
-  AUTHORING, COMPLETED, DISABLED, FRAME, GATED, MODE, NO_STRATEGIES, PACKAGE, RECEIPT, SINGLE, STRATEGIES, ok,
+  AUTHORING, COMPLETED, DISABLED, FRAME, GATED, GATED_STEERING, MODE, NO_STRATEGIES, PACKAGE, RECEIPT,
+  SINGLE, STEERED, STEERING, STRATEGIES, ok,
 } from './fake-console.client.ts'
 import { TAB, mountBody } from './mount.client.tsx'
 
@@ -232,6 +233,120 @@ describe('the run the picker is reading', () => {
     await waitFor(() => { expect(console.status).toHaveBeenCalledWith('/runs/live', FRAME.cursor, expect.anything()) })
     fireEvent.click(at(view, 'data-refactory-stop'))
     await waitFor(() => { expect(console.stop).toHaveBeenCalledWith('/runs/live', expect.anything()) })
+  })
+})
+
+describe('the steering the picker offers for the run it reads', () => {
+  it('says no run is being read when none is', () => {
+    const { view } = mountBody({ choices: { kind: 'ready', value: CHOICES } })
+    expect(at(view, 'data-refactory-steering', 'none').textContent).toBe(zh['steering.none'])
+  })
+
+  it('says it is reading the ledger while the read is on its way', () => {
+    const { view } = mountBody({ choices: { kind: 'ready', value: CHOICES }, watching: '/runs/live' })
+    expect(at(view, 'data-refactory-steering', 'reading').textContent).toBe(zh['steering.reading'])
+  })
+
+  it('draws every ledger entry, newest last, with its kind and text', () => {
+    const { view } = mountBody({
+      choices: { kind: 'ready', value: CHOICES },
+      watching: '/runs/live',
+      steering: { kind: 'ready', value: STEERING },
+    })
+    expect(at(view, 'data-refactory-steering', 'ready')).toBeDefined()
+    const entries = [...view.container.querySelectorAll('[data-refactory-entry]')]
+    expect(entries.map(node => node.getAttribute('data-refactory-entry'))).toEqual(['Initial Idea', 'correction'])
+    expect(entries[0]?.textContent).toContain('make it better')
+    expect(entries[1]?.textContent).toContain('use a smaller grid')
+  })
+
+  it('says the ledger has nothing in it rather than drawing an empty list', () => {
+    const { view } = mountBody({
+      choices: { kind: 'ready', value: CHOICES },
+      watching: '/runs/live',
+      steering: { kind: 'ready', value: { ...STEERING, exists: false, entries: [] } },
+    })
+    expect(at(view, 'data-refactory-ledger', 'empty').textContent).toBe(zh['steering.empty'])
+    expect(missing(view, 'data-refactory-ledger', 'entries')).toBe(true)
+  })
+
+  it('says why the ledger could not be read', () => {
+    const { view } = mountBody({
+      choices: { kind: 'ready', value: CHOICES },
+      watching: '/runs/live',
+      steering: { kind: 'failed', message: 'no ledger at /runs/live' },
+    })
+    expect(at(view, 'data-refactory-steering', 'failed').textContent).toContain('no ledger at /runs/live')
+  })
+
+  it('sends the note the person typed, with the kind they chose, and shows what came back', async () => {
+    const { view, console } = mountBody({
+      choices: { kind: 'ready', value: CHOICES },
+      watching: '/runs/live',
+      steering: { kind: 'ready', value: STEERING },
+    })
+    console.steer.mockImplementation(async () => ok(STEERED) as never)
+    const add = at(view, 'data-refactory-note-add') as HTMLButtonElement
+    expect(add.disabled).toBe(true)
+    const note = at(view, 'data-refactory-note') as HTMLInputElement
+    fireEvent.change(note, { target: { value: 'try the other seed' } })
+    fireEvent.change(at(view, 'data-refactory-note-kind'), { target: { value: 'correction' } })
+    expect(add.disabled).toBe(false)
+    fireEvent.submit(at(view, 'data-refactory-note-add').closest('form') ?? view.container)
+    await waitFor(() => {
+      expect(console.steer).toHaveBeenCalledWith(
+        { run: '/runs/live', note: 'try the other seed', kind: 'correction' },
+        expect.anything(),
+      )
+    })
+    // The field is cleared, and the entry the Host answered with is drawn.
+    expect(note.value).toBe('')
+    await waitFor(() => { expect(at(view, 'data-refactory-entry', 'info').textContent).toContain('try the other seed') })
+  })
+
+  it('offers the gate and the verdicts it accepts only while a gate is waiting', () => {
+    const waiting = mountBody({
+      choices: { kind: 'ready', value: CHOICES },
+      watching: '/runs/live',
+      steering: { kind: 'ready', value: GATED_STEERING },
+    })
+    expect(at(waiting.view, 'data-refactory-gate', 'approve').textContent).toContain('the person approves the draft')
+    expect([...waiting.view.container.querySelectorAll('[data-refactory-verdict]')]
+      .map(node => node.getAttribute('data-refactory-verdict'))).toEqual(['proceed', 'halt'])
+    const quiet = mountBody({
+      choices: { kind: 'ready', value: CHOICES },
+      watching: '/runs/live',
+      steering: { kind: 'ready', value: STEERING },
+    })
+    expect(missing(quiet.view, 'data-refactory-gate')).toBe(true)
+    expect(missing(quiet.view, 'data-refactory-verdict')).toBe(true)
+  })
+
+  it('answers the waiting gate with the verdict the person pressed', async () => {
+    const { view, console } = mountBody({
+      choices: { kind: 'ready', value: CHOICES },
+      watching: '/runs/live',
+      steering: { kind: 'ready', value: GATED_STEERING },
+    })
+    console.steer.mockImplementation(async () => ok(GATED_STEERING) as never)
+    fireEvent.click(at(view, 'data-refactory-verdict', 'proceed'))
+    await waitFor(() => {
+      expect(console.steer).toHaveBeenCalledWith(
+        { run: '/runs/live', verdicts: ['approve=proceed'] },
+        expect.anything(),
+      )
+    })
+  })
+
+  it('reads the ledger again when the reader asks it to', async () => {
+    const { view, console } = mountBody({
+      choices: { kind: 'ready', value: CHOICES },
+      watching: '/runs/live',
+      steering: { kind: 'ready', value: STEERING },
+    })
+    console.steer.mockImplementation(async () => ok(STEERING) as never)
+    fireEvent.click(at(view, 'data-refactory-steering-refresh'))
+    await waitFor(() => { expect(console.steer).toHaveBeenCalledWith({ run: '/runs/live' }, expect.anything()) })
   })
 })
 

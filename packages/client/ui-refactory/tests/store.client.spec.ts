@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import type { TabId } from '@deepseek-ai/dsh-client-ui-dockkit'
 import { NO_SETTINGS, createRefactoryStore, knobValues } from '../src/client/store.ts'
-import { FRAME, MODE, NO_STRATEGIES, PACKAGE, SINGLE } from './fake-console.client.ts'
+import { FRAME, GATED_STEERING, MODE, NO_STRATEGIES, PACKAGE, SINGLE, STEERING } from './fake-console.client.ts'
 
 const TAB = 'tab-1' as TabId
 const OTHER = 'tab-2' as TabId
@@ -28,6 +28,7 @@ describe('createRefactoryStore', () => {
       settings: { ...NO_SETTINGS },
       watching: null,
       frame: null,
+      steering: null,
       single: null,
       notice: null,
       busy: false,
@@ -121,6 +122,21 @@ describe('createRefactoryStore', () => {
     instance.actions.watching(TAB, '/runs/live')
     instance.actions.frameFailed(TAB, '/runs/live is not a run directory')
     expect(instance.getSnapshot().byTab[TAB]?.frame).toEqual({
+      kind: 'failed',
+      message: '/runs/live is not a run directory',
+    })
+  })
+
+  it('reads the watched run\'s ledger, and records why it could not be read', () => {
+    const instance = open()
+    instance.actions.watching(TAB, '/runs/live')
+    expect(instance.getSnapshot().byTab[TAB]?.steering).toEqual({ kind: 'loading' })
+    instance.actions.steered(TAB, STEERING)
+    expect(instance.getSnapshot().byTab[TAB]?.steering).toEqual({ kind: 'ready', value: STEERING })
+    instance.actions.steered(TAB, GATED_STEERING)
+    expect(instance.getSnapshot().byTab[TAB]?.steering).toEqual({ kind: 'ready', value: GATED_STEERING })
+    instance.actions.steeringFailed(TAB, '/runs/live is not a run directory')
+    expect(instance.getSnapshot().byTab[TAB]?.steering).toEqual({
       kind: 'failed',
       message: '/runs/live is not a run directory',
     })
