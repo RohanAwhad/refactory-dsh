@@ -308,8 +308,35 @@ def render_catalogue(project: Path) -> str:
         for mode in sorted(package.modes, key=lambda m: m.name):
             identifier = mode_id(name, mode.name)
             description = getattr(mode, "description", "")
-            lines.append(f"  {identifier:<38} {description}")
+            lines.append(f"  {identifier:<38} {description}{_routes(mode)}")
     return "\n".join(lines) + "\n" if lines else "no packages installed\n"
+
+
+def _routes(mode_class: type) -> str:
+    """How the mode is run, and where it stops for a person, for the listing.
+
+    Best-effort by construction: a mode whose default state cannot be built is still
+    listed with its description, because a listing that raises for one mode hides
+    every other. Both routes are named: the verb that runs it headless, and the
+    workflow spine, which lowers the same mode and puts its `user` gates to the
+    person rather than pre-answering them.
+    """
+    try:
+        mode = mode_class()
+        described = mode.describe()
+    except Exception:  # a listing is not the place to fail about one mode
+        return ""
+    scored = mode.is_scored()
+    verb = "start" if scored else (mode.name if mode.name in ("create", "edit", "design") else "start")
+    asks = [
+        node["id"]
+        for node in described["nodes"]
+        if node["kind"] == "gate" and node.get("gate_kind") == "user"
+    ]
+    note = f"[run: {verb} or wf_open"
+    if asks:
+        note += f"; asks a person at: {', '.join(asks)}"
+    return f"  {note}]"
 
 
 def smoke(project: Path, identifier: str, *, model: bool = False) -> dict[str, Any]:

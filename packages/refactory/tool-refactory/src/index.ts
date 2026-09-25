@@ -305,10 +305,10 @@ export function renderResult(args: Args, value: unknown): ContentBlock[] {
   switch (args.action) {
     case 'modes': {
       const modes = Array.isArray(value) ? value : []
-      lines.push(`${modes.length} mode(s) can be started:`)
+      lines.push(`${modes.length} mode(s):`)
       for (const mode of modes) {
         if (!isRecord(mode)) continue
-        lines.push(`- ${scalar(mode.id)}${mode.startable === true ? '' : ' (not startable)'}`)
+        lines.push(`- ${scalar(mode.id)} — ${modeSummary(mode)}`)
       }
       break
     }
@@ -563,7 +563,11 @@ export function apply(ctx: Context, config: Config): void {
       approve: {
         type: 'array',
         items: { type: 'string' },
-        description: 'For "create"/"edit"/"design": a person\'s answers to the gates the run pauses at, as "GATE=VALUE" (e.g. "gate_strategy=proceed"). A headless authoring run refuses a gate it was not told the answer to, so ask the user first — this call cannot pause to ask them itself.',
+        description: 'For "create"/"edit"/"design": answers to the gates the run pauses at, as "GATE=VALUE" (e.g. "gate_strategy=proceed"), for a run nobody can ask — it requires `headless: true`. These verbs run headless, so a gate the run stops at gets no answer unless one is passed; but when a person is here, their gate is theirs: open the mode with `wf_open <package>/<name>` instead and the runtime puts it to them. `modes` marks which gates belong to a person with `(user)`.',
+      },
+      headless: {
+        type: 'boolean',
+        description: 'For "create"/"edit"/"design": that nobody is at the keyboard for this run, which is the only case in which `approve` may answer a gate. Omit it for a run a person can answer, and drive the mode with `wf_open` so they are asked.',
       },
       attempts: { type: 'integer', description: 'For "create"/"edit"/"design": how many times the model may retry before the run fails.' },
       dataNode: { type: 'boolean', description: 'For action "create": require that the produced mode declares a DataNode that runs its subgraph once per item. A requirement on top of `task` rather than a directive of its own: `task` already implies the data node, and the run is refused if the produced mode does not declare one.' },

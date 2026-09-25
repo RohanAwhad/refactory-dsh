@@ -127,6 +127,21 @@ def catalogue(*, project: Path | None = None) -> list[dict[str, Any]]:
                 "parameters": described["knobs"],
                 "nodes": described["nodes"],
                 "ports": described["ports"],
+                # The second route to every mode: the workflow spine lowers the same
+                # mode and hands it over one node at a time, which is how a run that
+                # stops at a person's gate gets that person asked. Reported rather
+                # than assumed, because a caller that only knows `action` picks the
+                # headless route and pre-answers a gate the person could have been
+                # asked at (#92, #93).
+                "interactive": True,
+                # Where the run will stop for a person, before it is opened. `fn` and
+                # `agent` gates are answered by the runtime; `user` gates are put to
+                # the person, and no verdict may be passed for them.
+                "gates": [
+                    {"id": node["id"], "user": node.get("gate_kind") == "user"}
+                    for node in described["nodes"]
+                    if node["kind"] == "gate"
+                ],
             })
     return sorted(found, key=lambda item: item["id"])
 

@@ -405,6 +405,10 @@ class Mode:
                     "call": node.call or node.evaluator,
                     "knobs": list(node.knobs),
                     "notes": node.notes,
+                    # Who answers a gate: `fn` runs its evaluator, `user` is put to a
+                    # person, `agent` to the running agent. Named for a gate only --
+                    # every other kind defaults to `fn` and it would say nothing.
+                    **({"gate_kind": node.gate_kind} if node.kind == "gate" else {}),
                 }
                 for node in (graph.nodes[nid] for nid in sorted(graph.nodes))
             ],

@@ -544,8 +544,12 @@ it('tells the model which action runs which kind of mode', async () => {
   // have directed.
   const { ctx } = await setup()
   const definition = ctx.tools.get('refactory')
-  expect(definition?.description).toContain('the action that runs it')
+  // Both routes, and who a gate belongs to: a caller told only the headless verb
+  // picks it and pre-answers a gate the person would have been asked at (#92).
+  expect(definition?.description).toContain('Every mode has two routes')
   expect(definition?.description).toContain('authoring mode by its own verb')
+  expect(definition?.description).toContain('wf_open <package>/<name>')
+  expect(definition?.description).toContain('never pass "approve" for a gate "modes" marks "(user)"')
 })
 
 describe('authoring from the Web GUI', () => {

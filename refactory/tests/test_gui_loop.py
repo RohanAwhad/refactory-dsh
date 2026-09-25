@@ -68,6 +68,43 @@ def test_a_catalogue_entry_carries_what_a_start_dialog_needs():
     assert entry["trust"] in ("trusted", "generated")
 
 
+def test_a_catalogue_entry_names_both_routes_and_the_gates_that_ask_a_person():
+    """The route and the human touchpoints are readable before the run is opened.
+
+    A caller shown only `action` picks the headless route, and a headless authoring
+    run pre-answers a gate the person would have been asked at. The spine route and
+    the gate that belongs to a person are the two facts that choice needs (#92, #93).
+    """
+    entries = {entry["id"]: entry for entry in console.catalogue(project=Path("."))}
+
+    authoring = entries["default_pack/design"]
+    assert authoring["action"] == "design"
+    assert authoring["interactive"] is True, "a mode the spine can lower says so"
+    assert {"id": "gate_strategy", "user": True} in authoring["gates"]
+    assert {"id": "gate_research", "user": False} in authoring["gates"], (
+        "a gate with a command is answered by the runtime, not by a person"
+    )
+    assert authoring["parameters"], "the knobs travel with the route"
+
+    scored = entries["circle_packing/adaptive"]
+    assert scored["action"] == "start"
+    assert scored["interactive"] is True
+    assert all(gate["user"] is False for gate in scored["gates"]), scored["gates"]
+
+
+def test_the_terminal_listing_names_the_route_and_the_person(tmp_path):
+    """`refactory list modes` says the same thing the catalogue reports, for a person."""
+    from refactory_dsh import registry
+
+    listing = registry.render_catalogue(Path("."))
+    design = next(line for line in listing.splitlines() if "default_pack/design" in line)
+    assert "run: design or wf_open" in design
+    assert "asks a person at: gate_strategy" in design
+    adaptive = next(line for line in listing.splitlines() if "circle_packing/adaptive" in line)
+    assert "run: start or wf_open" in adaptive
+    assert "asks a person" not in adaptive
+
+
 def test_a_disabled_package_is_listed_but_not_startable(tmp_path):
     """Removing a mode from the list would make a disabled package look absent."""
     from refactory_dsh import registry
