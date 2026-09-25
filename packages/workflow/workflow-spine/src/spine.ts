@@ -78,6 +78,9 @@ export type SpineNext =
   | { status: 'ready'; nodes: NodeView[]; feedback?: Record<string, string>; completed?: number; skipped?: string[]; pass?: DataPass }
   | { status: 'done'; nodes?: never; feedback?: Record<string, string>; completed?: number; skipped?: string[]; pass?: DataPass }
 
+/** How {@link Spine.amendPrompt} changes a node's prompt. */
+export type PromptAmendmentMode = 'set' | 'append'
+
 const DEFAULT_MAX_ITERATIONS = 3
 
 /** Node types the spine advances through; others are marked unsupported. */
@@ -94,6 +97,24 @@ const PROCEED = 'proceed'
 /** Normalize a verdict/condition label. Gates and evaluators name outcomes freely. */
 function label(value: string): string {
   return value.trim().toLowerCase()
+}
+
+/** The node field a prompt lives in, or `undefined` for a node type that has none. */
+function promptField(node: WorkflowNode): string | undefined {
+  if (node._type === 'AgentNode') return 'prompt_template'
+  // An LLM node's view reports `system_prompt ?? instance_prompt`, so the
+  // amendment has to land in whichever of the two that view reads.
+  if (node._type === 'LLMNode') return node.system_prompt !== undefined ? 'system_prompt' : 'instance_prompt'
+  return undefined
+}
+
+/** One node's current prompt, read from the field its view reports. */
+function promptText(node: WorkflowNode | undefined): string {
+  if (node === undefined) return ''
+  const field = promptField(node)
+  if (field === undefined) return ''
+  const value = node[field]
+  return typeof value === 'string' ? value : ''
 }
 
 /** One structural defect found by {@link validateGraph}. */
@@ -287,6 +308,7 @@ export class Spine {
   private readonly feedback: Record<string, string>
   private readonly successors: Record<string, string>
   private readonly log: string[]
+  private readonly promptEdits: Set<string>
   private pass: DataPass | undefined
 
   constructor(graph: WorkflowGraph, options?: { maxIterations?: number }) {
@@ -304,6 +326,7 @@ export class Spine {
     this.feedback = {}
     this.successors = {}
     this.log = []
+    this.promptEdits = new Set()
   }
 
   private outgoing(nid: string): WorkflowEdge[] {
@@ -730,8 +753,69 @@ export class Spine {
     return this.next()
   }
 
+  /**
+   * Reopen one completed node, so the next {@link next} reports it again.
+   *
+   * A person who says a step is wrong needs that step run again, with the
+   * corrected prompt or graph edit in force. The node's completion and skip
+   * records are cleared and the cursor is moved to exactly that node. A gate is
+   * routed with {@link verdict}, and a data node's passes belong to its runner,
+   * so neither can be reopened this way.
+   * @param node - the node id to reopen.
+   * @returns the spine's next state, whose cursor is that node.
+   */
+  redo(node: string): SpineNext {
+    const body = this.nodes.get(node)
+    if (body === undefined) throw new Error(`unknown node ${node}`)
+    if (body._type === 'GateNode') {
+      throw new Error(`node ${node} is a gate; re-route it with a verdict instead`)
+    }
+    if (body._type === 'DataNode') {
+      throw new Error(`node ${node} iterates its items and its passes are the runner's`)
+    }
+    if (!this.completed.includes(node)) {
+      throw new Error(`node ${node} has not completed, so there is nothing to redo`)
+    }
+    this.completed = this.completed.filter(entry => entry !== node)
+    this.skipped = this.skipped.filter(entry => entry !== node)
+    this.cursor = [node]
+    this.log.push(`redid ${node}`)
+    return this.next()
+  }
+
+  /**
+   * Amend one node's prompt, so a re-run of that node uses the corrected task.
+   *
+   * Only an `AgentNode` or `LLMNode` carries a prompt. The amendment writes to
+   * whichever field that node's view reports, so {@link view} carries the
+   * correction with no further bookkeeping. `set` replaces the prompt; `append`
+   * extends it on its own paragraph, and equals `set` when there is no prompt yet.
+   * @param node - the node id whose prompt is amended.
+   * @param text - the amendment text; must not be empty.
+   * @param mode - `set` replaces the prompt, `append` adds a paragraph to it.
+   * @returns nothing; the amended prompt is reported by {@link state} and {@link view}.
+   */
+  amendPrompt(node: string, text: string, mode: PromptAmendmentMode): void {
+    const body = this.nodes.get(node)
+    if (body === undefined) throw new Error(`unknown node ${node}`)
+    const field = promptField(body)
+    if (field === undefined) {
+      throw new Error(`node ${node} is a ${body._type} and carries no prompt`)
+    }
+    if (text.trim() === '') throw new Error('prompt amendment text is required')
+    const existing = promptText(body)
+    body[field] = mode === 'append' && existing !== '' ? `${existing}\n\n${text}` : text
+    this.promptEdits.add(node)
+    this.log.push(`prompt ${node} ${mode}`)
+  }
+
   /** Full mutable state (for `wf_state`). */
   state(): Record<string, unknown> {
+    const prompts: Record<string, string> = {}
+    for (const node of this.promptEdits) {
+      const body = this.nodes.get(node)
+      if (body !== undefined) prompts[node] = promptText(body)
+    }
     return {
       workflow: this.workflow,
       project_dir: this.projectDir,
@@ -741,6 +825,7 @@ export class Spine {
       gate_verdicts: Object.fromEntries(this.gateVerdicts),
       iterations: { ...this.iterations },
       feedback: { ...this.feedback },
+      prompts,
       ...(this.pass === undefined ? {} : { pass: { ...this.pass } }),
       log: [...this.log],
     }

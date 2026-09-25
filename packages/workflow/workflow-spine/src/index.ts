@@ -33,7 +33,7 @@ import type { WorkflowGraph } from './types.ts'
 export { Spine, validateGraph } from './spine.ts'
 export { commandOf, dataCommandOf, isDeterministic, runDataCommand, verdictOf, NODE_ENV_KEY } from './execute.ts'
 export type { CommandFailure, CommandOutcome, CommandRunnerConfig, NodeManifest } from './execute.ts'
-export type { DataPass, GraphIssue, NodeView, SpineNext } from './spine.ts'
+export type { DataPass, GraphIssue, NodeView, PromptAmendmentMode, SpineNext } from './spine.ts'
 export type { WorkflowEdge, WorkflowGraph, WorkflowNode } from './types.ts'
 
 export const name = 'workflow-spine'
@@ -399,7 +399,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.systemPrompt.section({
     name: `tool:${toolPrefix}-spine`,
     order: ctx.systemPrompt.getSectionOrder('TOOL_WORKFLOW'),
-    text: `You are the CEO of a workflow run, and you are DRIVING A WORKFLOW GRAPH. Your coding tools (bash, write, edit, web, skill) are disabled — you cannot implement, edit files, or browse yourself. Advance only through the wf tools. ${toolPrefix}_next is the ONLY way to learn what is due now: call it first, and call it again after every ${toolPrefix}_done / ${toolPrefix}_verdict / ${toolPrefix}_edit / ${toolPrefix}_expand — those tools only confirm the mutation, they do not tell you what is next. For an AgentNode or LLMNode, spawn a subagent (the subagent tool) whose task is the node's prompt_template, and explicitly tell the subagent to read the node's reads files and write its result to the node's writes file (the filename in the node's writes field, e.g. candidate.py) — wait for it, then report the node with ${toolPrefix}_done. Every path in a node's reads and writes is relative to ${runDirectory}, and the subagent's own working directory is NOT that directory: give the subagent the absolute path (${runDirectory}/<the path>) for each file it must read or write, and tell it to write nowhere else. For a FnNode, follow its content and report ${toolPrefix}_done. Route a gate with ${toolPrefix}_verdict, answering with one of the verdicts the gate view lists (proceed/reloop/halt, or the gate's own named outcomes). For a user gate the runtime asks the person itself and routes the answer they give: call ${toolPrefix}_verdict with the gate id and never answer for them. Fan out a director's plan with ${toolPrefix}_expand, and apply user steering ("skip the tests") with ${toolPrefix}_edit. A DataNode is iterated for you: the runtime selects its items and hands you the subgraph's nodes one pass at a time, with the item being processed in the payload's item field and on disk as the node's current item file. Do not try to iterate it yourself, and do not report the data node — or the pass's last node — before its work is done. Never skip, reorder, or bypass a node — the runner refuses to advance until you report the current node complete.`,
+    text: `You are the CEO of a workflow run, and you are DRIVING A WORKFLOW GRAPH. Your coding tools (bash, write, edit, web, skill) are disabled — you cannot implement, edit files, or browse yourself. Advance only through the wf tools. ${toolPrefix}_next is the ONLY way to learn what is due now: call it first, and call it again after every ${toolPrefix}_done / ${toolPrefix}_verdict / ${toolPrefix}_edit / ${toolPrefix}_expand — those tools only confirm the mutation, they do not tell you what is next. For an AgentNode or LLMNode, spawn a subagent (the subagent tool) whose task is the node's prompt_template, and explicitly tell the subagent to read the node's reads files and write its result to the node's writes file (the filename in the node's writes field, e.g. candidate.py) — wait for it, then report the node with ${toolPrefix}_done. Every path in a node's reads and writes is relative to ${runDirectory}, and the subagent's own working directory is NOT that directory: give the subagent the absolute path (${runDirectory}/<the path>) for each file it must read or write, and tell it to write nowhere else. For a FnNode, follow its content and report ${toolPrefix}_done. Route a gate with ${toolPrefix}_verdict, answering with one of the verdicts the gate view lists (proceed/reloop/halt, or the gate's own named outcomes). For a user gate the runtime asks the person itself and routes the answer they give: call ${toolPrefix}_verdict with the gate id and never answer for them. Fan out a director's plan with ${toolPrefix}_expand, and apply user steering ("skip the tests") with ${toolPrefix}_edit. When a person says a step is wrong, read the run's ledger if one is configured, then use ${toolPrefix}_edit with \`set-prompt\` or \`append-prompt\` to correct that node's prompt and ${toolPrefix}_redo to run the node again with the correction. A DataNode is iterated for you: the runtime selects its items and hands you the subgraph's nodes one pass at a time, with the item being processed in the payload's item field and on disk as the node's current item file. Do not try to iterate it yourself, and do not report the data node — or the pass's last node — before its work is done. Never skip, reorder, or bypass a node — the runner refuses to advance until you report the current node complete.`,
   })
 
   ctx.tools.register(defineTool({
@@ -448,16 +448,36 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.tools.register(defineTool({
     name: `${toolPrefix}_edit`,
-    description: 'Edit the live graph: `skip` hot-removes a node (and, for a fork, its targets); `unskip` restores it. This is how a user steering instruction ("skip the tests") becomes a structured change the runner enforces. Returns only a confirmation — call `wf_next` to learn the next node.',
+    description: 'Edit the live graph: `skip` hot-removes a node (and, for a fork, its targets); `unskip` restores it; `set-prompt` replaces an agent/llm node\'s prompt and `append-prompt` adds a paragraph to it. This is how a person\'s correction reaches the node\'s prompt — follow it with `wf_redo` to run that node again. Returns only a confirmation — call `wf_next` to learn the next node.',
     parameters: {
       node: { type: 'string', required: true, description: 'The node id to edit.' },
-      action: { type: 'string', required: true, enum: ['skip', 'unskip'], description: 'The edit.' },
+      action: { type: 'string', required: true, enum: ['skip', 'unskip', 'set-prompt', 'append-prompt'], description: 'The edit.' },
+      text: { type: 'string', description: 'The new prompt text; required for `set-prompt` and `append-prompt`.' },
     },
     output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
     execute(args) {
       if (args.action === 'skip') spine.skip(args.node)
-      else spine.unskip(args.node)
+      else if (args.action === 'unskip') spine.unskip(args.node)
+      else {
+        if (args.text === undefined || args.text.trim() === '') {
+          throw new Error(`${toolPrefix}_edit action '${args.action}' needs a non-empty prompt amendment in 'text'`)
+        }
+        spine.amendPrompt(args.node, args.text, args.action === 'set-prompt' ? 'set' : 'append')
+      }
       return sync(json({ status: 'edited', node: args.node, action: args.action }))
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: `${toolPrefix}_redo`,
+    description: 'Reopen a completed node so the next `wf_next` returns it again; an amended prompt or other knob is what the re-run uses. Use this after correcting a node to run that node once more. Returns only a confirmation — call `wf_next` to get the node back.',
+    parameters: {
+      node: { type: 'string', required: true, description: 'The completed node id to reopen.' },
+    },
+    output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
+    execute(args) {
+      spine.redo(args.node)
+      return sync(json({ status: 'redone', node: args.node }))
     },
   }))
 
@@ -478,7 +498,7 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.tools.register(defineTool({
     name: `${toolPrefix}_state`,
-    description: 'Return the full live state: cursor, completed, skipped, gate verdicts, iteration counts, feedback, and the run log.',
+    description: 'Return the full live state: cursor, completed, skipped, gate verdicts, iteration counts, feedback, amended prompts, and the run log.',
     parameters: {},
     output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
     execute() {
