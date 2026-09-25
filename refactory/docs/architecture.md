@@ -525,6 +525,8 @@ newcomer's first reading a description of the wrong system.
 
 ## Where to go next
 
+- [The concepts](concepts.md) — the nouns first: a package, a mode, the outer loop
+  and the GUI, with pointers into the detail here.
 - [API reference](api/index.md) — every public module and symbol.
 - [Tutorials](tutorials/index.md) — the running example, built up.
 - [Packing a tool that is not Python](packing-tools.md) — how a package declares a

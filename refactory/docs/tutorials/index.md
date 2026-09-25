@@ -1,6 +1,11 @@
 # Tutorials
 
-Seven walkthroughs, in the order a person meets the system. Each one is a sequence
+Seven walkthroughs, in the order a person meets the system.
+
+**Want the nouns before the commands?** [The concepts](../concepts.md) is the
+mental model: what a package is, what a mode is and how one is defined, what the
+outer loop searches, every option it takes, and what the two GUI surfaces offer.
+These tutorials assume you have read it or would rather learn by doing. Each one is a sequence
 of commands that were run against this checkout, with the output they produced.
 
 The example running through all of them is **circle packing**: place circles on a

@@ -26,6 +26,7 @@ PYTHON = ROOT / ".venv" / "bin" / "python"
 #: Every doc a stranger is told to read, in the order they meet it.
 SHIPPED_DOCS = (
     ROOT / "README.md",
+    DOCS / "concepts.md",
     DOCS / "tutorials" / "index.md",
     DOCS / "tutorials" / "01-write-a-mode.md",
     DOCS / "tutorials" / "02-optimize-it.md",

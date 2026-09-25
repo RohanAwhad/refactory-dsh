@@ -231,6 +231,7 @@ The panel reads the same console the CLI does, so a run started in the browser i
 
 | document | what it answers |
 |---|---|
+| **[concepts.md](refactory/docs/concepts.md)** | what a **package**, a **mode**, the **outer loop** and the **GUI** are — the mental model, before the commands |
 | **[`refactory/docs/tutorial.html`](refactory/docs/tutorial.html)** | every mode, both v2 pipelines, the outer loop and all its options, the GUI — as one generated page |
 | [tutorials/](refactory/docs/tutorials/index.md) | how do I do the next thing, in order |
 | [architecture.md](refactory/docs/architecture.md) | what the layers are, and which one owns a behaviour |
