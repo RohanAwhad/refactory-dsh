@@ -17,8 +17,8 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import z from '@deepseek-ai/schemastery'
 import { scopeChainOf, scopeOf } from '@deepseek-ai/dsh-scope'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -186,6 +186,37 @@ function lastLine(text: string | null | undefined): string {
 }
 
 /**
+ * What one deterministic node left in its run directory, for the CEO to report.
+ *
+ * A node's outputs are the files it declared it writes and that now exist; a
+ * declaration that names a file the command did not produce is not an output,
+ * and saying otherwise would let the CEO report work that did not happen. The
+ * facts are the run's own `facts.json`, which the node command rewrites and
+ * which is empty when no command has run yet.
+ * @param node - the node that just ran.
+ * @param workdir - the run directory its command ran in.
+ * @returns the node's id and type, plus the outputs and facts that exist.
+ */
+function recordedStep(node: NodeView, workdir: string | undefined): RanStep {
+  const step: RanStep = { node: node.id, type: node._type }
+  if (workdir === undefined) return step
+  const outputs = (node.writes ?? []).filter(rel => rel !== '' && existsSync(resolve(workdir, rel)))
+  if (outputs.length > 0) step.outputs = outputs
+  try {
+    // The runner writes one JSON object; anything else is not facts a reader can
+    // use, and is reported as absent rather than as a malformed value.
+    const parsed: unknown = JSON.parse(readFileSync(join(workdir, 'facts.json'), 'utf8'))
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      step.facts = parsed as JsonValue
+    }
+  } catch {
+    // No facts file yet, or one a command left mid-write: the run directory
+    // simply carries no facts for this step.
+  }
+  return step
+}
+
+/**
  * The run directory a session gets when the person names none.
  *
  * A chat has no terminal to name a directory, and the console's `open` verb
@@ -208,6 +239,35 @@ function derivedWorkdir(session: string, mode: string): string {
 interface ToolExec {
   agent?: Agent
   signal?: AbortSignal
+}
+
+/**
+ * One deterministic node a `wf_next` (or `wf_open`) ran for the CEO.
+ *
+ * With `interactiveOpen` a call runs exactly one deterministic node, so the
+ * result can name the node that just ran and what it left in the run directory
+ * alongside the nodes still due. Neither field is invented when the run
+ * directory does not carry it: a node that declares no artifact has no
+ * `outputs`, and a run whose commands have not written `facts.json` has no
+ * `facts`.
+ */
+interface RanStep {
+  /** The node that just ran. */
+  node: string
+  /** Its node type, so a reader can tell an op from a gate. */
+  type: string
+  /** The node's declared writes that now exist in the run directory, relative to it. */
+  outputs?: string[]
+  /** The run's `facts.json` as the node's command left it. */
+  facts?: JsonValue
+}
+
+/** The item a data pass already materialised on disk, so it is begun once per item. */
+interface Materialised {
+  /** `<node>:<index>` of the pass whose item is on disk. */
+  key: string
+  /** The item `begin` printed for that pass. */
+  item: unknown
 }
 
 /** A graph opened at run time, and the session that owns it. */
@@ -311,6 +371,12 @@ export function apply(ctx: Context, config: Config): void {
   // and every tool call resolves that claim before touching a spine.
   let opened: OpenRun | undefined
 
+  // The item a pass already materialised, kept between calls rather than inside
+  // one `drain`. With `interactiveOpen` a call returns after a single
+  // deterministic node, so a pass's item outlives the call that began it and
+  // re-running `begin` for it would re-run the Task's setup once per node.
+  let materialised: Materialised | undefined
+
   /** The id of the session an execution belongs to, when it has an agent. */
   function sessionIdOf(exec: ToolExec): string | undefined {
     const session = exec.agent?.session
@@ -399,7 +465,7 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   /**
-   * Run every deterministic node the cursor is sitting on, so `wf_next` reports
+   * Run the deterministic nodes the cursor is sitting on, so `wf_next` reports
    * only work a model must do. A node that fails leaves the cursor where it is
    * and is reported instead: the graph must not advance past a step that did
    * not happen.
@@ -409,6 +475,13 @@ export function apply(ctx: Context, config: Config): void {
    * same way it walks the rest of the graph, and closes the pass when its exit
    * completes — which is what makes one pass land per item on this runtime, the way
    * the walking executor gives it.
+   *
+   * With `interactiveOpen` the loop stops after **one** deterministic node and
+   * returns, so each `wf_next` is one node the CEO can watch and steer between.
+   * Opening and closing a data pass are loop bookkeeping, not nodes, so they do
+   * not consume that one-node budget and a pass that begins always continues on
+   * the calls that follow. A configured graph (`interactiveOpen: false`) keeps
+   * draining every deterministic node in one call.
    * @param spine - the run to advance.
    * @param workdir - the run directory node commands run in.
    * @param commandEnv - the run's own environment for node commands.
@@ -419,8 +492,12 @@ export function apply(ctx: Context, config: Config): void {
     workdir: string | undefined,
     commandEnv: Record<string, string>,
     dataCommand: string,
-  ): Promise<{ next: SpineNext; failure?: CommandFailure; item?: unknown }> {
+  ): Promise<{ next: SpineNext; failure?: CommandFailure; item?: unknown; ran?: RanStep | undefined }> {
     if (!config.executeCommands) return { next: spine.next() }
+    // A configured graph drains a whole pass within one call, so its materialised
+    // item is per-call state exactly as before; only the one-node interactive
+    // drain has to carry it across calls.
+    if (!interactiveOpen) materialised = undefined
     const shell = ctx.get('shell')
     if (shell === undefined) {
       // Without an executor nothing deterministic can run. That is only a problem
@@ -450,8 +527,9 @@ export function apply(ctx: Context, config: Config): void {
       sandboxPolicy: { mode: config.commandSandboxMode as 'danger-full-access', workspaceRoot: workdir ?? process.cwd() },
       ...(workdir === undefined ? {} : { workdir }),
     }
-    /** `<node>:<index>` of the item already materialised on disk. */
-    let begun: string | undefined
+    // The node this call ran, when the composition stops after one. A configured
+    // graph runs many per call and reports none of them individually.
+    let ran: RanStep | undefined
     let item: unknown
 
     /** Select a data node's items and open its first pass. */
@@ -469,16 +547,19 @@ export function apply(ctx: Context, config: Config): void {
       return {}
     }
 
-    /** Materialise the running pass's item, once per item. */
+    /** Materialise the running pass's item, once per item across calls. */
     const beginItem = async (): Promise<{ failure?: CommandFailure }> => {
       const pass = spine.passOf()
       if (pass === undefined || pass.finished) return {}
       const key = `${pass.node}:${pass.index}`
-      if (begun === key) return {}
+      if (materialised?.key === key) {
+        item = materialised.item
+        return {}
+      }
       const data = spine.view(pass.node)
       const started = await runDataCommand(shell, data, 'begin', runner, pass.index)
       if (!started.ok) return { failure: started }
-      begun = key
+      materialised = { key, item: started.value }
       item = started.value
       return {}
     }
@@ -490,7 +571,7 @@ export function apply(ctx: Context, config: Config): void {
       const data = spine.view(pass.node)
       const ended = await runDataCommand(shell, data, 'end', runner, pass.index)
       if (!ended.ok) return { failure: ended }
-      begun = undefined
+      materialised = undefined
       item = undefined
       spine.endPass()
       return {}
@@ -498,25 +579,30 @@ export function apply(ctx: Context, config: Config): void {
 
     for (;;) {
       const closed = await close()
-      if (closed.failure !== undefined) return { next: spine.next(), failure: closed.failure }
+      if (closed.failure !== undefined) return { next: spine.next(), failure: closed.failure, ran }
       const state = spine.next()
-      if (state.status === 'done') return { next: state, item }
+      if (state.status === 'done') return { next: state, item, ran }
       const started = await beginItem()
-      if (started.failure !== undefined) return { next: state, failure: started.failure }
+      if (started.failure !== undefined) return { next: state, failure: started.failure, ran }
       const data = state.nodes.find(node => node._type === 'DataNode')
       if (data !== undefined) {
         const openedPass = await openPass(data)
-        if (openedPass.failure !== undefined) return { next: state, failure: openedPass.failure }
+        if (openedPass.failure !== undefined) return { next: state, failure: openedPass.failure, ran }
         continue
       }
       const automatic = state.nodes.filter(isDeterministic)
-      if (automatic.length === 0) return { next: state, item }
-      for (const node of automatic) {
+      if (automatic.length === 0) return { next: state, item, ran }
+      // One node per call is the interactive contract; the configured graph keeps
+      // walking every automatic node the cursor is sitting on.
+      const due = interactiveOpen ? automatic.slice(0, 1) : automatic
+      for (const node of due) {
         const outcome = await runDeterministic(shell, node, runner)
-        if (!outcome.ok) return { next: state, failure: outcome }
+        if (!outcome.ok) return { next: state, failure: outcome, ran }
         if (outcome.verdict === undefined) spine.complete(node.id)
         else spine.verdict(node.id, outcome.verdict)
+        if (interactiveOpen) ran = recordedStep(node, workdir)
       }
+      if (interactiveOpen) return { next: spine.next(), item, ran }
     }
   }
 
@@ -533,7 +619,7 @@ export function apply(ctx: Context, config: Config): void {
     commandEnv: Record<string, string>,
     dataCommand: string,
   ): Promise<JsonValue> {
-    const { next, failure, item } = await drain(spine, workdir, commandEnv, dataCommand)
+    const { next, failure, item, ran } = await drain(spine, workdir, commandEnv, dataCommand)
     if (failure !== undefined) {
       // The node's own stderr is why it failed. The exit code alone sends a reader
       // back to re-run the node to find out, so the reason is recorded with it.
@@ -550,8 +636,11 @@ export function apply(ctx: Context, config: Config): void {
     }
     recordStatus(spine, workdir, next.status === 'done' ? 'done' : 'ready')
     // The item being iterated travels with the node views, so the subagent for a
-    // pass is handed the item rather than being sent to find it on disk.
-    return json(item === undefined ? next : { ...next, item })
+    // pass is handed the item rather than being sent to find it on disk. Under
+    // `interactiveOpen` the node this call ran travels the same way, so the CEO
+    // can say which one it was and what it left behind.
+    const view = item === undefined ? next : { ...next, item }
+    return json(ran === undefined ? view : { ...view, ran })
   }
 
   /**
@@ -625,7 +714,12 @@ export function apply(ctx: Context, config: Config): void {
   const openInstruction = interactiveOpen
     ? ` When the person asks you to run a mode and see each step, open it with ${toolPrefix}_open `
       + '(pass the mode as <package>/<name>), then drive it with '
-      + `${toolPrefix}_next, reporting each node as it completes.`
+      + `${toolPrefix}_next, reporting each node as it completes: each call runs exactly one `
+      + 'deterministic node and names it under `ran` with the outputs and facts it left in the run '
+      + `directory, so say what it produced before acting on what is due next. A FnNode, Study or `
+      + '`fn` gate listed in `nodes` is deterministic — do NOT run its command and do NOT call '
+      + `${toolPrefix}_done for it; call ${toolPrefix}_next again and the runtime runs it. `
+      + `${toolPrefix}_done is only for a node whose work you or a subagent did.`
     : ''
   ctx.systemPrompt.section({
     name: `tool:${toolPrefix}-spine`,
@@ -639,7 +733,7 @@ export function apply(ctx: Context, config: Config): void {
   if (interactiveOpen) {
     ctx.tools.register(defineTool({
       name: `${toolPrefix}_open`,
-      description: `Open a mode's graph and claim it for this session, so it can be driven node by node. Pass the mode as \`<package>/<name>\`; the open command lowers it and this reads the graph it wrote. Returns the first view from \`${toolPrefix}_next\`, so a start node is due immediately. One driven run at a time is open in a session: a second open is refused until that run finishes. All the other \`${toolPrefix}_*\` tools work on the opened run, and refuse when this session has not opened one.`,
+      description: `Open a mode's graph and claim it for this session, so it can be driven node by node. Pass the mode as \`<package>/<name>\`; the open command lowers it and this reads the graph it wrote. Returns the post-drain view, so a deterministic start node has already run and is reported under \`ran\` rather than left due. One driven run at a time is open in a session: a second open is refused until that run finishes. All the other \`${toolPrefix}_*\` tools work on the opened run, and refuse when this session has not opened one.`,
       parameters: {
         mode: { type: 'string', required: true, description: 'The mode to run, as `<package>/<name>`.' },
         knobs: { type: 'array', items: { type: 'string' }, description: 'Knob overrides for this run, each as `NAME=VALUE` (repeatable).' },
@@ -722,6 +816,10 @@ export function apply(ctx: Context, config: Config): void {
           throw new Error(`invalid workflow graph: ${rendered}`)
         }
         const spine = new Spine(graph, { maxIterations })
+        const runEnv = payloadEnv(payload.commandEnv) ?? config.commandEnv
+        const runData = typeof payload.dataCommand === 'string' && payload.dataCommand !== ''
+          ? payload.dataCommand
+          : config.dataCommand
         opened = {
           session: owner,
           spine,
@@ -729,19 +827,22 @@ export function apply(ctx: Context, config: Config): void {
           name: typeof payload.name === 'string' && payload.name !== '' ? payload.name : graph.name,
           // The run's own values when the payload carries them; the composition's
           // static ones otherwise, which is what the graph profile relies on.
-          commandEnv: payloadEnv(payload.commandEnv) ?? config.commandEnv,
-          dataCommand: typeof payload.dataCommand === 'string' && payload.dataCommand !== ''
-            ? payload.dataCommand
-            : config.dataCommand,
+          commandEnv: runEnv,
+          dataCommand: runData,
         }
-        return sync(json(spine.next()))
+        // A new run owns no materialised item; a fresh claim cannot inherit one.
+        materialised = undefined
+        // The post-drain view, not `spine.next()`: a deterministic start node runs
+        // here, exactly as the next `<toolPrefix>_next` would, so it is never
+        // reported as work the model owes.
+        return report(spine, workdir, runEnv, runData)
       },
     }))
   }
 
   ctx.tools.register(defineTool({
     name: `${toolPrefix}_next`,
-    description: 'Get the next node(s) the workflow graph says are due now. Deterministic nodes (a command an `fn` gate or an `FnNode` runs) and a data node\'s item passes are executed for you and do not appear. Returns `{ status, nodes }`: for `ready`, the node views you must act on (agent task / one-shot LLM / user gate / fork) with the fields you need, plus `item` while a data node is iterating; for `done`, the run is complete; for `failed`, a deterministic node failed and the cursor has not moved. Always call this first and act only on what it returns — never skip or reorder.',
+    description: 'Get the next node(s) the workflow graph says are due now. Deterministic nodes (a command an `fn` gate or an `FnNode` runs) and a data node\'s item passes are executed for you and do not appear, except that when a mode is open interactively exactly one deterministic node runs per call: that node is named under `ran` (with its id, declared outputs and the run\'s facts), and `nodes` then names what is due next — which may itself be deterministic, in which case call this tool again rather than running it or calling `wf_done`. Returns `{ status, nodes }`: for `ready`, the node views you must act on (agent task / one-shot LLM / user gate / fork) with the fields you need, plus `item` while a data node is iterating; for `done`, the run is complete; for `failed`, a deterministic node failed and the cursor has not moved. Always call this first and act only on what it returns — never skip or reorder.',
     parameters: {},
     output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
     execute(_args, exec) {
@@ -752,7 +853,7 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.tools.register(defineTool({
     name: `${toolPrefix}_done`,
-    description: 'Mark one non-gate node complete and advance the spine. Returns only a confirmation — call `wf_next` to learn the next node. Call this after the node `wf_next` returned is done (e.g. after the subagent for an AgentNode finishes, or a deterministic FnNode is satisfied).',
+    description: 'Mark one non-gate node complete and advance the spine. Returns only a confirmation — call `wf_next` to learn the next node. Call this after the node `wf_next` returned is done (e.g. after the subagent for an AgentNode finishes). Never call this for a deterministic node (`FnNode`/`Study`, or an `fn` gate) when the composition runs commands: the runtime runs those itself on the next `wf_next`, and marking one complete here would skip its work.',
     parameters: {
       node: { type: 'string', required: true, description: 'The node id to mark complete.' },
     },
