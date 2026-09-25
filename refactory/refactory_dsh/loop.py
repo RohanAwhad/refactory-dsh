@@ -1312,7 +1312,11 @@ class Loop(OuterLoop):
         """
         from refactory_dsh.adopt import adopt as adopt_winner
 
-        name = as_name or f"{self.package}_adopted"
+        # The identifier's package part, not `self.package`: that is the loaded
+        # `Package` object, and its `str()` is a dataclass repr -- which became a
+        # default name the filesystem refused with "File name too long" the first
+        # time the panel adopted without naming a package.
+        name = as_name or f"{self.mode_id.split('/', 1)[0]}_adopted"
         outcome["as"] = name
         try:
             written = adopt_winner(

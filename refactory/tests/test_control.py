@@ -227,6 +227,38 @@ def test_adopt_now_writes_a_package_without_ending_the_run(tmp_path):
     assert "already exists" in str(again.get("error")), again
 
 
+def test_adopt_now_with_no_name_uses_the_packages_own_name(tmp_path):
+    """The panel's Adopt best now names nothing, so the default has to be a name.
+
+    It was `f"{self.package}_adopted"`, where `self.package` is the loaded `Package`
+    object: the default became a dataclass repr and the filesystem refused it with
+    "File name too long". The GUI's Adopt best now is the caller that names nothing,
+    which is why no unit test with an explicit `as` caught it.
+    """
+    loop = Loop(MODE, _config(tmp_path, epochs=1), project=tmp_path)
+    loop.run()
+
+    outcome = loop._honor({"action": "adopt"})
+    assert "error" not in outcome, outcome
+    assert outcome["as"] == "circle_packing_adopted"
+    assert (tmp_path / ".factory" / "packages" / "circle_packing_adopted" / "mode.py").exists()
+
+
+def test_a_destination_that_is_not_a_package_name_is_refused(tmp_path):
+    """One directory, named like a package: not a path, not a repr, not empty."""
+    loop = Loop(MODE, _config(tmp_path, epochs=1), project=tmp_path)
+    loop.run()
+
+    # An empty `as` is not a name, it is "no name given": that falls back to the
+    # default above. The rest are refusals.
+    for wrong in ("../../escape", "Not A Name", "with/slash"):
+        outcome = loop._honor({"action": "adopt", "as": wrong})
+        assert "error" in outcome, wrong
+        assert "package name" in outcome["error"], outcome
+    assert not (tmp_path / "escape").exists()
+    assert not (tmp_path.parent / "escape").exists()
+
+
 def test_a_one_shot_act_is_not_repeated_at_the_next_boundary(tmp_path):
     """A boundary that adopted the same winner every epoch is a bug, not enthusiasm."""
     loop = Loop(MODE, _config(tmp_path), project=Path("."))

@@ -44,6 +44,22 @@ class AdoptionError(RuntimeError):
     """A winner cannot be adopted. Always names what is wrong."""
 
 
+def _check_name(as_name: str) -> None:
+    """Refuse a destination name that is not the name of a package.
+
+    `adopt` writes one directory under the workspace root, so the name is one path
+    component and nothing else -- and it is a *package* name, which is the thing the
+    written `__init__.py` will declare. Both rules are the package's own, so a name
+    this accepts cannot produce a package the registry refuses to import.
+    """
+    from refactory_dsh.nn import Package, PackageError
+
+    try:
+        Package(name=as_name)
+    except PackageError as error:
+        raise AdoptionError(f"{as_name!r} is not a package name: {error}") from error
+
+
 def _journal_entries(run_root: Path) -> list[dict[str, Any]]:
     from refactory_dsh.history import JOURNAL
 
@@ -212,6 +228,11 @@ def adopt(
     """
     run_root = Path(run_root)
     project = Path(project or Path("."))
+    # The name is checked by the same rule the package it writes is held to, and it
+    # is checked here rather than after the directory exists: a name that is not a
+    # package name used to fail as a half-written package, or as whatever the
+    # filesystem said about a path that is not one component.
+    _check_name(as_name)
     winner = best(run_root)
 
     if not mode:
