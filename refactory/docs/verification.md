@@ -51,7 +51,12 @@ declares them under `patchedDependencies`:
   `ui-brand-refactory`, disables `ui-brand-official`, and defaults the agent preset to
   `ceo`. Its manifest also declares our three packages, so the loader resolves them.
 - `@deepseek-ai/dsh-agent-presets` ships the `ceo` preset directory, which mounts
-  `tool-refactory` and the re:factory persona.
+  `tool-refactory`, the re:factory persona, and the **interactive workflow spine**. The
+  spine is mounted with `interactiveOpen`, so the chat's CEO can open a mode with `wf_open`
+  and drive it with `wf_next`; it runs one deterministic node per call, refuses a caller
+  that is not the session that opened the run, and answers a `user` gate through
+  `userQuestions`. Mounting it inside the preset is what makes the spine's own guard
+  deny the CEO's coding tools, so the CEO cannot implement a node by hand.
 - `@deepseek-ai/dsh-headless` accepts `--provider` and `--model` and makes a named
   selection the model-selection middleware's current one, so
   `refactory_dsh/model.py`'s completion client uses the model a caller named.
@@ -104,6 +109,14 @@ with no preset returns `agentPreset: ceo`, and expanding the right sidebar and p
 **Modes** renders the picker. `ui-refactory/tests/remote.client.spec.ts` covers the call
 mapping, so a wrong endpoint or argument name fails a test; a future change to the patches
 or to the harness's client assembly can still break the page without a red test.
+
+The in-session drive is covered by `workflow-spine/tests/open.spec.ts` (open claims the
+run, one node per `wf_next`, the refusals, the post-drain open view, a data pass crossing
+calls, and the configured-graph path unchanged) and by hand in a browser: the CEO calls
+`wf_open` then one `wf_next` per node, no `bash` call appears in the transcript, the run
+reaches `done` with the mode's facts, and a second `wf_open` refuses with `a run is already
+open in this session`. One in-session run per session is the accepted limit; a second
+session is refused, and the detached search (`refactory start`) is untouched.
 
 The Typert Remote faces are kept in step by hand. The generated artifacts would make that
 impossible to get wrong, and issue #85 carries why they are not generated.

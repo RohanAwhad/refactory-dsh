@@ -212,6 +212,8 @@ The tab exists because of the pnpm patches in `patches/`: `@deepseek-ai/dsh-web-
 
 The panel reads the same console the CLI does, so a run started in the browser is the run `refactory status --run <id>` reads back. [The GUI tutorial](refactory/docs/tutorials/05-drive-it-from-the-gui.md) walks the conversation surface, and [the panel tutorial](refactory/docs/tutorials/07-pick-and-watch-from-the-panel.md) covers the widget.
 
+**Drive a mode step by step in the chat.** Ask the CEO to open one and walk it, for example `Open counting_pack/fixed_step and drive it one node at a time`. The CEO calls `wf_open`, then one `wf_next` per node, reporting each; its coding tools are denied while a run is open, so it cannot do the work itself. Tell it a step is wrong and it amends that node's prompt (`wf_edit set-prompt`/`append-prompt`) and re-runs it (`wf_redo`). A `user` gate is put to you as a question in the chat. One mode at a time per session; a detached search (`Start`) is unaffected.
+
 ## Documentation
 
 | document | what it answers |
