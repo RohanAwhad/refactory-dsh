@@ -692,6 +692,41 @@ def test_the_open_verb_lowers_a_mode_for_a_driver(tmp_path):
     assert Path(payload["declarations"]).exists()
 
 
+def test_the_open_payload_carries_the_runs_own_environment(tmp_path):
+    """The values are per run, so the driver cannot get them from a composition.
+
+    The node runner reads `REFACTORY_WORKDIR`, `REFACTORY_PROJECT` and the knob
+    JSON, and the item loader reads `REFACTORY_WORKDIR`; the interpreter that
+    resolves a bare `python` leads `PATH`. All of them name *this* run.
+    """
+    project = Path(".").resolve()
+    workdir = tmp_path / "driven-env"
+    payload = _cli(
+        "open", MODE,
+        "--project", str(project),
+        "--workdir", str(workdir),
+    )
+    env = payload["commandEnv"]
+    assert isinstance(env, dict)
+    assert env["REFACTORY_WORKDIR"] == str(workdir.resolve())
+    assert env["REFACTORY_PROJECT"] == str(project)
+    assert env["PATH"].startswith(str(Path(sys.executable).parent) + ":"), env["PATH"]
+    knobs = json.loads(env["REFACTORY_KNOBS"])
+    assert isinstance(knobs, dict) and knobs, knobs
+    assert payload["dataCommand"] == "python -m refactory_dsh.items"
+
+
+def test_a_knob_override_reaches_the_node_environment(tmp_path):
+    workdir = tmp_path / "driven-knob"
+    payload = _cli(
+        "open", MODE,
+        "--project", str(Path(".").resolve()),
+        "--workdir", str(workdir),
+        "--knob", "grid=24",
+    )
+    assert json.loads(payload["commandEnv"]["REFACTORY_KNOBS"])["grid"] == 24
+
+
 def test_open_refuses_a_missing_workdir_without_a_traceback():
     result = subprocess.run(
         [sys.executable, "-m", "refactory_dsh.console", "open", MODE],

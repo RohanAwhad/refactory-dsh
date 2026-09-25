@@ -219,6 +219,50 @@ def _run_id(mode: str) -> str:
 # ── lowering a mode for a driver that walks it node by node ────────────────
 
 
+#: The data node's item loader, as the composition mounts it. Spelled here
+#: because the console is the Python owner the Web composition reaches, and the
+#: graph bundle names the same module in its own `dataCommand`; the interpreter
+#: that resolves the bare `python` leads :func:`_node_environment`'s `PATH`.
+DATA_COMMAND = "python -m refactory_dsh.items"
+
+
+def _node_environment(
+    mode: str,
+    *,
+    project: Path,
+    workdir: Path,
+    knobs: list[str] | None = None,
+) -> dict[str, str]:
+    """The environment a node command of **this** run runs under.
+
+    The values are per run -- the work directory and the mode's knobs -- and a Web
+    process serves many runs, so they cannot be mount-time configuration. Both
+    owners are reused rather than restated: the lowering owns the knob values
+    (:func:`refactory_dsh.lowering.knob_environment`) and the node runner owns the
+    names it reads (``refactory_dsh/run.py`` reads ``REFACTORY_WORKDIR``,
+    ``REFACTORY_PROJECT`` and ``REFACTORY_KNOBS``, and
+    ``refactory_dsh/items.py`` reads ``REFACTORY_WORKDIR``).
+
+    ``PATH`` leads with the run's interpreter so a node command's bare ``python``
+    resolves to the venv that has ``refactory_dsh`` installed, exactly as the
+    graph profile's ``commandEnv`` does.
+    """
+    from refactory_dsh import interactive, lowering, registry
+    from refactory_dsh.paths import venv_bin
+
+    # The same mode with the same knob overrides `interactive.prepare` lowered,
+    # through the same owner, so the environment cannot disagree with the graph.
+    Mode = registry.resolve(project, mode)[1]
+    state = interactive.with_knobs(Mode().state_dict(), list(knobs or []))
+    interpreter = str(venv_bin())
+    ambient = os.environ.get("PATH", "")
+    return lowering.knob_environment(state, extra={
+        "REFACTORY_WORKDIR": str(workdir),
+        "REFACTORY_PROJECT": str(project),
+        "PATH": f"{interpreter}:{ambient}" if ambient else interpreter,
+    })
+
+
 def _open_mode(
     mode: str,
     *,
@@ -246,12 +290,18 @@ def _open_mode(
         absolute path of the lowered graph JSON the spine loads.
     ``declarations``
         absolute path of the run's node declarations.
+    ``commandEnv``
+        the environment this run's node commands run under, an object of
+        strings, computed by :func:`_node_environment` from the same lowering.
+    ``dataCommand``
+        the command that selects and opens a data node's item passes, so a mode
+        with a `DataNode` iterates on this run's directory and interpreter.
 
     ``workdir`` is required: a driven run needs one directory to own, and
     without it there is nowhere to lower the graph or write the run's status.
     A mode that cannot be resolved is refused by name.
     """
-    project = Path(project or project_root())
+    project = Path(project or project_root()).resolve()
     if not workdir:
         raise ConsoleError("open needs a --workdir: the directory this run is lowered into")
     # The interactive entry point owns the lowering (ledger seeding, intent fold,
@@ -263,6 +313,7 @@ def _open_mode(
     root = Path(workdir).expanduser().resolve()
     try:
         name, graphs = interactive.prepare(mode, workdir=root, project=project, knobs=knobs)
+        command_env = _node_environment(mode, project=project, workdir=root, knobs=knobs)
     except ValueError as error:
         # A malformed identifier is the caller's to fix, so it is a refusal with
         # the reason rather than a traceback.
@@ -273,6 +324,8 @@ def _open_mode(
         "name": name,
         "graph": str((graphs / f"{name}{SUFFIX}").resolve()),
         "declarations": str((root / DECLARATIONS).resolve()),
+        "commandEnv": command_env,
+        "dataCommand": DATA_COMMAND,
     }
 
 
