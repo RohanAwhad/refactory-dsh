@@ -608,6 +608,7 @@ def _steer(
     kind: str = "info",
     verdicts: tuple[str, ...] | list[str] = (),
     with_gates: bool = False,
+    control: str | None = None,
 ) -> dict[str, Any]:
     """Read the ledger, and optionally add to it.
 
@@ -647,6 +648,13 @@ def _steer(
     }
     if with_gates:
         payload["gates"] = gates(run_root)
+    if control is not None:
+        # Control is not prose: the loop polls a small file at a generation boundary,
+        # so a pause or a stop works from here, from the panel, and from a process
+        # that is not the run's parent.
+        from refactory_dsh.control import Control
+
+        payload["control"] = Control(run_root).request(control)
     return payload
 
 
@@ -957,6 +965,16 @@ def _parser() -> argparse.ArgumentParser:
         help="also report the `user` gates this run is stopped at, and the verdicts "
              "each accepts, so a caller can offer the answer the gate routes on",
     )
+    control = steer.add_mutually_exclusive_group()
+    control.add_argument(
+        "--pause", action="store_true",
+        help="hold the run at its next generation boundary until resumed or stopped",
+    )
+    control.add_argument("--resume", action="store_true", help="release a paused run")
+    control.add_argument(
+        "--stop", action="store_true",
+        help="end the run at its next boundary, recording that a person asked",
+    )
 
     champion = add(
         sub.add_parser("best", help="the winner, with the state that scored it")
@@ -1173,6 +1191,8 @@ def main(argv: list[str] | None = None) -> int:
                 _root_for(args, project),
                 seed=args.seed, note=args.note, kind=args.kind,
                 verdicts=args.verdict, with_gates=args.gates,
+                control=("pause" if args.pause else "resume" if args.resume
+                         else "stop" if args.stop else None),
             )
         elif args.verb == "best":
             payload = _best_payload(_root_for(args, project), keep_state=args.state)

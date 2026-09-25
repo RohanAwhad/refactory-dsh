@@ -93,3 +93,12 @@ def test_a_pause_then_a_stop_ends_the_run(tmp_path):
     report = Loop(MODE, _config(tmp_path), project=Path(".")).run()
     thread.join(timeout=5)
     assert "a person asked the run to stop" in str(report["bound"])
+
+
+def test_the_console_steer_verb_pauses_resumes_and_stops(tmp_path):
+    """The control file is reachable from the verb a person and the panel already use."""
+    from refactory_dsh import console
+
+    for flag, expected in (("--pause", "pause"), ("--resume", "resume"), ("--stop", "stop")):
+        assert console.main(["steer", "--run", str(tmp_path), flag]) == 0
+        assert Control(tmp_path).read() == expected, flag
