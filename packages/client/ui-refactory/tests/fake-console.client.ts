@@ -11,6 +11,7 @@ import { vi } from 'vitest'
 import type { Mock } from 'vitest'
 import type { RemoteFailure, RemoteResult } from '@deepseek-ai/dsh-api-remotes/client'
 import type {
+  RefactoryCandidateRow,
   RefactoryModeChoice,
   RefactoryPackageChoice,
   RefactoryRunStatus,
@@ -156,6 +157,16 @@ export const SINGLE: RefactorySingleRun = {
   facts: { name: 'demo', validation: 'ok' },
 }
 
+/**
+ * Two candidates as the console lists them: the leader, and one a person has
+ * already dismissed, so a spec can draw the flags the controls read.
+ */
+export const CANDIDATES: readonly RefactoryCandidateRow[] = [
+  { id: 'aaaa11', parent: null, score: 0.96, raw_score: 1.0, nodes: 4, kept: false, rejected: false },
+  { id: 'bbbb22', parent: 'aaaa11', score: 0.5, raw_score: 0.6, nodes: 5, kept: true, rejected: false },
+  { id: 'cccc33', parent: 'aaaa11', score: 0.4, raw_score: 0.5, nodes: 6, kept: false, rejected: true },
+]
+
 /** One mode used once that stopped at a gate a person owns. */
 export const GATED: RefactorySingleRun = {
   ...SINGLE,
@@ -191,6 +202,7 @@ export interface FakeConsole {
   readonly start: Mock
   readonly run: Mock
   readonly status: Mock
+  readonly leaderboard: Mock
   readonly steer: Mock
   readonly stop: Mock
   readonly setPackageEnabled: Mock
@@ -210,6 +222,7 @@ export function fakeConsole(): FakeConsole {
     start: vi.fn(async () => ok(RECEIPT)),
     run: vi.fn(async () => ok(SINGLE)),
     status: vi.fn(async () => ok(FRAME)),
+    leaderboard: vi.fn(async () => ok<readonly RefactoryCandidateRow[]>(CANDIDATES)),
     steer: vi.fn(async () => ok(STEERING)),
     stop: vi.fn(async () => ok({ stopped: true })),
     setPackageEnabled: vi.fn(async () => ok<readonly RefactoryPackageChoice[]>([])),

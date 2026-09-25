@@ -40,6 +40,7 @@ import type { ConsoleConfig as ConsoleSettings, ConsoleInvocation, ConsoleResult
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type {
   RefactoryAuthoringProgress,
+  RefactoryCandidateRow,
   RefactoryGate,
   RefactoryKnob,
   RefactoryKnobKind,
@@ -299,6 +300,32 @@ export class RefactoryConsole extends TypertRemoteService {
   }
 
   /**
+   * One run's candidates, ranked, with what a person did to each.
+   *
+   * `kept` and `rejected` travel on the row because they are what the candidate
+   * controls are drawn from: a person reading the table needs to see the acts they
+   * already asked for, and a live run reports them from its own `state.json`
+   * because its report does not exist yet.
+   * @param run - the run id or absolute run directory.
+   * @param signal - caller cancellation.
+   * @returns the candidates by score, highest first.
+   */
+  @Remote
+  async leaderboard(run: string, signal: AbortSignal): Promise<readonly RefactoryCandidateRow[]> {
+    const addressed = this.runAddress(run)
+    const answer = await this.call({ verb: 'leaderboard', options: { run: addressed } }, signal)
+    return objectList(answer, 'leaderboard').map(entry => ({
+      id: text(entry.id),
+      parent: typeof entry.parent === 'string' ? entry.parent : null,
+      score: typeof entry.score === 'number' ? entry.score : null,
+      raw_score: typeof entry.raw_score === 'number' ? entry.raw_score : null,
+      nodes: count(entry.nodes),
+      kept: entry.kept === true,
+      rejected: entry.rejected === true,
+    }))
+  }
+
+  /**
    * The packages the registry knows, with the modes each declares.
    * @param signal - caller cancellation.
    * @returns the packages as described choices.
@@ -443,8 +470,11 @@ export class RefactoryConsole extends TypertRemoteService {
         ...request.kind === undefined ? {} : { kind: request.kind },
         ...verdicts.length === 0 ? {} : { verdict: verdicts },
         // Control is its own flag, not a note: the loop polls it, and a pause must
-        // not have to be read as prose.
-        ...request.control === undefined ? {} : { [request.control]: true },
+        // not have to be read as prose. The three population acts travel the same
+        // way, carrying the candidate they name and the package an adopt writes.
+        ...this.controlOption(request.control, request.target),
+        ...request.lineage === true ? { lineage: true } : {},
+        ...(request.as ?? '').trim() === '' ? {} : { as: (request.as ?? '').trim() },
         // Read the waiting gates on the same call, so appending a note leaves the
         // section that offers a verdict current rather than a frame behind.
         gates: true,
@@ -461,6 +491,27 @@ export class RefactoryConsole extends TypertRemoteService {
       gates: gateList(answer.gates),
       problems: stringList(answer.problems, 'ledger problems'),
     }
+  }
+
+  /**
+   * One control act as the `steer` verb writes it: a flag, and the candidate it
+   * names when it names one.
+   *
+   * The act is refused here rather than written for the loop to guess at, because a
+   * request that cannot be honored is a person's mistake to fix and the file has no
+   * way to say "that id was wrong" other than a run that quietly did nothing.
+   */
+  private controlOption(
+    control: RefactorySteerRequest['control'],
+    target: string | undefined,
+  ): Readonly<Record<string, string | boolean>> {
+    if (control === undefined) return {}
+    if (control !== 'keep' && control !== 'reject') return { [control]: true }
+    const named = (target ?? '').trim()
+    if (named === '') {
+      throw new RemoteError('gateway/bad-request', `${control} needs the candidate id it names`, {})
+    }
+    return { [control]: named }
   }
 
   /**

@@ -19,7 +19,11 @@ import { RefactoryBody } from '../src/client/RefactoryBody.tsx'
 import type { RefactoryBodyProps } from '../src/client/RefactoryBody.tsx'
 import { zh } from '../src/client/locales.ts'
 import { NO_SETTINGS, createRefactoryStore } from '../src/client/store.ts'
-import type { RefactoryRunStatus, RefactorySteering } from '@deepseek-ai/dsh-refactory-console/types'
+import type {
+  RefactoryCandidateRow,
+  RefactoryRunStatus,
+  RefactorySteering,
+} from '@deepseek-ai/dsh-refactory-console/types'
 import type { Loadable, RefactoryChoices, RefactoryNotice, RefactorySingleState, RefactoryTabState } from '../src/client/store.ts'
 import { fakeConsole } from './fake-console.client.ts'
 import type { FakeConsole } from './fake-console.client.ts'
@@ -52,6 +56,8 @@ export interface TabSeed {
   readonly frame?: Loadable<RefactoryRunStatus> | null
   /** The watched run's ledger read, as the face would have written it. */
   readonly steering?: Loadable<RefactorySteering> | null
+  /** The watched run's candidates, as the face would have written them. */
+  readonly candidates?: Loadable<readonly RefactoryCandidateRow[]> | null
   readonly single?: RefactorySingleState | null
   readonly notice?: RefactoryNotice | null
   readonly busy?: boolean
@@ -100,6 +106,11 @@ export function mountBody(seed: TabSeed = {}): Mounted {
   if (seed.steering !== undefined && seed.steering !== null) {
     if (seed.steering.kind === 'ready') actions.steered(TAB, seed.steering.value)
     else if (seed.steering.kind === 'failed') actions.steeringFailed(TAB, seed.steering.message)
+  }
+  if (seed.candidates !== undefined && seed.candidates !== null) {
+    if (seed.candidates.kind === 'ready') actions.candidatesRead(TAB, seed.candidates.value)
+    else if (seed.candidates.kind === 'failed') actions.candidatesFailed(TAB, seed.candidates.message)
+    else actions.candidatesLoading(TAB)
   }
   if (seed.single !== undefined && seed.single !== null) {
     if (seed.single.kind === 'ready') actions.ran(TAB, seed.single.value)

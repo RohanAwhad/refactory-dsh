@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import type { TabId } from '@deepseek-ai/dsh-client-ui-dockkit'
 import { NO_SETTINGS, createRefactoryStore, knobValues } from '../src/client/store.ts'
-import { FRAME, GATED_STEERING, MODE, NO_STRATEGIES, PACKAGE, SINGLE, STEERING } from './fake-console.client.ts'
+import { CANDIDATES, FRAME, GATED_STEERING, MODE, NO_STRATEGIES, PACKAGE, SINGLE, STEERING } from './fake-console.client.ts'
 
 const TAB = 'tab-1' as TabId
 const OTHER = 'tab-2' as TabId
@@ -29,6 +29,7 @@ describe('createRefactoryStore', () => {
       watching: null,
       frame: null,
       steering: null,
+      candidates: null,
       single: null,
       notice: null,
       busy: false,
@@ -139,6 +140,23 @@ describe('createRefactoryStore', () => {
     expect(instance.getSnapshot().byTab[TAB]?.steering).toEqual({
       kind: 'failed',
       message: '/runs/live is not a run directory',
+    })
+  })
+
+  it('starts the watched run\'s candidates absent, then reads them', () => {
+    const instance = open()
+    instance.actions.watching(TAB, '/runs/live')
+    // Absent rather than loading: a candidate table is read on demand, so nothing
+    // is in flight until a person asks for it.
+    expect(instance.getSnapshot().byTab[TAB]?.candidates).toBeNull()
+    instance.actions.candidatesLoading(TAB)
+    expect(instance.getSnapshot().byTab[TAB]?.candidates).toEqual({ kind: 'loading' })
+    instance.actions.candidatesRead(TAB, CANDIDATES)
+    expect(instance.getSnapshot().byTab[TAB]?.candidates).toEqual({ kind: 'ready', value: CANDIDATES })
+    instance.actions.candidatesFailed(TAB, '/runs/live has no candidates')
+    expect(instance.getSnapshot().byTab[TAB]?.candidates).toEqual({
+      kind: 'failed',
+      message: '/runs/live has no candidates',
     })
   })
 

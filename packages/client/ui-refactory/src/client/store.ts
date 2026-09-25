@@ -14,6 +14,7 @@
  */
 import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
 import type {
+  RefactoryCandidateRow,
   RefactoryKnob,
   RefactoryModeChoice,
   RefactoryPackageChoice,
@@ -88,6 +89,8 @@ export interface RefactoryTabState {
   frame: Loadable<RefactoryRunStatus> | null
   /** The watched run's intent ledger and gates; `null` before the ledger is read. */
   steering: Loadable<RefactorySteering> | null
+  /** The watched run's candidates, with what a person did to each; `null` before they are read. */
+  candidates: Loadable<readonly RefactoryCandidateRow[]> | null
   /** The one-shot use of the chosen mode, and what it left; `null` before one is used. */
   single: RefactorySingleState | null
   /** What the last refused gesture said, or `null`. */
@@ -133,6 +136,9 @@ type RefactoryActions = {
   steeringLoading: (draft: RefactoryState, tabId: TabId) => void
   steered: (draft: RefactoryState, tabId: TabId, steering: RefactorySteering) => void
   steeringFailed: (draft: RefactoryState, tabId: TabId, message: string) => void
+  candidatesLoading: (draft: RefactoryState, tabId: TabId) => void
+  candidatesRead: (draft: RefactoryState, tabId: TabId, candidates: readonly RefactoryCandidateRow[]) => void
+  candidatesFailed: (draft: RefactoryState, tabId: TabId, message: string) => void
   runLoading: (draft: RefactoryState, tabId: TabId) => void
   ran: (draft: RefactoryState, tabId: TabId, run: RefactorySingleRun) => void
   runFailed: (draft: RefactoryState, tabId: TabId) => void
@@ -207,6 +213,7 @@ export function createRefactoryStore(): EngineStoreHandle<RefactoryState, Refact
           watching: null,
           frame: null,
           steering: null,
+          candidates: null,
           single: null,
           notice: null,
           busy: false,
@@ -289,6 +296,7 @@ export function createRefactoryStore(): EngineStoreHandle<RefactoryState, Refact
         tab.watching = run
         tab.frame = { kind: 'loading' }
         tab.steering = { kind: 'loading' }
+        tab.candidates = null
         tab.notice = null
       },
       /**
@@ -365,6 +373,32 @@ export function createRefactoryStore(): EngineStoreHandle<RefactoryState, Refact
        */
       steeringFailed: (d, tabId: TabId, message: string) => {
         bucket(d, tabId).steering = { kind: 'failed', message }
+      },
+      /**
+       * Mark the watched run's candidates as being read.
+       * @param d - draft state.
+       * @param tabId - the tab being drawn.
+       */
+      candidatesLoading: (d, tabId: TabId) => {
+        bucket(d, tabId).candidates = { kind: 'loading' }
+      },
+      /**
+       * Record one read of the watched run's candidates.
+       * @param d - draft state.
+       * @param tabId - the tab being drawn.
+       * @param candidates - the rows, highest score first.
+       */
+      candidatesRead: (d, tabId: TabId, candidates: readonly RefactoryCandidateRow[]) => {
+        bucket(d, tabId).candidates = { kind: 'ready', value: candidates }
+      },
+      /**
+       * Record why the watched run's candidates could not be read.
+       * @param d - draft state.
+       * @param tabId - the tab being drawn.
+       * @param message - the Host's reason.
+       */
+      candidatesFailed: (d, tabId: TabId, message: string) => {
+        bucket(d, tabId).candidates = { kind: 'failed', message }
       },
       /**
        * Mark the chosen mode as being used once.

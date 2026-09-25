@@ -111,6 +111,31 @@ export interface RefactoryRunEvent {
   readonly score?: number
 }
 
+/**
+ * One candidate on a run's leaderboard, as much of it as a reader reads.
+ *
+ * The console reports more per row — the full diff against the parent, the edits,
+ * the size cost — and a reader that wants the diff asks for the candidate by id.
+ * `kept` and `rejected` are the person's own two lists, which is what the
+ * candidate controls are drawn from.
+ */
+export interface RefactoryCandidateRow {
+  /** The candidate id every steer act and every read accepts. */
+  readonly id: string
+  /** The candidate this one was proposed against; `null` for the seed. */
+  readonly parent: string | null
+  /** The score the search compared, size cost taken off it; `null` before it is run. */
+  readonly score: number | null
+  /** The unpenalised score the evaluator reported; `null` before it is run. */
+  readonly raw_score: number | null
+  /** How many nodes the candidate's graph holds, which is what the size cost counts. */
+  readonly nodes: number
+  /** Whether a person pinned this candidate as a parent. */
+  readonly kept: boolean
+  /** Whether a person dismissed this candidate, so nothing selects it again. */
+  readonly rejected: boolean
+}
+
 /** The tail counters a run's progress reports. */
 export interface RefactoryRunCounters {
   /** Latest epoch in the events read. */
@@ -235,10 +260,29 @@ export interface RefactorySteerRequest {
   readonly verdicts?: readonly string[]
   /**
    * Control the run itself rather than its ledger: `pause` holds it at its next
-   * generation boundary, `resume` releases it, and `stop` ends it with the reason
-   * recorded. Absent writes no control request.
+   * generation boundary, `resume` releases it, `stop` ends it with the reason
+   * recorded, `keep` pins a candidate as a parent, `reject` drops one from the
+   * leaderboard, and `adopt` writes the current winner as a package now. Absent
+   * writes no control request.
    */
-  readonly control?: 'pause' | 'resume' | 'stop'
+  readonly control?: 'pause' | 'resume' | 'stop' | 'keep' | 'reject' | 'adopt'
+  /**
+   * The candidate `keep` and `reject` name, as the leaderboard lists it. Required
+   * for those two: a person reading the table has an opinion about *that*
+   * candidate, and a request that named none would be a guess.
+   */
+  readonly target?: string
+  /**
+   * With `keep` or `reject`, act on the candidate's descendants too, so a whole
+   * branch is followed up or dropped rather than one point of it.
+   */
+  readonly lineage?: boolean
+  /**
+   * With `adopt`, the package name to write; the console's own default when
+   * absent. Adopting never overwrites, so a name already in the workspace is
+   * refused rather than replaced.
+   */
+  readonly as?: string
 }
 
 /** One mode a package declares, as the registry's catalogue lists it. */
@@ -338,6 +382,8 @@ export interface RefactorySingleRunRequest {
 export interface RefactoryConsoleRemote {
   /** @param source - package source the mode comes from. @param name - mode package name. @param signal - caller cancellation. @returns the package list after the import. */
   importPackage: (source: string, name: string, signal?: AbortSignal) => Promise<RemoteResult<readonly RefactoryPackageChoice[]>>
+  /** @param run - the run whose candidates are read. @param signal - caller cancellation. @returns the candidates by score, each with what a person did to it. */
+  leaderboard: (run: string, signal?: AbortSignal) => Promise<RemoteResult<readonly RefactoryCandidateRow[]>>
   /** @param signal - caller cancellation. @returns the mode catalogue. */
   modes: (signal?: AbortSignal) => Promise<RemoteResult<readonly RefactoryModeChoice[]>>
   /** @param signal - caller cancellation. @returns the mode packages. */

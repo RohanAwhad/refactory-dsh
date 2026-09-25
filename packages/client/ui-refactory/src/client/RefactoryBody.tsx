@@ -18,6 +18,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type {
+  RefactoryCandidateRow,
   RefactoryKnob,
   RefactoryNoteKind,
   RefactoryRunStatus,
@@ -309,16 +310,113 @@ function Status({
 /** One note kind, and the copy the kind selector shows for it. */
 const NOTE_KINDS: readonly RefactoryNoteKind[] = ['info', 'correction', 'constraint']
 
+/**
+ * The watched run's candidates, and what a person can do to one.
+ *
+ * Read on demand rather than on every tick: a leaderboard is a console call of its
+ * own, and a search that is not being steered right now does not need its table
+ * fetched every few seconds. Every act refreshes it, so the flags a click changes
+ * are the flags the person then sees.
+ */
+function Candidates({
+  tabId, run, candidates, signal, t, readCandidates, controlRun,
+}: {
+  readonly tabId: Parameters<RefactoryInjected['refresh']>[0]
+  readonly run: string
+  readonly candidates: Loadable<readonly RefactoryCandidateRow[]> | null
+  readonly signal: AbortSignal
+  readonly t: TranslateNS<'sidebarRefactory'>
+  readonly readCandidates: RefactoryInjected['readCandidates']
+  readonly controlRun: RefactoryInjected['controlRun']
+}): ReactNode {
+  return (
+    <div className={css.status} data-refactory-candidates={candidates?.kind ?? 'none'}>
+      <div className={css.packageActions}>
+        <button
+          type="button"
+          className={css.action}
+          data-refactory-candidates-read
+          onClick={() => { readCandidates(tabId, run, signal) }}
+        >
+          <IconRefreshOutline16 />
+          {t('candidates.read')}
+        </button>
+        <button
+          type="button"
+          className={css.action}
+          data-refactory-control="adopt"
+          onClick={() => { controlRun(tabId, run, { control: 'adopt' }, signal) }}
+        >
+          {t('control.adopt')}
+        </button>
+      </div>
+      {candidates?.kind === 'loading' && (
+        <p className={css.note}>{t('candidates.reading')}</p>
+      )}
+      {candidates?.kind === 'failed' && (
+        <p className={css.note}>{t('error.failed', { message: candidates.message })}</p>
+      )}
+      {candidates?.kind === 'ready' && (candidates.value.length === 0
+        ? <p className={css.note} data-refactory-candidates-empty>{t('candidates.empty')}</p>
+        : (
+          <ul className={css.recorded} data-refactory-candidates-rows>
+            {candidates.value.map(row => (
+              <li
+                key={row.id}
+                className={css.package}
+                data-refactory-candidate={row.id}
+                data-refactory-kept={String(row.kept)}
+                data-refactory-rejected={String(row.rejected)}
+              >
+                <span className={css.name}>{row.id}</span>{' '}
+                {row.score === null ? t('candidates.unscored') : String(row.score)}
+                {row.kept && <span className={css.note}> · {t('candidate.kept')}</span>}
+                {row.rejected && <span className={css.note}> · {t('candidate.rejected')}</span>}
+                <div className={css.gestures}>
+                  <button
+                    type="button"
+                    className={css.action}
+                    disabled={row.kept}
+                    data-refactory-candidate-keep={row.id}
+                    onClick={() => {
+                      controlRun(tabId, run, { control: 'keep', target: row.id }, signal)
+                    }}
+                  >
+                    {t('candidate.keep')}
+                  </button>
+                  <button
+                    type="button"
+                    className={css.action}
+                    disabled={row.rejected}
+                    data-refactory-candidate-reject={row.id}
+                    onClick={() => {
+                      controlRun(tabId, run, { control: 'reject', target: row.id }, signal)
+                    }}
+                  >
+                    {t('candidate.reject')}
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        ))}
+    </div>
+  )
+}
+
 /** The watched run's intent ledger, and the gates it is stopped at. */
 function Steering({
-  tabId, run, steering, signal, t, readSteering, addNote, answerGate, controlRun,
+  tabId, run, steering, candidates, signal, t, readSteering, readCandidates, addNote,
+  answerGate, controlRun,
 }: {
   readonly tabId: Parameters<RefactoryInjected['refresh']>[0]
   readonly run: string
   readonly steering: Loadable<RefactorySteering> | null
+  readonly candidates: Loadable<readonly RefactoryCandidateRow[]> | null
   readonly signal: AbortSignal
   readonly t: TranslateNS<'sidebarRefactory'>
   readonly readSteering: RefactoryInjected['readSteering']
+  readonly readCandidates: RefactoryInjected['readCandidates']
   readonly addNote: RefactoryInjected['addNote']
   readonly answerGate: RefactoryInjected['answerGate']
   readonly controlRun: RefactoryInjected['controlRun']
@@ -352,7 +450,7 @@ function Steering({
           type="button"
           className={css.action}
           data-refactory-control="pause"
-          onClick={() => { controlRun(tabId, run, 'pause', signal) }}
+          onClick={() => { controlRun(tabId, run, { control: 'pause' }, signal) }}
         >
           {t('control.pause')}
         </button>
@@ -360,7 +458,7 @@ function Steering({
           type="button"
           className={css.action}
           data-refactory-control="resume"
-          onClick={() => { controlRun(tabId, run, 'resume', signal) }}
+          onClick={() => { controlRun(tabId, run, { control: 'resume' }, signal) }}
         >
           {t('control.resume')}
         </button>
@@ -368,7 +466,7 @@ function Steering({
           type="button"
           className={css.action}
           data-refactory-control="stop"
-          onClick={() => { controlRun(tabId, run, 'stop', signal) }}
+          onClick={() => { controlRun(tabId, run, { control: 'stop' }, signal) }}
         >
           {t('control.stop')}
         </button>
@@ -384,6 +482,15 @@ function Steering({
             ))}
           </ul>
         )}
+      <Candidates
+        tabId={tabId}
+        run={run}
+        candidates={candidates}
+        signal={signal}
+        t={t}
+        readCandidates={readCandidates}
+        controlRun={controlRun}
+      />
       {ledger.problems.length > 0 && (
         <ul className={css.recorded} data-refactory-ledger="problems">
           {ledger.problems.map((problem, index) => (
@@ -461,7 +568,8 @@ function Steering({
 /** The picker's body: the described choices, and the run they start. */
 export function RefactoryBody({
   useTabInfo, useStore, choose, setKnob, setSetting, start, run: runOnce, load, reload, refresh, stop,
-  readSteering, addNote, answerGate, controlRun, setEnabled, remove, importPackage, t,
+  readSteering, readCandidates, addNote, answerGate, controlRun, setEnabled, remove,
+  importPackage, t,
 }: RefactoryBodyProps): ReactNode {
   const { tab } = useTabInfo()
   const { signal } = tab
@@ -638,9 +746,11 @@ export function RefactoryBody({
               tabId={tab.id}
               run={run}
               steering={state.steering}
+              candidates={state.candidates}
               signal={signal}
               t={t}
               readSteering={readSteering}
+              readCandidates={readCandidates}
               addNote={addNote}
               answerGate={answerGate}
               controlRun={controlRun}

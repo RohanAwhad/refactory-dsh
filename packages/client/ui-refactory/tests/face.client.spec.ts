@@ -19,7 +19,8 @@ import { refactoryFace } from '../src/client/face.ts'
 import { NO_SETTINGS, createRefactoryStore } from '../src/client/store.ts'
 import type { RefactoryChoices } from '../src/client/store.ts'
 import {
-  AUTHORING, FRAME, GATED, GATED_STEERING, MODE, PACKAGE, RECEIPT, SINGLE, STEERED, STEERING, STRATEGIES,
+  AUTHORING, CANDIDATES, FRAME, GATED, GATED_STEERING, MODE, PACKAGE, RECEIPT, SINGLE,
+  STEERED, STEERING, STRATEGIES,
   failure, fakeConsole, ok, settle,
 } from './fake-console.client.ts'
 
@@ -352,10 +353,55 @@ describe('refactoryFace — the watched run\'s ledger', () => {
   it('controls the run itself rather than its ledger', async () => {
     const { instance, scripted, face, signal } = harness()
     answer(scripted.steer, ok(STEERED))
-    face.controlRun(TAB, '/runs/live', 'pause', signal)
+    face.controlRun(TAB, '/runs/live', { control: 'pause' }, signal)
     await settle()
     expect(scripted.steer).toHaveBeenCalledWith({ run: '/runs/live', control: 'pause' }, signal)
     expect(tab(instance)?.steering).toEqual({ kind: 'ready', value: STEERED })
+  })
+
+  it('carries the candidate a keep or a reject names, and the name an adopt writes', async () => {
+    const { instance, scripted, face, signal } = harness()
+    answer(scripted.steer, ok(STEERED))
+    face.controlRun(TAB, '/runs/live', { control: 'reject', target: 'bbbb22', lineage: true }, signal)
+    await settle()
+    expect(scripted.steer).toHaveBeenCalledWith(
+      { run: '/runs/live', control: 'reject', target: 'bbbb22', lineage: true },
+      signal,
+    )
+
+    answer(scripted.steer, ok(STEERED))
+    face.controlRun(TAB, '/runs/live', { control: 'adopt', as: 'better' }, signal)
+    await settle()
+    expect(scripted.steer).toHaveBeenLastCalledWith(
+      { run: '/runs/live', control: 'adopt', as: 'better' },
+      signal,
+    )
+    expect(tab(instance)?.steering).toEqual({ kind: 'ready', value: STEERED })
+  })
+
+  it('reads the candidates, and reads them again after an act that changes them', async () => {
+    const { instance, scripted, face, signal } = harness()
+    face.readCandidates(TAB, '/runs/live', signal)
+    await settle()
+    expect(scripted.leaderboard).toHaveBeenCalledWith('/runs/live', signal)
+    expect(tab(instance)?.candidates).toEqual({ kind: 'ready', value: CANDIDATES })
+
+    answer(scripted.steer, ok(STEERED))
+    scripted.leaderboard.mockClear()
+    face.controlRun(TAB, '/runs/live', { control: 'keep', target: 'aaaa11' }, signal)
+    await settle()
+    expect(scripted.leaderboard).toHaveBeenCalledWith('/runs/live', signal)
+  })
+
+  it('records why the candidates could not be read, where the table is drawn', async () => {
+    const { instance, scripted, face, signal } = harness()
+    answer(scripted.leaderboard, failure('refactory/console-failed', 'no such run'))
+    face.readCandidates(TAB, '/runs/gone', signal)
+    await settle()
+    expect(tab(instance)?.candidates).toEqual({
+      kind: 'failed',
+      message: 'no such run',
+    })
   })
 
   it('shows a refused note as the notice, keeping the ledger that was already read', async () => {

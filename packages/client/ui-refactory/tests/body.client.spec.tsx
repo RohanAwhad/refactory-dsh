@@ -13,8 +13,8 @@ import { makeTranslate } from './translate.client.ts'
 import { failureLine } from '../src/client/RefactoryBody.tsx'
 import { en, zh } from '../src/client/locales.ts'
 import {
-  AUTHORING, COMPLETED, DISABLED, FRAME, GATED, GATED_STEERING, MODE, NO_STRATEGIES, PACKAGE, RECEIPT,
-  SINGLE, STEERED, STEERING, STRATEGIES, ok,
+  AUTHORING, CANDIDATES, COMPLETED, DISABLED, FRAME, GATED, GATED_STEERING, MODE, NO_STRATEGIES,
+  PACKAGE, RECEIPT, SINGLE, STEERED, STEERING, STRATEGIES, ok,
 } from './fake-console.client.ts'
 import { TAB, mountBody } from './mount.client.tsx'
 
@@ -338,7 +338,7 @@ describe('the steering the picker offers for the run it reads', () => {
     })
   })
 
-  it('offers pause, resume and stop, and sends the one pressed', async () => {
+  it('offers pause, resume, stop and adopt, and sends the one pressed', async () => {
     const { view, console } = mountBody({
       choices: { kind: 'ready', value: CHOICES },
       watching: '/runs/live',
@@ -346,13 +346,81 @@ describe('the steering the picker offers for the run it reads', () => {
     })
     console.steer.mockImplementation(async () => ok(STEERED) as never)
     expect([...view.container.querySelectorAll('[data-refactory-control]')]
-      .map(node => node.getAttribute('data-refactory-control'))).toEqual(['pause', 'resume', 'stop'])
+      .map(node => node.getAttribute('data-refactory-control')))
+      .toEqual(['pause', 'resume', 'stop', 'adopt'])
     fireEvent.click(at(view, 'data-refactory-control', 'pause'))
     await waitFor(() => {
       expect(console.steer).toHaveBeenCalledWith(
         { run: '/runs/live', control: 'pause' },
         expect.anything(),
       )
+    })
+  })
+
+  it('offers the candidates with their flags, and sends the act a row asks for', async () => {
+    const { view, console } = mountBody({
+      choices: { kind: 'ready', value: CHOICES },
+      watching: '/runs/live',
+      steering: { kind: 'ready', value: STEERING },
+      candidates: { kind: 'ready', value: CANDIDATES },
+    })
+    console.steer.mockImplementation(async () => ok(STEERED) as never)
+    console.leaderboard.mockImplementation(async () => ok(CANDIDATES) as never)
+    const rows = [...view.container.querySelectorAll('[data-refactory-candidate]')]
+    expect(rows.map(row => row.getAttribute('data-refactory-candidate')))
+      .toEqual(['aaaa11', 'bbbb22', 'cccc33'])
+    expect(rows.map(row => row.getAttribute('data-refactory-kept')))
+      .toEqual(['false', 'true', 'false'])
+    expect(rows.map(row => row.getAttribute('data-refactory-rejected')))
+      .toEqual(['false', 'false', 'true'])
+    // A candidate already kept cannot be kept again, and one already rejected
+    // cannot be rejected again; either act is one the console would refuse as a
+    // second request in a file that holds one.
+    expect((at(view, 'data-refactory-candidate-keep', 'bbbb22') as HTMLButtonElement).disabled).toBe(true)
+    expect((at(view, 'data-refactory-candidate-reject', 'cccc33') as HTMLButtonElement).disabled).toBe(true)
+
+    fireEvent.click(at(view, 'data-refactory-candidate-reject', 'aaaa11'))
+    await waitFor(() => {
+      expect(console.steer).toHaveBeenCalledWith(
+        { run: '/runs/live', control: 'reject', target: 'aaaa11' },
+        expect.anything(),
+      )
+    })
+  })
+
+  it('adopts the best candidate now, and reads the table it acted on again', async () => {
+    const { view, console } = mountBody({
+      choices: { kind: 'ready', value: CHOICES },
+      watching: '/runs/live',
+      steering: { kind: 'ready', value: STEERING },
+      candidates: { kind: 'ready', value: CANDIDATES },
+    })
+    console.steer.mockImplementation(async () => ok(STEERED) as never)
+    console.leaderboard.mockImplementation(async () => ok(CANDIDATES) as never)
+    fireEvent.click(at(view, 'data-refactory-control', 'adopt'))
+    await waitFor(() => {
+      expect(console.steer).toHaveBeenCalledWith(
+        { run: '/runs/live', control: 'adopt' },
+        expect.anything(),
+      )
+      expect(console.leaderboard).toHaveBeenCalledWith('/runs/live', expect.anything())
+    })
+  })
+
+  it('reads the candidates on demand, and says when there are none', async () => {
+    const { view, console } = mountBody({
+      choices: { kind: 'ready', value: CHOICES },
+      watching: '/runs/live',
+      steering: { kind: 'ready', value: STEERING },
+    })
+    console.leaderboard.mockImplementation(async () => ok([]) as never)
+    // Absent until asked for: a leaderboard is a console call of its own, and a
+    // search nobody is steering does not need its table fetched every tick.
+    expect(missing(view, 'data-refactory-candidates-rows')).toBe(true)
+    fireEvent.click(at(view, 'data-refactory-candidates-read'))
+    await waitFor(() => { expect(console.leaderboard).toHaveBeenCalledWith('/runs/live', expect.anything()) })
+    await waitFor(() => {
+      expect(at(view, 'data-refactory-candidates-empty').textContent).toBe(zh['candidates.empty'])
     })
   })
 

@@ -632,6 +632,48 @@ describe('refactoryConsole — steering a run', () => {
     ])
   })
 
+  it('sends a keep or a reject with the candidate it names, and its lineage when asked', async () => {
+    const { service, subprocess } = await setup()
+    subprocess.answer(STEERING)
+    await service.steer({ run: '/runs/live', control: 'reject', target: 'bbbb22', lineage: true }, signal())
+    expect(subprocess.lastArgv).toEqual([
+      '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'steer', '--run', '/runs/live',
+      '--reject', 'bbbb22', '--lineage', '--gates',
+    ])
+  })
+
+  it('sends an adopt with the package name it writes', async () => {
+    const { service, subprocess } = await setup()
+    subprocess.answer(STEERING)
+    await service.steer({ run: '/runs/live', control: 'adopt', as: 'better' }, signal())
+    expect(subprocess.lastArgv).toEqual([
+      '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'steer', '--run', '/runs/live',
+      '--adopt', '--as', 'better', '--gates',
+    ])
+  })
+
+  it('refuses a keep with no candidate to name, before spawning anything', async () => {
+    const { service, subprocess } = await setup()
+    expect((await failureOf(service.steer({ run: '/runs/live', control: 'keep' }, signal()))).code)
+      .toBe('gateway/bad-request')
+    expect(subprocess.spawns).toHaveLength(0)
+  })
+
+  it('reads a run\'s candidates by score, with what a person did to each', async () => {
+    const { service, subprocess } = await setup()
+    subprocess.answer([
+      { id: 'aaaa11', parent: null, score: 0.96, raw_score: 1.0, nodes: 4, kept: false, rejected: false, diff: {} },
+      { id: 'cccc33', parent: 'aaaa11', score: 0.4, raw_score: 0.5, nodes: 6, kept: false, rejected: true },
+    ])
+    expect(await service.leaderboard('/runs/live', signal())).toEqual([
+      { id: 'aaaa11', parent: null, score: 0.96, raw_score: 1.0, nodes: 4, kept: false, rejected: false },
+      { id: 'cccc33', parent: 'aaaa11', score: 0.4, raw_score: 0.5, nodes: 6, kept: false, rejected: true },
+    ])
+    expect(subprocess.lastArgv).toEqual([
+      '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'leaderboard', '--run', '/runs/live',
+    ])
+  })
+
   it('omits an empty note and an empty verdict, so a read cannot write by accident', async () => {
     const { service, subprocess } = await setup()
     subprocess.answer(STEERING)

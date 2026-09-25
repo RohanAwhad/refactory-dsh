@@ -37,8 +37,8 @@ import type {
 export type RefactoryRemote = {
   readonly refactoryConsole: Pick<
     RefactoryConsoleRemote,
-    'modes' | 'strategies' | 'packages' | 'start' | 'run' | 'status' | 'steer' | 'stop'
-      | 'setPackageEnabled' | 'removePackage' | 'importPackage'
+    'modes' | 'strategies' | 'packages' | 'start' | 'run' | 'status' | 'leaderboard'
+      | 'steer' | 'stop' | 'setPackageEnabled' | 'removePackage' | 'importPackage'
   >
 }
 
@@ -69,6 +69,7 @@ export function refactoryConsoleOverConnection(rpc: ClientConnectionRpc): Refact
       start: (request, signal) => call('start', { request }, signal),
       run: (request, signal) => call('run', { request }, signal),
       status: (run, after, signal) => call('status', { run, after }, signal),
+      leaderboard: (run, signal) => call('leaderboard', { run }, signal),
       steer: (request, signal) => call('steer', { request }, signal),
       stop: (run, signal) => call('stop', { run }, signal),
       setPackageEnabled: (name, enabled, signal) => call('setPackageEnabled', { name, enabled }, signal),
@@ -85,6 +86,25 @@ export function refactoryConsoleOverConnection(rpc: ClientConnectionRpc): Refact
  */
 function knobArguments(values: readonly RefactoryKnobSetting[]): readonly string[] {
   return values.map(({ name, value }) => `${name}=${value}`)
+}
+
+/**
+ * One control act as the body asks for it: the verb, and the candidate or package
+ * it names.
+ *
+ * The act travels as one value rather than as four arguments because the console
+ * refuses a request that names nothing, and a shape that cannot express "keep,
+ * with no candidate" is one the body cannot ask for by accident.
+ */
+export interface RefactoryControlAct {
+  /** The verb the loop honors at its next generation boundary. */
+  readonly control: 'pause' | 'resume' | 'stop' | 'keep' | 'reject' | 'adopt'
+  /** The candidate `keep` and `reject` name, as the leaderboard lists it. */
+  readonly target?: string
+  /** With `keep` or `reject`, act on the candidate's descendants too. */
+  readonly lineage?: boolean
+  /** With `adopt`, the package name to write. */
+  readonly as?: string
 }
 
 /** The picker's injected business face, as the body receives it. */
@@ -166,16 +186,25 @@ export interface RefactoryInjected {
    */
   readonly readSteering: (tabId: TabId, run: string, signal: AbortSignal) => void
   /**
-   * Control the run itself: hold it, release it, or end it.
+   * Read the watched run's candidates, with what a person has done to each.
    * @param tabId - the tab being drawn.
    * @param run - the run id or directory.
-   * @param control - the action the loop honors at its next generation boundary.
+   * @param signal - the tab record's lifetime.
+   */
+  readonly readCandidates: (tabId: TabId, run: string, signal: AbortSignal) => void
+  /**
+   * Control the run: hold it, release it, end it, follow a candidate up, dismiss
+   * one, or write its current winner as a package.
+   * @param tabId - the tab being drawn.
+   * @param run - the run id or directory.
+   * @param act - the verb the loop honors at its next generation boundary, and
+   * what it names.
    * @param signal - the tab record's lifetime.
    */
   readonly controlRun: (
     tabId: TabId,
     run: string,
-    control: 'pause' | 'resume' | 'stop',
+    act: RefactoryControlAct,
     signal: AbortSignal,
   ) => void
   /**
@@ -249,6 +278,9 @@ export function refactoryFace(
      * independent reads of one run, and retiring one must not drop the other.
      */
     const steeringGenerations = new Map<TabId, number>()
+    // A candidate read and a ledger read are two reads of the same tab and must not
+    // retire each other; one control act refreshes both.
+    const candidateGenerations = new Map<TabId, number>()
     const nextGeneration = (generations: Map<TabId, number>, tabId: TabId): number => {
       const generation = (generations.get(tabId) ?? 0) + 1
       generations.set(tabId, generation)
@@ -296,6 +328,15 @@ export function refactoryFace(
       settle(steeringGenerations, tabId, generation, console.steer({ run }, signal), (steering) => {
         actions.steered(tabId, steering)
       }, undefined, (failure) => { actions.steeringFailed(tabId, failure.message) })
+    }
+    /** Read one run's candidates into the store. */
+    const readCandidates = (tabId: TabId, run: string, signal: AbortSignal): void => {
+      if (signal.aborted) return
+      const generation = nextGeneration(candidateGenerations, tabId)
+      actions.candidatesLoading(tabId)
+      settle(candidateGenerations, tabId, generation, console.leaderboard(run, signal), (candidates) => {
+        actions.candidatesRead(tabId, candidates)
+      }, undefined, (failure) => { actions.candidatesFailed(tabId, failure.message) })
     }
     /** Take the packages a package gesture answered with. */
     const takePackages = (
@@ -387,14 +428,20 @@ export function refactoryFace(
       readSteering(tabId, run, signal) {
         loadSteering(tabId, run, signal)
       },
-      controlRun(tabId, run, control, signal) {
+      readCandidates(tabId, run, signal) {
+        readCandidates(tabId, run, signal)
+      },
+      controlRun(tabId, run, act, signal) {
         if (signal.aborted) return
         const generation = nextGeneration(steeringGenerations, tabId)
         settle(steeringGenerations, tabId, generation, console.steer(
-          { run, control },
+          { run, ...act },
           signal,
         ), (steering) => {
           actions.steered(tabId, steering)
+          // A keep or a reject changes the rows themselves, and the ledger read is
+          // already current; so the same act refreshes the table it acted on.
+          readCandidates(tabId, run, signal)
         }, undefined, (failure) => {
           actions.noticed(tabId, { code: failure.code, message: failure.message })
         })
