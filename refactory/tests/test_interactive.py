@@ -126,3 +126,31 @@ def test_the_work_directory_reaches_dsh_as_an_absolute_path(tmp_path):
     workdir = Path(argv[argv.index("--workdir") + 1])
     assert workdir.is_absolute(), f"DSH was handed the relative workdir {workdir}"
     assert Path(argv[argv.index("--graphs") + 1]).is_absolute()
+
+
+def test_headless_is_exactly_todays_argv_and_the_default_chats(tmp_path):
+    """`--headless` promises a script the argv it got before.
+
+    So it must *leave the chat flag out*, not set it to false, and the live run's
+    argv must be today's plus that one flag: nothing else may drift between them.
+    """
+    name, graphs = interactive.prepare(
+        WITH_A_GATE, workdir=tmp_path / "run", intent="review this", project=ROOT
+    )
+    live = interactive.command(WITH_A_GATE, workdir=tmp_path / "run", graphs=graphs, name=name)
+    headless = interactive.command(
+        WITH_A_GATE, workdir=tmp_path / "run", graphs=graphs, name=name, headless=True
+    )
+    assert "--chat" in live, "the default run is not a live session"
+    assert "--chat" not in headless, "a headless run asked DSH for a conversation"
+    assert live == [*headless, "--chat"], "the only difference must be the chat flag"
+
+
+def test_main_forwards_headless_to_the_run(monkeypatch):
+    """The switch reaches the run, and its absence means live."""
+    seen: list[dict] = []
+    monkeypatch.setattr(interactive, "run", lambda *a, **k: seen.append(k) or 0)
+    assert interactive.main([WITH_A_GATE, "--headless"]) == 0
+    assert seen[-1]["headless"] is True
+    assert interactive.main([WITH_A_GATE]) == 0
+    assert seen[-1]["headless"] is False
