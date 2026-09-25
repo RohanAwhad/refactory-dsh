@@ -73,6 +73,30 @@ harness's own packages; `ui-refactory` therefore injects `connection`, not
 published Typert generator emits the artifacts only when its own protocol package is a
 workspace project, which a pinned install does not have.
 
+## The stream, the live session and control
+
+A run says what it is doing while it does it, and that single stream is what every
+surface reads.
+
+- `refactory_dsh/events.py` owns the event vocabulary and the two levels: the meaningful
+  events a watcher gets by default, and verbose, which adds every remaining event and a
+  candidate's own output. `tests/test_events.py` pins the filter.
+- The outer loop prints meaningful events as they happen; the final JSON stays on stdout
+  and `progress.jsonl` stays the durable record. `tests/test_loop.py` asserts a watched
+  run prints, a library run does not, and verbose is a superset.
+- `run_on_dsh` tees a candidate's child output while still collecting it, because
+  `best_score` is parsed out of the runner's last JSON object. `test_dsh_profile.py`
+  pins both from one stub child.
+- `ceo` is a live session by default: the graph profile is asked for `--chat`, which
+  prints each turn and reads the person's lines between them; `--headless` builds the
+  older one-shot argv and nothing else differs. `test_interactive.py` pins the argv
+  equality, and a real terminal run is the by-hand check.
+- Control travels as its own request, not as prose: `control.py` owns a small file in
+  the run directory, the loop honors pause/resume/stop at the generation boundary, and
+  `refactory steer --pause/--resume/--stop`, `refactoryConsole.steer` and the panel's
+  Steering buttons all write the same request. The intent ledger is the other channel:
+  the proposer reads it fresh before every generation, so a note steers the next one.
+
 ## What a contributor runs before pushing
 
 Change the glue or a document: `uv run python -m pytest refactory/tests -q`, then the two

@@ -132,6 +132,8 @@ Every command is `uv run refactory <verb>`. `uv run refactory <verb> --help` is 
 
 `refactory ceo <package>/<mode>` runs a mode you already have on DSH with your terminal attached, so a gate reaches you. It is the same `ceo` verb that authors a mode; a positional that names one is what says to run it.
 
+**A run is a live session.** The CEO's turns print as they complete, each node is reported as it runs, a gate is a prompt, and a line you type between turns reaches the CEO — which can amend a node's prompt and re-run it. `--headless` builds the older one-shot argv instead, for a script or CI, and then the run prints only its final JSON.
+
 | command | what it does |
 |---|---|
 | `refactory ceo <package>/<mode> --intent "<what it is for>"` | run the mode on DSH with your terminal attached, so a gate reaches you. |
@@ -181,9 +183,13 @@ Every command is `uv run refactory <verb>`. `uv run refactory <verb> --help` is 
 | `refactory artifacts --run <id> --contents` | what it left on disk. |
 | `refactory adopt --run <id> --as <package>` | write the winner as a new package, input untouched. |
 | `refactory adopt --run <id> --as <package> --allow-overfit` | adopt it anyway, with the audit recorded beside the package. |
-| `refactory steer --run <id> --note "<words>" --kind info\|correction\|constraint` | add what you said to the run's intent ledger. |
+| `refactory steer --run <id> --note "<words>" --kind info\|correction\|constraint` | add what you said to the run's intent ledger. The proposer reads the ledger before every generation, so a note steers the next one. |
 | `refactory steer --run <id> --verdict <gate>=<value>` | record a gate's answer, so a resume replays it. |
-| `refactory stop --run <id>` | ask a run to stop. |
+| `refactory steer --run <id> --pause` / `--resume` | hold a search at its next generation boundary, or release it. |
+| `refactory steer --run <id> --stop` | end a search at its next boundary, recording that a person asked. |
+| `refactory stop --run <id>` | ask a run to stop now. |
+
+**A search says what it is doing while it does it.** `refactory optimize` prints the meaningful events as they happen — each candidate's score, the best so far, what the optimizer kept and refused with the running rule tally, each epoch's best, and the held-out audit — while the final JSON stays on stdout for a caller to parse. `--verbose` adds every event and each candidate's own run output, and `refactory status --run <id>` shows the same records, which is what the Web panel reads.
 
 The read verbs pass through the console's own `--project`, `--runs-root`, `--after`, `--limit`, `--state` and `--contents` options.
 
