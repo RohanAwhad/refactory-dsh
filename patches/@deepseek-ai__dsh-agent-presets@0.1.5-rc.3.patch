@@ -1,9 +1,9 @@
 diff --git a/presets/ceo/agent.cordis.yml b/presets/ceo/agent.cordis.yml
 new file mode 100644
-index 0000000000000000000000000000000000000000..2b73136435f2d82c0f0d5297eaec0916788040c5
+index 0000000000000000000000000000000000000000..2ad43bdce4d5213d84abbcfe378f8cf247c99f40
 --- /dev/null
 +++ b/presets/ceo/agent.cordis.yml
-@@ -0,0 +1,273 @@
+@@ -0,0 +1,308 @@
 +# The `standard` agent preset: the full coding agent, mounted once per process.
 +#
 +# This file is an AGENT-PLANE composition. The roster mounts it ONCE under a
@@ -270,13 +270,48 @@ index 0000000000000000000000000000000000000000..2b73136435f2d82c0f0d5297eaec0916
 +    searchTimeoutMs: 60000
 +
 +# ── interactive workflow spine ─────────────────────────────────────────────
-+# NOT MOUNTED HERE, and that is the current state rather than an oversight: a
-+# spine row needs a graph inlined at boot, and this preset has no mode to inline.
-+# A person using a mode runs it through the `graph` profile instead —
-+# `python -m refactory_dsh.interactive <package>/<mode>` lowers the mode with its
-+# intent ledger and starts that profile with the terminal answering a `user` gate.
-+# Mounting the spine here so a mode can be used from the Web view would need a
-+# per-session graph, which is the follow-up in `refactory/`'s issue tracker.
++# The CEO drives a mode's graph node by node in the Web chat. It mounts HERE,
++# in the preset's standing scope, rather than in the host composition, because
++# the spine denies the CEO's own coding/external tools at `agent/created` and
++# that guard only bites when `scopeOf(ctx)` is the scope the CEO joined. A host
++# row has no scope, so the guard returned early and the CEO kept `bash` — which
++# it used to run a mode's deterministic nodes by hand. `tool-refactory` above is
++# the same pattern: a preset row registering a tool for the session's agent.
++#
++# `inject: [shell]` waits for the host `shell` executor (the base composition's
++# `bash-sandbox`), which the spine resolves with `ctx.get('shell')` to run a
++# mode's deterministic nodes itself.
++#
++# No graph is inlined at boot: `interactiveOpen` means a session lowers a mode at
++# run time through `wf_open`, and the graph, work directory and node environment
++# all arrive per run in that open payload. Only the commands and the fallbacks
++# are composition state, and `process.cwd()` is the launcher's directory — the
++# checkout holding `.venv/`.
++- id: workflow-spine
++  name: '@deepseek-ai/dsh-workflow-spine'
++  inject: [shell]
++  config:
++    interactiveOpen: true
++    toolPrefix: wf
++    maxIterations: 500
++    executeCommands: true
++    openCommand: !!js process.cwd() + '/.venv/bin/python'
++    openArgs: ['-m', 'refactory_dsh.console', 'open']
++    steerCommand: !!js process.cwd() + '/.venv/bin/python'
++    steerArgs: ['-m', 'refactory_dsh.console', 'steer', '--run']
++    commandTimeoutMs: 3600000
++    ceoDeny:
++      - bash
++      - pwsh
++      - write
++      - edit
++      - str_replace_editor
++      - web_search
++      - web_fetch
++      - skill
++      - ralph
++      - workflow
++      - read_image
 diff --git a/presets/ceo/preset.yml b/presets/ceo/preset.yml
 new file mode 100644
 index 0000000000000000000000000000000000000000..6eb131914ac8127a1543251c111a18f89982e1ae

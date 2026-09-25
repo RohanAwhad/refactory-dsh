@@ -1,8 +1,8 @@
 diff --git a/cordis.patch.yml b/cordis.patch.yml
-index cf4603031f6f452891a4d7da420869b6472fb333..8e524d7f6f3e7463c0347fb2a11df38be47586fb 100644
+index cf4603031f6f452891a4d7da420869b6472fb333..17c15da61980dfeabad2acb584f92f55e9c8c596 100644
 --- a/cordis.patch.yml
 +++ b/cordis.patch.yml
-@@ -105,6 +105,48 @@
+@@ -105,6 +105,20 @@
      - id: session-controller
        name: '@deepseek-ai/dsh-api-session-controller'
  
@@ -15,43 +15,15 @@ index cf4603031f6f452891a4d7da420869b6472fb333..8e524d7f6f3e7463c0347fb2a11df38b
 +      config:
 +        repoRoot: !!js process.cwd()
 +
-+    # The interactive workflow spine: the CEO drives an opened mode's graph node
-+    # by node in the chat. It mounts with no graph -- `interactiveOpen` means a
-+    # session lowers a mode at run time through `wf_open` -- so the graph, the
-+    # work directory and the node environment all arrive per run in that open
-+    # payload. Only the commands and the fallbacks are composition state, and
-+    # `process.cwd()` is the launcher's directory, the checkout holding `.venv/`.
-+    # The runner resolves `shell` from this host composition; no code-runtime row
-+    # is needed for it.
-+    - id: workflow-spine
-+      name: '@deepseek-ai/dsh-workflow-spine'
-+      config:
-+        interactiveOpen: true
-+        toolPrefix: wf
-+        maxIterations: 500
-+        executeCommands: true
-+        openCommand: !!js process.cwd() + '/.venv/bin/python'
-+        openArgs: ['-m', 'refactory_dsh.console', 'open']
-+        steerCommand: !!js process.cwd() + '/.venv/bin/python'
-+        steerArgs: ['-m', 'refactory_dsh.console', 'steer', '--run']
-+        commandTimeoutMs: 3600000
-+        ceoDeny:
-+          - bash
-+          - pwsh
-+          - write
-+          - edit
-+          - str_replace_editor
-+          - web_search
-+          - web_fetch
-+          - skill
-+          - ralph
-+          - workflow
-+          - read_image
++    # The interactive workflow spine is NOT mounted here. It lives in the `ceo`
++    # preset's `agent.cordis.yml` so the CEO it guards is in the mount's scope:
++    # a host row has no scope, and the spine's deny-guard needs one to restrict
++    # the CEO's own tools. See the patch on `@deepseek-ai/dsh-agent-presets`.
 +
      # Workspace file service: bounded read, directory listing, and the
      # agent-write change feed inside the session workspace root.
      - id: workspace-files
-@@ -234,6 +276,11 @@
+@@ -234,6 +248,11 @@
      - id: ui-sidebar-files
        name: '@deepseek-ai/dsh-client-ui-sidebar-files'
  
@@ -63,7 +35,7 @@ index cf4603031f6f452891a4d7da420869b6472fb333..8e524d7f6f3e7463c0347fb2a11df38b
      - id: ui-settings
        name: '@deepseek-ai/dsh-client-ui-settings'
  
-@@ -255,9 +302,14 @@
+@@ -255,9 +274,14 @@
      - id: ui-chat
        name: '@deepseek-ai/dsh-client-ui-chat'
  
@@ -79,25 +51,17 @@ index cf4603031f6f452891a4d7da420869b6472fb333..8e524d7f6f3e7463c0347fb2a11df38b
  
      - id: ui-attachment
        name: '@deepseek-ai/dsh-client-ui-attachment'
-@@ -481,4 +533,4 @@
+@@ -481,4 +505,4 @@
      - id: agent-presets
        name: '@deepseek-ai/dsh-agent-presets'
        config:
 -        default: standard
 +        default: ceo
 diff --git a/package.json b/package.json
-index edf0061c6c67cc6f3c04fc5e69594f4f3062d995..8469bb8cd55e17f0704e46032379efffc5013f1c 100644
+index edf0061c6c67cc6f3c04fc5e69594f4f3062d995..c678fd18fb72457c4d29c8f90226aa42faa8ba4a 100644
 --- a/package.json
 +++ b/package.json
-@@ -114,6 +114,7 @@
-     "@deepseek-ai/dsh-subprocess": "^0.1.5-rc.3",
-     "@deepseek-ai/dsh-tool-subagent": "^0.1.5-rc.3",
-     "@deepseek-ai/dsh-web-frontend": "^0.1.5-rc.3",
-+    "@deepseek-ai/dsh-workflow-spine": "0.1.5-rc.3",
-     "@deepseek-ai/dsh-workspace": "^0.1.5-rc.3",
-     "@deepseek-ai/schemastery": "3.18.2",
-     "@deepseek-ai/dsh-session-reference": "^0.1.5-rc.3",
-@@ -124,7 +125,10 @@
+@@ -124,7 +124,10 @@
      "@deepseek-ai/cordis": "4.0.2",
      "@deepseek-ai/dsh-system-prompt": "^0.1.5-rc.3",
      "@deepseek-ai/dsh-shell-env": "^0.1.5-rc.3",
