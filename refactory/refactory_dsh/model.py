@@ -26,6 +26,7 @@ from concurrent.futures import CancelledError
 from pathlib import Path
 
 from refactory_dsh.paths import SOURCE_CLI_ENTRY, dsh_command, dsh_root, node_bin
+from refactory_dsh.owned_process import SHUTDOWN_GRACE_S, shutdown
 
 #: The overlay that keeps a node's completion from backgrounding its own work. Checked
 #: in rather than generated, so what a node's model call is configured with is
@@ -50,10 +51,6 @@ DEFAULT_TIMEOUT_S = 1800
 #: work — so the client retries, and only a client that keeps failing fails the node.
 DEFAULT_ATTEMPTS = 3
 
-
-#: Allow the CLI's five-second root-disposal deadline to settle before escalation.
-#: SIGTERM invokes DSH's managed subprocess cleanup; SIGKILL cannot run it.
-SHUTDOWN_GRACE_S = 10
 
 #: What the child says when the failure was on the wire rather than in the model.
 #:
@@ -338,27 +335,6 @@ class DshModelClient:
         except BaseException:
             # Direct interruption or the fork's cooperative event both use the
             # runtime-owned cleanup before propagating failure.
-            try:
-                proc.terminate()
-            except ProcessLookupError:
-                pass
-            try:
-                proc.communicate(timeout=SHUTDOWN_GRACE_S)
-            except subprocess.TimeoutExpired as exc:
-                proc.kill()
-                # An uncooperative launcher may leave inherited output pipes
-                # open in a descendant. Do not wait on those pipes indefinitely.
-                try:
-                    proc.communicate(timeout=1)
-                except subprocess.TimeoutExpired:
-                    if proc.stdout is not None:
-                        proc.stdout.close()
-                    if proc.stderr is not None:
-                        proc.stderr.close()
-                    proc.wait(timeout=1)
-                raise RuntimeError(
-                    "model runtime did not finish shutdown within "
-                    f"{SHUTDOWN_GRACE_S}s; forced exit; child cleanup unconfirmed; not retried"
-                ) from exc
+            shutdown(proc)
             raise
         return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)

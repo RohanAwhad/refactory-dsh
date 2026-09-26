@@ -17,7 +17,6 @@ the mode: the graph is the author's, plus what the person said.
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -26,6 +25,7 @@ from refactory_dsh import lowering, registry, steering
 from refactory_dsh.dsh_runtime import TASK
 from refactory_dsh.paths import REPO_ROOT, dsh_command, venv_bin
 from refactory_dsh.run_ownership import ownership
+from refactory_dsh.owned_process import run_owned
 
 #: Where an interactive run lives when no work directory is named.
 DEFAULT_ROOT = Path(".factory/interactive")
@@ -214,7 +214,7 @@ def run(
         # A killed Python parent must not free the directory while its DSH child
         # continues. POSIX inherits this one descriptor, not ambient open files.
         inherited = {"pass_fds": (owner,)} if os.name != "nt" else {}
-        code = subprocess.call(argv, cwd=str(REPO_ROOT), timeout=timeout_s, **inherited)
+        code = run_owned(argv, cwd=str(REPO_ROOT), timeout=timeout_s, **inherited).returncode
         if code == 0:
             summary = run_summary(workdir)
             if summary:
