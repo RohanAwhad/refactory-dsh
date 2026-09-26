@@ -146,9 +146,22 @@ The in-session drive is covered by `workflow-spine/tests/open.spec.ts` (open cla
 run, one node per `wf_next`, the refusals, the post-drain open view, a data pass crossing
 calls, and the configured-graph path unchanged) and by hand in a browser: the CEO calls
 `wf_open` then one `wf_next` per node, no `bash` call appears in the transcript, the run
-reaches `done` with the mode's facts, and a second `wf_open` refuses with `a run is already
-open in this session`. One in-session run per session is the accepted limit; a second
-session is refused, and the detached search (`refactory start`) is untouched.
+reaches `done` with every selected item graded and the graph epilogue completed. A data
+pass retains its materialized item across agent handoffs on both configured and
+interactive graphs; `Task.setup` runs once per item. A completed exit or terminal
+refusal is closed and graded before a public terminal status is returned, so refusal
+can contribute a failed grade without silently losing the remaining dataset. An explicit
+halt without a forward edge, or an exhausted reloop cap, instead stops the whole run:
+its interrupted pass remains inspectable, is not graded, and does not start the next
+item. The terminal response carries `halted` with the gate and reason, and the status
+file records `halted`.
+
+An active run still holds one exclusive claim. After completion or halt, its owner
+can inspect it until another successful `wf_open` replaces the claim; the next run
+may belong to the same session or another one. Automatically derived work directories
+are unique, so reopening the same mode preserves earlier artifacts. The detached
+search (`refactory start`) is untouched. This is in-process lifecycle behavior, not
+restart/resume persistence.
 
 The Typert Remote faces are kept in step by hand. The generated artifacts would make that
 impossible to get wrong, and issue #85 carries why they are not generated.
