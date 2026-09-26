@@ -104,6 +104,8 @@ export interface Config {
    * is the fallback when it does not.
    */
   dataCommand: string
+  /** Optional shared agent artifact/provenance bridge, using a JSON stdin protocol. */
+  agentCommand?: string
   /**
    * The command that reads the run's steering ledger, run as
    * `<steerCommand> <steerArgs...> <workdir>`. When non-empty (and `workdir` is
@@ -155,6 +157,7 @@ export const Config = z.object({
   workdir: z.string(),
   commandEnv: z.dict(z.string()).default({}),
   dataCommand: z.string().default(''),
+  agentCommand: z.string().default(''),
   steerCommand: z.string().default(''),
   steerArgs: z.array(z.string()).default([]),
   commandTimeoutMs: z.natural().default(600_000),
@@ -287,6 +290,8 @@ interface OpenRun {
   commandEnv: Record<string, string>
   /** The run's own item loader command, from the open payload. */
   dataCommand: string
+  /** Optional shared agent artifact/provenance bridge, using a JSON stdin protocol. */
+  agentCommand: string
 }
 
 /** The JSON `<openCommand>` prints: where it lowered the mode. */
@@ -307,6 +312,8 @@ interface OpenPayload {
   commandEnv?: unknown
   /** The run's own data-node item loader command. */
   dataCommand?: unknown
+  /** Optional agent artifact/provenance bridge owned by the opened mode runtime. */
+  agentCommand?: unknown
 }
 
 /** The environment a payload names, or `undefined` when it is absent or malformed. */
@@ -398,6 +405,7 @@ export function apply(ctx: Context, config: Config): void {
     workdir: string | undefined
     commandEnv: Record<string, string>
     dataCommand: string
+    agentCommand: string
   } {
     if (configuredSpine !== undefined) {
       return {
@@ -405,6 +413,7 @@ export function apply(ctx: Context, config: Config): void {
         workdir: config.workdir,
         commandEnv: config.commandEnv,
         dataCommand: config.dataCommand,
+        agentCommand: config.agentCommand ?? '',
       }
     }
     if (opened === undefined) {
@@ -418,6 +427,7 @@ export function apply(ctx: Context, config: Config): void {
       workdir: opened.workdir,
       commandEnv: opened.commandEnv,
       dataCommand: opened.dataCommand,
+      agentCommand: opened.agentCommand,
     }
   }
 
@@ -426,6 +436,21 @@ export function apply(ctx: Context, config: Config): void {
   // headless run) cannot route a person's gate at all, and a model cannot route one
   // on their behalf.
   const userQuestions: UserQuestionService | undefined = ctx.get('userQuestions')
+
+  /** Call the optional runtime-owned delivery bridge without editing artifact text. */
+  function agentDelivery(command: string, workdir: string, env: Record<string, string>, payload: unknown): Record<string, unknown> {
+    const result = spawnSync(command, {
+      shell: true, cwd: workdir, env: { ...process.env, ...env },
+      input: JSON.stringify(payload), encoding: 'utf8', maxBuffer: 8 * 1024 * 1024,
+      timeout: config.commandTimeoutMs,
+    })
+    if (result.status !== 0) throw new Error(lastLine(result.stderr) || 'agent delivery bridge failed')
+    const value: unknown = JSON.parse(result.stdout)
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error('agent delivery bridge returned no receipt')
+    }
+    return value as Record<string, unknown>
+  }
 
   /**
    * The cursor's own status on disk, when a work directory is known.
@@ -628,6 +653,7 @@ export function apply(ctx: Context, config: Config): void {
     workdir: string | undefined,
     commandEnv: Record<string, string>,
     dataCommand: string,
+    agentCommand: string,
   ): Promise<JsonValue> {
     const { next, failure, item, ran } = await drain(spine, workdir, commandEnv, dataCommand)
     if (failure !== undefined) {
@@ -643,6 +669,16 @@ export function apply(ctx: Context, config: Config): void {
         stdout: failure.stdout,
         stderr: failure.stderr,
       })
+    }
+    if (next.status === 'ready' && agentCommand !== '' && workdir !== undefined) {
+      for (const node of next.nodes) {
+        if (node._type !== 'AgentNode' && node._type !== 'LLMNode') continue
+        const receipt = agentDelivery(agentCommand, workdir, commandEnv, {
+          action: 'begin', node: node.id, prompt: node.prompt_template ?? '', writes: node.writes ?? [],
+        })
+        if (typeof receipt.prompt !== 'string') throw new Error('agent delivery bridge returned no prompt')
+        node.prompt_template = receipt.prompt
+      }
     }
     recordStatus(spine, workdir, spine.isHalted() ? 'halted' : next.status === 'done' ? 'done' : 'ready')
     // The item being iterated travels with the node views, so the subagent for a
@@ -841,6 +877,7 @@ export function apply(ctx: Context, config: Config): void {
         const runData = typeof payload.dataCommand === 'string' && payload.dataCommand !== ''
           ? payload.dataCommand
           : config.dataCommand
+        const runAgent = typeof payload.agentCommand === 'string' ? payload.agentCommand : (config.agentCommand ?? '')
         opened = {
           session: owner,
           spine,
@@ -850,13 +887,14 @@ export function apply(ctx: Context, config: Config): void {
           // static ones otherwise, which is what the graph profile relies on.
           commandEnv: runEnv,
           dataCommand: runData,
+          agentCommand: runAgent,
         }
         // A fresh spine has no materialised item. Keep the prior run's files
         // intact; its terminal claim is replaced only after this open succeeds.
         // The post-drain view, not `spine.next()`: a deterministic start node runs
         // here, exactly as the next `<toolPrefix>_next` would, so it is never
         // reported as work the model owes.
-        return report(spine, workdir, runEnv, runData)
+        return report(spine, workdir, runEnv, runData, runAgent)
       },
     }))
   }
@@ -867,8 +905,8 @@ export function apply(ctx: Context, config: Config): void {
     parameters: {},
     output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
     execute(_args, exec) {
-      const { spine, workdir, commandEnv, dataCommand } = requireRun(exec)
-      return report(spine, workdir, commandEnv, dataCommand)
+      const { spine, workdir, commandEnv, dataCommand, agentCommand } = requireRun(exec)
+      return report(spine, workdir, commandEnv, dataCommand, agentCommand)
     },
   }))
 
@@ -880,7 +918,15 @@ export function apply(ctx: Context, config: Config): void {
     },
     output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
     execute(args, exec) {
-      const { spine } = requireRun(exec)
+      const { spine, workdir, commandEnv, agentCommand } = requireRun(exec)
+      const node = spine.view(args.node)
+      if (agentCommand !== '' && workdir !== undefined && (node._type === 'AgentNode' || node._type === 'LLMNode')) {
+        const next = spine.next()
+        if (next.status !== 'ready' || !next.nodes.some(due => due.id === args.node)) {
+          throw new Error(`agent ${args.node} is not currently due`)
+        }
+        agentDelivery(agentCommand, workdir, commandEnv, { action: 'finish', node: args.node })
+      }
       spine.complete(args.node)
       return sync(json({ status: 'complete', node: args.node }))
     },

@@ -412,16 +412,37 @@ invented verdict is indistinguishable from one a person gave.
 returns the workflow it was given. A run nobody steered is the run it would have been,
 which is what lets the interactive and headless paths be compared at all.
 
-**The fidelity gate now checks the chain as well as the precondition.**
+**Steering context travels beside artifacts, not inside their syntax.**
 `fidelity(ledger)` reports a ledger that is missing, empty, or holding the
-placeholder — the half that was broken in BUG-05, where `REFACTORY_INTENT` never
-arrived, the ledger held the literal `"Build something useful."`, and the gate
-reported a pass; `Ledger.seed` refuses that string. Given the run's agent outputs
-(`fidelity(ledger, outputs)`, via `outputs_in`), it additionally requires that every
-agent node **cite** a ledger entry that exists, so a node that ignored the ledger is
-caught for free. What it still cannot do is judge whether the work *satisfies* the
-intent: that needs a model to read the work against the ledger. That half is the
-remaining gap, stated in §12.
+placeholder; `Ledger.seed` refuses the old `"Build something useful."` default.
+At agent dispatch, the runtime supplies the current ledger and records that context
+under `.refactory/agent-delivery/<id>/`, alongside the exact prompt. Repeated DSH
+node views retain the original file snapshot and archive any changed prompt/ledger
+context; those receipts show what the runtime supplied to the CEO, not proof that
+the CEO forwarded it verbatim to a worker. Completion
+records the declared outputs' hashes and whether final text or a tool write supplied
+them. `console steer` exposes these receipts and reports whether their output fingerprints still
+match (a later node may legitimately enrich them); outputs that disappeared are
+reported separately as missing. This establishes context delivery, not that the model read, understood, or
+satisfied it. Old runs' inline `Serves:` citations remain readable, but new nodes are
+not asked to append prose to Python, JSON, or other structured artifacts.
+
+**Tool-written artifacts and final responses are separate.** The walker snapshots
+declared outputs before calling the model. A newly written or changed output remains
+unchanged when the model returns a status message. If the first declared output was
+not freshly written, the walker retains its existing final-text capture contract for
+that first file; additional declared outputs must have been delivered. A file left
+untouched from an earlier pass cannot satisfy that requirement. A real rewrite to
+identical bytes is recognized from file metadata as well as its hash. The exact final
+response is kept separately as `final-response.txt`, never stripped or repaired, and
+a text fact is populated from the delivered first artifact when one is declared
+(binary or directory outputs retain the original final-response fact).
+The file-writing DSH path checks declared delivery before accepting agent completion;
+its original worker response remains in the DSH session transcript rather than being
+invented or copied by the CEO into a receipt. Neither path automatically certifies the
+meaning or format of arbitrary file contents; downstream checks still own that work.
+Explicit structural controls such as skip and director expansion retain their existing
+semantics; a graph edit is not an ordinary verified agent delivery.
 
 ### A run with a person at a gate — the command and what it showed
 
@@ -459,11 +480,11 @@ Run against this checkout, with the terminal answering `1` (proceed) at
 Recorded here rather than in a backlog, because each one is a place the system
 promises more than it delivers.
 
-- **The fidelity gate cannot judge the work.** The precondition and the citation
-  chain are checked (`steering.fidelity`): a ledger that is missing, empty or holding
-  the placeholder is reported, and given the run's agent outputs a node that cited no
-  entry, or a dangling one, is caught. Whether the work **satisfies** the intent needs
-  a model to read the work against the ledger, and that is not built.
+- **The fidelity gate cannot judge the work.** `steering.fidelity` checks the ledger
+  precondition and current delivery receipts (or legacy inline citations). A receipt
+  establishes the context supplied and the artifact bytes delivered, not semantic
+  compliance. Whether the work **satisfies** the intent still requires reviewing the
+  actual output against the request.
 - **Two suites are load-flaky.** `packages/boot/app-boot/tests/hmr-config.spec.ts`
   and `user-patches.spec.ts` poll file watchers with 20s and 10s deadlines and fail
   under full-suite contention while passing standalone; `hmr-config` is not in

@@ -278,9 +278,9 @@ Steering a run while *using* it: the intent ledger, and the transform that adds 
 | class | `Ledger` | `(root: 'Path') -> 'None'` |
 | class | `SteeringError` | `` |
 | function | `annotate` | `(workflow: 'Any', ledger: 'Ledger') -> 'Any'` |
-| function | `chain` | `(ledger: 'Ledger', outputs: 'Mapping[str, str]') -> 'list[str]'` |
+| function | `chain` | `(ledger: 'Ledger', outputs: 'Mapping[str, str]', *, deliveries: 'Mapping[str, Any] \| None' = None) -> 'list[str]'` |
 | function | `citations` | `(text: 'str') -> 'list[str]'` |
-| function | `fidelity` | `(ledger: 'Ledger', outputs: 'Mapping[str, str] \| None' = None) -> 'list[str]'` |
+| function | `fidelity` | `(ledger: 'Ledger', outputs: 'Mapping[str, str] \| None' = None, *, deliveries: 'Mapping[str, Any] \| None' = None) -> 'list[str]'` |
 | function | `for_run` | `(workflow: 'Any', workdir: 'Path') -> 'Any'` |
 | function | `interactive` | `(state: 'dict[str, Any]', workdir: 'Path', *, request: 'str' = '', name: 'str' = '', description: 'str' = '') -> 'tuple[Any, Ledger]'` |
 | function | `outputs_in` | `(run_root: 'Path') -> 'dict[str, str]'` |

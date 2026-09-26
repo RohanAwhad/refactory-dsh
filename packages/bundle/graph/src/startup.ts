@@ -62,6 +62,7 @@ const DEFAULT_VENV_BIN = resolveDep(process.env.VENV_BIN, '.venv/bin', join(proc
  * `commandEnv`, exactly as `refactory_dsh.run` for a deterministic node is.
  */
 const DATA_COMMAND = 'python -m refactory_dsh.items'
+const AGENT_COMMAND = 'python -m refactory_dsh.agent_delivery'
 
 /** Everything the run needs, resolved once from the command line. */
 export interface GraphStartupValues {
@@ -87,6 +88,8 @@ export interface GraphStartupValues {
   pythonBin: string
   /** The command that selects a data node's items and opens and closes one pass. */
   dataCommand: string
+  /** Shared artifact delivery/provenance bridge for agent nodes. */
+  agentCommand: string
   /**
    * Whether the runner keeps a conversation with the person after the first turn.
    *
@@ -195,6 +198,7 @@ export function apply(ctx: Context): void {
       model: options.model === undefined ? undefined : String(options.model),
       pythonBin,
       dataCommand: DATA_COMMAND,
+      agentCommand: AGENT_COMMAND,
       chat: options.chat === true,
     } satisfies GraphStartupValues)
   })
