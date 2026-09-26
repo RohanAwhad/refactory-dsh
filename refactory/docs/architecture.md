@@ -334,7 +334,12 @@ The parallel reviews are a **fork/join** pair, and a mode may also declare a
 **`data`** node that runs a subgraph once per item; both are node kinds in the mode
 vocabulary (`Node.targets`, `Node.sources`, the DataNode's subgraph fields), lowered
 to the IR's own fork/join/data nodes and checked by `V12`. Both runtimes execute a
-fork by running each branch to its barrier, and a `data` node by loading the items
+fork by running each branch to its barrier. The Python walker schedules up to four
+independent flat branches concurrently, isolates their contexts, refuses conflicting
+declarations, and merges successful facts in target order before the join. A failed
+fork keeps its pre-fork facts and resume position; its completed file artifacts remain
+available for audit. See the [fork limits](concepts.md) for unsupported nested and
+shared-memory scheduling fallback. Both runtimes execute a `data` node by loading the items
 (`inline_items`, or a `directory`, `jsonl` or `csv` source, then the node's limit)
 and running the subgraph once per item with the item written to `current_item.json`.
 The loader is one implementation (`nn.executor.load_items`); the walker runs the whole
