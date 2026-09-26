@@ -129,3 +129,15 @@ None.
 </details>
 
 **Runtime invariant:** No runtime invariant companion is published because the layer carries a patch document and a one-shot runner whose only shared state is the `graphStartup` service; every inserted row's package owns that row's behavior and invariants.
+
+A terminal model failure is printed before the next chat prompt, including the
+provider's error code and message. You may send a follow-up to retry. Headless runs,
+or quitting after an unsuccessful turn, return a nonzero exit and `ok: false` with
+`error` in the final JSON. Success requires a completed latest turn and explicit
+workflow `done`; missing status is not completion. A later successful interactive
+retry can still complete normally.
+
+When reusing a run directory, the runner preserves its previous status as
+`.refactory/spine-status.previous-<new-session-id>.json` before the first turn.
+Only status written by this invocation can certify its completion; old artifacts
+and status history remain available for inspection.
