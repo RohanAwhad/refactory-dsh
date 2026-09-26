@@ -95,7 +95,7 @@ optimizer's prompt via `rules_text()`.
 | `V7` | every knob a node consumes must be declared, and every declared knob must be consumed |
 | `V8` | every call and evaluator must resolve to a real callable |
 | `V9` | every knob value must be of the declared kind and within its bounds |
-| `V10` | every cycle must pass through a gate, so the run is bounded |
+| `V10` | every cycle passes a gate; after explicit `reloop` edges are removed, each cyclic region has one gate that owns its retry budget |
 | `V11` | every declared port must be a file some node on a path writes |
 | `V12` | a fork's targets, a join's sources and a data node's subgraph must name nodes that exist |
 | `I:` | the mode's own rule, stated in `Mode.invariants()` |

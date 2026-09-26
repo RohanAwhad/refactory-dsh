@@ -42,7 +42,8 @@ RULES: dict[str, str] = {
           "must be consumed by some node",
     "V8": "every call and evaluator must resolve to a real callable",
     "V9": "every knob value must be of the declared kind and within its bounds",
-    "V10": "every cycle must pass through a gate, so the run is bounded",
+    "V10": "every cycle must pass through a gate; after explicit reloop edges are "
+           "removed, each remaining cyclic region must have exactly one gate",
     "V11": "every declared port must be a file some node on a path writes",
     "V12": "a fork's targets, a join's sources and a data node's subgraph must name "
            "nodes that exist",
@@ -116,36 +117,6 @@ def produced_on_path(graph: Graph) -> set[str]:
         if node_id in on_path
         for name in (*node.writes, *node.produces)
     }
-
-
-def _cycle_without_gate(graph: Graph) -> list[str] | None:
-    """Return a cycle in the gate-free subgraph, or ``None`` if there is none."""
-    open_nodes = {nid for nid, node in graph.nodes.items() if node.kind != "gate"}
-    state: dict[str, int] = {}
-    stack: list[str] = []
-
-    def visit(node_id: str) -> list[str] | None:
-        state[node_id] = 1
-        stack.append(node_id)
-        for edge in graph.out_edges(node_id):
-            if edge.target not in open_nodes:
-                continue
-            if state.get(edge.target) == 1:
-                return stack[stack.index(edge.target):] + [edge.target]
-            if state.get(edge.target, 0) == 0:
-                found = visit(edge.target)
-                if found:
-                    return found
-        stack.pop()
-        state[node_id] = 2
-        return None
-
-    for node_id in sorted(open_nodes):
-        if state.get(node_id, 0) == 0:
-            found = visit(node_id)
-            if found:
-                return found
-    return None
 
 
 def validate(
@@ -310,16 +281,13 @@ def validate(
     for name in sorted(set(declared_knobs) - set(values)):
         issues.append(Issue("V9", "knob has no value", knob=name))
 
-    # V10 every cycle passes through a gate, so the executor can bound it.
-    cycle = _cycle_without_gate(graph)
-    if cycle:
-        issues.append(
-            Issue(
-                "V10",
-                f"cycle {cycle} does not pass through a gate, so nothing bounds it",
-                node=cycle[0],
-            )
-        )
+    # V10: determine retry ownership before a candidate executes any work.
+    from .loops import loop_edges
+
+    try:
+        loop_edges(graph)
+    except ValueError as exc:
+        issues.append(Issue("V10", str(exc)))
 
     # V11 every declared port is a file the run actually produces.
     if ports:
