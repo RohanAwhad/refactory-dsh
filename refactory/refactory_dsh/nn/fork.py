@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import copy
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -128,12 +128,17 @@ def run_fork(executor: Executor, node: Node) -> str | None:
                 "live_gate_answers_serial": serial_gate}
 
     lock = threading.Lock()
+    cancelled = threading.Event()
+    branch_model = (ctx.model.with_cancellation(cancelled)
+                    if not serial and type(ctx.model) is DshModelClient else ctx.model)
     remaining = executor.max_steps - len(executor.steps)
     status: dict[str, dict[str, Any]] = {target: {"status": "queued"} for target in node.targets}
 
     def reserve() -> bool:
         nonlocal remaining
         with lock:
+            if cancelled.is_set():
+                raise CancelledError("fork cancelled before the next branch step")
             if remaining <= 0:
                 return False
             remaining -= 1
@@ -152,7 +157,7 @@ def run_fork(executor: Executor, node: Node) -> str | None:
         child_ctx = RunContext(
             ctx.workdir, knobs=copy.deepcopy(ctx.knobs), facts=copy.deepcopy(ctx.facts),
             verdicts=copy.deepcopy(ctx.verdicts), task=copy.deepcopy(ctx.task),
-            model=ctx.model, memory=ctx.memory, enforce_writes=ctx.enforce_writes,
+            model=branch_model, memory=ctx.memory, enforce_writes=ctx.enforce_writes,
         )
         child = Executor(executor.graph, child_ctx, max_steps=executor.max_steps)
         child._reserve_step = reserve
@@ -160,6 +165,9 @@ def run_fork(executor: Executor, node: Node) -> str | None:
 
     def walk(index: int) -> str | None:
         target, child = node.targets[index], children[index]
+        if cancelled.is_set():
+            record(target, "not-started")
+            return f"{target}: fork cancelled before dispatch"
         record(target, "running")
         try:
             error = child._walk_branch(target, barrier)
@@ -172,23 +180,53 @@ def run_fork(executor: Executor, node: Node) -> str | None:
                 raise ExecutionError(f"branch {target!r} changed undeclared facts: {sorted(changed - allowed)}")
         except Exception as exc:
             error = f"{target}: {type(exc).__name__}: {exc}"
-        record(target, "failed" if error else "completed", error)
+        state = "cancelled" if error and cancelled.is_set() else "failed" if error else "completed"
+        record(target, state, error)
         return error
 
     errors: list[str | None] = [None] * len(children)
-    if serial:
-        for index in range(len(children)):
-            errors[index] = walk(index)
-            if errors[index]:
-                for target in node.targets[index + 1:]:
-                    record(target, "not-started")
-                break
-    else:
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {pool.submit(walk, index): index for index in range(len(children))}
-            for future in as_completed(futures):
-                index = futures[future]
-                errors[index] = future.result()
+    try:
+        if serial:
+            for index in range(len(children)):
+                errors[index] = walk(index)
+                if errors[index]:
+                    for target in node.targets[index + 1:]:
+                        record(target, "not-started")
+                    break
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {}
+                try:
+                    for index in range(len(children)):
+                        futures[pool.submit(walk, index)] = index
+                    for future in as_completed(futures):
+                        index = futures[future]
+                        errors[index] = future.result()
+                except BaseException:
+                    # Set the scope before executor shutdown waits for workers.
+                    # Only shipped DSH clients observe it during a completion;
+                    # arbitrary operations are awaited, never thread-signalled.
+                    cancelled.set()
+                    for future in futures:
+                        future.cancel()
+                    raise
+    except BaseException as exc:
+        # Concurrent work has been awaited; a custom/serial call unwound on its
+        # own calling thread and retains its own cleanup contract. Keep the fork
+        # resumable without merging facts or acknowledging its join as successful.
+        cancelled.set()
+        for child in children:
+            executor.steps.extend(child.steps)
+            executor.model_calls += child.model_calls
+            ctx.writes_made.extend(child.ctx.writes_made)
+        for target in node.targets:
+            if status[target]["status"] == "queued":
+                status[target] = {"status": "not-started"}
+            elif status[target]["status"] == "running":
+                status[target] = {"status": "interrupted", "error": type(exc).__name__}
+        executor._record(node.id, error=f"{type(exc).__name__}: fork cancelled",
+                         branches=status, schedule=schedule)
+        raise
     # All workers have finished, so no branch can still write after we return or
     # after the join begins. Order does not depend on completion timing.
     for child in children:
