@@ -10,7 +10,7 @@ import { CANDIDATES, FRAME, GATED_STEERING, MODE, NO_STRATEGIES, PACKAGE, SINGLE
 const TAB = 'tab-1' as TabId
 const OTHER = 'tab-2' as TabId
 
-const CHOICES = { modes: [MODE], strategies: { ...NO_STRATEGIES, optimizers: [{ name: 'random', description: 'sample uniformly' }] }, packages: [PACKAGE] }
+const CHOICES = { project: '/repo', modes: [MODE], strategies: { ...NO_STRATEGIES, optimizers: [{ name: 'random', description: 'sample uniformly' }] }, packages: [PACKAGE] }
 
 function open() {
   const instance = createRefactoryStore().create()

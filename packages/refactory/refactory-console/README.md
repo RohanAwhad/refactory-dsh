@@ -115,3 +115,5 @@ None.
 </details>
 
 **Runtime invariant:** No companion is published. The service holds one `Console` and no durable state of its own: every relationship an invariant could assert is either the platform's (a child process exits) or the loop's (a run directory replays to the same population).
+
+The `project` Remote call returns the configured absolute checkout directory. The Modes panel shows it above the run controls: changing the selected chat workspace does not retarget this host console. Mode launches and package actions continue using that displayed project; an explicitly attached run keeps its own displayed run directory.

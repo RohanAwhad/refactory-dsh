@@ -654,7 +654,7 @@ export function RefactoryBody({
       </div>
     )
   }
-  const { modes, strategies, packages } = choices.value
+  const { project, modes, strategies, packages } = choices.value
   const selected = chosen
   const run = state.watching
   return (
@@ -673,6 +673,11 @@ export function RefactoryBody({
           <IconRefreshOutline16 />
         </button>
       </div>
+      <section className={css.section} data-refactory-project>
+        <h2 className={css.heading}>{t('project.heading')}</h2>
+        <code className={css.projectPath}>{project}</code>
+        <p className={css.note}>{t('project.explanation')}</p>
+      </section>
       {state.notice !== null && (
         <p className={css.notice} data-refactory-notice={state.notice.code}>{failureLine(t, state.notice)}</p>
       )}

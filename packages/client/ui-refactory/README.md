@@ -82,3 +82,5 @@ None.
 </details>
 
 **Runtime invariant:** No companion is published. The picker's only runtime state is one Slot store per tab, written by the body that owns it and forgotten on the tab's abort signal; there is no second observation of it to compare against.
+
+The panel displays its authoritative **Modes project** before the run controls. That path comes from the host console configuration, independent of the selected chat workspace. Catalogue loads include this identity, so controls are not offered with an unknown project.

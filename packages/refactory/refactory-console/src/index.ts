@@ -267,6 +267,7 @@ export class RefactoryConsole extends TypertRemoteService {
   })
 
   private readonly console: Console
+  private readonly projectRoot: string
 
   /**
    * @param ctx - Host context carrying the subprocess capability.
@@ -274,7 +275,20 @@ export class RefactoryConsole extends TypertRemoteService {
    */
   constructor(ctx: Context, config: Config) {
     super(ctx, 'refactoryConsole')
-    this.console = new Console(ctx.subprocess, resolveConsoleSettings(config as Required<Config>))
+    const settings = resolveConsoleSettings(config as Required<Config>)
+    this.projectRoot = settings.repoRoot
+    this.console = new Console(ctx.subprocess, settings)
+  }
+
+  /**
+   * The configured checkout used by this console, independent of chat workspace.
+   * @param signal - caller cancellation.
+   * @returns the absolute project directory used for console calls.
+   */
+  @Remote
+  async project(signal: AbortSignal): Promise<string> {
+    signal.throwIfAborted()
+    return this.projectRoot
   }
 
   /**
