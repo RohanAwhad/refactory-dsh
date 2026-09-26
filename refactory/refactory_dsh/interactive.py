@@ -243,7 +243,9 @@ def run(
                 from refactory_dsh.model import DshModelClient
                 # Old unrouted runs still need a concrete native policy in the
                 # child environment, even when no shared budget was configured.
-                model_context = DshModelClient(worker_backend='dsh', permission_mode='default').context()
+                # They also did not opt into any ambient role or node overrides.
+                model_context = DshModelClient(worker_backend='dsh', permission_mode='default',
+                                               role_routes={}, node_routes={}).context()
             else:
                 model_context = {**model_context, 'permission_mode': model_context.get('permission_mode') or 'default'}
             resource_limits = effective_limits

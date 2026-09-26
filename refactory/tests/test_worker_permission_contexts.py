@@ -149,7 +149,11 @@ def test_legacy_null_context_without_budget_pins_native_policy_for_nested_worker
     (tmp_path / '.refactory/spine-checkpoint.json').write_text(json.dumps({
         'run_id': str(tmp_path), 'graph': {'name': name}, 'status': 'paused', 'file_fingerprints': {},
     }))
-    monkeypatch.setenv('REFACTORY_WORKER_CONTEXT', json.dumps({'worker_backend': 'dsh', 'permission_mode': 'skip'}))
+    monkeypatch.setenv('REFACTORY_WORKER_CONTEXT', json.dumps({
+        'worker_backend': 'dsh', 'permission_mode': 'skip',
+        'role_routes': {'builder': {'worker_backend': 'codex', 'permission_mode': 'skip'}},
+        'node_routes': {'repair': {'worker_backend': 'claude_code', 'permission_mode': 'bypassPermissions'}},
+    }))
     seen = []
 
     def inspect_launch(*args, **kwargs):
@@ -158,9 +162,15 @@ def test_legacy_null_context_without_budget_pins_native_policy_for_nested_worker
         assert context == kwargs['context']
         assert context['worker_backend'] == 'dsh'
         assert context['permission_mode'] == 'default'
+        assert context['role_routes'] == context['node_routes'] == {}
         with monkeypatch.context() as nested:
             nested.setenv('REFACTORY_WORKER_CONTEXT', kwargs['env']['REFACTORY_WORKER_CONTEXT'])
-            assert DshModelClient().route()['permission_mode'] == 'default'
+            client = DshModelClient()
+            assert client.route()['permission_mode'] == 'default'
+            for node, role in [('build', 'builder'), ('repair', 'worker')]:
+                route = client.for_node(node, role).route()
+                assert route['worker_backend'] == 'dsh'
+                assert route['permission_mode'] == 'default'
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(workers, 'run_graph_command', inspect_launch)
