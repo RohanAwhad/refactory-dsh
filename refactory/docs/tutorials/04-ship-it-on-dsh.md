@@ -148,5 +148,29 @@ its lowering call; a separate long-lived `wf_open` driver must manage its own
 execution lifetime. It is not distributed locking, protection against external
 file deletion, or general descendant-process containment. The Windows byte-lock
 path protects the Python call; inherited-child behavior after abrupt parent exit
-has only been established on POSIX. Existing timeout/cancellation cleanup remains
-the selected runtime's responsibility.
+has only been established on POSIX. Timeout and direct interruption keep ownership until the launcher has awaited
+the selected runtime's shutdown, as described below.
+
+
+### Timeout and interruption await owned shutdown
+
+On POSIX, `ceo` and `console run` request the selected DSH CLI's graceful shutdown
+when their deadline expires or the calling thread is interrupted, and wait up to
+ten seconds before forced-exit escalation. A deadline still fails; ordinary
+nonzero child exits remain failures. An uncooperative runtime produces an explicit
+forced-exit/cleanup-unconfirmed error. Files already written are not rolled back.
+
+The console's intermediate Python owner participates in the same chain. Each
+owned CLI has a separate session so terminal Ctrl-C is forwarded once, rather
+than reaching DSH twice. On the main thread, a temporary handler converts default
+SIGTERM into an unwinding exit and is restored afterward. Existing custom or
+ignored handlers are preserved. Run-directory ownership remains held while this
+cleanup is awaited, and normal terminal input/output stay inherited where they
+were inherited before.
+
+This is cleanup through the runtime's managed subprocess service, not signalling
+arbitrary descendants. SIGKILL, worker-thread process-wide signals, custom signal
+policies, Windows termination and escaped descendants still need their own
+supervision. A CLI/runtime exit alone cannot certify arbitrary process-tree
+quiescence. The actual acceptance check uses a real DSH-managed deterministic
+child and unrelated sentinel; it is not a model or solver-performance result.

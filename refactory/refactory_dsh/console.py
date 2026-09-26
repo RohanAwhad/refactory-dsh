@@ -1234,7 +1234,12 @@ def _forward(module: str, argv: list[str]) -> dict[str, Any]:
     # Capture at the process boundary, not just Python's sys.stdout: forwarded
     # commands spawn DSH with inherited file descriptors. redirect_stdout leaves
     # that child's prose and report on the console's machine-readable stdout.
-    completed = subprocess.run(
+    # The interactive child owns another CLI. Keep interruption on the same
+    # graceful ownership chain instead of subprocess.run killing that owner.
+    from refactory_dsh.owned_process import run_owned
+
+    runner = run_owned if module == "interactive" else subprocess.run
+    completed = runner(
         [sys.executable, "-m", f"refactory_dsh.{module}", *argv],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
