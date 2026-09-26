@@ -73,7 +73,7 @@ export interface DataPass {
 /** A gate stopped the run, rather than completing an item branch. */
 export interface TerminalHalt {
   gate: string
-  reason: 'verdict' | 'max_iterations'
+  reason: 'verdict' | 'max_iterations' | 'cancelled'
 }
 
 /**
@@ -454,6 +454,14 @@ export class Spine {
     return this.describe(nodeId)
   }
 
+  /** Refuse a mutation unless this node is currently due, before any side effect. */
+  assertDue(node: string): void {
+    if (!this.nodes.has(node)) throw new Error(`unknown node ${node}`)
+    if (this.halted !== undefined || !this.cursor.includes(node)) {
+      throw new Error(`node ${node} is not due (current: ${this.cursor.join(', ') || 'none'}); use explicit redo to reopen completed work`)
+    }
+  }
+
   /**
    * The verdict labels a gate accepts, in edge order and lowercased.
    * @param gate - the gate node id.
@@ -553,11 +561,15 @@ export class Spine {
     }
     this.pass = undefined
     this.log.push(`data ${pass.node}: ${pass.count} item(s) done`)
+    // Restore the enclosing data continuation before completing it. Its body
+    // exhausted the cursor, but only this bookkeeping may resume the parent.
+    this.cursor = [pass.node]
     return this.complete(pass.node)
   }
 
   /** Mark a non-gate node complete and advance. */
   complete(node: string): SpineNext {
+    this.assertDue(node)
     const body = this.nodes.get(node)
     if (body === undefined) throw new Error(`unknown node ${node}`)
     if (body._type === 'GateNode') throw new Error(`${node} is a gate — use verdict()`)
@@ -614,14 +626,20 @@ export class Spine {
    */
   verdict(gate: string, verdict: string, feedback = ''): SpineNext {
     if (this.nodes.get(gate)?._type !== 'GateNode') throw new Error(`${gate} is not a gate`)
+    this.assertDue(gate)
     const outcome = label(verdict)
     if (outcome === '') throw new Error(`empty verdict for gate ${gate}`)
-    if (!this.completed.includes(gate)) this.completed.push(gate)
-    this.gateVerdicts.set(gate, outcome)
+    // Validate the route before committing history: a rejected outcome must
+    // leave the same cursor, verdicts, iterations and completion record.
+    const record = (): void => {
+      if (!this.completed.includes(gate)) this.completed.push(gate)
+      this.gateVerdicts.set(gate, outcome)
+    }
 
     if (outcome === RELOOP) {
       const target = this.conditionalTarget(gate, RELOOP)
       if (target === undefined) throw new Error(`${gate} has no reloop edge`)
+      record()
       const cap = this.reloopCap(gate)
       const count = (this.iterations[gate] ?? 0) + 1
       this.iterations[gate] = count
@@ -641,6 +659,7 @@ export class Spine {
       this.log.push(`gate ${gate}: reloop -> ${target} (${count})`)
     } else if (outcome === HALT) {
       const target = this.conditionalTarget(gate, HALT)
+      record()
       this.halted = target === undefined ? { gate, reason: 'verdict' } : undefined
       this.cursor = target === undefined ? [] : [target]
       this.afters = []
@@ -652,11 +671,26 @@ export class Spine {
         const allowed = this.acceptedVerdicts(gate)
         throw new Error(`${gate} has no '${outcome}' edge (accepts ${allowed.join(', ')})`)
       }
+      record()
       this.halted = undefined
       this.cursor = [target]
       this.afters = []
       this.log.push(`gate ${gate}: ${outcome} -> ${target}`)
     }
+    return this.next()
+  }
+
+  /** Stop at a due gate without certifying an evaluator result or taking an edge. */
+  cancel(gate: string): SpineNext {
+    this.assertDue(gate)
+    if (this.nodes.get(gate)?._type !== 'GateNode') throw new Error(`${gate} is not a gate`)
+    if (this.conditionalTarget(gate, HALT) !== undefined) {
+      throw new Error(`${gate} has a forward halt edge; cancellation cannot choose its result`)
+    }
+    this.halted = { gate, reason: 'cancelled' }
+    this.cursor = []
+    this.afters = []
+    this.log.push(`gate ${gate}: cancelled`)
     return this.next()
   }
 
@@ -792,7 +826,7 @@ export class Spine {
     const body = this.nodes.get(node)
     if (body === undefined) throw new Error(`unknown node ${node}`)
     if (body._type === 'GateNode') {
-      throw new Error(`node ${node} is a gate; re-route it with a verdict instead`)
+      throw new Error(`node ${node} is a gate; redo a completed upstream agent, then run the gate when due`)
     }
     if (body._type === 'DataNode') {
       throw new Error(`node ${node} iterates its items and its passes are the runner's`)
