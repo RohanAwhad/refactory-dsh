@@ -1497,6 +1497,11 @@ def blocking_findings(text: str) -> list[str]:
             continue
         cleaned = stripped.lstrip("*-+>#` \t")
         cleaned = re.sub(r"^\d+[.)]\s+", "", cleaned).lstrip("*_` ")
+        # A numbered finding is still a finding, including when its marker is
+        # a heading: "### BLOCKING 1: ..." is not an empty section title.
+        cleaned = re.sub(
+            r"^(BLOCKING[*_`]*)\s+\d+\s*[:.)—–-]\s*", r"\1: ", cleaned, flags=re.I,
+        )
         # Retain existing decorated/no-colon finding syntax. A bare BLOCKING
         # heading or a 'Blocking findings' section title carries no finding.
         marked = re.match(r"^BLOCKING(?:(?:[*_`]*\s*[:—–-][*_`]*\s*)|(?:[*_`]+\s+)|\s+)(.*)$", cleaned, re.I)
