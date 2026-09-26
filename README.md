@@ -124,7 +124,7 @@ Codex and Claude Code are explicit, optional worker backends through the install
 | Versioned search profiles, full controls and candidate comparison | [Optimization profiles](refactory/docs/optimization-profiles.md) | [#236](https://github.com/akashgit/refactory-dsh/issues/236) |
 | Shared routing and optional coding workers | [Models and workers](refactory/docs/models.md) | [#237](https://github.com/akashgit/refactory-dsh/issues/237) |
 
-Implementation does not establish acceptance for every path. Release verification is still in progress: a bounded CLI fast Create run exhausted its 150,000-token allocation without success, and native GUI/backend acceptance is still being collected. Deterministic checks and prior artifacts support unchanged contracts; they do not prove fresh generated-artifact quality or equal performance across providers.
+Bounded CLI and native GUI checks establish profile configuration, candidate measurements, exact adoption/replay and live boundary controls. All six fast-authoring checks stopped on token exhaustion before graph completion. Codex and Claude Code passed CLI editing/checks with explicit native edit permissions; their GUI checks under default permissions truthfully failed. Positive GUI external-worker completion and public dead-owner recovery acceptance remain open. See the [release validation record](refactory/docs/release-validation-20260926.md) for evidence and limits. Prior artifacts support unchanged contracts; they do not establish generated-artifact quality or equal backend performance.
 
 ## The command line
 

@@ -31,9 +31,9 @@ Optimizer notes, keep/reject and pause/resume/stop apply at generation boundarie
 The native panel's **Graph controls** offers pause/resume/stop. The console exposes the same operations:
 
 ```bash
-uv run python -m refactory_dsh.console graph-control pause --run /absolute/run
-uv run python -m refactory_dsh.console graph-control resume --run /absolute/run
-uv run python -m refactory_dsh.console graph-control stop --run /absolute/run
+uv run refactory graph-control pause --run /absolute/run
+uv run refactory graph-control resume --run /absolute/run
+uv run refactory graph-control stop --run /absolute/run
 ```
 
 Process cancellation is separate: `refactory stop --run RUN_DIR` requests interruption of its recorded owned process. Inspect the receipt and subsequent activity for confirmation; sending a signal is not proof that every worker terminated. Stopping a reader does not issue either kind of stop.
@@ -52,5 +52,7 @@ uv run python -m refactory_dsh.interactive package/mode \
 Recovery requires a recognized checkpoint, a stopped owner, matching prepared configuration and unchanged fingerprinted inputs/outputs. It refuses a pending dispatched worker with unknown outcome or a failed/unknown last-node outcome. In-flight external product sessions are not resumed. Python executor partial-fork recovery is also refused because successful sibling facts cannot yet be restored safely.
 
 Inspect side effects and outputs when continuation is refused. Use explicit invalidation where a valid replay plan exists, or start a new run deliberately. Reopening the mode is not an implicit retry. No mechanism here can infer whether an unacknowledged external side effect happened before a crash.
+
+Release checks exercised live CLI observation and native gate answers, pause/resume, reviewed replay and owned stop. Recovery admission and actual checkpoint restoration have separate deterministic evidence; a complete registered dead-owner resume through both public interfaces remains unverified. See the [validation record](release-validation-20260926.md).
 
 [Profiles and candidate evidence](optimization-profiles.md) · [Fast modes and resource recovery](budgets-fast-modes.md) · [Worker capabilities](models.md#model-provider-versus-coding-agent)
