@@ -1217,13 +1217,35 @@ def _forward_error(payload: dict[str, Any]) -> str:
 
 
 def _root_for(args: argparse.Namespace, project: Path) -> Path:
-    if args.run:
-        candidate_path = Path(args.run)
-        if candidate_path.is_dir():
-            return candidate_path
-        base = Path(args.runs_root) if args.runs_root else project / RUNS_ROOT
-        return base / args.run
-    raise ConsoleError("this verb needs --run <run id or directory>")
+    if not args.run:
+        raise ConsoleError("this verb needs --run <run id or directory>")
+    candidate_path = Path(args.run).expanduser()
+    base = Path(args.runs_root).expanduser() if args.runs_root else project / RUNS_ROOT
+    # Explicit paths name one directory. A bare id can name a cwd-relative run
+    # or a run under runs_root; refuse ambiguity instead of steering the wrong one.
+    separators = (os.sep,) + ((os.altsep,) if os.altsep else ())
+    explicit_path = (
+        candidate_path.is_absolute()
+        or any(separator in args.run for separator in separators)
+        or args.run in (".", "..")
+    )
+    candidates = [candidate_path] if explicit_path else [base / candidate_path]
+    if not explicit_path and not args.runs_root:
+        candidates.append(candidate_path)
+    found = {path.resolve() for path in candidates if path.is_dir()}
+    if len(found) > 1:
+        raise ConsoleError(
+            f"ambiguous run {args.run!r}: {', '.join(str(path) for path in sorted(found))}. "
+            "Pass the absolute run directory returned by start, or --runs-root."
+        )
+    if not found:
+        locations = ', '.join(str(path.resolve()) for path in candidates)
+        raise ConsoleError(
+            f"run {args.run!r} does not exist (checked {locations}). "
+            "Pass the absolute run directory returned by start, or the same --runs-root. "
+            "This action does not create a run."
+        )
+    return found.pop()
 
 
 def main(argv: list[str] | None = None) -> int:

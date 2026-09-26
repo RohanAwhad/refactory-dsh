@@ -60,7 +60,7 @@ const VERBS = {
   artifacts: 'What a run left on disk, optionally with contents.',
   leaderboard: 'The run\'s candidates by score, each with its diff against its parent.',
   candidate: 'One candidate, with what it changed against the parent it came from.',
-  steer: 'Read a run\'s intent ledger, or add what the person said to it.',
+  steer: 'Read an existing run\'s intent ledger, or add what the person said to it. Use the absolute run directory returned by start, or repeat its runsRoot.',
   best: 'The winner of a run, with the state that scored it.',
   adopt: 'Write a run\'s winner as a new package, leaving the run and its source untouched.',
   registry: 'List packages of modes, or verify, smoke, add, import, remove, enable or disable one.',
@@ -453,6 +453,8 @@ export function renderResult(args: Args, value: unknown): ContentBlock[] {
     }
     case 'steer': {
       const entries = Array.isArray(data.entries) ? data.entries : []
+      lines.push(`Run directory: ${scalar(data.run)}.`)
+      lines.push(`Intent ledger: ${scalar(data.ledger)}.`)
       lines.push(
         `The intent ledger is ${data.exists === true ? 'present' : 'missing'} `
         + `with ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}:`,
