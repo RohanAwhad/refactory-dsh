@@ -97,7 +97,8 @@ export interface Config {
   commandEnv: Record<string, string>
   /**
    * The command that selects a data node's items and opens and closes one pass,
-   * run as `<dataCommand> <list|begin|end> --node <id> [--index <n>]`. Required
+   * run as `<dataCommand> <list|begin|end> --node <id> [--index <n>]`;
+   * `reset` accepts a redo plan on JSON stdin to invalidate current facts. Required
    * when the graph has a `DataNode` and `executeCommands` is on: the items live
    * outside the graph, so a composition with no loader cannot iterate one. A run
    * opened at run time may name its own in the `<toolPrefix>_open` payload; this
@@ -437,17 +438,17 @@ export function apply(ctx: Context, config: Config): void {
   // on their behalf.
   const userQuestions: UserQuestionService | undefined = ctx.get('userQuestions')
 
-  /** Call the optional runtime-owned delivery bridge without editing artifact text. */
-  function agentDelivery(command: string, workdir: string, env: Record<string, string>, payload: unknown): Record<string, unknown> {
+  /** Call a runtime-owned bookkeeping bridge without editing artifact text. */
+  function runtimeBridge(command: string, workdir: string, env: Record<string, string>, payload: unknown): Record<string, unknown> {
     const result = spawnSync(command, {
       shell: true, cwd: workdir, env: { ...process.env, ...env },
       input: JSON.stringify(payload), encoding: 'utf8', maxBuffer: 8 * 1024 * 1024,
       timeout: config.commandTimeoutMs,
     })
-    if (result.status !== 0) throw new Error(lastLine(result.stderr) || 'agent delivery bridge failed')
+    if (result.status !== 0) throw new Error(lastLine(result.stderr) || 'runtime bookkeeping bridge failed')
     const value: unknown = JSON.parse(result.stdout)
     if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-      throw new Error('agent delivery bridge returned no receipt')
+      throw new Error('runtime bookkeeping bridge returned no receipt')
     }
     return value as Record<string, unknown>
   }
@@ -673,7 +674,7 @@ export function apply(ctx: Context, config: Config): void {
     if (next.status === 'ready' && agentCommand !== '' && workdir !== undefined) {
       for (const node of next.nodes) {
         if (node._type !== 'AgentNode' && node._type !== 'LLMNode') continue
-        const receipt = agentDelivery(agentCommand, workdir, commandEnv, {
+        const receipt = runtimeBridge(agentCommand, workdir, commandEnv, {
           action: 'begin', node: node.id, prompt: node.prompt_template ?? '', writes: node.writes ?? [],
         })
         if (typeof receipt.prompt !== 'string') throw new Error('agent delivery bridge returned no prompt')
@@ -925,7 +926,7 @@ export function apply(ctx: Context, config: Config): void {
         throw new Error(`${args.node} is executed by the runtime; call ${toolPrefix}_next instead of declaring it complete`)
       }
       if (agentCommand !== '' && workdir !== undefined && (node._type === 'AgentNode' || node._type === 'LLMNode')) {
-        agentDelivery(agentCommand, workdir, commandEnv, { action: 'finish', node: args.node })
+        runtimeBridge(agentCommand, workdir, commandEnv, { action: 'finish', node: args.node })
       }
       spine.complete(args.node)
       return sync(json({ status: 'complete', node: args.node }))
@@ -995,15 +996,26 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.tools.register(defineTool({
     name: `${toolPrefix}_redo`,
-    description: 'Reopen a completed node so the next `wf_next` returns it again; an amended prompt or other knob is what the re-run uses. Use this after correcting a node to run that node once more. Returns only a confirmation — call `wf_next` to get the node back.',
+    description: 'Redo completed work after a correction, invalidating downstream completions and produced facts while archiving prior facts. Within an active data item it keeps that item; after a dataset finished, redoing a body node restarts the whole dataset. Concurrent forks must finish first. Returns the restart and invalidated nodes; call `wf_next` to resume.',
     parameters: {
       node: { type: 'string', required: true, description: 'The completed node id to reopen.' },
     },
     output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
     execute(args, exec) {
-      const { spine } = requireRun(exec)
+      const { spine, workdir, commandEnv, dataCommand } = requireRun(exec)
+      const plan = spine.planRedo(args.node)
+      if (dataCommand !== '' && workdir === undefined) {
+        throw new Error('redo needs the run workdir to invalidate its data facts safely')
+      }
+      // Bookkeeping must succeed before the live cursor is changed. This bridge
+      // uses the existing data loader because it owns the run's Task facts.
+      const receipt = dataCommand !== '' && workdir !== undefined
+        ? runtimeBridge(`${dataCommand} reset`, workdir, commandEnv, { ...plan, state: spine.state() })
+        : undefined
       spine.redo(args.node)
-      return sync(json({ status: 'redone', node: args.node }))
+      if (plan.resetPass) materialised.delete(spine)
+      recordStatus(spine, workdir, 'ready')
+      return sync(json({ status: 'redone', node: args.node, ...plan, ...(receipt === undefined ? {} : { receipt }) }))
     },
   }))
 
