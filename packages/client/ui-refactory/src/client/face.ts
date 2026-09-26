@@ -32,6 +32,7 @@ import type {
   RefactorySettings,
   createRefactoryStore,
 } from './store.ts'
+import { searchBudget } from './store.ts'
 
 /** The slice of the Client Remote face this package calls: the `refactoryConsole` namespace. */
 export type RefactoryRemote = {
@@ -434,9 +435,14 @@ export function refactoryFace(
       },
       start(tabId, mode, knobs, settings, signal) {
         if (signal.aborted) return
+        const budget = searchBudget(settings)
+        if (budget === null) {
+          actions.noticed(tabId, { code: 'refactory/invalid-search-budget', message: 'Search limits must be positive whole numbers.' })
+          return
+        }
         // Only the names that were chosen travel; an empty seam takes the
         // console's own default.
-        const chosen: Record<string, string> = {}
+        const chosen: Record<string, string | number> = { ...budget }
         if (settings.strategy !== '') chosen.strategy = settings.strategy
         if (settings.optimizer !== '') chosen.optimizer = settings.optimizer
         if (settings.evaluator !== '') chosen.evaluator = settings.evaluator
