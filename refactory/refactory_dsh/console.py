@@ -396,6 +396,30 @@ def _authoring(run_root: Path, spine: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _item_results(run_root: Path) -> dict[str, int] | None:
+    """Count recorded Task verdicts without inventing a mode's scoring rule."""
+    values = _read_json(run_root / "facts.json").get("item_scores")
+    if not isinstance(values, list):
+        return None
+    rows = [value for value in values if isinstance(value, dict)]
+    if not rows:
+        return None
+    passed = sum(row.get("passed") is True for row in rows)
+    failed = sum(row.get("passed") is False for row in rows)
+    return {"count": len(rows), "passed": passed, "failed": failed,
+            "unclassified": len(rows) - passed - failed}
+
+
+def _run_kind(run_root: Path, spine: dict[str, Any]) -> str:
+    """Offer controls only for a recognized persisted run layout."""
+    config = _read_json(run_root / "config.json")
+    if isinstance(config.get("mode"), str) and isinstance(config.get("optimizer"), str):
+        return "optimizer"
+    if spine or any((run_root / "graphs").glob("*.graph.json")):
+        return "graph"
+    return "unknown"
+
+
 def status(run_root: Path, *, after: int = 0) -> dict[str, Any]:
     """Where the run is, and what is new since the reader last looked.
 
@@ -425,6 +449,7 @@ def status(run_root: Path, *, after: int = 0) -> dict[str, Any]:
         "run_id": run_root.name,
         "root": str(run_root),
         "mode": console.get("mode"),
+        "kind": _run_kind(run_root, spine),
         "state": state,
         "events": events,
         "cursor": after + len(events),
@@ -433,6 +458,7 @@ def status(run_root: Path, *, after: int = 0) -> dict[str, Any]:
         "finished": finished,
         "running": not finished and spine.get("status") != "paused" and (_running(run_root, console) or bool(spine)),
         "authoring": _authoring(run_root, spine) if spine else None,
+        "item_results": _item_results(run_root),
     }
 
 

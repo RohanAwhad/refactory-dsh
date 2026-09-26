@@ -180,7 +180,7 @@ describe('the picker with the described choices', () => {
 describe('the run the picker is reading', () => {
   it('names the run the gesture started, so it can be followed outside the panel', () => {
     const { view } = mountBody({ choices: { kind: 'ready', value: CHOICES }, watching: '/runs/live' })
-    expect(at(view, 'data-refactory-started').textContent).toBe(zh['started'].replace('{run}', '/runs/live'))
+    expect(at(view, 'data-refactory-started').textContent).toBe(zh['watching'].replace('{run}', '/runs/live'))
   })
 
   it('says it is reading while the first frame is on its way', () => {
@@ -217,7 +217,7 @@ describe('the run the picker is reading', () => {
       watching: '/runs/live',
       frame: { kind: 'ready', value: { ...FRAME, best_score: null, finished: true } },
     })
-    expect(at(view, 'data-refactory-score').textContent).toBe(zh['status.noScore'])
+    expect(at(view, 'data-refactory-score').textContent).toBe(zh['single.noAggregate'])
     expect(missing(view, 'data-refactory-stop')).toBe(true)
   })
 
@@ -342,6 +342,7 @@ describe('the steering the picker offers for the run it reads', () => {
     const { view, console } = mountBody({
       choices: { kind: 'ready', value: CHOICES },
       watching: '/runs/live',
+      frame: { kind: 'ready', value: FRAME },
       steering: { kind: 'ready', value: STEERING },
     })
     console.steer.mockImplementation(async () => ok(STEERED) as never)
@@ -361,6 +362,7 @@ describe('the steering the picker offers for the run it reads', () => {
     const { view, console } = mountBody({
       choices: { kind: 'ready', value: CHOICES },
       watching: '/runs/live',
+      frame: { kind: 'ready', value: FRAME },
       steering: { kind: 'ready', value: STEERING },
       candidates: { kind: 'ready', value: CANDIDATES },
     })
@@ -392,6 +394,7 @@ describe('the steering the picker offers for the run it reads', () => {
     const { view, console } = mountBody({
       choices: { kind: 'ready', value: CHOICES },
       watching: '/runs/live',
+      frame: { kind: 'ready', value: FRAME },
       steering: { kind: 'ready', value: STEERING },
       candidates: { kind: 'ready', value: CANDIDATES },
     })
@@ -411,6 +414,7 @@ describe('the steering the picker offers for the run it reads', () => {
     const { view, console } = mountBody({
       choices: { kind: 'ready', value: CHOICES },
       watching: '/runs/live',
+      frame: { kind: 'ready', value: FRAME },
       steering: { kind: 'ready', value: STEERING },
     })
     console.leaderboard.mockImplementation(async () => ok([]) as never)

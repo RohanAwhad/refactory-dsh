@@ -12,15 +12,12 @@ same run readable from the shell by the id the panel showed you.
 choice is not in `uv run refactory modes`, it is not in the picker; if
 the console refuses something, the panel shows the console's own reason.
 
-> **The panel is not composed by the pinned harness's `web` profile yet.** `uv run refactory ui` starts that profile, which selects the harness's own client packages and not `packages/client/ui-refactory`, so the Modes tab does not appear. This tutorial describes the panel the package implements; every choice it offers is reachable today from `uv run refactory`.
-
 ---
 
 ## Start the GUI from this checkout
 
-The panel is built as `packages/client/ui-refactory/lib/client.js`, and a profile
-composes it by naming the package. The pinned harness's own `web` profile does not, so
-starting the GUI shows the conversation without the tab:
+The repository's patched web profile composes the panel built at
+`packages/client/ui-refactory/lib/client.js`:
 
 ```bash
 uv run refactory ui --port 3103 --no-open
@@ -62,24 +59,27 @@ while you read the conversation.
 | **Start** | starts the chosen mode in its own process and names the run it began | `console start <mode> --strategy … --optimizer … --evaluator … --knob …` |
 | **Run once** | uses the chosen mode once and reports what happened: the run's own status word, the nodes still due, and the facts it left | `console run <mode> --knob NAME=VALUE` |
 | **Run status** | one frame of the run being read — state, best score, evaluations; **Refresh status** reads the next frame, **Stop the run** asks it to stop | `console status --run <id>`, `console stop --run <id>` |
+| **Existing run directory → Read this run** | attach the exact directory reported by CEO chat or the terminal; read its status and steer its ledger | `console status --run <directory>`, `console steer --run <directory> --gates` |
 | **Packages of modes** | per package: **Enable**, **Disable**, **Remove**, and **Import a package** from a directory or git URL | `registry list`, `enable`, `disable`, `remove`, `import` |
 
-Three behaviours are worth knowing before you press something:
+Behaviours to know before you press something:
 
 - **Controls appear as they become usable.** The section headings are always there,
   but **Start** and **Run once** appear once a mode is chosen, and **Refresh status** and **Stop the
   run** appear once a run is being read. A panel that looks short is waiting for a
   choice, not broken.
 
-- **Authoring modes are refused on purpose.** `default_pack/create`, `edit` and
-  `design` are not runs; choosing one and pressing Start is refused with the verb that
-  does run it. The refusal is the console's `action` field, not a second list kept in
-  the browser. **Run once** follows the same field, so an authoring mode offers no
-  button that would fail.
+- **Disabled packages offer Enable.** Their run buttons are disabled, and enabling
+  the package refreshes its modes. An authoring mode instead names its own action;
+  Start is disabled and Run once is absent for it.
 - **A run stopped at a gate is reported as stopped.** When a run reaches a gate a
   person owns, **Run once** says so, names the nodes still due, and stops: the panel
-  does not answer gates, because a gate with no person is the thing it must not fake.
-  Answer it from the shell (`refactory ceo <mode>`) and run the mode again.
+  does not choose a verdict. Attach the run directory to record a verdict in
+  Steering, then ask the CEO to continue. Graph runs show notes and gates, while
+  optimizer candidate and control buttons remain specific to optimizer searches.
+- **Task grades are separate from a mode score.** A completed run shows recorded
+  per-item pass/fail counts when present. If no aggregate mode score was produced,
+  the panel says so; it does not invent an average or keep promising a future score.
 - **Status is read on demand.** There is no poll timer, so a long run does not
   animate; press **Refresh status** when you want the next frame.
 
