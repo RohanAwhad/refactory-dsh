@@ -166,7 +166,21 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
             "blocking": node.blocking,
         }
         if node.kind == "op":
+            command_timeout_s = None
+            if node.call == "refactory_dsh.create_ops:smoke":
+                # Resolve from the final state, after command-line/GUI knobs.
+                # The operation owns up to three bounded passes plus sandbox
+                # discovery/launch overhead; the enclosing shell must outlast it.
+                from refactory_dsh.sandbox import DEFAULT_MODEL_SMOKE_TIMEOUT_S
+
+                budget = int((state.get("knobs") or {}).get("smoke_timeout_s", {}).get(
+                    "value", DEFAULT_MODEL_SMOKE_TIMEOUT_S,
+                ))
+                if not 1 <= budget <= 86400:
+                    raise LoweringError("smoke_timeout_s must be between 1 and 86400 seconds")
+                command_timeout_s = 3 * budget + 600
             nodes[node_id] = FnNode(
+                command_timeout_s=command_timeout_s,
                 **common,
                 # Both fields, and both for a reason. `callable_name` is
                 # the language's own way of naming what an `FnNode` runs

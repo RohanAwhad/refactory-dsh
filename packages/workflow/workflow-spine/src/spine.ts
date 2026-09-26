@@ -35,6 +35,7 @@ export interface NodeView {
   temperature?: number
   content?: string
   command?: string
+  command_timeout_s?: number
   targets?: string[]
   sources?: string[]
   expand?: DirectorExpansion
@@ -415,6 +416,7 @@ export class Spine {
     if (node._type === 'FnNode' || node._type === 'Study') {
       view.writes = node.writes ?? []
       view.command = node.command ?? ''
+      if (node.command_timeout_s !== undefined) view.command_timeout_s = node.command_timeout_s
       if (node.content !== undefined) view.content = node.content
     }
     if (node._type === 'DataNode') {

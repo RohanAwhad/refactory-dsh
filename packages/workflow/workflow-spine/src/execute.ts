@@ -109,10 +109,14 @@ function manifestOf(node: NodeView, command: string): NodeManifest {
 
 /** One command's request: where it runs, with what, and under which sandbox. */
 function requestFor(node: NodeView, command: string, config: CommandRunnerConfig): ShellExecRequest {
+  const seconds = node.command_timeout_s
+  if (seconds !== undefined && (!Number.isSafeInteger(seconds) || seconds <= 0 || seconds > 2_147_483)) {
+    throw new Error(`${node.id} has an invalid command_timeout_s`)
+  }
   return {
     command,
     env: { ...config.env, [NODE_ENV_KEY]: JSON.stringify(manifestOf(node, command)) },
-    timeoutMs: config.timeoutMs,
+    timeoutMs: seconds === undefined ? config.timeoutMs : seconds * 1000,
     ...(config.workdir === undefined ? {} : { workdir: config.workdir }),
     ...(config.sandboxPolicy === undefined ? {} : { sandboxPolicy: config.sandboxPolicy }),
   }
@@ -221,7 +225,13 @@ export async function runDeterministic(
   }
 
   const request = requestFor(node, command, config)
-  const spec = shell.resolve(request)
+  const resolved = shell.resolve(request)
+  // The model-facing shell caps arbitrary calls at its default maximum. This
+  // trusted workflow operation carries a bounded allowance resolved at lowering;
+  // retain every resolved environment/sandbox setting while honoring that budget.
+  const spec = node.command_timeout_s === undefined
+    ? resolved
+    : { ...resolved, timeoutMs: node.command_timeout_s * 1000 }
   const result = await shell.run(spec)
   const stdout = result.stdout.text.trim()
   const stderr = result.stderr.text.trim()

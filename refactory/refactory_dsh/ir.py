@@ -112,6 +112,8 @@ class FnNode(Node):
     command: str = ""
     callable_name: str | None = None
     notes: str = ""
+    # An operation with its own bounded subprocesses may need a longer envelope.
+    command_timeout_s: int | None = Field(default=None, gt=0, le=2_147_483)
 
 
 class GateNode(Node):
@@ -242,6 +244,8 @@ class Workflow(BaseModel):
         nodes_out: dict[str, Any] = {}
         for nid, node in self.nodes.items():
             d = node.model_dump(mode="json")
+            if d.get("command_timeout_s") is None:
+                d.pop("command_timeout_s", None)
             for field_name in ("reads", "writes"):
                 value = d.get(field_name)
                 if isinstance(value, list):
