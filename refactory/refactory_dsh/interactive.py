@@ -86,15 +86,13 @@ def prepare(
         # broader purpose when the caller supplied no prose intent.
         steering.Ledger.seed(workdir, intent.strip() or f"Run {identifier}.")
 
-    graphs = workdir / "graphs"
+    from refactory_dsh import invocations
+
     name = f"{package}-{mode_name}"
-    lowering.write_mode_graph(
-        state,
-        graphs,
-        name=name,
+    graphs = invocations.prepare(
+        state, workdir, name=name,
         transform=lambda workflow: steering.for_run(workflow, workdir),
     )
-    lowering.write_declarations(state, workdir)
     return name, graphs
 
 
