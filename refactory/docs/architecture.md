@@ -562,3 +562,17 @@ newcomer's first reading a description of the wrong system.
   the commands, the environment and what it hides, the invariants, and what not to do.
 - [Hardening](hardening.md) — what an adversarial audit of the finished work found,
   and what holds each fix in place.
+
+### Fresh graph invocation ownership
+
+Terminal `ceo` and console/GUI `wf_open` share `interactive.prepare`. Preparation
+stages a complete lowering before retiring any previous state. Prior declared
+outputs and runtime facts, run-retention memory, graph declarations/status and agent-delivery receipts
+are archived under `.refactory/invocations/<id>/artifacts/`, with an `archive.json`
+manifest; a failed installation restores the prior paths. Current facts start empty.
+The new mode's external inputs, explicit item selection and intent ledger remain
+in place, including documented standing upfront approvals. This is a fresh graph
+invocation, not a resume or an implicit redo. Unmanaged files and declared cross-run
+memory are not swept away; only recorded output ownership and runtime paths are
+retired. An old run lacking ownership declarations refuses reuse rather than
+guessing which files to move.

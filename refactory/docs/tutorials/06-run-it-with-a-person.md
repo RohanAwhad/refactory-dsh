@@ -107,6 +107,21 @@ persists across later invocations in that same work directory; use a new directo
 when a fresh approval policy is required. A consumed or legacy unscoped ledger
 answer does not substitute for that authorization.
 
+## Reusing a work directory
+
+`ceo` and `wf_open` start a fresh graph invocation, including when you explicitly
+reuse a work directory. Prior declared outputs, current facts, lowering and runtime
+receipts move into `.refactory/invocations/<id>/artifacts/`; `archive.json` lists
+what moved. A rejected second review therefore has no current `published_chars`
+or old `final.md` left over from a first approval.
+
+The input selection (`items.json`), source inputs, other files the runtime does not
+own, and `intent-ledger.md` remain in place. This preserves the documented standing
+upfront approval policy; fresh execution does not silently revoke that approval.
+An old owned output used as a declared external input by the new mode is retained
+and listed in the receipt. Undeclared files are not assumed to be runtime outputs.
+Explicit `wf_redo` still uses its separate invalidation/archive contract.
+
 ## Steering while it runs
 
 What the person says *while using* a mode is the ledger, and it never changes the

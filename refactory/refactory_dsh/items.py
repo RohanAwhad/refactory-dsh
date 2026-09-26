@@ -252,7 +252,12 @@ def command_reset(workdir: Path, request: dict[str, Any]) -> dict[str, Any]:
     cleared = sorted(names.intersection(facts))
     for name in cleared:
         facts.pop(name)
-    archive = workdir / '.refactory' / 'redo' / uuid.uuid4().hex
+    from refactory_dsh.run_artifacts import archive_root
+
+    try:
+        archive = archive_root(workdir, 'redo') / uuid.uuid4().hex
+    except ValueError as exc:
+        raise ItemsError(str(exc)) from exc
     # Replaying the same selected items must not inherit op state such as an
     # attempt counter in a declared output file. Keep explicit restart inputs,
     # and archive by rename so the prior bytes stay inspectable without copies.
@@ -261,23 +266,12 @@ def command_reset(workdir: Path, request: dict[str, Any]) -> dict[str, Any]:
     if request.get('restartData'):
         reads = [Path(name) for name in declarations.get(request.get('start'), {}).get('reads', [])]
         writes = {name for node in nodes for name in declarations.get(node, {}).get('writes', [])}
-        for name in sorted(writes, key=lambda value: len(Path(value).parts)):
-            relative = Path(name)
-            if relative.is_absolute() or '..' in relative.parts or relative == Path('.'):
-                raise ItemsError(f'cannot reset output {name!r}: it must name an owned path inside the run')
-            if relative.parts[0] == '.refactory' or relative in (Path(FACTS), Path(ITEMS_OVERRIDE)):
-                raise ItemsError(f'cannot reset runtime-owned output {name!r}')
-            if any(relative == item or relative in item.parents or item in relative.parents for item in reads):
-                retained.append(name)
-                continue
-            path_to_reset = workdir / relative
-            if not path_to_reset.exists() and not path_to_reset.is_symlink():
-                continue
-            if path_to_reset.is_symlink() or not path_to_reset.resolve().is_relative_to(workdir.resolve()):
-                raise ItemsError(f'cannot reset output {name!r}: symlink or path outside the run')
-            if any(parent in relative.parents for parent in targets):
-                continue
-            targets.append(relative)
+        from refactory_dsh.run_artifacts import owned_outputs
+
+        try:
+            targets, retained = owned_outputs(workdir, writes, reads)
+        except ValueError as exc:
+            raise ItemsError(str(exc)) from exc
     receipt = {**request, 'cleared_facts': cleared,
                'archive': str(archive.relative_to(workdir)),
                'archived_artifacts': [str(path) for path in targets],
