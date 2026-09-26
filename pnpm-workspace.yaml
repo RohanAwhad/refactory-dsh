@@ -51,3 +51,4 @@ patchedDependencies:
   '@deepseek-ai/dsh-headless@0.1.5-rc.3': patches/@deepseek-ai__dsh-headless@0.1.5-rc.3.patch
   '@deepseek-ai/dsh-web-app@0.1.5-rc.3': patches/@deepseek-ai__dsh-web-app@0.1.5-rc.3.patch
   '@deepseek-ai/dsh-goal-round-driver@0.1.5-rc.3': patches/@deepseek-ai__dsh-goal-round-driver@0.1.5-rc.3.patch
+  '@deepseek-ai/dsh-client-ui-conversation@0.1.5-rc.3': patches/@deepseek-ai__dsh-client-ui-conversation@0.1.5-rc.3.patch

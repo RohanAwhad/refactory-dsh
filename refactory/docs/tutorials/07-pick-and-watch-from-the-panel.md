@@ -40,11 +40,10 @@ is `.venv/bin/python -m refactory_dsh.console`.
 
 1. **Pick the workspace.** The app remembers one; a fresh profile starts with the
    workspace list empty and asks you to add a directory. Choose this repository.
-2. **Send one message.** Any message will do — "hello". This is the step people trip
-   over: the Sidebar's expand control lives in the *session* header, so the panel
-   cannot be opened before a session exists. One real round is enough.
-3. **Press the expand control** in the conversation header (its tooltip is
-   `Open the sidebar`), then the **Modes** tab.
+2. **Select New Session.** Its panel entry is available while the conversation is
+   still blank; opening the panel does not require a message or a model call.
+3. **Press the expand control** at the top right of the conversation (its tooltip
+   is `Open the sidebar`), then the **Modes** tab.
 
 The panel is the right Sidebar's own tab, beside the files view, so it keeps its place
 while you read the conversation.
