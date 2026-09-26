@@ -603,7 +603,7 @@ export function apply(ctx: Context, config: Config): void {
     /** Materialise the running pass's item, once per item across calls. */
     const beginItem = async (): Promise<{ failure?: CommandFailure }> => {
       const pass = spine.passOf()
-      if (pass === undefined || pass.finished) return {}
+      if (pass === undefined) return {}
       const key = `${pass.node}:${pass.index}`
       const current = materialised.get(spine)
       if (current?.key === key) {
@@ -628,6 +628,10 @@ export function apply(ctx: Context, config: Config): void {
         // missing answer, just as on the walker; it must not strand the dataset.
         if (pending.status !== 'ready' || pending.nodes.length !== 0) return {}
       }
+      // Explicit skips may exhaust a body before any executable node is exposed.
+      // Its Task still owns setup-before-verify, exactly once for this item.
+      const started = await beginItem()
+      if (started.failure !== undefined) return started
       const data = spine.view(pass.node)
       const ended = await runDataCommand(shell, data, 'end', runner, pass.index)
       if (!ended.ok) return { failure: ended }
@@ -645,6 +649,8 @@ export function apply(ctx: Context, config: Config): void {
       if (state.status === 'done' || spine.isPaused()) return { next: state, item, ran }
       const started = await beginItem()
       if (started.failure !== undefined) return { next: state, failure: started.failure, ran }
+      // Normalizing a standing skip can exhaust the next item immediately too.
+      if (spine.passOf()?.finished) continue
       if (advanceControl(state)) continue
       const data = state.nodes.find(node => node._type === 'DataNode')
       if (data !== undefined) {
@@ -1040,7 +1046,7 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.tools.register(defineTool({
     name: `${toolPrefix}_edit`,
-    description: 'Edit the live graph: `pause` arms a stop BEFORE the named node (including before data setup); `unpause` releases only that boundary after the person asks to continue. A paused run stays stopped across wf_next calls; skip, redo and expansion require explicit unpause first. An armed boundary cannot be skipped. `skip` hot-removes a node (and, for a fork, its targets); `unskip` restores it; `set-prompt` replaces an agent/llm node\'s prompt and `append-prompt` adds a paragraph to it. This is how a person\'s correction reaches the node\'s prompt — follow it with `wf_redo` to run that node again. Returns only a confirmation — call `wf_next` to learn the next node.',
+    description: 'Edit the live graph: `pause` arms a stop BEFORE the named node (including before data setup); `unpause` releases only that boundary after the person asks to continue. A paused run stays stopped across wf_next calls; skip, redo and expansion require explicit unpause first. An armed boundary cannot be skipped. `skip` bypasses a due or future node through its unambiguous continuation, preserving concurrent peers; skipping an unopened fork/data node bypasses its body. Conditional-only gates and already-entered containers require explicit routing or finishing their current work. `unskip` restores a future skipped node. If you already dispatched a worker for skipped work, stop that owned worker explicitly; editing the spine does not cancel it; `set-prompt` replaces an agent/llm node\'s prompt and `append-prompt` adds a paragraph to it. This is how a person\'s correction reaches the node\'s prompt — follow it with `wf_redo` to run that node again. Returns only a confirmation — call `wf_next` to learn the next node.',
     parameters: {
       node: { type: 'string', required: true, description: 'The node id to edit.' },
       action: { type: 'string', required: true, enum: ['skip', 'unskip', 'set-prompt', 'append-prompt', 'pause', 'unpause'], description: 'The edit.' },

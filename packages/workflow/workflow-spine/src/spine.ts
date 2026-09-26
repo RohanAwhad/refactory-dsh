@@ -487,8 +487,35 @@ export class Spine {
       .map(edge => label(edge.condition as string))
   }
 
+  /** Follow explicit skip edits without completing work or discarding peers. */
+  private advanceSkipped(): void {
+    let cursor = [...this.cursor]
+    const afters = [...this.afters]
+    let pass = this.pass === undefined ? undefined : { ...this.pass }
+    const seen = new Set<string>()
+    while (!cursor.some(node => this.pauseBoundaries.has(node))) {
+      const node = cursor.find(entry => this.skipped.includes(entry))
+      if (node === undefined) break
+      const position = JSON.stringify([cursor, afters, pass?.finished])
+      if (seen.has(position)) throw new Error('skipped nodes form a workflow cycle; unskip a step before continuing')
+      seen.add(position)
+      if (pass !== undefined && !pass.finished && node === pass.exit) {
+        pass = { ...pass, finished: true }
+        cursor = cursor.filter(entry => entry !== node)
+      } else {
+        const target = this.unconditionalTarget(node)
+        cursor = [...new Set([...cursor.filter(entry => entry !== node), ...(target === undefined ? [] : [target])])]
+        if (cursor.length === 0 && afters.length > 0) cursor = [afters.pop() as string]
+      }
+    }
+    this.cursor = cursor
+    this.afters = afters
+    this.pass = pass
+  }
+
   /** The node(s) due now, or `done`. */
   next(): SpineNext {
+    this.advanceSkipped()
     const pass = this.pass === undefined ? {} : { pass: { ...this.pass } }
     if (this.halted !== undefined || (this.cursor.length === 0 && this.pass === undefined)) {
       return {
@@ -560,7 +587,7 @@ export class Spine {
     const entry = body.subgraph_entry ?? ''
     const exit = body.subgraph_exit ?? ''
     if (entry === '' || exit === '') throw new Error(`${node} declares no subgraph to iterate`)
-    this.invalidateNodes(this.descendants(entry, exit))
+    this.invalidateNodes(this.descendants(entry, exit), false)
     this.pass = { node, count, index: 0, entry, exit, finished: false }
     this.cursor = [entry]
     this.afters = []
@@ -587,7 +614,7 @@ export class Spine {
     }
     if (pass.index + 1 < pass.count) {
       const index = pass.index + 1
-      this.invalidateNodes(this.descendants(pass.entry, pass.exit))
+      this.invalidateNodes(this.descendants(pass.entry, pass.exit), false)
       this.pass = { ...pass, index, finished: false }
       this.cursor = [pass.entry]
       this.afters = []
@@ -624,8 +651,9 @@ export class Spine {
     if (body._type === 'ForkNode') {
       const join = this.unconditionalTarget(node)
       if (join !== undefined) this.afters.push(join)
-      this.cursor = (body.targets ?? []).filter(target => !this.skipped.includes(target))
-      // A fork with no remaining branches still reaches its join/continuation.
+      this.cursor = [...(body.targets ?? [])]
+      // An empty fork still reaches its join; skipped targets retain their own
+      // continuations through next() instead of dropping an entire branch.
       if (this.cursor.length === 0 && this.afters.length > 0) {
         this.cursor = [this.afters.pop() as string]
       }
@@ -823,34 +851,37 @@ export class Spine {
     return { expanded: director, children, next: this.next() }
   }
 
-  /** Graph mutation: skip a node (and, for a fork, its targets). */
+  /** Graph mutation: skip a node's work, retaining its unambiguous continuation. */
   skip(node: string): SpineNext {
     if (this.isPaused()) throw new Error(`run paused before ${this.pausedAt().join(', ')}; explicitly unpause before skipping work`)
     const body = this.nodes.get(node)
     if (body === undefined) throw new Error(`unknown node ${node}`)
-    const removed = body._type === 'ForkNode' ? [node, ...(body.targets ?? [])] : [node]
+    if (this.completed.includes(node)) throw new Error(`${node} already entered or completed; skip a due/future step, or explicitly redo completed work`)
+    if (this.pass?.node === node) throw new Error(`${node} already has an active data pass; finish or skip its current body before changing the dataset`)
+    if (body._type === 'GateNode' && this.unconditionalTarget(node) === undefined && this.outgoing(node).length > 0) {
+      throw new Error(`${node} has conditional successors; route its verdict explicitly instead of an ambiguous skip`)
+    }
+    // A skipped container bypasses its body, but still reaches its continuation.
+    // Keep child skip flags independent so unskip(container) restores that body.
+    const continuation = this.unconditionalTarget(node)
+    const removed = body._type === 'ForkNode' || body._type === 'DataNode'
+      ? [...this.descendants(node, continuation)].filter(id => id !== continuation)
+      : [node]
     const stops = removed.filter(id => this.pauseBoundaries.has(id))
     if (stops.length > 0) throw new Error(`pause armed before ${stops.join(', ')}; explicitly unpause before skipping that boundary`)
+    const skipped = [...this.skipped]
+    const logLength = this.log.length
     if (!this.skipped.includes(node)) {
       this.skipped.push(node)
       this.log.push(`skipped ${node}`)
     }
-    if (body._type === 'ForkNode') {
-      for (const target of body.targets ?? []) {
-        if (!this.skipped.includes(target)) {
-          this.skipped.push(target)
-          this.log.push(`skipped ${target}`)
-        }
-      }
-      const join = this.unconditionalTarget(node)
-      this.cursor = join === undefined ? [] : [join]
-    } else {
-      this.cursor = this.cursor.filter(entry => entry !== node)
-      if (this.cursor.length === 0 && this.afters.length > 0) {
-        this.cursor = [this.afters.pop() as string]
-      }
+    try {
+      return this.next()
+    } catch (error) {
+      this.skipped = skipped
+      this.log.length = logLength
+      throw error
     }
-    return this.next()
   }
 
   /** Undo a skip. */
@@ -888,9 +919,9 @@ export class Spine {
   }
 
   /** Clear current completion and gate decisions without erasing graph edits. */
-  private invalidateNodes(affected: Set<string>): void {
+  private invalidateNodes(affected: Set<string>, clearSkips = true): void {
     this.completed = this.completed.filter(entry => !affected.has(entry))
-    this.skipped = this.skipped.filter(entry => !affected.has(entry))
+    if (clearSkips) this.skipped = this.skipped.filter(entry => !affected.has(entry))
     for (const id of affected) {
       this.gateVerdicts.delete(id)
       delete this.iterations[id]

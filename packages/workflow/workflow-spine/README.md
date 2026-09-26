@@ -230,3 +230,19 @@ explicit workflow control; interpreting a free-form request and arming the corre
 node remains the CEO's responsibility. `wf_open` still performs its documented
 initial deterministic step, so an initial-node pause in terminal use should be
 armed on the configured graph before its first `wf_next`.
+
+
+A skip bypasses the selected due or future node through its unconditional
+continuation; it never marks that work complete or discards another concurrent
+branch. Skipping an unopened fork or dataset bypasses its body, and unskipping
+it before arrival restores the body without clearing independent child skips.
+A gate with only conditional successors must be routed explicitly instead of
+guessing an outcome. Already-entered containers cannot be skipped retroactively.
+Skipping a data body's last step still closes and grades that item; even a fully
+skipped body receives its Task setup before verification. Skipping the unopened
+DataNode skips the whole dataset without starting any item. Armed pause boundaries
+also protect skipped container bodies.
+Skip edits persist across normal data items until explicitly unskipped; an explicit
+redo retains its existing reset behavior. If a worker was already dispatched for
+a skipped step, the coordinator must stop that owned worker separately: a graph
+edit does not cancel a running agent.
