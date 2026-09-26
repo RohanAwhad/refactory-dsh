@@ -43,8 +43,8 @@ uv run refactory package smoke review_pack/review
 ```
 {"error": "approve: ExecutionError: gate 'approve' is answered by 'user' and this run
 has no verdict for it. A headless run cannot answer a gate meant for a person or for
-an agent; pass one in RunContext.verdicts (an interactive run collects it, a resumed
-run replays it) or make the gate `fn`."}
+an agent; pass one in RunContext.verdicts (an interactive run collects a fresh
+answer) or make the gate `fn`."}
 ```
 
 That refusal is the point: an invented verdict is indistinguishable in the artifacts
@@ -77,15 +77,23 @@ the run's ledger.
 > could not be asked: no user-questions answerer accepted the request` instead of
 > scoring 0.
 
-## The answer is durable
+## The history is durable; approval is scoped
 
 ```bash
 uv run refactory steer --run .factory/interactive/review_pack-review
 ```
 
-The ledger shows the intent and the answer, and `verdicts` reports
-`{"approve": "proceed"}`. Run the same command again and it **replays** that answer
-rather than asking: a resumed run is the same run, not a second question.
+The ledger keeps the intent and the answer as history. The interactive answer is
+consumed for that gate visit: running the command again asks a fresh question,
+even in the same work directory and with the same draft. Changing the draft while
+a question is pending also invalidates the old answer.
+
+A public `steer --verdict approve=proceed` is likewise scoped to the declared review
+inputs and consumed once. First open the mode and reach its gate so the runtime
+knows what is being reviewed; an unknown or ambiguous gate is refused. To grant
+standing authorization deliberately, use `ceo --approve approve=proceed` or an
+explicit Python `RunContext.verdicts` mapping. A consumed or legacy unscoped ledger
+answer does not substitute for that authorization.
 
 ## Steering while it runs
 
@@ -138,7 +146,8 @@ small file in the run directory rather than a message to the running process.
 - **Who answers a gate is part of the architecture**, not a convention: the IR
   carries it, the runtime enforces it, and a headless run refuses rather than
   guessing.
-- The person's answer is durable, so resuming and replaying are the same act.
+- The decision history is durable. Interactive approval applies once to the
+  reviewed inputs; another visit needs a new answer.
 - Steering is context; structure is the outer loop's job. During use the graph does
   not change.
 
