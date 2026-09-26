@@ -165,6 +165,10 @@ def prepare(ctx: Any) -> dict[str, Any]:
     # and emit prompts state them, and read by `validate` so a mode that hardcodes a
     # fixture instead is refused rather than shipped.
     inputs = declared_inputs(ctx.knob("requires_input", ""))
+    from refactory_dsh.sandbox import DEFAULT_MODEL_SMOKE_TIMEOUT_S
+    smoke_timeout_s = int(ctx.knob("smoke_timeout_s", DEFAULT_MODEL_SMOKE_TIMEOUT_S))
+    if not 1 <= smoke_timeout_s <= 86400:
+        raise ValueError("smoke_timeout_s must be between 1 and 86400 seconds")
     # Fail before research, using the exact downstream HOME rewrite and scrub.
     # Other ModelClient implementations own their own readiness contract.
     from refactory_dsh.model import DshModelClient
@@ -184,7 +188,7 @@ def prepare(ctx: Any) -> dict[str, Any]:
     ctx.write_json("brief.json", {
         "name": name, "brief": brief, "extends": extends, "mode": revision,
         "task_ref": task_ref, "single_shot": single_shot, "data_node": data_node,
-        "requires_input": list(inputs),
+        "requires_input": list(inputs), "smoke_timeout_s": smoke_timeout_s,
     })
     return {
         "name": name,
@@ -1016,6 +1020,17 @@ def _model_context(ctx: Any) -> dict[str, str]:
     return (client if isinstance(client, DshModelClient) else DshModelClient()).context()
 
 
+def _smoke_timeout_record(result: Any, identifier: str, workdir: Path, *, model: bool) -> dict[str, Any]:
+    """Describe an incomplete pass without claiming a score or model request occurred."""
+    return {
+        "mode": identifier, "ok": False, "score": None, "timed_out": True,
+        "returncode": result.returncode, "timeout_s": result.timeout_s,
+        "elapsed_s": result.elapsed_s, "progress": result.progress,
+        "workdir": str(workdir), "sandboxed": True,
+        "model": "requested" if model else "none", "error": result.problem(),
+    }
+
+
 def smoke(ctx: Any) -> dict[str, Any]:
     """Run the new mode once, and compare a revision with what it revises.
 
@@ -1032,6 +1047,16 @@ def smoke(ctx: Any) -> dict[str, Any]:
     # reading which mode to run is done out of process.
     from refactory_dsh import sandbox
 
+    timeout_s = int(ctx.knob("smoke_timeout_s", sandbox.DEFAULT_MODEL_SMOKE_TIMEOUT_S))
+    if not 1 <= timeout_s <= 86400:
+        raise ValueError("smoke_timeout_s must be between 1 and 86400 seconds")
+
+    def record_timeout(result: Any, *, model: bool) -> None:
+        if result.timed_out:
+            ctx.write_json(
+                "smoke.json", _smoke_timeout_record(result, identifier, workdir, model=model),
+            )
+
     described = sandbox.describe_package(name, project=project_for_nodes())
     if not described.ok:
         raise ValueError(f"the package could not be read: {described.problem()}")
@@ -1041,7 +1066,9 @@ def smoke(ctx: Any) -> dict[str, Any]:
     samples = _sample_knobs(ctx.knob("sample_knobs", ""))
     result = sandbox.smoke(
         identifier, workdir, project=project_for_nodes(), knobs=samples or None,
+        timeout_s=timeout_s,
     )
+    record_timeout(result, model=False)
     if not result.ok:
         with_samples = f" (with {samples})" if samples else ""
         raise ValueError(f"the new mode did not finish a run{with_samples}: {result.problem()}")
@@ -1058,8 +1085,9 @@ def smoke(ctx: Any) -> dict[str, Any]:
         scored = sandbox.smoke(
             identifier, workdir, project=project_for_nodes(), model=True,
             knobs=samples or None,
-            model_context=_model_context(ctx),
+            model_context=_model_context(ctx), timeout_s=timeout_s,
         )
+        record_timeout(scored, model=True)
         if scored.ok and scored.payload.get("exit_ok") is False:
             # The sandbox exited 0 while the *mode* failed: it ran and raised, so its
             # score is not a measurement of anything. Reporting 0.0 would say "this
@@ -1077,7 +1105,8 @@ def smoke(ctx: Any) -> dict[str, Any]:
                     "score": score,
                     "iterations": scored.payload.get("iterations"),
                     "sandboxed": True,
-                    "model": "used",
+                    "model": "used", "timeout_s": timeout_s,
+                    "elapsed_s": scored.elapsed_s,
                 },
             )
             revised = _revision(
@@ -1103,7 +1132,8 @@ def smoke(ctx: Any) -> dict[str, Any]:
                 "agent_nodes": agent_nodes,
                 "detail": scored.problem(),
                 "sandboxed": True,
-                "model": "unavailable",
+                "model": "unavailable", "timeout_s": timeout_s,
+                "elapsed_s": scored.elapsed_s,
             },
         )
         revised = _revision(
@@ -1140,7 +1170,7 @@ def smoke(ctx: Any) -> dict[str, Any]:
             "mode": identifier,
             "score": score,
             "iterations": result.payload.get("iterations"),
-            "sandboxed": True,
+            "sandboxed": True, "timeout_s": timeout_s, "elapsed_s": result.elapsed_s,
             **({"sample_knobs": samples} if samples else {}),
         },
     )
@@ -1185,7 +1215,17 @@ def _revision(
         scored = sandbox.smoke(
             revision, ctx.workdir / "smoke-source", project=project,
             model_context=_model_context(ctx),
+            timeout_s=int(ctx.knob("smoke_timeout_s", sandbox.DEFAULT_MODEL_SMOKE_TIMEOUT_S)),
         )
+        if scored.timed_out:
+            # Keep the new mode's completed smoke receipt intact. The source pass
+            # is incomplete, so neither non-regression nor provenance is established.
+            ctx.write_json("revision.json", {
+                **_smoke_timeout_record(scored, revision, ctx.workdir / "smoke-source", model=False),
+                "phase": "source-comparison", "revision_of": revision,
+                "before_score": None, "after_score": after, "regressed": None,
+            })
+            raise ValueError(f"the revision source {revision} did not finish a run: {scored.problem()}")
         if scored.ok:
             before = float(scored.payload.get("score") or 0.0)
         else:
