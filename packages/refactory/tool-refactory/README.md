@@ -121,10 +121,10 @@ The loop names its eight steps after PyTorch: `init` builds the genesis state fr
 Read these pages when the package-level contract is not enough. They move from the Python loop this tool drives, to the capability it calls, to the tool contract it satisfies.
 
 - [The refactory system, as built](../../../refactory/docs/architecture.md) — the loop's steps, the state model, the validator's rules, and the edit algebra. [Decisions](../../../refactory/docs/plans/pythonic-modes.md) records why it is shaped that way; the `refactory/` project's own `README.md` is its entry point.
-- [refactory group map](../README.md) — the sibling group page and its package table.
-- [Subprocess capability](../../subprocess/subprocess/README.md) — the `ctx.subprocess` service this package spawns the console through.
-- [Adding a tool cookbook](../../../docs/cookbook/adding-a-tool.md) — the tool registration, presentation, and Model Experience contract.
-- [ceo preset](../../preset/agent-presets/presets/ceo/agent.cordis.yml) — the row that mounts this package.
+- [Python project](../../../refactory/README.md) — source map and entry points.
+- [Console bridge](src/console.ts) — the subprocess contract used to call Python.
+- [Tool registration](src/index.ts) — declarations, handlers and presentation.
+- [Graph composition](../../bundle/graph/cordis.patch.yml) — the terminal graph runtime configuration.
 
 -----
 

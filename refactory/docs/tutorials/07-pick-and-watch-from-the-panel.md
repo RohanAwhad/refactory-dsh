@@ -1,6 +1,6 @@
 # Pick and watch from the panel
 
-The other tutorials use the shell. This one uses the browser, because the panel is
+See [Get started](../getting-started.md) for installation and [Terminal and GUI](../interfaces.md) for current interface coverage. The other tutorials use the shell. This one uses the browser, because the panel is
 where a person chooses a run rather than composing the command for it: a mode, an
 outer loop, an optimizer and an evaluator are all **described choices** read from the
 same console the shell and the model use.
@@ -62,6 +62,7 @@ including a completed run another session still has open for inspection.
 | **Mode** | every mode the console lists, each with the verb that runs it | `console modes` |
 | **Outer loop**, **Optimizer**, **Evaluator** | the three level-two registries; each entry carries the console's own description, and `Use the default` leaves the console's default in place | `console strategies` |
 | **The mode's knobs** | one field per knob the chosen mode declares, shaped by the kind it declares: a knob with declared values is a choice, a `bool` is a choice over `true`/`false`, a number is bounded by its declared range, an open `str` is text. What the fields show is what the run sends, including a knob left at its declared default | `console start <mode> --knob NAME=VALUE` |
+| **Search budget** | epochs, candidates per epoch and maximum candidate evaluations; invalid values disable Start. These are search settings, separate from mode knobs. Final holdout checks are additional; these are not token/time limits | `console start <mode> --epochs … --batch-size … --max-evaluations …` |
 | **Start** | starts the chosen mode in its own process and names the run it began | `console start <mode> --strategy … --optimizer … --evaluator … --knob …` |
 | **Run once** | shows a unique run directory during launch, then reports the run's own status, due nodes and facts; **Watch and steer this run** attaches its live status and ledger | `console run <mode> --workdir <unique-directory> --knob NAME=VALUE` |
 | **Run status** | one frame of the run being read — state, best score, evaluations; **Refresh status** reads the next frame, **Stop the run** asks it to stop | `console status --run <id>`, `console stop --run <id>` |

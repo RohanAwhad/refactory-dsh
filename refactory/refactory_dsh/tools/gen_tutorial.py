@@ -46,7 +46,7 @@ TOOL_SOURCE = REPO_ROOT / "packages" / "refactory" / "tool-refactory" / "src" / 
 #: Which node kinds a reader has to understand, in the order the legend shows them.
 KINDS: tuple[tuple[str, str], ...] = (
     ("op", "an operation: deterministic Python, no model"),
-    ("agent", "an agent: one model call, run as a subagent under the CEO"),
+    ("agent", "an agent task: may use tools and multiple model turns"),
     ("gate", "a gate: routes on a verdict — `fn` computes it, `user` asks a person"),
     ("fork", "a fork: the branches start together"),
     ("join", "a join: the barrier every branch must reach"),
@@ -63,14 +63,14 @@ LOOP_OPTIONS: tuple[tuple[str, str, str], ...] = (
     ("--strategy", "which outer loop drives the search (table below)", "the harness's own"),
     ("--evaluator", "which runtime scores a candidate: `walker` (fast) or `dsh` (ships)", "walker"),
     ("--preset", "which edits the optimizer may use: `broad`, `structure`, `conservative`, `knob_only`", "broad"),
-    ("--seed", "the search's random seed; the same seed reproduces the leaderboard", "0"),
+    ("--seed", "the search RNG seed; model responses can still vary", "0"),
     ("--elite", "how many parents each round proposes against", "3"),
     ("--max-evaluations", "a hard ceiling on evaluated candidates, whatever the epochs say", "64"),
     ("--attempts", "retries per batch after a refusal, before the batch is short", "3"),
     ("--runs-root", "the run directory to write; read it back with `console --run <this path>`", ".factory/loop/<mode>-<time>"),
     ("--intent", "what the run is for, in your words; seeds the intent ledger the agents read", "empty"),
     ("--project", "the project root packages resolve against", "the checkout"),
-    ("--model", "the model the *reasoning* optimizer asks (not the mode's own agents)", "the default route"),
+    ("--model", "model for proposals and walker agent nodes; the DSH evaluator uses runtime defaults", "the default route"),
 )
 
 #: The loop's own steps, in order. The default strategy's names, and what each does.
@@ -964,7 +964,7 @@ TEMPLATE = """<!DOCTYPE html>
       {dataset_pipeline}
       <p>Each pass writes the item to <code>current_item.json</code> in the run directory, so
       an op or an agent node reads the item it is working on rather than being told it in a
-      prompt. Items come from <code>inline_items</code>, a <code>source_path</code> read as
+      prompt. Reusable harnesses take items from a <code>source_path</code> read as
       <code>directory</code>/<code>jsonl</code>/<code>csv</code>, or the bound Task's
       <code>instances()</code>; <code>limit</code> caps them; a named source that is missing is
       refused by name, because an empty selection and an unbound source must not look alike.

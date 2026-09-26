@@ -5,8 +5,6 @@ kind: "package-reference"
 
 # `@deepseek-ai/dsh-workflow-spine`
 
-English | [中文](README.zh.md)
-
 ## Summary
 
 This package turns a refactory workflow graph (the JSON from `Workflow.to_dict()`) into a live, steerable run that the driving agent walks step by step without ever choosing what to do next. A per-session `Spine` owns the position ("what is next"), gate routing, iteration caps, fork/join barriers, director expansion, and graph edits, and exposes that state through the `wf_*` tools. The spine refuses to hand over the next node until the current one is complete, so a run cannot skip, reorder, or bypass a checkpoint. Deterministic nodes — `FnNode` and `Study` commands and `fn` gate evaluators — can run in-process when `executeCommands` is on and a `shell` executor is mounted, and a `DataNode`'s subgraph is iterated once per item through a configured item loader. The main costs are that the graph must validate at load and that the CEO's own coding tools are denied, so node work happens inside the subagents it spawns.
@@ -89,7 +87,7 @@ An edge `condition` is a label, not an enum. `proceed` exits along the edge, `re
 <a id="upstream-vocabulary"></a>
 ## Upstream vocabulary
 
-`@deepseek-ai/dsh-workflow-spine` is one consumer of refactory's `Workflow` IR; the [named-gate-outcomes Agent Note](../../../.agents/notes/implemented/architecture/2026-09-09-workflow-spine-named-gate-outcomes.md) owns the vocabulary decision and its verified coverage.
+`@deepseek-ai/dsh-workflow-spine` consumes Refactory's `Workflow` IR. See [the Python API](../../../refactory/docs/api/reference.md) for graph declarations and [interactive gates](../../../refactory/docs/tutorials/06-run-it-with-a-person.md) for user-answer ownership and replay semantics.
 
 -----
 
@@ -134,7 +132,7 @@ The plugin registers one tool per verb — `wf_next`, `wf_done`, `wf_verdict`, `
 
 #### Token effect
 
-Constant per request when the graph and tools are fixed: six tool definitions plus one prompt section, independent of graph size. Node content reaches the model only through the tool results the CEO reads, so a node's `prompt_template` and a command's stdout cost tokens once, when that node is due.
+Constant per request when the graph and tools are fixed: the registered workflow tool definitions plus one prompt section, independent of graph size. Node content reaches the model only through the tool results the CEO reads, so a node's `prompt_template` and a command's stdout cost tokens once, when that node is due.
 
 #### KV Cache effect
 

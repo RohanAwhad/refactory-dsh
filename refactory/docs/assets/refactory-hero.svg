@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="410" viewBox="0 0 1200 410" role="img" aria-labelledby="title desc">
+  <title id="title">Refactory — agentic harnesses, built to improve</title>
+  <desc id="desc">Create a reusable mode, run its explicit graph, and optimize it with measured feedback. Stay involved through conversation, steering and approval gates.</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#101e35"/><stop offset="1" stop-color="#162c43"/></linearGradient>
+    <linearGradient id="accent"><stop stop-color="#7de2d1"/><stop offset="1" stop-color="#8bb6ff"/></linearGradient>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0 0 7 4 0 8" fill="none" stroke="#8fa9ca" stroke-width="1.5"/></marker>
+  </defs>
+  <rect width="1200" height="410" rx="24" fill="url(#bg)"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">
+    <rect x="44" y="43" width="9" height="26" rx="4" fill="#7de2d1"/>
+    <text x="67" y="65" fill="#e4efff" font-size="27" font-weight="700" letter-spacing="1">refactory</text>
+    <text x="45" y="143" fill="#fff" font-size="45" font-weight="750">Agentic harnesses,</text>
+    <text x="45" y="201" fill="url(#accent)" font-size="45" font-weight="750">built to improve.</text>
+    <text x="47" y="248" fill="#c1d1e7" font-size="20">Explicit graphs. Interactive execution.</text>
+    <text x="47" y="279" fill="#c1d1e7" font-size="20">Configurable optimization.</text>
+    <rect x="46" y="327" width="155" height="35" rx="17" fill="#223a55"/>
+    <text x="123" y="350" text-anchor="middle" fill="#dcecff" font-size="14">TERMINAL + GUI</text>
+    <rect x="212" y="327" width="146" height="35" rx="17" fill="#223a55"/>
+    <text x="285" y="350" text-anchor="middle" fill="#dcecff" font-size="14">PYTHON MODES</text>
+    <rect x="667" y="55" width="470" height="300" rx="20" fill="#102238" stroke="#35516f"/>
+    <text x="694" y="88" fill="#9eb8d5" font-size="14" letter-spacing="2">YOUR WORKFLOW, AS A GRAPH</text>
+    <g fill="none" stroke="#8fa9ca" stroke-width="2" marker-end="url(#arrow)">
+      <path d="M828 145 H873"/><path d="M972 177 V211"/><path d="M875 245 H830"/>
+      <path d="M699 245 H683 V103 H1096 V146 H1075"/>
+    </g>
+    <rect x="699" y="116" width="130" height="61" rx="12" fill="#254064" stroke="#8bb6ff"/>
+    <text x="764" y="154" text-anchor="middle" fill="#eef5ff" font-size="20" font-weight="600">Create</text>
+    <rect x="876" y="116" width="196" height="61" rx="12" fill="#244943" stroke="#7de2d1"/>
+    <text x="974" y="154" text-anchor="middle" fill="#e3fff7" font-size="20" font-weight="600">Run + steer</text>
+    <rect x="876" y="214" width="196" height="61" rx="12" fill="#254064" stroke="#8bb6ff"/>
+    <text x="974" y="252" text-anchor="middle" fill="#eef5ff" font-size="20" font-weight="600">Optimize</text>
+    <rect x="699" y="214" width="130" height="61" rx="12" fill="#443c32" stroke="#e7c48a"/>
+    <text x="764" y="252" text-anchor="middle" fill="#fff0d2" font-size="20" font-weight="600">Adopt</text>
+    <text x="903" y="317" text-anchor="middle" fill="#b5c9df" font-size="15">Inspect the changes. Keep the evidence.</text>
+  </g>
+</svg>

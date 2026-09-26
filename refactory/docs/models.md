@@ -1,6 +1,6 @@
 # Models
 
-A run asks one model. Which model answers is your settings document, `~/.dsh/settings.yaml`, and the `--model` and `--provider` flags override it for a single run without writing anything back.
+Configure model routes in `~/.dsh/settings.yaml` or **Settings → Models**. Supported entry points accept `--model` and `--provider` overrides without changing saved settings. The table below explains which execution paths receive those overrides.
 
 ## Where the list comes from
 
@@ -42,7 +42,7 @@ Keys are read from the environment (`DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, …, i
 
 A local OpenAI-compatible server works through the same route, and still needs *a* key — pi-ai's OpenAI protocol asks for one, so name a dummy variable and export any value (`apiKeyEnv: LOCAL_TEST_KEY`, then `LOCAL_TEST_KEY=dummy`), or set an `Authorization` header.
 
-## One run, one model
+## Choose a model for a run
 
 ```bash
 uv run refactory ceo counting_pack/fixed_step --model deepseek-v4-pro
@@ -51,6 +51,26 @@ uv run refactory optimize circle_packing/adaptive --provider deepseek-official -
 ```
 
 `--model` names the id and `--provider` the route; both fall back to `agent-default-model` in your settings, and neither writes anything back, so choosing a model for one run does not change the next. A route that does not exist is a loud failure (`NO_ADAPTER: no adapter registered for provider …`), not a quiet return to the default. The same two flags exist one level down, on `dsh --profile headless|graph`, which is what `refactory` calls.
+
+## Model selection across execution paths
+
+| Path | Where its model comes from |
+|---|---|
+| Terminal `ceo` | The selected graph-runtime provider/model, or saved defaults |
+| Python Create/Edit/Design agent nodes | The supplied `DshModelClient`; its route/context is carried to supported nested validation |
+| Optimization with the default `walker` evaluator | The supplied model client serves the reasoning proposer and evaluated agent nodes |
+| Optimization with the separate `dsh` evaluator | Candidate execution launches the graph runtime using its configured defaults; the optimizer's CLI override is not forwarded as a universal candidate override |
+| GUI CEO and children | The owning session and worker configuration; inspect actual child execution when validating a route |
+
+For the separate DSH evaluator, configure the runtime's intended defaults as well as the proposer route. Current session selection and nested-runtime defaults are distinct facts. `refactory runtime` inspects configuration; actual session/request receipts establish what ran. Consistent routing across all paths is planned in [#237](https://github.com/akashgit/refactory-dsh/issues/237).
+
+A random seed does not make model outputs deterministic. Changing provider/model can change tool use, latency, cost and output quality; support for a protocol is not a performance guarantee.
+
+## Model provider versus coding agent
+
+DSH is the current coding-agent runtime. It supplies the tool loop, sessions, delegation and working context; an OpenAI or Anthropic model can answer through its provider adapters. Choosing an OpenAI model does not switch the worker to Codex, and choosing a Claude model does not launch Claude Code.
+
+The installed DSH presets include disabled optional Codex/Claude Code delegation rows. Their provider bundles and Refactory integration are not enabled here. [#237](https://github.com/akashgit/refactory-dsh/issues/237) tracks opt-in worker backends, capability-aware controls and CLI/GUI acceptance. Refactory retains graph order, user gates, scoring and validation when those workers are introduced.
 
 ## Credentials for nested execution
 

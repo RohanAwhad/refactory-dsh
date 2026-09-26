@@ -1,213 +1,75 @@
 # 3. Author with a model
 
-Three modes whose **output is a mode or an artifact**. They are Python entry
-points rather than DSH presets, because they write Python and a `graph.json` —
-which a workflow graph cannot carry.
+Create, Edit and Design are ordinary graphs in `default_pack`. Run them interactively through terminal CEO or GUI chat, or use their Python APIs. They call a model; duration and output quality depend on the workload, model and review cycles.
 
-All three share one property: they produce something **new** and never mutate
-their input. A creation lands in the workspace root; the package it was based on
-is untouched.
+| Mode | Output | Completion evidence |
+|---|---|---|
+| Create | A new registered package of modes | Structural validation, reviews and canonical smoke |
+| Edit | A revised package with source provenance | The same checks, plus comparison status where meaningful |
+| Design | An artifact | The supplied check command and reviews against the brief |
 
-> These make real model calls. Each command below was run against this checkout
-> with a real provider; the outputs shown are the shape they produce, and scores
-> will vary with the model.
+Configure [managed model credentials](../models.md#credentials-for-nested-execution) first. These examples are starting briefs; inspect actual results rather than assuming a particular generated mode name or score.
 
----
-
-## create: a brief becomes a package
+## Create a reusable harness
 
 ```bash
-uv run refactory ceo "hill-climb a greedy circle packing by accepting non-worsening moves" \
-  --mode create --name annealing_pack --single --approve gate_strategy=proceed
+uv run refactory ceo \
+  "Draft and check a project README from a supplied brief. Declare the input and output contract clearly." \
+  --mode create --name readme_pack --single
 ```
 
-The run ends with a **smoke of the new package**: it is read out of process, its first
-mode is run once, and the score is recorded. A mode with an `agent` node is scored by
-supplying a model client (the same one every other path uses); if no model is reachable
-on the machine, the report says `score: null` with the reason and the commands that do
-score it, rather than reporting `0.0`, which would read as "this scored nothing".
+`--single` deliberately chooses a single-run harness. For a class of work, use `--task module:TaskClass` instead. The importable [Task](../datasets.md) lists inputs, prepares each item and verifies the result; Create binds the generated mode to it. The final `create.json` records the actual binding.
 
-`--approve` is the person's answer to `gate_strategy`, carried over from create-v2:
-the strategy is a decision a person owns, and a headless run is **told** it rather
-than approving its own plan. Drop the flag and the run stops at that gate with the
-message saying so. `uv run refactory steer --run <id> --verdict gate_strategy=proceed` records the
-same answer on a paused run, and a resumed run replays it instead of asking again.
+The current graph surveys existing packages, researches the problem, develops a strategy, asks you to approve it, emits files, validates them, runs parallel reviews and an audit, then registers the package and performs the canonical smoke. Repair loops are bounded by the declared controls. Full model/Task validation belongs to that final smoke; review stages use bounded checks for their findings.
 
-**A brief that is *about* something the caller supplies should say so.** `--knob
-requires_input=package` (or `--input package` on `python -m refactory_dsh.create`, and
-`inputs` on the tool's `create` action) declares what the mode must take as input.
-`validate` then refuses a mode with no way to receive it — no declared knob named after
-it and no read under that name — which is the difference between a mode that operates on
-a package and one that hardcodes a fixture shaped like the brief. The design and emit
-prompts are told the same list, so the requirement reaches the code rather than the
-gate alone.
+A sample run does not establish quality on every future input. A failed inner execution is a failure, not a measured zero. A specifically unavailable model may leave an explicit unmeasured score/reason; it is not proof of working authentication or a passed model run. Inspect `smoke.json` and the final report.
 
-`--sample target=7` (repeatable) is how a real input reaches the validation run:
-without one the smoke exercises the declared defaults, which for an input-taking mode is
-the fixture it already ships. The run is also refused when what it produced is not the
-format it claims — a `.whl` with no `METADATA` or `WHEEL` beside its `RECORD`, an
-archive that will not open. And `--resume .factory/edit/name` continues a run that died
-at the node it failed on, keeping every node that had already finished.
+When the mode needs a named input, declare it in the brief and through `--knob requires_input=<name>` on CEO. The Python Create entry point also supports `--input` and repeatable `--sample NAME=VALUE`; samples exercise supplied inputs rather than only defaults. Read that entry point's help for its own flags.
 
-Generated content guards should check the promised structure and substance, not
-reject harmless spelling. An unresolved template field needs its template context;
-punctuation, braces or an ordinary word alone do not establish missing content.
-The authoring reviews ask for both accepted and rejected cases through the public
-package interface: quoted prose, Unicode and mathematical notation (including
-nested LaTeX braces) when supported, alongside malformed inputs. These are review
-instructions, not a runtime proof of semantic correctness or a repair of previously
-generated packages.
-
-What happens, in order — and the gates are the point:
-
-1. **survey** — what already exists, so the model can build on it rather than
-   duplicate it. The survey names the installed modes.
-2. **research** — between three and five questions the design has to answer, each one
-   answered and written to `research/<slug>.md`, collected in `research-plan.json` as
-   an array of `{focus, slug, finding}`. A **gate** checks that the plan is a plan and
-   that every finding it names is on disk, and reloops with the reasons otherwise: the
-   stage exists to ground the design in facts, and a node whose contract is
-   `writes=("research-plan.json",)` is satisfied by any bytes at all, including a
-   sentence about subagents still working.
-3. **strategy** — the model considers **three** approaches and picks one, with a
-   reason and a score. The prompt carries the survey, the JSON schema, and the
-   distinction between a gate and an op.
-4. **review** — a gate that *refuses* a thin design and reloops with its reasons:
-   one approach only, no chosen/why/score, a `closest_existing` that is not
-   installed, a design with no knobs, a graph that does not hold together (V2), a
-   gate declared with a `call` instead of an `evaluator`, or an answer that is not
-   JSON.
-5. **emit** → **materialise** → **validate** → **register** → **smoke**.
-
-`annealing_pack` in this repository is the output of exactly that command, and its
-`__init__.py` records what it was built on:
-
-```python
-PACKAGE = Package(
-    name="annealing_pack",
-    description="Hill-climb a greedy circle packing by accepting non-worsening single-circle moves.",
-    modes=(Anneal,),
-    ops=("refactory_packages.annealing_pack.ops",),
-    # Declared, because this package imports circle_packing.ops for RADII and
-    # score_centers. Without the declaration, removing circle_packing would leave a
-    # package that fails at import time and nothing would have warned anyone.
-    requires=("circle_packing",),
-)
-```
-
-`requires` is not decoration: `registry remove circle_packing` refuses while a
-dependent names it, instead of leaving a package that fails at import.
-
-Check what came out:
+Inspect the generated package with:
 
 ```bash
-uv run refactory package show annealing_pack/anneal
-.venv/bin/python -m refactory_dsh.sandbox --smoke annealing_pack/anneal
+uv run refactory package show readme_pack
+uv run refactory package verify readme_pack
 ```
 
-The smoke check runs the mode in a scrubbed environment. A generated package is
-**AST-checked and never imported** by the checker — running code you did not write
-is a decision, not a side effect.
+The catalogue/report names its generated mode IDs. Use the actual ID to run it. `package smoke` without `--model` is keyless; agent-containing modes need the model-backed path. Structural admission is not a guarantee of safe arbitrary generated code; see [hardening](../hardening.md).
 
-## edit: revise a mode from a brief
+## Edit an existing mode
 
 ```bash
-uv run refactory ceo "restart from a jittered sample when the search stalls" \
-  --mode edit --revise circle_packing/adaptive --name revised_pack --approve gate_strategy=proceed
+uv run refactory ceo "Improve the search strategy while preserving its input and output contract" \
+  --mode edit --revise circle_packing/adaptive --name revised_pack
 ```
 
-`EditMode` is `CreateMode`'s graph with a different intent. Two differences that
-matter:
+Edit uses the Create graph with the source and revision intent. It writes a new package; the source remains available. The Python driver preserves the graph's canonical report rather than independently repeating keyless before/after passes.
 
-- **prepare hands the model the source it is revising**, and the result records
-  `revision_of`.
-- **a regression is refused by default.** The revision is scored before and after;
-  if it got worse, the run fails, naming both scores. Pass
-  `--knob allow_regression=1` (or `--allow-regression` on
-  `python -m refactory_dsh.edit`) when you want a revision that trades score for
-  something else.
+Comparable deterministic executions use the same accepted sample inputs. A measured regression is refused by default; `--knob allow_regression=1` on CEO explicitly allows that tradeoff. Model-dependent or incompatible-input comparisons are marked unavailable with a reason, not reported as non-regressions. Inspect `revision.json`, `before_score`, `after_score`, `regressed` and `revision_note`.
 
-  Two modes can only be compared when a single smoke run measures both: a source
-  mode with no `score()`, or one whose graph calls a model, is recorded as **not
-  compared** with the reason, because one sample of a model call is not a score to
-  refuse on. `revision.json` in the run directory, and `revision_of`, `before_score`
-  and `after_score` in the package's `.origin.json`, say which of the two happened.
-  An unmeasured comparison has `before_score: null` and `regressed: null`; a failed
-  deterministic source run fails the revision instead of counting as score zero.
+The Python entry point supports `--sample NAME=VALUE`, `--allow-regression` and `--resume RUN_DIR`. These are entry-point-specific flags, not all aliases on CEO. A supported resume keeps completed stages; rerunning an ordinary CEO launch is a fresh invocation, not generic continuation.
 
-The Python `edit(EditConfig(...))` API and `python -m refactory_dsh.edit` use that
-same graph result, including its comparison reason and Task contract. They do not
-run extra keyless before/after passes. The API captures the source state before
-authoring and refuses if that state changes before comparison; its persisted task
-keeps this identity across resume. `--sample NAME=VALUE` reaches the revised smoke
-and, when the source accepts those knobs, its comparison pass. A newly introduced
-input knob makes the comparison unavailable with an explicit reason rather than
-comparing the new input against the source's default input.
-
-Note what it does *not* do: it writes a **new** package. `circle_packing` is
-unchanged, so "did the revision help?" stays a question you can still ask.
-
-## design: an artifact, checked by running it
+## Design an artifact
 
 ```bash
-uv run refactory ceo "count words, lines and characters in a text file" \
+uv run refactory ceo \
+  "Build wordcount.py for a UTF-8 input file. Include sample.txt and verify line, word and character counts." \
   --mode design --name wordcount --check "python wordcount.py sample.txt"
 ```
 
-`--check` is required and runs the artifact in its own directory. The graph has
-no register or smoke step: it has a check gate followed by reviews against the
-brief. A command that exits successfully proves only what it actually checks.
-Reviews compare the output semantics with the brief. Visual deliverables need
-rendered inspection; exchange files need acceptance by an established consumer
-or independent reader.
-Normal loading and loading that repairs the file are separate results.
+Design researches and prepares a design document for your approval, implements the artifact, executes the check and runs reviews. The check executes from the artifact directory. Its exit status establishes only what the command checks; correct semantics may need additional evidence. Visual deliverables need a rendered inspection, and exchange files need a suitable independent consumer.
 
-If a required renderer or consumer is unavailable, the reviewer preserves the
-artifact and evidence, names the missing dependency and the exact external
-validation needed, and leaves the requirement unverified. Re-authoring cannot
-supply a missing validation tool. These prompts add no automatic halt directive:
-the review gates still reloop with a four-visit bound, so external validation may
-need intervention by the CEO or person before that bound is exhausted. An
-unverified requirement must not be relabelled as passed to finish the run.
+The original brief, approved design and explicit steering remain the acceptance baseline. A README limitation or reviewer summary cannot silently waive requested behavior. If an external validation dependency is missing, preserve the artifact and report the unmet requirement honestly.
 
-Artifacts live at `<project>/.factory/artifacts/<name>`, separate from mode packages.
-Node commands use `REFACTORY_PROJECT` when configured; the Python walker otherwise
-uses its calling directory as the project. The recorded `artifact` fact and final
-report contain the absolute directory, which is also given to every artifact reviewer.
-The name is one directory component, not a path. Unsafe names, symlinked output
-boundaries and malformed/colliding emitted paths are refused before replacing an
-existing artifact. Valid replacements are written privately first. An older saved
-run with a relative artifact fact must materialise again before its check can run.
+The artifact is published under `.factory/artifacts/<name>`, with its exact absolute path in the run report. Design does not register a mode or produce a numeric optimization objective. Use it when the deliverable is the artifact itself.
 
----
+## Approval, time and evidence
 
-## Reading the output
+Leave user gates interactive when you want to review the plan. `--approve gate_strategy=proceed` supplies deliberate upfront authorization for unattended work. Approval history and scope matter; [the interactive tutorial](06-run-it-with-a-person.md) explains them.
 
-All three leave the same kind of run directory as any other mode, so the reading
-tools are the same:
+Create/Edit's `smoke_timeout_s` knob bounds each full smoke pass (default 3600 seconds); it is separate from an agent completion deadline and does not bound total authoring time. API flags and graph knobs are documented by their respective help/catalogue surfaces.
 
-```bash
-# The console's run root is <project>/.factory/loop, so point it at this run.
-uv run refactory runs --runs-root .factory/loop
-uv run refactory status --run <run-id>
-```
+Use the exact work directory returned by the launch. Research, design, review, progress and final report files belong to that run. Do not confuse authoring evidence with an optimizer's `analysis/generation-*.md` records.
 
-And the analysis the model wrote is kept per generation, which is what makes a
-create-run reviewable after the fact:
+Fast Create/Edit/Design graphs with light QA are planned in [#234](https://github.com/akashgit/refactory-dsh/issues/234). Users can define their own modes today; research and QA are graph choices, and the platform does not require every mode to use the full authoring pipeline.
 
-```bash
-cat .factory/loop/<run-id>/analysis/generation-0.md
-```
-
-## What to take away
-
-- The authoring modes are **modes**, running through the same executor, the same
-  validator, and the same journal as everything else. There is no separate
-  pipeline.
-- Their gates are strict on purpose: a design that cannot hold together is
-  refused *before* it is emitted, because emitting it and discovering that later
-  is how the system this replaced produced unreviewable output.
-- Everything they create is a **new** artifact with provenance recorded, so a
-  deployment can see what was generated and by what.
-
-Next: [ship it on DSH](04-ship-it-on-dsh.md).
+Next: [run with a person](06-run-it-with-a-person.md) or [drive GUI chat](05-drive-it-from-the-gui.md).

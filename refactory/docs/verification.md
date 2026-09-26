@@ -199,3 +199,12 @@ pending must refuse the old answer without routing, then allow a fresh review an
 answer. Validate both terminal and native browser channels; no substitute mode is
 needed. Also run with explicit `--approve approve=proceed` to verify unattended
 upfront authorization still works.
+
+
+## Bounded release acceptance
+
+Agree on the feature, exact success conditions, budget and stop condition before model-backed acceptance. Test both CLI and GUI for a feature exposed in both; API success alone is not evidence of native GUI behavior. Record actual provider/model/backend and the revision under test.
+
+Separate framework execution and control, declared artifact checks, and generated-output quality. Reuse saved artifacts for unchanged routing/reporting contracts, and reserve fresh model runs for behavior that needs them. A timeout is an incomplete run, even when its failure reporting is correct. A no-improvement search is not a framework failure.
+
+Documentation-only changes need link/command checks, generated-reference freshness when relevant, and visual inspection of changed graphics; they do not require rerunning authoring campaigns. Keep normal commit/push checks. Do not turn a wording correction into an unbounded model-quality exercise.
