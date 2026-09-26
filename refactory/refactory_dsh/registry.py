@@ -367,13 +367,21 @@ def smoke(project: Path, identifier: str, *, model: bool = False) -> dict[str, A
 
 
 # ── the lifecycle ──────────────────────────────────────────────────────────
-def _write_origin(root: Path, *, origin: str, trust: str, ref: str = "") -> Path:
+def _write_origin(
+    root: Path, *, origin: str, trust: str, ref: str = "", source_name: str = "",
+) -> Path:
     import datetime
 
     path = root / ORIGIN
+    try:
+        previous = json.loads(path.read_text()) if path.exists() else None
+    except (OSError, json.JSONDecodeError):
+        previous = None
     path.write_text(json.dumps({
+        **({"source_provenance": previous} if isinstance(previous, dict) else {}),
         "origin": origin,
         "ref": ref,
+        **({"source_package": source_name} if source_name else {}),
         "trust": trust,
         "at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
     }, indent=2))
@@ -394,6 +402,8 @@ def add(project: Path, source: Path, *, as_name: str = "", trust: str = "generat
     """
     import shutil
 
+    from refactory_dsh import package_rewrite
+
     project = Path(project)
     source = Path(source).resolve()
     if not (source / "__init__.py").exists():
@@ -401,7 +411,13 @@ def add(project: Path, source: Path, *, as_name: str = "", trust: str = "generat
     destination_root = workspace_root(project)
     if destination_root.is_dir() and source.is_relative_to(destination_root.resolve()):
         raise PackageError(f"{source} is already in the workspace")
-    name = as_name or source.name
+    original = package_rewrite.declared_name(source)
+    if as_name and not original:
+        raise PackageError(
+            "--as needs a direct literal PACKAGE name; dynamic or ambiguous identities "
+            "must be prepared under the new name before importing"
+        )
+    name = as_name or original or source.name
     _check_name(name)
     existing = where(name, project)
     if existing is not None:
@@ -411,8 +427,16 @@ def add(project: Path, source: Path, *, as_name: str = "", trust: str = "generat
     target = destination_root / name
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
-        shutil.copytree(source, target)
-        _write_origin(target, origin=str(source), trust=trust)
+        target.mkdir()
+    except FileExistsError as exc:
+        raise PackageClash(f"destination {target} already exists; no files were changed") from exc
+    try:
+        # The exclusive mkdir establishes ownership before cleanup can remove it.
+        shutil.copytree(source, target, dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        if original and name != original:
+            package_rewrite.rename(target, original, name)
+        _write_origin(target, origin=str(source), trust=trust, source_name=original)
         install_workspace(project)
         # `load` refuses a package whose declared name differs, so it both checks
         # the copy and names the mismatch.
@@ -421,8 +445,8 @@ def add(project: Path, source: Path, *, as_name: str = "", trust: str = "generat
         # The copy is before the check, so a refusal has to undo it: the residue
         # would make the next attempt a false name clash, and the clash message
         # sends the caller to `--as`, which is what they already passed.
-        shutil.rmtree(target, ignore_errors=True)
         _evict_workspace(name, project)
+        shutil.rmtree(target, ignore_errors=True)
         raise
     importlib.invalidate_caches()
     log.info("package_added", package=name, source=str(source), trust=trust)
@@ -454,7 +478,19 @@ def import_package(
         result = subprocess.run(command, capture_output=True, text=True)
         if result.returncode != 0:
             raise PackageError(f"git clone failed: {result.stderr.strip()[-400:]}")
-        return add(project, Path(tmp), as_name=as_name, trust=trust)
+        name = add(project, Path(tmp), as_name=as_name, trust=trust)
+        path = workspace_root(project) / name / ORIGIN
+        recorded = json.loads(path.read_text())
+        origin = source
+        if source.startswith(("http://", "https://")):
+            from urllib.parse import urlsplit, urlunsplit
+
+            url = urlsplit(source)
+            # Repository identity is useful provenance; transport credentials are not.
+            origin = urlunsplit((url.scheme, url.netloc.rsplit("@", 1)[-1], url.path, "", ""))
+        recorded.update(origin=origin, ref=ref)
+        path.write_text(json.dumps(recorded, indent=2))
+        return name
 
 
 def remove(project: Path, name: str, *, force: bool = False) -> Path:

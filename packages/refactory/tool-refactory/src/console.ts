@@ -197,6 +197,8 @@ export class Console {
       if (value === undefined || value === false) continue
       const flag = `--${name.replaceAll('_', '-')}`
       if (value === true) argv.push(flag)
+      // Forwarded registry flags are a value, even when they begin with `--`.
+      else if (name === 'args') argv.push(`${flag}=${String(value)}`)
       else if (Array.isArray(value)) {
         for (const element of value) argv.push(flag, String(element))
       } else argv.push(flag, String(value))
