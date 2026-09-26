@@ -241,8 +241,10 @@ class CreateMode(Mode):
                 "## The perspectives\n{{strategy_plan}}\n\n"
                 "## What went wrong last time\n{{design_review}}\n\n"
                 "Compile the perspectives into one strategy. Every ask in the brief must "
-                "appear in it or be named as deliberately out of scope: an ask that is "
-                "silently dropped is the failure this step exists to catch. Then decide "
+                "appear in it unless the user explicitly agreed to exclude it; naming "
+                "an ask out of scope does not supply that agreement. Preserve user-approved "
+                "non-goals and later explicit user steering. An unmet ask remains "
+                "unresolved. Then decide "
                 "the approach: consider at least two, say why the one you chose wins, "
                 "say what it will not do, name the existing mode it is closest to, and "
                 "describe the graph you intend to write.\n\n" + STRATEGY_SCHEMA

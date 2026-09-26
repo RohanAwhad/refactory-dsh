@@ -192,11 +192,14 @@ export function apply(ctx: Context): void {
         + 'wf_next crosses sole static fork/join boundaries and establishes branch delivery contexts '
         + 'for you. Dispatch only the AgentNode/LLMNode prompts it returns, never fork target ids from '
         + 'a state view. If a control node is explicitly returned, wf_done it, then call wf_next first. '
-        + 'For each AgentNode or LLMNode, spawn a subagent and give it a tight brief: it must write ONLY '
-        + 'the exact files in that node\'s `writes` list (reading only its `reads`), then stop and return '
-        + 'a one-line summary. The subagent must NOT run the eval, run tests, iterate, edit other files, or '
-        + 'spawn further subagents — the deterministic FnNode/gate commands run automatically afterward, so '
-        + 'a subagent that runs them itself wastes the budget. Then report wf_done for the node. Route each '
+        + 'For each AgentNode or LLMNode, spawn a subagent and pass the returned prompt in full. '
+        + 'Coordination notes must not weaken its requirements or waive the original brief/approved design '
+        + 'without explicit user steering; a documented limitation is not a waiver. Preserve the node\'s '
+        + 'declared `writes` contract and read its `reads`, plus any inputs expressly required by its prompt. '
+        + 'Perform checks or delegate only as that node expressly requires. Do not independently rerun '
+        + 'the eval or deterministic FnNode/gate commands, add unrelated edits, or iterate beyond the node\'s '
+        + 'requested work: the deterministic commands run automatically. After writing the required outputs, '
+        + 'stop and return a one-line summary. Then report wf_done for the node. Route each '
         + 'gate with wf_verdict. When wf_next returns done, stop and report the final best score you observed.',
       graph,
       workdir,

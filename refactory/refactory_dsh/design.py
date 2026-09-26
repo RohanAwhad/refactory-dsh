@@ -19,6 +19,15 @@ from refactory_dsh.nn import Graph, Knob, Mode, Node, RunResult
 
 OPS = "refactory_dsh.design_ops"
 
+_ACCEPTANCE_BASELINE = (
+    "Acceptance baseline: the original brief, any approved design, and explicit user "
+    "steering. Preserve user-approved non-goals. A README limitation, proposed "
+    "exclusion, coordinator summary or reviewer note cannot waive a requested "
+    "behavior without explicit user agreement to that change. Report conflicts "
+    "instead of silently narrowing scope. Reviews must mark observed noncompliance "
+    "as BLOCKING even when the limitation is documented.\n\n"
+)
+
 
 class DesignMode(Mode):
     """Design, emit and check a software artifact.
@@ -131,9 +140,11 @@ class DesignMode(Mode):
                 "The check, run from the artifact's own directory:\n    {{check}}\n\n"
                 "## What the research found\n{{research}}\n\n"
                 "## The perspectives\n{{strategy_plan}}\n\n"
-                "Compile the perspectives into one plan: what will be built, which files "
+                + _ACCEPTANCE_BASELINE
+                + "Compile the perspectives into one plan: what will be built, which files "
                 "it needs, how the check will pass, and what is deliberately out of "
-                "scope. Every ask in the brief must appear or be named as out of scope. "
+                "scope with the user's agreement. Every remaining ask in the brief must "
+                "appear in the plan; an unmet ask remains unresolved. "
                 "For each ask distinguish what the supplied check establishes from "
                 "what still needs independent evidence. Plan executable semantic checks "
                 "for the gaps; a successful command or an existing output file does not "
@@ -154,10 +165,11 @@ class DesignMode(Mode):
                 "Artifact name: {{name}}\nBrief: {{brief}}\n"
                 "The check, run from the artifact's own directory:\n    {{check}}\n\n"
                 "## The plan\n{{strategy}}\n\n"
-                "Write the design document for this artifact: every file it will "
+                + _ACCEPTANCE_BASELINE
+                + "Write the design document for this artifact: every file it will "
                 "contain, what each one does, the interfaces between them, and how the "
                 "check exercises them. Be concrete — the next step writes the code from "
-                "this document alone. Specify accepted input syntax and unambiguous "
+                "this document and the brief. Specify accepted input syntax and unambiguous "
                 "rejection behavior: unsupported counts, signs, units, or other values "
                 "must not silently become different valid requests. For visual output, "
                 "plan a rendered inspection as well as format/geometry checks, including "
@@ -189,7 +201,8 @@ class DesignMode(Mode):
                 "## The design\n{{design}}\n\n"
                 "## What went wrong last time\n{{validation}}\n\n"
                 "## What the reviews refused\n{{qa_gate}}\n{{overwatch_review}}\n\n"
-                "Answer with file blocks, each introduced by a line of exactly:\n"
+                + _ACCEPTANCE_BASELINE
+                + "Answer with file blocks, each introduced by a line of exactly:\n"
                 "===FILE: <relative path>===\n"
                 "followed by the file's contents. No prose outside the blocks.\n"
             ),
@@ -226,7 +239,8 @@ class DesignMode(Mode):
                 "from your working directory.\n\n"
                 "Brief: {{brief}}\nThe check it must pass: {{check}}\n\n"
                 "## The design\n{{design}}\n\n"
-                "You are the health checker. Run the artifact the way a user would: run "
+                + _ACCEPTANCE_BASELINE
+                + "You are the health checker. Run the artifact the way a user would: run "
                 "its check, and run it from a clean directory. Record every command and "
                 "its exact output in `reviews/health-check.md`. For visual deliverables, "
                 "render actual representative output and inspect it at a useful size; "
@@ -259,8 +273,10 @@ class DesignMode(Mode):
                 "Artifact directory (absolute): {{artifact}}\n"
                 "Read and run the delivered files at this exact path; do not infer it "
                 "from your working directory.\n\n"
+                "Brief: {{brief}}\n\n"
                 "## The design\n{{design}}\n\n## The emitted source\n{{emit}}\n\n"
-                "You are the code reviewer. Read the emitted files against the design "
+                + _ACCEPTANCE_BASELINE
+                + "You are the code reviewer. Read the emitted files against the design "
                 "and the brief: is every file the design names present, does it do what "
                 "the design says, and would it run? Trace input values through parsing "
                 "to the delivered artifact: count/role binding, signs, units, and "
@@ -270,7 +286,7 @@ class DesignMode(Mode):
                 "`reviews/code-review.md`. A defect that would stop the artifact working "
                 "is written as `BLOCKING:` followed by the file and what is wrong."
             ),
-            reads=("design.md", "emit.txt"),
+            reads=("brief.json", "design.md", "emit.txt"),
             writes=("reviews/code-review.md",),
             produces=("code_review",),
             notes="review the emitted files against the design",
@@ -282,8 +298,10 @@ class DesignMode(Mode):
                 "Read and run the delivered files at this exact path; do not infer it "
                 "from your working directory.\n\n"
                 "Brief: {{brief}}\nThe check it must pass: {{check}}\n\n"
+                "## The approved design\n{{design}}\n\n"
                 "## The plan\n{{strategy}}\n\n"
-                "You are the QA director. Design adversarial checks on the artifact — "
+                + _ACCEPTANCE_BASELINE
+                + "You are the QA director. Design adversarial checks on the artifact — "
                 "the cases a friendly reviewer would not try — and run them. Vary one "
                 "semantic property at a time and inspect the actual output, not just "
                 "the exit code. Include conflicting nearby numbers, unsupported counts, "
@@ -296,7 +314,7 @@ class DesignMode(Mode):
                 "breaks an ask in the brief is written as `BLOCKING:` followed by what "
                 "you ran and what happened."
             ),
-            reads=("brief.json", "strategy.json"),
+            reads=("brief.json", "design.md", "strategy.json"),
             writes=("reviews/qa.md",),
             produces=("qa_review",),
             notes="attack the artifact against the brief",
@@ -329,7 +347,8 @@ class DesignMode(Mode):
                 "Brief: {{brief}}\nThe check it must pass: {{check}}\n\n"
                 "## The design\n{{design}}\n\n"
                 "## The merged reviews\n{{qa}}\n\n"
-                "You are the overwatch. Audit the reviews rather than repeating them: "
+                + _ACCEPTANCE_BASELINE
+                + "You are the overwatch. Audit the reviews rather than repeating them: "
                 "take each ask in the brief and say what evidence proves it — a command "
                 "and its output — or that nothing does. Run your own spot checks on what "
                 "the reviews claim passed. Do not promote a syntax check, file-presence "

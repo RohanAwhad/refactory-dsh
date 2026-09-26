@@ -330,6 +330,15 @@ parallel**, merge into one synthesis whose blocking findings the QA gate reads, 
 are audited by an overwatch pass whose stated verdict the last gate reads. A QA or
 overwatch reloop goes back to the emit step, not to the plan a person approved.
 
+Design review uses the original brief, approved design and explicit user steering
+as its acceptance baseline. User-approved non-goals remain valid; an author or
+reviewer cannot waive a requested behavior by documenting a new limitation.
+Observed noncompliance stays blocking unless the user explicitly changes that
+requirement. Coordinators pass the returned node prompt in full, and the three
+reviews receive both the brief and design. These are prompt and context safeguards,
+not automatic semantic enforcement: fresh modeled acceptance is needed to assess
+whether reviewers follow them, and existing artifacts/reviews are not repaired.
+
 The parallel reviews are a **fork/join** pair, and a mode may also declare a
 **`data`** node that runs a subgraph once per item; both are node kinds in the mode
 vocabulary (`Node.targets`, `Node.sources`, the DataNode's subgraph fields), lowered
