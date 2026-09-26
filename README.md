@@ -32,6 +32,13 @@ model pass, `model: requested` describes intent, not proof that a request reache
 the provider. Partial work is not a measured score. Generic non-model sandbox
 commands retain their 180-second default.
 
+The final smoke stage owns full model/Task validation of the reviewed package.
+Health, QA and overwatch perform bounded independent checks and identify full-run
+criteria as pending that stage. Their PASS means the package is ready for the
+mandatory smoke, not that its model performance has already been measured. Extra
+model checks should target a specific unresolved requirement; reviewers do not
+repeat the full dataset by default. No prior review claim replaces the fresh smoke.
+
 `refactory doctor` checks local prerequisites and downstream credential configuration without calling a model. Its ready result does not verify authentication or quota:
 
 ```
