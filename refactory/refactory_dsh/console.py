@@ -289,6 +289,7 @@ def _open_mode(
     project: Path | None = None,
     workdir: Path | str | None = None,
     knobs: list[str] | None = None,
+    intent: str = "",
 ) -> dict[str, Any]:
     """Lower a mode for a caller that will drive its graph one node at a time.
 
@@ -332,7 +333,7 @@ def _open_mode(
 
     root = Path(workdir).expanduser().resolve()
     try:
-        name, graphs = interactive.prepare(mode, workdir=root, project=project, knobs=knobs)
+        name, graphs = interactive.prepare(mode, workdir=root, project=project, knobs=knobs, intent=intent)
         command_env = _node_environment(mode, project=project, workdir=root, knobs=knobs)
     except ValueError as error:
         # A malformed identifier is the caller's to fix, so it is a refusal with
@@ -1009,6 +1010,7 @@ def _parser() -> argparse.ArgumentParser:
     # driving.
     opened = add(sub.add_parser("open", help="lower a mode for a caller that drives it node by node"))
     opened.add_argument("mode", help="the mode to lower, as <package>/<name>")
+    opened.add_argument("--intent", default="", help="the user's purpose for this run's ledger")
     opened.add_argument(
         "--workdir", default="",
         help="the run directory this caller drives (required); the graph, the "
@@ -1403,6 +1405,7 @@ def main(argv: list[str] | None = None) -> int:
                 project=project,
                 workdir=args.workdir,
                 knobs=args.knob,
+                intent=args.intent,
             )
         elif args.verb == "create":
             forwarded = ["--name", args.name, "--brief", args.brief, "--attempts", str(args.attempts)]

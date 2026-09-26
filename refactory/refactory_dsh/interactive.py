@@ -81,8 +81,10 @@ def prepare(
     # graph started, on the default root that is relative by design.
     workdir = Path(workdir).expanduser().resolve()
     workdir.mkdir(parents=True, exist_ok=True)
-    if intent.strip() and not steering.Ledger(workdir).exists():
-        steering.Ledger.seed(workdir, intent)
+    if not steering.Ledger(workdir).exists():
+        # Selecting a mode is itself an explicit run request. Do not invent a
+        # broader purpose when the caller supplied no prose intent.
+        steering.Ledger.seed(workdir, intent.strip() or f"Run {identifier}.")
 
     graphs = workdir / "graphs"
     name = f"{package}-{mode_name}"

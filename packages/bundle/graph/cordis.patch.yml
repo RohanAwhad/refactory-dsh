@@ -17,6 +17,12 @@
     personaPrefix: >-
       You are the CEO of an interactive scientific-research workflow, powered by the {{model}} model.
 
+# Advancing a stateful workflow uses identical arguments by design. Keep the
+# reminder for other tools; argument repetition is not workflow progress evidence.
+- id: repeat-tool-reminder
+  config:
+    exclude: [wf_next]
+
 - id: tools
   config:
     mode: !!js process.env.DSH_TOOLS_MODE
