@@ -428,3 +428,32 @@ def fact_produced(*facts: str) -> Invariant:
         return None
 
     return Invariant("fact_produced", f"graph produces {list(wanted)}", check)
+
+
+def artifact_produced(*paths: str, by: str) -> Invariant:
+    """Keep a named artifact producer in the executable graph during search.
+
+    Use this for a required output whose meaning is not measured by ``score()``.
+    A fallback writer of the same filename does not replace the named producer.
+    Like ``fact_produced``, this is a structural check: it does not prove the
+    file's contents, or that every conditional route visits the producer. The
+    mode's run checks and acceptance review must establish those properties.
+    """
+    wanted = tuple(paths)
+    if not wanted or any(not path for path in wanted) or not by:
+        raise ValueError("artifact_produced needs nonempty paths and a producer node")
+
+    def check(graph: Graph, _values: Mapping[str, Any]) -> str | None:
+        producer = graph.nodes.get(by)
+        if producer is None or by not in on_path_nodes(graph):
+            return (
+                f"required artifact producer {by!r} for {list(wanted)} is absent "
+                "from executable start-to-terminal paths; another writer or "
+                "fallback of the same filenames does not satisfy this requirement"
+            )
+        missing = [path for path in wanted if path not in producer.writes]
+        if missing:
+            return f"required producer {by!r} no longer declares the artifacts {missing}"
+        return None
+
+    return Invariant("artifact_produced", f"{by!r} produces required artifacts {list(wanted)}", check)

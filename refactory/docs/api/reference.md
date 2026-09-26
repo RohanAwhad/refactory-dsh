@@ -151,6 +151,7 @@ The validator: what makes architecture-in-the-state safe.
 |---|---|---|
 | class | `Invariant` | `(name: 'str', description: 'str', check: 'Callable[[Graph, Mapping[str, Any]], str \| None]') -> None` |
 | class | `Issue` | `(code: 'str', message: 'str', node: 'str \| None' = None, knob: 'str \| None' = None) -> None` |
+| function | `artifact_produced` | `(*paths: 'str', by: 'str') -> 'Invariant'` |
 | function | `declared_knobs` | `(state: 'Mapping[str, Any]') -> 'dict[str, Knob]'` |
 | function | `fact_produced` | `(*facts: 'str') -> 'Invariant'` |
 | function | `on_path_nodes` | `(graph: 'Graph') -> 'set[str]'` |
@@ -161,6 +162,7 @@ The validator: what makes architecture-in-the-state safe.
 
 - **`Invariant`** — A mode-declared rule, for the parts only the author can know.
 - **`Issue`** — One reason a state was refused.
+- **`artifact_produced`** — Keep a named artifact producer in the executable graph during search.
 - **`declared_knobs`** — The knobs a state declares, as ``Knob`` objects.
 - **`fact_produced`** — An invariant requiring the graph to produce the facts ``score()`` reads.
 - **`on_path_nodes`** — Nodes that lie on some ``start -> terminal`` path.
