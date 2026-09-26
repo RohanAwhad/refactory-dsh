@@ -1,0 +1,48 @@
+diff --git a/lib/client.js b/lib/client.js
+index 1b7f1344e65adac4f08f13a35eb94fa3b89bd9f1..5e6ec8e9538606f4dbb744cf564bac18d0f3664d 100644
+--- a/lib/client.js
++++ b/lib/client.js
+@@ -15017,7 +15017,7 @@ window.__ModuleLoader__.load({
+ 		/**
+ 		* Renders Session header chrome above the resident conversation scrollport.
+ 		* @param props - Strict Session store, view ledger, navigation, render, and locale shares.
+-		* @returns the hidden blank-session header or visible title and tabs.
++		* @returns panel access for a blank session, or the active title and tabs.
+ 		*/
+ 		function ConversationSessionHeader({ sessionId, useSession, useSessions, useConversation, useConversationViews, useStore, renderSlot, open, selectView, t }) {
+ 			const tabs = useConversationViews((value) => value);
+@@ -15027,9 +15027,18 @@ window.__ModuleLoader__.load({
+ 			const conversation = useConversation((s) => s);
+ 			const hideChrome = session.blank && conversationPhase(session, conversation) === "blank";
+ 			return (0, react_jsx_runtime.jsx)("header", {
+-				className: clsx(ConversationRoot_module_css_default.header, hideChrome && ConversationRoot_module_css_default.headerHidden),
+-				"aria-hidden": hideChrome || void 0,
+-				children: !hideChrome && (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsxs)("div", {
++				className: ConversationRoot_module_css_default.header,
++				style: hideChrome ? { minHeight: 44, borderBottom: 0 } : void 0,
++				// Keep the existing panel entry usable before the first chat turn.
++				children: hideChrome ? (0, react_jsx_runtime.jsx)("div", {
++					className: ConversationRoot_module_css_default.titleRow,
++					style: { justifyContent: "flex-end" },
++					children: (0, react_jsx_runtime.jsx)("div", {
++						className: ConversationRoot_module_css_default.headerCorner,
++						"data-conversation-header-corner": "",
++						children: renderSlot("conversation.session.header.corner", {})
++					})
++				}) : (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsxs)("div", {
+ 					className: ConversationRoot_module_css_default.titleRow,
+ 					children: [
+ 						(0, react_jsx_runtime.jsxs)("div", {
+diff --git a/lib/types/client/skeleton/ConversationSession.d.ts b/lib/types/client/skeleton/ConversationSession.d.ts
+index c6e824ccbdbbedf1833c00a214d33afac5c86b11..0cda19547cf524900138f631be182107fbd04c43 100644
+--- a/lib/types/client/skeleton/ConversationSession.d.ts
++++ b/lib/types/client/skeleton/ConversationSession.d.ts
+@@ -7,7 +7,7 @@ export type ConversationSessionHeaderProps = ConversationSessionHeaderSlotProps;
+ /**
+  * Renders Session header chrome above the resident conversation scrollport.
+  * @param props - Strict Session store, view ledger, navigation, render, and locale shares.
+- * @returns the hidden blank-session header or visible title and tabs.
++ * @returns panel access for a blank session, or the active title and tabs.
+  */
+ export declare function ConversationSessionHeader({ sessionId, useSession, useSessions, useConversation, useConversationViews, useStore, renderSlot, open, selectView, t, }: ConversationSessionHeaderProps): import("react").JSX.Element;
+ /**
