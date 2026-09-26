@@ -173,9 +173,29 @@ it:
 | `op` | runs a resolved Python callable — your code | `call` (`module:function`) |
 | `agent` | makes one model call | `prompt_template`, `role`, optionally `tools` |
 | `gate` | routes by a verdict | `gate_kind` (`fn`, `user` or `agent`); `evaluator` when `fn` |
-| `fork` | starts branches that run concurrently | `targets` |
+| `fork` | starts independent branches concurrently (up to four on the Python walker) | `targets` |
 | `join` | waits for branches | `sources` |
 | `data` | runs a subgraph once per item of a bound Task | `subgraph_entry`, `subgraph_exit`, `task_ref` |
+
+On the Python walker, fork branches receive separate copies of facts, knobs, task
+inputs and upfront verdicts. Declared facts merge in target order only after every
+branch succeeds; the join never runs after a failed branch. Declared file
+write/write and write/read conflicts (including resolved path aliases), duplicate
+facts and sibling-fact prompt dependencies are refused before dispatch. Outputs
+share the run directory: this checks declarations, not arbitrary effects of user
+code or agent tools. The shipped DSH client uses separate concurrent subprocesses;
+a custom model client or nonempty/custom shared memory store keeps the whole
+fork serial on its original caller thread, preserving signature adaptation and
+thread affinity. Gates that consume live/ledger answers also use this serial path. Progress states these compatibility fallbacks explicitly.
+
+Python fork branches currently support ordinary ops, agents and gates. Nested
+forks/data passes are refused explicitly; place them outside the fork. A missing
+gate answer still refuses normally rather than inventing permission. A failed fork waits for all
+scheduled work to finish, preserves its files/receipts for audit, and resumes at
+the fork with the pre-fork facts, replaying its branches. Progress includes each
+branch's queued/running/completed/failed state and the scheduling policy. Serial
+fallback stops on the first failure and marks later branches not-started. These restrictions do not add mode
+knobs or change the graph's serialized form.
 
 Every node also declares:
 

@@ -1,8 +1,8 @@
 """Execute a built graph in this process.
 
-One node at a time, one unconditional edge at a time, with every branch decided
-by a gate's verdict. That model is why the validator can make promises a
-free-for-all executor could not: fan-out is forbidden on a non-gate node, every
+One node per branch at a time, with independent fork branches scheduled concurrently
+and every control-flow branch decided by a gate's verdict. That model is why the
+validator can make promises a free-for-all executor could not: fan-out is forbidden on a non-gate node, every
 cycle passes through a gate, and a gate carries the iteration bound that stops
 it.
 
@@ -345,8 +345,13 @@ class Executor:
     max_steps: int = 2000
     steps: list[Step] = field(default_factory=list)
     model_calls: int = 0
+    _reserve_step: Callable[[], bool] | None = field(default=None, repr=False)
 
-    def _record(self, node: str, *, error: str | None = None) -> None:
+    def _record(
+        self, node: str, *, error: str | None = None,
+        branches: dict[str, Any] | None = None,
+        schedule: dict[str, Any] | None = None,
+    ) -> None:
         """Write how far the run got, so a restart can continue instead of starting over.
 
         Best effort: a run directory that cannot be written to is the caller's
@@ -357,14 +362,18 @@ class Executor:
         path = self.ctx.workdir / PROGRESS
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps({
+            pending = path.with_suffix(".tmp")
+            pending.write_text(json.dumps({
                 "node": node,
                 "error": error,
                 "facts": self.ctx.facts,
                 "knobs": self.ctx.knobs,
                 "task": self.ctx.task,
                 "steps": len(self.steps),
+                **({"branches": branches} if branches is not None else {}),
+                **({"schedule": schedule} if schedule is not None else {}),
             }, indent=2, default=str))
+            pending.replace(path)
         except OSError:  # pragma: no cover - an unwritable run directory
             pass
 
@@ -392,25 +401,18 @@ class Executor:
                 break
             visits[current] = visits.get(current, 0) + 1
 
-            # A fork starts its branches and the barrier is its single out-edge.
-            # The walker runs each branch in turn and then continues at the barrier,
-            # so the shared tail sees every branch's writes; the DSH runtime runs
-            # them concurrently and waits on the join, which is the same barrier.
             if node.kind == "fork":
-                barrier = next(
-                    (edge.target for edge in self.graph.out_edges(node.id)
-                     if edge.condition is None),
-                    None,
-                )
+                from .fork import run_fork
+
                 self.steps.append(Step(node.id, node.kind, 0.0))
-                for target in node.targets:
-                    branch_error = self._walk_branch(target, barrier)
-                    if branch_error is not None:
-                        error = branch_error
-                        break
-                current = barrier if error is None else None
+                try:
+                    error = run_fork(self, node)
+                except Exception as exc:
+                    error = f"{node.id}: {type(exc).__name__}: {exc}"
+                    self._record(node.id, error=error)
                 if error is not None:
                     break
+                current = self.graph.out_edges(node.id)[0].target
                 continue
             if node.kind == "join":
                 self.steps.append(Step(node.id, node.kind, 0.0))
@@ -522,17 +524,18 @@ class Executor:
         the last one of the subgraph, not the one after it.
         """
         current: str | None = start
+        visits: dict[str, int] = {}
         while current is not None and (current != barrier or include_barrier):
             if include_barrier and current == barrier:
                 barrier = None  # the exit is visited once, then the pass ends
             node = self.graph.nodes.get(current)
             if node is None:
                 return f"node {current!r} does not exist"
-            node = self.graph.nodes.get(current)
-            if node is None:
-                return f"node {current!r} does not exist"
-            if len(self.steps) >= self.max_steps:
+            if len(self.steps) >= self.max_steps or (self._reserve_step and not self._reserve_step()):
                 return f"the run exceeded {self.max_steps} steps"
+            if node.kind == "gate" and visits.get(current, 0) > node.max_iterations:
+                return f"gate {current!r} exceeded its max_iterations of {node.max_iterations}"
+            visits[current] = visits.get(current, 0) + 1
             self.ctx.iteration = len(self.steps)
             self.ctx.node_id = current
             self.ctx._declared = node.writes  # noqa: SLF001 - the run owns the context
