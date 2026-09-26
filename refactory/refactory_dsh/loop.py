@@ -1189,7 +1189,8 @@ class Loop(OuterLoop):
                         continue
                     accepted_ids.add(outcome.id)
                     accepted.append(outcome)
-            if len(accepted) >= wanted or len(self.rejections) == before:
+            # Another response is useful only if a validation round remains.
+            if len(accepted) >= wanted or len(self.rejections) == before or _attempt >= cap:
                 break
             proposals = self.propose(run, parents, wanted - len(accepted))
             if not proposals:
