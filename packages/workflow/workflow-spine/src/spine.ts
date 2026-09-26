@@ -625,6 +625,10 @@ export class Spine {
       const join = this.unconditionalTarget(node)
       if (join !== undefined) this.afters.push(join)
       this.cursor = (body.targets ?? []).filter(target => !this.skipped.includes(target))
+      // A fork with no remaining branches still reaches its join/continuation.
+      if (this.cursor.length === 0 && this.afters.length > 0) {
+        this.cursor = [this.afters.pop() as string]
+      }
       return this.next()
     }
 
