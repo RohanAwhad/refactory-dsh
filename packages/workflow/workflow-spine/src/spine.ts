@@ -15,6 +15,7 @@ export interface NodeView {
   id: string
   _type: string
   role?: string
+  resource_role?: 'work' | 'final_validation'
   evaluator_type?: string
   /** For an `fn` gate: the command whose last stdout line is the verdict. */
   evaluator_command?: string
@@ -316,6 +317,7 @@ export interface RedoPlan {
 }
 
 export class Spine {
+  private readonly sourceGraph: string
   private readonly nodes: Map<string, WorkflowNode>
   private edges: WorkflowEdge[]
   private readonly workflow: string
@@ -336,6 +338,7 @@ export class Spine {
   private readonly pauseBoundaries = new Set<string>()
 
   constructor(graph: WorkflowGraph, options?: { maxIterations?: number }) {
+    this.sourceGraph = JSON.stringify(graph)
     this.nodes = new Map(Object.entries(graph.nodes))
     this.edges = JSON.parse(JSON.stringify(graph.edges)) as WorkflowEdge[]
     this.workflow = graph.name
@@ -434,6 +437,7 @@ export class Spine {
       view.model = node.model ?? ''
       view.temperature = node.temperature ?? 0
     }
+    if (node.resource_role !== undefined) view.resource_role = node.resource_role
     if (node._type === 'ForkNode') view.targets = node.targets ?? []
     if (node._type === 'JoinNode') view.sources = node.sources ?? []
     if (node._type === 'FnNode' || node._type === 'Study') {
@@ -558,7 +562,11 @@ export class Spine {
 
   /** The armed boundaries currently preventing execution. */
   pausedAt(): string[] {
-    return this.halted === undefined ? this.cursor.filter(node => this.pauseBoundaries.has(node)) : []
+    if (this.halted !== undefined) return []
+    // A completed item's body has an empty cursor until its Task is graded.
+    // Its container remains a real command boundary that can be paused.
+    const boundary = this.cursor.length === 0 && this.pass !== undefined ? [this.pass.node] : this.cursor
+    return boundary.filter(node => this.pauseBoundaries.has(node))
   }
 
   /** Whether the current cursor must yield to the person before any work runs. */
@@ -1035,6 +1043,55 @@ export class Spine {
     body[field] = mode === 'append' && existing !== '' ? `${existing}\n\n${text}` : text
     this.promptEdits.add(node)
     this.log.push(`prompt ${node} ${mode}`)
+  }
+
+  /** Stop at a graph boundary after owned in-flight work has returned. */
+  stopAtBoundary(): void { this.halted = { gate: this.cursor[0] ?? '', reason: 'cancelled' } }
+
+  /** Serialize the complete cursor, including nested branches and graph edits. */
+  checkpoint(): Record<string, unknown> {
+    const redo_plans: Record<string, RedoPlan> = {}
+    for (const node of this.completed) {
+      try { redo_plans[node] = this.planRedo(node) } catch { /* unsafe replay stays unavailable */ }
+    }
+    return { schema_version: 1, source_graph: this.sourceGraph, state: this.state(),
+      graph: { name: this.workflow, project_dir: this.projectDir, start_node: this.cursor[0] ?? '',
+        nodes: Object.fromEntries(this.nodes), edges: this.edges },
+      afters: [...this.afters], successors: { ...this.successors }, redo_plans }
+  }
+
+  /** Restore only an explicit checkpoint of this exact source graph. */
+  restore(value: Record<string, unknown>): void {
+    if (value.schema_version !== 1 || value.source_graph !== this.sourceGraph) {
+      throw new Error('checkpoint inputs or source graph changed; explicit invalidation is required')
+    }
+    const saved = value.state as ReturnType<Spine['state']>
+    const graph = value.graph as WorkflowGraph
+    const list = (entry: unknown): string[] => {
+      if (!Array.isArray(entry) || !entry.every(item => typeof item === 'string')) throw new Error('invalid checkpoint node list')
+      return [...entry] as string[]
+    }
+    const cursor = list(saved.cursor), completed = list(saved.completed)
+    if ([...cursor, ...completed].some(id => graph.nodes[id] === undefined)) throw new Error('checkpoint references an unknown node')
+    this.nodes.clear()
+    for (const [id, node] of Object.entries(graph.nodes)) this.nodes.set(id, node)
+    this.edges = graph.edges
+    this.cursor = cursor
+    this.completed = completed
+    this.skipped = list(saved.skipped)
+    this.afters = list(value.afters)
+    this.pauseBoundaries.clear()
+    for (const node of list(saved.pause_before)) this.pauseBoundaries.add(node)
+    this.gateVerdicts.clear()
+    for (const [id, verdict] of Object.entries(saved.gate_verdicts as Record<string, string>)) this.gateVerdicts.set(id, verdict)
+    Object.assign(this.iterations, saved.iterations)
+    Object.assign(this.feedback, saved.feedback)
+    Object.assign(this.successors, value.successors)
+    this.log.splice(0, this.log.length, ...list(saved.log))
+    this.promptEdits.clear()
+    for (const node of Object.keys(saved.prompts as object)) this.promptEdits.add(node)
+    this.pass = saved.pass as DataPass | undefined
+    this.halted = saved.halted as TerminalHalt | undefined
   }
 
   /** Full mutable state (for `wf_state`). */

@@ -63,6 +63,9 @@ def prepare(
     intent: str = "",
     project: Path | None = None,
     knobs: list[str] | None = None,
+    model_context: dict[str, Any] | None = None,
+    resource_limits: dict[str, Any] | None = None,
+    resume: bool = False,
 ) -> tuple[str, Path]:
     """Lower the mode for a person to use, and leave the run ready to start.
 
@@ -73,6 +76,12 @@ def prepare(
     workdir = Path(workdir).expanduser().resolve()
     with ownership(workdir):
         project = Path(project or ".")
+        if resume:
+            if knobs or intent or model_context:
+                raise ValueError('resume retains saved knobs, instructions and route; changes require explicit invalidation')
+            from refactory_dsh.recovery import prepare as recover
+            name = identifier.replace('/', '-')
+            return name, recover(workdir, name, resource_limits=resource_limits)
         if "/" not in identifier:
             raise ValueError(f"{identifier!r} is not a <package>/<mode> identifier")
         package, mode_name = identifier.split("/", 1)
@@ -89,13 +98,29 @@ def prepare(
             # broader purpose when the caller supplied no prose intent.
             steering.Ledger.seed(workdir, intent.strip() or f"Run {identifier}.")
 
-        from refactory_dsh import invocations
+        from refactory_dsh import invocations, workers
+        if resource_limits:
+            from refactory_dsh.budgets import LEDGER, ResourceLimits
+            from refactory_dsh.model import DshModelClient
+            ResourceLimits.from_dict(resource_limits)
+            routing_context = dict(model_context or {})
+            routing_context.pop('budget_ledger', None)
+            model_context = DshModelClient(**routing_context).context()
+            model_context['budget_ledger'] = str(workdir / LEDGER)
 
         name = f"{package}-{mode_name}"
         graphs = invocations.prepare(
             state, workdir, name=name,
-            transform=lambda workflow: steering.for_run(workflow, workdir),
+            transform=lambda workflow: workers.lower_workflow(steering.for_run(workflow, workdir), workdir, model_context, lowering.node_declarations(state)),
+            resource_limits=resource_limits,
         )
+        import json
+        from refactory_dsh.recovery import configuration_fingerprints
+
+        (workdir / '.refactory/run-config.json').write_text(json.dumps({'mode': identifier,
+            'project': str(project.resolve()), 'knobs': knobs or [], 'model_context': model_context,
+            'resource_limits': resource_limits,
+            'configuration_fingerprints': configuration_fingerprints(workdir, identifier, project)}))
         return name, graphs
 
 
@@ -175,6 +200,14 @@ def run(
     provider: str = "",
     model: str = "",
     headless: bool = False,
+    worker_backend: str = "dsh",
+    effort: str = "",
+    permission_mode: str = "default",
+    role_routes: dict[str, Any] | None = None,
+    node_routes: dict[str, Any] | None = None,
+    model_context: dict[str, Any] | None = None,
+    resource_limits: dict[str, Any] | None = None,
+    resume: bool = False,
 ) -> int:
     """Lower, then run the mode under the CEO with the terminal attached.
 
@@ -190,15 +223,40 @@ def run(
         workdir = default_workdir(identifier)
     workdir = Path(workdir).expanduser().resolve()
     with ownership(workdir) as owner:
+        if resume:
+            if source or source_format not in ('', 'directory') or approve or knobs or intent or model_context or provider or model or worker_backend != 'dsh' or effort or permission_mode != 'default' or role_routes or node_routes:
+                raise ValueError('resume retains saved inputs, knobs, instructions and routes; changes require explicit invalidation')
+            import json
+
+            saved = json.loads((workdir / '.refactory/run-config.json').read_text())
+            if saved.get('mode') != identifier:
+                raise ValueError('saved run belongs to a different mode')
+            # Resource allocation is the only override accepted by recovery.
+            effective_limits = resource_limits or saved.get('resource_limits')
+            name, graphs = prepare(identifier, workdir=workdir, resource_limits=effective_limits, resume=True)
+            project = Path(saved['project'])
+            knobs = saved.get('knobs') or []
+            model_context = saved.get('model_context')
+            resource_limits = effective_limits
+            if model_context:
+                provider = model_context.get('provider', '')
+                model = model_context.get('model', '')
+                worker_backend = model_context.get('worker_backend', 'dsh')
         if source:
             from refactory_dsh.items import write_source
 
             # The harness's input port, fed at run time: the mode keeps the Task it was
             # built for and this run says which items to read instead.
             write_source(workdir, source_path=source, source_format=source_format or "directory")
-        name, graphs = prepare(
-            identifier, workdir=workdir, intent=intent, project=project, knobs=knobs,
-        )
+        if model_context is None and (provider or model or worker_backend != "dsh" or effort or role_routes or node_routes):
+            from refactory_dsh.model import DshModelClient
+            model_context = DshModelClient(provider=provider, model=model, worker_backend=worker_backend,
+                                           effort=effort, permission_mode=permission_mode,
+                                           role_routes=role_routes, node_routes=node_routes).context()
+        if not resume:
+            name, graphs = prepare(
+                identifier, workdir=workdir, intent=intent, project=project, knobs=knobs, model_context=model_context, resource_limits=resource_limits,
+            )
         for pair in list(approve or []):
             gate, separator, value = str(pair).partition("=")
             if not separator or not gate.strip() or not value.strip():
@@ -207,14 +265,42 @@ def run(
             steering.Ledger(workdir).verdict(gate.strip(), value.strip(), approval=True)
         argv = command(
             identifier, workdir=workdir, graphs=graphs, name=name, knobs=knobs, project=project,
-            provider=provider, model=model, headless=headless,
+            provider=provider if worker_backend == "dsh" else "",
+            model=model if worker_backend == "dsh" else "", headless=headless,
         )
         # stdin is inherited on purpose: the graph profile chats on it -- and its answerer
         # reads a gate's answer from it -- while a captured stdin is not a person.
         # A killed Python parent must not free the directory while its DSH child
         # continues. POSIX inherits this one descriptor, not ambient open files.
         inherited = {"pass_fds": (owner,)} if os.name != "nt" else {}
-        code = run_owned(argv, cwd=str(REPO_ROOT), timeout=timeout_s, **inherited).returncode
+        env = dict(os.environ)
+        from refactory_dsh.workers import environment
+        env.update(environment(model_context))
+        budget = None
+        if resource_limits:
+            from refactory_dsh.budgets import RunBudget
+            budget = RunBudget.open(workdir)
+            try:
+                budget.checkpoint()
+            except BaseException:
+                budget.pause()
+                raise
+            env["REFACTORY_BUDGET_LEDGER"] = str(budget.path)
+            remaining = budget.remaining_s('final_validation')
+            if remaining is not None:
+                timeout_s = min(timeout_s, remaining) if timeout_s else remaining
+        try:
+            if model_context is not None or resource_limits:
+                from refactory_dsh.model import DshModelClient
+                from refactory_dsh.workers import run_graph_command
+                context = model_context or DshModelClient().context()
+                code = run_graph_command(argv, workdir=workdir, context=context, cwd=str(REPO_ROOT),
+                                         timeout=timeout_s, env=env, **inherited).returncode
+            else:
+                code = run_owned(argv, cwd=str(REPO_ROOT), timeout=timeout_s, env=env, **inherited).returncode
+        finally:
+            if budget is not None:
+                budget.pause()
         if code == 0:
             summary = run_summary(workdir)
             if summary:
@@ -271,6 +357,7 @@ def main(argv: list[str] | None = None) -> int:
              "nodes read and a resumed run is judged against",
     )
     parser.add_argument("--workdir", default="", help="the run directory")
+    parser.add_argument("--resume", action="store_true", help="recover a stopped known boundary, preserving completed stages")
     parser.add_argument(
         "--source", default="", metavar="PATH",
         help="read the items from here instead of the source the mode declares, so a "
@@ -304,6 +391,16 @@ def main(argv: list[str] | None = None) -> int:
              "and CI expect; without it the run is live and a line you type between "
              "turns reaches the CEO",
     )
+    parser.add_argument("--worker-backend", choices=["dsh", "codex", "claude_code"], default="dsh")
+    parser.add_argument("--effort", default="")
+    parser.add_argument("--permission-mode", default="default")
+    import json
+    parser.add_argument("--role-routes", type=json.loads, default=None)
+    parser.add_argument("--node-routes", type=json.loads, default=None)
+    parser.add_argument("--max-elapsed-s", type=float, default=None)
+    parser.add_argument("--max-tokens", type=int, default=None)
+    parser.add_argument("--validation-reserve-s", type=float, default=0)
+    parser.add_argument("--validation-reserve-tokens", type=int, default=0)
     args = parser.parse_args(argv)
 
     workdir = Path(args.workdir) if args.workdir else None
@@ -319,7 +416,13 @@ def main(argv: list[str] | None = None) -> int:
             timeout_s=args.timeout or None,
             provider=args.provider,
             model=args.model,
-            headless=args.headless,
+            headless=args.headless, resume=args.resume, worker_backend=args.worker_backend,
+            effort=args.effort, permission_mode=args.permission_mode,
+            role_routes=args.role_routes, node_routes=args.node_routes,
+            resource_limits={"max_elapsed_s": args.max_elapsed_s, "max_tokens": args.max_tokens,
+                             "validation_reserve_s": args.validation_reserve_s,
+                             "validation_reserve_tokens": args.validation_reserve_tokens}
+            if args.max_elapsed_s is not None or args.max_tokens is not None else None,
         )
     except Exception as exc:  # a failed run must be a message, not a traceback
         print(f"{type(exc).__name__}: {exc}", file=sys.stderr)

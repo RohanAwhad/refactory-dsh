@@ -1,3 +1,6 @@
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
@@ -202,5 +205,23 @@ describe('deterministic nodes run without the driver', () => {
     expect(result.exit_code).toBe(4)
     expect(result.stderr).toBe('broken')
     expect(await run(ctx, 'wf_next', {})).toMatchObject({ status: 'failed' })
+  })
+})
+
+
+describe('recovery checkpoint ownership', () => {
+  it('refuses dispatch when the execution checkpoint cannot be replaced', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'spine-checkpoint-'))
+    try {
+      mkdirSync(join(root, '.refactory', 'spine-checkpoint.json'), { recursive: true })
+      const ctx = new Context()
+      await ctx.plugin(SystemPrompt)
+      await ctx.plugin(ToolRuntime)
+      let calls = 0
+      ctx.provide('shell', { ...realShell(), run: () => { calls++; throw new Error('must not dispatch') } } as never)
+      await ctx.plugin(workflowSpine, { graph: commandGraph, executeCommands: true, workdir: root })
+      await expect(run(ctx, 'wf_next', {})).rejects.toThrow(/recovery checkpoint/)
+      expect(calls).toBe(0)
+    } finally { rmSync(root, { recursive: true, force: true }) }
   })
 })

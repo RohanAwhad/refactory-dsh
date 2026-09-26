@@ -77,6 +77,7 @@ class Node(BaseModel):
     reads: set[str] = Field(default_factory=set)
     writes: set[str] = Field(default_factory=set)
     blocking: bool = True
+    resource_role: Literal["work", "final_validation"] = "work"
 
 
 class ArtifactCheck(BaseModel):
@@ -244,6 +245,8 @@ class Workflow(BaseModel):
         nodes_out: dict[str, Any] = {}
         for nid, node in self.nodes.items():
             d = node.model_dump(mode="json")
+            if d.get("resource_role") == "work":
+                d.pop("resource_role", None)
             if d.get("command_timeout_s") is None:
                 d.pop("command_timeout_s", None)
             for field_name in ("reads", "writes"):

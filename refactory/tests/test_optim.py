@@ -343,7 +343,7 @@ def test_the_model_client_reports_a_timeout_instead_of_hanging(monkeypatch):
     def explode(*args, **kwargs):
         raise subprocess.TimeoutExpired(cmd="dsh", timeout=1)
 
-    monkeypatch.setattr(subprocess, "run", explode)
+    monkeypatch.setattr(DshModelClient, "_run_completion", explode)
     with pytest.raises(RuntimeError, match="timed out"):
         DshModelClient(timeout_s=1).complete("hello")
 
@@ -358,7 +358,7 @@ def test_the_model_client_reports_a_failed_run(monkeypatch):
         stdout = ""
         stderr = "no credentials"
 
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: Failed())
+    monkeypatch.setattr(DshModelClient, "_run_completion", lambda *a, **k: Failed())
     with pytest.raises(RuntimeError, match="exit 3"):
         DshModelClient().complete("hello")
 
@@ -373,7 +373,7 @@ def test_the_model_client_returns_stdout(monkeypatch):
         stdout = '{"proposals": []}\n'
         stderr = ""
 
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: Ok())
+    monkeypatch.setattr(DshModelClient, "_run_completion", lambda *a, **k: Ok())
     assert DshModelClient().complete("hello") == '{"proposals": []}\n'
 
 

@@ -29,6 +29,7 @@ a test that only checks a file appeared would not notice it being violated.
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -87,7 +88,11 @@ def _score_by_id(entries: list[dict[str, Any]]) -> dict[str, float]:
                 scored.pop(candidate_id, None)
                 continue
             try:
-                scored[candidate_id] = float(entry.get("score") or 0.0)
+                value = entry.get("score")
+                if value is None or isinstance(value, bool) or not math.isfinite(float(value)):
+                    scored.pop(candidate_id, None)
+                    continue
+                scored[candidate_id] = float(value)
             except (TypeError, ValueError):
                 continue
     return scored
@@ -332,6 +337,8 @@ def adopt(
                     "candidate": winner["candidate"],
                     "score": winner["score"],
                     "edits": winner["edits"],
+                    "resolved_profile": json.loads((run_root / "resolved-profile.json").read_text()) if (run_root / "resolved-profile.json").is_file() else None,
+                    "holdout": json.loads((run_root / "holdout.json").read_text()),
                 },
                 indent=2,
             )

@@ -22,6 +22,7 @@ because "describe what you want" is the use case, and everything else is plumbin
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -33,6 +34,9 @@ from refactory_dsh.paths import REPO_ROOT, node_bin, venv_bin
 
 #: The authoring modes, by the verb a person names them with.
 AUTHORING: dict[str, str] = {
+    "create_fast": "default_pack/create_fast",
+    "edit_fast": "default_pack/edit_fast",
+    "design_fast": "default_pack/design_fast",
     "create": "default_pack/create",
     "design": "default_pack/design",
     "edit": "default_pack/edit",
@@ -40,6 +44,7 @@ AUTHORING: dict[str, str] = {
 
 #: Verbs the console already answers, so `refactory <verb>` is `console <verb>`.
 READ_VERBS: tuple[str, ...] = (
+    "profiles", "profile-save", "profile-resolve", "comparison",
     "runtime", "status", "runs", "artifacts", "leaderboard", "candidate", "best", "adopt", "steer", "stop",
 )
 
@@ -95,6 +100,10 @@ def _run_argv(identifier: str, args: argparse.Namespace) -> list[str]:
         forwarded += ["--provider", str(args.provider)]
     if args.model:
         forwarded += ["--model", str(args.model)]
+    for key in ("worker_backend", "effort", "permission_mode", "max_elapsed_s", "max_tokens", "validation_reserve_s", "validation_reserve_tokens"):
+        value = getattr(args, key, None)
+        if value is not None and value != "":
+            forwarded += ["--" + key.replace("_", "-"), str(value)]
     if args.headless:
         forwarded += ["--headless"]
     return forwarded
@@ -127,6 +136,7 @@ def cmd_ceo(args: argparse.Namespace) -> int:
         )
         return 2
 
+    authoring = authoring.removesuffix("_fast")
     check = str(args.check or "")
     if authoring == "design" and not check:
         print(
@@ -159,7 +169,11 @@ def cmd_ceo(args: argparse.Namespace) -> int:
         if args.single_shot:
             knobs.append("single_shot=1")
     if check:
-        knobs.append(f"check={check}")
+        knobs.append(f"{'focused_check' if mode in ('create_fast', 'edit_fast') else 'check'}={check}")
+    if getattr(args, "repair_attempts", None) is not None:
+        knobs.append(f"repair_attempts={args.repair_attempts}")
+    if getattr(args, "source_project", ""):
+        knobs.append(f"source_project={args.source_project}")
     if args.revise:
         knobs.append(f"revision_of={args.revise}")
     # Last, so a person's own setting wins over the one derived from the flags above.
@@ -177,6 +191,10 @@ def cmd_ceo(args: argparse.Namespace) -> int:
     # with nobody sitting there, and it is an explicit act rather than a default.
     for pair in args.verdict:
         forwarded += ["--approve", pair]
+    for key in ("worker_backend", "effort", "permission_mode", "max_elapsed_s", "max_tokens", "validation_reserve_s", "validation_reserve_tokens"):
+        value = getattr(args, key, None)
+        if value is not None and value != "":
+            forwarded += ["--" + key.replace("_", "-"), str(value)]
     if args.headless:
         forwarded += ["--headless"]
     print(f"refactory: {authoring} — {target}", file=sys.stderr)
@@ -355,6 +373,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="set one of the authoring mode's knobs for this run, e.g. allow_regression=1",
     )
     ceo.add_argument("--workdir", default="", help="the run directory")
+    ceo.add_argument("--repair-attempts", type=int, default=None)
+    ceo.add_argument("--source-project", default="")
+    for key in ("worker_backend", "effort", "permission_mode"):
+        ceo.add_argument("--" + key.replace("_", "-"), default="")
+    for key in ("max_elapsed_s", "max_tokens", "validation_reserve_s", "validation_reserve_tokens"):
+        ceo.add_argument("--" + key.replace("_", "-"), type=int if "tokens" in key else float, default=None)
     ceo.add_argument(
         "--provider", default="",
         help="provider route for this run's model (default: the settings default)",
@@ -398,25 +422,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     optimize = sub.add_parser("optimize", help="search a mode's architecture and knobs")
     optimize.add_argument("mode", help="the mode, as <package>/<name>")
-    for flag, help_text in (
-        ("--epochs", "rounds of propose → validate → evaluate → select"),
-        ("--batch-size", "candidates per epoch"),
-        ("--optimizer", "how candidates are proposed"),
-        ("--strategy", "which outer loop drives the search"),
-        ("--evaluator", "walker (fast) or dsh (ships)"),
-        ("--preset", "which edits are allowed"),
-        ("--seed", "reproduce a search"),
-        ("--elite", "how many parents each round proposes against"),
-        ("--max-evaluations", "a hard ceiling on evaluated candidates"),
-        ("--holdout", "the fraction of items held out of the search and audited after it"),
-        ("--parsimony", "what each node of a candidate's graph costs its score"),
-        ("--attempts", "retries per batch after a refusal"),
-        ("--runs-root", "the run directory to write"),
-        ("--intent", "what the run is for, in your words"),
-        ("--model", "the model the reasoning optimizer asks"),
-        ("--provider", "the provider route that model is on"),
-    ):
-        optimize.add_argument(flag, default=None, help=help_text)
+    from refactory_dsh.profiles import add_arguments
+    add_arguments(optimize)
+    optimize.add_argument("--runs-root", default=None)
+    optimize.add_argument("--resume", action="store_true")
     optimize.add_argument(
         "--verbose", action="store_true",
         help="print every event, and each candidate's own run output, not only the "
@@ -480,8 +489,13 @@ def main(argv: list[str] | None = None) -> int:
             if isinstance(value, bool):
                 if value:
                     forwarded.append(name)
+            elif isinstance(value, list):
+                for element in value:
+                    forwarded.extend([name, str(element)])
+            elif isinstance(value, dict):
+                forwarded.extend([name, json.dumps(value)])
             else:
-                forwarded.extend([name, str(value)])
+                forwarded.extend(["--preset" if flag == "edit_preset" else name, str(value)])
         return _forward("refactory_dsh.loop", forwarded)
     if args.verb == "list":
         return cmd_list(args)

@@ -63,5 +63,9 @@
     "vite-tsconfig-paths": "^6.1.1",
     "vitest": "^4.1.8",
     "zustand": "~4.4.7"
+  },
+  "optionalDependencies": {
+    "@deepseek-ai/dsh-subagent-codex": "0.1.5-rc.3",
+    "@deepseek-ai/dsh-subagent-claude-code": "0.1.5-rc.3"
   }
 }

@@ -106,12 +106,12 @@ def test_the_loop_does_not_branch_on_the_evaluator_name():
     """The branch was the defect. A seam that is still an `if` is not a seam."""
     import inspect
 
-    source = inspect.getsource(Loop._evaluate)
+    source = inspect.getsource(Loop._measure)
     assert "evaluator ==" not in source, (
         "`_evaluate` branches on the evaluator name again; the choice belongs in "
         "the registry"
     )
-    assert "evaluator.evaluate(" in source, "`_evaluate` does not call the seam"
+    assert "evaluator.evaluate(" in source, "`_measure` does not call the seam"
 
 
 # ── the two must agree ─────────────────────────────────────────────────────

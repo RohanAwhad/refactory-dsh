@@ -79,13 +79,20 @@ def edit(config: EditConfig, client: Any = None) -> dict[str, Any]:
     if not 1 <= config.smoke_timeout_s <= 86400:
         raise CreateError("smoke_timeout_s must be between 1 and 86400 seconds")
 
-    mode_class = EditMode
+    from refactory_dsh.fast import EditFastMode
+
+    mode_class = EditFastMode if config.fast else EditMode
     run_workdir = Path(config.workdir)
     run_workdir.mkdir(parents=True, exist_ok=True)
 
     mode = mode_class()
     state = mode.state_dict()
-    state["knobs"]["attempts"]["value"] = int(config.attempts)
+    if config.fast:
+        state["knobs"]["repair_attempts"]["value"] = int(config.repair_attempts)
+        state["knobs"]["check"]["value"] = config.check
+        state["knobs"]["check_timeout_s"]["value"] = int(config.check_timeout_s)
+    else:
+        state["knobs"]["attempts"]["value"] = int(config.attempts)
     state["knobs"]["smoke_timeout_s"]["value"] = int(config.smoke_timeout_s)
     state["knobs"]["task_ref"]["value"] = config.task_ref
     state["knobs"]["data_node"]["value"] = bool(config.data_node)
@@ -111,6 +118,7 @@ def edit(config: EditConfig, client: Any = None) -> dict[str, Any]:
         # The revision is the create-v2 graph, so it carries the same person's gate
         # on the strategy; a headless run has to be given their answer.
         verdicts=dict(config.verdicts),
+        resource_limits=config.resource_limits,
     )
     if not run.exit_ok:
         raise CreateError(f"revising {config.mode!r} failed: {run.error}")
@@ -140,6 +148,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--name", required=True, help="the package to write the revision into")
     parser.add_argument("--brief", required=True)
     parser.add_argument("--attempts", type=int, default=3)
+    parser.add_argument("--fast", action="store_true", help="use the inspectable edit_fast graph with focused QA")
+    parser.add_argument("--repair-attempts", type=int, default=1, help="fast graph repair limit (0..3)")
+    parser.add_argument("--check", default="", help="fast graph's explicit focused check command")
+    from refactory_dsh.budgets import add_arguments, arguments
+
+    add_arguments(parser)
     parser.add_argument("--allow-regression", action="store_true")
     # Per package name, for the same reason a creation is: one fixed directory
     # means runs overwrite each other's state.
@@ -177,7 +191,11 @@ def main(argv: list[str] | None = None) -> int:
             timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
         )
         try:
-            run = EditMode.resume(Path(args.resume), model=client)
+            from refactory_dsh.fast import EditFastMode
+
+            run = (EditFastMode if args.fast else EditMode).resume(
+                Path(args.resume), model=client, resource_limits=arguments(args),
+            )
         except Exception as exc:
             print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), file=sys.stderr)
             return 2
@@ -201,6 +219,8 @@ def main(argv: list[str] | None = None) -> int:
                 model_timeout_s=int(args.model_timeout_s),
                 smoke_timeout_s=int(args.smoke_timeout_s),
                 verdicts=parse_verdicts(args.verdict),
+                fast=args.fast, repair_attempts=args.repair_attempts, check=args.check,
+                resource_limits=arguments(args),
             ),
             client=DshModelClient(
                 timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,

@@ -66,6 +66,7 @@ def _inputs(workdir: Path, declarations: dict[str, Any]) -> list[Path]:
 
 def prepare(
     state: dict[str, Any], workdir: Path, *, name: str, transform: Callable,
+    resource_limits: dict[str, Any] | None = None,
 ) -> Path:
     """Stage a valid lowering, archive prior ownership, then install or roll back."""
     with ownership(workdir):
@@ -85,7 +86,11 @@ def prepare(
         writes = [name for node in prior.values() if isinstance(node, dict) for name in node.get('writes', [])]
         targets, retained = owned_outputs(workdir, writes, _inputs(workdir, lowering.node_declarations(state)))
         metadata = [Path('facts.json'), Path('graphs'), Path('.memory'), Path(lowering.DECLARATIONS),
-                    Path('.refactory/spine-status.json'), Path('.refactory/agent-delivery'), INVOCATION]
+                    Path('.refactory/spine-status.json'), Path('.refactory/agent-delivery'),
+                    Path('.refactory/events.jsonl'), Path('.refactory/spine-checkpoint.json'),
+                    Path('.refactory/graph-controls'), Path('.refactory/graph-control-receipt.json'),
+                    Path('.refactory/resource-usage.json'), Path('.refactory/workers'),
+                    Path('.refactory/resume-request.json'), Path('.refactory/run-config.json'), INVOCATION]
         for relative in metadata:
             path = workdir / relative
             if not path.exists() and not path.is_symlink():
@@ -111,6 +116,12 @@ def prepare(
             lowering.write_mode_graph(state, stage / 'graphs', name=name, transform=transform)
             lowering.write_declarations(state, stage)
             (stage / INVOCATION).write_text(json.dumps(record, indent=2) + '\n')
+            fresh_metadata: list[Path] = []
+            if resource_limits is not None:
+                from refactory_dsh.budgets import LEDGER, RunBudget
+
+                RunBudget.create(stage, resource_limits)
+                fresh_metadata.append(LEDGER)
             moved: list[Path] = []
             installed: list[Path] = []
             try:
@@ -122,7 +133,7 @@ def prepare(
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     (workdir / relative).rename(destination)
                     moved.append(relative)
-                for relative in [Path('graphs'), Path(lowering.DECLARATIONS), INVOCATION]:
+                for relative in [Path('graphs'), Path(lowering.DECLARATIONS), INVOCATION, *fresh_metadata]:
                     (stage / relative).rename(workdir / relative)
                     installed.append(relative)
             except Exception:

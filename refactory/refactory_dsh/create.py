@@ -526,7 +526,7 @@ class CreateMode(Mode):
             notes="confirm the registry lists the new package",
         ))
         graph.add(Node(
-            "smoke", "op", call=f"{OPS}:smoke",
+            "smoke", "op", call=f"{OPS}:smoke", role="validation",
             knobs=("allow_regression", "sample_knobs", "smoke_timeout_s"),
             writes=("smoke.json", "revision.json"),
             produces=("smoke_score", "smoke_ok", "smoke_model", "smoke_reason",
@@ -606,6 +606,11 @@ class CreateConfig:
     #: Verdicts for gates a person answers. `gate_strategy` is one, so a headless
     #: run has to be given the person's answer explicitly rather than inventing it.
     verdicts: dict[str, str] = field(default_factory=dict)
+    fast: bool = False
+    repair_attempts: int = 1
+    check: str = ""
+    check_timeout_s: int = 60
+    resource_limits: dict[str, Any] | None = None
 
 
 @dataclass
@@ -660,9 +665,16 @@ def create(config: CreateConfig, client: Any = None) -> CreateResult:
         raise CreateError(CREATION_DIRECTIVE)
     if not 1 <= config.smoke_timeout_s <= 86400:
         raise CreateError("smoke_timeout_s must be between 1 and 86400 seconds")
-    mode = CreateMode()
+    from refactory_dsh.fast import CreateFastMode
+
+    mode = CreateFastMode() if config.fast else CreateMode()
     state = mode.state_dict()
-    state["knobs"]["attempts"]["value"] = int(config.attempts)
+    if config.fast:
+        state["knobs"]["repair_attempts"]["value"] = int(config.repair_attempts)
+        state["knobs"]["check"]["value"] = config.check
+        state["knobs"]["check_timeout_s"]["value"] = int(config.check_timeout_s)
+    else:
+        state["knobs"]["attempts"]["value"] = int(config.attempts)
     state["knobs"]["smoke_timeout_s"]["value"] = int(config.smoke_timeout_s)
     state["knobs"]["task_ref"]["value"] = config.task_ref
     state["knobs"]["single_shot"]["value"] = bool(config.single_shot)
@@ -687,6 +699,7 @@ def create(config: CreateConfig, client: Any = None) -> CreateResult:
         },
         max_steps=config.max_steps,
         verdicts=dict(config.verdicts),
+        resource_limits=config.resource_limits,
     )
     if not run.exit_ok:
         raise CreateError(f"creating {config.name!r} failed: {run.error}")
@@ -728,6 +741,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--brief", required=True, help="what the package should do")
     parser.add_argument("--extends", default="", help="a <package>/<mode> to use as a reference")
     parser.add_argument("--attempts", type=int, default=3)
+    parser.add_argument("--fast", action="store_true", help="use the inspectable create_fast graph with focused QA")
+    parser.add_argument("--repair-attempts", type=int, default=1, help="fast graph repair limit (0..3)")
+    parser.add_argument("--check", default="", help="fast graph's explicit focused check command")
+    from refactory_dsh.budgets import add_arguments, arguments
+
+    add_arguments(parser)
     # The two creation directives, reachable from the shell. One of them is required:
     # a Task names the class of work, and naming one implies the data node.
     parser.add_argument(
@@ -796,7 +815,11 @@ def main(argv: list[str] | None = None) -> int:
         # produced. The knobs and the task come from the run's own record, so the
         # command needs only the directory — nothing has to be remembered or retyped.
         try:
-            run = CreateMode.resume(Path(args.resume), model=client, max_steps=200)
+            from refactory_dsh.fast import CreateFastMode
+
+            run = (CreateFastMode if args.fast else CreateMode).resume(
+                Path(args.resume), model=client, max_steps=200, resource_limits=arguments(args),
+            )
         except Exception as exc:
             print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), file=sys.stderr)
             return 2
@@ -827,6 +850,8 @@ def main(argv: list[str] | None = None) -> int:
                 model_timeout_s=int(args.model_timeout_s),
                 smoke_timeout_s=int(args.smoke_timeout_s),
                 verdicts=parse_verdicts(args.verdict),
+                fast=args.fast, repair_attempts=args.repair_attempts, check=args.check,
+                resource_limits=arguments(args),
             ),
             client=client,
         )

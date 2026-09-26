@@ -24,6 +24,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -51,6 +52,7 @@ _SECRET_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "AUTH")
 _ALLOWED_ENV = (
     "PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "PYTHONPATH", "VIRTUAL_ENV",
     "REFACTORY_WORKDIR", "REFACTORY_KNOBS", "DSH_WORKFLOW_NODE", "SYSTEMROOT",
+    "REFACTORY_BUDGET_LEDGER",
 )
 
 
@@ -292,15 +294,19 @@ def run_sandboxed(
         kwargs["preexec_fn"] = _limits(memory_mb, cpu_s, file_mb)
     started = time.monotonic()
     try:
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True,
-            text=True,
-            cwd=str(workdir),
-            env=child_env,
-            timeout=timeout_s,
-            **kwargs,
-        )
+        if child_env.get("REFACTORY_BUDGET_LEDGER"):
+            from refactory_dsh.owned_process import run_owned
+
+            result = run_owned(
+                [sys.executable, "-c", code], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, cwd=str(workdir), env=child_env, timeout=timeout_s,
+                label="budgeted validation", **kwargs,
+            )
+        else:
+            result = subprocess.run(
+                [sys.executable, "-c", code], capture_output=True, text=True,
+                cwd=str(workdir), env=child_env, timeout=timeout_s, **kwargs,
+            )
     except subprocess.TimeoutExpired as exc:
         return SandboxResult(
             ok=False,
@@ -341,6 +347,7 @@ def run_command(
     cpu_s: int = DEFAULT_CPU_S,
     file_mb: int = DEFAULT_FILE_MB,
     env: dict[str, str] | None = None,
+    budget: Any = None,
 ) -> SandboxResult:
     """Run a shell command under the same containment as a code snippet.
 
@@ -357,16 +364,42 @@ def run_command(
         kwargs["preexec_fn"] = _limits(memory_mb, cpu_s, file_mb)
     started = time.monotonic()
     try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            cwd=str(workdir),
-            env=child_env,
-            timeout=timeout_s,
-            **kwargs,
-        )
+        options = dict(shell=True, text=True, cwd=str(workdir), env=child_env, **kwargs)
+        if budget is None:
+            result = subprocess.run(command, capture_output=True, timeout=timeout_s, **options)
+        else:
+            budget.checkpoint()
+            proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    start_new_session=os.name == "posix", **options)
+            deadline = time.monotonic() + timeout_s
+            try:
+                while True:
+                    budget.checkpoint()
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(command, timeout_s)
+                    try:
+                        stdout, stderr = proc.communicate(timeout=min(remaining, 0.1))
+                        result = subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
+                        break
+                    except subprocess.TimeoutExpired:
+                        pass
+            except BaseException:
+                # This session was created by this call and contains only this
+                # check's shell/tools. No descendant discovery or name matching.
+                try:
+                    os.killpg(proc.pid, signal.SIGTERM) if os.name == "posix" else proc.terminate()
+                except ProcessLookupError:
+                    pass
+                try:
+                    proc.communicate(timeout=2)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL) if os.name == "posix" else proc.kill()
+                    except ProcessLookupError:
+                        pass
+                    proc.communicate(timeout=2)
+                raise
     except subprocess.TimeoutExpired:
         return SandboxResult(
             ok=False, timed_out=True, returncode=124, timeout_s=timeout_s,
@@ -476,6 +509,15 @@ def smoke(
 
     forwarded = toolchain.tool_env(identifier.split("/", 1)[0], project)
     kwargs.setdefault("timeout_s", DEFAULT_MODEL_SMOKE_TIMEOUT_S if model else DEFAULT_TIMEOUT_S)
+    if context.get("budget_ledger"):
+        from refactory_dsh.budgets import RunBudget
+
+        budget = RunBudget.from_path(context["budget_ledger"])
+        budget.checkpoint()
+        remaining = budget.remaining_s()
+        if remaining is not None:
+            kwargs["timeout_s"] = min(kwargs["timeout_s"], remaining)
+        forwarded["REFACTORY_BUDGET_LEDGER"] = str(budget.path)
     return run_sandboxed(
         code, workdir=Path(workdir), env=dict(os.environ), forwarded=forwarded, **kwargs
     )

@@ -27,6 +27,7 @@ export interface WorkflowNode {
   id: string
   /** `AgentNode`: the agent role the node is declared with. */
   role?: string
+  resource_role?: 'work' | 'final_validation'
   /** The artifacts the node produces, as paths relative to the run directory. */
   writes?: string[]
   /** The artifacts the node consumes; a subagent is told to read these. */

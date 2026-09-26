@@ -26,11 +26,12 @@ from __future__ import annotations
 from refactory_dsh.create import CreateMode
 from refactory_dsh.design import DesignMode
 from refactory_dsh.edit import EditMode
+from refactory_dsh.fast import CreateFastMode, EditFastMode, DesignFastMode
 from refactory_dsh.nn import Package
 
 PACKAGE = Package(
     name="default_pack",
     description="Create a package, revise one, or design an artifact — from a brief.",
-    modes=(CreateMode, EditMode, DesignMode),
-    ops=("refactory_dsh.create_ops", "refactory_dsh.design_ops"),
+    modes=(CreateMode, EditMode, DesignMode, CreateFastMode, EditFastMode, DesignFastMode),
+    ops=("refactory_dsh.create_ops", "refactory_dsh.design_ops", "refactory_dsh.fast_ops"),
 )

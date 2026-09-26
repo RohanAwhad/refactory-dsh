@@ -5,7 +5,7 @@
  *
  * These are the parts a run depends on but a single tool call does not reach.
  */
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -140,12 +140,12 @@ describe('the cursor status a run leaves behind', () => {
     const { ctx } = await mount({ workdir })
     await call(ctx, 'wf_next')
     expect(JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8')))
-      .toEqual({ status: 'ready', nodes: ['a'], completed: [] })
+      .toMatchObject({ status: 'ready', nodes: ['a'], completed: [] })
 
     await call(ctx, 'wf_done', { node: 'a' })
     await call(ctx, 'wf_next')
     expect(JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8')))
-      .toEqual({ status: 'done' })
+      .toMatchObject({ status: 'done', completed: ['a'], nodes: [] })
   })
 
   it('records a refusal, with the reason, when no answerer can be asked', async () => {
@@ -205,16 +205,42 @@ describe('the cursor status a run leaves behind', () => {
     expect(recorded.error).toBe('run exited with code 4')
   })
 
-  it('runs the graph even when the status cannot be written', async () => {
-    // A file where the directory should be: the write fails and is swallowed.
+  it('refuses dispatch when the recovery checkpoint cannot be written', async () => {
     const blocked = join(scratch(), 'not-a-directory')
     writeFileSync(blocked, 'x')
-    const { ctx } = await mount({ workdir: join(blocked, 'child') })
-    await expect(call(ctx, 'wf_next')).resolves.toMatchObject({ status: 'ready' })
+    const { ctx } = await mount({ workdir: join(blocked, 'child'), executeCommands: true,
+      graph: { name: 'blocked', start_node: 'a', nodes: { a: { id: 'a', _type: 'FnNode', command: 'never' } }, edges: [] } })
+    const executed = vi.fn(() => ({ exitCode: 0 }))
+    ctx.provide('shell', shell(executed))
+    await expect(call(ctx, 'wf_next')).rejects.toThrow(/Cannot persist graph recovery checkpoint/)
+    expect(executed).not.toHaveBeenCalled()
   })
 })
 
 describe('deterministic nodes', () => {
+  it.each(['pause', 'stop'])('applies queued %s before dispatching the next node in the same drain', async (action) => {
+    const workdir = scratch()
+    const { ctx } = await mount({ workdir, executeCommands: true, graph: {
+      name: 'boundaries', start_node: 'a', nodes: {
+        a: { id: 'a', _type: 'FnNode', command: 'first' },
+        b: { id: 'b', _type: 'FnNode', command: 'second' },
+      }, edges: [{ source: 'a', target: 'b' }],
+    } })
+    const commands: string[] = []
+    ctx.provide('shell', shell(command => {
+      commands.push(command)
+      const directory = join(workdir, '.refactory/graph-controls')
+      mkdirSync(directory, { recursive: true })
+      writeFileSync(join(directory, '1.json'), JSON.stringify({ action, run_id: workdir, invocation: null }))
+      return { exitCode: 0 }
+    }))
+    await call(ctx, 'wf_next')
+    expect(commands).toEqual(['first'])
+    const saved = JSON.parse(readFileSync(join(workdir, '.refactory/spine-checkpoint.json'), 'utf8'))
+    expect(saved.state.completed).toEqual(['a'])
+    expect(saved.status).toBe(action === 'pause' ? 'paused' : 'halted')
+  })
+
   it('hands the node over when no shell is mounted', async () => {
     const { ctx } = await mount({
       executeCommands: true,
@@ -265,6 +291,44 @@ describe('tool presentation', () => {
 })
 
 describe('asking a person', () => {
+  it.each(['pause', 'stop'])('applies %s while a gate question is pending without recording a verdict', async (action) => {
+    const workdir = scratch()
+    const root = new Context()
+    await root.plugin(SystemPrompt)
+    await root.plugin(ToolRuntime)
+    await root.plugin(UserQuestionService)
+    let questionSignal: AbortSignal | undefined
+    const asked = Promise.withResolvers<void>()
+    root.on('user-questions/request', (request: { signal?: AbortSignal }) => {
+      questionSignal = request.signal
+      asked.resolve()
+      return new Promise<never>((_resolve, reject) => request.signal?.addEventListener('abort',
+        () => reject(new Error('pending native question released')), { once: true }))
+    })
+    await root.plugin(spinePlugin, config({ workdir, graph: {
+      name: 'pending-control', start_node: 'gate', nodes: {
+        gate: { id: 'gate', _type: 'GateNode', evaluator_type: 'user', reads: [] },
+        after: { id: 'after', _type: 'AgentNode', prompt_template: 'must remain undispatched' },
+      }, edges: [{ source: 'gate', target: 'after', condition: 'proceed' }],
+    } }))
+    const pending = call(root, 'wf_verdict', { gate: 'gate' })
+    await asked.promise
+    expect(questionSignal?.aborted).toBe(false)
+    const directory = join(workdir, '.refactory/graph-controls')
+    mkdirSync(directory, { recursive: true })
+    writeFileSync(join(directory, '1.json'), JSON.stringify({ action, run_id: workdir, invocation: null }))
+    const result = await pending
+    expect(result).toMatchObject({ status: action === 'pause' ? 'paused' : 'halted', interrupted_by: 'graph_control' })
+    expect(result).not.toHaveProperty('verdict')
+    expect(questionSignal?.aborted).toBe(true)
+    const state = await call(root, 'wf_state')
+    expect(state).toMatchObject({ cursor: ['gate'], completed: [], gate_verdicts: {} })
+    expect(JSON.parse(readFileSync(join(workdir, '.refactory/spine-status.json'), 'utf8')))
+      .toMatchObject({ status: action === 'pause' ? 'paused' : 'halted' })
+    expect(JSON.parse(readFileSync(join(workdir, '.refactory/graph-control-receipt.json'), 'utf8')))
+      .toMatchObject({ action, status: 'applied' })
+  })
+
   it('refuses an answer that carries no verdict', async () => {
     const root = new Context()
     await root.plugin(SystemPrompt)
@@ -309,7 +373,8 @@ describe('asking a person', () => {
     const definition = root.tools.get('wf_verdict')
     await definition?.execute({ gate: 'gate' }, { agent, signal: controller.signal } as never)
     expect(seen.agent).toBe(agent)
-    expect(seen.signal).toBe(controller.signal)
+    expect(seen.signal).toBeInstanceOf(AbortSignal)
+    expect((seen.signal as AbortSignal).aborted).toBe(true) // the resolved question no longer owns a polling loop
   })
 
   it('asks a gate that lists no outcomes as a free-text question', async () => {

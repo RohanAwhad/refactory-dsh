@@ -170,6 +170,8 @@ export function apply(ctx: Context): void {
       SRF_KNOBS: String(options.knobs),
       SRF_BUDGET: String(budget),
       REFACTORY_WORKDIR: workdir,
+      ...(process.env.REFACTORY_WORKER_CONTEXT ? { REFACTORY_WORKER_CONTEXT: process.env.REFACTORY_WORKER_CONTEXT } : {}),
+      ...(process.env.REFACTORY_BUDGET_LEDGER ? { REFACTORY_BUDGET_LEDGER: process.env.REFACTORY_BUDGET_LEDGER } : {}),
       // Nonsecret context for nested model calls after command/sandbox scrubbing.
       REFACTORY_MODEL_DSH_HOME: resolve((process.env.DSH_HOME?.trim() || join(homedir(), '.dsh')).replace(/^~(?=[/\\]|$)/, homedir())),
       REFACTORY_MODEL_PROVIDER: String(options.provider ?? ''),

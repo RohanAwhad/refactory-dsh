@@ -78,6 +78,9 @@ class RunContext:
         #: headless run, which is why such a gate refuses rather than deciding.
         self.verdicts: dict[str, str] = dict(verdicts or {})
         self.model = model
+        from refactory_dsh.budgets import RunBudget
+
+        self.budget = RunBudget.inherited(model)
         self.task: dict[str, Any] = dict(task or {})
         #: The mode's declared memory, for an op that has something to remember.
         self.memory = memory
@@ -349,11 +352,14 @@ class Executor:
     _reserve_step: Callable[[], bool] | None = field(default=None, repr=False)
 
     _gate_iterations: dict[str, int] = field(default_factory=dict, init=False, repr=False)
+    _outcome: str = field(default="pending", init=False, repr=False)
+    _next_after_completion: str | None = field(default=None, init=False, repr=False)
 
     def _record(
         self, node: str, *, error: str | None = None,
         branches: dict[str, Any] | None = None,
         schedule: dict[str, Any] | None = None,
+        outcome: str = "pending",
     ) -> None:
         """Write how far the run got, so a restart can continue instead of starting over.
 
@@ -373,6 +379,8 @@ class Executor:
                 "knobs": self.ctx.knobs,
                 "task": self.ctx.task,
                 "steps": len(self.steps),
+                "outcome": outcome,
+                "graph": self.graph.to_state(),
                 **({"branches": branches} if branches is not None else {}),
                 **({"schedule": schedule} if schedule is not None else {}),
             }, indent=2, default=str))
@@ -489,7 +497,19 @@ class Executor:
                          error=f"{type(exc).__name__}: {exc}")
                 )
                 error = f"{node.id}: {type(exc).__name__}: {exc}"
-                self._record(node.id, error=error)
+                from refactory_dsh.budgets import BudgetExhausted
+                from concurrent.futures import CancelledError
+                import subprocess
+
+                if isinstance(exc, BudgetExhausted) and self._outcome == "completed":
+                    self._record(self._next_after_completion or "", error=error, outcome="pending")
+                else:
+                    unknown = self._outcome == "running" and (
+                        isinstance(exc, (BudgetExhausted, CancelledError, subprocess.TimeoutExpired))
+                        or "timed out" in str(exc).lower()
+                    )
+                    self._record(node.id, error=error,
+                                 outcome="unknown" if unknown else "failed")
                 current = None
                 break
             self.steps.append(
@@ -503,6 +523,13 @@ class Executor:
                 if step.error:
                     error = step.error
                     break
+        if error is None and self.ctx.budget is not None:
+            from refactory_dsh.budgets import BudgetExhausted
+
+            try:
+                self.ctx.budget.checkpoint()
+            except BudgetExhausted as exc:
+                error = str(exc)
 
         return RunResult(
             facts=dict(self.ctx.facts),
@@ -579,6 +606,29 @@ class Executor:
     # ── one node ───────────────────────────────────────────────────────────
     def _visit(self, node: Node) -> tuple[str | None, str | None]:
         """Run one node and return ``(next node id, verdict)``."""
+        from refactory_dsh.live import emit
+
+        self._outcome = "pending"
+        if self.ctx.budget is not None:
+            self.ctx.budget.checkpoint_node("final_validation" if node.role == "validation" else None)
+        self._outcome = "running"
+        if self._reserve_step is None:
+            self._record(node.id, outcome="running")
+        emit(self.ctx.workdir, "node_started", node_id=node.id, state="running", summary=node.notes)
+        try:
+            result = self._dispatch(node)
+        except BaseException as exc:
+            emit(self.ctx.workdir, "node_failed", node_id=node.id, state="failed", summary=f"{type(exc).__name__}: {exc}")
+            raise
+        self._outcome = "completed"
+        self._next_after_completion = result[0]
+        emit(self.ctx.workdir, "node_completed", node_id=node.id, state="completed", summary=node.notes)
+        if self.ctx.budget is not None:
+            self.ctx.budget.checkpoint()
+        return result
+
+    def _dispatch(self, node: Node) -> tuple[str | None, str | None]:
+        """Execute a node after resource admission and the durable start marker."""
         if node.kind == "op":
             fn = resolve(node.call)
             produced = fn(self.ctx)
@@ -599,10 +649,17 @@ class Executor:
 
         delivery = begin(self.ctx.workdir, node.id, render(node.prompt_template, self.ctx), list(node.writes))
         self.model_calls += 1
+        client = self.ctx.model
+        if callable(getattr(client, "for_node", None)):
+            client = client.for_node(node.id, role=node.role)
+        if self.ctx.budget is not None and not callable(getattr(client, "with_budget", None)):
+            self.ctx.budget.require_usage_capability(False)
         output = _ask_model(
-            self.ctx.model, delivery["prompt"], system=node.notes, workdir=self.ctx.workdir
+            client, delivery["prompt"], system=node.notes, workdir=self.ctx.workdir
         )
-        finish(self.ctx.workdir, node.id, final_response=output, capture_final=True)
+        route = client.route() if callable(getattr(client, "route", None)) else {}
+        finish(self.ctx.workdir, node.id, final_response=output,
+               capture_final=route.get("worker_backend", "dsh") == "dsh")
         if node.produces:
             # Text-producing nodes expose the delivered artifact, which can have
             # been written by tools while the final response only summarizes it.
@@ -676,6 +733,8 @@ def execute(
     enforce_writes: bool = True,
     max_steps: int = 2000,
     start: str | None = None,
+    resource_limits: Any = None,
+    shared_budget: Any = None,
 ) -> RunResult:
     """Build a context and run the graph once.
 
@@ -695,6 +754,18 @@ def execute(
     from refactory_dsh.steering import for_run
 
     workdir = Path(workdir)
+    from refactory_dsh.budgets import LEDGER, ResourceLimits, RunBudget
+
+    budget = shared_budget or RunBudget.inherited(model)
+    if budget is None and start is None and (workdir / LEDGER).exists():
+        raise ValueError("this directory already has a resource ledger; use a new run directory or explicit resume")
+    own_budget = budget is None and resource_limits is not None
+    if own_budget:
+        limits = resource_limits if isinstance(resource_limits, ResourceLimits) else ResourceLimits.from_dict(resource_limits)
+        budget = RunBudget.open(workdir, limits) if start is not None else RunBudget.create(workdir, limits)
+        budget.resume()
+    if budget is not None:
+        model = budget.bind_model(model)
     graph = for_run(graph, workdir)
     ctx = RunContext(
         workdir,
@@ -706,4 +777,12 @@ def execute(
         memory=memory,
         enforce_writes=enforce_writes,
     )
-    return Executor(graph, ctx, max_steps=max_steps).run(start=start)
+    ctx.budget = budget
+    try:
+        result = Executor(graph, ctx, max_steps=max_steps).run(start=start)
+        if budget is not None:
+            result.facts["resources"] = budget.snapshot()
+        return result
+    finally:
+        if own_budget and budget is not None:
+            budget.pause()

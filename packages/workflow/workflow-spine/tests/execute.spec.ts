@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import type { ShellExecRequest, ShellExecSpec, ShellExecutor, ShellRunResult } from '@deepseek-ai/dsh-shell'
@@ -221,5 +224,22 @@ describe('reading a gate verdict', () => {
   it('ignores evaluator log lines before the verdict', async () => {
     const outcome = await runDeterministic(localShell, gate('g', 'echo "log line"; echo RELOOP'), config)
     expect(completed(outcome).verdict).toBe('reloop')
+  })
+})
+
+
+describe('shared resource boundaries', () => {
+  it('retains final validation reserve, then lets validation and reporting finish within it', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'spine-resources-'))
+    try {
+      const ledger = join(root, '.refactory/resource-usage.json')
+      const prepared = spawnSync(resolve('.venv/bin/python'), ['-c',
+        'from pathlib import Path; from refactory_dsh.budgets import RunBudget,ResourceLimits; b=RunBudget.open(Path(__import__("sys").argv[1]),ResourceLimits(max_tokens=100,validation_reserve_tokens=20)); b.record_usage("prior",85)', root], { encoding: 'utf8' })
+      expect(prepared.status, prepared.stderr).toBe(0)
+      const bounded = { ...config, workdir: root, env: { PATH: `${resolve('.venv/bin')}:${process.env.PATH}`, REFACTORY_BUDGET_LEDGER: ledger } }
+      await expect(runDeterministic(localShell, fn('work', 'echo forbidden'), bounded)).rejects.toThrow(/reserve retained/)
+      expect(completed(await runDeterministic(localShell, { ...fn('validate', 'echo validated'), resource_role: 'final_validation' }, bounded)).stdout).toBe('validated')
+      expect(completed(await runDeterministic(localShell, fn('report', 'echo reported'), bounded)).stdout).toBe('reported')
+    } finally { rmSync(root, { recursive: true, force: true }) }
   })
 })

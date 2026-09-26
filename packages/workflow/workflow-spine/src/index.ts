@@ -17,7 +17,9 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { setTimeout as wait } from 'node:timers/promises'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, lstatSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { homedir } from 'node:os'
 import z from '@deepseek-ai/schemastery'
@@ -361,6 +363,8 @@ function payloadEnv(value: unknown): Record<string, string> | undefined {
 
 export function apply(ctx: Context, config: Config): void {
   const { toolPrefix, maxIterations, ceoDeny, interactiveOpen } = config
+  // This is initialized before an explicit checkpoint restore at mount time.
+  const materialised = new WeakMap<Spine, Materialised>()
 
   // The composition's one spine, when the graph was a mount-time constant. When
   // `interactiveOpen` is true there is none yet: a session opens a mode through
@@ -403,15 +407,12 @@ export function apply(ctx: Context, config: Config): void {
       }
     }
     configuredSpine = new Spine(config.graph, { maxIterations })
+    restoreRequested(configuredSpine, config.workdir)
   }
 
   // Tools are shared by the web composition; cursors and run settings are not.
   // Keep each claim until that same session successfully opens its next run.
   const openedBySession = new Map<string, OpenRun>()
-
-  // Both runtimes return while an agent works inside a data pass. Keep setup's
-  // result with that spine until the pass closes, never with one drain call.
-  const materialised = new WeakMap<Spine, Materialised>()
 
   /** The id of the session an execution belongs to, when it has an agent. */
   function sessionIdOf(exec: ToolExec): string | undefined {
@@ -482,6 +483,45 @@ export function apply(ctx: Context, config: Config): void {
     return value as Record<string, unknown>
   }
 
+  function restoreRequested(spine: Spine, workdir: string | undefined): void {
+    if (workdir === undefined) return
+    const requestPath = join(workdir, '.refactory', 'resume-request.json')
+    if (!existsSync(requestPath)) return
+    const request = JSON.parse(readFileSync(requestPath, 'utf8'))
+    const bytes = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
+    if (createHash('sha256').update(bytes).digest('hex') !== request.checkpoint_sha256) throw new Error('checkpoint changed after recovery was requested')
+    const saved = JSON.parse(bytes.toString())
+    if (saved.status === 'executing' || saved.status === 'failed') throw new Error('unknown side-effect outcome; automatic replay refused')
+    if (saved.state.halted?.reason === 'cancelled') delete saved.state.halted
+    saved.state.pause_before = []
+    spine.restore(saved)
+    if (spine.passOf() !== undefined) {
+      if (!Object.hasOwn(saved, 'materialised')) throw new Error('active data pass has no saved setup boundary; automatic replay refused')
+      if (saved.materialised !== null) {
+        const pass = spine.passOf()!
+        if (saved.materialised?.key !== `${pass.node}:${pass.index}`) throw new Error('saved item setup belongs to another data pass')
+        materialised.set(spine, saved.materialised)
+      }
+    }
+    unlinkSync(requestPath)
+  }
+
+  function fingerprint(path: string): unknown {
+    if (!existsSync(path)) return null
+    if (!statSync(path).isDirectory()) return createHash('sha256').update(readFileSync(path)).digest('hex')
+    const found: Record<string, string> = {}
+    const visit = (directory: string, prefix: string): void => {
+      for (const entry of readdirSync(directory).sort()) {
+        const child = join(directory, entry), key = prefix + entry
+        if (lstatSync(child).isSymbolicLink()) continue
+        if (statSync(child).isDirectory()) visit(child, key + '/')
+        else found[key] = createHash('sha256').update(readFileSync(child)).digest('hex')
+      }
+    }
+    visit(path, '')
+    return found
+  }
+
   /**
    * The cursor's own status on disk, when a work directory is known.
    *
@@ -502,22 +542,87 @@ export function apply(ctx: Context, config: Config): void {
       // The cursor travels with the status: a reader of a finished run wants the
       // score, and a reader of an abandoned one wants to know which nodes never ran.
       const state = spine.state()
-      writeFileSync(
-        join(dir, 'spine-status.json'),
-        JSON.stringify(
-          {
-            status,
-            ...(detail === undefined ? {} : { error: detail }),
-            ...(status === 'ready' || status === 'paused' ? { nodes: state.cursor as string[], completed: state.completed as string[] } : {}),
-            ...(status === 'paused' ? { paused_before: spine.pausedAt() } : {}),
-          },
-          null,
-          2,
-        ),
-      )
-    } catch {
-      // The work directory belongs to the caller; a status write must never be the
-      // thing that stops the run it is describing.
+      const next = spine.next()
+      const views = next.status === 'ready' ? next.nodes : []
+      const wait = status === 'paused' ? 'paused by user'
+        : status === 'waiting_user' || views.some(node => node._type === 'GateNode' && node.evaluator_type === 'user') ? 'waiting for user gate'
+          : views.some(node => node._type === 'AgentNode' || node._type === 'LLMNode') ? 'waiting for worker delivery'
+            : status === 'executing' ? 'running a graph check' : undefined
+      const record = {
+        schema_version: 1, run_id: resolve(workdir), at: new Date().toISOString(),
+        status, nodes: state.cursor, completed: state.completed,
+        ...(detail === undefined ? {} : { error: detail }),
+        ...(wait === undefined ? {} : { wait_reason: wait }),
+        ...(status === 'paused' ? { paused_before: spine.pausedAt() } : {}),
+      }
+      const path = join(dir, 'spine-status.json')
+      writeFileSync(`${path}.tmp`, JSON.stringify(record, null, 2))
+      renameSync(`${path}.tmp`, path)
+      const checkpoint = join(dir, 'spine-checkpoint.json')
+      const saved = spine.checkpoint()
+      const graph = saved.graph as WorkflowGraph
+      const paths = new Set(Object.values(graph.nodes).flatMap(node => [...node.reads ?? [], ...node.writes ?? []]))
+      if (existsSync(join(dir, 'run-config.json'))) paths.add('.refactory/run-config.json')
+      const file_fingerprints = Object.fromEntries([...paths].map(path => [path, fingerprint(resolve(workdir, path))]))
+      writeFileSync(`${checkpoint}.tmp`, JSON.stringify({ ...saved, status, owner_pid: process.pid,
+        file_fingerprints, materialised: materialised.get(spine) ?? null, run_id: resolve(workdir) }))
+      renameSync(`${checkpoint}.tmp`, checkpoint)
+      appendFileSync(join(dir, 'events.jsonl'), JSON.stringify({ ...record, kind: 'graph_state' }) + '\n')
+
+    } catch (error) {
+      // A stale ready checkpoint could replay a command whose outcome is unknown.
+      // Persist the execution marker before dispatch, and stop on every write error.
+      throw new Error('Cannot persist graph recovery checkpoint; continuation refused', { cause: error })
+    }
+  }
+
+  /** Consume only controls addressed to this exact durable invocation. */
+  function applyControls(spine: Spine, workdir: string | undefined, env: Record<string, string>, dataCommand: string): void {
+    if (workdir === undefined) return
+    const directory = join(workdir, '.refactory', 'graph-controls')
+    if (!existsSync(directory)) return
+    const invocationPath = join(workdir, '.refactory', 'invocation.json')
+    const invocation = existsSync(invocationPath) ? JSON.parse(readFileSync(invocationPath, 'utf8')).id : null
+    for (const name of readdirSync(directory).filter(name => name.endsWith('.json')).sort()) {
+      const path = join(directory, name)
+      const request = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+      const receipt = { ...request, status: 'applied', message: 'Applied at graph boundary; continuation requires the owning driver.' }
+      try {
+        if (request.run_id !== resolve(workdir) || request.invocation !== invocation) throw new Error('control belongs to another run invocation')
+        const state = spine.state()
+        if (request.action === 'pause') {
+          const cursor = state.cursor as string[]
+          const targets = cursor.length ? cursor : spine.passOf() ? [spine.passOf()!.node] : []
+          for (const node of targets) spine.pauseBefore(node, true)
+        }
+        else if (request.action === 'resume') for (const node of state.pause_before as string[]) spine.pauseBefore(node, false)
+        else if (request.action === 'stop') { spine.stopAtBoundary(); receipt.message = 'Stopped at graph boundary; no further nodes will dispatch.' }
+        else if (request.action === 'rerun') {
+          const checkpoint = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
+          if (createHash('sha256').update(checkpoint).digest('hex') !== request.revision) throw new Error('graph changed since preview; preview invalidation again')
+          const target = String(request.target)
+          const plan = spine.planRedo(target)
+          const nodes = (spine.checkpoint().graph as WorkflowGraph).nodes
+          if (typeof request.text === 'string' && request.text.trim() !== '' && !['AgentNode', 'LLMNode'].includes(nodes[target]?._type ?? '')) {
+            throw new Error('this node has no editable prompt; correct its source with explicit invalidation')
+          }
+          if (dataCommand !== '') {
+            recordStatus(spine, workdir, 'executing')
+            runtimeBridge(`${dataCommand} reset`, workdir, env, { ...plan, state, archiveArtifacts: true })
+          }
+          if (typeof request.text === 'string' && request.text.trim() !== '') spine.amendPrompt(target, request.text, 'append')
+          spine.redo(target)
+          if (plan.resetPass) materialised.delete(spine)
+          receipt.message = `Reopened ${target}; invalidated ${plan.nodes.join(', ')}; prior evidence archived.`
+        } else throw new Error('unsupported graph control')
+      } catch (error) { receipt.status = 'failed'; receipt.message = error instanceof Error ? error.message : String(error) }
+      if (receipt.status === 'applied') recordStatus(spine, workdir,
+        spine.isHalted() ? 'halted' : spine.isPaused() ? 'paused' : spine.next().status)
+      writeFileSync(join(workdir, '.refactory', 'graph-control-receipt.json'), JSON.stringify(receipt))
+      appendFileSync(join(workdir, '.refactory', 'events.jsonl'), JSON.stringify({ schema_version: 1,
+        run_id: resolve(workdir), invocation, at: new Date().toISOString(), kind: 'control',
+        state: receipt.status, summary: receipt.message }) + '\n')
+      unlinkSync(path)
     }
   }
 
@@ -604,8 +709,12 @@ export function apply(ctx: Context, config: Config): void {
     let ran: RanStep | undefined
     let item: unknown
 
+    const recordBoundary = (): void => recordStatus(spine, workdir,
+      spine.isHalted() ? 'halted' : spine.isPaused() ? 'paused' : spine.next().status)
+
     /** Select a data node's items and open its first pass. */
     const openPass = async (data: NodeView): Promise<{ failure?: CommandFailure }> => {
+      recordStatus(spine, workdir, 'executing')
       const listed = await runDataCommand(shell, data, 'list', runner)
       if (!listed.ok) return { failure: listed }
       const count = Number(listed.value.count ?? 0)
@@ -613,9 +722,11 @@ export function apply(ctx: Context, config: Config): void {
       // continues, exactly as the walking executor continues past it.
       if (count === 0) {
         spine.complete(data.id)
+        recordBoundary()
         return {}
       }
       spine.startPass(data.id, count)
+      recordBoundary()
       return {}
     }
 
@@ -630,10 +741,12 @@ export function apply(ctx: Context, config: Config): void {
         return {}
       }
       const data = spine.view(pass.node)
+      recordStatus(spine, workdir, 'executing')
       const started = await runDataCommand(shell, data, 'begin', runner, pass.index)
       if (!started.ok) return { failure: started }
       materialised.set(spine, { key, item: started.value })
       item = started.value
+      recordBoundary()
       return {}
     }
 
@@ -651,25 +764,36 @@ export function apply(ctx: Context, config: Config): void {
       // Its Task still owns setup-before-verify, exactly once for this item.
       const started = await beginItem()
       if (started.failure !== undefined) return started
+      applyControls(spine, workdir, commandEnv, dataCommand)
+      if (spine.isHalted() || spine.isPaused()) return {}
+      if (JSON.stringify(spine.passOf()) !== JSON.stringify(pass)) return {}
       const data = spine.view(pass.node)
+      recordStatus(spine, workdir, 'executing')
       const ended = await runDataCommand(shell, data, 'end', runner, pass.index)
       if (!ended.ok) return { failure: ended }
       materialised.delete(spine)
       item = undefined
       spine.endPass()
       structural.clear()
+      recordBoundary()
       return {}
     }
 
     for (;;) {
+      applyControls(spine, workdir, commandEnv, dataCommand)
+      if (spine.isHalted() || spine.isPaused()) return { next: spine.next(), item, ran }
       const closed = await close()
       if (closed.failure !== undefined) return { next: spine.next(), failure: closed.failure, ran }
-      const state = spine.next()
+      let state = spine.next()
       if (state.status === 'done' || spine.isPaused()) return { next: state, item, ran }
       const started = await beginItem()
       if (started.failure !== undefined) return { next: state, failure: started.failure, ran }
+      applyControls(spine, workdir, commandEnv, dataCommand)
+      state = spine.next()
+      if (spine.isHalted() || spine.isPaused()) return { next: state, item, ran }
       // Normalizing a standing skip can exhaust the next item immediately too.
       if (spine.passOf()?.finished) continue
+      if (state.status === 'done') return { next: state, item, ran }
       if (advanceControl(state)) continue
       const data = state.nodes.find(node => node._type === 'DataNode')
       if (data !== undefined) {
@@ -681,17 +805,19 @@ export function apply(ctx: Context, config: Config): void {
       if (automatic.length === 0 || (interactiveOpen && ran !== undefined)) return { next: state, item, ran }
       // One node per call is the interactive contract; the configured graph keeps
       // walking every automatic node the cursor is sitting on.
-      const due = interactiveOpen ? automatic.slice(0, 1) : automatic
-      for (const node of due) {
-        const outcome = await runDeterministic(shell, node, runner)
-        if (!outcome.ok) return { next: state, failure: outcome, ran }
-        if (outcome.verdict === undefined) spine.complete(node.id)
-        else spine.verdict(node.id, outcome.verdict)
-        if (interactiveOpen) {
-          // Preserve the one-command budget while allowing structural boundaries
-          // and data-pass grading to settle before exposing the next ready work.
-          ran = recordedStep(node, workdir)
-        }
+      // Re-enter the boundary after each command, including concurrent cursors:
+      // a queued stop/pause must take effect before any later node dispatch.
+      const node = automatic[0]!
+      recordStatus(spine, workdir, 'executing')
+      const outcome = await runDeterministic(shell, node, runner)
+      if (!outcome.ok) return { next: state, failure: outcome, ran }
+      if (outcome.verdict === undefined) spine.complete(node.id)
+      else spine.verdict(node.id, outcome.verdict)
+      recordBoundary()
+      if (interactiveOpen) {
+        // Preserve the one-command budget while allowing structural boundaries
+        // and data-pass grading to settle before exposing the next ready work.
+        ran = recordedStep(node, workdir)
       }
     }
   }
@@ -710,7 +836,14 @@ export function apply(ctx: Context, config: Config): void {
     dataCommand: string,
     agentCommand: string,
   ): Promise<JsonValue> {
-    const { next, failure, item, ran } = await drain(spine, workdir, commandEnv, dataCommand)
+    applyControls(spine, workdir, commandEnv, dataCommand)
+    let drained: Awaited<ReturnType<typeof drain>>
+    try { drained = await drain(spine, workdir, commandEnv, dataCommand) }
+    catch (error) {
+      recordStatus(spine, workdir, 'failed', error instanceof Error ? error.message : String(error))
+      throw error
+    }
+    const { next, failure, item, ran } = drained
     if (failure !== undefined) {
       // The node's own stderr is why it failed. The exit code alone sends a reader
       // back to re-run the node to find out, so the reason is recorded with it.
@@ -777,7 +910,7 @@ export function apply(ctx: Context, config: Config): void {
    * @param view - the gate's view, whose `verdicts` are the offered options.
    * @param exec - the tool execution, for the calling agent and its abort signal.
    * @param workdir - the run directory a refusal is recorded in.
-   * @returns the verdict the person chose.
+   * @returns the verdict the person chose, or no verdict when a graph control interrupted the question.
    */
   async function askPerson(
     gate: string,
@@ -785,7 +918,7 @@ export function apply(ctx: Context, config: Config): void {
     view: NodeView,
     exec: ToolExec,
     workdir: string | undefined,
-  ): Promise<string> {
+  ): Promise<string | undefined> {
     if (pendingQuestions.has(spine)) throw new Error('a user-gate question is already pending for this run')
     pendingQuestions.add(spine)
     try {
@@ -797,8 +930,10 @@ export function apply(ctx: Context, config: Config): void {
 
   async function askCurrentReview(
     gate: string, spine: Spine, view: NodeView, exec: ToolExec, workdir: string | undefined,
-  ): Promise<string> {
-    const { gateCommand, commandEnv } = requireRun(exec)
+  ): Promise<string | undefined> {
+    const { gateCommand, commandEnv, dataCommand } = requireRun(exec)
+    applyControls(spine, workdir, commandEnv, dataCommand)
+    if (spine.isPaused() || spine.isHalted()) return undefined
     const labels = spine.acceptedVerdicts(gate)
     const request = { gate, reads: view.reads ?? [], labels }
     const prior = gateCommand !== '' && workdir !== undefined
@@ -813,8 +948,11 @@ export function apply(ctx: Context, config: Config): void {
       throw new Error(message)
     }
     let answer
+    const questionLifetime = new AbortController()
+    const questionSignal = exec.signal === undefined ? questionLifetime.signal : AbortSignal.any([exec.signal, questionLifetime.signal])
     try {
-      answer = await userQuestions.ask({
+      recordStatus(spine, workdir, 'waiting_user')
+      const nativeAnswer = userQuestions.ask({
         questions: [{
           id: gate,
           header: 'Workflow gate',
@@ -822,14 +960,30 @@ export function apply(ctx: Context, config: Config): void {
           ...(labels.length === 0 ? {} : { options: labels.map(verdict => ({ label: verdict })) }),
         }],
         ...(exec.agent === undefined ? {} : { agent: exec.agent }),
-        ...(exec.signal === undefined ? {} : { signal: exec.signal }),
+        signal: questionSignal,
       })
+      const panelAnswer = async (): Promise<Awaited<typeof nativeAnswer> | undefined> => {
+        if (workdir === undefined) return new Promise(() => {})
+        while (!questionSignal.aborted) {
+          await wait(500, undefined, { signal: questionSignal })
+          applyControls(spine, workdir, commandEnv, dataCommand)
+          if (spine.isPaused() || spine.isHalted() || JSON.stringify(spine.state()) !== stateBefore) return undefined
+          if (gateCommand === '') continue
+          const polled = runtimeBridge(gateCommand, workdir, commandEnv, { ...request, action: 'poll', review: prior?.review })
+          if (typeof polled.verdict === 'string' && polled.verdict !== '') {
+            return { answers: [{ id: gate, selected: [polled.verdict], custom: '' }] } as Awaited<typeof nativeAnswer>
+          }
+        }
+        throw new Error('question cancelled')
+      }
+      answer = await Promise.race([nativeAnswer, panelAnswer()])
     } catch (error: unknown) {
       const detail = error instanceof Error ? error.message : String(error)
       const message = `gate ${gate} is answered by a person and could not be asked: ${detail}`
       recordStatus(spine, workdir, 'refused', message)
       throw new Error(message)
-    }
+    } finally { questionLifetime.abort() }
+    if (answer === undefined) return undefined
     const chosen = answer.answers.find(entry => entry.id === gate)
     const verdict = (chosen?.selected[0] ?? chosen?.custom ?? '').trim()
     if (verdict === '') {
@@ -838,7 +992,7 @@ export function apply(ctx: Context, config: Config): void {
     if (JSON.stringify(spine.state()) !== stateBefore) {
       throw new Error(`gate ${gate} changed while awaiting the answer; ask again`)
     }
-    if (!labels.includes(verdict)) throw new Error(`gate ${gate} does not accept ${verdict}`)
+    if (labels.length > 0 && !labels.includes(verdict)) throw new Error(`gate ${gate} does not accept ${verdict}`)
     if (gateCommand !== '' && workdir !== undefined) {
       runtimeBridge(gateCommand, workdir, commandEnv, {
         ...request, action: 'answer', review: prior?.review, verdict,
@@ -987,6 +1141,7 @@ export function apply(ctx: Context, config: Config): void {
           throw new Error(`invalid workflow graph: ${rendered}`)
         }
         const spine = new Spine(graph, { maxIterations })
+        restoreRequested(spine, workdir)
         const modelConfig = session.requestHeader()?.config ?? exec.agent?.options
         const runEnv = {
           ...(payloadEnv(payload.commandEnv) ?? config.commandEnv),
@@ -1081,6 +1236,14 @@ export function apply(ctx: Context, config: Config): void {
           throw new Error(`gate ${args.gate} is a user gate: calling it with a verdict would record an answer the person never gave. Call again with the gate id alone; the runtime asks them.`)
         }
         const verdict = await askPerson(args.gate, spine, view, exec, workdir)
+        if (verdict === undefined) {
+          const status = spine.isHalted() ? 'halted' : spine.isPaused() ? 'paused' : 'ready'
+          recordStatus(spine, workdir, status)
+          const state = spine.state()
+          return json({ status, gate: args.gate, interrupted_by: 'graph_control',
+            nodes: state.cursor, completed: state.completed,
+            ...(state.halted === undefined ? {} : { halted: state.halted }) })
+        }
         spine.verdict(args.gate, verdict, args.feedback ?? '')
         return json({ status: 'routed', gate: args.gate, verdict, answered_by: 'user' })
       }

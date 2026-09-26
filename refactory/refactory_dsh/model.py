@@ -24,9 +24,10 @@ import threading
 import time
 from concurrent.futures import CancelledError
 from pathlib import Path
+from typing import Any
 
-from refactory_dsh.paths import SOURCE_CLI_ENTRY, dsh_command, dsh_root, node_bin
-from refactory_dsh.owned_process import SHUTDOWN_GRACE_S, shutdown
+from refactory_dsh.paths import SOURCE_CLI_ENTRY, dsh_command, dsh_root, node_bin, venv_bin
+from refactory_dsh.owned_process import SHUTDOWN_GRACE_S, shutdown, _termination_as_exit
 
 #: The overlay that keeps a node's completion from backgrounding its own work. Checked
 #: in rather than generated, so what a node's model call is configured with is
@@ -125,18 +126,88 @@ class DshModelClient:
         dsh_home: str | Path | None = None,
         runtime_root: str | Path | None = None,
         dsh_cli: str | None = None,
+        worker_backend: str = "",
+        effort: str = "",
+        permission_mode: str = "default",
+        role_routes: dict[str, Any] | None = None,
+        node_routes: dict[str, Any] | None = None,
+        budget_ledger: str | Path | None = None,
+        python_bin: str | Path | None = None,
     ) -> None:
+        from refactory_dsh.workers import validate_route
+        inherited = json.loads(os.environ.get("REFACTORY_WORKER_CONTEXT") or "{}")
+        if not isinstance(inherited, dict):
+            raise ValueError("REFACTORY_WORKER_CONTEXT must contain an object")
+        inherited_route = inherited if not worker_backend or worker_backend == inherited.get("worker_backend") else {}
+        worker_backend = worker_backend or inherited.get("worker_backend", "")
+        provider = provider or inherited_route.get("provider", "")
+        model = model or inherited_route.get("model", "")
+        effort = effort or inherited_route.get("effort", "")
+        permission_mode = inherited.get("permission_mode", permission_mode) if permission_mode == "default" else permission_mode
+        role_routes = role_routes if role_routes is not None else inherited.get("role_routes")
+        node_routes = node_routes if node_routes is not None else inherited.get("node_routes")
+        runtime_root = runtime_root or inherited.get("runtime_root")
+        dsh_cli = dsh_cli if dsh_cli is not None else inherited.get("dsh_cli")
+        dsh_home = dsh_home or inherited.get("dsh_home")
+        budget_ledger = budget_ledger or inherited.get("budget_ledger")
+        python_bin = python_bin or inherited.get("python_bin")
+        timeout_s = inherited.get("timeout_s", timeout_s) if timeout_s == DEFAULT_TIMEOUT_S else timeout_s
+        attempts = inherited.get("attempts", attempts) if attempts == DEFAULT_ATTEMPTS else attempts
         self._timeout_s = timeout_s
+        self._worker_backend = worker_backend or os.environ.get("REFACTORY_WORKER_BACKEND", "dsh")
+        self._effort = effort or (os.environ.get("REFACTORY_MODEL_EFFORT", "") if self._worker_backend == "dsh" else "")
+        self._permission_mode = permission_mode
+        self._role_routes = copy.deepcopy(role_routes or {})
+        self._node_routes = copy.deepcopy(node_routes or {})
+        self._node_id = ""
+        self._role = "worker"
+        self._worker_receipt: Path | None = None
+        ledger = budget_ledger or os.environ.get("REFACTORY_BUDGET_LEDGER")
+        self._budget = None
+        if ledger:
+            from refactory_dsh.budgets import RunBudget
+            self._budget = RunBudget.from_path(ledger)
         self._runtime_root = Path(runtime_root or dsh_root()).expanduser().resolve()
+        self._python_bin = Path(python_bin or venv_bin()).expanduser().resolve()
         self._dsh_cli = (dsh_cli if dsh_cli is not None else os.environ.get("DSH_CLI", "")).strip()
-        self._model = model or os.environ.get("REFACTORY_MODEL_ID", "")
-        self._provider = provider or os.environ.get("REFACTORY_MODEL_PROVIDER", "")
+        self._model = model or (os.environ.get("REFACTORY_MODEL_ID", "") if self._worker_backend == "dsh" else "")
+        self._provider = provider or (os.environ.get("REFACTORY_MODEL_PROVIDER", "") if self._worker_backend == "dsh" else "")
         # Resolve before containment rewrites HOME. This is a location, never a key.
         selected_home = dsh_home or os.environ.get("REFACTORY_MODEL_DSH_HOME") or os.environ.get("DSH_HOME", "").strip()
         self._dsh_home = Path(selected_home or Path.home() / ".dsh").expanduser().resolve()
-        self._attempts = max(1, int(attempts))
+        self._attempts = max(1, int(attempts)) if self._worker_backend == "dsh" else 1
         self._backoff_s = max(0.0, float(backoff_s))
         self._cancellations: tuple[threading.Event, ...] = ()
+        validate_route(self.route())
+
+    def route(self) -> dict[str, str]:
+        return {"worker_backend": self._worker_backend, "provider": self._provider,
+                "model": self._model, "effort": self._effort,
+                "permission_mode": self._permission_mode}
+
+    def for_node(self, node: str, role: str = "worker") -> DshModelClient:
+        from refactory_dsh.workers import resolve_route
+        route = resolve_route(self.route(), node=node, role=role,
+                              role_routes=self._role_routes, node_routes=self._node_routes)
+        client = copy.copy(self)
+        client._node_id, client._role = node, role
+        for key, value in route.items():
+            setattr(client, "_" + key, value)
+        return client
+
+    def with_budget(self, budget: Any) -> DshModelClient:
+        client = copy.copy(self)
+        client._budget = budget
+        return client
+
+    def _checkpoint(self, *, final: bool = False) -> None:
+        if self._budget is None:
+            return
+        if self._worker_receipt is not None and self._worker_receipt.exists():
+            receipt = json.loads(self._worker_receipt.read_text())
+            from refactory_dsh.workers import account_usage
+            account_usage(self._budget, receipt, final=final)
+        self._budget.checkpoint()
 
     def with_cancellation(self, event: threading.Event) -> DshModelClient:
         """Bind an independent client copy to one caller-owned cancellation scope.
@@ -152,17 +223,34 @@ class DshModelClient:
         if any(event.is_set() for event in self._cancellations):
             raise CancelledError("model completion cancelled; not retried")
 
-    def context(self) -> dict[str, str]:
+    def context(self) -> dict[str, Any]:
         """Nonsecret settings safe to carry across the model subprocess boundary."""
         return {
             "dsh_home": str(self._dsh_home), "provider": self._provider, "model": self._model,
+            "timeout_s": self._timeout_s, "attempts": self._attempts, "backoff_s": self._backoff_s,
             "runtime_root": str(self._runtime_root), "dsh_cli": self._dsh_cli,
+            "python_bin": str(self._python_bin),
+            "worker_backend": self._worker_backend, "effort": self._effort,
+            "permission_mode": self._permission_mode,
+            "role_routes": copy.deepcopy(self._role_routes), "node_routes": copy.deepcopy(self._node_routes),
+            "budget_ledger": str(self._budget.path) if self._budget is not None else "",
         }
 
     def _environment(self) -> dict[str, str]:
         # Never resolve a credential here or copy it into the environment. The DSH
         # credentials service reads its managed store in the selected home.
-        return {**os.environ, "DSH_HOME": str(self._dsh_home)}
+        result = {**os.environ, "DSH_HOME": str(self._dsh_home),
+                  "REFACTORY_MODEL_DSH_HOME": str(self._dsh_home),
+                  "REFACTORY_MODEL_PROVIDER": self._provider, "REFACTORY_MODEL_ID": self._model,
+                  "REFACTORY_MODEL_EFFORT": self._effort, "REFACTORY_WORKER_BACKEND": self._worker_backend,
+                  "REFACTORY_RUNTIME_ROOT": str(self._runtime_root)}
+        if self._budget is not None:
+            result["REFACTORY_BUDGET_LEDGER"] = str(self._budget.path)
+        if self._worker_receipt is not None:
+            result["REFACTORY_WORKER_RECEIPT"] = str(self._worker_receipt)
+        from refactory_dsh.workers import environment
+        result.update(environment(self.context()))
+        return result
 
     def _readiness_unavailable(self, reason: str) -> dict[str, object]:
         return {
@@ -175,6 +263,14 @@ class DshModelClient:
 
     def readiness(self, *, workdir: Path, require_ready: bool = True) -> dict[str, object]:
         """Describe local configuration; report known failures only when require_ready is false."""
+        if self._worker_backend != "dsh":
+            from refactory_dsh.workers import PACKAGES, capabilities
+            available = (self._runtime_root / "node_modules" / PACKAGES[self._worker_backend] / "package.json").exists()
+            if not available and require_ready:
+                raise RuntimeError(f"optional {self._worker_backend} worker provider is not installed")
+            return {**self._readiness_unavailable("native-worker-authentication-unverified"),
+                    "worker_backend": self._worker_backend, "installed": available,
+                    "capabilities": capabilities(self._worker_backend)}
         # Inspect only the runtime this client will actually launch. A custom CLI
         # or source checkout need not use the repository's installed composition.
         if self._dsh_cli:
@@ -209,6 +305,37 @@ class DshModelClient:
         return result
 
     def complete(
+        self, prompt: str, *, system: str = "", workdir: Path | None = None
+    ) -> str:
+        from refactory_dsh import workers
+        scratch = Path(os.environ.get("REFACTORY_MODEL_SCRATCH", "/tmp")) / "refactory-model"
+        run_dir = Path(workdir).expanduser().resolve() if workdir is not None else scratch
+        run_dir.mkdir(parents=True, exist_ok=True)
+        client = copy.copy(self)
+        client._checkpoint()
+        if client._budget is not None:
+            client._budget.require_usage_capability(self._worker_backend == "dsh")
+        client._worker_receipt = workers.begin(run_dir, self.route(), node=self._node_id, role=self._role)
+        try:
+            result = client._complete(prompt, system=system, workdir=run_dir)
+            client._checkpoint(final=True)
+        except BaseException as error:
+            state = "failed"
+            if isinstance(error, (CancelledError, KeyboardInterrupt, SystemExit)):
+                state = "cancelled"
+            elif "timed out" in str(error):
+                state = "timed_out"
+            elif type(error).__name__ == "BudgetExhausted":
+                state = "budget_exhausted"
+            if client._budget is not None:
+                receipt = json.loads(client._worker_receipt.read_text())
+                workers.account_usage(client._budget, receipt, final=True)
+            workers.finish(client._worker_receipt, state, error=str(error))
+            raise
+        workers.finish(client._worker_receipt, "completed")
+        return result
+
+    def _complete(
         self, prompt: str, *, system: str = "", workdir: Path | None = None
     ) -> str:
         """Return the model's answer to ``prompt``.
@@ -246,10 +373,16 @@ class DshModelClient:
         # The headless profile takes these for one invocation only: nothing is
         # written back to settings, so one optimized run against another model cannot
         # change what the next one uses.
-        if self._provider:
-            cmd += ["--provider", self._provider]
-        if self._model:
-            cmd += ["--model", self._model]
+        if self._worker_receipt is not None:
+            from refactory_dsh.workers import write_patch
+            patch = self._worker_receipt.with_suffix(".patch.yml")
+            write_patch(patch, self._runtime_root, self.route())
+            cmd += ["--patch", str(patch)]
+        if self._worker_backend == "dsh":
+            if self._provider:
+                cmd += ["--provider", self._provider]
+            if self._model:
+                cmd += ["--model", self._model]
         cmd.append(task)
 
         scratch = Path(os.environ.get("REFACTORY_MODEL_SCRATCH", "/tmp")) / "refactory-model"
@@ -259,6 +392,7 @@ class DshModelClient:
         last = ""
         for attempt in range(1, self._attempts + 1):
             self._raise_if_cancelled()
+            self._checkpoint()
             try:
                 proc = self._run_completion(cmd, run_dir)
             except subprocess.TimeoutExpired as exc:
@@ -307,34 +441,36 @@ class DshModelClient:
         bypassing the DSH CLI's SIGTERM handler and stranding detached tool jobs.
         Do not signal process names, inferred descendants, or unrelated groups.
         """
-        self._raise_if_cancelled()
-        proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            cwd=str(run_dir), env=self._environment(),
-            # A terminal Ctrl-C reaches the Python caller only. Forward one
-            # shutdown request: DSH escalates a second signal to immediate exit.
-            start_new_session=os.name == "posix",
-        )
-        try:
-            deadline = time.monotonic() + self._timeout_s
-            while True:
-                self._raise_if_cancelled()
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise subprocess.TimeoutExpired(cmd, self._timeout_s)
-                try:
-                    stdout, stderr = proc.communicate(
-                        timeout=remaining if not self._cancellations else min(remaining, 0.1)
-                    )
-                    break
-                except subprocess.TimeoutExpired:
-                    # communicate retains its output across bounded waits. There
-                    # is no stdin input to resend, and the deadline never resets.
-                    if not self._cancellations:
-                        raise
-        except BaseException:
-            # Direct interruption or the fork's cooperative event both use the
-            # runtime-owned cleanup before propagating failure.
-            shutdown(proc)
-            raise
-        return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+        with _termination_as_exit():
+            self._raise_if_cancelled()
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                cwd=str(run_dir), env=self._environment(),
+                # A terminal Ctrl-C reaches the Python caller only. Forward one
+                # shutdown request: DSH escalates a second signal to immediate exit.
+                start_new_session=os.name == "posix",
+            )
+            try:
+                deadline = time.monotonic() + self._timeout_s
+                while True:
+                    self._raise_if_cancelled()
+                    self._checkpoint()
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(cmd, self._timeout_s)
+                    try:
+                        stdout, stderr = proc.communicate(
+                            timeout=min(remaining, 0.1)
+                        )
+                        break
+                    except subprocess.TimeoutExpired:
+                        # communicate retains its output across bounded waits. There
+                        # is no stdin input to resend, and the deadline never resets.
+                        if time.monotonic() >= deadline:
+                            raise
+            except BaseException:
+                # Direct interruption or the fork's cooperative event both use the
+                # runtime-owned cleanup before propagating failure.
+                shutdown(proc)
+                raise
+            return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)

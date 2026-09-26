@@ -65,6 +65,12 @@ class Run:
     # ── the cheap primitive ────────────────────────────────────────────────
     def attempt(self, proposal: Proposal, parent: Candidate) -> Candidate | list[str]:
         """Apply a typed edit and validate it. Spends no budget."""
+        from refactory_dsh.nn import edits
+        allowed = self.loop.config.allowed_ops or edits.enabled(self.loop.config.edit_preset)
+        if proposal.edit.get("op") not in allowed:
+            reason = ["E-policy: operation is outside this run's permitted edits"]
+            self.loop.rejections.append(Rejection(1, proposal.edit, reason, rationale=proposal.rationale))
+            return reason
         outcome = self.loop.optimizer.attempt(
             proposal,
             parent,

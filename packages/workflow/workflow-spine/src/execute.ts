@@ -8,6 +8,7 @@
  * @module @deepseek-ai/dsh-workflow-spine/execute
  */
 
+import { spawnSync } from 'node:child_process'
 import type { ShellExecRequest, ShellExecutor } from '@deepseek-ai/dsh-shell'
 import type { NodeView } from './spine.ts'
 
@@ -42,6 +43,21 @@ export interface CommandRunnerConfig {
    * model-authored candidate is confined by the op that scores it.
    */
   sandboxPolicy?: { mode: 'read-only' | 'workspace-write' | 'danger-full-access'; workspaceRoot: string }
+}
+
+/** Check the shared ledger before dispatch and after completion, including final validation. */
+function resourceCheck(node: NodeView, config: CommandRunnerConfig): number | undefined {
+  const ledger = config.env.REFACTORY_BUDGET_LEDGER ?? process.env.REFACTORY_BUDGET_LEDGER
+  if (ledger === undefined) return undefined
+  const phase = node.resource_role
+  const checked = spawnSync('python', ['-m', 'refactory_dsh.budgets', ledger, '--check', ...(phase === undefined ? [] : ['--phase', phase])], {
+    cwd: config.workdir, env: { ...process.env, ...config.env }, encoding: 'utf8', timeout: 10_000,
+  })
+  if (checked.status !== 0) throw new Error(`Resource boundary refused: ${checked.stdout || checked.stderr || checked.error?.message}`)
+  const state = JSON.parse(checked.stdout) as { elapsed_s: number; phase: string; limits: { max_elapsed_s: number | null; validation_reserve_s: number } }
+  if (state.limits.max_elapsed_s === null) return undefined
+  const reserve = state.phase === 'final_validation' ? 0 : state.limits.validation_reserve_s
+  return Math.max(1, Math.floor((state.limits.max_elapsed_s - reserve - state.elapsed_s) * 1000))
 }
 
 /** What one deterministic node produced, before the plugin judges it. */
@@ -172,8 +188,11 @@ export async function runDataCommand(
   index?: number,
 ): Promise<{ ok: true; value: Record<string, unknown> } | CommandFailure> {
   const command = dataCommandOf(node, verb, config, index)
-  const spec = shell.resolve(requestFor(node, command, config))
+  const allowance = resourceCheck(node, config)
+  const resolved = shell.resolve(requestFor(node, command, config))
+  const spec = allowance === undefined ? resolved : { ...resolved, timeoutMs: Math.min(resolved.timeoutMs, allowance) }
   const result = await shell.run(spec)
+  resourceCheck(node, config)
   const stdout = result.stdout.text.trim()
   const stderr = result.stderr.text.trim()
   const base: CommandResult = { command, exitCode: result.exitCode, stdout, stderr }
@@ -224,15 +243,16 @@ export async function runDeterministic(
     return { ...base, ok: false, error: `${node.id} has no command` }
   }
 
+  const allowance = resourceCheck(node, config)
   const request = requestFor(node, command, config)
   const resolved = shell.resolve(request)
   // The model-facing shell caps arbitrary calls at its default maximum. This
   // trusted workflow operation carries a bounded allowance resolved at lowering;
   // retain every resolved environment/sandbox setting while honoring that budget.
-  const spec = node.command_timeout_s === undefined
-    ? resolved
-    : { ...resolved, timeoutMs: node.command_timeout_s * 1000 }
+  const timeoutMs = node.command_timeout_s === undefined ? resolved.timeoutMs : node.command_timeout_s * 1000
+  const spec = { ...resolved, timeoutMs: allowance === undefined ? timeoutMs : Math.min(timeoutMs, allowance) }
   const result = await shell.run(spec)
+  resourceCheck(node, config)
   const stdout = result.stdout.text.trim()
   const stderr = result.stderr.text.trim()
   const outcome: CommandResult = { ...base, exitCode: result.exitCode, stdout, stderr }

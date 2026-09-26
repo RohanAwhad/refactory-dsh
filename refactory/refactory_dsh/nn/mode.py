@@ -233,7 +233,8 @@ class Mode:
 
     @classmethod
     def resume(
-        cls, workdir: Path, *, model: Any = None, max_steps: int = 2000
+        cls, workdir: Path, *, model: Any = None, max_steps: int = 2000,
+        resource_limits: Any = None,
     ) -> "RunResult":
         """Continue a run where it failed, from the record it left in its directory.
 
@@ -258,6 +259,17 @@ class Mode:
         except json.JSONDecodeError as exc:
             raise ValueError(f"{path} is not readable JSON: {exc}") from exc
         node = str(record.get("node") or "").strip()
+        if record.get("outcome") in ("running", "unknown"):
+            raise ValueError(
+                f"node {node!r} has an unknown side-effect outcome; inspect its artifacts "
+                "before an explicit restart; automatic replay refused"
+            )
+        branches = record.get("branches") or {}
+        if any(branch.get("status") not in ("queued", "not-started") for branch in branches.values()):
+            raise ValueError(
+                "partial fork recovery needs per-branch outcome review; automatic replay "
+                "would repeat completed or unknown side effects and is refused"
+            )
         if not node:
             raise ValueError(f"{path} names no node to resume at")
         if record.get("error"):
@@ -271,11 +283,39 @@ class Mode:
             if name in state.get("knobs", {}):
                 state["knobs"][name]["value"] = value
         mode.load_state_dict(state)
-        return execute(
-            mode.graph(), Path(workdir), knobs=mode.values(), model=model,
-            facts=dict(record.get("facts") or {}), task=dict(record.get("task") or {}),
-            start=node, max_steps=max_steps,
-        )
+        from refactory_dsh.steering import for_run
+
+        graph = for_run(mode.graph(), Path(workdir))
+        if record.get("graph") is not None and record["graph"] != graph.to_state():
+            raise ValueError("graph or instructions changed; dependent results are invalid; start a new run")
+        source_manifest = Path(workdir) / "source-manifest.json"
+        if source_manifest.exists():
+            source = json.loads(source_manifest.read_text())
+            if source.get("source_project"):
+                from refactory_dsh.fast_ops import _source_manifest
+
+                if _source_manifest(Path(source["source_project"])) != source.get("files"):
+                    raise ValueError("source project changed; dependent results are invalid; start a new run")
+        from refactory_dsh.budgets import LEDGER, ResourceLimits, RunBudget
+
+        budget = RunBudget.inherited(model)
+        owns_budget = budget is None and (Path(workdir) / LEDGER).exists()
+        if owns_budget:
+            budget = RunBudget.from_path(Path(workdir) / LEDGER)
+            limits = resource_limits if isinstance(resource_limits, ResourceLimits) else ResourceLimits.from_dict(resource_limits) if resource_limits is not None else None
+            budget.resume(limits)
+            if callable(getattr(model, "with_budget", None)):
+                model = model.with_budget(budget)
+            resource_limits = budget.limits
+        try:
+            return execute(
+                mode.graph(), Path(workdir), knobs=mode.values(), model=model,
+                facts=dict(record.get("facts") or {}), task=dict(record.get("task") or {}),
+                start=node, max_steps=max_steps, resource_limits=resource_limits,
+            )
+        finally:
+            if owns_budget and budget is not None:
+                budget.pause()
 
     def evaluate(
         self,

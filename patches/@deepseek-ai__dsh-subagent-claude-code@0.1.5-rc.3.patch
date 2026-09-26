@@ -1,0 +1,53 @@
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -231,15 +231,30 @@
+ * @param onResult - records that the SDK supplied a terminal result message.
+ * @returns the completed shared result.
+ */
+-async function consumeClaudeQuery(query, onPermissionDenied, onResult) {
++async function consumeClaudeQuery(query, onPermissionDenied, onResult, onRefactoryMetadata) {
+ 	let answer;
+ 	for await (const message of query) {
++		if (message.type === "system" && message.subtype === "init") {
++			onRefactoryMetadata?.({ actual_route: { worker_backend: "claude_code", provider: null,
++				model: typeof message.model === "string" ? message.model : null, effort: null, source: "native-sdk-init" },
++				product_session_id: typeof message.session_id === "string" ? message.session_id : null, resumable: false });
++		}
++
+ 		if (message.type === "system" && message.subtype === "permission_denied") {
+ 			onPermissionDenied?.();
+ 			continue;
+ 		}
+ 		if (message.type !== "result") continue;
+ 		onResult?.();
++		if (message.modelUsage && typeof message.modelUsage === "object") {
++			const models = Object.entries(message.modelUsage);
++			const counts = models.map(([, usage]) => [usage.inputTokens, usage.outputTokens, usage.cacheReadInputTokens, usage.cacheCreationInputTokens]);
++			if (models.length && counts.flat().every(value => Number.isSafeInteger(value) && value >= 0)) {
++				onRefactoryMetadata?.({ observed_models: models.map(([model]) => model), usage: { status: "estimated",
++					tokens: counts.flat().reduce((sum, value) => sum + value, 0), scope: "sdk-query-pipeline",
++					includes_nested_workers: true, excludes: "permission classifier, token-count probes and other helpers outside the SDK query pipeline" } });
++			}
++		}
+ 		answer = successfulResult(message);
+ 	}
+ 	if (answer === void 0) throw new ClaudeCodeFailure({
+@@ -434,7 +449,7 @@
+ 					capturePermissionDiagnostic(unattendedDiagnostic(spec.permissionMode, "tool permission", "denied", "Claude Code denied the request before an interactive prompt"));
+ 				}, () => {
+ 					receivedResult = true;
+-				}), publishedProcessFailure]);
++				}, spec.onRefactoryMetadata), publishedProcessFailure]);
+ 			} catch (error) {
+ 				const processOutcome = managedProcess?.outcome;
+ 				let facts;
+@@ -529,6 +544,9 @@
+ 			env: this.config.env,
+ 			disposeGraceMs: this.config.disposeGraceMs,
+ 			spawn: (spawnSpec) => this.ctx.subprocess.spawn(spawnSpec),
++			onRefactoryMetadata: (metadata) => {
++				try { this.ctx.emit("refactory/worker-metadata", request.parent.session.id, metadata); } catch {}
++			},
+ 			onError: (error, stopReason) => {
+ 				this.ctx.logger.warn(`subagent-claude-code "${this.name}": child run failed (${stopReason}): %o`, error);
+ 			}
