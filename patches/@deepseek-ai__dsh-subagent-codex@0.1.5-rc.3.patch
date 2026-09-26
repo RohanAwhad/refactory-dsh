@@ -1,0 +1,82 @@
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -137,6 +137,8 @@
+ 	input;
+ 	permissionMode;
+ 	model;
++	onRefactoryMetadata;
++	refactoryRoute;
+ 	transport;
+ 	fatal = Promise.withResolvers();
+ 	threadId;
+@@ -154,7 +156,8 @@
+ 	inputEnded = false;
+ 	terminalObserved = false;
+ 	closed = false;
+-	constructor(input, output, permissionMode, model) {
++	constructor(input, output, permissionMode, model, onRefactoryMetadata) {
++		this.onRefactoryMetadata = onRefactoryMetadata;
+ 		this.input = input;
+ 		this.permissionMode = permissionMode;
+ 		this.model = model;
+@@ -208,15 +211,20 @@
+ 	* @param signal - unpublished-start cancellation.
+ 	*/
+ 	async startThread(cwd, signal) {
+-		const thread = object(object(await this.guarded(this.transport.request("thread/start", {
++		const response = object(await this.guarded(this.transport.request("thread/start", {
+ 			cwd,
+ 			ephemeral: true,
+ 			...this.model === void 0 ? {} : { model: this.model },
+ 			...THREAD_PERMISSION_PARAMS[this.permissionMode]
+-		}, signal), signal), "thread/start response").thread, "thread/start thread");
++		}, signal), signal), "thread/start response");
++		const thread = object(response.thread, "thread/start thread");
+ 		const id = string(thread.id, "thread/start thread id");
+ 		if (thread.ephemeral !== true) throw new Error("subagent-codex: app-server did not create an ephemeral thread");
+ 		this.threadId = id;
++		this.refactoryRoute = { worker_backend: "codex", model: typeof response.model === "string" ? response.model : null,
++			provider: typeof response.modelProvider === "string" ? response.modelProvider : null,
++			effort: typeof response.reasoningEffort === "string" ? response.reasoningEffort : null, source: "native-thread-start" };
++		this.onRefactoryMetadata?.({ actual_route: this.refactoryRoute, product_session_id: id, resumable: false });
+ 	}
+ 	/**
+ 	* Submit the one text-only task and wait for this thread/turn's authoritative
+@@ -456,6 +464,18 @@
+ 		}
+ 	}
+ 	handleNotification(method, params, order) {
++		if (params.threadId === this.threadId && method === "thread/tokenUsage/updated") {
++			const tokens = params.tokenUsage?.total?.totalTokens;
++			if (Number.isSafeInteger(tokens) && tokens >= 0) this.onRefactoryMetadata?.({ usage: {
++				status: "measured", tokens, scope: "native-thread", includes_nested_workers: false } });
++			return;
++		}
++		if (params.threadId === this.threadId && method === "model/rerouted" && typeof params.toModel === "string") {
++			this.refactoryRoute = { ...this.refactoryRoute, model: params.toModel, source: "native-model-rerouted" };
++			this.onRefactoryMetadata?.({ actual_route: this.refactoryRoute });
++			return;
++		}
++
+ 		if (method === "turn/started") {
+ 			if (string(params.threadId, "turn/started thread id") !== this.threadId) return;
+ 			const turn = object(params.turn, "turn/started turn");
+@@ -656,7 +676,7 @@
+ 			category: "unknown"
+ 		}, thrown(error));
+ 	}
+-	const wire = new CodexAppServerWire(child.stdout, child.stdin, spec.permissionMode, spec.model);
++	const wire = new CodexAppServerWire(child.stdout, child.stdin, spec.permissionMode, spec.model, spec.onRefactoryMetadata);
+ 	const onStderr = (chunk) => {
+ 		const bytes = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+ 		try {
+@@ -844,6 +864,9 @@
+ 			env: this.config.env,
+ 			disposeGraceMs: this.config.disposeGraceMs,
+ 			spawn: (spawnSpec) => this.ctx.subprocess.spawn(spawnSpec),
++			onRefactoryMetadata: (metadata) => {
++				try { this.ctx.emit("refactory/worker-metadata", request.parent.session.id, metadata); } catch {}
++			},
+ 			onError: (error, stopReason) => {
+ 				this.ctx.logger.warn(`subagent-codex "${this.name}": child run failed (${stopReason}): ${error.message}`);
+ 			}

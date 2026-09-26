@@ -17,7 +17,7 @@ from refactory_dsh import nn, registry
 from refactory_dsh.loop import Loop, LoopConfig
 
 PACKAGE = "default_pack"
-MODES = ("create", "edit", "design")
+MODES = ("create", "edit", "design", "create_fast", "edit_fast", "design_fast")
 
 
 def _mode(identifier: str):

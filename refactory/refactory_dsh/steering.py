@@ -525,6 +525,10 @@ def main() -> int:
         if request["action"] == "begin":
             review = ledger.visit(gate, request["reads"])
             result = {"review": review, "verdict": ledger.take_verdict(gate, review, labels)}
+        elif request["action"] == "poll":
+            if review != request["review"]:
+                raise SteeringError(f"gate {gate!r} inputs changed while awaiting the answer")
+            result = {"review": review, "verdict": ledger.take_verdict(gate, review, labels)}
         elif request["action"] == "answer":
             if review != request["review"]:
                 raise SteeringError(f"gate {gate!r} review inputs changed while awaiting the answer; ask again")

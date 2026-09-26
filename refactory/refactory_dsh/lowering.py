@@ -84,6 +84,7 @@ def node_declarations(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "reads": sorted(node.reads),
             "writes": sorted(node.writes),
             "produces": sorted(node.produces),
+            "resource_role": "final_validation" if node.role == "validation" else "work",
         }
         if node.kind == "data":
             entry["data"] = {
@@ -164,10 +165,11 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
             "reads": set(node.reads),
             "writes": set(node.writes),
             "blocking": node.blocking,
+            "resource_role": "final_validation" if node.role == "validation" else "work",
         }
         if node.kind == "op":
             command_timeout_s = None
-            if node.call == "refactory_dsh.create_ops:smoke":
+            if node.call in ("refactory_dsh.create_ops:smoke", "refactory_dsh.fast_ops:smoke"):
                 # Resolve from the final state, after command-line/GUI knobs.
                 # The operation owns up to three bounded passes plus sandbox
                 # discovery/launch overhead; the enclosing shell must outlast it.

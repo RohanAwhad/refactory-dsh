@@ -230,9 +230,10 @@ def command_end(node: Node, workdir: Path, index: int) -> dict[str, Any]:
 def command_reset(workdir: Path, request: dict[str, Any]) -> dict[str, Any]:
     """Archive prior facts, then invalidate the facts of explicitly redone work.
 
-    A full dataset restart also archives affected node-owned outputs, excluding
-    the restart node's declared inputs. A current-item correction keeps artifacts
-    for its next attempt. Pending agent snapshots are retired in either case.
+    A full dataset restart or explicit graph-control reset archives affected
+    node-owned outputs, excluding the restart node's declared inputs. Legacy
+    current-item corrections keep artifacts unless archiveArtifacts is requested.
+    Pending agent snapshots are retired in either case.
     """
     import uuid
     from refactory_dsh.agent_delivery import invalidate
@@ -263,7 +264,7 @@ def command_reset(workdir: Path, request: dict[str, Any]) -> dict[str, Any]:
     # and archive by rename so the prior bytes stay inspectable without copies.
     targets: list[Path] = []
     retained: list[str] = []
-    if request.get('restartData'):
+    if request.get('restartData') or request.get('archiveArtifacts') is True:
         reads = [Path(name) for name in declarations.get(request.get('start'), {}).get('reads', [])]
         writes = {name for node in nodes for name in declarations.get(node, {}).get('writes', [])}
         from refactory_dsh.run_artifacts import owned_outputs

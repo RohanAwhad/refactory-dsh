@@ -19,6 +19,7 @@ needed to score a run that DSH executed.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -60,6 +61,7 @@ def run_on_dsh(
     timeout_s: int = DEFAULT_TIMEOUT_S,
     repo_root: Path | None = None,
     on_output: Callable[[str], None] | None = None,
+    model: Any = None,
 ) -> DshRun:
     """Lower ``state``, run it on DSH, and read back the facts it produced.
 
@@ -89,20 +91,24 @@ def run_on_dsh(
     # The steering layer, on the runtime that ships. A run a person steered has a
     # ledger in its work directory; folding it in here is what makes the CEO's agent
     # nodes carry what was said, and what a resumed run replays.
-    from refactory_dsh import steering
+    from refactory_dsh import steering, workers
+    context = model.context() if callable(getattr(model, "context", None)) else None
+    budget = getattr(model, "_budget", None)
+    if budget is not None:
+        budget.checkpoint()
 
     lowering.write_mode_graph(
         state,
         graphs,
         name=name,
-        transform=lambda workflow: steering.for_run(workflow, workdir),
+        transform=lambda workflow: workers.lower_workflow(steering.for_run(workflow, workdir), workdir, context, lowering.node_declarations(state)),
     )
     # The IR cannot carry the facts a node produces, so they travel in the run
     # directory and the runner reads them from there.
     lowering.write_declarations(state, workdir)
 
     command = [
-        *dsh_command(),
+        *dsh_command(root=Path(context["runtime_root"]) if context else None, cli=context.get("dsh_cli") if context else None),
         "--profile", "graph", "run",
         "--mode", name,
         "--task", TASK,
@@ -115,67 +121,81 @@ def run_on_dsh(
         # and every node falls back to its op's default.
         "--knobs", lowering.knob_environment(state)[lowering.KNOBS_ENV],
     ]
+    env = dict(os.environ)
+    env.update(workers.environment(context))
+    telemetry = workers.GraphTelemetry(workdir, context, budget) if context else None
+    if telemetry is not None:
+        command = telemetry.command(command)
+        env.update(telemetry.environment())
+    if context:
+        env["DSH_HOME"] = str(context["dsh_home"])
+        if context.get("budget_ledger"):
+            env["REFACTORY_BUDGET_LEDGER"] = str(context["budget_ledger"])
+        if context.get("worker_backend", "dsh") == "dsh":
+            if context.get("provider"):
+                command += ["--provider", context["provider"]]
+            if context.get("model"):
+                command += ["--model", context["model"]]
     started = time.time()
-    if on_output is None:
-        try:
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                cwd=str(repo_root or REPO_ROOT),
-                timeout=timeout_s,
-            )
-        except subprocess.TimeoutExpired:
-            return DshRun(
-                facts={},
-                workdir=workdir,
-                returncode=-1,
-                stderr=f"dsh timed out after {timeout_s}s",
-                duration_s=time.time() - started,
-            )
-        stdout, stderr, returncode = result.stdout, result.stderr, result.returncode
-    else:
-        # A watcher asked to see the child while it runs. Capturing and streaming are
-        # not alternatives here: the parse below needs the whole stdout, so the lines
-        # are collected and handed on as they arrive.
-        process = subprocess.Popen(
-            command,
-            cwd=str(repo_root or REPO_ROOT),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-        )
+    from refactory_dsh.owned_process import shutdown, _termination_as_exit
+    with _termination_as_exit():
+        process = subprocess.Popen(command, cwd=str(repo_root or REPO_ROOT), env=env,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   text=True, start_new_session=os.name == "posix")
         out_lines: list[str] = []
         err_lines: list[str] = []
 
         def _pump(stream: Any, sink: list[str]) -> None:
             for line in stream:
                 sink.append(line)
-                on_output(line)
+                if on_output is not None:
+                    on_output(line)
 
-        readers = [
-            Thread(target=_pump, args=(process.stdout, out_lines), daemon=True),
-            Thread(target=_pump, args=(process.stderr, err_lines), daemon=True),
-        ]
+        readers = [Thread(target=_pump, args=(process.stdout, out_lines), daemon=True),
+                   Thread(target=_pump, args=(process.stderr, err_lines), daemon=True)]
         for reader in readers:
             reader.start()
         try:
-            returncode = process.wait(timeout=timeout_s)
-        except subprocess.TimeoutExpired:
-            process.kill()
+            deadline = time.monotonic() + timeout_s
+            while True:
+                if telemetry is not None:
+                    telemetry.checkpoint()
+                if budget is not None:
+                    budget.checkpoint()
+                if callable(getattr(model, "_raise_if_cancelled", None)):
+                    model._raise_if_cancelled()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, timeout_s)
+                try:
+                    returncode = process.wait(timeout=min(remaining, 0.1))
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+        except BaseException as error:
+            shutdown(process)
             for reader in readers:
                 reader.join(timeout=5)
-            return DshRun(
-                facts={},
-                workdir=workdir,
-                returncode=-1,
-                stderr=f"dsh timed out after {timeout_s}s",
-                duration_s=time.time() - started,
-            )
+            if telemetry is not None:
+                telemetry.finish("timed_out" if isinstance(error, subprocess.TimeoutExpired) else (
+                    "budget_exhausted" if type(error).__name__ == "BudgetExhausted" else "cancelled"), str(error))
+            if isinstance(error, subprocess.TimeoutExpired):
+                return DshRun(facts={}, workdir=workdir, returncode=-1,
+                              stderr=f"dsh timed out after {timeout_s}s; owned runtime shutdown requested",
+                              duration_s=time.time() - started)
+            raise
         for reader in readers:
             reader.join()
         stdout, stderr = "".join(out_lines), "".join(err_lines)
+        try:
+            if telemetry is not None:
+                telemetry.checkpoint(final=True)
+        except BaseException as error:
+            if telemetry is not None:
+                telemetry.finish("budget_exhausted", str(error))
+            raise
+        if telemetry is not None:
+            telemetry.finish("completed" if returncode == 0 else "failed")
 
     payload = _last_json_object(stdout)
     facts_path = workdir / FACTS
@@ -218,6 +238,7 @@ def _last_json_object(text: str) -> dict[str, Any]:
 def evaluate_on_dsh(
     mode: Any, state: dict[str, Any], workdir: Path, *, timeout_s: int = DEFAULT_TIMEOUT_S,
     on_output: Callable[[str], None] | None = None,
+    model: Any = None,
 ) -> RunResult:
     """One forward pass on DSH, scored by the mode's own `score()`.
 
@@ -227,7 +248,8 @@ def evaluate_on_dsh(
     merely scored badly.
     """
     name = f"{type(mode).__module__.split('.')[-2]}-{mode.name}"
-    run = run_on_dsh(state, workdir, name=name, timeout_s=timeout_s, on_output=on_output)
+    run = run_on_dsh(state, workdir, name=name, timeout_s=timeout_s, on_output=on_output,
+                     **({"model": model} if model is not None else {}))
     if run.returncode != 0 or not run.facts:
         detail = run.stderr.strip().splitlines()[-1] if run.stderr.strip() else "no output"
         return RunResult(

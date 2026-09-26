@@ -387,3 +387,41 @@ def test_a_run_can_point_one_node_somewhere_and_the_rest_nowhere_specific(tmp_pa
     assert items.source_override(workdir, "items")["source_path"] == "/specific"
     assert items.source_override(workdir, "other")["source_path"] == "/general"
     assert items.source_override(tmp_path / "elsewhere", "items") == {}
+
+
+@pytest.mark.parametrize('archive_artifacts', [False, True])
+def test_non_data_reset_archives_only_owned_outputs_when_requested(tmp_path, archive_artifacts):
+    graph = nn.Graph()
+    graph.add(nn.Node('check', 'op', call='loop_ops:write_number',
+                      reads=('input.txt', 'shared.txt'), writes=('checked.json', 'shared.txt'),
+                      produces=('checked',)))
+    graph.add(nn.Node('finish', 'op', call='loop_ops:write_number',
+                      writes=('finished.txt',), produces=('finished',)))
+    graph.connect('check', 'finish')
+    lowering.write_declarations({'graph': graph.to_state()}, tmp_path)
+    original = {'checked.json': '{"old": true}', 'finished.txt': 'old result',
+                'input.txt': 'declared input', 'shared.txt': 'read before rewrite',
+                'unrelated.txt': 'unowned input'}
+    for name, contents in original.items():
+        (tmp_path / name).write_text(contents)
+    prior_facts = {'checked': True, 'finished': 'old', 'unrelated': 'keep'}
+    (tmp_path / 'facts.json').write_text(json.dumps(prior_facts))
+    request = {'requested': 'check', 'start': 'check', 'nodes': ['check', 'finish'], 'restartData': []}
+    if archive_artifacts:
+        request['archiveArtifacts'] = True
+    receipt = items.command_reset(tmp_path, request)
+    assert receipt['cleared_facts'] == ['checked', 'finished']
+    assert json.loads((tmp_path / 'facts.json').read_text()) == {'unrelated': 'keep'}
+    archive = tmp_path / receipt['archive']
+    assert json.loads((archive / 'facts.json').read_text()) == prior_facts
+    if archive_artifacts:
+        assert receipt['archived_artifacts'] == ['checked.json', 'finished.txt']
+        assert receipt['retained_inputs'] == ['shared.txt']
+        for name in ('checked.json', 'finished.txt'):
+            assert not (tmp_path / name).exists()
+            assert (archive / 'artifacts' / name).read_text() == original[name]
+    else:
+        assert receipt['archived_artifacts'] == []
+        assert all((tmp_path / name).read_text() == contents for name, contents in original.items())
+    for name in ('input.txt', 'shared.txt', 'unrelated.txt'):
+        assert (tmp_path / name).read_text() == original[name]

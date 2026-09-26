@@ -145,6 +145,8 @@ export function startInvocation(request: StartRequest): ConsoleInvocation {
 
 /** What one `run` call carries: a mode used once, and the knobs it uses. */
 export interface SingleRunRequest {
+  /** Explicit worker route and shared resource limits. */
+  readonly settings?: Readonly<Record<string, string | number>> | undefined
   /** Host-selected directory for this invocation; absent keeps the CLI default. */
   readonly workdir?: string | undefined
   /** Mode to run, as `<package>/<name>`. */
@@ -163,10 +165,13 @@ export interface SingleRunRequest {
  * @returns the verb, positionals, and options for one console call.
  */
 export function runInvocation(request: SingleRunRequest): ConsoleInvocation {
+  const routeKeys = ['worker_backend', 'provider', 'model', 'effort', 'permission_mode', 'role_routes', 'node_routes',
+    'max_elapsed_s', 'max_tokens', 'validation_reserve_s', 'validation_reserve_tokens']
+  const settings = Object.fromEntries(Object.entries(request.settings ?? {}).filter(([key]) => routeKeys.includes(key)))
   return {
     verb: 'run',
     positional: [request.mode],
-    options: { knob: request.knobs, workdir: request.workdir },
+    options: { ...settings, knob: request.knobs, workdir: request.workdir },
   }
 }
 

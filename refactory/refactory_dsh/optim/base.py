@@ -138,6 +138,7 @@ class Candidate:
     error: str | None = None
     duration_s: float = 0.0
     evaluated: bool = False
+    measurements: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_state(
@@ -166,6 +167,7 @@ class Candidate:
             "exit_ok": self.exit_ok,
             "error": self.error,
             "duration_s": self.duration_s,
+            "measurements": self.measurements,
         }
 
 
@@ -398,6 +400,9 @@ class Optimizer:
 
     name: str = "optimizer"
 
+    def bind_model(self, model: Any, *, workdir: Any = None) -> None:
+        """Model-using optimizers override this to inherit the run's resources."""
+
     def __init__(self, *, k: int = 3) -> None:
         #: How many times the loop may ask again after a refusal.
         self.k = max(1, int(k))
@@ -472,6 +477,11 @@ class Optimizer:
                 self.proposal_rounds += 1
                 proposals = self.propose(round_ctx, n - len(accepted), parents) or []
             except Exception as exc:  # a failed optimizer round is not a crash
+                from refactory_dsh.budgets import BudgetExhausted
+
+                if isinstance(exc, BudgetExhausted):
+                    self.proposal_failures.append(f"{type(exc).__name__}: {exc}")
+                    raise
                 detail = f"{type(exc).__name__}: {exc}"
                 self.proposal_failures.append(detail)
                 feedback = [f"{self.name} could not propose: {detail}"]
@@ -549,6 +559,12 @@ class Optimizer:
             return [f"{exc.code}: {exc}"]
         except Exception as exc:  # an operator bug is reported, not swallowed
             return [f"E-internal: {type(exc).__name__}: {exc}"]
+
+        fixed = frozen | {name for name, value in parent.state.get("knobs", {}).items()
+                          if (value.get("spec") or {}).get("frozen")}
+        for name in fixed:
+            if state.get("knobs", {}).get(name) != parent.state.get("knobs", {}).get(name):
+                return [f"E-frozen: knob {name!r} must retain its value and declaration"]
 
         if candidate_id(state) == parent.id:
             # The edit is legal and changes nothing: setting a knob to the value it

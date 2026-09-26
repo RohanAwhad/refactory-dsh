@@ -431,6 +431,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", required=True,
                         help="the command that decides whether it works")
     parser.add_argument("--attempts", type=int, default=2)
+    parser.add_argument("--fast", action="store_true", help="use the inspectable design_fast graph with focused QA")
+    parser.add_argument("--repair-attempts", type=int, default=1, help="fast graph repair limit (0..3)")
+    parser.add_argument("--source-project", default="", help="fast design: copy this existing project before applying the feature")
+    from refactory_dsh.budgets import add_arguments, arguments
+
+    add_arguments(parser)
     # Per artifact name, for the same reason a creation is: one fixed directory
     # means runs overwrite each other's state.
     parser.add_argument("--workdir", default="")
@@ -458,7 +464,11 @@ def main(argv: list[str] | None = None) -> int:
             timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
         )
         try:
-            run = DesignMode.resume(Path(args.resume), model=client)
+            from refactory_dsh.fast import DesignFastMode
+
+            run = (DesignFastMode if args.fast else DesignMode).resume(
+                Path(args.resume), model=client, resource_limits=arguments(args),
+            )
         except Exception as exc:
             print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), file=sys.stderr)
             return 2
@@ -469,9 +479,11 @@ def main(argv: list[str] | None = None) -> int:
         }, indent=2, default=str))
         return 0 if run.exit_ok else 2
 
-    mode = DesignMode()
+    from refactory_dsh.fast import DesignFastMode
+
+    mode = DesignFastMode() if args.fast else DesignMode()
     state = mode.state_dict()
-    state["knobs"]["check_attempts"]["value"] = int(args.attempts)
+    state["knobs"]["repair_attempts" if args.fast else "check_attempts"]["value"] = int(args.repair_attempts if args.fast else args.attempts)
     mode.load_state_dict(state)
     from refactory_dsh.create import parse_verdicts
 
@@ -480,8 +492,9 @@ def main(argv: list[str] | None = None) -> int:
         model=DshModelClient(
             timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
         ),
-        task={"name": args.name, "brief": args.brief, "check": args.check},
+        task={"name": args.name, "brief": args.brief, "check": args.check, "source_project": args.source_project},
         verdicts=parse_verdicts(args.verdict),
+        resource_limits=arguments(args),
     )
     if not result.exit_ok:
         print(json.dumps({"error": result.error}), file=sys.stderr)

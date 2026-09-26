@@ -7,7 +7,8 @@
  * everything else, one node at a time, so the item loop is split across three
  * loader commands that the composition configures.
  */
-import { mkdtempSync, rmSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -96,8 +97,8 @@ describe("a data node's pass machine", () => {
     spine.startPass('data', 1)
     spine.complete('work')
     const afterExit = spine.complete('end')
-    expect(afterExit.status).toBe('done')
-    expect(afterExit.nodes).toBeUndefined()
+    expect(afterExit.status).toBe('ready')
+    expect(afterExit.nodes).toEqual([])
     expect(spine.endPass().nodes?.[0]).toMatchObject({ id: 'after' })
   })
 
@@ -163,7 +164,7 @@ describe('the graph rules the pass machine relies on', () => {
 })
 
 /** A shell that answers each loader verb with the JSON a real loader prints. */
-function loaderShell(items: Array<Record<string, unknown>>, log: string[]): object {
+function loaderShell(items: Array<Record<string, unknown>>, log: string[]) {
   return {
     resolve: (request: { command: string; workdir?: string; env?: Record<string, string> }) => ({
       command: request.command,
@@ -231,6 +232,70 @@ async function call(ctx: Context, name: string, args: unknown = {}): Promise<unk
 }
 
 describe('driving the loader commands around each pass', () => {
+  it('persists an executing marker before every loader and node command', async () => {
+    const workdir = scratch()
+    const log: string[] = []
+    const shell = loaderShell([{ id: 'a' }], log)
+    const run = shell.run
+    shell.run = async (spec) => {
+      const saved = JSON.parse(readFileSync(join(workdir, '.refactory/spine-checkpoint.json'), 'utf8'))
+      expect(saved.status).toBe('executing')
+      return run(spec)
+    }
+    const root = await mount(shell, { workdir })
+    await call(root, 'wf_next')
+    await call(root, 'wf_done', { node: 'end' })
+    await call(root, 'wf_next')
+    expect(log.some(command => command.includes(' list '))).toBe(true)
+    expect(log.some(command => command.includes(' begin '))).toBe(true)
+    expect(log.some(command => command.includes(' end '))).toBe(true)
+  })
+
+  it('restores a known item setup without invoking begin a second time', async () => {
+    const workdir = scratch()
+    const root = await mount(loaderShell([{ id: 'a' }], []), { workdir })
+    await call(root, 'wf_next')
+    const path = join(workdir, '.refactory/spine-checkpoint.json')
+    const saved = readFileSync(path)
+    expect(JSON.parse(saved.toString()).materialised).toEqual({ key: 'data:0', item: { id: 'a' } })
+    writeFileSync(join(workdir, '.refactory/resume-request.json'), JSON.stringify({
+      checkpoint_sha256: createHash('sha256').update(saved).digest('hex'),
+    }))
+    const commands: string[] = []
+    const restored = await mount(loaderShell([{ id: 'a' }], commands), { workdir })
+    expect(await call(restored, 'wf_next')).toMatchObject({ nodes: [{ id: 'end' }], item: { id: 'a' } })
+    expect(commands).toEqual([])
+  })
+
+  it('pauses a finished item before its grading command and resumes without repeating setup', async () => {
+    const workdir = scratch()
+    const graph = dataGraph()
+    graph.nodes.data = { ...graph.nodes.data!, subgraph_exit: 'work' } as WorkflowNode
+    delete graph.nodes.end
+    graph.edges = [{ source: 'data', target: 'after' }]
+    const commands: string[] = []
+    const shell = loaderShell([{ id: 'a' }], commands)
+    const original = shell.run
+    let paused = false
+    const queue = (action: string): void => {
+      const directory = join(workdir, '.refactory/graph-controls')
+      mkdirSync(directory, { recursive: true })
+      writeFileSync(join(directory, '1.json'), JSON.stringify({ action, run_id: workdir, invocation: null }))
+    }
+    shell.run = async (spec) => {
+      const result = await original(spec)
+      if (spec.command === 'true' && !paused) { paused = true; queue('pause') }
+      return result
+    }
+    const root = await mount(shell, { workdir, graph })
+    expect(await call(root, 'wf_next')).toMatchObject({ status: 'paused' })
+    expect(commands.some(command => command.includes(' end '))).toBe(false)
+    queue('resume')
+    expect(await call(root, 'wf_next')).toMatchObject({ status: 'done' })
+    expect(commands.filter(command => command.includes(' begin '))).toHaveLength(1)
+    expect(commands.filter(command => command.includes(' end '))).toHaveLength(1)
+  })
+
   it('selects the items, opens a pass, and hands the subgraph over', async () => {
     const log: string[] = []
     const root = await mount(loaderShell([{ id: 'a' }, { id: 'b' }], log))

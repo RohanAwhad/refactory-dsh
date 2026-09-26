@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from refactory_dsh import observe
-from refactory_dsh import registry
+from refactory_dsh import registry, profiles
 from refactory_dsh.adopt import AdoptionError
 from refactory_dsh.control import search_finished, search_owner, search_phase
 from refactory_dsh.history import find_runs
@@ -188,19 +188,26 @@ def start(
     root = runs_root / run_id
     if root.exists():
         raise ConsoleError(f"{root} already exists; pick another run id")
+    profile_name = str(config.pop("profile", "") or "")
+    profile_version = config.pop("profile_version", None)
+    config = {**(config.pop("settings_json", None) or {}), **config}
+    snapshot = profiles.resolve(project, mode, name=profile_name, version=profile_version, overrides=config)
     root.mkdir(parents=True, exist_ok=True)
+    snapshot_path = root / profiles.SNAPSHOT
+    snapshot_path.write_text(json.dumps(snapshot, indent=2))
 
     console = {
         "run_id": run_id,
         "mode": mode,
         "root": str(root),
         "started": round(time.time(), 3),
-        "config": {key: str(value) for key, value in sorted(config.items())},
+        "config": snapshot["settings"],
+        "resolved_profile": snapshot,
         "log": f"{run_id}.log",
     }
     (root / CONSOLE_FILE).write_text(json.dumps(console, indent=2))
 
-    process = _spawn(mode, root, config, project=project)
+    process = _spawn(mode, root, {"resolved_config": str(snapshot_path)}, project=project)
     console["pid"] = process.pid
     (root / CONSOLE_FILE).write_text(json.dumps(console, indent=2))
     return console
@@ -290,6 +297,8 @@ def _open_mode(
     workdir: Path | str | None = None,
     knobs: list[str] | None = None,
     intent: str = "",
+    model_context: dict[str, Any] | None = None,
+    resource_limits: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Lower a mode for a caller that will drive its graph one node at a time.
 
@@ -333,8 +342,17 @@ def _open_mode(
 
     root = Path(workdir).expanduser().resolve()
     try:
-        name, graphs = interactive.prepare(mode, workdir=root, project=project, knobs=knobs, intent=intent)
+        name, graphs = interactive.prepare(mode, workdir=root, project=project, knobs=knobs, intent=intent,
+                                           **({"model_context": model_context} if model_context else {}),
+                                           **({"resource_limits": resource_limits} if resource_limits else {}))
         command_env = _node_environment(mode, project=project, workdir=root, knobs=knobs)
+        if model_context or resource_limits:
+            from refactory_dsh import workers
+            context = dict(model_context or {})
+            if resource_limits:
+                from refactory_dsh.budgets import RunBudget
+                context["budget_ledger"] = str(RunBudget.open(root).path)
+            command_env.update(workers.environment(context))
     except ValueError as error:
         # A malformed identifier is the caller's to fix, so it is a refusal with
         # the reason rather than a traceback.
@@ -363,7 +381,7 @@ SPINE_STATUS = Path(".refactory") / "spine-status.json"
 #: The spine's states, in the words a reader of `status` already has.
 SPINE_STATES = {
     "done": "finished", "ready": "running", "failed": "failed", "refused": "failed",
-    "halted": "halted", "paused": "paused",
+    "halted": "halted", "paused": "paused", "executing": "running", "waiting_user": "waiting_user",
 }
 
 
@@ -445,6 +463,18 @@ def status(run_root: Path, *, after: int = 0) -> dict[str, Any]:
         state = SPINE_STATES.get(str(spine.get("status")), state)
         if finished and not halted:
             state = "finished"
+    from refactory_dsh import live
+    activity = live.snapshot(run_root)
+    resources = activity.get('resources') or {}
+    checkpoint = _read_json(run_root / '.refactory/spine-checkpoint.json')
+    owner = checkpoint.get('owner_pid')
+    running = _running(run_root, console) or (isinstance(owner, int) and _alive(owner))
+    if resources.get('exhausted') and not finished:
+        state = 'failed'
+        activity['wait_reason'] = resources.get('reason') or 'resource budget exhausted'
+    elif spine and owner and not running and state not in ('finished', 'failed', 'halted', 'paused'):
+        state = 'died'
+        activity['wait_reason'] = 'owner exited; inspect the saved boundary before explicit recovery'
     return {
         "run_id": run_root.name,
         "root": str(run_root),
@@ -453,12 +483,13 @@ def status(run_root: Path, *, after: int = 0) -> dict[str, Any]:
         "state": state,
         "events": events,
         "cursor": after + len(events),
-        "counters": _counters(events),
+        "counters": _counters(observe.progress(run_root)),
         "best_score": _best(run_root, events),
         "finished": finished,
-        "running": not finished and spine.get("status") != "paused" and (_running(run_root, console) or bool(spine)),
+        "running": not finished and state not in ("failed", "died", "paused", "halted") and bool(running),
         "authoring": _authoring(run_root, spine) if spine else None,
         "item_results": _item_results(run_root),
+        "activity": activity,
     }
 
 
@@ -587,7 +618,8 @@ def stop(run_root: Path) -> dict[str, Any]:
         os.kill(int(pid), signal.SIGINT)
     except OSError as error:
         return {"stopped": False, "reason": str(error)}
-    return {"stopped": True, "pid": int(pid)}
+    return {"stopped": not _alive(int(pid)), "requested": True, "pid": int(pid),
+            "reason": "cancellation requested; worker termination is not yet confirmed"}
 
 
 # ── reading one ────────────────────────────────────────────────────────────
@@ -624,6 +656,37 @@ def candidate(run_root: Path, candidate_id: str) -> dict[str, Any]:
     diff = observe.candidate_diff(run_root, candidate_id)
     record = _measured(run_root, candidate_id)
     return {**diff, "rendered": observe.render_diff(diff["diff"]), **record}
+
+
+def comparison(run_root: Path) -> dict[str, Any]:
+    """Compare measured and unmeasured states without promoting missing metrics."""
+    root = Path(run_root)
+    rows = []
+    seen = set()
+    journal = root / "journal.jsonl"
+    for line in journal.read_text().splitlines() if journal.exists() else ():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("event") != "candidate" or event.get("id") in seen:
+            continue
+        seen.add(event["id"])
+        row = candidate(root, event["id"])
+        row["id"] = event["id"]
+        measured = _measured(root, event["id"])
+        row["status"] = "unmeasured" if not measured else "measured" if measured.get("exit_ok") is True else "failed"
+        row.setdefault("score", None)
+        row.setdefault("raw_score", None)
+        row.setdefault("duration_s", None)
+        row["tokens"] = (measured.get("measurements") or {}).get("tokens")
+        row["cost"] = (measured.get("measurements") or {}).get("cost")
+        rows.append(row)
+    audit = holdout(root)
+    return {"candidates": rows, "holdout": audit,
+            "resolved_profile": _read_json(root / profiles.SNAPSHOT),
+            "selection_rule": profiles.SELECTION_RULE,
+            "interpretation": "Scores are observed sample means. No measured improvement is a valid outcome; unavailable cost or token usage is not zero."}
 
 
 def gates(run_root: Path) -> list[dict[str, Any]]:
@@ -748,11 +811,15 @@ def _steer(
         from refactory_dsh.control import Control, ControlError
 
         try:
+            if _run_kind(run_root, _spine(run_root)) == "graph":
+                from refactory_dsh.graph_control import request
+                payload["control"] = request(run_root, control)
+                return payload
             payload["control"] = Control(run_root).request(
                 control, target=target, lineage=lineage, as_name=as_name, project=project
             )
             payload["control"].setdefault("status", "queued")
-        except ControlError as error:
+        except (ControlError, ValueError) as error:
             raise ConsoleError(str(error)) from error
     elif target or lineage or as_name:
         # `--lineage` or `--as` on their own name no act, and a flag that silently
@@ -910,6 +977,13 @@ def runs(
             "best_score": _best(run_root, observe.progress(run_root)),
             "finished": False,
         })
+    if runs_root is None:
+        for status_file in (project / '.factory' / 'interactive').glob('*/.refactory/spine-status.json'):
+            directory = status_file.parent.parent
+            frame = status(directory)
+            out.append({"run_id": directory.name, "root": str(directory), "mode": frame["mode"],
+                        "best_score": frame["best_score"], "finished": frame["finished"],
+                        "state": frame["state"], "pending_questions": len(gates(directory))})
     out.sort(key=lambda item: -Path(item["root"]).stat().st_mtime)
     return out[:limit]
 
@@ -1011,10 +1085,17 @@ def _parser() -> argparse.ArgumentParser:
     begin = add(sub.add_parser("start", help="begin a run in its own process"))
     begin.add_argument("mode")
     begin.add_argument("--run-id", default=None)
-    for setting, help_text, kind in SETTINGS:
-        begin.add_argument(
-            "--" + setting.replace("_", "-"), type=kind, default=None, help=help_text
-        )
+    profiles.add_arguments(begin)
+    begin.add_argument("--settings-json", type=json.loads, default=None)
+    add(sub.add_parser("profiles", help="list saved immutable profile versions"))
+    save_profile = add(sub.add_parser("profile-save", help="save a new version of a search profile"))
+    save_profile.add_argument("--name", required=True)
+    save_profile.add_argument("--spec", required=True, type=json.loads, help="JSON object with settings and contract")
+    resolve_profile = add(sub.add_parser("profile-resolve", help="preview effective settings and immutable search contract"))
+    resolve_profile.add_argument("mode")
+    profiles.add_arguments(resolve_profile)
+    resolve_profile.add_argument("--settings-json", type=json.loads, default=None)
+    add(sub.add_parser("comparison", help="all candidates including failed and unmeasured trials"))
 
     # `run` is the CLI's run: use a mode once, with the person answering any gate.
     # `start` is the outer loop (`refactory optimize`); the two are different acts and
@@ -1023,6 +1104,7 @@ def _parser() -> argparse.ArgumentParser:
     single.add_argument("mode", help="the mode, as <package>/<name>")
     single.add_argument("--intent", default="", help="what this run is for, in your words")
     single.add_argument("--workdir", default="", help="the run directory")
+    single.add_argument("--resume", action="store_true")
     single.add_argument(
         "--source", default="", metavar="PATH",
         help="read the items from here instead of the source the mode declares",
@@ -1043,6 +1125,13 @@ def _parser() -> argparse.ArgumentParser:
     single.add_argument("--timeout", type=int, default=0, help="seconds; 0 waits for the person")
     single.add_argument("--provider", default="", help="provider route for this run's model")
     single.add_argument("--model", default="", help="model id for this run")
+    for key in ("worker_backend", "effort", "permission_mode"):
+        single.add_argument("--" + key.replace("_", "-"), default="")
+    for key in ("max_elapsed_s", "max_tokens", "validation_reserve_s", "validation_reserve_tokens"):
+        single.add_argument("--" + key.replace("_", "-"), type=int if "tokens" in key else float, default=None)
+
+    for key in ("role_routes", "node_routes"):
+        single.add_argument("--" + key.replace("_", "-"), type=json.loads, default=None)
 
     # `open` lowers a mode for a caller that will drive its graph node by node
     # (a web chat session's spine), rather than running it to completion. It is
@@ -1050,6 +1139,12 @@ def _parser() -> argparse.ArgumentParser:
     # driving.
     opened = add(sub.add_parser("open", help="lower a mode for a caller that drives it node by node"))
     opened.add_argument("mode", help="the mode to lower, as <package>/<name>")
+    for key in ("worker_backend", "provider", "model", "effort", "permission_mode"):
+        opened.add_argument("--" + key.replace("_", "-"), default="")
+    for key in ("max_elapsed_s", "max_tokens", "validation_reserve_s", "validation_reserve_tokens"):
+        opened.add_argument("--" + key.replace("_", "-"), type=int if "tokens" in key else float, default=None)
+    for key in ("role_routes", "node_routes"):
+        opened.add_argument("--" + key.replace("_", "-"), type=json.loads, default=None)
     opened.add_argument("--intent", default="", help="the user's purpose for this run's ledger")
     opened.add_argument(
         "--workdir", default="",
@@ -1061,13 +1156,16 @@ def _parser() -> argparse.ArgumentParser:
         help="set one of the mode's knobs for this run (repeatable)",
     )
 
-    begin.add_argument(
-        "--knob", action="append", default=[], metavar="NAME=VALUE",
-        help="a knob value the search starts from (repeatable); a mode whose inputs "
-             "are frozen knobs needs one or every candidate scores the same",
-    )
     watch = add(sub.add_parser("status", help="where a run is"))
     watch.add_argument("--after", type=int, default=0)
+    watch.add_argument("--follow", action="store_true", help="stream durable state changes without launching work")
+    watch.add_argument("--interval", type=float, default=1.0, help="reader interval in seconds (minimum 0.1)")
+
+    graph_control = add(sub.add_parser("graph-control", help="preview or queue a graph boundary control"))
+    graph_control.add_argument("action", choices=["pause", "resume", "stop", "preview", "rerun"])
+    graph_control.add_argument("--node", default="")
+    graph_control.add_argument("--text", default="")
+    graph_control.add_argument("--revision", default="")
 
     read = add(sub.add_parser("artifacts", help="what a run left"))
     read.add_argument("--contents", action="store_true")
@@ -1400,23 +1498,46 @@ def main(argv: list[str] | None = None) -> int:
             payload = level_two()
         elif args.verb == "runs":
             payload = runs(project=project, runs_root=args.runs_root)
-        elif args.verb == "start":
-            payload = start(
-                args.mode,
-                project=project,
-                runs_root=args.runs_root,
-                run_id=args.run_id,
-                # `knob`, not `knobs`: the console forwards each config key as
-                # `--<key>`, and the loop's flag is the singular one.
-                knob=list(args.knob),
-                **{
-                    setting: getattr(args, setting)
-                    for setting, _help, _kind in SETTINGS
-                    if getattr(args, setting) is not None
-                },
-            )
+        elif args.verb == "profiles":
+            payload = profiles.list_profiles(project)
+        elif args.verb == "profile-save":
+            payload = profiles.save(project, args.name, args.spec)
+        elif args.verb in ("start", "profile-resolve"):
+            settings = {key: value for key, value in vars(args).items()
+                        if (key in profiles.defaults() or key == "knob") and value is not None}
+            settings = {**(args.settings_json or {}), **settings}
+            if args.verb == "profile-resolve":
+                payload = profiles.resolve(project, args.mode, name=args.profile,
+                                           version=args.profile_version, overrides=settings)
+            else:
+                payload = start(args.mode, project=project, runs_root=args.runs_root,
+                                run_id=args.run_id, profile=args.profile,
+                                profile_version=args.profile_version, **settings)
+        elif args.verb == "comparison":
+            payload = comparison(_root_for(args, project))
+        elif args.verb == "status" and args.follow:
+            root = _root_for(args, project)
+            previous = None
+            try:
+                while True:
+                    frame = status(root, after=args.after)
+                    encoded = json.dumps(frame, sort_keys=True)
+                    if encoded != previous:
+                        print(encoded, flush=True)
+                        previous = encoded
+                    if frame["finished"] or frame["state"] in ("failed", "died", "halted"):
+                        return 0
+                    time.sleep(max(0.1, args.interval))
+            except KeyboardInterrupt:
+                return 0
         elif args.verb == "status":
             payload = status(_root_for(args, project), after=args.after)
+        elif args.verb == "graph-control":
+            from refactory_dsh.graph_control import request
+            try:
+                payload = request(_root_for(args, project), args.action, node=args.node, text=args.text, revision=args.revision)
+            except ValueError as error:
+                raise ConsoleError(str(error)) from error
         elif args.verb == "artifacts":
             payload = artifacts(_root_for(args, project), contents=args.contents)
         elif args.verb == "leaderboard":
@@ -1464,6 +1585,8 @@ def main(argv: list[str] | None = None) -> int:
             payload = _forward("registry", forwarded)
         elif args.verb == "run":
             forwarded = [args.mode, "--headless"]
+            if args.resume:
+                forwarded.append("--resume")
             if args.intent:
                 forwarded += ["--intent", args.intent]
             if args.workdir:
@@ -1482,6 +1605,13 @@ def main(argv: list[str] | None = None) -> int:
                 forwarded += ["--provider", args.provider]
             if args.model:
                 forwarded += ["--model", args.model]
+            for key in ("worker_backend", "effort", "permission_mode", "max_elapsed_s", "max_tokens", "validation_reserve_s", "validation_reserve_tokens"):
+                value = getattr(args, key, None)
+                if value is not None and value != "":
+                    forwarded += ["--" + key.replace("_", "-"), str(value)]
+            for key in ("role_routes", "node_routes"):
+                if getattr(args, key, None):
+                    forwarded += ["--" + key.replace("_", "-"), json.dumps(getattr(args, key))]
             payload = _forward("interactive", forwarded)
             # The captured child output is diagnostic text; the run directory is
             # the durable structured answer:
@@ -1509,6 +1639,8 @@ def main(argv: list[str] | None = None) -> int:
                 workdir=args.workdir,
                 knobs=args.knob,
                 intent=args.intent,
+                model_context={key: getattr(args, key) for key in ("worker_backend", "provider", "model", "effort", "permission_mode", "role_routes", "node_routes") if getattr(args, key)},
+                resource_limits={key: getattr(args, key) for key in ("max_elapsed_s", "max_tokens", "validation_reserve_s", "validation_reserve_tokens") if getattr(args, key) is not None},
             )
         elif args.verb == "create":
             forwarded = ["--name", args.name, "--brief", args.brief, "--attempts", str(args.attempts)]
@@ -1576,7 +1708,7 @@ def main(argv: list[str] | None = None) -> int:
             payload = _forward("design", forwarded)
         else:  # pragma: no cover - argparse rejects an unknown verb first
             raise ConsoleError(f"unknown verb {args.verb!r}")
-    except (ConsoleError, LoopError, PackageError, AdoptionError, SteeringError) as error:
+    except (profiles.ProfileError, ConsoleError, LoopError, PackageError, AdoptionError, SteeringError) as error:
         print(json.dumps({"error": str(error)}), file=sys.stdout)
         return 2
     if isinstance(payload, dict) and payload.get("ok") is False:

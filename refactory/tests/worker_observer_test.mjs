@@ -1,0 +1,58 @@
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import assert from 'node:assert/strict'
+import { apply } from '../refactory_dsh/worker_observer.mjs'
+
+const root = mkdtempSync(join(tmpdir(), 'refactory-observer-'))
+try {
+  const directory = join(root, '.refactory', 'workers')
+  mkdirSync(directory, { recursive: true })
+  const path = join(directory, 'one.json')
+  writeFileSync(path, JSON.stringify({ requested_route: { worker_backend: 'dsh' }, worker_id: 'one', run_id: root,
+    usage: { status: 'unavailable', tokens: null } }))
+  process.env.REFACTORY_WORKER_RECEIPT = path
+  const events = new Map()
+  let providers = ['spawn', 'fork']
+  apply({ on: (name, callback) => events.set(name, callback), subagents: { list: () => providers } })
+  const agent = { session: { id: 'dsh-parent' } }
+  const request = events.get('agent/request')
+  const stream = events.get('agent/assistant-stream')
+  await request({ agent }, async () => ({ provider: 'dsh-p', model: 'dsh-model' }))
+  stream({ agent, frame: { type: 'start' } })
+  stream({ agent, frame: { type: 'chunk', chunk: { type: 'usage', usage: { totalTokens: 11 } } } })
+  stream({ agent, frame: { type: 'end' } })
+  events.get('refactory/worker-metadata')('dsh-parent', { actual_route: { model: 'external-model' }, usage: { tokens: 90, status: 'measured' } })
+  events.get('subagent/start')({ id: 'external', provider: 'codex', local: false })
+  stream({ agent, frame: { type: 'start' } })
+  stream({ agent, frame: { type: 'chunk', chunk: { type: 'usage', usage: { totalTokens: 13 } } } })
+  stream({ agent, frame: { type: 'end' } })
+  const receipt = JSON.parse(readFileSync(path))
+  assert.equal(receipt.actual_route.model, 'dsh-model')
+  assert.equal(receipt.usage.status, 'unavailable')
+  assert.equal(receipt.usage.tokens, null)
+  assert.equal(receipt.usage.known_tokens, 24)
+  assert.equal(receipt.native_observations[0].actual_route.model, 'external-model')
+
+  const ledger = join(root, 'budget.json')
+  writeFileSync(ledger, JSON.stringify({ limits: { max_tokens: 1000 } }))
+  process.env.REFACTORY_BUDGET_LEDGER = ledger
+  providers = ['spawn', 'fork', 'external']
+  let called = false
+  await assert.rejects(request({ agent }, async () => { called = true }), /unmetered providers/)
+  assert.equal(called, false)
+  providers = ['spawn', 'fork']
+  await request({ agent }, async () => ({ provider: 'dsh-p', model: 'dsh-model' }))
+  // A miscomposed external worker must fail before entering DSH transport.
+  writeFileSync(path, JSON.stringify({ requested_route: { worker_backend: 'codex' }, worker_id: 'external', run_id: root,
+    usage: { status: 'unavailable', tokens: null } }))
+  apply({ on: (name, callback) => events.set(name, callback), subagents: { list: () => [] } })
+  let fallback = false
+  await assert.rejects(events.get('agent/request')({ agent }, async () => { fallback = true }), /cannot dispatch a DSH model request/)
+  assert.equal(fallback, false)
+  assert.equal(JSON.parse(readFileSync(path)).runtime.backend, null)
+  assert.equal(JSON.parse(readFileSync(path)).runtime.version, null)
+  console.log('worker observer accounting and capability boundaries passed')
+} finally {
+  rmSync(root, { recursive: true, force: true })
+}

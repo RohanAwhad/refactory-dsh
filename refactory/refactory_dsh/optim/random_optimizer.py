@@ -130,9 +130,18 @@ class AutoresearchOptimizer(Optimizer):
         if client is None:
             raise ValueError("the autoresearch optimizer needs a model client")
         self._client = client
+        self._completion_options: dict[str, Any] = {}
         self._system = system or (
             "You are the optimizer of a search over workflows. You reply with JSON only."
         )
+
+    def bind_model(self, model: Any, *, workdir: Any = None) -> None:
+        import inspect
+        self._client = model
+        # Keep the original minimal ModelClient protocol compatible. DSH supports
+        # an owned workspace, so its proposer receipts belong to this search.
+        if workdir is not None and "workdir" in inspect.signature(model.complete).parameters:
+            self._completion_options = {"workdir": workdir}
 
     def propose(
         self, ctx: ProposalContext, n: int, parents: Sequence[Candidate]
@@ -141,7 +150,7 @@ class AutoresearchOptimizer(Optimizer):
             f"{ctx.render()}\n\nPropose at most {max(1, n)} update(s). "
             "Reply with the JSON object described under 'Answer' and nothing else."
         )
-        text = self._client.complete(question, system=self._system)
+        text = self._client.complete(question, system=self._system, **self._completion_options)
         payload = extract_json(text)
         self.last_diagnosis = str(payload.get("diagnosis", "") or "")
         parent_ids = {parent.id for parent in parents}

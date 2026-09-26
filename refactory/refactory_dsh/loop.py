@@ -26,11 +26,13 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import math
 import random
 import statistics
 import sys
 import time
 from dataclasses import asdict, dataclass
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -171,6 +173,21 @@ class LoopConfig:
     #: How often a paused run re-reads its control file, in seconds. Configuration
     #: only so a test does not have to wait a real second for each generation.
     control_poll_s: float = 1.0
+    strategy: str = "default"
+    repeats: int = 1
+    allowed_ops: tuple[str, ...] = ()
+    worker_backend: str = "dsh"
+    provider: str = ""
+    model: str = ""
+    effort: str = ""
+    permission_mode: str = ""
+    role_routes: dict[str, Any] = dataclasses.field(default_factory=dict)
+    node_routes: dict[str, Any] = dataclasses.field(default_factory=dict)
+    max_elapsed_s: float | None = None
+    max_tokens: int | None = None
+    validation_reserve_s: float = 0
+    validation_reserve_tokens: int = 0
+    resolved_profile: dict[str, Any] = dataclasses.field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -192,7 +209,7 @@ class LoopConfig:
                 continue
             if key == "runs_root":
                 restored[key] = Path(value)
-            elif key == "frozen":
+            elif key in ("frozen", "allowed_ops"):
                 restored[key] = tuple(value or ())
             elif key == "memory_global_root":
                 restored[key] = Path(value) if value else None
@@ -230,19 +247,55 @@ class Loop(OuterLoop):
 
     name = "default"
 
+    def bind_budget(self, budget: Any) -> None:
+        """Share accounting even when a deterministic target has no model client."""
+        self.budget = budget
+        if budget is None:
+            return
+        if self.model is not None:
+            self.model = budget.bind_model(self.model)
+            self.evaluator.model = self.model
+            proposer = self.model.for_node("optimizer", role="optimizer") if callable(getattr(self.model, "for_node", None)) else self.model
+            self.optimizer.bind_model(proposer, workdir=self.root / "proposer")
+        self.evaluator.budget = budget
+
     def run(self) -> dict[str, Any]:
         """Own strategy execution; a report-only replay does not start a search."""
         from refactory_dsh.control import running_search
+        from refactory_dsh.budgets import BudgetExhausted, RunBudget, ResourceLimits, LEDGER
 
+        ledger_path = self.root / LEDGER
+        inherited_budget = self.budget or RunBudget.inherited(self.model)
+        self._owns_resource_budget = inherited_budget is None
+        if self._owns_resource_budget and ledger_path.exists() and not self.config.resume:
+            raise LoopError("this run already has a resource ledger; use --resume or choose a new run directory")
         with running_search(self.root):
+            limits = ResourceLimits.from_dict(self.config.to_dict())
+            self.budget = inherited_budget or (RunBudget.from_path(ledger_path) if ledger_path.exists() else RunBudget.open(self.root, limits))
+            if self.config.resume and self._owns_resource_budget:
+                try:
+                    self.budget.resume(limits)
+                except BudgetExhausted as error:
+                    self.budget.pause()
+                    raise LoopError(str(error)) from error
+            if self._owns_resource_budget:
+                self.budget.set_validation_owner("search")
+            self.bind_budget(self.budget)
             self._executing_strategy = True
             try:
-                result = super().run()
+                try:
+                    result = super().run()
+                except BudgetExhausted as exc:
+                    self.bound = str(exc)
+                    self._journal("bound", bound=self.bound)
+                    result = self.report()
                 # A same-bound resume stops before the scheduler. Persist that
                 # final reason too, so a later report-only replay retains it.
                 self._journal("bound", bound=self.bound)
                 return result
             finally:
+                if self._owns_resource_budget:
+                    self.budget.pause()
                 self._executing_strategy = False
 
     def __init__(
@@ -259,6 +312,20 @@ class Loop(OuterLoop):
         self.project = Path(project or Path("."))
         self.root = Path(self.config.runs_root)
         self.model = model
+        # A library caller may provide a configured client directly. Its actual
+        # requested routes must agree with the saved effective settings, just as
+        # clients constructed by the CLI do.
+        if callable(getattr(model, "context", None)):
+            client_context = model.context()
+            for key in ("worker_backend", "provider", "model", "effort", "permission_mode", "role_routes", "node_routes"):
+                if key in client_context:
+                    setattr(self.config, key, client_context[key])
+        if not isinstance(self.config.repeats, int) or not 1 <= self.config.repeats <= 10:
+            raise LoopError("repeats must be an integer from 1 to 10")
+        self.measurements = 0
+        self.holdout_measurements: dict[str, Any] = {}
+        self.budget: Any = None
+        self._owns_resource_budget = False
         # One printer for the run: a caller that asked for events sees them while
         # the search goes, and a library caller prints nothing at all.
         self._printer = events.Printer(verbose=self.config.verbose) if self.config.print_events else None
@@ -388,6 +455,24 @@ class Loop(OuterLoop):
             )
 
         self.root.mkdir(parents=True, exist_ok=True)
+        from refactory_dsh import profiles
+        settings = {k: v for k, v in self.config.to_dict().items() if k not in profiles.RUNTIME_FIELDS}
+        snapshot = profiles.refresh(self.project, self.mode_id, settings, self.config.resolved_profile, model_client=self.model) if self.config.resolved_profile else profiles.resolve(
+            self.project, self.mode_id, overrides=settings, validate_settings=False, model_client=self.model)
+        snapshot_path = self.root / profiles.SNAPSHOT
+        if self.config.resume and snapshot_path.exists():
+            previous = json.loads(snapshot_path.read_text())
+            # Historical evidence is usable only with the same implementation,
+            # input, route and contract. Runtime addressing is deliberately absent.
+            if previous.get("context_hash") != snapshot.get("context_hash"):
+                raise LoopError("evaluation context changed; start a new run instead of reusing cached scores")
+            if snapshot.get("profile") and (snapshot.get("evaluation_context", {}).get("routing") or {}).get("status") == "runtime_defaults_unresolved":
+                raise LoopError("the saved profile's inherited model route is unresolved; start a new run with an explicit model before reusing evidence")
+        self.config.resolved_profile = snapshot
+        if not self.config.resume:
+            snapshot_path.write_text(json.dumps(snapshot, indent=2, default=str))
+        else:
+            self._journal("resume_configuration", resolved_profile=snapshot)
         (self.root / "config.json").write_text(
             json.dumps({"mode": self.mode_id, **self.config.to_dict()}, indent=2, default=str)
         )
@@ -459,6 +544,8 @@ class Loop(OuterLoop):
             edits.append(edit)
 
         for edit in edits:
+            if edit.get("op") not in (self.config.allowed_ops or nn_edits.enabled(self.config.edit_preset)):
+                continue
             proposal = Proposal(edit=edit, parent=seed.id, rationale="starting population")
             outcome = sampler.attempt(
                 proposal, seed, self.invariants, True, self.config.frozen, self._tried()
@@ -514,6 +601,8 @@ class Loop(OuterLoop):
                 error=candidate.error,
                 duration_s=candidate.duration_s,
             )
+            if self.budget and self.budget.snapshot().get("exhausted"):
+                break
         return len(batch)
 
     def _carry_ledger(self, workdir: Path) -> None:
@@ -564,14 +653,13 @@ class Loop(OuterLoop):
         the report can say whether a candidate won on merit or on size.
         """
         workdir = self.root / "runs" / candidate.id
-        self._carry_ledger(workdir)
-        self._write_subset(workdir, task_module.TRAIN)
         mode = self.mode_class(state=candidate.state)
-        result = self.evaluator.evaluate(mode, candidate.state, workdir)
+        result, measurements = self._measure(candidate, workdir, task_module.TRAIN)
         nodes = node_count(candidate.state)
-        candidate.raw_score = result.score
-        candidate.score = result.score - self.config.parsimony * nodes
-        candidate.mean_score = result.score
+        candidate.raw_score = result.score if result.exit_ok else None
+        candidate.score = result.score - self.config.parsimony * nodes if result.exit_ok else None
+        candidate.mean_score = candidate.raw_score
+        candidate.measurements = measurements
         candidate.facts = _trim(result.facts)
         candidate.exit_ok = result.exit_ok
         candidate.error = result.error
@@ -591,8 +679,80 @@ class Loop(OuterLoop):
             duration_s=candidate.duration_s,
             model_calls=candidate.model_calls,
             facts=candidate.facts,
+            measurements=measurements,
         )
         self._write_candidate(candidate, workdir, mode=mode)
+
+    def _measure(self, candidate: Candidate, workdir: Path, part: str) -> tuple[Any, dict[str, Any]]:
+        """Independent bounded trials; any failed contract makes a candidate ineligible."""
+        from refactory_dsh.nn.mode import RunResult
+        from refactory_dsh.budgets import BudgetExhausted
+        trials = []
+        last = RunResult(exit_ok=False, error="no measurement completed")
+        required = (self.config.resolved_profile.get("contract") or {}).get("required_artifacts", [])
+        for index in range(self.config.repeats):
+            trial_dir = workdir if index == 0 else workdir / "trials" / str(index + 1)
+            self._carry_ledger(trial_dir)
+            self._write_subset(trial_dir, part)
+            before = self.budget.snapshot() if self.budget else {}
+            try:
+                if self.budget:
+                    self.budget.checkpoint(("final_validation" if part == task_module.HOLDOUT else "work")
+                                           if self._owns_resource_budget else None)
+                with self.budget.retain_validation_reserve() if self.budget else nullcontext():
+                    result = self.evaluator.evaluate(self.mode_class(state=candidate.state), candidate.state, trial_dir)
+            except BudgetExhausted as exc:
+                last = RunResult(exit_ok=False, error=str(exc))
+                self.bound = str(exc)
+                break
+            after = self.budget.snapshot() if self.budget else {}
+            if self.budget:
+                try:
+                    self.budget.checkpoint()
+                except BudgetExhausted as exc:
+                    result.exit_ok = False
+                    result.error = str(exc)
+                    self.bound = str(exc)
+            missing = [path for path in required if not (trial_dir / path).exists()]
+            valid_score = isinstance(result.score, (int, float)) and math.isfinite(result.score)
+            if missing or not valid_score:
+                result.exit_ok = False
+                result.error = result.error or ("required artifacts missing: " + ", ".join(missing) if missing else "score is unmeasured or nonfinite")
+            trial = {"trial": index + 1, "score": result.score if result.exit_ok else None,
+                     "exit_ok": result.exit_ok, "error": result.error, "duration_s": result.duration_s,
+                     "model_calls": result.model_calls, "required_contract": {"passed": result.exit_ok, "missing_artifacts": missing},
+                     "tokens": after.get("known_tokens", 0) - before.get("known_tokens", 0) if after.get("token_status") in ("measured", "estimated") else None,
+                     "cost": after["estimated_cost_usd"] - (before.get("estimated_cost_usd") or 0) if after.get("estimated_cost_usd") is not None else None,
+                     "workdir": str(trial_dir)}
+            trial["workers"] = []
+            for receipt_path in sorted(trial_dir.glob("**/.refactory/workers/*.json")):
+                try:
+                    receipt = json.loads(receipt_path.read_text())
+                    trial["workers"].append({key: receipt.get(key) for key in ("worker_id", "node_id", "role", "state", "actual_route", "runtime", "usage")})
+                except (OSError, json.JSONDecodeError):
+                    continue
+            trials.append(trial)
+            self.measurements += 1
+            last = result
+            if not result.exit_ok:
+                break
+        scores = [t["score"] for t in trials if t["score"] is not None]
+        complete = len(trials) == self.config.repeats and all(t["exit_ok"] for t in trials)
+        summary = {"requested": self.config.repeats, "count": len(trials), "successful": len(scores),
+                   "mean": statistics.mean(scores) if scores else None,
+                   "stdev": statistics.stdev(scores) if len(scores) > 1 else None,
+                   "min": min(scores) if scores else None, "max": max(scores) if scores else None,
+                   "complete": complete, "trials": trials, "context_hash": self.config.resolved_profile.get("context_hash"),
+                   "tokens": sum(t["tokens"] for t in trials) if trials and all(isinstance(t["tokens"], (int, float)) for t in trials) else None,
+                   "cost": sum(t["cost"] for t in trials) if trials and all(isinstance(t["cost"], (int, float)) for t in trials) else None,
+                   "interpretation": "observed sample mean; improvement is not a statistical proof"}
+        last.score = float(summary["mean"] or 0) if complete else 0.0
+        last.exit_ok = complete
+        last.duration_s = sum(t["duration_s"] for t in trials)
+        last.model_calls = sum(t["model_calls"] for t in trials)
+        workdir.mkdir(parents=True, exist_ok=True)
+        (workdir / "measurements.json").write_text(json.dumps(summary, indent=2))
+        return last, summary
 
     def _write_candidate(
         self, candidate: Candidate, workdir: Path, *, mode: Any = None
@@ -617,6 +777,7 @@ class Loop(OuterLoop):
                     "edits": candidate.edits,
                     "facts": candidate.facts,
                     "model_calls": candidate.model_calls,
+                    "measurements": candidate.measurements,
                     # What the run published, against what the mode declared: a port
                     # that is missing is a promise the mode did not keep. Written for
                     # every candidate whichever evaluator ran it, because a reader
@@ -1127,9 +1288,14 @@ class Loop(OuterLoop):
         whether the optimizer answered at all is the loop's, and it is recorded in
         ``Optimizer.proposal_failures`` so the report can say which happened.
         """
+        from refactory_dsh.budgets import BudgetExhausted
+
         self.optimizer.proposal_rounds += 1
         try:
             return self.optimizer.propose(self._context(), n, parents)
+        except BudgetExhausted as exc:
+            self.optimizer.proposal_failures.append(f"{type(exc).__name__}: {exc}")
+            raise
         except Exception as exc:  # a proposer that is down is not a crash
             detail = f"{type(exc).__name__}: {exc}"
             self.optimizer.proposal_failures.append(detail)
@@ -1165,6 +1331,10 @@ class Loop(OuterLoop):
             for proposal in proposals:
                 if len(accepted) >= wanted:
                     break
+                allowed = self.config.allowed_ops or [op["op"] for op in nn_edits.catalogue(self.config.edit_preset)]
+                if proposal.edit.get("op") not in allowed:
+                    self.rejections.append(Rejection(rounds, proposal.edit, ["E-policy: operation is outside this run's permitted edits"]))
+                    continue
                 parent = next((p for p in parents if p.id == proposal.parent), parents[0])
                 outcome = run.attempt(proposal, parent)
                 if isinstance(outcome, Candidate):
@@ -1232,12 +1402,21 @@ class Loop(OuterLoop):
         from refactory_dsh.control import Control, ONE_SHOT
 
         control = Control(self.root)
+        paused_budget = None
         while True:
             request = control.read_request()
+            action = str(request["action"]) if request is not None else ""
+            if action != "pause" and paused_budget is not None:
+                paused_budget.resume()
+                paused_budget = None
             if request is None:
                 return None
-            action = str(request["action"])
             if action == "pause":
+                # Only the allocation's owner can stop its clock: a nested search
+                # may share resources with enclosing work that is still running.
+                if self.budget and self._owns_resource_budget and paused_budget is None:
+                    self.budget.pause()
+                    paused_budget = self.budget
                 self._progress("paused")
                 time.sleep(max(0.01, float(self.config.control_poll_s)))
                 continue
@@ -1369,6 +1548,12 @@ class Loop(OuterLoop):
         """A reason to stop before the bound, or ``None``. The bound is the default."""
         if run.stopped:
             return run.stopped
+        if self.budget:
+            from refactory_dsh.budgets import BudgetExhausted
+            try:
+                self.budget.checkpoint("work" if self._owns_resource_budget else None)
+            except BudgetExhausted as exc:
+                return str(exc)
         # A resumed completed epoch must not buy another proposal round. An
         # interrupted open epoch may still finish its bookkeeping at this limit.
         if not self._epoch_open and self.epoch >= self.config.epochs:
@@ -1513,6 +1698,9 @@ class Loop(OuterLoop):
             "optimizer": self.optimizer.name,
             "evaluator": self.config.evaluator,
             "evaluations": self.evaluations,
+            "measurements": self.measurements,
+            "resolved_profile": self.config.resolved_profile,
+            "resources": self.budget.snapshot() if self.budget else None,
             "population": len(self.population),
             "unevaluated": self._unevaluated(),
             "best": self._row(best) if best else None,
@@ -1520,6 +1708,8 @@ class Loop(OuterLoop):
             "raw_best_score": best.raw_score if best else None,
             "seed_score": self.population[0].score if self.population and self.population[0].exit_ok else None,
             "seed_raw_score": self.population[0].raw_score if self.population and self.population[0].exit_ok else None,
+            "improvement": {"status": "observed" if best and self.population and self.population[0].score is not None and best.score > self.population[0].score else "none",
+                            "interpretation": "sample means are observations, not proof of a stochastic improvement"},
             "scoring": self.scoring(),
             "leaderboard": [self._row(c) for c in board],
             "failed_candidates": [self._row(c) for c in self._evaluated() if not c.exit_ok],
@@ -1630,6 +1820,7 @@ class Loop(OuterLoop):
             "threshold": OVERFIT_THRESHOLD,
             "instances": instances,
             "winner": winner.id if winner is not None else None,
+            "measurements": self.holdout_measurements,
         }
         if note:
             audit["note"] = note
@@ -1654,10 +1845,7 @@ class Loop(OuterLoop):
         workdir = self.root / "holdout" / winner.id
         try:
             workdir.mkdir(parents=True, exist_ok=True)
-            self._carry_ledger(workdir)
-            self._write_subset(workdir, task_module.HOLDOUT)
-            mode = self.mode_class(state=winner.state)
-            result = self.evaluator.evaluate(mode, winner.state, workdir)
+            result, self.holdout_measurements = self._measure(winner, workdir, task_module.HOLDOUT)
         except Exception as exc:  # a failed audit is recorded, not raised
             return None, f"the holdout run failed: {type(exc).__name__}: {exc}"
         if not result.exit_ok:
@@ -1915,7 +2103,8 @@ class Loop(OuterLoop):
                 self.root.parent, limit=self.config.prior_runs, exclude=self.root
             ),
             traces=[self.gradient] if self.gradient else [],
-            catalogue=nn_edits.catalogue(self.config.edit_preset),
+            catalogue=[op for op in nn_edits.catalogue(self.config.edit_preset)
+                       if not self.config.allowed_ops or op["op"] in self.config.allowed_ops],
             insertable=[node.to_state() for node in self.mode.insertable()],
             frozen=list(self.config.frozen),
             rejections=summarise_reasons(
@@ -1926,7 +2115,7 @@ class Loop(OuterLoop):
                 ]
             ),
             preset=self.config.edit_preset,
-            strategy=dict(self.strategy_decision),
+            strategy={**dict(self.strategy_decision), **({"search_contract": self.config.resolved_profile["contract"]} if self.config.resolved_profile.get("contract") else {})},
             # Read now, not at construction: the point of steering a search is that a
             # note added while it runs reaches the next proposal.
             steering=self._steering_block(),
@@ -2107,6 +2296,7 @@ class Loop(OuterLoop):
                 candidate.duration_s = float(record.get("duration_s") or 0.0)
                 candidate.model_calls = int(record.get("model_calls") or 0)
                 candidate.facts = dict(record.get("facts") or {})
+                candidate.measurements = dict(record.get("measurements") or {})
                 candidate.evaluated = True
             elif event == "rejection":
                 self.rejections.append(
@@ -2148,6 +2338,7 @@ class Loop(OuterLoop):
             raise LoopError(f"{journal} holds no candidate, so there is nothing to resume")
         self.population = [by_id[node_id] for node_id in order]
         self.evaluations = sum(1 for c in self.population if c.evaluated)
+        self.measurements = sum(c.measurements.get("count", 1) for c in self.population if c.evaluated)
         self.proposals = {
             candidate.id: {
                 "id": candidate.id,
@@ -2354,105 +2545,47 @@ def main(argv: list[str] | None = None) -> int:
         description="Run the optimizer loop on a mode.",
     )
     parser.add_argument("mode", help="the mode to optimize, as <package>/<name>")
-    parser.add_argument("--epochs", type=int, default=2)
-    parser.add_argument("--batch-size", type=int, default=4)
-    from refactory_dsh import optim, strategies
-
-    # The registry is the list of what can be selected. Hardcoding it here is how
-    # the two buckets drifted apart in the first place: five optimizers could be
-    # registered and still not be reachable from the command line.
-    parser.add_argument("--optimizer", default="autoresearch", choices=optim.names())
-    parser.add_argument(
-        "--strategy", default="default", choices=strategies.names(),
-        help="which outer loop drives the search; the default is the harness's own",
-    )
-    parser.add_argument(
-        "--evaluator", default="walker", choices=["walker", "dsh"],
-        help="which runtime runs a candidate: walker (fast, for search) or dsh "
-             "(the runtime that ships)",
-    )
-    parser.add_argument("--preset", default="broad", help="which edits the optimizer may use")
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--elite", type=int, default=3, help="how many parents to propose against")
-    parser.add_argument("--max-evaluations", type=int, default=64)
-    parser.add_argument(
-        "--holdout", type=float, default=task_module.DEFAULT_HOLDOUT,
-        help="the fraction of the Task's items held out of the search and used to "
-             "audit the winner; one item cannot be split, which the audit records",
-    )
-    parser.add_argument(
-        "--parsimony", type=float, default=0.01,
-        help="what each node of a candidate's graph costs its score; the search "
-             "compares raw_score - parsimony * nodes",
-    )
-    parser.add_argument("--attempts", type=int, default=3, help="retries per batch after a refusal")
-    parser.add_argument(
-        "--verbose", action="store_true",
-        help="print every event, and each candidate's own run output, not only the "
-             "meaningful ones",
-    )
-    parser.add_argument(
-        "--runs-root",
-        default=".factory/loop",
-        help=(
-            "the run directory to write, read back with `console --run <this path>`; "
-            "the console's --runs-root is a parent of runs, not this"
-        ),
-    )
-    parser.add_argument(
-        "--intent", default="",
-        help="what this run is for, in the asker's words; seeds the run's intent "
-             "ledger, which every agent node of an interactive run reads",
-    )
+    from refactory_dsh import profiles, strategies
+    profiles.add_arguments(parser)
+    parser.add_argument("--runs-root", default=".factory/loop")
     parser.add_argument("--project", default=str(project_root()))
-    parser.add_argument(
-        "--knob", action="append", default=[], metavar="NAME=VALUE",
-        help="a knob value the search starts from (repeatable); required for a mode "
-             "whose inputs are frozen knobs, which the search itself may not move",
-    )
-    parser.add_argument(
-        "--model", default="",
-        help="model name for this run's completions: the reasoning optimizer's "
-             "proposals, and the agent nodes of the mode being evaluated",
-    )
-    parser.add_argument(
-        "--provider", default="", help="provider route that model is on (default: the settings default)"
-    )
+    parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--resolved-config", default="", help="exact resolved snapshot prepared by the console")
     args = parser.parse_args(argv)
-
-    # A client for whatever needs a model: the reasoning optimizer when it is the one
-    # proposing, and *any* mode whose graph has an agent node, because the evaluator
-    # has to supply one to run those nodes. Building it only for `autoresearch` made
-    # every agent mode unevaluable under every other optimizer — each candidate failed
-    # with `agent node 'propose' needs a model client` and the run reported a search
-    # that found nothing. Constructing it is free: it spawns nothing until asked.
-    from refactory_dsh.model import DshModelClient
-
-    model = DshModelClient(model=args.model, provider=args.provider)
-
-    config = LoopConfig(
-        epochs=args.epochs,
-        batch_size=args.batch_size,
-        optimizer=args.optimizer,
-        evaluator=args.evaluator,
-        edit_preset=args.preset,
-        seed=args.seed,
-        elite=args.elite,
-        max_evaluations=args.max_evaluations,
-        # A search a person started prints what it is doing while it does it.
-        print_events=True,
-        verbose=bool(args.verbose),
-        attempts=args.attempts,
-        runs_root=Path(args.runs_root),
-        intent=args.intent,
-        holdout=args.holdout,
-        parsimony=args.parsimony,
-        knobs={name.strip(): value.strip() for pair in args.knob
-               for name, _, value in [pair.partition("=")] if name.strip()},
-    )
+    project = Path(args.project)
+    try:
+        if args.resolved_config:
+            snapshot = json.loads(Path(args.resolved_config).read_text())
+            if snapshot.get("mode") != args.mode:
+                raise profiles.ProfileError("resolved snapshot belongs to another mode")
+        else:
+            overrides = {key: value for key, value in vars(args).items()
+                         if (key in profiles.defaults() or key == "knob") and value is not None}
+            prior_path = Path(args.runs_root) / "config.json"
+            if args.resume and not args.profile and prior_path.exists():
+                previous = json.loads(prior_path.read_text())
+                if previous.get("mode") != args.mode:
+                    raise profiles.ProfileError("the resume directory belongs to another mode")
+                previous_settings = {k: v for k, v in previous.items() if k in profiles.defaults()}
+                snapshot = profiles.refresh(project, args.mode, profiles.normalize({**previous_settings, **overrides}), previous.get("resolved_profile") or {})
+            else:
+                snapshot = profiles.resolve(project, args.mode, name=args.profile,
+                                            version=args.profile_version, overrides=overrides)
+        settings = snapshot["settings"]
+        from refactory_dsh.model import DshModelClient
+        model = DshModelClient(**{key: settings[key] for key in
+            ("worker_backend", "provider", "model", "effort", "permission_mode", "role_routes", "node_routes")
+            if settings[key] not in ("", {})})
+        config = LoopConfig.from_dict({**settings, "runs_root": args.runs_root,
+                                      "print_events": True, "verbose": args.verbose,
+                                      "resume": args.resume, "resolved_profile": snapshot})
+    except (profiles.ProfileError, ValueError, OSError) as exc:
+        print(json.dumps({"error": str(exc)}), file=sys.stderr)
+        return 2
     try:
         loop = strategies.create(
-            args.strategy, args.mode, config, project=Path(args.project), model=model
+            config.strategy, args.mode, config, project=project, model=model
         )
         report = loop.run()
     except LoopError as exc:

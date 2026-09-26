@@ -1,0 +1,98 @@
+import hashlib
+import json
+import threading
+from types import SimpleNamespace
+
+import pytest
+
+from refactory_dsh import recovery
+from refactory_dsh.run_ownership import ownership
+
+
+def saved_run(root, status='paused'):
+    runtime = root / '.refactory'
+    runtime.mkdir()
+    source = root / 'mode.py'
+    source.write_text('answer = 42\n')
+    config = {'mode': 'demo/run', 'project': str(root),
+              'configuration_fingerprints': {str(source): recovery.fingerprint(source)}}
+    (runtime / 'run-config.json').write_text(json.dumps(config))
+    payload = {'run_id': str(root), 'graph': {'name': 'demo-run'}, 'status': status,
+               'file_fingerprints': {}}
+    (runtime / 'spine-checkpoint.json').write_text(json.dumps(payload))
+    return source
+
+
+def test_start_releases_ownership_before_launch(monkeypatch, tmp_path):
+    saved_run(tmp_path)
+
+    def popen(argv, **kwargs):
+        acquired, errors = [], []
+
+        def child():
+            try:
+                with ownership(tmp_path):
+                    acquired.append(True)
+            except Exception as error:
+                errors.append(error)
+
+        thread = threading.Thread(target=child)
+        thread.start()
+        thread.join()
+        assert not errors
+        assert acquired
+        assert '--resume' in argv
+        return SimpleNamespace(pid=123)
+
+    monkeypatch.setattr('subprocess.Popen', popen)
+    assert recovery.start(tmp_path)['pid'] == 123
+
+
+@pytest.mark.parametrize('status', ['executing', 'failed', 'unexpected', None])
+def test_unknown_outcome_never_produces_resume_request(tmp_path, status):
+    saved_run(tmp_path, status)
+    with pytest.raises(ValueError, match='unknown or failed'):
+        recovery.prepare(tmp_path, 'demo-run')
+    assert not (tmp_path / '.refactory/resume-request.json').exists()
+
+
+def test_changed_source_and_unknown_worker_refuse_recovery(tmp_path):
+    source = saved_run(tmp_path)
+    source.write_text('answer = 0\n')
+    with pytest.raises(ValueError, match='configuration.*changed'):
+        recovery.prepare(tmp_path, 'demo-run')
+    source.write_text('answer = 42\n')
+    pending = tmp_path / '.refactory/agent-delivery/pending'
+    pending.mkdir(parents=True)
+    (pending / 'worker.json').write_text('{}')
+    with pytest.raises(ValueError, match='worker outcome is unknown'):
+        recovery.prepare(tmp_path, 'demo-run')
+
+
+def test_recovery_request_binds_validated_bytes(tmp_path):
+    saved_run(tmp_path)
+    recovery.prepare(tmp_path, 'demo-run')
+    checkpoint = tmp_path / '.refactory/spine-checkpoint.json'
+    request = json.loads((tmp_path / '.refactory/resume-request.json').read_text())
+    assert request['checkpoint_sha256'] == hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+
+
+def test_configuration_fingerprints_ignore_only_interpreter_cache(monkeypatch, tmp_path):
+    from refactory_dsh import registry, lowering
+    package = tmp_path / 'package'
+    package.mkdir()
+    (package / 'mode.py').write_text('a=1')
+    (tmp_path / 'graphs').mkdir()
+    declarations = tmp_path / lowering.DECLARATIONS
+    declarations.parent.mkdir(exist_ok=True)
+    declarations.write_text('{}')
+    monkeypatch.setattr(registry, 'where', lambda *args: package)
+    class Mode:
+        pass
+    monkeypatch.setattr(registry, 'resolve', lambda *args: (SimpleNamespace(ops=()), Mode))
+    before = recovery.configuration_fingerprints(tmp_path, 'package/run', tmp_path)
+    (package / '__pycache__').mkdir()
+    (package / '__pycache__/mode.pyc').write_bytes(b'cache')
+    assert recovery.configuration_fingerprints(tmp_path, 'package/run', tmp_path) == before
+    (package / 'data.json').write_text('{}')
+    assert recovery.configuration_fingerprints(tmp_path, 'package/run', tmp_path) != before

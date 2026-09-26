@@ -79,7 +79,8 @@ def _resumed(ctx: Any) -> Loop:
     # and `resume=False` means "start over" — which here would delete the run
     # between two nodes of its own loop.
     stored["resume"] = True
-    loop = Loop(_target(ctx), LoopConfig.from_dict(stored), project=_project(ctx))
+    loop = Loop(_target(ctx), LoopConfig.from_dict(stored), project=_project(ctx), model=getattr(ctx, "model", None))
+    loop.bind_budget(getattr(ctx, "budget", None))
     # `init` is also the replay entry point: with `resume` set it rebuilds the
     # population and the counters from the journal and returns, which is exactly
     # what a step needs and is why every step goes through it.
@@ -106,7 +107,8 @@ def init(ctx: Any) -> dict[str, Any]:
     and every later step reads them from there.
     """
     config = LoopConfig(runs_root=_root(ctx), **_settings(ctx))
-    loop = Loop(_target(ctx), config, project=_project(ctx))
+    loop = Loop(_target(ctx), config, project=_project(ctx), model=getattr(ctx, "model", None))
+    loop.bind_budget(getattr(ctx, "budget", None))
     loop.init()
     return {"population": len(loop.population)}
 

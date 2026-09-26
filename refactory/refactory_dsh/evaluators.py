@@ -65,6 +65,7 @@ class Evaluator:
     #: process, so a caller can tell the slow one from the fast one without
     #: matching on the name.
     out_of_process: bool = False
+    budget: Any = None
 
     @classmethod
     def from_settings(
@@ -126,7 +127,8 @@ class WalkerEvaluator(Evaluator):
         started = time.time()
         try:
             result = mode.evaluate(
-                workdir, model=self.model, memory=store, max_steps=self.max_steps
+                workdir, model=self.model, memory=store, max_steps=self.max_steps,
+                **({"shared_budget": self.budget} if self.budget is not None else {}),
             )
         finally:
             # Also on a crash or a stop: a namespace that outlives the run it was
@@ -143,11 +145,12 @@ class DshEvaluator(Evaluator):
     out_of_process = True
 
     def __init__(
-        self, *, timeout_s: int | None = None, on_output: Callable[[str], None] | None = None
+        self, *, timeout_s: int | None = None, on_output: Callable[[str], None] | None = None, model: Any = None
     ) -> None:
         from refactory_dsh.dsh_runtime import DEFAULT_TIMEOUT_S
 
         self.timeout_s = DEFAULT_TIMEOUT_S if timeout_s is None else timeout_s
+        self.model = model
         #: Where a candidate's own run output goes while it runs. Only a verbose
         #: run passes one: the meaningful per-candidate line is the loop's own event.
         self.on_output = on_output
@@ -161,13 +164,21 @@ class DshEvaluator(Evaluator):
         return cls(
             timeout_s=config.dsh_timeout_s,
             on_output=_print_line if watching and verbose else None,
+            model=model,
         )
 
     def evaluate(self, mode: Any, state: dict[str, Any], workdir: Path) -> RunResult:
         from refactory_dsh.dsh_runtime import evaluate_on_dsh
 
+        model = self.model
+        if self.budget is not None and model is None:
+            from refactory_dsh.model import DshModelClient
+
+            model = DshModelClient().with_budget(self.budget)
+
         return evaluate_on_dsh(
             mode, state, workdir, timeout_s=self.timeout_s, on_output=self.on_output,
+            **({"model": model} if model is not None else {}),
         )
 
 

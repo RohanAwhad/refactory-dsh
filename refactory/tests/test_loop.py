@@ -182,7 +182,9 @@ def test_the_leaderboard_is_ordered_and_complete(tmp_path):
     report = Loop(MODE, _config(tmp_path), project=Path(".")).run()
     scores = [row["score"] for row in report["leaderboard"]]
     assert scores == sorted(scores, reverse=True)
-    assert len(report["leaderboard"]) == report["evaluations"]
+    assert len(report["leaderboard"]) + len(report["failed_candidates"]) == report["evaluations"]
+    assert all(row["exit_ok"] and row["score"] is not None for row in report["leaderboard"])
+    assert all(not row["exit_ok"] and row["score"] is None for row in report["failed_candidates"])
 
 
 def test_every_evaluated_candidate_validated_first(tmp_path):
@@ -716,6 +718,10 @@ def test_every_recorded_score_carries_the_raw_one_beside_it(tmp_path):
     scored = [event for event in events if event.get("event") == "score"]
     assert scored, "the run recorded no score"
     for event in scored:
+        if not event["exit_ok"]:
+            assert event["raw_score"] is None and event["score"] is None, event
+            assert event["error"], event
+            continue
         assert event["raw_score"] is not None, event
         assert event["score"] == pytest.approx(
             event["raw_score"] - event["parsimony"] * event["nodes"]
@@ -774,3 +780,35 @@ def test_no_ledger_means_no_steering_section(tmp_path):
     loop = Loop(MODE, _config(tmp_path), project=Path("."))
     loop.init()
     assert "What the user has said" not in loop._context().render()
+
+
+@pytest.mark.parametrize("owner", [True, False])
+def test_user_pause_stops_only_the_owned_resource_clock(tmp_path, monkeypatch, owner):
+    from refactory_dsh.budgets import BudgetExhausted, ResourceLimits, RunBudget
+    from refactory_dsh.control import Control
+
+    now = [100.0]
+    monkeypatch.setattr("refactory_dsh.budgets.time.time", lambda: now[0])
+    loop = Loop(MODE, _config(tmp_path), project=Path("."))
+    loop.budget = RunBudget.create(tmp_path, ResourceLimits(max_elapsed_s=5, max_tokens=10))
+    loop._owns_resource_budget = owner
+    loop.budget.record_usage("before-pause", 2)
+    now[0] += 1
+    requests = iter([{"action": "pause"}, {"action": "resume"}])
+    monkeypatch.setattr(Control, "read_request", lambda _control: next(requests))
+
+    def wait(_seconds):
+        assert (loop.budget.snapshot()["started_at"] is None) is owner
+        now[0] += 10
+
+    monkeypatch.setattr("refactory_dsh.loop.time.sleep", wait)
+    loop._apply_control()
+    usage = loop.budget.snapshot()
+    assert usage["tokens"] == 2
+    assert usage["elapsed_s"] == (1 if owner else 11)
+    assert usage["started_at"] is not None
+    if owner:
+        loop.budget.checkpoint()
+    else:
+        with pytest.raises(BudgetExhausted):
+            loop.budget.checkpoint()
