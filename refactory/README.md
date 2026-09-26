@@ -40,6 +40,11 @@ cd refactory-dsh
 ./install.sh
 ```
 
+Follow the [repository quickstart](../README.md#quickstart) for prerequisites and
+the offline smoke check. Before model-backed work, save a provider key through
+**Settings → Models**; see [model setup](docs/models.md#credentials-for-nested-execution).
+`uv run refactory doctor` checks local configuration without making a model call.
+
 ## Run
 
 List the packages and the modes they own:
@@ -49,22 +54,51 @@ uv run refactory package list
 uv run refactory package show circle_packing/adaptive
 ```
 
-Optimize a mode. `autoresearch` reads the traces and asks a model for the next edit; `random` samples the edit catalogue. Both run the same validating loop, so a proposal that cannot run costs tokens and not budget.
+Try a small offline search first. Restricting this shipped example to knob edits
+keeps it deterministic and avoids model calls:
 
 ```bash
 uv run refactory optimize circle_packing/adaptive \
-    --epochs 2 --batch-size 4 --optimizer autoresearch
+    --epochs 2 --batch-size 4 --optimizer random --preset knob_only --seed 5
 
 # what came out of it
 cat .factory/loop/report.md
 ```
 
-Create a package of modes from a brief. Design and emit are model steps; the gate is deterministic — the package is imported, its graph is built, every call it names is resolved, and it is run once before it is registered.
+For model-proposed edits, use `--optimizer autoresearch` after model setup.
+Both optimizers validate proposals before evaluating them. Read the raw score and
+held-out audit separately from the score's graph-size penalty.
+
+Create a package of modes from a brief. The authoring workflow researches, designs,
+emits, reviews, validates and smoke-runs the package. A class-of-work harness uses
+`--task <module:Class>`; this example uses the explicit one-off `--single` form.
+The terminal CEO asks you to review the strategy before emission:
 
 ```bash
 uv run refactory ceo "what the package should do" \
-    --mode create --name my_pkg --single --approve gate_strategy=proceed
+    --mode create --name my_pkg --single
 ```
+
+Run an existing mode with `uv run refactory ceo <package>/<mode>`. The live CEO
+accepts your steering between turns. See the [command guide](../README.md#the-command-line)
+for design, edit, optimization, adoption and unattended gate approvals.
+
+## GUI
+
+```bash
+uv run refactory ui --port 3081
+```
+
+Select this checkout as the workspace and start a chat. Ask the CEO to open a mode,
+for example, `Open counting_pack/fixed_step and drive it one node at a time`.
+The chat drives the workflow through its public tools and presents user gates.
+
+Open the conversation's right sidebar and choose **Modes** to select, run and
+optimize modes, inspect progress, or attach an existing run. The panel displays the
+project its console uses; changing the chat workspace does not retarget that console.
+The install applies the GUI patches that provide these surfaces.
+See the [chat tutorial](docs/tutorials/05-drive-it-from-the-gui.md) and
+[panel tutorial](docs/tutorials/07-pick-and-watch-from-the-panel.md).
 
 ## Test
 
@@ -75,7 +109,3 @@ uv run python -m pytest refactory/tests -q
 `tests/test_registry.py::test_every_installed_package_mode_validates` asserts the strongest statement the library can make about a package it did not write: every mode of every installed package builds a graph that validates with all of its calls resolved.
 
 `tests/test_ir_parity.py` holds `refactory_dsh/ir.py` against the reference graph language over every shipped mode, serializing both byte for byte. The reference is a test-time oracle, not a runtime dependency: run `uv sync --group reference` to install it, and without it those tests skip with a reason.
-
-## Not yet wired
-
-The DSH agent presets that used to drive the JSON graphs are not regenerated any more, because creating and optimizing are now Python entry points. Wiring them back onto `refactory_dsh.create` and `refactory_dsh.loop` for the GUI is the next piece of work; see `docs/plans/pythonic-modes.md`.
