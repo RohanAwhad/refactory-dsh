@@ -15,11 +15,12 @@ with tools, and an analysis prompt must not be able to write into the run.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
 
-from refactory_dsh.paths import dsh_command
+from refactory_dsh.paths import dsh_command, dsh_root, node_bin
 
 #: The overlay that keeps a node's completion from backgrounding its own work. Checked
 #: in rather than generated, so what a node's model call is configured with is
@@ -107,12 +108,45 @@ class DshModelClient:
         provider: str = "",
         attempts: int = DEFAULT_ATTEMPTS,
         backoff_s: float = 1.0,
+        dsh_home: str | Path | None = None,
     ) -> None:
         self._timeout_s = timeout_s
-        self._model = model
-        self._provider = provider
+        self._model = model or os.environ.get("REFACTORY_MODEL_ID", "")
+        self._provider = provider or os.environ.get("REFACTORY_MODEL_PROVIDER", "")
+        # Resolve before containment rewrites HOME. This is a location, never a key.
+        selected_home = dsh_home or os.environ.get("REFACTORY_MODEL_DSH_HOME") or os.environ.get("DSH_HOME", "").strip()
+        self._dsh_home = Path(selected_home or Path.home() / ".dsh").expanduser().resolve()
         self._attempts = max(1, int(attempts))
         self._backoff_s = max(0.0, float(backoff_s))
+
+    def context(self) -> dict[str, str]:
+        """Nonsecret settings safe to carry across the model subprocess boundary."""
+        return {"dsh_home": str(self._dsh_home), "provider": self._provider, "model": self._model}
+
+    def _environment(self) -> dict[str, str]:
+        # Never resolve a credential here or copy it into the environment. The DSH
+        # credentials service reads its managed store in the selected home.
+        return {**os.environ, "DSH_HOME": str(self._dsh_home)}
+
+    def readiness(self, *, workdir: Path) -> dict[str, object]:
+        """Describe local credential configuration; make no authenticated request."""
+        probe = Path(__file__).with_name("model_readiness.mjs")
+        proc = subprocess.run(
+            [node_bin(), str(probe), str(dsh_root()), self._provider, self._model],
+            cwd=str(workdir), env=self._environment(), capture_output=True, text=True,
+            timeout=30,
+        )
+        try:
+            result = json.loads(proc.stdout)
+        except (ValueError, TypeError):
+            # Provider parse errors can include document values. Never relay raw
+            # stderr from a configuration probe into the authoring prompt.
+            raise RuntimeError("model readiness failed: DSH configuration could not be described; run refactory doctor") from None
+        if not isinstance(result, dict):
+            raise RuntimeError("model readiness failed: invalid DSH diagnostic response")
+        if proc.returncode or result.get("ready") is not True:
+            raise RuntimeError(str(result.get("error") or "model readiness failed"))
+        return result
 
     def complete(
         self, prompt: str, *, system: str = "", workdir: Path | None = None
@@ -170,6 +204,7 @@ class DshModelClient:
                     capture_output=True,
                     text=True,
                     cwd=str(run_dir),
+                    env=self._environment(),
                     timeout=self._timeout_s,
                 )
             except subprocess.TimeoutExpired:

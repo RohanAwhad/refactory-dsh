@@ -51,3 +51,33 @@ uv run refactory optimize circle_packing/adaptive --provider deepseek-official -
 ```
 
 `--model` names the id and `--provider` the route; both fall back to `agent-default-model` in your settings, and neither writes anything back, so choosing a model for one run does not change the next. A route that does not exist is a loud failure (`NO_ADAPTER: no adapter registered for provider …`), not a quiet return to the default. The same two flags exist one level down, on `dsh --profile headless|graph`, which is what `refactory` calls.
+
+## Credentials for nested execution
+
+Create/edit smoke and panel optimization launch further DSH processes. Their environment
+is deliberately scrubbed, and the smoke process has a workspace-local `HOME`. Save the
+provider key once through **Settings → Models** in the DSH home used by the run:
+open the provider row with **Edit**, enter its **API key**, and choose **Apply**. The
+product passes that nonsecret home location to nested model processes; keys remain in
+DSH's managed store and are resolved by its credential service. Do not copy `.env`
+files into generated packages or smoke directories. If an exported key shadows the
+reference, the UI reports “Provided by the launch environment (read-only)”; launch
+without that override before saving. DSH resolves keys in this order: inherited launch
+environment, managed store, invocation-directory `.env`, then DSH-home `.env`. A stored
+key overrides both `.env` layers, but not an inherited environment override. The launch
+environment is a startup snapshot; changing the launching shell afterward does not
+change the running GUI's credential source.
+
+`refactory doctor --provider deepseek-official --model deepseek-flash` checks local
+credential configuration through the same scrubbed subprocess boundary as smoke. Create
+and edit perform this check before research. The check makes no model request: a
+configured key is not proof of valid authentication, available quota, or network access.
+The later real model smoke remains required. Provider-native authentication without an
+API-key reference is reported as `native-auth-unverified`, not as a verified credential.
+
+The local diagnostic uses the installed headless profile's supported file-backed
+credential/settings services and adapter schemas. A replaced service or dynamic `!!js`
+configuration is reported as unavailable for this diagnostic, rather than inspected with
+a guessed credential location. The local managed store is owner-only but does not
+isolate credentials from generated code running as the same OS user; stricter isolation
+requires a separate model-service boundary.

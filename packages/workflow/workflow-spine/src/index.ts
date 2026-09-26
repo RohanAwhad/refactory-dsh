@@ -19,6 +19,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { homedir } from 'node:os'
 import z from '@deepseek-ai/schemastery'
 import { scopeChainOf, scopeOf } from '@deepseek-ai/dsh-scope'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -819,7 +820,15 @@ export function apply(ctx: Context, config: Config): void {
           throw new Error(`invalid workflow graph: ${rendered}`)
         }
         const spine = new Spine(graph, { maxIterations })
-        const runEnv = payloadEnv(payload.commandEnv) ?? config.commandEnv
+        const modelConfig = session.requestHeader()?.config ?? exec.agent?.options
+        const runEnv = {
+          ...(payloadEnv(payload.commandEnv) ?? config.commandEnv),
+          // The parent owns these values: a lowered package cannot choose another
+          // credential home. No key is copied into deterministic node commands.
+          REFACTORY_MODEL_DSH_HOME: resolve((process.env.DSH_HOME?.trim() || join(homedir(), '.dsh')).replace(/^~(?=[/\\]|$)/, homedir())),
+          REFACTORY_MODEL_PROVIDER: modelConfig?.provider ?? '',
+          REFACTORY_MODEL_ID: modelConfig?.model ?? '',
+        }
         const runData = typeof payload.dataCommand === 'string' && payload.dataCommand !== ''
           ? payload.dataCommand
           : config.dataCommand

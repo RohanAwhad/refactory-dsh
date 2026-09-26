@@ -164,6 +164,17 @@ def prepare(ctx: Any) -> dict[str, Any]:
     # and emit prompts state them, and read by `validate` so a mode that hardcodes a
     # fixture instead is refused rather than shipped.
     inputs = declared_inputs(ctx.knob("requires_input", ""))
+    # Fail before research, using the exact downstream HOME rewrite and scrub.
+    # Other ModelClient implementations own their own readiness contract.
+    from refactory_dsh.model import DshModelClient
+    from refactory_dsh.sandbox import model_readiness
+
+    client = getattr(ctx, "model", None)
+    if client is None or isinstance(client, DshModelClient):
+        model_readiness(
+            ctx.workdir / ".model-readiness",
+            model_context=client.context() if isinstance(client, DshModelClient) else None,
+        )
     reference = _revision_source(revision) if revision else _reference(extends)
     ctx.write_json("brief.json", {
         "name": name, "brief": brief, "extends": extends, "mode": revision,
@@ -993,6 +1004,13 @@ def _sample_knobs(raw: Any) -> dict[str, str]:
     return pairs
 
 
+def _model_context(ctx: Any) -> dict[str, str]:
+    from refactory_dsh.model import DshModelClient
+
+    client = getattr(ctx, "model", None)
+    return (client if isinstance(client, DshModelClient) else DshModelClient()).context()
+
+
 def smoke(ctx: Any) -> dict[str, Any]:
     """Run the new mode once, and compare a revision with what it revises.
 
@@ -1031,10 +1049,11 @@ def smoke(ctx: Any) -> dict[str, Any]:
         # A mode with an agent node cannot be scored without a model, and almost every
         # mode worth shipping has one — so supply a model rather than declining to
         # measure the common case. The client reaches one exactly as every other path
-        # does, so the sandbox needs no credential of its own.
+        # does, using the trusted home/route while its environment stays scrubbed.
         scored = sandbox.smoke(
             identifier, workdir, project=project_for_nodes(), model=True,
             knobs=samples or None,
+            model_context=_model_context(ctx),
         )
         if scored.ok and scored.payload.get("exit_ok") is False:
             # The sandbox exited 0 while the *mode* failed: it ran and raised, so its
@@ -1160,6 +1179,7 @@ def _revision(
     if not reason:
         scored = sandbox.smoke(
             revision, ctx.workdir / "smoke-source", project=project,
+            model_context=_model_context(ctx),
         )
         if scored.ok:
             before = float(scored.payload.get("score") or 0.0)

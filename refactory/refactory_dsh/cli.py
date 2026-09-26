@@ -242,6 +242,19 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     except Exception as exc:
         checks.append(("packages of modes", False, str(exc)))
 
+    try:
+        from tempfile import TemporaryDirectory
+        from refactory_dsh.model import DshModelClient
+        from refactory_dsh.sandbox import model_readiness
+
+        client = DshModelClient(provider=getattr(args, "provider", ""), model=getattr(args, "model", ""))
+        with TemporaryDirectory(prefix="refactory-readiness-") as work:
+            readiness = model_readiness(Path(work), model_context=client.context())
+        checks.append(("sandbox model configuration", True,
+                       f"{readiness['provider']}/{readiness['model']}: {readiness['status']}; authentication not tested"))
+    except Exception as exc:
+        checks.append(("sandbox model configuration", False, str(exc)))
+
     width = max(len(name) for name, _ok, _detail in checks)
     for name, ok, detail in checks:
         print(f"  {'ok  ' if ok else 'MISS'}  {name:<{width}}  {detail}")
@@ -249,7 +262,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     if bad:
         print(f"\nrefactory doctor: {len(bad)} problem(s): {', '.join(bad)}")
         return 1
-    print("\nrefactory doctor: ready — try `refactory list`, or `refactory ceo \"an idea\" --mode design`")
+    print("\nrefactory doctor: local configuration ready (authentication not tested) — try `refactory list`, or `refactory ceo \"an idea\" --mode design`")
     return 0
 
 
@@ -422,7 +435,9 @@ def build_parser() -> argparse.ArgumentParser:
     ui.add_argument("--port", type=int, default=0, help="default: the launcher's own")
     ui.add_argument("--no-open", action="store_true", help="do not open a browser")
 
-    sub.add_parser("doctor", help="whether this machine can run a mode")
+    doctor = sub.add_parser("doctor", help="check local prerequisites and sandbox credential configuration (no model request)")
+    doctor.add_argument("--provider", default="", help="provider route to check (default: DSH settings)")
+    doctor.add_argument("--model", default="", help="model selection to report (default: DSH settings)")
     return parser
 
 

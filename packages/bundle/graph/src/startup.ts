@@ -8,8 +8,8 @@
  */
 
 import { readFileSync, existsSync, mkdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { Command } from 'commander'
 import type { Context } from '@deepseek-ai/cordis'
 import { parseCmdline } from '@deepseek-ai/dsh-cmdline'
@@ -164,6 +164,10 @@ export function apply(ctx: Context): void {
       SRF_KNOBS: String(options.knobs),
       SRF_BUDGET: String(budget),
       REFACTORY_WORKDIR: workdir,
+      // Nonsecret context for nested model calls after command/sandbox scrubbing.
+      REFACTORY_MODEL_DSH_HOME: resolve((process.env.DSH_HOME?.trim() || join(homedir(), '.dsh')).replace(/^~(?=[/\\]|$)/, homedir())),
+      REFACTORY_MODEL_PROVIDER: String(options.provider ?? ''),
+      REFACTORY_MODEL_ID: String(options.model ?? ''),
       // The node commands run *in the work directory*, so `Path.cwd()` inside one of
       // them is the run, not the checkout. The project — where `.factory/packages`
       // and the packages of modes live — has to be said out loud, and this is where
