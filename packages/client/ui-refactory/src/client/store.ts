@@ -20,6 +20,7 @@ import type {
   RefactoryPackageChoice,
   RefactoryRunStatus,
   RefactorySingleRun,
+  RefactorySingleLaunch,
   RefactorySteering,
   RefactoryStrategies,
 } from '@deepseek-ai/dsh-refactory-console/types'
@@ -69,7 +70,8 @@ export interface RefactoryNotice {
  * that came back.
  */
 export type RefactorySingleState =
-  | { readonly kind: 'running' }
+  | { readonly kind: 'running'; readonly launch?: RefactorySingleLaunch }
+  | { readonly kind: 'failed'; readonly launch: RefactorySingleLaunch }
   | { readonly kind: 'ready'; readonly value: RefactorySingleRun }
 
 /** One tab's picker: what it read, what it chose, and where the run got to. */
@@ -142,6 +144,7 @@ type RefactoryActions = {
   candidatesRead: (draft: RefactoryState, tabId: TabId, candidates: readonly RefactoryCandidateRow[]) => void
   candidatesFailed: (draft: RefactoryState, tabId: TabId, message: string) => void
   runLoading: (draft: RefactoryState, tabId: TabId) => void
+  runLaunched: (draft: RefactoryState, tabId: TabId, launch: RefactorySingleLaunch) => void
   ran: (draft: RefactoryState, tabId: TabId, run: RefactorySingleRun) => void
   runFailed: (draft: RefactoryState, tabId: TabId) => void
   packages: (draft: RefactoryState, tabId: TabId, packages: readonly RefactoryPackageChoice[]) => void
@@ -414,6 +417,9 @@ export function createRefactoryStore(): EngineStoreHandle<RefactoryState, Refact
        * @param tabId - the tab being drawn.
        * @param run - the run, with where it got to.
        */
+      runLaunched: (d, tabId: TabId, launch: RefactorySingleLaunch) => {
+        bucket(d, tabId).single = { kind: 'running', launch }
+      },
       ran: (d, tabId: TabId, run: RefactorySingleRun) => {
         bucket(d, tabId).single = { kind: 'ready', value: run }
       },
@@ -424,7 +430,9 @@ export function createRefactoryStore(): EngineStoreHandle<RefactoryState, Refact
        * @param tabId - the tab being drawn.
        */
       runFailed: (d, tabId: TabId) => {
-        bucket(d, tabId).single = null
+        const tab = bucket(d, tabId)
+        const launch = tab.single?.kind === 'running' ? tab.single.launch : undefined
+        tab.single = launch === undefined ? null : { kind: 'failed', launch }
       },
       /**
        * Say what the last refused gesture was.

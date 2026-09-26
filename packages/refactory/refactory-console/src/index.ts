@@ -29,6 +29,10 @@
  * @module @deepseek-ai/dsh-refactory-console
  */
 
+import { randomUUID } from 'node:crypto'
+import { mkdir, readFile, realpath } from 'node:fs/promises'
+import { join } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-subprocess'
@@ -54,6 +58,7 @@ import type {
   RefactoryRunStatus,
   RefactoryRunSummary,
   RefactorySingleRun,
+  RefactorySingleEvent,
   RefactorySingleRunRequest,
   RefactoryStartReceipt,
   RefactoryStartRequest,
@@ -422,7 +427,80 @@ export class RefactoryConsole extends TypertRemoteService {
   @Remote
   async run(request: RefactorySingleRunRequest, signal: AbortSignal): Promise<RefactorySingleRun> {
     const mode = await this.runnable(request.mode, signal)
-    const result = await this.consoleCall(runInvocation({ mode, knobs: request.knobs }), signal)
+    return this.executeSingle(mode, request.knobs, signal)
+  }
+
+  /**
+   * Stream one unique run's identity while the same console call owns execution.
+   * A prepared event certifies only a fresh lowering, never model authentication
+   * or success. Ending this stream aborts and awaits its owned console call.
+   * @param request - admitted mode and knob values; callers cannot choose a path.
+   * @param signal - the transport's cancellation for this stream.
+   * @returns starting identity, durable preparation, and the ordinary final answer.
+   */
+  @Remote({ mode: 'stream' })
+  async *runStream(request: RefactorySingleRunRequest, signal: AbortSignal): AsyncGenerator<RefactorySingleEvent> {
+    const mode = await this.runnable(request.mode, signal)
+    signal.throwIfAborted()
+    const project = await realpath(this.projectRoot)
+    const factory = join(project, '.factory')
+    await mkdir(factory, { recursive: true })
+    if (await realpath(factory) !== factory) {
+      throw new RemoteError('gateway/bad-request', 'the factory directory must remain inside the configured project', {})
+    }
+    const parent = join(factory, 'interactive')
+    await mkdir(parent, { recursive: true })
+    if (await realpath(parent) !== parent) {
+      throw new RemoteError('gateway/bad-request', 'the one-shot run directory must remain inside the configured project', {})
+    }
+    const root = join(parent, `single-${randomUUID()}`)
+    // Exclusive mkdir claims a fresh namespace: no caller path or reused result.
+    await mkdir(root)
+    const controller = new AbortController()
+    const ownedSignal = AbortSignal.any([signal, controller.signal])
+    let settled = false
+    const completion = this.executeSingle(mode, request.knobs, ownedSignal, root).then(
+      run => ({ ok: true as const, run }),
+      error => ({ ok: false as const, error }),
+    ).finally(() => { settled = true })
+    try {
+      yield { kind: 'launch', launch: { mode, root, phase: 'starting' } }
+      while (!settled) {
+        ownedSignal.throwIfAborted()
+        let invocation: unknown
+        try {
+          invocation = JSON.parse(await readFile(join(root, '.refactory', 'invocation.json'), 'utf8'))
+        } catch (error) {
+          // An incomplete external write is not preparation evidence or a reason
+          // to cancel otherwise valid work. Keep the same bounded observation.
+          if (!(error instanceof SyntaxError)
+            && !(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error
+        }
+        // prepare() publishes this record last, after its graph/declarations.
+        if (isRecord(invocation) && typeof invocation.id === 'string'
+          && invocation.mode === mode.replace('/', '-') && invocation.previous === null) {
+          yield { kind: 'launch', launch: { mode, root, phase: 'prepared', invocation: invocation.id } }
+          break
+        }
+        // Stop observation at settlement/abort; the timer is bounded and owned.
+        const tick = new AbortController()
+        try {
+          await Promise.race([completion, delay(100, undefined, { signal: AbortSignal.any([ownedSignal, tick.signal]) })])
+        } finally { tick.abort() }
+      }
+      const result = await completion
+      ownedSignal.throwIfAborted()
+      if (!result.ok) throw result.error
+      yield { kind: 'result', run: result.run }
+    } finally {
+      controller.abort()
+      await completion
+    }
+  }
+
+  /** Execute and interpret one console call for unary and streaming callers. */
+  private async executeSingle(mode: string, knobs: readonly string[] | undefined, signal: AbortSignal, workdir?: string): Promise<RefactorySingleRun> {
+    const result = await this.consoleCall(runInvocation({ mode, knobs, workdir }), signal)
     const answer = isRecord(result.value) ? result.value : {}
     const single = answer.run
     const progress = isRecord(single) ? authoring(single.authoring) : null
