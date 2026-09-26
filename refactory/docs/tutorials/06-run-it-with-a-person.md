@@ -141,6 +141,8 @@ an applied or refused receipt, including the resulting package directory. Readin
 If the search is explicitly resumed with more budget, controls follow the active
 optimizer. Its previous terminal report is retained under
 `.refactory/previous-reports/`; a report-only replay does not start that lifecycle.
+Only one optimizer may own a run directory at a time. A concurrent launch is
+refused before changing its state; process exit releases ownership automatically.
 
 Older versions could leave a Keep or Reject queued after completion. Both adoption
 routes recover that choice, including its lineage, into the journal and selection

@@ -28,6 +28,7 @@ the ordinary winner/audit guard, first recovering any legacy queued selection.
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import time
@@ -38,6 +39,7 @@ from pathlib import Path
 #: The file's name inside a run directory.
 CONTROL = "control.json"
 SEARCH_STATE = Path(".refactory/optimizer-status.json")
+SEARCH_LOCK = Path(".refactory/optimizer.lock")
 
 
 def search_owner(root: Path) -> dict:
@@ -77,9 +79,53 @@ def request_identity(request: dict) -> dict:
 
 
 @contextmanager
+def _search_lock(root: Path):
+    """Hold one OS-owned lock until strategy execution ends, including on death.
+
+    The persistent file is only the lock's inode: never unlink it, since another
+    process may already have opened it. The OS releases ownership on process exit.
+    """
+    path = root / SEARCH_LOCK
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('a+b') as handle:
+        if os.name == 'nt':
+            import msvcrt
+
+            if handle.tell() == 0:
+                handle.write(b'\0')
+                handle.flush()
+            handle.seek(0)
+            lock = lambda: msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            unlock = lambda: msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            lock = lambda: fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            unlock = lambda: fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        try:
+            lock()
+        except OSError as error:
+            if error.errno not in (errno.EACCES, errno.EAGAIN):
+                raise
+            raise ControlError(f"an optimizer already owns {root}") from error
+        try:
+            yield
+        finally:
+            unlock()
+
+
+@contextmanager
 def running_search(root: Path):
-    """Own actual strategy execution and retire a previous terminal report."""
+    """Exclusively own actual strategy execution and retire a terminal report."""
     root = Path(root)
+    with _search_lock(root), _running_search(root):
+        yield
+
+
+@contextmanager
+def _running_search(root: Path):
+    # Retain the PID check inside the lock for an owner started by an older
+    # version that wrote lifecycle state but did not acquire the OS lock.
     if search_phase(root) == "running":
         raise ControlError(f"an optimizer already owns {root}")
     path = root / SEARCH_STATE
@@ -87,7 +133,7 @@ def running_search(root: Path):
     record = {"status": "running", "pid": os.getpid(), "started": time.time(), "id": uuid.uuid4().hex}
 
     def save() -> None:
-        temporary = path.with_suffix('.tmp')
+        temporary = path.with_suffix(f'.{record["id"]}.tmp')
         temporary.write_text(json.dumps(record) + '\n')
         temporary.replace(path)
 
