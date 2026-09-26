@@ -1,0 +1,25 @@
+# Optimization profiles
+
+A profile is a named, immutable version of search settings and the user's objective. A run writes its exact resolved settings, source identity, input fingerprints and validation contract to `resolved-profile.json`; changing the reusable profile later does not edit that run.
+
+```sh
+refactory profile-save --name small-search --spec '{"settings":{"optimizer":"random","edit_preset":"knob_only","epochs":1,"batch_size":2,"max_evaluations":2,"repeats":2,"max_elapsed_s":30,"validation_reserve_s":3},"contract":{"objective":"Compare a bounded pair of candidates","required_artifacts":[]}}'
+refactory profiles
+refactory profile-resolve circle_packing/adaptive --profile small-search --profile-version 1
+refactory optimize circle_packing/adaptive --profile small-search --profile-version 1 --runs-root .factory/profile-demo
+refactory comparison --run .factory/profile-demo
+refactory adopt --run .factory/profile-demo --as profile_winner
+refactory package smoke profile_winner/adaptive
+```
+
+Saving the same name creates a new version. CLI overrides are explicit and appear in the resolved snapshot. Profiles support the existing strategy, optimizer and evaluator; starting/frozen knobs, edit preset and a narrower allowed-operation list; epochs, batch size, evaluation cap, retained parents, proposal attempts, seed, holdout and parsimony; repeats, shared resources and worker/model routing. `refactory optimize --help` lists every option.
+
+In the native Refactory panel, select a scored mode and expand **Optimization profiles and full search controls**. Select a saved version or edit controls and save a new version. The mode's existing knob fields choose starting values. **Preview launch contract** uses the same resolver as the CLI and launch service. Save objective or additional-artifact changes before launching. Existing live notes, candidate keep/reject, pause/resume/stop, explicit adoption and using the adopted mode once remain available.
+
+**Candidate changes, measurements and validation** includes successful, failed and unmeasured states. Expand a candidate to inspect its lineage, graph/prompt/knob diff, raw and adjusted score, real trial count/variation, required-artifact outcome and duration. Missing token/cost telemetry is unavailable, never zero. Held-out winner validation is separate from training and never enters proposal context. The mode still owns Task definitions, scoring code and invariants; a profile cannot redefine them.
+
+By default `repeats=1`. Opt in to 2–10 independent measurements per candidate and winner audit. Trials consume shared resources, including final validation. One failed or incomplete trial makes that candidate ineligible; its partial measurements remain visible. Ranking maximizes the mean validated score minus `parsimony × node count`. Cost and latency are descriptive rather than hidden selection advantages. A larger observed mean is not statistical proof; finding no improvement is a valid result.
+
+Adoption records the exact winning state, profile snapshot and held-out audit in its provenance. Historical configurations without profiles remain readable. Profiles apply to scored modes, including generated Create/Edit packages; standalone Design artifacts have no separate optimizer.
+
+See [shared budgets and fast modes](budgets-fast-modes.md), [model and worker routing](models.md), and [live controls and recovery](live-control.md) for the resource, execution and continuation contracts used by these settings.

@@ -11,6 +11,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
+import type { TypertRemoteContribution } from '@deepseek-ai/dsh-typert-protocol'
 import type { SidebarRightTabDefinition } from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
 import { REFACTORY_ID, REFACTORY_KIND } from '../src/client/definition.ts'
 import { apply, inject } from '../src/client/index.ts'
@@ -77,9 +78,22 @@ async function boot() {
   ctx.provide('slots', slots as never)
   ctx.provide('locale', locale as never)
   ctx.provide('connection', connection as never)
+  const mounted: TypertRemoteContribution[] = []
+  const streams = {
+    runStream: vi.fn(async function* () {}),
+    watchStream: vi.fn(async function* () {}),
+  }
+  const remote = {
+    refactoryConsole: streams,
+    $mount: vi.fn(async (contribution: TypertRemoteContribution) => {
+      mounted.push(contribution)
+      ctx.provide('remote.refactoryConsole', streams as never)
+    }),
+  }
+  ctx.provide('remote', remote as never)
   const fiber = ctx.plugin({ inject: [...inject], apply })
   await fiber.await()
-  return { tabs, registered, dictionaries, fiber }
+  return { tabs, registered, dictionaries, fiber, mounted }
 }
 
 describe('ui-refactory apply', () => {
@@ -88,7 +102,7 @@ describe('ui-refactory apply', () => {
   })
 
   it('registers the type, its dictionaries, and the body seat under the type\'s id with a store and a face', async () => {
-    const { tabs, registered, dictionaries } = await boot()
+    const { tabs, registered, dictionaries, mounted } = await boot()
     const definition = tabs.get(REFACTORY_KIND)
     expect(definition?.id).toBe(REFACTORY_ID)
     expect(definition?.priority).toBe('builtin')
@@ -96,6 +110,10 @@ describe('ui-refactory apply', () => {
     expect(definition?.guide?.map(entry => [entry.order, entry.title(), entry.description?.()]))
       .toEqual([[10, 'guide.title', 'guide.description']])
     expect(dictionaries.get('sidebarRefactory')).toEqual({ zh, en })
+    expect(mounted).toHaveLength(1)
+    expect(mounted[0]?.descriptors.map(descriptor => [descriptor.method, descriptor.mode])).toEqual([
+      ['runStream', 'stream'], ['watchStream', 'stream'],
+    ])
     // The seat key is the implementation's id, not the kind: an extension may
     // take the kind over, and the seat must still find this body.
     expect(registered.map(entry => [entry.name, entry.key, entry.locale, entry.component])).toEqual([

@@ -43,7 +43,7 @@ describe('failureLine', () => {
   it('names the three refusals the Host names precisely, in the reader\'s language', () => {
     const t = makeTranslate(zh)
     expect(failureLine(t, { code: 'refactory/unknown-mode', message: 'raw' })).toBe('这个模式不在目录里，请重新读取列表再选。')
-    expect(failureLine(t, { code: 'refactory/authoring-mode', message: 'raw' })).toBe('这是创作模式，不是可以搜索或使用的运行；请用它的创作动作。')
+    expect(failureLine(t, { code: 'refactory/authoring-mode', message: 'raw' })).toBe('这是创作模式，无法进行优化搜索；请使用「单次运行」。')
     expect(failureLine(t, { code: 'refactory/package-disabled', message: 'raw' })).toBe('这个模式的包已停用，请先启用它。')
   })
 
@@ -511,10 +511,14 @@ describe('using the chosen mode once', () => {
     expect(missing(view, 'data-refactory-start')).toBe(false)
   })
 
-  it('says an authoring mode cannot be run once, and offers no button that would fail', () => {
-    const { view } = mountBody({ choices: { kind: 'ready', value: CHOICES }, chosen: AUTHORING.id })
-    expect(missing(view, 'data-refactory-run-once')).toBe(true)
+  it('offers authoring Run once and keeps optimizer Start disabled', async () => {
+    const { view, console } = mountBody({ choices: { kind: 'ready', value: CHOICES }, chosen: AUTHORING.id })
+    console.run.mockImplementation(async () => ok({ ...SINGLE, mode: AUTHORING.id, best_score: null }) as never)
+    expect((at(view, 'data-refactory-start') as HTMLButtonElement).disabled).toBe(true)
+    expect((at(view, 'data-refactory-run-once') as HTMLButtonElement).disabled).toBe(false)
     expect(at(view, 'data-refactory-authoring').textContent).toContain('create')
+    fireEvent.click(at(view, 'data-refactory-run-once'))
+    await waitFor(() => { expect(console.run).toHaveBeenCalledWith(expect.objectContaining({ mode: AUTHORING.id }), expect.anything()) })
   })
 
   it('uses the mode once with the same knob values Start would send', async () => {

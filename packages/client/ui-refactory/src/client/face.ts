@@ -39,6 +39,8 @@ export type RefactoryRemote = {
   readonly refactoryConsole: Pick<
     RefactoryConsoleRemote,
     'project' | 'modes' | 'strategies' | 'packages' | 'start' | 'run' | 'runStream' | 'status' | 'leaderboard'
+      | 'runs' | 'graphControl' | 'watchStream' | 'steer' | 'stop' | 'setPackageEnabled' | 'removePackage' | 'importPackage'
+      | 'profiles' | 'profileSave' | 'profileResolve' | 'comparison'
       | 'steer' | 'stop' | 'setPackageEnabled' | 'removePackage' | 'importPackage'
   >
 }
@@ -59,6 +61,7 @@ export type RefactoryRemote = {
 export function refactoryConsoleOverConnection(
   rpc: ClientConnectionRpc,
   runStream?: RefactoryConsoleRemote['runStream'],
+  watchStream?: RefactoryConsoleRemote['watchStream'],
 ): RefactoryRemote {
   const call = <T>(
     method: string,
@@ -68,6 +71,13 @@ export function refactoryConsoleOverConnection(
     rpc.call('/api', `refactoryConsole/${method}`, { args }, signal) as Promise<RemoteResult<T>>
   return {
     refactoryConsole: {
+      ...watchStream === undefined ? {} : { watchStream },
+      runs: (signal) => call('runs', {}, signal),
+      graphControl: (request, signal) => call('graphControl', { request }, signal),
+      profiles: (signal) => call('profiles', {}, signal),
+      profileSave: (name, spec, signal) => call('profileSave', { name, spec }, signal),
+      profileResolve: (request, signal) => call('profileResolve', { request }, signal),
+      comparison: (run, signal) => call('comparison', { run }, signal),
       project: (signal) => call('project', {}, signal),
       modes: (signal) => call('modes', {}, signal),
       strategies: (signal) => call('strategies', {}, signal),
@@ -120,6 +130,12 @@ export interface RefactoryControlAct {
 
 /** The picker's injected business face, as the body receives it. */
 export interface RefactoryInjected {
+  readonly listRuns?: (signal: AbortSignal) => Promise<readonly import('@deepseek-ai/dsh-refactory-console/types').RefactoryRunSummary[]>
+  readonly graphControl?: (request: { run: string; action: string; node?: string; text?: string; revision?: string }, signal: AbortSignal) => Promise<Record<string, unknown>>
+
+  /** Direct profile operations keep the saved recipe separate from the watched run. */
+  readonly profileApi?: Pick<RefactoryConsoleRemote, 'profiles' | 'profileSave' | 'profileResolve' | 'comparison'>
+
   /**
    * Seed this tab's picker and read the described choices into it.
    * @param tabId - the tab being drawn.
@@ -180,6 +196,7 @@ export interface RefactoryInjected {
     mode: string,
     knobs: readonly RefactoryKnobSetting[],
     signal: AbortSignal,
+    settings?: RefactorySettings,
   ) => void
   /**
    * Read one status frame for a run.
@@ -292,7 +309,9 @@ export function refactoryFace(
     const runGenerations = new Map<TabId, number>()
     const packageGenerations = new Map<TabId, number>()
     const stopGenerations = new Map<TabId, number>()
+    const watchGenerations = new Map<TabId, number>()
     const running = new Set<TabId>()
+    const watchers = new Map<TabId, AbortController>()
     /**
      * The same, for the ledger read: a status refresh and a ledger refresh are two
      * independent reads of one run, and retiring one must not drop the other.
@@ -364,12 +383,36 @@ export function refactoryFace(
     /** Change target without allowing the previous target's late replies to land. */
     const watchRun = (tabId: TabId, run: string, signal: AbortSignal): void => {
       if (signal.aborted || run.trim() === '') return
+      nextGeneration(watchGenerations, tabId)
       nextGeneration(startGenerations, tabId)
       nextGeneration(candidateGenerations, tabId)
       nextGeneration(stopGenerations, tabId)
+      watchers.get(tabId)?.abort()
       actions.watching(tabId, run.trim())
       readStatus(tabId, run.trim(), 0, signal)
       loadSteering(tabId, run.trim(), signal)
+      if (console.watchStream !== undefined) {
+        const controller = new AbortController()
+        watchers.set(tabId, controller)
+        const abort = (): void => controller.abort()
+        signal.addEventListener('abort', abort, { once: true })
+        void (async () => {
+          try {
+            for await (const frame of console.watchStream!(run.trim(), 0, controller.signal)) {
+              if (controller.signal.aborted || watchers.get(tabId) !== controller) return
+              // Retire any older unary frame before accepting streamed state.
+              nextGeneration(statusGenerations, tabId)
+              nextGeneration(steeringGenerations, tabId)
+              actions.framed(tabId, frame.status)
+              actions.steered(tabId, frame.steering)
+            }
+          } catch (error) {
+            if (!controller.signal.aborted) actions.noticed(tabId, {
+              code: 'refactory/watch-disconnected', message: `Live view disconnected; Watch reconnects without restarting work. ${error instanceof Error ? error.message : String(error)}`,
+            })
+          } finally { signal.removeEventListener('abort', abort) }
+        })()
+      }
     }
     /** Take the packages a package gesture answered with. */
     const takePackages = (
@@ -406,15 +449,29 @@ export function refactoryFace(
       })
     }
     return {
+      async listRuns(signal) {
+        const result = await console.runs(signal)
+        if (!result.ok) throw new Error(result.error.message)
+        return result.value
+      },
+      async graphControl(request, signal) {
+        if (console.graphControl === undefined) throw new Error('Graph controls unavailable in this runtime')
+        const result = await console.graphControl(request, signal)
+        if (!result.ok) throw new Error(result.error.message)
+        return result.value
+      },
+      profileApi: console,
       load(tabId, signal) {
         if (signal.aborted) return
         actions.start(tabId)
         signal.addEventListener('abort', () => {
           for (const generations of [
             catalogueGenerations, statusGenerations, startGenerations, runGenerations,
-            packageGenerations, stopGenerations, steeringGenerations, candidateGenerations,
+            packageGenerations, stopGenerations, steeringGenerations, candidateGenerations, watchGenerations,
           ]) generations.delete(tabId)
           running.delete(tabId)
+          watchers.get(tabId)?.abort()
+          watchers.delete(tabId)
           actions.forget(tabId)
         }, { once: true })
         read(tabId, signal)
@@ -446,6 +503,9 @@ export function refactoryFace(
         if (settings.strategy !== '') chosen.strategy = settings.strategy
         if (settings.optimizer !== '') chosen.optimizer = settings.optimizer
         if (settings.evaluator !== '') chosen.evaluator = settings.evaluator
+        if (settings.configuration) chosen.settings_json = settings.configuration
+        if (settings.profile) chosen.profile = settings.profile
+        if (settings.profile_version) chosen.profile_version = Number(settings.profile_version)
         const generation = nextGeneration(startGenerations, tabId)
         settle(startGenerations, tabId, generation, console.start(
           { mode, settings: chosen, knobs: knobArguments(knobs) },
@@ -454,18 +514,30 @@ export function refactoryFace(
           watchRun(tabId, receipt.root, signal)
         })
       },
-      run(tabId, mode, knobs, signal) {
+      run(tabId, mode, knobs, signal, settings) {
         if (signal.aborted || running.has(tabId)) return
         running.add(tabId)
         const generation = nextGeneration(runGenerations, tabId)
+        const watchGeneration = watchGenerations.get(tabId)
         actions.runLoading(tabId)
         const current = (): boolean => !signal.aborted && runGenerations.get(tabId) === generation
         void (async () => {
           let answered = false
           try {
-            for await (const event of console.runStream({ mode, knobs: knobArguments(knobs) }, signal)) {
+            for await (const event of console.runStream({ mode, knobs: knobArguments(knobs),
+              ...settings?.configuration ? { settings: runtimeSettings(settings.configuration) } : {},
+            }, signal)) {
               if (!current()) return
-              if (event.kind === 'launch') actions.runLaunched(tabId, event.launch)
+              if (event.kind === 'launch') {
+                actions.runLaunched(tabId, event.launch)
+                // A later explicit Watch owns the view, even while this launch
+                // is still preparing. Its worker/result remain independently owned.
+                if (event.launch.phase === 'prepared' && watchGenerations.get(tabId) === watchGeneration) {
+                  watchRun(tabId, event.launch.root, signal)
+                }
+              }
+              // The durable watcher owns the ledger. A completed use must not
+              // put its gates under another run selected in the meantime.
               else { actions.ran(tabId, event.run); answered = true }
             }
             if (!answered && current()) throw new Error('The run stream ended without a final result; inspect its run directory before retrying.')
@@ -565,4 +637,15 @@ export function refactoryFace(
       },
     }
   }
+}
+
+/** Only worker routing and resources apply when using a mode once. */
+export function runtimeSettings(configuration: string): Record<string, string | number> {
+  const value = JSON.parse(configuration) as Record<string, unknown>
+  const allowed = ['worker_backend', 'provider', 'model', 'effort', 'permission_mode',
+    'max_elapsed_s', 'max_tokens', 'validation_reserve_s', 'validation_reserve_tokens']
+  const result = Object.fromEntries(Object.entries(value).filter(([key, entry]) => allowed.includes(key)
+    && (typeof entry === 'string' || typeof entry === 'number'))) as Record<string, string | number>
+  for (const key of ['role_routes', 'node_routes']) if (value[key] && typeof value[key] === 'object') result[key] = JSON.stringify(value[key])
+  return result
 }

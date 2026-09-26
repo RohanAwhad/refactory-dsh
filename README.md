@@ -62,8 +62,8 @@ The original package remains available. [Continue the walkthrough →](refactory
 | Terminal | Browser |
 |---|---|
 | `refactory ceo` for conversation and approval gates | CEO chat for authoring and node-by-node interaction |
-| `refactory optimize` for explicit search configuration | Modes panel for knobs, search choices and evaluation budgets |
-| `status`, `candidate`, `steer`, `adopt` for inspection and control | Run once, attached-run status, Steering and candidate controls |
+| `refactory optimize` for explicit search configuration | Modes panel for saved profiles, knobs, search and resource limits |
+| `status`, `candidate`, `steer`, `adopt` for inspection and control | Run once, live graph/worker activity, questions and candidate comparison |
 
 ```bash
 uv run refactory ui --port 3081
@@ -84,7 +84,7 @@ uv run refactory ceo counting_pack/fixed_step \
   --knob target=20 --knob step=2 --intent "Count to twenty and explain the recorded result."
 ```
 
-Chat supports Create, Edit and Design. The Modes panel's ordinary **Start** button launches optimization of a scored mode; **Run once** executes an existing mode. Some attached status and steering views require manual refresh today. [Interface guide →](refactory/docs/interfaces.md)
+Chat supports Create, Edit and Design. The Modes panel's **Start** button launches optimization of a scored mode; **Run once** executes any enabled mode, including full and fast authoring modes. Attach a run to follow durable activity, worker receipts and pending questions. [Interface guide →](refactory/docs/interfaces.md)
 
 ## Create, edit or design
 
@@ -97,34 +97,34 @@ Chat supports Create, Edit and Design. The Modes panel's ordinary **Start** butt
 
 These commands call a model and can take substantial time. The current full authoring modes include research and reviews; you approve the strategy/design before implementation. Generated packages live in `.factory/packages/`; Design artifacts live in `.factory/artifacts/`. Exact paths and validation outcomes are recorded in the run.
 
+For a smaller graph, choose `create_fast`, `edit_fast` or `design_fast`. Each retains one focused QA stage and bounded repair; research and review stages remain customizable graph choices. See [fast modes and shared budgets](refactory/docs/budgets-fast-modes.md).
+
 Design produces the artifact itself. It does not need to produce a scored mode or enter the optimizer. [Authoring guide →](refactory/docs/tutorials/03-author-with-a-model.md)
 
 ## Optimize with a clear contract
 
-Choose an outer-loop strategy, a candidate proposer, an evaluator and the permitted edits. Set evaluation limits and, for Task-bound modes, a holdout fraction. Inspect each candidate's changes and raw/adjusted scores before adopting.
+Choose an outer-loop strategy, a candidate proposer, an evaluator and permitted edits. Save a named [optimization profile](refactory/docs/optimization-profiles.md), preview its objective and validation contract, and launch the same settings from CLI or GUI. Each run retains its exact resolved snapshot. Candidate comparison includes lineage, changes, raw/adjusted scores, failures, trial variability, duration and available cost/usage.
 
 During a search you can add instructions, keep or reject candidate branches, pause/resume/stop at generation boundaries, and request adoption. A failed or unaudited candidate cannot be treated as a verified winner. A run may finish without finding an improvement.
 
-**Evaluation limits count candidate runs, not tokens or wall-clock time.** Final holdout checks are additional. Different models can change quality, cost and latency. [Optimization tutorial →](refactory/docs/tutorials/02-optimize-it.md)
+**Candidate limits, elapsed limits and token limits are separate controls.** Opt-in repeated trials and final holdout validation consume the shared run allocation; validation can have a reserved portion. Missing usage stays unavailable. Different models can change quality, cost and latency. [Optimization tutorial →](refactory/docs/tutorials/02-optimize-it.md)
 
 ## Models and coding workers
 
-The current runtime is DSH, built with Cordis. Its coding workers can use configured model providers, including DeepSeek, OpenAI and Anthropic. Selecting an OpenAI model inside DSH does not select the Codex coding agent. The separate DSH evaluator currently uses runtime model defaults; see [routing details](refactory/docs/models.md#model-selection-across-execution-paths).
+DSH remains the default worker runtime, composed with Cordis. Its providers include DeepSeek, OpenAI and Anthropic. A DSH worker using an OpenAI model is still a DSH worker. Both evaluators carry the selected routing context; per-node overrides take precedence over per-role and run settings. Inspect actual execution receipts, not just the configured selection. [Routing and worker guide →](refactory/docs/models.md)
 
-Codex/Claude Code worker integrations, global budgets and the fast modes below are **planned**, not shipping features. We do not claim equal performance across providers.
+Codex and Claude Code are explicit, optional worker backends through the installed DSH provider registry. They retain native authentication and product settings; unsupported capabilities fail before dispatch. External token-limited runs are refused because complete nested accounting is not established. Refactory still owns graph order, validation and gates.
 
-## Next release
+## Release capabilities and validation
 
-Every item requires working **CLI and GUI** paths, with separate acceptance evidence.
+| Implemented surface | Guide | Tracking |
+|---|---|---|
+| Shared resource accounting and fast Create/Edit/Design graphs | [Fast modes and budgets](refactory/docs/budgets-fast-modes.md) | [#234](https://github.com/akashgit/refactory-dsh/issues/234) |
+| Durable live activity, pending questions and explicit boundary controls | [Live control and recovery](refactory/docs/live-control.md) | [#235](https://github.com/akashgit/refactory-dsh/issues/235) |
+| Versioned search profiles, full controls and candidate comparison | [Optimization profiles](refactory/docs/optimization-profiles.md) | [#236](https://github.com/akashgit/refactory-dsh/issues/236) |
+| Shared routing and optional coding workers | [Models and workers](refactory/docs/models.md) | [#237](https://github.com/akashgit/refactory-dsh/issues/237) |
 
-| Planned improvement | Tracking |
-|---|---|
-| Shared run budgets and fast Create/Edit/Design modes with light QA | [#234](https://github.com/akashgit/refactory-dsh/issues/234) |
-| Live graph/worker visibility, questions and steering | [#235](https://github.com/akashgit/refactory-dsh/issues/235) |
-| Saved optimization profiles and complete GUI controls | [#236](https://github.com/akashgit/refactory-dsh/issues/236) |
-| Consistent model routing and optional Codex/Claude Code workers | [#237](https://github.com/akashgit/refactory-dsh/issues/237) |
-
-Modes are ordinary customizable graphs. Research and QA are choices in those graphs; proposed fast defaults retain one focused QA stage and bounded repair.
+Bounded CLI and native GUI checks establish profile configuration, candidate measurements, exact adoption/replay and live boundary controls. All six fast-authoring checks stopped on token exhaustion before graph completion. Codex and Claude Code passed CLI editing/checks with explicit native edit permissions; their GUI checks under default permissions truthfully failed. Positive GUI external-worker completion and public dead-owner recovery acceptance remain open. See the [release validation record](refactory/docs/release-validation-20260926.md) for evidence and limits. Prior artifacts support unchanged contracts; they do not establish generated-artifact quality or equal backend performance.
 
 ## The command line
 

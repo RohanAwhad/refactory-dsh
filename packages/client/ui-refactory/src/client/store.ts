@@ -58,6 +58,11 @@ export interface RefactorySettings {
   batch_size?: string
   /** Maximum candidate evaluations; absent keeps the console default. */
   max_evaluations?: string
+  /** Complete additional settings sent through the common JSON resolver. */
+  configuration?: string
+  /** Selected saved recipe and immutable version. */
+  profile?: string
+  profile_version?: string
 }
 
 /** Defaults of the console's LoopConfig, shown until a person changes a limit. */

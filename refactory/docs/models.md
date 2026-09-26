@@ -1,6 +1,6 @@
 # Models
 
-Configure model routes in `~/.dsh/settings.yaml` or **Settings → Models**. Supported entry points accept `--model` and `--provider` overrides without changing saved settings. The table below explains which execution paths receive those overrides.
+DSH is the default coding worker. Configure its model routes in `~/.dsh/settings.yaml` or **Settings → Models**. The Modes panel exposes **Worker routing and shared resources** for Run once and saved optimization profiles. Supported entry points accept `--model` and `--provider` overrides without changing saved settings. The table below explains which execution paths receive those overrides.
 
 ## Where the list comes from
 
@@ -59,18 +59,41 @@ uv run refactory optimize circle_packing/adaptive --provider deepseek-official -
 | Terminal `ceo` | The selected graph-runtime provider/model, or saved defaults |
 | Python Create/Edit/Design agent nodes | The supplied `DshModelClient`; its route/context is carried to supported nested validation |
 | Optimization with the default `walker` evaluator | The supplied model client serves the reasoning proposer and evaluated agent nodes |
-| Optimization with the separate `dsh` evaluator | Candidate execution launches the graph runtime using its configured defaults; the optimizer's CLI override is not forwarded as a universal candidate override |
+| Optimization with the separate `dsh` evaluator | The supplied client context is forwarded; explicit agent workers are dispatched through the same node bridge and route as the walker |
 | GUI CEO and children | The owning session and worker configuration; inspect actual child execution when validating a route |
 
-For the separate DSH evaluator, configure the runtime's intended defaults as well as the proposer route. Current session selection and nested-runtime defaults are distinct facts. `refactory runtime` inspects configuration; actual session/request receipts establish what ran. Consistent routing across all paths is planned in [#237](https://github.com/akashgit/refactory-dsh/issues/237).
+`refactory runtime` inspects configuration; `.refactory/workers/*.json` receipts establish the selected backend, observed runtime route, version and usage. Requested settings are separate from observed settings. Explicit `node_routes` override `role_routes`, which override the run settings; empty fields use the runtime defaults. Switching backend clears inherited provider/model/effort unless the override supplies them.
 
 A random seed does not make model outputs deterministic. Changing provider/model can change tool use, latency, cost and output quality; support for a protocol is not a performance guarantee.
 
 ## Model provider versus coding agent
 
-DSH is the current coding-agent runtime. It supplies the tool loop, sessions, delegation and working context; an OpenAI or Anthropic model can answer through its provider adapters. Choosing an OpenAI model does not switch the worker to Codex, and choosing a Claude model does not launch Claude Code.
+DSH remains the default coding-agent runtime. It supplies the tool loop, sessions, delegation and working context; an OpenAI or Anthropic model can answer through its provider adapters. Choosing an OpenAI model does not switch the worker to Codex, and choosing a Claude model does not launch Claude Code.
 
-The installed DSH presets include disabled optional Codex/Claude Code delegation rows. Their provider bundles and Refactory integration are not enabled here. [#237](https://github.com/akashgit/refactory-dsh/issues/237) tracks opt-in worker backends, capability-aware controls and CLI/GUI acceptance. Refactory retains graph order, user gates, scoring and validation when those workers are introduced.
+Select `--worker-backend codex` or `--worker-backend claude_code` explicitly for an external node worker; `--worker-backend dsh` returns to DSH. The optional dependencies reuse DSH's named-provider registry, Codex app-server and Claude Agent SDK. They are dormant until selected and can be omitted from an installation that uses only DSH. A missing selected provider fails before execution. Native product settings and authentication remain authoritative; DSH credentials are not copied to either product.
+
+For example, the direct interactive interface accepts:
+
+```bash
+python -m refactory_dsh.interactive counting_pack/fixed_step --worker-backend codex --model YOUR_CODEX_MODEL --headless
+```
+
+Refactory dispatches only the agent node's self-contained task, retains its declared outputs and runs graph-owned checks. The worker never owns graph order, user gates or scoring. Optional `--permission-mode` values are `never`/`approve-for-me` for Codex and `dontAsk`/`acceptEdits`/`auto`/`plan` for Claude Code; `default` preserves each provider's conservative native default and may deny file creation. For a task that should edit its workspace, explicitly choose Codex `approve-for-me` or Claude Code `acceptEdits` in the CLI or **Worker permission mode** control; the native product still decides individual tool permissions. Unsupported route combinations and permissions fail before launch. External per-call provider and reasoning-effort overrides are unsupported; select those through the product's native configuration. `--effort` is supported for DSH nodes.
+
+| Adapter capability | DSH node | Codex node | Claude Code node |
+|---|---|---|---|
+| Model selection | Yes | Yes | Yes |
+| Cancellation/deadline | Owned runtime shutdown | Owned runtime shutdown | Owned runtime shutdown |
+| Steering | Next node boundary | Next node boundary | Next node boundary |
+| Resume in-flight worker / images / human questions | Not exposed by this one-shot bridge | Unsupported | Unsupported |
+| Observed route | DSH model request | Native thread startup and reroute events | Native SDK initialization and observed model list |
+| Token reporting | Measured request totals, including nested DSH agents | Measured native thread totals; nested coverage not established | Estimated SDK query totals, including Task workers; excludes helper calls outside that pipeline |
+
+External workers refuse token-limited launches because complete nested accounting is not established. They support elapsed limits. Missing usage stays unavailable, never measured zero. Codex/Claude product sessions are ephemeral: receipts retain their identity for provenance, but never offer resume. A failed or cancelled worker is not automatically replayed. New instructions are delivered at an explicitly chosen node boundary; an already executing external worker cannot receive an in-flight edit. The native panel disables unsupported provider/effort/token controls for external backends and displays these limits. Switching backend clears incompatible inherited values; explicit unsupported overrides still fail validation.
+
+Observe-only patches on the pinned DSH providers emit whitelisted route/usage metadata through Cordis. They do not copy raw protocol traffic, prompts, commands, paths, reasoning or credentials into the parent conversation. The protocol and product lifecycle remain owned by the existing provider bundles. Official integration contracts: [Codex App Server](https://learn.chatgpt.com/docs/app-server), [Codex SDK](https://learn.chatgpt.com/docs/codex-sdk), [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview).
+
+Worker receipts also feed [live activity](live-control.md); saved [profiles](optimization-profiles.md) retain requested routes in their exact launch snapshot. Configuration readiness is not execution evidence. DSH completed the bounded CLI and native GUI task. Codex and Claude Code completed the CLI task with explicit edit permissions; their native GUI default-permission checks failed honestly before delivering the artifact. Positive GUI completion remains unverified; see the [validation record](release-validation-20260926.md).
 
 ## Credentials for nested execution
 
@@ -122,6 +145,19 @@ From the terminal, `refactory runtime` reports nested defaults as JSON; `--provi
 
 ## Completion deadlines and interruption
 
+Worker contexts retain the selected Python environment (`VENV_BIN`, defaulting to
+the checkout's `.venv/bin`). Tool commands receive it first on `PATH` and receive
+the installed Refactory API on `PYTHONPATH`, even when their working directory is
+a run's artifact directory. DSH's normal credential scrub still applies to child
+processes; selecting a Python environment does not forward credential variables.
+
+Token-limited DSH runs require the shipped in-process `spawn` and `fork` provider
+composition. An additional named provider with unverified nested telemetry is
+refused before a model request. Without a token limit, native descendants may run,
+but their observations remain separate from the DSH parent's route: known DSH
+tokens stay visible and total usage is explicitly unavailable. A completed DSH
+request without valid usage likewise prevents claiming a measured total.
+
 A `DshModelClient` deadline fails the completion without replaying its prompt: the
 agent may already have written files or started tool work. Explicit transport
 failures retain their bounded retry policy. On POSIX, a deadline or caller
@@ -144,7 +180,7 @@ is unconfirmed and no retry follows. Custom launchers must implement their own
 shutdown, and Windows termination does not provide the POSIX graceful signal
 path. The local provider's macOS process-group fallback cannot contain arbitrary
 descendants that escape its managed range. Python SIGKILL, abrupt parent death,
-and process-wide SIGTERM without a caller exception also need external supervision.
+still need external supervision. Default process-wide SIGTERM now unwinds the owned Python model subprocess before exit.
 Arbitrary in-flight Python operations are awaited, not forcibly interrupted;
 custom model clients retain caller-thread serial execution and their own cleanup
 contract. The client does not undo files written before failure or certify their reuse.

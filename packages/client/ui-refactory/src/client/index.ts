@@ -11,7 +11,7 @@
  */
 import type { ClientRemote } from '@deepseek-ai/dsh-api-gateway/client'
 import type { RefactoryConsoleRemote } from '@deepseek-ai/dsh-refactory-console/types'
-import { runStreamContribution, singleEvent } from './run-stream.ts'
+import { runStreamContribution, singleEvent, watchStreamContribution, watchFrame } from './run-stream.ts'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
@@ -51,16 +51,18 @@ export async function apply(ctx: ClientContext): Promise<void> {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-refactory: dictionaries')
 
   const remote = ctx.get('remote') as ClientRemote
-  await remote.$mount(runStreamContribution)
+  await remote.$mount({ ...runStreamContribution, descriptors: [...runStreamContribution.descriptors, ...watchStreamContribution.descriptors] })
   // Mounting registers a separate Cordis service. Enter its dependency scope
   // after registration; requesting it in the outer inject would deadlock mount.
   ctx.inject(['remote.refactoryConsole'], scope => {
     const store = createRefactoryStore()
     const connection = scope.get('connection') as ConnectionHandle | undefined
     if (connection === undefined) throw new Error('ui-refactory: the connection service is unavailable')
-    const mounted = scope.get('remote') as ClientRemote & { refactoryConsole: Pick<RefactoryConsoleRemote, 'runStream'> }
+    const mounted = scope.get('remote') as ClientRemote & { refactoryConsole: Pick<RefactoryConsoleRemote, 'runStream' | 'watchStream'> }
     const inject = refactoryFace(refactoryConsoleOverConnection(connection.rpc, async function* (request, signal) {
       for await (const event of mounted.refactoryConsole.runStream(request, signal)) yield singleEvent(event)
+    }, async function* (run, after, signal) {
+      for await (const frame of mounted.refactoryConsole.watchStream!(run, after, signal)) yield watchFrame(frame)
     }))
     scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register(
       { name: 'sidebar.right.pane.tab', key: REFACTORY_ID, locale: NS, store, inject },

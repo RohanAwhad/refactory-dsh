@@ -143,7 +143,7 @@ const READ_PARAMETERS = {
 }
 
 /** One run as the console's `runs` verb lists it. */
-const RUN = { run_id: 'live', root: '/repo/.factory/loop/live', mode: 'p/adaptive', best_score: 1.5, finished: true }
+const RUN = { run_id: 'live', root: '/repo/.factory/loop/live', mode: 'p/adaptive', best_score: 1.5, finished: true, state: 'finished', pending_questions: 0 }
 
 /** One status frame, as the console answers it. */
 const FRAME = {
@@ -236,8 +236,8 @@ describe('refactoryConsole — the described choices', () => {
     const { service, subprocess } = await setup()
     subprocess.answer([RUN, { run_id: 'fresh', root: '/repo/.factory/loop/fresh', finished: false }])
     expect(await service.runs(signal())).toEqual([
-      { run_id: 'live', root: '/repo/.factory/loop/live', mode: 'p/adaptive', best_score: 1.5, finished: true },
-      { run_id: 'fresh', root: '/repo/.factory/loop/fresh', mode: null, best_score: null, finished: false },
+      { run_id: 'live', root: '/repo/.factory/loop/live', mode: 'p/adaptive', best_score: 1.5, finished: true, state: 'finished', pending_questions: 0 },
+      { run_id: 'fresh', root: '/repo/.factory/loop/fresh', mode: null, best_score: null, finished: false, state: '', pending_questions: 0 },
     ])
   })
 
@@ -491,13 +491,18 @@ describe('refactoryConsole — using one mode once', () => {
     expect((await failureOf(service.run({ mode: 'p/adaptive' }, signal()))).message).toBe('refusing')
   })
 
-  it('refuses an authoring mode with the verb that runs it', async () => {
+  it('uses an enabled authoring mode once without requiring a score', async () => {
     const { service, subprocess } = await setup()
-    subprocess.answer([mode()])
-    const failure = await failureOf(service.run({ mode: 'default_pack/create' }, signal()))
-    expect(failure.code).toBe('refactory/authoring-mode')
-    expect(failure.details).toEqual({ mode: 'default_pack/create', action: 'create' })
-    expect(subprocess.spawns).toHaveLength(1)
+    subprocess.script = [
+      { stdout: JSON.stringify([mode()]) },
+      { stdout: singleRun({ ...SINGLE, mode: 'default_pack/create', best_score: null }) },
+    ]
+    await expect(service.run({ mode: 'default_pack/create' }, signal())).resolves.toMatchObject({
+      mode: 'default_pack/create', best_score: null, finished: true,
+    })
+    expect(subprocess.lastArgv).toEqual([
+      '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'run', 'default_pack/create',
+    ])
   })
 
   it('refuses to use a mode the caller already cancelled', async () => {
@@ -526,6 +531,7 @@ describe('refactoryConsole — reading a run', () => {  it('maps a status frame,
     running: true,
     authoring: null,
     item_results: null,
+    activity: null,
   })
   expect(subprocess.lastArgv).toEqual([
     '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'status', '--run', '/runs/live', '--after', '3',

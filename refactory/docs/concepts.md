@@ -58,19 +58,19 @@ Three choices are independent:
 | **Optimizer** | Propose candidate edits |
 | **Evaluator** | Execute a candidate and measure its result |
 
-The default walker evaluates the graph in Python and supplies a model client to agent nodes. The DSH evaluator lowers the graph and runs it through the shipping DSH runtime. Their current model-selection paths differ; see [Models](models.md#model-selection-across-execution-paths).
+The default walker evaluates the graph in Python and supplies a model client to agent nodes. The DSH evaluator lowers the graph and runs it through the shipping DSH runtime. Both carry the run's selected model/worker context to agent nodes; see [Models](models.md#model-selection-across-execution-paths).
 
 Permitted edits can include knobs, prompts, nodes and edges, subject to the selected preset and invariants. A proposal is validated before it can spend candidate evaluation budget. Execution failures are recorded but cannot win.
 
 For Task-bound modes, candidates use the training partition and the winner is audited on held-out items. A mode without a data split reports holdout as not applicable. The compared score can include a graph-size penalty; the raw score is retained separately.
 
-Adoption writes the exact eligible winner into a new package with provenance. It does not alter the source package or guarantee a future stochastic run will reproduce the same outputs. No-improvement searches are valid outcomes.
+A [profile](optimization-profiles.md) versions the search settings and objective; each run retains its own resolved snapshot. Opt-in repeats report actual trial count and variability, while shared budgets account for proposals, evaluations and validation. Adoption writes the exact eligible winner into a new package with its profile and audit provenance. It does not alter the source package or guarantee a future stochastic run will reproduce the same outputs. No-improvement searches are valid outcomes.
 
 ## Models, agents and runtimes
 
 Cordis supplies plugin composition and service lifecycle. DSH supplies the current agent runtime, tools, sessions and model-provider adapters. Refactory supplies modes, graph execution/steering and the meta outer loop.
 
-The model provider and coding-agent runtime are different choices. Today, choosing an OpenAI model still runs the DSH coding agent. Optional Codex and Claude Code workers are tracked in [#237](https://github.com/akashgit/refactory-dsh/issues/237); they are not enabled by a model-name change.
+The model provider and coding-agent runtime are different choices. Today, choosing an OpenAI model still runs the DSH coding agent. Optional Codex and Claude Code workers require an explicit backend selection and their native setup; they are not enabled by a model-name change. [Worker capabilities](models.md#model-provider-versus-coding-agent) define the supported controls.
 
 ## What evidence means
 

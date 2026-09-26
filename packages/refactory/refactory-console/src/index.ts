@@ -53,9 +53,13 @@ import type {
   RefactoryModeChoice,
   RefactoryPackageChoice,
   RefactoryPackageMode,
+  RefactoryProfile,
+  RefactoryProfileSpec,
   RefactoryRunCounters,
   RefactoryRunEvent,
   RefactoryRunStatus,
+  RefactoryActivity,
+  RefactoryWatchFrame,
   RefactoryRunSummary,
   RefactorySingleRun,
   RefactorySingleEvent,
@@ -348,6 +352,8 @@ export class RefactoryConsole extends TypertRemoteService {
       mode: typeof entry.mode === 'string' ? entry.mode : null,
       best_score: typeof entry.best_score === 'number' ? entry.best_score : null,
       finished: entry.finished === true,
+      state: text(entry.state),
+      pending_questions: count(entry.pending_questions),
     }))
   }
 
@@ -410,12 +416,37 @@ export class RefactoryConsole extends TypertRemoteService {
     return receipt(await this.call(invocation, signal))
   }
 
+  /** List saved recipes, including older immutable versions. */
+  @Remote
+  async profiles(signal: AbortSignal): Promise<readonly RefactoryProfile[]> {
+    return await this.call({ verb: 'profiles' }, signal) as readonly RefactoryProfile[]
+  }
+
+  /** Save explicit edits to settings or objective as a new version. */
+  @Remote
+  async profileSave(name: string, spec: RefactoryProfileSpec, signal: AbortSignal): Promise<RefactoryProfile> {
+    return await this.call({ verb: 'profile-save', options: { name, spec: JSON.stringify(spec) } }, signal) as RefactoryProfile
+  }
+
+  /** Preview uses the same resolver as start. */
+  @Remote
+  async profileResolve(request: RefactoryStartRequest, signal: AbortSignal): Promise<Record<string, unknown>> {
+    const invocation = startInvocation(request)
+    return objectOf(await this.call({ ...invocation, verb: 'profile-resolve' }, signal), 'resolved profile')
+  }
+
+  /** Inspect failures and missing measurements alongside successful candidates. */
+  @Remote
+  async comparison(run: string, signal: AbortSignal): Promise<Record<string, unknown>> {
+    return objectOf(await this.call({ verb: 'comparison', options: { run: this.runAddress(run) } }, signal), 'candidate comparison')
+  }
+
   /**
    * Use one described mode once, with a person's knobs, and report what it left.
    *
    * This is the console's `run` — a person using a mode — where `start` is the
-   * outer loop searching one. It is refused for the same three reasons `start` is,
-   * because a mode the loop cannot search is one a person cannot use here either.
+   * outer loop searching one. Any enabled, described mode can run once, including
+   * authoring modes that do not emit a score and cannot be searched.
    *
    * The run is synchronous: the console drives it to quiescence before answering.
    * A run that stopped at a gate a person owns is still a result — the answer
@@ -426,8 +457,8 @@ export class RefactoryConsole extends TypertRemoteService {
    */
   @Remote
   async run(request: RefactorySingleRunRequest, signal: AbortSignal): Promise<RefactorySingleRun> {
-    const mode = await this.runnable(request.mode, signal)
-    return this.executeSingle(mode, request.knobs, signal)
+    const mode = await this.runnable(request.mode, signal, false)
+    return this.executeSingle(mode, request.knobs, signal, undefined, request.settings)
   }
 
   /**
@@ -440,7 +471,7 @@ export class RefactoryConsole extends TypertRemoteService {
    */
   @Remote({ mode: 'stream' })
   async *runStream(request: RefactorySingleRunRequest, signal: AbortSignal): AsyncGenerator<RefactorySingleEvent> {
-    const mode = await this.runnable(request.mode, signal)
+    const mode = await this.runnable(request.mode, signal, false)
     signal.throwIfAborted()
     const project = await realpath(this.projectRoot)
     const factory = join(project, '.factory')
@@ -459,7 +490,7 @@ export class RefactoryConsole extends TypertRemoteService {
     const controller = new AbortController()
     const ownedSignal = AbortSignal.any([signal, controller.signal])
     let settled = false
-    const completion = this.executeSingle(mode, request.knobs, ownedSignal, root).then(
+    const completion = this.executeSingle(mode, request.knobs, ownedSignal, root, request.settings).then(
       run => ({ ok: true as const, run }),
       error => ({ ok: false as const, error }),
     ).finally(() => { settled = true })
@@ -499,8 +530,8 @@ export class RefactoryConsole extends TypertRemoteService {
   }
 
   /** Execute and interpret one console call for unary and streaming callers. */
-  private async executeSingle(mode: string, knobs: readonly string[] | undefined, signal: AbortSignal, workdir?: string): Promise<RefactorySingleRun> {
-    const result = await this.consoleCall(runInvocation({ mode, knobs, workdir }), signal)
+  private async executeSingle(mode: string, knobs: readonly string[] | undefined, signal: AbortSignal, workdir?: string, settings?: Readonly<Record<string, string | number>>): Promise<RefactorySingleRun> {
+    const result = await this.consoleCall(runInvocation({ mode, knobs, workdir, settings }), signal)
     const answer = isRecord(result.value) ? result.value : {}
     const single = answer.run
     const progress = isRecord(single) ? authoring(single.authoring) : null
@@ -561,6 +592,32 @@ export class RefactoryConsole extends TypertRemoteService {
       running: answer.running === true,
       authoring: authoring(answer.authoring),
       item_results: itemResults(answer.item_results),
+      activity: isRecord(answer.activity) ? answer.activity as unknown as RefactoryActivity : null,
+    }
+  }
+
+  /** Preview invalidation or queue a control for the owning graph boundary. */
+  @Remote
+  async graphControl(request: { run: string; action: string; node?: string; text?: string; revision?: string }, signal: AbortSignal): Promise<Record<string, unknown>> {
+    return objectOf(await this.call({ verb: 'graph-control', positional: [request.action], options: {
+      run: this.runAddress(request.run), node: request.node ?? '', text: request.text ?? '', revision: request.revision ?? '',
+    } }, signal), 'graph control receipt')
+  }
+
+  /** Stream persisted changes; closing this reader never cancels its run. */
+  @Remote({ mode: 'stream' })
+  async *watchStream(run: string, after: number, signal: AbortSignal): AsyncGenerator<RefactoryWatchFrame> {
+    let previous = ''
+    while (!signal.aborted) {
+      const status = await this.status(run, after, signal)
+      const steering = await this.steer({ run }, signal)
+      const frame = { status, steering }
+      const encoded = JSON.stringify(frame)
+      if (encoded !== previous) { yield frame; previous = encoded }
+      // A finished graph may be explicitly reopened while this view is attached.
+      // Keep its reader alive until the tab detaches; idle terminal runs poll less often.
+      const terminal = status.finished || ['failed', 'died', 'halted'].includes(status.state)
+      try { await delay(terminal ? 3000 : 1000, undefined, { signal }) } catch { return }
     }
   }
 
@@ -769,7 +826,7 @@ export class RefactoryConsole extends TypertRemoteService {
    * @param signal - caller cancellation.
    * @returns the trimmed mode identifier to pass to the console.
    */
-  private async runnable(requested: string, signal: AbortSignal): Promise<string> {
+  private async runnable(requested: string, signal: AbortSignal, search = true): Promise<string> {
     const mode = requested.trim()
     if (mode.length === 0) {
       throw new RemoteError('gateway/bad-request', 'mode is required: the <package>/<name> to run', {})
@@ -790,7 +847,7 @@ export class RefactoryConsole extends TypertRemoteService {
         { mode, package: choice.package },
       )
     }
-    if (choice.action !== 'start') {
+    if (search && choice.action !== 'start') {
       throw new RemoteError(
         'refactory/authoring-mode',
         `"${mode}" is an authoring mode, not a mode to run or search; use the "${choice.action}" action`,
