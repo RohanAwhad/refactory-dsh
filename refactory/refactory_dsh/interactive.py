@@ -10,7 +10,7 @@ give.
         --intent "draft a note about circle packing and let me approve it"
 
 The answer is written into the run's ledger, so `console steer --run <workdir>`
-shows it and a later run replays it instead of asking again. Nothing here changes
+shows its history. Each later interactive visit requires a fresh answer. Nothing here changes
 the mode: the graph is the author's, plus what the person said.
 """
 
@@ -175,8 +175,8 @@ def run(
 ) -> int:
     """Lower, then run the mode under the CEO with the terminal attached.
 
-    ``approve`` states a gate's answer before the run starts. It is the same act as
-    answering at the terminal, recorded in the same ledger, so a run nobody is
+    ``approve`` states a gate's answer before the run starts. It explicitly authorizes that gate throughout this run, unlike a one-visit
+    terminal answer. It is recorded in the same ledger, so a run nobody is
     sitting at can still be given a person's decision -- explicitly, by name.
 
     A live session is the default: the CEO's turns print as they happen and a line
@@ -200,7 +200,7 @@ def run(
         if not separator or not gate.strip() or not value.strip():
             raise ValueError(f"--approve takes GATE=VALUE, not {pair!r}")
         # After prepare(), so the intent seed and the verdicts are both in the ledger.
-        steering.Ledger(workdir).verdict(gate.strip(), value.strip())
+        steering.Ledger(workdir).verdict(gate.strip(), value.strip(), approval=True)
     argv = command(
         identifier, workdir=workdir, graphs=graphs, name=name, knobs=knobs, project=project,
         provider=provider, model=model, headless=headless,

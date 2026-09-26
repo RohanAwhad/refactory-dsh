@@ -401,12 +401,16 @@ down before each evaluation. Without that copy an `optimize --intent` or a
 place steering is most wanted, because a search is what runs for hours. The copy is
 per candidate so the directory says what the person had said when it ran.
 
-**A gate a person answers is recorded, and a resume replays it.** `wf_*`/the walker
-routes the verdict a person gave; `Ledger.verdict(gate, value)` writes it down, and
-`execute` reads `Ledger.verdicts()` back into the run so a resumed run is the same
-run rather than a second question. An explicit verdict passed by a caller still wins.
-Without a recorded verdict a headless run **refuses** at that gate and names it: an
-invented verdict is indistinguishable from one a person gave.
+**A person's gate answer is recorded and consumed for that review.** The ledger
+keeps the decision and the hashes of the gate's declared review inputs. An
+interactive answer or public `steer --verdict` authorizes one matching gate visit;
+changed inputs expire an unused answer, and a later visit asks again even when the
+files are identical. Legacy unscoped answers remain history, not authorization.
+Explicit upfront `--approve` or `RunContext.verdicts` remains standing authorization
+from the caller. A ledger-backed upfront approval remains active when that same
+work directory is reopened; it has no separate invocation identifier. Without a
+current scoped answer or standing authorization, a
+headless run **refuses** at the gate and names it.
 
 **It is inert when unused.** An empty ledger renders the empty string and `annotate`
 returns the workflow it was given. A run nobody steered is the run it would have been,
@@ -466,11 +470,11 @@ Run against this checkout, with the terminal answering `1` (proceed) at
   `the graph did not finish: gate approve is answered by a person and could not be
   asked: no user-questions answerer accepted the request`. Before this, the CEO's
   invented `proceed` was routed and the run reported "approved by the person".
-- **The answer is recorded and replayed.** The terminal answer is written into the
-  run's ledger (`gate: approve` / `verdict: proceed`), so `console steer --run
-  <workdir>` shows the intent and the answer, and a later run replays it: with the
-  verdict in the ledger and no terminal, the same command completed and wrote
-  `final.md` without asking.
+- **The answer is recorded without granting future approval.** The terminal and
+  browser answer is recorded as consumed in the run's ledger. Reopening the same
+  work directory asks a fresh question. If the draft changes while a question is
+  pending, the old answer is refused and the current draft needs a new answer.
+  Explicit upfront approval is the supported way to grant standing authorization.
 - **A mid-run note reaches the agents.** `console steer --run <workdir> --note …
   --kind constraint` appends to the ledger, and `for_run` is what folds it into the
   agent nodes of a run that starts afterwards.

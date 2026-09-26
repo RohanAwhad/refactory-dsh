@@ -600,16 +600,22 @@ class Executor:
         answer. That is the whole point of :attr:`Node.gate_kind`: a run that pauses
         for a person cannot quietly decide for them, and a run that did would be a
         result nobody can account for. The answer is supplied through
-        ``RunContext.verdicts``, which an interactive run fills and a resumed run
-        replays from the intent ledger rather than asking again.
+        ``RunContext.verdicts`` for explicit upfront authorization, or consumed from
+        the intent ledger for the current review inputs.
         """
         verdict = (self.ctx.verdicts or {}).get(node.id, "")
+        if not verdict and node.gate_kind == "user":
+            from refactory_dsh.steering import Ledger
+
+            ledger = Ledger(self.ctx.workdir)
+            labels = [str(edge.condition) for edge in self.graph.out_edges(node.id)]
+            verdict = ledger.take_verdict(node.id, ledger.visit(node.id, node.reads), labels)
         if not verdict:
             raise ExecutionError(
                 f"gate {node.id!r} is answered by {node.gate_kind!r} and this run has "
                 "no verdict for it. A headless run cannot answer a gate meant for a "
                 "person or for an agent; pass one in RunContext.verdicts (an "
-                "interactive run collects it, a resumed run replays it) or make the "
+                "interactive run collects a fresh answer) or make the "
                 "gate `fn`."
             )
         return str(verdict)
@@ -656,25 +662,23 @@ def execute(
 
     - The **intent ledger** is folded into every agent node, so a run a person
       steered carries what they said. Inert when there is no ledger.
-    - A gate a person answered is **replayed** from the ledger rather than asked
-      again. An explicit ``verdicts`` argument still wins, so a caller can override.
+    - A user gate consumes a pending answer for its current review inputs once.
+      An explicit ``verdicts`` argument is standing upfront authorization.
 
     ``start`` and ``facts`` are how a failed run continues: the node it died on, and
     the facts the nodes before it produced. Both come from the run's own
     ``.refactory/progress.json``; a caller that passes neither runs the graph from
     its start with the facts it was given.
     """
-    from refactory_dsh.steering import Ledger, for_run
+    from refactory_dsh.steering import for_run
 
     workdir = Path(workdir)
     graph = for_run(graph, workdir)
-    ledger = Ledger(workdir)
-    recorded = ledger.verdicts() if ledger.exists() else {}
     ctx = RunContext(
         workdir,
         knobs=knobs,
         facts=facts,
-        verdicts={**recorded, **(verdicts or {})},
+        verdicts=verdicts,
         model=model,
         task=task,
         memory=memory,

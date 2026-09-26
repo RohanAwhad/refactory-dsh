@@ -180,3 +180,22 @@ edge is recorded as cancellation, not a measured gate result.
 Explicit prompt edits, skip/unskip and redo remain steering actions. To recover a
 halted run, redo a completed agent deliberately; a verdict cannot implicitly reopen
 a halted gate outside the cursor. Restart/resume and pausing remain separate contracts.
+
+### User-gate decisions after a revision
+
+A terminal or GUI answer authorizes one gate visit against the exact declared review
+inputs. Returning after an upstream agent is redone, or changing an input while a question is pending,
+requires a fresh question. The intent ledger keeps the old answer as history; it is
+not reusable authorization. `console steer --verdict gate=value` queues a one-use
+answer for the current lowered gate inputs, and expires if they change before use.
+Explicit `ceo --approve` and Python/authoring `verdicts` retain their separate meaning:
+standing upfront authorization for that run. Old records without an explicit scope
+are displayed but cannot prove current approval.
+
+For actual-use validation, run the shipped `review_pack/review`, answer its `approve`
+gate, then open the mode again in the completed run directory. Confirm a new question
+appears even when `draft.md` is unchanged. Changing `draft.md` while that question is
+pending must refuse the old answer without routing, then allow a fresh review and
+answer. Validate both terminal and native browser channels; no substitute mode is
+needed. Also run with explicit `--approve approve=proceed` to verify unattended
+upfront authorization still works.
