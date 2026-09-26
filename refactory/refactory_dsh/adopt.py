@@ -19,8 +19,9 @@ are the same code, and only the state differs. That is what makes the comparison
 meaningful: the baseline and the adoption are the same mode at two points in the
 search, which is exactly what D15's "so the baseline stays measurable" asks for.
 
-**What it never does.** It does not touch the source package, and it does not touch
-the run. Adoption is a read of both. `tests/test_adoption.py` asserts the source is
+**What it never does.** It does not touch the source package. Ordinary adoption
+reads the run; a legacy pending finished-run selection is first recovered into
+its journal so adoption cannot silently ignore that choice. `tests/test_adoption.py` asserts the source is
 byte-identical afterwards, because "produces something new" is the whole decision and
 a test that only checks a file appeared would not notice it being violated.
 """
@@ -254,13 +255,15 @@ def adopt(
     mode: str = "",
     allow_overfit: bool = False,
 ) -> dict[str, Any]:
-    """Write the winner as a new package, and leave both inputs untouched.
+    """Write the winner as a new package, honoring a legacy pending selection.
 
     ``mode`` is the identifier the run searched, as ``<package>/<name>``. It is
     read from the run's own journal when not given, so a caller does not have to
     remember what a run was about. A completed held-out audit must describe the
     winner. ``allow_overfit`` acknowledges a measured gap; it does not override
     an execution failure or a missing audit.
+    A legacy finished-run Keep/Reject is recovered before selecting the winner;
+    it changes selection records, without evaluating or proposing candidates.
     """
     run_root = Path(run_root)
     project = Path(project or Path("."))
@@ -269,6 +272,14 @@ def adopt(
     # package name used to fail as a half-written package, or as whatever the
     # filesystem said about a path that is not one component.
     _check_name(as_name)
+    from refactory_dsh.control import ControlError
+    from refactory_dsh.finished_control import recover_selection
+    from refactory_dsh.loop import LoopError
+
+    try:
+        recovered = recover_selection(run_root, project=project)
+    except (ControlError, LoopError, ValueError, OSError) as error:
+        raise AdoptionError(f"could not recover the pending selection: {error}") from error
     winner = best(run_root)
     _check_holdout(run_root, winner["candidate"], allow_overfit=allow_overfit)
 
@@ -333,7 +344,7 @@ def adopt(
 
     registry.install_workspace(project)
     loaded = registry.load(as_name, project)
-    return {
+    result = {
         "package": as_name,
         "mode": f"{as_name}/{loaded.modes[0].name}",
         "adopted_from": mode,
@@ -342,3 +353,6 @@ def adopt(
         "edits": winner["edits"],
         "package_root": str(destination),
     }
+    if recovered is not None:
+        result["recovered_control"] = recovered
+    return result

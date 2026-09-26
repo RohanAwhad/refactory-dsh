@@ -133,6 +133,49 @@ scored yet) is reported as an event rather than killing the run.
 second terminal while `refactory optimize` is still printing, because control is a
 small file in the run directory rather than a message to the running process.
 
+A finished search has no next boundary. New Keep, Reject, Pause, Resume and Stop
+requests are refused without queuing; the panel disables those controls. **Adopt
+best now** and `steer --adopt` instead apply guarded adoption immediately and show
+an applied or refused receipt, including the resulting package directory. Reading
+`steer --run <run>` preserves that receipt across refreshes.
+If the search is explicitly resumed with more budget, controls follow the active
+optimizer. Its previous terminal report is retained under
+`.refactory/previous-reports/`; a report-only replay does not start that lifecycle.
+Only one optimizer may own a run directory at a time. A concurrent launch is
+refused before changing its state; process exit releases ownership automatically.
+
+Older versions could leave a Keep or Reject queued after completion. Both adoption
+routes recover that choice, including its lineage, into the journal and selection
+state before choosing a winner. The receipt identifies the recovery; it does not
+claim a new evaluation. If rejection changes the winner, adoption refuses an audit
+for the old winner. An unknown queued candidate is preserved with an error.
+
+To audit the current winner without proposing candidates or opening another epoch,
+replay the saved configuration and call the public report step directly. Run this
+from the original project, using the same model route as the original search when
+its evaluator needs a model (the example uses DeepSeek V4.1 Flash):
+
+```python
+import json
+from pathlib import Path
+from refactory_dsh.loop import Loop, LoopConfig
+from refactory_dsh.model import DshModelClient
+
+root = Path(".factory/loop/<run>")
+saved = json.loads((root / "config.json").read_text())
+config = LoopConfig.from_dict(saved)
+config.runs_root = root
+config.resume = True
+loop = Loop(saved["mode"], config, model=DshModelClient(
+    provider="deepseek-official", model="deepseek-flash",
+))
+loop.init()                 # replay; does not evaluate or propose
+report = loop.report()       # audit the current winner; may call the model
+```
+
+The saved epoch/evaluation bounds remain unchanged. Inspect the resulting audit,
+then repeat adoption. This does not waive failed evaluations or an overfit warning.
+
 ## What to take away
 
 - **Who answers a gate is part of the architecture**, not a convention: the IR
