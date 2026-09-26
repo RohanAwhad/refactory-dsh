@@ -408,7 +408,7 @@ function Candidates({
 /** The watched run's intent ledger, and the gates it is stopped at. */
 function Steering({
   tabId, run, steering, candidates, signal, t, readSteering, readCandidates, addNote,
-  answerGate, controlRun,
+  answerGate, controlRun, statusFinished,
 }: {
   readonly tabId: Parameters<RefactoryInjected['refresh']>[0]
   readonly run: string
@@ -421,6 +421,7 @@ function Steering({
   readonly addNote: RefactoryInjected['addNote']
   readonly answerGate: RefactoryInjected['answerGate']
   readonly controlRun: RefactoryInjected['controlRun']
+  readonly statusFinished: boolean | undefined
 }): ReactNode {
   const [said, setSaid] = useState('')
   const [kind, setKind] = useState<RefactoryNoteKind>('info')
@@ -435,7 +436,7 @@ function Steering({
     )
   }
   const ledger = steering.value
-  const finished = ledger.finished === true
+  const finished = statusFinished === true || ledger.finished === true
   return (
     <div className={css.status} data-refactory-steering="ready">
       {finished && <p className={css.note} data-refactory-controls-finished>{t('control.finished')}</p>}
@@ -769,6 +770,7 @@ export function RefactoryBody({
               run={run}
               steering={state.steering}
               candidates={state.candidates}
+              statusFinished={state.frame?.kind === 'ready' ? state.frame.value.finished : undefined}
               signal={signal}
               t={t}
               readSteering={readSteering}
