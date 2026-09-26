@@ -5,8 +5,6 @@ kind: "package-reference"
 
 # @deepseek-ai/dsh-client-ui-brand-refactory
 
-English | [中文](README.zh.md)
-
 ## Summary
 
 This package gives the Web client the re:factory identity: it replaces the DeepSeek whale mark and the harness wordmark in the sidebar with the re:factory logo and name, fills the blank-session hero mark with the same logo, and tints the primary accent rose. Choose it in a deployment that ships the re:factory product; the occupants are pure presentation, so nothing here reaches a model request. The package declares no slot of its own — it occupies three slots that `ui-sidebar` and `ui-conversation` declare — so leaving it out restores the fallbacks those declarers render. The hero occupant replaces the animated whale fallback rather than decorating it, and one raster logo serves both color schemes.
@@ -53,10 +51,9 @@ The browser half is [`src/client/index.ts`](src/client/index.ts); the node half 
 
 Read these pages when the brand surface is not enough. They move from the slots this package occupies to the shell that renders them.
 
-- [ui-sidebar](../ui-sidebar/README.md) — declares `sidebar.brand.mark` and `sidebar.brand.name` and renders their fallbacks.
-- [ui-conversation](../ui-conversation/README.md) — declares `conversation.hero.brand.mark` in the hero.
-- [ui-brand-official](../ui-brand-official/README.md) — the upstream occupier of the same sidebar slots, gated to official builds.
-- [Web client architecture](../../../.agents/notes/implemented/architecture/2026-07-19-gui-web-client-architecture.md) — how browser plugin rows load and register slots.
+- [GUI guide](../../../refactory/docs/tutorials/05-drive-it-from-the-gui.md) — the user-facing chat workflow.
+- [Modes panel](../../../refactory/docs/tutorials/07-pick-and-watch-from-the-panel.md) — the adjacent run and optimization controls.
+- [Brand registration](src/client/index.ts) — the slots occupied by this local plugin; the slot declarers ship in the installed DSH dependency.
 
 -----
 

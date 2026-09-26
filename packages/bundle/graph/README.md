@@ -5,8 +5,6 @@ kind: "package-bundle"
 
 # @deepseek-ai/dsh-graph
 
-English | [中文](README.zh.md)
-
 ## Summary
 
 The `graph` profile layer drives one refactory mode graph end to end: it mounts the workflow spine with `executeCommands` on, replaces the base persona with the CEO wording, and adds a `run` subcommand that takes a mode and a task. You get one JSON report — the run's `best_score`, its session id, its work directory, and the CEO's final message — after the agent reaches quiescence. Install it into a profile with one `dsh plugin` command; the layer stacks over `dsh-base`, which supplies the model connection, the tool set, the session store, and the `shell` executor that deterministic nodes run in. The bundle holds no graph of its own: it loads `<mode>.graph.json` from `--graphs` at startup, so a mode is one file plus the Python ops its commands call. Choose it to run a committed mode; when the mode declares a `user` gate, the terminal answerer puts the gate to the person, so the same profile serves an unattended run and one with a person at the gate. Refactory's `python -m refactory_dsh.interactive <package>/<mode>` is the entry point that prepares that run: it lowers the mode with its intent ledger folded in and starts this profile with the terminal attached.
@@ -35,6 +33,8 @@ dsh plugin --profile graph remove @deepseek-ai/dsh-graph
 `graph` is not one of the shipped profile templates, so the profile must exist before a run: `dsh --profile graph` on a machine without one stops with `profile "graph" does not exist; create it with 'dsh plugin --profile graph add <package>'`. The `add` form above links the package from a checkout, because `@deepseek-ai/dsh-graph` is not published to the npm registry. The command initializes the profile over `dsh-base` and installs the package; because the manifest declares `dsh.bundle.patch`, the reconcile step appends `@deepseek-ai/dsh-graph` to `dsh.profile.bundles`, after `@deepseek-ai/dsh-base`, and the layer activates on the next start. A dependency without that declaration installs as a plain package and never becomes a layer. `remove` drops the dependency and the layer together.
 
 ### Run a mode
+
+For normal use, run `uv run refactory ceo <package>/<mode>` from the checkout. The Python bridge lowers the selected mode, supplies its graph directory and Python environment, and enables interactive chat unless `--headless` is given. The lower-level example below retains the legacy SRF defaults and requires its own graph files; it is not the new-user quickstart. See [the interface guide](../../../refactory/docs/interfaces.md).
 
 ```text
 dsh --profile graph run --mode gepa --task circle_packing --budget 20
@@ -81,10 +81,10 @@ The bundle is one patch document over `dsh-base` plus three runtime plugins. The
 
 Read these pages when you want the parts this layer composes rather than the run itself.
 
-- [dsh-base](../base/README.md) — the shared core this layer patches.
+- [Runtime architecture](../../../refactory/docs/architecture.md) — Refactory and the installed DSH core this layer patches.
 - [workflow-spine](../../workflow/workflow-spine/README.md) — the spine row and the `wf_*` tools the CEO drives.
 - [refactory glue](../../../refactory/README.md) — the Python modes, graphs, and ops a node command runs.
-- [Bundle package map](../README.md) — the other installable profile layers.
+- [Models and credentials](../../../refactory/docs/models.md) — provider configuration and nested execution.
 
 -----
 
@@ -99,7 +99,7 @@ The layer replaces the base persona: the prefix reads `You are the CEO of an int
 
 #### Token effect
 
-One persona prefix and suffix per request, plus the six `wf_*` tool definitions and their prompt section; the graph's own node content reaches the model through the tool results the CEO reads, so a mode's prompt template costs tokens once, when that node is due.
+One persona prefix and suffix per request, plus the `wf_*` tool definitions and their prompt section; the graph's own node content reaches the model through the tool results the CEO reads, so a mode's prompt template costs tokens once, when that node is due.
 
 #### KV Cache effect
 
@@ -115,8 +115,8 @@ These limits define the current headless run. They are current package constrain
 - **The graph is inlined at boot** — the spine reads `ctx.graphStartup.graph`, so editing `<mode>.graph.json` during a run changes nothing; restart the run to pick up an edit.
 - **Node commands run unconfined** — graph commands are trusted ops and run with full sandbox access. `ceoDeny` constrains the CEO's own tool list only, and the subagents the CEO spawns keep the full tool set.
 - **`best_score` is read from the work directory** — the runner prefers the mode's known state file and otherwise takes the first JSON file with a numeric `best_score`, so a mode that records its score elsewhere reports 0.
-- **One run per process** — the runner drives one CEO agent to quiescence and exits; there is no interactive steering loop in this entry point.
-- **The reloop cap is fixed at 500** — `maxIterations` is a config value of this patch, and `--budget` reaches the ops only as `SRF_BUDGET`, so a mode whose ops ignore the budget can run for the full cap.
+- **One workflow per process** — the default low-level run is one-shot. `--chat` keeps a conversation between turns; the public `refactory ceo` command enables it by default.
+- **Separate limits** — this profile supplies `maxIterations: 500` as a fallback; a gate can declare its own cap. `--budget` reaches operations as `SRF_BUDGET`, not as a global time/token limit.
 
 <a id="dev-note"></a>
 ### Dev Note

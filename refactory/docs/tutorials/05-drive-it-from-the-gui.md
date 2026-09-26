@@ -1,211 +1,62 @@
-# 5. Drive it from the GUI
+# 5. Drive a workflow from GUI chat
 
-The loop stays a Python process. The Web GUI drives it through one tool, and
-renders what came back. No terminal is involved once it is running.
+GUI chat is the conversational interface to the same explicit mode graph used by the terminal. The adjacent [Modes panel](07-pick-and-watch-from-the-panel.md) offers direct controls for existing modes and searches.
 
-> **The pinned harness's `web` profile does not compose this repository's tool and client packages yet.** `./refactory-dsh` starts that profile, so the conversation runs and both the `refactory` tool and the Modes panel are absent. What follows is the surface those packages implement; every console verb it names is reachable today from `uv run refactory`.
-
-## Start the GUI
+## Open a session
 
 ```bash
-./refactory-dsh --port 3081 --no-open
+uv run refactory ui --port 3081
 ```
 
-It prints an authenticated URL; open it. The default preset is **ceo**, which
-mounts the `refactory` tool.
+Open the full URL the server prints. Select the checkout as the workspace and create a new session. Configure a provider and managed key under **Settings → Models** before model-backed work; see [Models](../models.md).
 
-> The GUI serves each plugin's client bundle from `packages/*/*/lib/client.js`, so a
-> checkout that has not been built serves the bundled version of each client module.
-> Build first if you have changed one: `pnpm run build`.
+## Walk a small mode
 
-## What the tool does
+Ask the CEO:
 
-One action per console verb, so the tool and a shell are the same surface:
+> Open counting_pack/fixed_step with target=9 and step=1. Drive it one node at a time. Tell me which node is due before doing its work.
 
-| action | needs | what it returns |
-|---|---|---|
-| `modes` | — | every mode the checkout can start, with its parameters and the **action that runs it** (`start` for a scored mode, its own verb for an authoring one) |
-| `strategies` | — | the named outer loops, optimizers and evaluators, each with what it is |
-| `runs` | — | every run under the run root, newest first |
-| `start` | `mode`, `settings` | the run id, root, and pid |
-| `status` | `run`, `after` | the state, counters, best score, and new events |
-| `artifacts` | `run`, `contents` | what the run left, optionally with contents |
-| `leaderboard` | `run` | the candidates by score, each with its parent diff |
-| `candidate` | `run`, `candidate` | one candidate and what it changed |
-| `steer` | `run`, and `intent`/`note`/`kind` | the intent ledger, and any problems with it |
-| `best` | `run` | the winner, and with `state` its whole state dict |
-| `adopt` | `run`, `as` | the new package the winner was written to |
-| `registry` | `packages`, `target`, `args` | the registry's own JSON for `list`, `show`, `verify`, `smoke`, `add`, `import`, `remove`, `enable`, `disable` |
-| `create` | `name`, `brief`, and exactly one of `task` (the class of work, which implies the `data` node) or `singleShot` (the one-off special case); optionally `extends`, `dataNode` | the package it produced, and the design review it wrote; with `task` the mode is bound to a Task that lists and judges the items, and naming neither is refused before any model call |
-| `edit` | `mode`, `name`, `brief` | the revision, its before/after scores, and whether it regressed |
-| `design` | `name`, `brief`, `check` | the artifact, and whether its check command passed |
-| `stop` | `run` | whether the run was asked to stop |
+The CEO uses `wf_open`, then `wf_next`. The runtime runs deterministic operations; the CEO delegates agent nodes and waits for their results. User gates ask you in chat. Its direct coding and skill tools are disabled while it drives the graph.
 
-Read the `action` a mode's catalogue entry carries before running it: a scored mode
-is run by `start`, and an authoring mode — `create`, `edit`, `design` — by its own
-verb, which is also what `start` will tell you if you try it anyway.
+Knobs set actual operation inputs. Prose intent describes what you want; it does not silently replace `target` or `step`.
 
-In the conversation, ask for it directly:
+## Author a mode or artifact
 
-> Use the refactory tool with action `modes`.
+Be explicit about the output:
 
-It answers with the catalogue — `annealing_pack/anneal`,
-`circle_packing/adaptive`, `loop_mode/loop` — and the call renders as a **run
-card** rather than a generic tool row.
+> Use Create to build a reusable single-run harness for drafting and checking a project README from a brief. Call the package readme_pack. Open its workflow and let me review the strategy before building it.
 
-## Start a run
+For a class of work, supply the importable Task reference instead of the single-run choice. [The authoring guide](03-author-with-a-model.md) explains both.
 
-> Start a run of `circle_packing/adaptive` with settings
-> `{"epochs": 2, "batch_size": 4, "optimizer": "random", "seed": 5}` and
-> runs-root `/tmp/gui-tour`.
+> Use Design to build wordcount.py and sample.txt, with a check command of `python wordcount.py sample.txt`. Show me the design before implementing it, and verify the reported counts.
 
-The call returns immediately. **The run is a separate process**, so it continues
-after the call returns and after the session ends — a run that died with the window
-would be a run nobody could start and walk away from.
+Design produces an artifact rather than a registered mode. Its supplied command and reviews determine acceptance. The current full authoring modes include substantial research and review; fast modes with light QA are planned in [#234](https://github.com/akashgit/refactory-dsh/issues/234).
 
-## Watch it while it runs
+## Steer and correct
 
-> Poll `status` until the run is finished, then read the `leaderboard` and the
-> `artifacts` with contents.
+You can say:
 
-`status` takes an `after` offset, so a poll asks for what is new rather than
-re-reading the whole run. While the run is going the card shows the state, the
-best score so far, and the progress tail — one line per candidate evaluated, which
-is why it moves within an epoch rather than only between them.
+> Pause before the implementation node so I can review the plan.
 
-## Author, manage and steer
+> Preserve the existing command-line interface. Add that as a constraint for the remaining work.
 
-The same tool reaches the rest of the system, so none of it needs a terminal.
+> That node used the wrong assumption. Change its prompt and rerun it; show me which dependent results become stale.
 
-Authoring is model-driven and slow (minutes):
+The CEO uses workflow state, steering and edit/redo tools. A delivery receipt shows which instruction reached work; inspect the outputs to judge compliance. An already running worker may not receive a change immediately. See [the interface guide](../interfaces.md#steering-is-precise-about-timing).
 
-> Ask the CEO: *"what does the plan look like?"* It shows the strategy the run would
-> build. Approve it, then:
+A session owns one open workflow. Use another session with a distinct run directory for independent work. Reopening a mode can start a fresh invocation; it is not equivalent to resuming an interrupted one.
 
-> Use the refactory tool with action `create`, name `gui_made`, brief "count up to a
-> target in deterministic steps and score the count reached", approve
-> `["gate_strategy=proceed"]`.
+## Follow a run in the panel
 
-The approval has to be part of the call: the tool runs the authoring mode for minutes
-inside that call and cannot pause to ask you, and a headless run refuses a gate it was
-not told the answer to. While it runs, the run directory reports its own progress:
+Copy the exact run directory reported by chat into **Existing run directory → Read this run**. The attached status and Steering sections refer to that directory. Refresh those snapshots when needed; a unified live graph/worker view is planned in [#235](https://github.com/akashgit/refactory-dsh/issues/235).
 
-> Use the refactory tool with action `status`, run `.factory/create/gui_made`.
+For optimization, choose a scored mode in Modes, select its starting knobs, outer loop, optimizer, evaluator and search budgets, then **Start**. Inspect candidates and use the optimizer-specific steering/adoption controls. Authoring entries are driven from chat instead of the ordinary Start button.
 
-The answer names the nodes done, the nodes still due, and what the run has validated so
-far. It returns the package it wrote **and the design review** — which approaches it
-considered, which it chose, and what the review refused — so the choice is visible
-rather than only its result. `edit` revises a mode and returns the before/after
-scores, refusing a regression unless you pass `allowRegression`; `design` takes a
-`check` command and reports whether the artifact passed it.
-
-A mode you have just created can be used from the same conversation, which `start`
-cannot do: `start` is the optimizer.
-
-> Use the refactory tool with action `run`, mode `gui_made/counter`, intent "count
-> to five and show me the result".
-
-It runs the mode once on DSH and reports the run directory, how the run ended and
-what it recorded, so the answer is the run rather than a promise about one.
-
-Two flags on the authoring actions are worth knowing. `sample` supplies a real input —
-`sample: ["package=/tmp/demo_pkg"]` — so the smoke runs the path the brief asked for
-rather than the built-in fixture, and a revision that only works on the fixture is
-refused. And `resume` continues a run that died: `resume: ".factory/edit/p"` picks up at
-the node that failed, keeping every node that finished, which is what makes a transport
-blip cost one node instead of the whole run.
-
-Managing packages is the registry's own verbs, passed through:
-
-> Use the refactory tool with action `registry`, packages `disable`, target `annealing_pack`.
-> Then action `registry`, packages `list`.
-
-A refusal comes back as the console's own error, so removing a package another one
-requires fails naming the dependent rather than breaking it.
-
-Steering is what the person says while *using* a mode, and it never changes the
-graph:
-
-> Use the refactory tool with action `steer`, run `…`, intent "make it better, no new
-> deps", note "no numpy", kind "constraint".
-
-The card shows the ledger and any problem with it. The ledger is folded into every
-agent node, and the instruction names the live file, so a note added while the run
-goes reaches the nodes that run afterwards.
-
-And the winner becomes a mode of its own:
-
-> Use the refactory tool with action `best`, run `…`. Then action `adopt`, run `…`,
-> as `adopted_demo`.
-
-The adopted package scores what the winner scored and the source package is byte
-identical afterwards.
-
-## What renders
-
-The tool projects the console's payload through `output.presentationMeta`, so the
-card renders the **run**, not a sentence about the run:
-
-- **state and best score**, while collapsed;
-- expanded: the counters, the progress tail, the leaderboard with each candidate's
-  diff, and the artifact list.
-
-Nothing about the card re-derives the loop's files. It renders the JSON the console
-produced, which is the same JSON `python -m refactory_dsh.console` prints — so a
-reader in the browser and a reader in a shell are reading one answer.
-
-## The same thing from a shell
-
-If you would rather not use the GUI, the console is the same surface:
+The same run can be inspected from a second terminal:
 
 ```bash
-uv run refactory modes
-uv run refactory start circle_packing/adaptive \
-  --run-id gui-tour --epochs 2 --batch-size 4 --optimizer random --seed 5 \
-  --runs-root /tmp/gui-tour
-uv run refactory status --run /tmp/gui-tour/gui-tour --after 0
+uv run refactory status --run <exact-run-directory>
+uv run refactory steer --run <exact-run-directory>
 ```
 
-For later actions, use the absolute run directory returned by `start`. A bare run
-ID uses the default root unless you repeat `--runs-root` (or `runsRoot` in CEO
-chat). Run-scoped actions refuse missing or ambiguous directories; they do not
-create a run. A steering response names both its target directory and ledger so
-you can see where the note was recorded.
-
-```bash
-uv run refactory steer --run /tmp/gui-tour/gui-tour \
-  --kind constraint --note "Preserve the required explanation in every solution."
-```
-
-## Changing what the card shows
-
-The card is a **client plugin** claiming the tool's wire name through the
-`tool.call.toolview` slot, and its model is a pure function of the logged metadata:
-
-- `packages/client/ui-tool/src/client/tool/models/refactory-card-model.ts` — the
-  derivation, and the test surface;
-- `packages/client/ui-tool/src/client/tool/toolviews/refactory-row.tsx` — the row.
-
-Because it is a keyed slot, registering under a tool name **replaces** that tool's
-row and leaves every other tool alone. A new action needs no card change unless it
-needs a new *shape*; the model switches on the action and falls back to the
-model-facing summary for anything it does not know.
-
-## What to take away
-
-- The GUI is a **view of the run directory**, not a second implementation of the
-  loop. Everything the card shows came from `console.py`.
-- A run outlives the call, the tab, and the session.
-- The tool's payload is the contract: the card, a shell, and any future reader all
-  read the same JSON.
-
-Back to the [tutorial index](index.md).
-
-## Background work and active goals
-
-When the CEO ends a turn while its background agents are still working, an active
-DSH goal waits for their completion instead of spending additional goal rounds
-polling for reports. Child completion notices and your chat messages can still
-wake the CEO. A child that has completed and remains available in session history
-does not hold the goal open. Waiting does not mark the goal blocked or authorize
-shortening a worker's required checks.
+Replace the placeholder with the actual directory. [The command reference](../cli.md) lists note, gate and search controls.

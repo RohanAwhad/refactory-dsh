@@ -1,8 +1,7 @@
 # The refactory system, as built
 
 Audience: someone who has to change this code, and needs to know what the pieces
-are and why they are shaped that way. Every claim here was produced by running the
-code; the commands are in the text so you can re-run them.
+are and why they are shaped that way. The descriptions follow the implementation; example outputs illustrate their recorded configuration and are not a guarantee for every model or workload.
 
 This describes the system that exists now. It replaces an earlier one built on
 `refactory_dsh.ops.scaffold` and `refactory_dsh.ops.outer_loop`, which are gone.
@@ -134,7 +133,7 @@ on purpose:
 
 - **`Optimizer`** — proposes. `propose()` returns `Proposal`s; the harness
   validates and evaluates them. It cannot run anything, so it cannot waste budget.
-  Two ship: `random`, `autoresearch` (which asks a model).
+  Seven ship: `random`, `hill_climb`, `evolutionary`, `archive`, `islands`, `map_elites`, and `autoresearch` (which asks a model).
 - **`OuterLoop`** — owns the search. `run()` is `init -> Run -> strategy ->
   report`, and every step a strategy would change (`select_parents`, `propose`,
   `batch_size`, `accepts`, `update`, `should_stop`, `on_epoch_end`) is a method to
