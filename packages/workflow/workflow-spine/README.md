@@ -246,3 +246,9 @@ Skip edits persist across normal data items until explicitly unskipped; an expli
 redo retains its existing reset behavior. If a worker was already dispatched for
 a skipped step, the coordinator must stop that owned worker separately: a graph
 edit does not cancel a running agent.
+
+An admitted skip retires pending delivery attempts for the skipped step/container
+body before moving the cursor. A later unskip/reloop creates a new output baseline
+and requires a fresh write; repeated `wf_next` calls within an active attempt still
+reuse its baseline. Invalid skip requests leave delivery attempts intact. This
+retirement preserves the prior receipt and artifacts and does not stop a worker.

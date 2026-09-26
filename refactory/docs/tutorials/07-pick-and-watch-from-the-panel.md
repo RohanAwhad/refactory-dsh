@@ -57,7 +57,7 @@ while you read the conversation.
 | **Outer loop**, **Optimizer**, **Evaluator** | the three level-two registries; each entry carries the console's own description, and `Use the default` leaves the console's default in place | `console strategies` |
 | **The mode's knobs** | one field per knob the chosen mode declares, shaped by the kind it declares: a knob with declared values is a choice, a `bool` is a choice over `true`/`false`, a number is bounded by its declared range, an open `str` is text. What the fields show is what the run sends, including a knob left at its declared default | `console start <mode> --knob NAME=VALUE` |
 | **Start** | starts the chosen mode in its own process and names the run it began | `console start <mode> --strategy … --optimizer … --evaluator … --knob …` |
-| **Run once** | uses the chosen mode once and reports what happened: the run's own status word, the nodes still due, and the facts it left | `console run <mode> --knob NAME=VALUE` |
+| **Run once** | shows a unique run directory during launch, then reports the run's own status, due nodes and facts; **Watch and steer this run** attaches its live status and ledger | `console run <mode> --workdir <unique-directory> --knob NAME=VALUE` |
 | **Run status** | one frame of the run being read — state, best score, evaluations; **Refresh status** reads the next frame, **Stop the run** asks it to stop | `console status --run <id>`, `console stop --run <id>` |
 | **Existing run directory → Read this run** | attach the exact directory reported by CEO chat or the terminal; read its status and steer its ledger | `console status --run <directory>`, `console steer --run <directory> --gates` |
 | **Packages of modes** | per package: **Enable**, **Disable**, **Remove**, and **Import a package** from a directory or git URL | `registry list`, `enable`, `disable`, `remove`, `import` |
@@ -80,6 +80,7 @@ Behaviours to know before you press something:
 - **Task grades are separate from a mode score.** A completed run shows recorded
   per-item pass/fail counts when present. If no aggregate mode score was produced,
   the panel says so; it does not invent an average or keep promising a future score.
+- **A one-shot has its own identity while it works.** Its path appears while preparing; **Watch and steer this run** becomes available once the fresh graph is durable. That button selects the run for the status and Steering sections. Launching it does not redirect a different run you deliberately attached. The same owned console call returns its final result or refusal; ending its stream requests cancellation through the runtime's subprocess owner. Preparation alone does not certify model authentication or success.
 - **Status is read on demand.** There is no poll timer, so a long run does not
   animate; press **Refresh status** when you want the next frame.
 

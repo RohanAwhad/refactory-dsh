@@ -37,7 +37,7 @@ import type {
 export type RefactoryRemote = {
   readonly refactoryConsole: Pick<
     RefactoryConsoleRemote,
-    'project' | 'modes' | 'strategies' | 'packages' | 'start' | 'run' | 'status' | 'leaderboard'
+    'project' | 'modes' | 'strategies' | 'packages' | 'start' | 'run' | 'runStream' | 'status' | 'leaderboard'
       | 'steer' | 'stop' | 'setPackageEnabled' | 'removePackage' | 'importPackage'
   >
 }
@@ -52,9 +52,13 @@ export type RefactoryRemote = {
  * namespace; the same `/api` channel answers `refactoryConsole/<method>`, so this
  * sends the named arguments the SRC descriptor reads.
  * @param rpc - the Client Connection's generic unary RPC caller.
+ * @param runStream - the mounted Gateway stream; absent retains the unary adapter contract.
  * @returns the namespace face the picker calls.
  */
-export function refactoryConsoleOverConnection(rpc: ClientConnectionRpc): RefactoryRemote {
+export function refactoryConsoleOverConnection(
+  rpc: ClientConnectionRpc,
+  runStream?: RefactoryConsoleRemote['runStream'],
+): RefactoryRemote {
   const call = <T>(
     method: string,
     args: Record<string, unknown>,
@@ -69,6 +73,11 @@ export function refactoryConsoleOverConnection(rpc: ClientConnectionRpc): Refact
       packages: (signal) => call('packages', {}, signal),
       start: (request, signal) => call('start', { request }, signal),
       run: (request, signal) => call('run', { request }, signal),
+      runStream: runStream ?? (async function* (request, signal) {
+        const result = await call<import('@deepseek-ai/dsh-refactory-console/types').RefactorySingleRun>('run', { request }, signal)
+        if (!result.ok) throw new Error(result.error.message)
+        yield { kind: 'result' as const, run: result.value }
+      }),
       status: (run, after, signal) => call('status', { run, after }, signal),
       leaderboard: (run, signal) => call('leaderboard', { run }, signal),
       steer: (request, signal) => call('steer', { request }, signal),
@@ -444,14 +453,33 @@ export function refactoryFace(
         running.add(tabId)
         const generation = nextGeneration(runGenerations, tabId)
         actions.runLoading(tabId)
-        settle(runGenerations, tabId, generation, console.run({ mode, knobs: knobArguments(knobs) }, signal), (run) => {
-          actions.ran(tabId, run)
-        }, () => { running.delete(tabId) }, (failure) => {
-          // A refused gesture is the notice, and the tab is no longer waiting on a
-          // run that is never going to arrive.
-          actions.noticed(tabId, { code: failure.code, message: failure.message })
-          actions.runFailed(tabId)
-        })
+        const current = (): boolean => !signal.aborted && runGenerations.get(tabId) === generation
+        void (async () => {
+          let answered = false
+          try {
+            for await (const event of console.runStream({ mode, knobs: knobArguments(knobs) }, signal)) {
+              if (!current()) return
+              if (event.kind === 'launch') actions.runLaunched(tabId, event.launch)
+              else { actions.ran(tabId, event.run); answered = true }
+            }
+            if (!answered && current()) throw new Error('The run stream ended without a final result; inspect its run directory before retrying.')
+          } catch (error) {
+            if (!current()) return
+            const failure = error instanceof Error ? error.message : String(error)
+            actions.noticed(tabId, { code: 'refactory/console-failed', message: failure })
+            actions.runFailed(tabId)
+          } finally {
+            // Release this invocation even when its own signal was cancelled.
+            // Record teardown deletes the generation first, so it is never revived.
+            if (runGenerations.get(tabId) === generation) {
+              running.delete(tabId)
+              if (signal.aborted) {
+                actions.noticed(tabId, { code: 'gateway/cancelled', message: 'Run once was cancelled; inspect its run directory before retrying.' })
+                actions.runFailed(tabId)
+              }
+            }
+          }
+        })()
       },
       refresh(tabId, run, after, signal) {
         readStatus(tabId, run, after, signal)

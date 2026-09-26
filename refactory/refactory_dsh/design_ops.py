@@ -10,17 +10,55 @@ from __future__ import annotations
 import json
 import re
 import shutil
-from pathlib import Path
+import tempfile
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from refactory_dsh import sandbox
 from refactory_dsh.create_ops import FILE_MARKER, parse_files
+from refactory_dsh.paths import project_for_nodes
 
 STAGING = "staging"
 
-#: Where a designed artifact lands, beside the workspace rather than in it: it is not
-#: a package, and it must not be discoverable as one.
+#: Project-owned software artifacts are separate from discoverable mode packages.
 ARTIFACTS = Path(".factory") / "artifacts"
+
+
+def _artifact_name(name: str) -> str:
+    if (not name or name in {".", ".."} or name != name.strip()
+            or any(char in name for char in "/\\:")
+            or any(ord(char) < 32 for char in name)):
+        raise ValueError("artifact name must be one directory name, without separators, drives or '..'")
+    return name
+
+
+def _artifact_root(name: str) -> Path:
+    """Use the configured project, never the lowered operation's working directory."""
+    project = project_for_nodes().expanduser().resolve()
+    root = project / ARTIFACTS / _artifact_name(name)
+    for path in (project / ".factory", project / ARTIFACTS, root):
+        if path.is_symlink() or not path.resolve().is_relative_to(project):
+            raise ValueError(f"artifact path must not cross a symlink: {path}")
+        if path.exists() and not path.is_dir():
+            raise ValueError(f"artifact path is not a directory: {path}")
+    return root
+
+
+def _artifact_files(files: dict[str, str]) -> dict[Path, str]:
+    checked: dict[Path, str] = {}
+    for relative, content in files.items():
+        path = Path(relative)
+        if (path.is_absolute() or PureWindowsPath(relative).drive
+                or "\\" in relative or ".." in path.parts or not path.parts
+                or relative.endswith("/") or any(ord(char) < 32 for char in relative)):
+            raise ValueError(f"{relative!r} is not a file inside the artifact directory")
+        if path in checked:
+            raise ValueError(f"{relative!r} duplicates an artifact file")
+        checked[path] = content
+    for path in checked:
+        if any(parent in checked for parent in path.parents):
+            raise ValueError(f"{str(path)!r} conflicts with an artifact file used as its directory")
+    return checked
 
 
 def prepare_design(ctx: Any) -> dict[str, Any]:
@@ -39,6 +77,7 @@ def prepare_design(ctx: Any) -> dict[str, Any]:
             "design-mode needs what to build: pass {'name': ..., 'brief': ..., 'check': ...} "
             "in the task (the walker) or the `name`/`brief`/`check` knobs (a run on DSH)"
         )
+    _artifact_name(name)
     if not check:
         raise ValueError(
             "design-mode needs a check: the command that decides whether the artifact "
@@ -64,23 +103,47 @@ def prepare_design(ctx: Any) -> dict[str, Any]:
 
 def materialise_artifact(ctx: Any) -> dict[str, Any]:
     """Write the emitted files into the artifact directory."""
-    files = parse_files(ctx.read_text("emit.txt"))
+    answer = ctx.read_text("emit.txt")
+    headers = [line for line in answer.splitlines() if line.startswith("===FILE:")]
+    if any(FILE_MARKER.fullmatch(line) is None for line in headers):
+        raise ValueError("invalid artifact file header; use ===FILE: <relative path>=== with letters, digits, '_', '.', '/' or '-'")
+    paths = [match.group(1) for match in FILE_MARKER.finditer(answer)]
+    if len(paths) != len(set(paths)):
+        raise ValueError("the artifact emission repeats a file path")
+    files = parse_files(answer)
     if not files:
         raise ValueError("the answer contained no '===FILE: <name>===' blocks")
-    name = str(ctx.facts["name"])
-    root = ARTIFACTS / name
-    if root.exists():
-        shutil.rmtree(root)
-    root.mkdir(parents=True)
-    written: list[str] = []
-    for relative, content in files.items():
-        target = root / relative
-        if not target.resolve().is_relative_to(root.resolve()):
-            raise ValueError(f"{relative!r} escapes the artifact directory")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content)
-        written.append(relative)
-    return {"artifact": str(root), "files": sorted(written)}
+    root = _artifact_root(str(ctx.facts["name"]))
+    checked = _artifact_files(files)
+    # Validate and finish all writes privately before moving an earlier artifact.
+    root.parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(tempfile.mkdtemp(prefix=".design-", dir=root.parent))
+    preserve_backup = False
+    previous = temporary / "previous"
+    try:
+        stage = temporary / "artifact"
+        stage.mkdir()
+        for relative, content in checked.items():
+            target = stage / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content)
+        replaced = root.exists()
+        if replaced:
+            root.rename(previous)
+        try:
+            stage.rename(root)
+        except BaseException:
+            if replaced:
+                try:
+                    previous.rename(root)
+                except OSError as error:
+                    preserve_backup = True
+                    raise RuntimeError(f"artifact replacement failed; previous artifact retained at {previous}") from error
+            raise
+    finally:
+        if not preserve_backup and not (previous.exists() and not root.exists()):
+            shutil.rmtree(temporary)
+    return {"artifact": str(root), "files": sorted(str(path) for path in checked)}
 
 
 def check_artifact(ctx: Any) -> str:
@@ -90,7 +153,9 @@ def check_artifact(ctx: Any) -> str:
     score, an artifact must build and run. Both refuse rather than warn, because an
     artifact nobody checked is not a deliverable.
     """
-    root = Path(str(ctx.facts["artifact"]))
+    root = _artifact_root(str(ctx.facts["name"]))
+    if Path(str(ctx.facts["artifact"])) != root:
+        raise ValueError("artifact location is stale or ambiguous; materialise again before checking")
     command = str(ctx.facts["check"])
     attempts = int(ctx.knob("check_attempts", 2))
     result = sandbox.run_command(

@@ -145,6 +145,8 @@ export function startInvocation(request: StartRequest): ConsoleInvocation {
 
 /** What one `run` call carries: a mode used once, and the knobs it uses. */
 export interface SingleRunRequest {
+  /** Host-selected directory for this invocation; absent keeps the CLI default. */
+  readonly workdir?: string | undefined
   /** Mode to run, as `<package>/<name>`. */
   readonly mode: string
   /** Knob values the run uses, as `NAME=VALUE`; one `--knob` per element. */
@@ -164,7 +166,7 @@ export function runInvocation(request: SingleRunRequest): ConsoleInvocation {
   return {
     verb: 'run',
     positional: [request.mode],
-    options: { knob: request.knobs },
+    options: { knob: request.knobs, workdir: request.workdir },
   }
 }
 
