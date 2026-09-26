@@ -239,7 +239,12 @@ def run(
             project = Path(saved['project'])
             knobs = saved.get('knobs') or []
             model_context = saved.get('model_context')
-            if model_context is not None:
+            if model_context is None:
+                from refactory_dsh.model import DshModelClient
+                # Old unrouted runs still need a concrete native policy in the
+                # child environment, even when no shared budget was configured.
+                model_context = DshModelClient(worker_backend='dsh', permission_mode='default').context()
+            else:
                 model_context = {**model_context, 'permission_mode': model_context.get('permission_mode') or 'default'}
             resource_limits = effective_limits
             if model_context:

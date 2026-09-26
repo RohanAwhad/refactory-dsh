@@ -116,3 +116,36 @@ def test_recovery_retains_recorded_policy_without_rewriting_history(tmp_path, mo
     assert config.read_bytes() == original
     assert (tmp_path / '.refactory/resume-request.json').exists()
     assert RunBudget.open(tmp_path).snapshot()['started_at'] is None
+
+
+def test_legacy_null_context_without_budget_pins_native_policy_for_nested_workers(tmp_path, monkeypatch):
+    monkeypatch.delenv('REFACTORY_WORKER_CONTEXT', raising=False)
+    name, _ = interactive.prepare('counting_pack/fixed_step', workdir=tmp_path, project=PROJECT)
+    config = tmp_path / '.refactory/run-config.json'
+    saved = json.loads(config.read_text())
+    saved.update(model_context=None, resource_limits=None)
+    config.write_text(json.dumps(saved))
+    original = config.read_bytes()
+    (tmp_path / '.refactory/spine-checkpoint.json').write_text(json.dumps({
+        'run_id': str(tmp_path), 'graph': {'name': name}, 'status': 'paused', 'file_fingerprints': {},
+    }))
+    monkeypatch.setenv('REFACTORY_WORKER_CONTEXT', json.dumps({'worker_backend': 'dsh', 'permission_mode': 'skip'}))
+    seen = []
+
+    def inspect_launch(*args, **kwargs):
+        seen.append(kwargs)
+        context = json.loads(kwargs['env']['REFACTORY_WORKER_CONTEXT'])
+        assert context == kwargs['context']
+        assert context['worker_backend'] == 'dsh'
+        assert context['permission_mode'] == 'default'
+        with monkeypatch.context() as nested:
+            nested.setenv('REFACTORY_WORKER_CONTEXT', kwargs['env']['REFACTORY_WORKER_CONTEXT'])
+            assert DshModelClient().route()['permission_mode'] == 'default'
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(workers, 'run_graph_command', inspect_launch)
+    monkeypatch.setattr(interactive, 'run_owned', lambda *args, **kwargs: pytest.fail('legacy resume must pin its worker context'))
+    assert interactive.run('counting_pack/fixed_step', workdir=tmp_path, resume=True, headless=True) == 0
+    assert len(seen) == 1
+    assert config.read_bytes() == original
+    assert not (tmp_path / '.refactory/resource-usage.json').exists()
