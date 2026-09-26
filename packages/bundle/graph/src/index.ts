@@ -7,7 +7,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import type { Context } from '@deepseek-ai/cordis'
@@ -80,6 +80,19 @@ function finalText(session: Session, firstSeq: SessionLogOffset): string {
   return text
 }
 
+/** The latest turn's actual failure; a later successful retry clears an earlier one. */
+function turnError(session: Session, firstSeq: SessionLogOffset): string | undefined {
+  for (let seq = session.seq - 1; seq >= firstSeq; seq--) {
+    const event = session.eventAt(SessionSeq(seq))
+    if (event?.type !== 'turn/end') continue
+    const reason = event.data.reason
+    if (reason.kind === 'completed') return undefined
+    if (reason.kind === 'error') return `${reason.error.code}: ${reason.error.message}`
+    return `the model turn ended (${reason.kind})`
+  }
+  return 'the model turn recorded no completion'
+}
+
 /** The terminal the run writes to and reads from; the launcher supplies the process's. */
 export interface Io {
   stdout: { write(chunk: string): unknown }
@@ -133,9 +146,11 @@ async function chat(agent: Agent, startup: GraphStartupValues, io: Io, firstSeq:
   for (;;) {
     const turn = finalText(agent.session, seqBefore)
     if (turn !== '') io.stdout.write(`${turn}\n`)
+    const failure = turnError(agent.session, seqBefore)
+    if (failure !== undefined) io.stderr.write(`dsh: ${failure}\n`)
     // Quiescence is not completion: the cursor's own status on disk is what says the
     // graph finished, and there is nothing left to steer once it has.
-    if (spineStatus(startup.workdir)?.status === 'done') return
+    if (failure === undefined && spineStatus(startup.workdir)?.status === 'done') return
     const line = await readLine(io.stdin, io.stdout)
     if (line === undefined) return
     const typed = line.trim()
@@ -173,7 +188,14 @@ async function run(ctx: Context, io: Io): Promise<void> {
   })
   await agent.whenIdle()
   const firstSeq = agent.session.seq
+  let caughtError: string | undefined
   try {
+    // A reused directory may carry another invocation's done marker. Keep it as
+    // history, but require this CEO's workflow calls to write fresh status.
+    const priorStatus = join(startup.workdir, '.refactory', 'spine-status.json')
+    if (existsSync(priorStatus)) {
+      renameSync(priorStatus, join(startup.workdir, '.refactory', `spine-status.previous-${agent.session.id}.json`))
+    }
     agent.followup(createUserMessage({
       content: [{ type: 'text', text: startup.task }],
       source: { kind: 'user' },
@@ -183,11 +205,24 @@ async function run(ctx: Context, io: Io): Promise<void> {
     // now, while the graph is still running, and the person may answer it.
     if (startup.chat) await chat(agent, startup, io, firstSeq)
   } catch (error: unknown) {
-    io.stderr.write(`dsh: ${error instanceof Error ? error.message : String(error)}\n`)
+    caughtError = error instanceof Error ? error.message : String(error)
   }
   await sessions.flush(agent.session)
 
+  const status = spineStatus(startup.workdir)
+  const due = status?.nodes === undefined || status.nodes.length === 0
+    ? ''
+    : `: ${status.nodes.join(', ')} still due`
+  const graphError = status === undefined
+    ? 'the graph did not start: no readable workflow status was recorded'
+    : status.status === 'done'
+      ? undefined
+      : `the graph did not finish (${status.status}${due})${status.error === undefined ? '' : ` — ${status.error}`}`
+  const failure = caughtError ?? turnError(agent.session, firstSeq) ?? graphError
   const result = {
+    ok: failure === undefined,
+    status: status?.status ?? 'not-started',
+    ...(failure === undefined ? {} : { error: failure }),
     mode: startup.mode,
     task: startup.taskName,
     budget: startup.budget,
@@ -198,24 +233,10 @@ async function run(ctx: Context, io: Io): Promise<void> {
   }
   io.stdout.write(JSON.stringify(result, null, 2) + '\n')
 
-  // Quiescence is not completion. The cursor's own status on disk is what says
-  // whether the graph finished, and a run that stopped with nodes still due (the CEO
-  // backgrounded a subagent and ended its turn, or a gate could not be answered) must
-  // not report a score as if it had run: "the graph finished" and "the graph was
-  // abandoned" have to be different outcomes to whoever started it.
-  const status = spineStatus(startup.workdir)
-  if (status !== undefined && status.status !== 'done') {
-    const due = status.nodes === undefined || status.nodes.length === 0
-      ? ''
-      : `: ${status.nodes.join(', ')} still due`
-    io.stderr.write(
-      `dsh: the graph did not finish (${status.status}${due})`
-      + `${status.error === undefined ? '' : ` — ${status.error}`}\n`,
-    )
-    io.exit(1)
-    return
-  }
-  io.exit(0)
+  // A failed final turn (even beside an old done file), absent status, or an
+  // unfinished cursor cannot certify completion. Live chat may retry before here.
+  if (failure !== undefined) io.stderr.write(`dsh: ${failure}\n`)
+  io.exit(failure === undefined ? 0 : 1)
 }
 
 /**
