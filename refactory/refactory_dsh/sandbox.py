@@ -484,6 +484,7 @@ def verify_sandboxed(
     project: Path | None = None,
     requires_data_node: bool = False,
     requires_task_ref: str = "",
+    requires_task_refs: tuple[str, ...] = (),
     requires_input: tuple[str, ...] = (),
     **kwargs: Any,
 ) -> SandboxResult:
@@ -499,6 +500,9 @@ def verify_sandboxed(
     to ask whether model-written code is a usable mode.
     """
     project = Path(project or project_for_nodes())
+    required_tasks = tuple(dict.fromkeys(
+        ref for ref in (*requires_task_refs, requires_task_ref) if ref
+    ))
     code = (
         "import json\n"
         "import importlib\n"
@@ -507,7 +511,7 @@ def verify_sandboxed(
         "from refactory_dsh.nn import validate_state\n"
         "problems = []\n"
         f"requires_data_node = {bool(requires_data_node)!r}\n"
-        f"requires_task_ref = {str(requires_task_ref)!r}\n"
+        f"required_tasks = {required_tasks!r}\n"
         f"required_inputs = {tuple(requires_input)!r}\n"
         f"package = registry.load({name!r}, Path({str(project)!r}))\n"
         f"expected = {name!r}\n"
@@ -548,12 +552,11 @@ def verify_sandboxed(
         "subgraph, which this creation asked for')\n"
         # A Task binding is a declaration too: the mode has to be bound to the Task
         # the brief named, or the run produced something the Task does not describe.
-        "    if requires_task_ref and not any(\n"
-        "        node.kind == 'data' and node.task_ref == requires_task_ref\n"
-        "        for node in mode.graph().nodes.values()\n"
-        "    ):\n"
-        "        problems.append(f'{identifier} declares no DataNode bound to the Task "
-        "{requires_task_ref!r}, which this creation asked for')\n"
+        "    for required_task in required_tasks:\n"
+        "        if not any(node.kind == 'data' and node.task_ref == required_task\n"
+        "                   for node in mode.graph().nodes.values()):\n"
+        "            problems.append(f'{identifier} declares no DataNode bound to the Task "
+        "{required_task!r}, which this creation or revision requires')\n"
         # The brief's inputs are a declaration too, and the one the pipeline could not
         # check before: a mode can ignore the thing it was asked to operate on and
         # still be structurally perfect. What is checkable is whether the mode has a
@@ -578,14 +581,17 @@ def verify_sandboxed(
     return run_sandboxed(code, workdir=project, env=dict(os.environ), **kwargs)
 
 
-def describe_package(name: str, *, project: Path | None = None, **kwargs: Any) -> SandboxResult:
+def describe_package(
+    name: str, *, project: Path | None = None, include_contracts: bool = False, **kwargs: Any,
+) -> SandboxResult:
     """A package's manifest and mode ids, read without importing it here.
 
     Reading ``PACKAGE`` means importing the module that declares it, and for a
     generated package that is the model's code. So the read happens where the
     check happens. A caller that only wants to *name* what a package contains — to
     report what was registered, or to choose a mode to smoke — should not have to
-    run the package in the driver to find out.
+    run the package in the driver to find out. ``include_contracts`` also constructs
+    the modes here and reports their data-node Task/runtime-source bindings.
     """
     project = Path(project or project_for_nodes())
     code = (
@@ -593,7 +599,16 @@ def describe_package(name: str, *, project: Path | None = None, **kwargs: Any) -
         "from pathlib import Path\n"
         "from refactory_dsh import registry\n"
         f"package = registry.load({name!r}, Path({str(project)!r}))\n"
-        "print(json.dumps({'describe': package.describe(), 'ids': package.ids()}))\n"
+        "payload = {'describe': package.describe(), 'ids': package.ids()}\n"
+        f"if {include_contracts!r}:\n"
+        "    payload['mode_contracts'] = {\n"
+        "        f'{package.name}/{mode.name}': [\n"
+        "            {'node': node.id, 'task_ref': node.task_ref,\n"
+        "             'source_path': node.source_path, 'source_format': node.source_format}\n"
+        "            for node in mode().graph().nodes.values() if node.kind == 'data'\n"
+        "        ] for mode in package.modes\n"
+        "    }\n"
+        "print(json.dumps(payload))\n"
     )
     return run_sandboxed(code, workdir=project, env=dict(os.environ), **kwargs)
 

@@ -131,6 +131,51 @@ def _slug(text: str, *, words: int = 3) -> str:
     return slug[:40]
 
 
+def _mode_contracts(name: str) -> dict[str, list[dict[str, Any]]]:
+    """Read actual data bindings where loading generated code is already contained."""
+    from refactory_dsh import sandbox
+
+    result = sandbox.describe_package(name, project=project_for_nodes(), include_contracts=True)
+    if not result.ok:
+        raise ValueError(f"cannot read the mode's Task bindings: {result.problem()}")
+    return result.payload["mode_contracts"]
+
+
+def _required_bindings(ctx: Any, revision: str) -> tuple[list[str], bool]:
+    """Explicit directives win; otherwise a revision preserves the source contract."""
+    explicit = str(ctx.knob("task_ref", "") or "").strip()
+    requires_data = bool(ctx.knob("data_node", 0)) or bool(explicit)
+    if explicit or bool(ctx.knob("single_shot", 0)) or not revision:
+        return ([explicit] if explicit else []), requires_data
+    package, _mode = registry.split(revision)
+    contracts = _mode_contracts(package)
+    if revision not in contracts:
+        raise ValueError(f"the source package has no mode {revision!r}")
+    nodes = contracts[revision]
+    refs = sorted({node["task_ref"] for node in nodes if node.get("task_ref")})
+    return refs, requires_data or bool(nodes)
+
+
+def _binding_metadata(task_refs: list[str], data_node: bool) -> dict[str, Any]:
+    """Describe the actual or requested bindings without calling data input single-shot."""
+    refs = sorted(set(task_refs))
+    if refs:
+        class_of_work = (
+            "a harness for the class of work named by the Task " + refs[0]
+            if len(refs) == 1 else "a harness for the classes of work named by the Tasks " + ", ".join(refs)
+        ) + (
+            ": a `data` node bound to each Task runs its subgraph once per item, "
+            "folding each `verify` verdict into the run's facts; runtime sources may "
+            "supply other items of that class"
+        )
+    elif data_node:
+        class_of_work = "a harness with data nodes fed from runtime sources, with no Task binding"
+    else:
+        class_of_work = "a harness for one run of one thing, with no Task binding"
+    return {"task_ref": refs[0] if len(refs) == 1 else "", "task_refs": refs,
+            "class_of_work": class_of_work, "data_node": "yes" if data_node else "no"}
+
+
 def prepare(ctx: Any) -> dict[str, Any]:
     """Read the brief the run was given and publish it to the prompts."""
     task = dict(getattr(ctx, "task", {}) or {})
@@ -156,7 +201,6 @@ def prepare(ctx: Any) -> dict[str, Any]:
     # work, so naming one implies the data node rather than asking for it twice.
     task_ref = str(ctx.knob("task_ref", "") or "").strip()
     single_shot = bool(ctx.knob("single_shot", 0))
-    data_node = bool(ctx.knob("data_node", 0)) or bool(task_ref)
     # A revision is not a creation: `edit` walks this same graph with a mode to
     # revise, and the creation directive is about what a *new* harness is for.
     if not revision and not task_ref and not single_shot:
@@ -184,10 +228,14 @@ def prepare(ctx: Any) -> dict[str, Any]:
             import sys
 
             print(f"refactory: warning: {readiness['warning']}", file=sys.stderr)
+    task_refs, data_node = _required_bindings(ctx, revision)
+    metadata = _binding_metadata(task_refs, data_node)
+    task_ref = metadata["task_ref"]
     reference = _revision_source(revision) if revision else _reference(extends)
     ctx.write_json("brief.json", {
         "name": name, "brief": brief, "extends": extends, "mode": revision,
-        "task_ref": task_ref, "single_shot": single_shot, "data_node": data_node,
+        "task_ref": task_ref, "task_refs": task_refs,
+        "single_shot": single_shot, "data_node": data_node,
         "requires_input": list(inputs), "smoke_timeout_s": smoke_timeout_s,
     })
     return {
@@ -201,18 +249,8 @@ def prepare(ctx: Any) -> dict[str, Any]:
         "api": API,
         "reference": reference,
         "task_ref": task_ref,
-        "class_of_work": (
-            f"a harness for the class of work named by the Task {task_ref}: the graph "
-            "starts with a `data` node bound to that Task, and the executor runs the "
-            "subgraph between `subgraph_entry` and `subgraph_exit` once per item the "
-            "Task lists, folding each `verify` verdict into the run's facts. The node "
-            "is the harness's input port: it takes the items from the Task or from a "
-            "`source_path` with a `source_format` at run time, so any item of that "
-            "class may arrive and never only the items the authoring run seeded"
-        ) if task_ref else (
-            "a harness for one run of one thing, with no Task binding"
-        ),
-        "data_node": "yes" if data_node else "no",
+        "class_of_work": metadata["class_of_work"],
+        "data_node": metadata["data_node"],
         "requires_input": (
             "The brief says this mode takes these as input: " + ", ".join(f"`{name}`" for name in inputs)
             + ". It must receive each one as a declared knob named after it, or by "
@@ -675,14 +713,25 @@ def validate(ctx: Any) -> str:
     """
     name = str(ctx.facts["name"])
     attempts = int(ctx.knob("attempts", 3))
-    task_ref = str(ctx.knob("task_ref", "") or "").strip()
+    brief = ctx.read_json("brief.json", {}) or {}
+    if "task_refs" in brief:
+        task_refs, requires_data = list(brief["task_refs"]), bool(brief.get("data_node"))
+    elif brief.get("task_ref") or brief.get("single_shot"):
+        # Preserve an explicit directive already saved by an older prepare node.
+        task_refs = [str(brief["task_ref"])] if brief.get("task_ref") else []
+        requires_data = bool(brief.get("data_node")) or bool(task_refs)
+    else:
+        # Saved authoring runs before this metadata existed still inherit their source.
+        revision = str(ctx.facts.get("revision_of") or brief.get("mode") or "")
+        task_refs, requires_data = _required_bindings(ctx, revision)
+        requires_data = requires_data or bool(brief.get("data_node"))
     try:
         problems = check_package(
             name,
             # The same implication `prepare` publishes as a fact: naming a Task is
             # what asks for a data node, so the gate checks for one either way.
-            requires_data_node=bool(ctx.knob("data_node", 0)) or bool(task_ref),
-            requires_task_ref=task_ref,
+            requires_data_node=requires_data,
+            requires_task_refs=tuple(task_refs),
             requires_input=declared_inputs(ctx.knob("requires_input", "")),
         )
     except Exception as exc:
@@ -861,6 +910,7 @@ def check_package(
     *,
     requires_data_node: bool = False,
     requires_task_ref: str = "",
+    requires_task_refs: tuple[str, ...] = (),
     requires_input: tuple[str, ...] = (),
 ) -> list[str]:
     """Everything wrong with a staged package, as a list of reasons.
@@ -907,6 +957,7 @@ def check_package(
         project=project_for_nodes(),
         requires_data_node=requires_data_node,
         requires_task_ref=requires_task_ref,
+        requires_task_refs=requires_task_refs,
         requires_input=requires_input,
     )
     problems.extend(checked.payload.get("problems") or [])
@@ -1321,6 +1372,9 @@ def _agent_nodes(name: str) -> list[str]:
 
 def write_result(ctx: Any) -> dict[str, Any]:
     """The run's own summary, written where a person can read it."""
+    contracts = _mode_contracts(str(ctx.facts["name"]))
+    nodes = [node for mode_nodes in contracts.values() for node in mode_nodes]
+    metadata = _binding_metadata([node["task_ref"] for node in nodes if node.get("task_ref")], bool(nodes))
     payload = {
         "package": ctx.facts.get("name"),
         "extends": ctx.facts.get("extends"),
@@ -1330,9 +1384,8 @@ def write_result(ctx: Any) -> dict[str, Any]:
         # What kind of harness this run produced: the Task it is bound to, or that it
         # is the single-shot special case. A reader of the run's own result must not
         # have to infer that from the package.
-        "task_ref": ctx.facts.get("task_ref"),
-        "class_of_work": ctx.facts.get("class_of_work"),
-        "data_node": ctx.facts.get("data_node"),
+        **metadata,
+        "mode_contracts": contracts,
     }
     if ctx.facts.get("revision_of"):
         payload.update({
