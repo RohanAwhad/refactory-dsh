@@ -33,6 +33,8 @@ export type Loadable<T> =
 
 /** Everything a picker offers to choose between, read as one. */
 export interface RefactoryChoices {
+  /** Absolute configured console project, independent of the selected chat workspace. */
+  readonly project: string
   /** The modes a run can be made from, each with the verb that runs it and its declared knobs. */
   readonly modes: readonly RefactoryModeChoice[]
   /** The named outer loops, optimizers and evaluators. */

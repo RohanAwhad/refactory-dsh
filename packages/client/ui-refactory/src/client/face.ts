@@ -37,7 +37,7 @@ import type {
 export type RefactoryRemote = {
   readonly refactoryConsole: Pick<
     RefactoryConsoleRemote,
-    'modes' | 'strategies' | 'packages' | 'start' | 'run' | 'status' | 'leaderboard'
+    'project' | 'modes' | 'strategies' | 'packages' | 'start' | 'run' | 'status' | 'leaderboard'
       | 'steer' | 'stop' | 'setPackageEnabled' | 'removePackage' | 'importPackage'
   >
 }
@@ -63,6 +63,7 @@ export function refactoryConsoleOverConnection(rpc: ClientConnectionRpc): Refact
     rpc.call('/api', `refactoryConsole/${method}`, { args }, signal) as Promise<RemoteResult<T>>
   return {
     refactoryConsole: {
+      project: (signal) => call('project', {}, signal),
       modes: (signal) => call('modes', {}, signal),
       strategies: (signal) => call('strategies', {}, signal),
       packages: (signal) => call('packages', {}, signal),
@@ -375,21 +376,23 @@ export function refactoryFace(
     }
     const console = remote.refactoryConsole
     /**
-     * One read of the three catalogues, retired by the next read of this tab.
+     * One read of the project identity and catalogues, retired by the next read of this tab.
      * Both callers have already refused an ended record; this only reads.
      */
     const read = (tabId: TabId, signal: AbortSignal): void => {
       const generation = nextGeneration(catalogueGenerations, tabId)
       void Promise.all([
+        console.project(signal),
         console.modes(signal),
         console.strategies(signal),
         console.packages(signal),
-      ]).then(([modes, strategies, packages]) => {
+      ]).then(([project, modes, strategies, packages]) => {
         if (catalogueGenerations.get(tabId) !== generation) return
+        if (!project.ok) { actions.failed(tabId, project.error.message); return }
         if (!modes.ok) { actions.failed(tabId, modes.error.message); return }
         if (!strategies.ok) { actions.failed(tabId, strategies.error.message); return }
         if (!packages.ok) { actions.failed(tabId, packages.error.message); return }
-        actions.loaded(tabId, { modes: modes.value, strategies: strategies.value, packages: packages.value })
+        actions.loaded(tabId, { project: project.value, modes: modes.value, strategies: strategies.value, packages: packages.value })
       })
     }
     return {

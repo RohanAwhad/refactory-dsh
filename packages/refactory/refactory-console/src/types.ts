@@ -411,6 +411,8 @@ export interface RefactorySingleRunRequest {
  * still has to select this contribution in its own assembly.
  */
 export interface RefactoryConsoleRemote {
+  /** @param signal - caller cancellation. @returns the configured console project directory. */
+  project: (signal?: AbortSignal) => Promise<RemoteResult<string>>
   /** @param source - package source the mode comes from. @param name - mode package name. @param signal - caller cancellation. @returns the package list after the import. */
   importPackage: (source: string, name: string, signal?: AbortSignal) => Promise<RemoteResult<readonly RefactoryPackageChoice[]>>
   /** @param run - the run whose candidates are read. @param signal - caller cancellation. @returns the candidates by score, each with what a person did to it. */

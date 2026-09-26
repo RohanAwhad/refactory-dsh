@@ -198,6 +198,7 @@ export function failure<T>(code: string, message: string): RemoteResult<T> {
 export interface FakeConsole {
   readonly remote: RefactoryRemote
   readonly modes: Mock
+  readonly project: Mock
   readonly strategies: Mock
   readonly packages: Mock
   readonly start: Mock
@@ -218,6 +219,7 @@ export interface FakeConsole {
 export function fakeConsole(): FakeConsole {
   const methods = {
     modes: vi.fn(async () => ok<readonly RefactoryModeChoice[]>([])),
+    project: vi.fn(async () => ok('/repo')),
     strategies: vi.fn(async () => ok(NO_STRATEGIES)),
     packages: vi.fn(async () => ok<readonly RefactoryPackageChoice[]>([])),
     start: vi.fn(async () => ok(RECEIPT)),

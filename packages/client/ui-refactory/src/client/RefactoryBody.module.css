@@ -226,3 +226,7 @@
 .statusLine {
   margin: 0;
 }
+
+.projectPath {
+  overflow-wrap: anywhere;
+}
