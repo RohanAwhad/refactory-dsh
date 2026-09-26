@@ -99,3 +99,25 @@ can select their route through the profile's `agent-default-model` configuration
 The CEO can use the existing `refactory` tool with `action: "runtime"` before `wf_open`. It reads the current session selection and the host-owned DSH home, then uses the same nested credential diagnostic as create/edit. It never asks you to copy credentials into a run or change a configured home. Missing and invalid configuration are reported as such; unsupported diagnostics stay unverified. Current-session reasoning effort is shown separately because credential readiness does not prove nested reasoning selection.
 
 From the terminal, `refactory runtime` reports nested defaults as JSON; `--provider` and `--model` inspect an explicit route without changing settings. There is no current CEO session in that CLI call. The diagnostic does not authenticate or launch a mode. As with doctor, the normal DSH loader may initialize a missing shipped headless profile, but it does not write credentials.
+
+## Completion deadlines and interruption
+
+A `DshModelClient` deadline fails the completion without replaying its prompt: the
+agent may already have written files or started tool work. Explicit transport
+failures retain their bounded retry policy. On POSIX, a deadline or caller
+`KeyboardInterrupt` raised in the thread calling `complete()` sends one SIGTERM
+to the selected CLI and allows ten seconds for shutdown. A main-thread interrupt
+during a concurrent fork does not propagate into its completion worker threads;
+this helper does not implement concurrent fork cancellation. The shipped CLI disposes its context and managed subprocesses,
+including ordinary tool jobs launched in separate process groups. A separate CLI
+session prevents terminal Ctrl-C from also delivering a second shutdown signal.
+Valid work that finishes inside the deadline follows normal CLI disposal.
+
+This is runtime-owned cleanup, not a scan or kill of process names. A runtime that
+does not settle within the grace is forced to exit; the error says child cleanup
+is unconfirmed and no retry follows. Custom launchers must implement their own
+shutdown, and Windows termination does not provide the POSIX graceful signal
+path. The local provider's macOS process-group fallback cannot contain arbitrary
+descendants that escape its managed range. Python SIGKILL, abrupt parent death,
+and process-wide SIGTERM without a caller exception also need external supervision.
+The client does not undo files written before failure or certify their reuse.
