@@ -15,10 +15,14 @@ with tools, and an analysis prompt must not be able to write into the run.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
 import subprocess
+import threading
+import time
+from concurrent.futures import CancelledError
 from pathlib import Path
 
 from refactory_dsh.paths import SOURCE_CLI_ENTRY, dsh_command, dsh_root, node_bin
@@ -135,6 +139,21 @@ class DshModelClient:
         self._dsh_home = Path(selected_home or Path.home() / ".dsh").expanduser().resolve()
         self._attempts = max(1, int(attempts))
         self._backoff_s = max(0.0, float(backoff_s))
+        self._cancellations: tuple[threading.Event, ...] = ()
+
+    def with_cancellation(self, event: threading.Event) -> DshModelClient:
+        """Bind an independent client copy to one caller-owned cancellation scope.
+
+        Routing and limits are copied as resolved, retaining inherited scopes without
+        changing the original client or serializing process-local events.
+        """
+        client = copy.copy(self)
+        client._cancellations = (*self._cancellations, event)
+        return client
+
+    def _raise_if_cancelled(self) -> None:
+        if any(event.is_set() for event in self._cancellations):
+            raise CancelledError("model completion cancelled; not retried")
 
     def context(self) -> dict[str, str]:
         """Nonsecret settings safe to carry across the model subprocess boundary."""
@@ -242,6 +261,7 @@ class DshModelClient:
 
         last = ""
         for attempt in range(1, self._attempts + 1):
+            self._raise_if_cancelled()
             try:
                 proc = self._run_completion(cmd, run_dir)
             except subprocess.TimeoutExpired as exc:
@@ -253,6 +273,7 @@ class DshModelClient:
                     "requested runtime shutdown; not retried"
                 ) from exc
             else:
+                self._raise_if_cancelled()
                 if proc.returncode == 0:
                     return proc.stdout
                 cause = failure_cause(proc.stderr)
@@ -265,9 +286,19 @@ class DshModelClient:
                     )
                 last = cause or f"exit {proc.returncode}"
             if attempt < self._attempts:
-                import time as _time
-
-                _time.sleep(self._backoff_s * (2 ** (attempt - 1)))
+                delay = self._backoff_s * (2 ** (attempt - 1))
+                if not self._cancellations:
+                    time.sleep(delay)
+                else:
+                    deadline = time.monotonic() + delay
+                    while True:
+                        self._raise_if_cancelled()
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            break
+                        # The innermost event wakes immediately; inherited scopes
+                        # are also observed within the bounded polling interval.
+                        self._cancellations[-1].wait(min(remaining, 0.1))
         raise RuntimeError(
             f"model completion failed on the wire {self._attempts} time(s); last cause: {last}"
         )
@@ -279,6 +310,7 @@ class DshModelClient:
         bypassing the DSH CLI's SIGTERM handler and stranding detached tool jobs.
         Do not signal process names, inferred descendants, or unrelated groups.
         """
+        self._raise_if_cancelled()
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             cwd=str(run_dir), env=self._environment(),
@@ -287,11 +319,25 @@ class DshModelClient:
             start_new_session=os.name == "posix",
         )
         try:
-            stdout, stderr = proc.communicate(timeout=self._timeout_s)
+            deadline = time.monotonic() + self._timeout_s
+            while True:
+                self._raise_if_cancelled()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(cmd, self._timeout_s)
+                try:
+                    stdout, stderr = proc.communicate(
+                        timeout=remaining if not self._cancellations else min(remaining, 0.1)
+                    )
+                    break
+                except subprocess.TimeoutExpired:
+                    # communicate retains its output across bounded waits. There
+                    # is no stdin input to resend, and the deadline never resets.
+                    if not self._cancellations:
+                        raise
         except BaseException:
-            # Includes KeyboardInterrupt raised in this calling thread, not a
-            # main-thread interrupt while complete() runs in a fork worker.
-            # Cleanup precedes propagation; never reinterpret it as output.
+            # Direct interruption or the fork's cooperative event both use the
+            # runtime-owned cleanup before propagating failure.
             try:
                 proc.terminate()
             except ProcessLookupError:
