@@ -170,7 +170,14 @@ the review gates still reloop with a four-visit bound, so external validation ma
 need intervention by the CEO or person before that bound is exhausted. An
 unverified requirement must not be relabelled as passed to finish the run.
 
-The artifact is written beside the workspace, not into it.
+Artifacts live at `<project>/.factory/artifacts/<name>`, separate from mode packages.
+Node commands use `REFACTORY_PROJECT` when configured; the Python walker otherwise
+uses its calling directory as the project. The recorded `artifact` fact and final
+report contain the absolute directory, which is also given to every artifact reviewer.
+The name is one directory component, not a path. Unsafe names, symlinked output
+boundaries and malformed/colliding emitted paths are refused before replacing an
+existing artifact. Valid replacements are written privately first. An older saved
+run with a relative artifact fact must materialise again before its check can run.
 
 ---
 

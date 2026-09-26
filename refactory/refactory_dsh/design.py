@@ -221,6 +221,9 @@ class DesignMode(Mode):
         graph.add(Node(
             "health_checker", "agent",
             prompt_template=(
+                "Artifact directory (absolute): {{artifact}}\n"
+                "Read and run the delivered files at this exact path; do not infer it "
+                "from your working directory.\n\n"
                 "Brief: {{brief}}\nThe check it must pass: {{check}}\n\n"
                 "## The design\n{{design}}\n\n"
                 "You are the health checker. Run the artifact the way a user would: run "
@@ -253,6 +256,9 @@ class DesignMode(Mode):
         graph.add(Node(
             "code_reviewer", "agent",
             prompt_template=(
+                "Artifact directory (absolute): {{artifact}}\n"
+                "Read and run the delivered files at this exact path; do not infer it "
+                "from your working directory.\n\n"
                 "## The design\n{{design}}\n\n## The emitted source\n{{emit}}\n\n"
                 "You are the code reviewer. Read the emitted files against the design "
                 "and the brief: is every file the design names present, does it do what "
@@ -272,6 +278,9 @@ class DesignMode(Mode):
         graph.add(Node(
             "qa_director", "agent",
             prompt_template=(
+                "Artifact directory (absolute): {{artifact}}\n"
+                "Read and run the delivered files at this exact path; do not infer it "
+                "from your working directory.\n\n"
                 "Brief: {{brief}}\nThe check it must pass: {{check}}\n\n"
                 "## The plan\n{{strategy}}\n\n"
                 "You are the QA director. Design adversarial checks on the artifact — "
@@ -314,6 +323,9 @@ class DesignMode(Mode):
         graph.add(Node(
             "overwatch", "agent",
             prompt_template=(
+                "Artifact directory (absolute): {{artifact}}\n"
+                "Read and run the delivered files at this exact path; do not infer it "
+                "from your working directory.\n\n"
                 "Brief: {{brief}}\nThe check it must pass: {{check}}\n\n"
                 "## The design\n{{design}}\n\n"
                 "## The merged reviews\n{{qa}}\n\n"
