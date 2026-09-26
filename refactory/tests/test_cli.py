@@ -103,7 +103,7 @@ def test_the_authoring_modes_are_the_ones_the_catalogue_offers():
         )
 
 
-@pytest.mark.parametrize("argv", [["--help"], ["ceo", "--help"], ["optimize", "--help"], ["package", "--help"]])
+@pytest.mark.parametrize("argv", [["--help"], ["ceo", "--help"], ["optimize", "--help"], ["package", "--help"], ["graph-control", "--help"]])
 def test_help_is_available_for_every_verb_a_person_starts_with(argv):
     result = _run(*argv)
     assert result.returncode == 0
@@ -237,3 +237,11 @@ def test_ceo_single_reaches_the_mode_as_the_knob_it_reads(monkeypatch):
     monkeypatch.setattr(cli, "_forward", lambda module, argv: seen.append(argv) or 0)
     assert cli.main(["ceo", "count to ten", "--mode", "create", "--single"]) == 0
     assert "single_shot=1" in seen[0]
+
+
+def test_graph_controls_reach_public_console_admission(tmp_path):
+    result = _run("graph-control", "preview", "--run", str(tmp_path), "--node", "check")
+    assert result.returncode == 2
+    payload = json.loads(result.stdout)
+    assert "durable graph checkpoint" in payload["error"]
+    assert "invalid choice" not in result.stderr and "unrecognized arguments" not in result.stderr
