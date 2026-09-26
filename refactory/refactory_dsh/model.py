@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -81,14 +82,21 @@ def is_transport_failure(text: str) -> bool:
 def failure_cause(stderr: str) -> str:
     """The line that says *why* a completion failed, not the model's last paragraph.
 
-    The child's stderr is mostly the model's own reasoning, and the cause is the last
-    line `dsh` writes. Reporting the tail of the prose made a transport failure read
-    like a code-review defect ("Confirmed non-blocking (design fault). Let me write
-    the review now."), which sends a reader looking in the wrong place.
+    The child's stderr is mostly the model's own reasoning. Prefer the explicit
+    diagnostic `dsh` writes. Reporting the tail of the prose made a transport
+    failure read like a code-review defect ("Confirmed non-blocking (design fault).
+    Let me write the review now."), which sends a reader looking in the wrong place.
+
+    A runtime bootstrap crash may happen before DSH can report anything. Node ends
+    those stacks with its version banner; retain the error header instead of that
+    banner or a stack frame. Do not expose the full reasoning/stack transcript.
     """
     lines = [line.strip() for line in (stderr or "").splitlines() if line.strip()]
     for line in reversed(lines):
         if line.startswith("dsh:") or is_transport_failure(line):
+            return line
+    for line in reversed(lines):
+        if re.match(r"^(?:[A-Za-z_$][\w$]*Error|Error)(?: \[[A-Z0-9_]+\])?:\s*\S", line):
             return line
     return lines[-1] if lines else ""
 
