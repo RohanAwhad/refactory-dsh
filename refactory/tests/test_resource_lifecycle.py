@@ -87,7 +87,8 @@ def test_resume_restores_saved_knobs_project_route_and_budget(tmp_path, monkeypa
     assert interactive.run("counting_pack/fixed_step", workdir=tmp_path, resume=True) == 0
     assert seen["command"]["knobs"] == ["target=7"]
     assert seen["command"]["provider"] == "saved-provider"
-    assert seen["runtime"]["context"] == context
+    assert seen["runtime"]["context"] == {**context, "permission_mode": "default"}
+    assert json.loads((tmp_path / ".refactory/run-config.json").read_text())["model_context"] == context
     assert RunBudget.open(tmp_path).snapshot()["tokens"] == 12
     assert RunBudget.open(tmp_path).snapshot()["started_at"] is None
 

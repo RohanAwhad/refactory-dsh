@@ -55,6 +55,9 @@ def normalize(settings: dict[str, Any]) -> dict[str, Any]:
     if unknown:
         raise ProfileError(f"unknown search settings: {', '.join(sorted(unknown))}")
     result.update({key: value for key, value in settings.items() if value is not None})
+    # A new recipe records its effective policy, rather than depending on a
+    # future worker default. Explicit native defaults remain a distinct choice.
+    result["permission_mode"] = result["permission_mode"] or "skip"
     for key in ("epochs", "batch_size", "elite", "max_evaluations", "attempts", "max_steps", "dsh_timeout_s", "history_limit"):
         value = result[key]
         if isinstance(value, bool) or not isinstance(value, int) or value < 1:
@@ -82,7 +85,7 @@ def normalize(settings: dict[str, Any]) -> dict[str, Any]:
             raise ProfileError(f"{key} must be an object")
     from refactory_dsh.workers import resolve_route, validate_route
     route = {key: result[key] for key in ("worker_backend", "provider", "model", "effort")}
-    route["permission_mode"] = result["permission_mode"] or "default"
+    route["permission_mode"] = result["permission_mode"]
     try:
         validate_route(route)
         for role in result["role_routes"]:
@@ -106,8 +109,20 @@ def _name(name: str) -> str:
     return name
 
 
+def _read_profile(path: Path) -> dict[str, Any]:
+    result = json.loads(path.read_text())
+    if result.get("schema_version", 1) != SCHEMA_VERSION:
+        raise ProfileError("unsupported profile schema_version")
+    # Earlier writers saved an empty policy to mean the native restricted
+    # default. Resolve that historical meaning in memory without rewriting the
+    # immutable version or broadening its next launch to the new default.
+    if not result["settings"].get("permission_mode"):
+        result["settings"]["permission_mode"] = "default"
+    return result
+
+
 def list_profiles(project: Path) -> list[dict[str, Any]]:
-    return [json.loads(path.read_text()) for path in sorted((project / PROFILE_ROOT).glob("*/*.json"))]
+    return [_read_profile(path) for path in sorted((project / PROFILE_ROOT).glob("*/*.json"))]
 
 
 def save(project: Path, name: str, spec: dict[str, Any]) -> dict[str, Any]:
@@ -139,10 +154,7 @@ def load(project: Path, name: str, version: int | None = None) -> dict[str, Any]
     versions = [int(p.stem) for p in root.glob("*.json") if p.stem.isdigit()]
     if not versions or version is not None and version not in versions:
         raise ProfileError(f"profile {name!r} version {version or 'latest'} does not exist")
-    result = json.loads((root / f"{version or max(versions)}.json").read_text())
-    if result.get("schema_version", 1) != SCHEMA_VERSION:
-        raise ProfileError("unsupported profile schema_version")
-    return result
+    return _read_profile(root / f"{version or max(versions)}.json")
 
 
 def resolve(project: Path, mode_id: str, *, name: str = "", version: int | None = None,

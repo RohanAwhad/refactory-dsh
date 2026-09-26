@@ -13,10 +13,12 @@ from typing import Any
 
 BACKENDS = ('dsh', 'codex', 'claude_code')
 PERMISSIONS = {
-    'dsh': ('default',),
-    'codex': ('default', 'never', 'approve-for-me'),
-    'claude_code': ('default', 'dontAsk', 'acceptEdits', 'auto', 'plan'),
+    'dsh': ('skip', 'default'),
+    'codex': ('skip', 'default', 'never', 'approve-for-me', 'dangerously-bypass-approvals-and-sandbox'),
+    'claude_code': ('skip', 'default', 'dontAsk', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'),
 }
+SKIP_PERMISSIONS = {'codex': 'dangerously-bypass-approvals-and-sandbox',
+                    'claude_code': 'bypassPermissions'}
 PACKAGES = {'codex': '@deepseek-ai/dsh-subagent-codex',
             'claude_code': '@deepseek-ai/dsh-subagent-claude-code'}
 
@@ -43,7 +45,7 @@ def validate_route(route: dict[str, Any]) -> dict[str, Any]:
         raise ValueError('worker route fields must be strings')
     if backend != 'dsh' and (route.get('provider') or route.get('effort')):
         raise ValueError(f'{backend} uses native provider settings and does not support provider/effort overrides')
-    if route.get('permission_mode', 'default') not in PERMISSIONS[backend]:
+    if route.get('permission_mode', 'skip') not in PERMISSIONS[backend]:
         raise ValueError(f'unsupported permission mode for {backend}: {route.get("permission_mode")}')
     return route
 
@@ -58,7 +60,12 @@ def resolve_route(base: dict[str, Any], *, role: str = 'worker', node: str = '',
             raise ValueError('role/node worker route overrides must be objects')
         # A backend switch must not inherit a different product's route.
         if override.get('worker_backend', route.get('worker_backend')) != route.get('worker_backend'):
-            route.update(provider='', model='', effort='', permission_mode='default')
+            # These two policies have the same meaning across every backend.
+            # Preserve an explicit native default in historical profiles; only
+            # backend-specific permission values need a fresh default.
+            permission = route.get('permission_mode')
+            route.update(provider='', model='', effort='',
+                         permission_mode=permission if permission in ('default', 'skip') else 'skip')
         route.update(override)
     return validate_route(route)
 
@@ -103,11 +110,20 @@ def finish(path: Path, state: str, *, error: str | None = None) -> dict[str, Any
     return record
 
 
+def permission_patch(route: dict[str, Any]) -> list[dict[str, Any]]:
+    """Scope DSH bypass to this runtime, without leaking through child env."""
+    if route.get('worker_backend', 'dsh') == 'dsh' and route.get('permission_mode', 'skip') == 'skip':
+        return [{'id': 'sandbox-policy', 'config': {'mode': 'danger-full-access'}},
+                {'id': 'approval', 'config': {'policy': 'never'}}]
+    return []
+
+
 def write_patch(path: Path, runtime_root: Path, route: dict[str, Any]) -> None:
     """Compose installed DSH services, never a parallel agent wire protocol."""
     observer = Path(__file__).with_name('worker_observer.mjs')
     rows: list[dict[str, Any]] = [{'insert': [
         {'id': 'refactory-worker-observer', 'name': str(observer)}]}]
+    rows.extend(permission_patch(route))
     if route['worker_backend'] != 'dsh':
         package = PACKAGES[route['worker_backend']]
         provider = runtime_root / 'node_modules' / package
@@ -116,8 +132,9 @@ def write_patch(path: Path, runtime_root: Path, route: dict[str, Any]) -> None:
         config: dict[str, Any] = {'providerName': 'refactory-worker'}
         if route.get('model'):
             config['model'] = route['model']
-        if route.get('permission_mode', 'default') != 'default':
-            config['permissionMode'] = route['permission_mode']
+        permission = route.get('permission_mode', 'skip')
+        if permission != 'default':
+            config['permissionMode'] = SKIP_PERMISSIONS[route['worker_backend']] if permission == 'skip' else permission
         rows.append({'insert': [{'id': 'refactory-external-worker', 'name': str(provider / 'lib' / 'index.js'), 'config': config}]})
         # A patch's name is an identity guard, not a replacement operation.
         # Disable the ordinary driver and insert the named-provider driver.
@@ -198,9 +215,11 @@ def environment(context: dict[str, Any] | None) -> dict[str, str]:
     return result
 
 
-def observer_patch(path: Path) -> None:
-    path.write_text(json.dumps([{'insert': [{'id': 'refactory-worker-observer',
-                      'name': str(Path(__file__).with_name('worker_observer.mjs'))}]}]) + '\n')
+def observer_patch(path: Path, route: dict[str, Any]) -> None:
+    rows = [{'insert': [{'id': 'refactory-worker-observer',
+                        'name': str(Path(__file__).with_name('worker_observer.mjs'))}]}]
+    rows.extend(permission_patch(route))
+    path.write_text(json.dumps(rows) + '\n')
 
 
 def account_usage(budget: Any, receipt: dict[str, Any], *, final: bool = False) -> None:
@@ -218,12 +237,13 @@ class GraphTelemetry:
     """One coordinator receipt; node subprocesses own distinct worker receipts."""
     def __init__(self, workdir: Path, context: dict[str, Any], budget: Any = None):
         self.budget = budget
-        route = {'worker_backend': 'dsh', 'provider': '', 'model': '', 'effort': ''}
+        route = {'worker_backend': 'dsh', 'provider': '', 'model': '', 'effort': '', 'permission_mode': 'default'}
         if context.get('worker_backend', 'dsh') == 'dsh':
             route.update({key: str(context.get(key) or '') for key in ('provider', 'model', 'effort')})
+            route['permission_mode'] = context.get('permission_mode') or 'default'
         self.path = begin(workdir, route, role='coordinator')
         self.patch = self.path.with_suffix('.patch.yml')
-        observer_patch(self.patch)
+        observer_patch(self.patch, route)
         self.context = context
 
     def command(self, argv: list[str]) -> list[str]:

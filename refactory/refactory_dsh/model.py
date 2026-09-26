@@ -9,8 +9,8 @@ out. DSH already exposes that as ``dsh --profile headless "<task>"``, which is
 the same mechanism the inner loop uses to run a mode, so nothing new is
 introduced to reach a model and the credentials come from the same place.
 
-The subprocess runs in a scratch directory: the headless profile is a full agent
-with tools, and an analysis prompt must not be able to write into the run.
+The subprocess runs in a scratch directory to separate temporary output. The
+configured worker permission policy determines which other paths its tools can access.
 """
 
 from __future__ import annotations
@@ -128,7 +128,7 @@ class DshModelClient:
         dsh_cli: str | None = None,
         worker_backend: str = "",
         effort: str = "",
-        permission_mode: str = "default",
+        permission_mode: str = "",
         role_routes: dict[str, Any] | None = None,
         node_routes: dict[str, Any] | None = None,
         budget_ledger: str | Path | None = None,
@@ -143,7 +143,12 @@ class DshModelClient:
         provider = provider or inherited_route.get("provider", "")
         model = model or inherited_route.get("model", "")
         effort = effort or inherited_route.get("effort", "")
-        permission_mode = inherited.get("permission_mode", permission_mode) if permission_mode == "default" else permission_mode
+        # Shared policies retain their meaning across backends. Native-specific
+        # values only inherit within their own product, unlike default/skip.
+        inherited_permission = inherited_route.get("permission_mode")
+        if inherited.get("permission_mode") in ("default", "skip"):
+            inherited_permission = inherited["permission_mode"]
+        permission_mode = permission_mode or inherited_permission or "skip"
         role_routes = role_routes if role_routes is not None else inherited.get("role_routes")
         node_routes = node_routes if node_routes is not None else inherited.get("node_routes")
         runtime_root = runtime_root or inherited.get("runtime_root")

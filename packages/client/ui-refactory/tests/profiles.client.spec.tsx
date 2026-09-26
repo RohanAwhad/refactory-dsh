@@ -69,8 +69,26 @@ describe('profile and worker controls', () => {
     const changed = vi.fn()
     render(<RuntimeControls configuration={JSON.stringify({ worker_backend: 'dsh', provider: 'openai', model: 'old', effort: 'high' })} onChange={changed} />)
     fireEvent.change(screen.getByLabelText('Coding worker backend'), { target: { value: 'codex' } })
-    expect(JSON.parse(changed.mock.calls[0]?.[0] as string)).toMatchObject({ worker_backend: 'codex', provider: '', model: '', effort: '', permission_mode: 'default' })
+    expect(JSON.parse(changed.mock.calls[0]?.[0] as string)).toMatchObject({ worker_backend: 'codex', provider: '', model: '', effort: '', permission_mode: 'skip' })
   })
+
+  it('defaults to skip while preserving an explicit native permission policy', () => {
+    const changed = vi.fn()
+    const view = render(<RuntimeControls configuration='{"worker_backend":"codex"}' onChange={changed} />)
+    expect((screen.getByLabelText('Worker permission mode') as HTMLSelectElement).value).toBe('skip')
+    view.rerender(<RuntimeControls configuration='{"worker_backend":"claude_code","permission_mode":"default"}' onChange={changed} />)
+    expect((screen.getByLabelText('Worker permission mode') as HTMLSelectElement).value).toBe('default')
+    fireEvent.change(screen.getByLabelText('Worker permission mode'), { target: { value: 'skip' } })
+    expect(JSON.parse(changed.mock.calls[0]?.[0] as string).permission_mode).toBe('skip')
+  })
+
+  it.each([['default', 'default'], ['skip', 'skip'], ['acceptEdits', 'skip']])(
+    'backend switches preserve shared policy %s and resolve to %s', (permission, expected) => {
+      const changed = vi.fn()
+      render(<RuntimeControls configuration={JSON.stringify({ worker_backend: 'claude_code', permission_mode: permission })} onChange={changed} />)
+      fireEvent.change(screen.getByLabelText('Coding worker backend'), { target: { value: 'codex' } })
+      expect(JSON.parse(changed.mock.calls[0]?.[0] as string).permission_mode).toBe(expected)
+    })
 
   it('Run once carries route/resource settings and JSON overrides without search-only settings', () => {
     expect(runtimeSettings(JSON.stringify({ repeats: 3, optimizer: 'random', worker_backend: 'codex', model: 'selected', max_elapsed_s: 40, max_tokens: null, node_routes: { repair: { worker_backend: 'dsh' } } })))

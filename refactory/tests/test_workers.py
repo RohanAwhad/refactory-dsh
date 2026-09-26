@@ -17,14 +17,14 @@ def test_route_precedence_is_per_node_and_does_not_mutate_parent():
                             node_routes={'one': {'model': 'specific'}, 'two': {'worker_backend': 'codex', 'model': 'codex-model'}})
     assert client.for_node('one', 'builder').route()['model'] == 'specific'
     assert client.for_node('other', 'builder').route()['model'] == 'build'
-    assert client.for_node('two', 'builder').route() == {'worker_backend': 'codex', 'provider': '', 'model': 'codex-model', 'effort': '', 'permission_mode': 'default'}
+    assert client.for_node('two', 'builder').route() == {'worker_backend': 'codex', 'provider': '', 'model': 'codex-model', 'effort': '', 'permission_mode': 'skip'}
     assert client.route()['model'] == 'base'
     assert DshModelClient(**client.context()).context() == client.context()
 
 
 @pytest.mark.parametrize('route', [{'worker_backend': 'codex', 'provider': 'openai'},
                                    {'worker_backend': 'claude_code', 'effort': 'high'},
-                                   {'worker_backend': 'codex', 'permission_mode': 'dangerously-bypass-approvals-and-sandbox'},
+                                   {'worker_backend': 'codex', 'permission_mode': 'invalid'},
                                    {'worker_backend': 'invalid'}])
 def test_unsupported_routes_fail_before_launch(route):
     with pytest.raises(ValueError):

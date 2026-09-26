@@ -9,7 +9,7 @@ Implementation started from main `a339605c69` in an isolated clone. These checks
 | [#234](https://github.com/akashgit/refactory-dsh/issues/234) | Create/Edit/Design fast graphs launched with shared resources; all exhausted tokens before completion. Focused Design check and a QA artifact ran, but the graph did not finish. | All three variants selected and launched; actual routes, resource consumption and failed states displayed. | Successful complete fast paths through QA and bounded repair in both interfaces. Issue remains open. |
 | [#235](https://github.com/akashgit/refactory-dsh/issues/235) | Actual live `status --follow`, boundary resume, persisted questions and control receipts; checkpoint admission/restoration and failure refusal have separate deterministic evidence. | Pending gate discovery and verdict, pause/resume while waiting, reviewed invalidation/replay, ownership across concurrent runs, and owned stop. | Complete registered dead-owner recovery through both public interfaces. Issue remains open. |
 | [#236](https://github.com/akashgit/refactory-dsh/issues/236) | Versioned profiles, exact configuration, 2 candidates × 2 trials, failed required-artifact control, separated holdout audit, adoption and replay. | Saved-version selection, profile creation and objective edit into a new version, same bounded search, candidate comparison, actual keep/reject/resume, exact adoption and replay. | No stochastic improvement is claimed; missing cost/usage remains unavailable. |
-| [#237](https://github.com/akashgit/refactory-dsh/issues/237) | DSH passed; corrected native Codex and Claude Code dispatch both passed artifact and graph checks with explicit native edit permissions. | DSH passed. Actual native Codex/Claude route and version observed, but default permissions prevented required output; graph failure was visible. | Positive native GUI completion with explicit edit permissions. Issue remains open. |
+| [#237](https://github.com/akashgit/refactory-dsh/issues/237) | DSH passed; corrected native Codex and Claude Code dispatch both passed artifact and graph checks with explicit native edit permissions. | DSH passed. Codex and Claude Code passed the exact artifact and graph checks with the new `skip` default; actual native routes and versions displayed. | Both interfaces complete. Unsupported capabilities and usage coverage remain explicit below. |
 
 ## Fast-mode outcomes
 
@@ -44,6 +44,17 @@ Earlier apparent Codex/Claude successes were withdrawn: the named-provider patch
 | Claude Code | Agent SDK 0.3.263 / `claude-opus-4-6[1m]` | `acceptEdits` | 72.84 s | 454,673 estimated SDK-pipeline tokens; helper calls excluded | Exact `42\n` and graph-owned Python assertion passed |
 
 Both checks were single attempts with 120-second limits and no retry. External whole-tree token caps remain unsupported. Claude's own Python tool was denied by its native sandbox; its alternative byte check and the independent graph Python check passed. The native GUI default-permission attempts reported 44,405 Codex measured tokens and 46,668 Claude estimated tokens, but delivered no required file. Those are useful permission-failure controls and are not positive GUI completion evidence.
+
+## Worker permission follow-up
+
+At the user's explicit request, new workers now default to full native permission bypass (`skip`). Existing profiles and checkpoints retain their prior policies. The change was verified at `1762d11dca`, based on merged main `6d732dd9e4`. Each additional GUI check used **Run once**, one worker attempt, a 120-second elapsed allocation, no retry or repair, and the same fixed `worker_gui_acceptance/worker_once` task. Both delivered exact `42\n`, passed the independent Python artifact check, and visibly reached **finished / done** with `build` and `verify` complete.
+
+| Native GUI backend | Actual native runtime/model | Elapsed including graph checks | Usage | Run identity |
+|---|---|---:|---|---|
+| Codex | 0.153.4 / `gpt-6-astra`, OpenAI, high | 9.15 s | 44,016 measured native-thread tokens; nested coverage unverified | `single-4df96cd6-8a2c-4261-844c-061a1e92ea3c` |
+| Claude Code | Agent SDK 0.3.263 / `claude-opus-4-6[1m]` | 18.73 s | 77,887 estimated SDK-pipeline tokens; helper calls excluded | `single-48ddda32-0d15-4b20-8992-361ccc16dd9d` |
+
+Requested permission `skip` was saved in each run and worker receipt. Installed-provider contract tests independently verify Codex's full-access sandbox/never-approve mapping and Claude's bypass mapping. DSH uses a scoped runtime patch, with no environment override leaking into explicitly restricted children. Fresh preparation, CLI/console context propagation and historical run/profile preservation are covered by 117 focused Python tests and nine native-controls component tests; host/client typechecks and builds passed. Previous positive CLI evidence is reused for unchanged worker dispatch and artifact contracts. No further worker model calls or old campaign restarts were made. A subsequent recovery fixture unexpectedly used a managed profile pointing to the older graph runtime and consumed 9,929 coordinator tokens before its completion-boundary cap stopped it; no node completed and no retry with model access followed. This failed fixture is retained separately from the successful worker evidence.
 
 ## Verification limits
 

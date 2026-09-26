@@ -78,7 +78,11 @@ For example, the direct interactive interface accepts:
 python -m refactory_dsh.interactive counting_pack/fixed_step --worker-backend codex --model YOUR_CODEX_MODEL --headless
 ```
 
-Refactory dispatches only the agent node's self-contained task, retains its declared outputs and runs graph-owned checks. The worker never owns graph order, user gates or scoring. Optional `--permission-mode` values are `never`/`approve-for-me` for Codex and `dontAsk`/`acceptEdits`/`auto`/`plan` for Claude Code; `default` preserves each provider's conservative native default and may deny file creation. For a task that should edit its workspace, explicitly choose Codex `approve-for-me` or Claude Code `acceptEdits` in the CLI or **Worker permission mode** control; the native product still decides individual tool permissions. Unsupported route combinations and permissions fail before launch. External per-call provider and reasoning-effort overrides are unsupported; select those through the product's native configuration. `--effort` is supported for DSH nodes.
+Refactory dispatches only the agent node's self-contained task, retains its declared outputs and runs graph-owned checks. The worker never owns graph order, user gates or scoring.
+
+New workers default to `--permission-mode skip` in the CLI, API and **Worker permission mode** control. This grants workers the access available to the OS account: DSH uses `danger-full-access` with approval policy `never`; Codex uses `dangerously-bypass-approvals-and-sandbox`; Claude Code uses `bypassPermissions`. The setting applies to each launched runtime and does not change personal product settings. Use this mode only for tasks and inputs you trust.
+
+Choose `--permission-mode default` (**Native permission policy** in the GUI) to retain the backend's native policy, which may deny file creation. Existing saved runs and profiles preserve their permission settings; historical snapshots without a recorded policy keep the native default. A backend switch resets an inherited backend-specific policy to `skip`. Codex also accepts `never`, `approve-for-me` and its full bypass name. Claude Code also accepts `dontAsk`, `acceptEdits`, `auto`, `plan` and `bypassPermissions`. Unsupported route combinations and permissions fail before launch. External per-call provider and reasoning-effort overrides are unsupported; select those through the product's native configuration. `--effort` is supported for DSH nodes.
 
 | Adapter capability | DSH node | Codex node | Claude Code node |
 |---|---|---|---|
@@ -93,7 +97,7 @@ External workers refuse token-limited launches because complete nested accountin
 
 Observe-only patches on the pinned DSH providers emit whitelisted route/usage metadata through Cordis. They do not copy raw protocol traffic, prompts, commands, paths, reasoning or credentials into the parent conversation. The protocol and product lifecycle remain owned by the existing provider bundles. Official integration contracts: [Codex App Server](https://learn.chatgpt.com/docs/app-server), [Codex SDK](https://learn.chatgpt.com/docs/codex-sdk), [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview).
 
-Worker receipts also feed [live activity](live-control.md); saved [profiles](optimization-profiles.md) retain requested routes in their exact launch snapshot. Configuration readiness is not execution evidence. DSH completed the bounded CLI and native GUI task. Codex and Claude Code completed the CLI task with explicit edit permissions; their native GUI default-permission checks failed honestly before delivering the artifact. Positive GUI completion remains unverified; see the [validation record](release-validation-20260926.md).
+Worker receipts also feed [live activity](live-control.md); saved [profiles](optimization-profiles.md) retain requested routes in their exact launch snapshot. Configuration readiness is not execution evidence. DSH completed the bounded CLI and native GUI task. Codex and Claude Code completed the CLI task with explicit edit permissions and the native GUI task with the new `skip` default. Earlier native-policy failures remain documented as permission controls; see the [validation record](release-validation-20260926.md).
 
 ## Credentials for nested execution
 

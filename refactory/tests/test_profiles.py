@@ -55,6 +55,105 @@ def test_versions_are_immutable_and_console_resolves_exactly(tmp_path, monkeypat
     assert json.loads(Path(spawned[0]["resolved_config"]).read_text()) == expected == receipt["resolved_profile"]
 
 
+@pytest.mark.parametrize("settings, expected", [({}, "skip"), ({"permission_mode": ""}, "skip"),
+                                               ({"permission_mode": "default"}, "default")])
+def test_new_profiles_persist_the_effective_permission_policy(tmp_path, settings, expected):
+    normalized = profiles.normalize(settings)
+    assert normalized["permission_mode"] == expected
+    saved = profiles.save(tmp_path, "permission-policy", {"settings": settings})
+    assert saved["settings"]["permission_mode"] == expected
+    assert profiles.load(tmp_path, "permission-policy")["settings"]["permission_mode"] == expected
+
+
+@pytest.mark.parametrize("legacy_policy", ["", None])
+def test_legacy_profile_policy_keeps_native_defaults_without_rewriting(tmp_path, legacy_policy):
+    saved = profiles.save(tmp_path, "historical", {"settings": {"optimizer": "random", "permission_mode": "default"}})
+    # Reproduce the earlier saved representation, including profiles predating
+    # the optional field. This is historical input, not a new recipe request.
+    if legacy_policy is None:
+        saved["settings"].pop("permission_mode")
+    else:
+        saved["settings"]["permission_mode"] = legacy_policy
+    path = tmp_path / profiles.PROFILE_ROOT / "historical/1.json"
+    path.write_text(json.dumps(saved, indent=2))
+    before = path.read_bytes()
+    assert profiles.load(tmp_path, "historical", 1)["settings"]["permission_mode"] == "default"
+    assert profiles.list_profiles(tmp_path)[0]["settings"]["permission_mode"] == "default"
+    assert profiles.resolve(tmp_path, "circle_packing/adaptive", name="historical", version=1)["settings"]["permission_mode"] == "default"
+    updated = profiles.save(tmp_path, "historical", {"settings": {"optimizer": "random"}})
+    assert updated["version"] == 2 and updated["settings"]["permission_mode"] == "skip"
+    assert path.read_bytes() == before
+
+
+def test_permission_policy_changes_evaluation_identity(tmp_path, monkeypatch):
+    from refactory_dsh.model import DshModelClient
+    monkeypatch.setattr(DshModelClient, "readiness", lambda *args, **kwargs: {
+        "status": "configured", "provider": "explicit-provider", "model": "explicit-model",
+    })
+    settings = {"optimizer": "autoresearch", "provider": "explicit-provider", "model": "explicit-model"}
+    legacy = profiles.resolve(tmp_path, "circle_packing/adaptive", overrides={**settings, "permission_mode": "default"})
+    current = profiles.resolve(tmp_path, "circle_packing/adaptive", overrides=settings)
+    assert legacy["evaluation_context"]["routing"]["route"]["permission_mode"] == "default"
+    assert current["evaluation_context"]["routing"]["route"]["permission_mode"] == "skip"
+    assert legacy["context_hash"] != current["context_hash"]
+
+
+@pytest.mark.parametrize("legacy_policy", ["default", ""])
+@pytest.mark.parametrize("route_kind", ["role_routes", "node_routes"])
+def test_historical_backend_switch_keeps_policy_and_cache_identity(tmp_path, monkeypatch, legacy_policy, route_kind):
+    from refactory_dsh.model import DshModelClient
+    monkeypatch.delenv("REFACTORY_WORKER_CONTEXT", raising=False)
+    monkeypatch.setattr(DshModelClient, "readiness", lambda *args, **kwargs: {
+        "status": "configured", "provider": "explicit-provider", "model": "explicit-model",
+    })
+    saved = profiles.save(tmp_path, "routed", {"settings": {
+        "optimizer": "autoresearch", "provider": "explicit-provider", "model": "explicit-model",
+        "permission_mode": "default", route_kind: {"builder": {"worker_backend": "codex"}},
+    }})
+    saved["settings"]["permission_mode"] = legacy_policy
+    path = tmp_path / profiles.PROFILE_ROOT / "routed/1.json"
+    path.write_text(json.dumps(saved))
+    before = path.read_bytes()
+    snapshot = profiles.resolve(tmp_path, "circle_packing/adaptive", name="routed")
+    settings = snapshot["settings"]
+    client = DshModelClient(provider=settings["provider"], model=settings["model"],
+                            permission_mode=settings["permission_mode"], **{route_kind: settings[route_kind]})
+    assert client.for_node("builder", "builder").route()["permission_mode"] == "default"
+    refreshed = profiles.refresh(tmp_path, "circle_packing/adaptive", settings, snapshot, model_client=client)
+    assert refreshed["context_hash"] == snapshot["context_hash"]
+    changed = profiles.resolve(tmp_path, "circle_packing/adaptive", name="routed", overrides={
+        route_kind: {"builder": {"worker_backend": "codex", "permission_mode": "skip"}},
+    })
+    assert changed["context_hash"] != snapshot["context_hash"]
+    assert path.read_bytes() == before
+
+
+def test_legacy_blank_snapshot_refuses_reuse_under_new_policy_without_rewriting(tmp_path, monkeypatch):
+    from refactory_dsh.model import DshModelClient
+    readiness = lambda *args, **kwargs: {
+        "status": "configured", "provider": "explicit-provider", "model": "explicit-model",
+    }
+    monkeypatch.setattr(DshModelClient, "readiness", readiness)
+    # The historical implicit route was restricted, while the saved settings
+    # contained an empty policy. The client deliberately has no context() method
+    # so that the actual old representation is retained by this fixture.
+    legacy_route = {"worker_backend": "dsh", "provider": "explicit-provider", "model": "explicit-model",
+                    "effort": "", "permission_mode": "default"}
+    legacy_client = SimpleNamespace(route=lambda: dict(legacy_route), readiness=readiness)
+    config = LoopConfig(epochs=1, batch_size=1, optimizer="autoresearch", permission_mode="", runs_root=tmp_path)
+    first = Loop("circle_packing/adaptive", config, project=tmp_path, model=legacy_client)
+    first.init()
+    first.forward()  # Deterministic graph; no model request or proposal.
+    path = tmp_path / profiles.SNAPSHOT
+    before = path.read_bytes()
+    assert json.loads(before)["settings"]["permission_mode"] == ""
+    config.resume = True
+    with pytest.raises(LoopError, match="evaluation context changed"):
+        Loop("circle_packing/adaptive", config, project=tmp_path,
+             model=DshModelClient(provider="explicit-provider", model="explicit-model")).init()
+    assert path.read_bytes() == before
+
+
 @pytest.mark.parametrize("settings", [{"repeats": 0}, {"repeats": 11}, {"holdout": 1}, {"max_tokens": -1}, {"unknown": 1}, {"allowed_ops": ["remove_node"], "edit_preset": "knob_only"}])
 def test_invalid_contract_refused(settings, tmp_path):
     with pytest.raises(profiles.ProfileError):
@@ -204,7 +303,7 @@ def test_explicit_resource_extension_keeps_previous_usage(tmp_path):
     assert result["resources"]["limits"]["max_tokens"] == 10
 
 
-@pytest.mark.parametrize("changed", ["model", "dsh_home", "node_routes"])
+@pytest.mark.parametrize("changed", ["model", "dsh_home", "node_routes", "permission_mode"])
 def test_supplied_client_context_is_recorded_and_changed_context_refuses_reuse(tmp_path, monkeypatch, changed):
     from refactory_dsh.model import DshModelClient
     monkeypatch.setattr(DshModelClient, "readiness", lambda *args, **kwargs: {
@@ -215,13 +314,15 @@ def test_supplied_client_context_is_recorded_and_changed_context_refuses_reuse(t
     snapshot = profiles.resolve(tmp_path, "circle_packing/adaptive", name="fixed")
     config = LoopConfig.from_dict({**snapshot["settings"], "runs_root": tmp_path / "run", "resolved_profile": snapshot})
     client_args = {"provider": "selected-provider", "model": "selected-model", "effort": "high",
-                   "dsh_home": tmp_path / "selected-home", "node_routes": {"optimizer": {"model": "proposer-model"}}}
+                   "dsh_home": tmp_path / "selected-home", "node_routes": {"optimizer": {"model": "proposer-model"}},
+                   "permission_mode": "default"}
     first = Loop("circle_packing/adaptive", config, project=tmp_path, model=DshModelClient(**client_args))
     first.init()
     first.forward()  # The shipped circle graph is deterministic; no worker is dispatched.
     recorded = first.config.resolved_profile
     assert recorded["settings"]["model"] == "selected-model"
     assert recorded["settings"]["node_routes"] == client_args["node_routes"]
+    assert recorded["settings"]["permission_mode"] == "default"
     assert recorded["evaluation_context"]["routing"]["route"]["model"] == "selected-model"
     assert recorded["evaluation_context"]["routing"]["client_context"]["dsh_home"] == str(client_args["dsh_home"])
     assert recorded["contract"]["objective"] == "Keep the declared requirement"
@@ -229,7 +330,7 @@ def test_supplied_client_context_is_recorded_and_changed_context_refuses_reuse(t
     before = (config.runs_root / profiles.SNAPSHOT).read_bytes()
     config.resume = True
     changes = {"model": "another-model", "dsh_home": tmp_path / "another-home",
-               "node_routes": {"optimizer": {"model": "another-proposer"}}}
+               "node_routes": {"optimizer": {"model": "another-proposer"}}, "permission_mode": "skip"}
     client_args[changed] = changes[changed]
     with pytest.raises(LoopError, match="evaluation context changed"):
         Loop("circle_packing/adaptive", config, project=tmp_path, model=DshModelClient(**client_args)).init()
