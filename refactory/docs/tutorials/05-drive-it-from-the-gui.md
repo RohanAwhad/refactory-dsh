@@ -166,6 +166,17 @@ uv run refactory start circle_packing/adaptive \
 uv run refactory status --run /tmp/gui-tour/gui-tour --after 0
 ```
 
+For later actions, use the absolute run directory returned by `start`. A bare run
+ID uses the default root unless you repeat `--runs-root` (or `runsRoot` in CEO
+chat). Run-scoped actions refuse missing or ambiguous directories; they do not
+create a run. A steering response names both its target directory and ledger so
+you can see where the note was recorded.
+
+```bash
+uv run refactory steer --run /tmp/gui-tour/gui-tour \
+  --kind constraint --note "Preserve the required explanation in every solution."
+```
+
 ## Changing what the card shows
 
 The card is a **client plugin** claiming the tool's wire name through the
