@@ -147,7 +147,7 @@ def finish(workdir: Path, node: str, *, final_response: str | None = None,
 
 
 def invalidate(workdir: Path, nodes: list[str], reason: str) -> None:
-    """Retire in-flight snapshots when an explicit redo invalidates their work."""
+    """Retire in-flight snapshots when an explicit skip or redo invalidates work."""
     for node in nodes:
         pending = _pending(workdir, node)
         if not pending.exists():
@@ -194,6 +194,15 @@ def main() -> int:
             result = begin(workdir, request['node'], request['prompt'], request['writes'], reuse=True)
         elif request['action'] == 'finish':
             result = finish(workdir, request['node'])
+        elif request['action'] == 'invalidate':
+            nodes = request['nodes']
+            reason = request['reason']
+            if (not isinstance(nodes, list)
+                    or not all(isinstance(node, str) for node in nodes)
+                    or not isinstance(reason, str) or not reason.strip()):
+                raise ValueError('invalidate needs node ids and a non-empty reason')
+            invalidate(workdir, nodes, reason)
+            result = {'requested': nodes}
         else:
             raise ValueError('unknown agent delivery action')
         print(json.dumps(result))

@@ -488,13 +488,13 @@ export class Spine {
   }
 
   /** Follow explicit skip edits without completing work or discarding peers. */
-  private advanceSkipped(): void {
+  private advanceSkipped(skipped = this.skipped, dryRun = false): void {
     let cursor = [...this.cursor]
     const afters = [...this.afters]
     let pass = this.pass === undefined ? undefined : { ...this.pass }
     const seen = new Set<string>()
     while (!cursor.some(node => this.pauseBoundaries.has(node))) {
-      const node = cursor.find(entry => this.skipped.includes(entry))
+      const node = cursor.find(entry => skipped.includes(entry))
       if (node === undefined) break
       const position = JSON.stringify([cursor, afters, pass?.finished])
       if (seen.has(position)) throw new Error('skipped nodes form a workflow cycle; unskip a step before continuing')
@@ -508,9 +508,11 @@ export class Spine {
         if (cursor.length === 0 && afters.length > 0) cursor = [afters.pop() as string]
       }
     }
-    this.cursor = cursor
-    this.afters = afters
-    this.pass = pass
+    if (!dryRun) {
+      this.cursor = cursor
+      this.afters = afters
+      this.pass = pass
+    }
   }
 
   /** The node(s) due now, or `done`. */
@@ -851,8 +853,8 @@ export class Spine {
     return { expanded: director, children, next: this.next() }
   }
 
-  /** Graph mutation: skip a node's work, retaining its unambiguous continuation. */
-  skip(node: string): SpineNext {
+  /** Admit a skip before the runtime retires its pending delivery attempts. */
+  planSkip(node: string): string[] {
     if (this.isPaused()) throw new Error(`run paused before ${this.pausedAt().join(', ')}; explicitly unpause before skipping work`)
     const body = this.nodes.get(node)
     if (body === undefined) throw new Error(`unknown node ${node}`)
@@ -869,6 +871,13 @@ export class Spine {
       : [node]
     const stops = removed.filter(id => this.pauseBoundaries.has(id))
     if (stops.length > 0) throw new Error(`pause armed before ${stops.join(', ')}; explicitly unpause before skipping that boundary`)
+    this.advanceSkipped([...this.skipped, node], true)
+    return removed
+  }
+
+  /** Graph mutation: skip a node's work, retaining its unambiguous continuation. */
+  skip(node: string): SpineNext {
+    this.planSkip(node)
     const skipped = [...this.skipped]
     const logLength = this.log.length
     if (!this.skipped.includes(node)) {
