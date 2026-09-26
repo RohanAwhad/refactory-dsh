@@ -151,3 +151,22 @@ None.
 </details>
 
 **Runtime invariant:** No runtime invariant companion is published because the spine's cursor, gate verdicts, and iteration counters are read only through the `wf_*` tools the plugin registers on the session's fiber.
+
+## Live intent and progress
+
+`wf_open` accepts an optional `intent`. Refactory records that purpose before
+lowering the graph; without prose, it records the requested mode identifier as
+`Run <package>/<mode>.` Existing ledgers are retained.
+
+`wf_steer {}` reads the ledger. `wf_steer {"note": "...", "kind": "constraint"}`
+appends the user's words and returns the updated ledger. The kind is `info`
+(the default), `correction`, or `constraint`; blank notes, a kind without a note,
+and unsupported fields are rejected. The configured steering command must accept
+`<workdir> --note=<text> --kind=<kind>` for writes. Recording a constraint does not
+prove later output complies with it.
+
+The shipped graph and web compositions exclude `wf_next` from the upstream
+argument-only repeat reminder: identical arguments legitimately advance the
+cursor or a data pass. Other tools remain covered. This does not claim to detect
+lack of workflow progress; cursor, gate, and iteration controls remain responsible
+for workflow validity.
