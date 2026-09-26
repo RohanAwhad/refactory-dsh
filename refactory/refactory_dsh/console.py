@@ -363,7 +363,7 @@ SPINE_STATUS = Path(".refactory") / "spine-status.json"
 #: The spine's states, in the words a reader of `status` already has.
 SPINE_STATES = {
     "done": "finished", "ready": "running", "failed": "failed", "refused": "failed",
-    "halted": "halted",
+    "halted": "halted", "paused": "paused",
 }
 
 
@@ -431,7 +431,7 @@ def status(run_root: Path, *, after: int = 0) -> dict[str, Any]:
         "counters": _counters(events),
         "best_score": _best(run_root, events),
         "finished": finished,
-        "running": not finished and (_running(run_root, console) or bool(spine)),
+        "running": not finished and spine.get("status") != "paused" and (_running(run_root, console) or bool(spine)),
         "authoring": _authoring(run_root, spine) if spine else None,
     }
 
