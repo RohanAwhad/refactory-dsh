@@ -143,9 +143,12 @@ class DshModelClient:
         provider = provider or inherited_route.get("provider", "")
         model = model or inherited_route.get("model", "")
         effort = effort or inherited_route.get("effort", "")
-        # An explicit native default is a real policy, not an inheritance marker.
-        # A backend switch must not inherit another product's permission value.
-        permission_mode = permission_mode or inherited_route.get("permission_mode") or "skip"
+        # Shared policies retain their meaning across backends. Native-specific
+        # values only inherit within their own product, unlike default/skip.
+        inherited_permission = inherited_route.get("permission_mode")
+        if inherited.get("permission_mode") in ("default", "skip"):
+            inherited_permission = inherited["permission_mode"]
+        permission_mode = permission_mode or inherited_permission or "skip"
         role_routes = role_routes if role_routes is not None else inherited.get("role_routes")
         node_routes = node_routes if node_routes is not None else inherited.get("node_routes")
         runtime_root = runtime_root or inherited.get("runtime_root")

@@ -82,6 +82,14 @@ describe('profile and worker controls', () => {
     expect(JSON.parse(changed.mock.calls[0]?.[0] as string).permission_mode).toBe('skip')
   })
 
+  it.each([['default', 'default'], ['skip', 'skip'], ['acceptEdits', 'skip']])(
+    'backend switches preserve shared policy %s and resolve to %s', (permission, expected) => {
+      const changed = vi.fn()
+      render(<RuntimeControls configuration={JSON.stringify({ worker_backend: 'claude_code', permission_mode: permission })} onChange={changed} />)
+      fireEvent.change(screen.getByLabelText('Coding worker backend'), { target: { value: 'codex' } })
+      expect(JSON.parse(changed.mock.calls[0]?.[0] as string).permission_mode).toBe(expected)
+    })
+
   it('Run once carries route/resource settings and JSON overrides without search-only settings', () => {
     expect(runtimeSettings(JSON.stringify({ repeats: 3, optimizer: 'random', worker_backend: 'codex', model: 'selected', max_elapsed_s: 40, max_tokens: null, node_routes: { repair: { worker_backend: 'dsh' } } })))
       .toEqual({ worker_backend: 'codex', model: 'selected', max_elapsed_s: 40, node_routes: '{"repair":{"worker_backend":"dsh"}}' })

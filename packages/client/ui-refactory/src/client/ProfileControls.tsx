@@ -169,7 +169,7 @@ export function RuntimeControls({ configuration, onChange }: { readonly configur
   return <details data-refactory-runtime-controls open>
     <summary className={css.heading}>Worker routing and shared resources</summary>
     <label className={css.label} htmlFor="refactory-worker-backend">Coding worker backend</label>
-    <select className={css.control} id="refactory-worker-backend" value={backend} onChange={event => { onChange(JSON.stringify({ ...value, worker_backend: event.target.value, provider: '', model: '', effort: '', permission_mode: 'skip', max_tokens: null, validation_reserve_tokens: 0 })) }}>
+    <select className={css.control} id="refactory-worker-backend" value={backend} onChange={event => { onChange(JSON.stringify({ ...value, worker_backend: event.target.value, provider: '', model: '', effort: '', permission_mode: value.permission_mode === 'default' ? 'default' : 'skip', max_tokens: null, validation_reserve_tokens: 0 })) }}>
       <option value="dsh">DSH (default)</option><option value="codex">Codex (opt in)</option><option value="claude_code">Claude Code (opt in)</option>
     </select>
     {(['provider', 'model', 'effort'] as const).map(key => <div className={css.field} key={key}>

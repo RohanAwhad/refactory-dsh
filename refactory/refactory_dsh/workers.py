@@ -60,7 +60,12 @@ def resolve_route(base: dict[str, Any], *, role: str = 'worker', node: str = '',
             raise ValueError('role/node worker route overrides must be objects')
         # A backend switch must not inherit a different product's route.
         if override.get('worker_backend', route.get('worker_backend')) != route.get('worker_backend'):
-            route.update(provider='', model='', effort='', permission_mode='skip')
+            # These two policies have the same meaning across every backend.
+            # Preserve an explicit native default in historical profiles; only
+            # backend-specific permission values need a fresh default.
+            permission = route.get('permission_mode')
+            route.update(provider='', model='', effort='',
+                         permission_mode=permission if permission in ('default', 'skip') else 'skip')
         route.update(override)
     return validate_route(route)
 

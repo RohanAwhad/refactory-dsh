@@ -98,6 +98,36 @@ def test_permission_policy_changes_evaluation_identity(tmp_path, monkeypatch):
     assert legacy["context_hash"] != current["context_hash"]
 
 
+@pytest.mark.parametrize("legacy_policy", ["default", ""])
+@pytest.mark.parametrize("route_kind", ["role_routes", "node_routes"])
+def test_historical_backend_switch_keeps_policy_and_cache_identity(tmp_path, monkeypatch, legacy_policy, route_kind):
+    from refactory_dsh.model import DshModelClient
+    monkeypatch.delenv("REFACTORY_WORKER_CONTEXT", raising=False)
+    monkeypatch.setattr(DshModelClient, "readiness", lambda *args, **kwargs: {
+        "status": "configured", "provider": "explicit-provider", "model": "explicit-model",
+    })
+    saved = profiles.save(tmp_path, "routed", {"settings": {
+        "optimizer": "autoresearch", "provider": "explicit-provider", "model": "explicit-model",
+        "permission_mode": "default", route_kind: {"builder": {"worker_backend": "codex"}},
+    }})
+    saved["settings"]["permission_mode"] = legacy_policy
+    path = tmp_path / profiles.PROFILE_ROOT / "routed/1.json"
+    path.write_text(json.dumps(saved))
+    before = path.read_bytes()
+    snapshot = profiles.resolve(tmp_path, "circle_packing/adaptive", name="routed")
+    settings = snapshot["settings"]
+    client = DshModelClient(provider=settings["provider"], model=settings["model"],
+                            permission_mode=settings["permission_mode"], **{route_kind: settings[route_kind]})
+    assert client.for_node("builder", "builder").route()["permission_mode"] == "default"
+    refreshed = profiles.refresh(tmp_path, "circle_packing/adaptive", settings, snapshot, model_client=client)
+    assert refreshed["context_hash"] == snapshot["context_hash"]
+    changed = profiles.resolve(tmp_path, "circle_packing/adaptive", name="routed", overrides={
+        route_kind: {"builder": {"worker_backend": "codex", "permission_mode": "skip"}},
+    })
+    assert changed["context_hash"] != snapshot["context_hash"]
+    assert path.read_bytes() == before
+
+
 def test_legacy_blank_snapshot_refuses_reuse_under_new_policy_without_rewriting(tmp_path, monkeypatch):
     from refactory_dsh.model import DshModelClient
     readiness = lambda *args, **kwargs: {

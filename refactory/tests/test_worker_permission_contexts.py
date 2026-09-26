@@ -53,6 +53,10 @@ def test_dsh_worker_and_coordinator_overlay_do_not_change_child_environment(tmp_
 @pytest.mark.parametrize(('parent', 'arguments', 'expected'), [
     ({'worker_backend': 'dsh', 'permission_mode': 'skip'}, {}, 'skip'),
     ({'worker_backend': 'dsh', 'permission_mode': 'skip'}, {'permission_mode': 'default'}, 'default'),
+    ({'worker_backend': 'dsh', 'provider': 'old-provider', 'model': 'old-model', 'effort': 'high',
+      'permission_mode': 'default'}, {'worker_backend': 'codex'}, 'default'),
+    ({'worker_backend': 'dsh', 'provider': 'old-provider', 'model': 'old-model', 'effort': 'high',
+      'permission_mode': 'skip'}, {'worker_backend': 'codex'}, 'skip'),
     ({'worker_backend': 'codex', 'permission_mode': 'never'}, {}, 'never'),
     ({'worker_backend': 'claude_code', 'permission_mode': 'acceptEdits'}, {'worker_backend': 'codex'}, 'skip'),
     ({'worker_backend': 'claude_code', 'permission_mode': 'acceptEdits'},
@@ -62,7 +66,23 @@ def test_explicit_native_policy_and_same_backend_inheritance(monkeypatch, parent
     monkeypatch.setenv('REFACTORY_WORKER_CONTEXT', json.dumps(parent))
     client = DshModelClient(**arguments)
     assert client.route()['permission_mode'] == expected
+    if arguments.get('worker_backend', parent['worker_backend']) != parent['worker_backend']:
+        assert all(client.route()[key] == '' for key in ('provider', 'model', 'effort'))
     assert DshModelClient(**client.context()).route() == client.route()
+
+
+@pytest.mark.parametrize(('backend', 'permission', 'expected'), [
+    ('dsh', 'default', 'default'), ('dsh', 'skip', 'skip'),
+    ('claude_code', 'acceptEdits', 'skip'),
+])
+@pytest.mark.parametrize('route_kind', ['role_routes', 'node_routes'])
+def test_backend_switch_preserves_shared_permissions_only(backend, permission, expected, route_kind):
+    routes = {route_kind: {'builder': {'worker_backend': 'codex'}}}
+    client = DshModelClient(worker_backend=backend, permission_mode=permission, **routes)
+    selected = client.for_node('builder', 'builder')
+    assert selected.route()['worker_backend'] == 'codex'
+    assert selected.route()['permission_mode'] == expected
+    assert client.route()['permission_mode'] == permission
 
 
 @pytest.mark.parametrize(('context', 'permission'), [(None, 'skip'), ({'permission_mode': 'default'}, 'default')])
