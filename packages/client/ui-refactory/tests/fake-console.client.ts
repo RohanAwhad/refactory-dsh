@@ -223,7 +223,7 @@ export function fakeConsole(): FakeConsole {
     strategies: vi.fn(async () => ok(NO_STRATEGIES)),
     packages: vi.fn(async () => ok<readonly RefactoryPackageChoice[]>([])),
     start: vi.fn(async () => ok(RECEIPT)),
-    run: vi.fn(async () => ok(SINGLE)),
+    run: vi.fn(async (_request?: unknown, _signal?: AbortSignal) => ok(SINGLE)),
     status: vi.fn(async () => ok(FRAME)),
     leaderboard: vi.fn(async () => ok<readonly RefactoryCandidateRow[]>(CANDIDATES)),
     steer: vi.fn(async () => ok(STEERING)),
@@ -232,7 +232,11 @@ export function fakeConsole(): FakeConsole {
     removePackage: vi.fn(async () => ok<readonly RefactoryPackageChoice[]>([])),
     importPackage: vi.fn(async () => ok<readonly RefactoryPackageChoice[]>([])),
   }
-  return { remote: { refactoryConsole: methods }, ...methods }
+  return { remote: { refactoryConsole: { ...methods, runStream: async function* (request, signal) {
+    const result = await methods.run(request, signal)
+    if (!result.ok) throw new Error(result.error.message)
+    yield { kind: 'result' as const, run: result.value }
+  } } }, ...methods }
 }
 
 /** Let every settled Remote promise's `.then` run. */
