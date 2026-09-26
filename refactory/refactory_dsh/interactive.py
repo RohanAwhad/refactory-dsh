@@ -16,6 +16,7 @@ the mode: the graph is the author's, plus what the person said.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -24,6 +25,7 @@ from typing import Any
 from refactory_dsh import lowering, registry, steering
 from refactory_dsh.dsh_runtime import TASK
 from refactory_dsh.paths import REPO_ROOT, dsh_command, venv_bin
+from refactory_dsh.run_ownership import ownership
 
 #: Where an interactive run lives when no work directory is named.
 DEFAULT_ROOT = Path(".factory/interactive")
@@ -68,32 +70,33 @@ def prepare(
     ledger is seeded **before** the lowering, because the lowering is what folds it
     into the agent prompts; seeding afterwards would produce a run nobody steered.
     """
-    project = Path(project or ".")
-    if "/" not in identifier:
-        raise ValueError(f"{identifier!r} is not a <package>/<mode> identifier")
-    package, mode_name = identifier.split("/", 1)
-    Mode = registry.resolve(project, identifier)[1]
-    mode = Mode()
-    state = with_knobs(mode.state_dict(), list(knobs or []))
-
-    # Absolute, because this directory becomes DSH's session cwd and DSH refuses a
-    # relative one: `interactive <mode>` with no `--workdir` used to fail before the
-    # graph started, on the default root that is relative by design.
     workdir = Path(workdir).expanduser().resolve()
-    workdir.mkdir(parents=True, exist_ok=True)
-    if not steering.Ledger(workdir).exists():
-        # Selecting a mode is itself an explicit run request. Do not invent a
-        # broader purpose when the caller supplied no prose intent.
-        steering.Ledger.seed(workdir, intent.strip() or f"Run {identifier}.")
+    with ownership(workdir):
+        project = Path(project or ".")
+        if "/" not in identifier:
+            raise ValueError(f"{identifier!r} is not a <package>/<mode> identifier")
+        package, mode_name = identifier.split("/", 1)
+        Mode = registry.resolve(project, identifier)[1]
+        mode = Mode()
+        state = with_knobs(mode.state_dict(), list(knobs or []))
 
-    from refactory_dsh import invocations
+        # Absolute, because this directory becomes DSH's session cwd and DSH refuses a
+        # relative one: `interactive <mode>` with no `--workdir` used to fail before the
+        # graph started, on the default root that is relative by design.
+        workdir.mkdir(parents=True, exist_ok=True)
+        if not steering.Ledger(workdir).exists():
+            # Selecting a mode is itself an explicit run request. Do not invent a
+            # broader purpose when the caller supplied no prose intent.
+            steering.Ledger.seed(workdir, intent.strip() or f"Run {identifier}.")
 
-    name = f"{package}-{mode_name}"
-    graphs = invocations.prepare(
-        state, workdir, name=name,
-        transform=lambda workflow: steering.for_run(workflow, workdir),
-    )
-    return name, graphs
+        from refactory_dsh import invocations
+
+        name = f"{package}-{mode_name}"
+        graphs = invocations.prepare(
+            state, workdir, name=name,
+            transform=lambda workflow: steering.for_run(workflow, workdir),
+        )
+        return name, graphs
 
 
 def command(
@@ -186,33 +189,37 @@ def run(
     if workdir is None:
         workdir = default_workdir(identifier)
     workdir = Path(workdir).expanduser().resolve()
-    if source:
-        from refactory_dsh.items import write_source
+    with ownership(workdir) as owner:
+        if source:
+            from refactory_dsh.items import write_source
 
-        # The harness's input port, fed at run time: the mode keeps the Task it was
-        # built for and this run says which items to read instead.
-        write_source(workdir, source_path=source, source_format=source_format or "directory")
-    name, graphs = prepare(
-        identifier, workdir=workdir, intent=intent, project=project, knobs=knobs,
-    )
-    for pair in list(approve or []):
-        gate, separator, value = str(pair).partition("=")
-        if not separator or not gate.strip() or not value.strip():
-            raise ValueError(f"--approve takes GATE=VALUE, not {pair!r}")
-        # After prepare(), so the intent seed and the verdicts are both in the ledger.
-        steering.Ledger(workdir).verdict(gate.strip(), value.strip(), approval=True)
-    argv = command(
-        identifier, workdir=workdir, graphs=graphs, name=name, knobs=knobs, project=project,
-        provider=provider, model=model, headless=headless,
-    )
-    # stdin is inherited on purpose: the graph profile chats on it -- and its answerer
-    # reads a gate's answer from it -- while a captured stdin is not a person.
-    code = subprocess.call(argv, cwd=str(REPO_ROOT), timeout=timeout_s)
-    if code == 0:
-        summary = run_summary(workdir)
-        if summary:
-            print(summary)
-    return code
+            # The harness's input port, fed at run time: the mode keeps the Task it was
+            # built for and this run says which items to read instead.
+            write_source(workdir, source_path=source, source_format=source_format or "directory")
+        name, graphs = prepare(
+            identifier, workdir=workdir, intent=intent, project=project, knobs=knobs,
+        )
+        for pair in list(approve or []):
+            gate, separator, value = str(pair).partition("=")
+            if not separator or not gate.strip() or not value.strip():
+                raise ValueError(f"--approve takes GATE=VALUE, not {pair!r}")
+            # After prepare(), so the intent seed and the verdicts are both in the ledger.
+            steering.Ledger(workdir).verdict(gate.strip(), value.strip(), approval=True)
+        argv = command(
+            identifier, workdir=workdir, graphs=graphs, name=name, knobs=knobs, project=project,
+            provider=provider, model=model, headless=headless,
+        )
+        # stdin is inherited on purpose: the graph profile chats on it -- and its answerer
+        # reads a gate's answer from it -- while a captured stdin is not a person.
+        # A killed Python parent must not free the directory while its DSH child
+        # continues. POSIX inherits this one descriptor, not ambient open files.
+        inherited = {"pass_fds": (owner,)} if os.name != "nt" else {}
+        code = subprocess.call(argv, cwd=str(REPO_ROOT), timeout=timeout_s, **inherited)
+        if code == 0:
+            summary = run_summary(workdir)
+            if summary:
+                print(summary)
+        return code
 
 
 #: The facts worth showing a person who just ran a mode, in the order they read them.
