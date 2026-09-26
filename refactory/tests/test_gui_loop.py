@@ -451,7 +451,7 @@ def test_the_catalogue_names_the_action_that_runs_each_mode():
 # ── the console's authoring forwards (#61, #62, #64) ───────────────────────
 #
 # The tool calls the console, and the console forwards the authoring entry points
-# in-process. What the forwarded call says has to survive that hop: the entry points
+# as a captured child process. What the forwarded call says has to survive that hop: the entry points
 # report a handled refusal as JSON on *stderr*, and `_forward` captured stdout only,
 # so the Web GUI saw `create failed (exit 2)` with an empty payload and no reason.
 
@@ -462,19 +462,16 @@ def test_a_forwarded_refusal_keeps_the_reason_it_wrote_to_stderr(monkeypatch, ca
     `_forward` captured stdout only, so the payload was `{"output": ""}` and the tool
     could only say `create failed (exit 2)` — with the actual reason destroyed.
     """
-    import sys
-    import types
+    from subprocess import CompletedProcess
 
     from refactory_dsh import console
 
-    stub = types.ModuleType("refactory_dsh.stub_authoring")
-
-    def main(argv: list[str]) -> int:
-        print(json.dumps({"error": "the gate needs a person"}), file=sys.stderr)
-        return 2
-
-    stub.main = main  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "refactory_dsh.stub_authoring", stub)
+    monkeypatch.setattr(
+        console.subprocess, "run",
+        lambda argv, **kwargs: CompletedProcess(
+            argv, 2, stdout="", stderr=json.dumps({"error": "the gate needs a person"}),
+        ),
+    )
 
     payload = console._forward("stub_authoring", ["--name", "x"])
     assert payload["ok"] is False and payload["exit_code"] == 2
@@ -593,6 +590,7 @@ def test_the_console_forwards_a_single_run_of_a_mode(monkeypatch, capsys):
     module, argv = seen[-1]
     assert module == "interactive", "a single run is the interactive entry point"
     assert argv[0] == "buildroot_pack/build"
+    assert "--headless" in argv
     assert argv[argv.index("--intent") + 1] == "discover the recipe"
     assert argv[argv.index("--knob") + 1] == "rounds=2"
     assert argv[argv.index("--approve") + 1] == "approve=proceed"

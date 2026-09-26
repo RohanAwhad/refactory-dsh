@@ -542,7 +542,7 @@ describe('using the chosen mode once', () => {
       single: { kind: 'ready', value: SINGLE },
     })
     expect(at(view, 'data-refactory-single', SINGLE.state)).toBeDefined()
-    expect(at(view, 'data-refactory-single-run').textContent).toBe(zh['single.ran'].replace('{run}', SINGLE.root))
+    expect(at(view, 'data-refactory-single-run').textContent).toBe(zh['single.ran'].replace('{mode}', SINGLE.mode ?? SINGLE.run_id).replace('{run}', SINGLE.root))
     expect(view.getByText(`${zh['status.state']}: finished`)).toBeDefined()
     expect(at(view, 'data-refactory-single-score').textContent).toBe('最好成绩 0.75')
     expect(at(view, 'data-refactory-fact', 'name').textContent).toBe('name: demo')
