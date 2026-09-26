@@ -110,6 +110,11 @@ Every command is `uv run refactory <verb>`. `uv run refactory <verb> --help` is 
 | `refactory ceo "<what you want>" --mode edit --revise <package>/<mode>` | revise an existing mode and refuse a regression. |
 | `refactory ceo <package>/<mode>` | run that mode instead of authoring anything. |
 
+An edit inherits the source mode's Task and data-node requirements when no new
+`task_ref` or `single_shot` knob is supplied. The final `create.json` describes the
+emitted package's actual bindings, including `task_refs` and bindings per mode;
+its legacy `task_ref` field is populated when there is exactly one distinct Task.
+
 | option | what it does |
 |---|---|
 | `--mode <mode>` | `design` (the default), `create`, `edit`, or `<package>/<mode>`. |

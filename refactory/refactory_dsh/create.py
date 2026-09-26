@@ -353,7 +353,7 @@ class CreateMode(Mode):
         # create-v2's `gate_build`: the built thing is checked before it is reviewed.
         graph.add(Node(
             "validate", "gate", evaluator=f"{OPS}:validate",
-            reads=("emit.txt",),
+            reads=("emit.txt", "brief.json"),
             writes=("validation.txt",),
             produces=("validation", "attempts_used"),
             knobs=("attempts",),
