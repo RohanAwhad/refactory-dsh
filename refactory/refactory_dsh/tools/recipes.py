@@ -84,7 +84,7 @@ RECIPES: tuple[Recipe, ...] = (
         title="Is this machine ready?",
         command="uv run refactory doctor",
         expect="python, uv, node, the vendored language, and the DSH profile the modes run on",
-        contains=("refactory doctor: ready",),
+        contains=("refactory doctor: local configuration ready (authentication not tested)",),
     ),
     Recipe(
         id="install-packages",

@@ -61,7 +61,7 @@ describe('createRefactoryStore', () => {
     expect(instance.getSnapshot().byTab[TAB]?.choices).toEqual({ kind: 'failed', message: 'the console is missing' })
     expect(instance.getSnapshot().byTab[TAB]?.chosen).toBeNull()
     expect(instance.getSnapshot().byTab[TAB]?.knobs).toEqual({})
-    expect(instance.getSnapshot().byTab[TAB]?.single).toBeNull()
+    expect(instance.getSnapshot().byTab[TAB]?.single).toEqual({ kind: 'ready', value: SINGLE })
   })
 
   it('chooses one of the described modes, and can choose nothing again', () => {
@@ -72,7 +72,7 @@ describe('createRefactoryStore', () => {
     expect(instance.getSnapshot().byTab[TAB]?.chosen).toBeNull()
   })
 
-  it('drops the knobs typed for the last mode, and its run, when another is chosen', () => {
+  it("drops the last mode's knobs but preserves the separately owned one-shot result", () => {
     const instance = open()
     instance.actions.loaded(TAB, CHOICES)
     instance.actions.chose(TAB, MODE.id)
@@ -80,7 +80,7 @@ describe('createRefactoryStore', () => {
     instance.actions.ran(TAB, SINGLE)
     instance.actions.chose(TAB, null)
     expect(instance.getSnapshot().byTab[TAB]?.knobs).toEqual({})
-    expect(instance.getSnapshot().byTab[TAB]?.single).toBeNull()
+    expect(instance.getSnapshot().byTab[TAB]?.single).toEqual({ kind: 'ready', value: SINGLE })
   })
 
   it('records each knob value a person changed, by name', () => {

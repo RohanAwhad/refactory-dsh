@@ -240,6 +240,7 @@ def _run_id(mode: str) -> str:
 #: graph bundle names the same module in its own `dataCommand`; the interpreter
 #: that resolves the bare `python` leads :func:`_node_environment`'s `PATH`.
 DATA_COMMAND = "python -m refactory_dsh.items"
+AGENT_COMMAND = "python -m refactory_dsh.agent_delivery"
 
 
 def _node_environment(
@@ -342,6 +343,7 @@ def _open_mode(
         "declarations": str((root / DECLARATIONS).resolve()),
         "commandEnv": command_env,
         "dataCommand": DATA_COMMAND,
+        "agentCommand": AGENT_COMMAND,
     }
 
 
@@ -659,6 +661,8 @@ def _steer(
     """
     from refactory_dsh.steering import Ledger, chain, fidelity, outputs_in
 
+    from refactory_dsh.agent_delivery import receipts_in
+
     ledger = Ledger(run_root)
     if seed is not None:
         Ledger.seed(run_root, seed)
@@ -670,6 +674,7 @@ def _steer(
     # The chain is checkable only when the run left agent outputs beside the ledger
     # (a single mode run does; an outer-loop run keeps its candidates in subdirs).
     outputs = outputs_in(run_root) if ledger.exists() else {}
+    deliveries = receipts_in(run_root)
     payload: dict[str, Any] = {
         "run": str(run_root),
         "ledger": str(ledger.path),
@@ -677,8 +682,9 @@ def _steer(
         "entries": ledger.entries(),
         "constraints": ledger.constraints(),
         "verdicts": ledger.verdicts(),
-        "chain": chain(ledger, outputs) if ledger.exists() else [],
-        "problems": fidelity(ledger, outputs),
+        "chain": chain(ledger, outputs, deliveries=deliveries) if ledger.exists() else [],
+        "problems": fidelity(ledger, outputs, deliveries=deliveries),
+        "deliveries": deliveries,
     }
     if with_gates:
         payload["gates"] = gates(run_root)
@@ -1172,17 +1178,16 @@ def _forward(module: str, argv: list[str]) -> dict[str, Any]:
     rather than lost — a forwarded command that half-printed before failing is
     exactly the case a caller needs to see.
     """
-    import contextlib
-    import importlib
-    import io
-
-    entry = importlib.import_module(f"refactory_dsh.{module}")
-    buffer = io.StringIO()
-    errors = io.StringIO()
-    with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(errors):
-        code = int(entry.main(argv) or 0)
-    text = buffer.getvalue().strip()
-    stderr = errors.getvalue().strip()
+    # Capture at the process boundary, not just Python's sys.stdout: forwarded
+    # commands spawn DSH with inherited file descriptors. redirect_stdout leaves
+    # that child's prose and report on the console's machine-readable stdout.
+    completed = subprocess.run(
+        [sys.executable, "-m", f"refactory_dsh.{module}", *argv],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    code = completed.returncode
+    text = completed.stdout.strip()
+    stderr = completed.stderr.strip()
     try:
         payload: Any = json.loads(text)
     except json.JSONDecodeError:
@@ -1339,7 +1344,7 @@ def main(argv: list[str] | None = None) -> int:
             forwarded += extra
             payload = _forward("registry", forwarded)
         elif args.verb == "run":
-            forwarded = [args.mode]
+            forwarded = [args.mode, "--headless"]
             if args.intent:
                 forwarded += ["--intent", args.intent]
             if args.workdir:
@@ -1359,9 +1364,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.model:
                 forwarded += ["--model", args.model]
             payload = _forward("interactive", forwarded)
-            # The one-shot runner prints its report from the child process, whose
-            # stdout is the terminal's rather than this buffer, so the JSON contract
-            # would otherwise carry nothing. The run directory is the durable answer:
+            # The captured child output is diagnostic text; the run directory is
+            # the durable structured answer:
             # where it is, how it ended and what it recorded -- and it is the
             # directory the runner itself chose, so this reads the run it made rather
             # than a second guess at where a run would have gone.
@@ -1374,6 +1378,7 @@ def main(argv: list[str] | None = None) -> int:
             if root.is_dir():
                 payload["run"] = {
                     **status(root),
+                    "mode": args.mode,
                     "facts": _read_json(root / "facts.json"),
                 }
         elif args.verb == "open":

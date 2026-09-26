@@ -123,6 +123,13 @@ Every command is `uv run refactory <verb>`. `uv run refactory <verb> --help` is 
 | `--approve <gate>=<value>` | answer a gate up front, e.g. `gate_strategy=proceed`, for a run with nobody at it. A gate a person would be asked at is theirs: run without this and answer it, or drive the mode node by node with the `wf_open` tool. `modes` marks a person's gate `(user)`. |
 | `--headless` | run without a conversation: one task, one report, then exit, for scripts and CI. Without it the run is live — each turn prints as it happens and a line you type between turns reaches the CEO. |
 
+The create and design QA gate uses current `BLOCKING: <finding>` statements from
+all three review reports. `BLOCKING: none` is a clean verdict. Fenced transcripts
+and sections headed `Previous review`, `Superseded`, or `Archived review` are
+history; a `Current findings` heading resumes current findings. The synthesis
+preserves the full reports and their digests, so changing a report after synthesis
+requires fresh synthesis before the gate can proceed.
+
 ### Manage packages of modes
 
 | command | what it does |

@@ -573,15 +573,25 @@ class Executor:
     def _visit_agent(self, node: Node) -> None:
         if self.ctx.model is None:
             raise ExecutionError(f"agent node {node.id!r} needs a model client")
-        prompt = render(node.prompt_template, self.ctx)
+        from refactory_dsh.agent_delivery import begin, finish
+
+        delivery = begin(self.ctx.workdir, node.id, render(node.prompt_template, self.ctx), list(node.writes))
         self.model_calls += 1
         output = _ask_model(
-            self.ctx.model, prompt, system=node.notes, workdir=self.ctx.workdir
+            self.ctx.model, delivery["prompt"], system=node.notes, workdir=self.ctx.workdir
         )
-        if node.writes:
-            self.ctx.write_text(node.writes[0], output)
+        finish(self.ctx.workdir, node.id, final_response=output, capture_final=True)
         if node.produces:
-            self.ctx.set_fact(node.produces[0], output)
+            # Text-producing nodes expose the delivered artifact, which can have
+            # been written by tools while the final response only summarizes it.
+            value = output
+            if node.writes:
+                try:
+                    value = self.ctx.read_text(node.writes[0])
+                except (UnicodeDecodeError, IsADirectoryError):
+                    # Binary/directory delivery has no textual fact to substitute.
+                    pass
+            self.ctx.set_fact(node.produces[0], value)
 
     def _answered_verdict(self, node: Node) -> str:
         """The verdict for a gate a person or an agent answers.

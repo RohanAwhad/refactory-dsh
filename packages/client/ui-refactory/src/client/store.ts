@@ -91,7 +91,7 @@ export interface RefactoryTabState {
   steering: Loadable<RefactorySteering> | null
   /** The watched run's candidates, with what a person did to each; `null` before they are read. */
   candidates: Loadable<readonly RefactoryCandidateRow[]> | null
-  /** The one-shot use of the chosen mode, and what it left; `null` before one is used. */
+  /** The last one-shot request and what it left; independent of the current selection. */
   single: RefactorySingleState | null
   /** What the last refused gesture said, or `null`. */
   notice: RefactoryNotice | null
@@ -248,7 +248,6 @@ export function createRefactoryStore(): EngineStoreHandle<RefactoryState, Refact
         tab.choices = { kind: 'failed', message }
         tab.chosen = null
         tab.knobs = {}
-        tab.single = null
       },
       /**
        * Choose one of the described modes, or nothing, and start its knobs at the
@@ -260,10 +259,9 @@ export function createRefactoryStore(): EngineStoreHandle<RefactoryState, Refact
       chose: (d, tabId: TabId, id: string | null) => {
         const tab = bucket(d, tabId)
         tab.chosen = id
-        // A knob value belongs to the mode it was typed for, and so does the run
-        // that used it.
+        // Knobs belong to the selection. A one-shot belongs to its own request
+        // and keeps its result even when the person selects another mode.
         tab.knobs = {}
-        tab.single = null
       },
       /**
        * Record one knob value a person changed.
