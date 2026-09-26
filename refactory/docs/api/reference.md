@@ -565,7 +565,7 @@ Running code we did not write.
 | function | `describe_package` | `(name: 'str', *, project: 'Path \| None' = None, include_contracts: 'bool' = False, **kwargs: 'Any') -> 'SandboxResult'` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
 | function | `missing_init` | `(root: 'Path') -> 'str'` |
-| function | `model_readiness` | `(workdir: 'Path', *, model_context: 'dict[str, str] \| None' = None) -> 'dict[str, Any]'` |
+| function | `model_readiness` | `(workdir: 'Path', *, model_context: 'dict[str, str] \| None' = None, require_ready: 'bool' = True) -> 'dict[str, Any]'` |
 | function | `promote` | `(project: 'Path', name: 'str', *, note: 'str' = '') -> 'dict[str, Any]'` |
 | function | `run_command` | `(command: 'str', *, workdir: 'Path', timeout_s: 'int' = 180, memory_mb: 'int' = 2048, cpu_s: 'int' = 120, file_mb: 'int' = 64, env: 'dict[str, str] \| None' = None) -> 'SandboxResult'` |
 | function | `run_sandboxed` | `(code: 'str', *, workdir: 'Path', timeout_s: 'int' = 180, memory_mb: 'int' = 2048, cpu_s: 'int' = 120, file_mb: 'int' = 64, env: 'dict[str, str] \| None' = None, forwarded: 'dict[str, str] \| None' = None) -> 'SandboxResult'` |
@@ -717,6 +717,7 @@ Driving a run from a GUI: the catalogue, a live run, and what it produced.
 | function | `level_two` | `() -> 'dict[str, Any]'` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
 | function | `runs` | `(*, project: 'Path \| None' = None, runs_root: 'Path \| None' = None, limit: 'int' = 20) -> 'list[dict[str, Any]]'` |
+| function | `runtime_context` | `(project: 'Path', *, provider: 'str' = '', model: 'str' = '') -> 'dict[str, Any]'` |
 | function | `start` | `(mode: 'str', *, project: 'Path \| None' = None, runs_root: 'Path \| None' = None, run_id: 'str \| None' = None, **config: 'Any') -> 'dict[str, Any]'` |
 | function | `status` | `(run_root: 'Path', *, after: 'int' = 0) -> 'dict[str, Any]'` |
 | function | `stop` | `(run_root: 'Path') -> 'dict[str, Any]'` |
@@ -730,6 +731,7 @@ Driving a run from a GUI: the catalogue, a live run, and what it produced.
 - **`leaderboard`** — The candidates by score, with each one's diff against its parent.
 - **`level_two`** — The three level-2 seams by name, each with what it says it is.
 - **`runs`** — Every run under the root, newest first, each with where it got to.
+- **`runtime_context`** — Describe the existing nested model configuration without a model request.
 - **`start`** — Begin a run in its own process, and hand back the id to watch it with.
 - **`status`** — Where the run is, and what is new since the reader last looked.
 - **`stop`** — Ask the run to stop, and say whether it did.

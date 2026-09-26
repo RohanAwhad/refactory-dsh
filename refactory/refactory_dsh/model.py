@@ -152,8 +152,8 @@ class DshModelClient:
                        "credential readiness is unverified. Normal execution will perform its own checks.",
         }
 
-    def readiness(self, *, workdir: Path) -> dict[str, object]:
-        """Describe local configuration, or explicitly leave unsupported runtimes unverified."""
+    def readiness(self, *, workdir: Path, require_ready: bool = True) -> dict[str, object]:
+        """Describe local configuration; report known failures only when require_ready is false."""
         # Inspect only the runtime this client will actually launch. A custom CLI
         # or source checkout need not use the repository's installed composition.
         if self._dsh_cli:
@@ -177,7 +177,9 @@ class DshModelClient:
         if not isinstance(result, dict):
             return self._readiness_unavailable("diagnostic-response-unavailable")
         if result.get("status") in ("missing-credential", "invalid-configuration"):
-            raise RuntimeError(str(result.get("error") or "model credential configuration is invalid"))
+            if require_ready:
+                raise RuntimeError(str(result.get("error") or "model credential configuration is invalid"))
+            return result
         if proc.returncode or not (
             result.get("ready") is True
             or (result.get("ready") is None and result.get("status") == "diagnostic-unavailable")

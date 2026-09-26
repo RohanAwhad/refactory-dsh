@@ -193,3 +193,9 @@ This Dev Note is working context for maintainers: open questions and directions 
 - **Runs outside the run root** — `run` accepts an absolute directory while `runs` lists only the configured root; whether the two should agree is undecided.
 
 </details>
+
+## Inspect inherited runtime context
+
+Before opening an interactive workflow, call `refactory` with `action: "runtime"`. It reports the owning session's provider/model/reasoning selection, the host DSH home, and the existing nested configuration diagnostic. It does not change settings, return keys, or make a model request. A configured credential is not proof of authentication, quota, or network access. Current session selection and nested configuration are separate; the credential check does not establish a child's reasoning effort. Without an owning session, `current_session` is null and nested defaults are reported honestly.
+
+For create/edit/design through `wf_open`, pass the full user brief as one `brief=<full text>` entry in the initial `knobs` array. `intent` also records the authoritative purpose in the ledger delivered to every agent node. Do not reopen an active workflow or amend a deterministic node merely because its brief knob is empty when the full intent is already present.

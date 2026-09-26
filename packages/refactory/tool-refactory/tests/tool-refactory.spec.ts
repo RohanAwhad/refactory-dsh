@@ -116,7 +116,7 @@ describe('dsh-tool-refactory', () => {
     expect(schema).toBeDefined()
     const action = (schema!.parameters as { properties: Record<string, { enum?: string[] }> }).properties.action
     expect(action?.enum).toEqual([
-      'modes', 'strategies', 'runs', 'start', 'run', 'status', 'artifacts', 'leaderboard',
+      'runtime', 'modes', 'strategies', 'runs', 'start', 'run', 'status', 'artifacts', 'leaderboard',
       'candidate', 'steer', 'best', 'adopt', 'registry', 'create', 'edit', 'design', 'stop',
     ])
   })

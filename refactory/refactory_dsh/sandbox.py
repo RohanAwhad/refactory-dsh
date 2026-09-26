@@ -383,11 +383,15 @@ def run_command(
     )
 
 
-def model_readiness(workdir: Path, *, model_context: dict[str, str] | None = None) -> dict[str, Any]:
+def model_readiness(
+    workdir: Path, *, model_context: dict[str, str] | None = None, require_ready: bool = True,
+) -> dict[str, Any]:
     """Check the model path after the same scrub/HOME rewrite as real smoke.
 
     No package is imported and no model is called. Presence is not proof that the
     provider will accept the key; the later real smoke remains mandatory.
+    Diagnostic callers may set require_ready=False to receive a known local
+    refusal as data. Authoring keeps the default that raises before research.
     """
     from refactory_dsh.model import DshModelClient
 
@@ -395,12 +399,13 @@ def model_readiness(workdir: Path, *, model_context: dict[str, str] | None = Non
     code = (
         "import json\nfrom pathlib import Path\n"
         "from refactory_dsh.model import DshModelClient\n"
-        f"print(json.dumps(DshModelClient(**{context!r}).readiness(workdir=Path.cwd())))\n"
+        f"print(json.dumps(DshModelClient(**{context!r}).readiness(workdir=Path.cwd(), require_ready={require_ready!r})))\n"
     )
     result = run_sandboxed(code, workdir=workdir, timeout_s=40)
     if not result.ok or not (
         result.payload.get("ready") is True
         or (result.payload.get("ready") is None and result.payload.get("status") == "diagnostic-unavailable")
+        or (not require_ready and result.payload.get("status") in ("missing-credential", "invalid-configuration"))
     ):
         raise SandboxError(result.problem() or "sandbox model configuration is not ready; run refactory doctor")
     return result.payload

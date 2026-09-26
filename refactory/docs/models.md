@@ -93,3 +93,9 @@ agent processes still run in their item directories. `DSH_CLI` continues to sele
 external executable directly. A custom/source runtime must support the flags supplied
 to it: upstream headless profiles without this fork's `--provider`/`--model` extension
 can select their route through the profile's `agent-default-model` configuration.
+
+## Inspect context before an interactive workflow
+
+The CEO can use the existing `refactory` tool with `action: "runtime"` before `wf_open`. It reads the current session selection and the host-owned DSH home, then uses the same nested credential diagnostic as create/edit. It never asks you to copy credentials into a run or change a configured home. Missing and invalid configuration are reported as such; unsupported diagnostics stay unverified. Current-session reasoning effort is shown separately because credential readiness does not prove nested reasoning selection.
+
+From the terminal, `refactory runtime` reports nested defaults as JSON; `--provider` and `--model` inspect an explicit route without changing settings. There is no current CEO session in that CLI call. The diagnostic does not authenticate or launch a mode. As with doctor, the normal DSH loader may initialize a missing shipped headless profile, but it does not write credentials.
