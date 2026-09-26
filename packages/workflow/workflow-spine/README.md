@@ -252,3 +252,16 @@ body before moving the cursor. A later unskip/reloop creates a new output baseli
 and requires a fresh write; repeated `wf_next` calls within an active attempt still
 reuse its baseline. Invalid skip requests leave delivery attempts intact. This
 retirement preserves the prior receipt and artifacts and does not stop a worker.
+
+The graph profile can drive a fully automatic headless graph without creating a
+CEO. The configured-only `workflowConfiguredRun` capability exposes eligibility
+and the same drain/status operation as `wf_next`; it is absent for dynamically
+opened, session-owned runs. Eligibility inspects every declared node, including
+all data and fork branches: only command-bearing FnNode/Study, function gates,
+one flat fork/join pair and configured data nodes qualify, and director annotations
+do not. Multiple/nested structural coordination retains the CEO path because the
+shared drain does not automatically cross mixed structural cursors. Paused, halted,
+failed or unfinished status is never converted to success.
+The automatic result names its driver and zero **driver** model calls, not a
+claim about arbitrary operation internals. Prose steering remains durable context,
+not an interpreted command; conversational or model/manual graphs keep the CEO.

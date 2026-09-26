@@ -82,6 +82,17 @@ A `Task` is what makes a harness general: it lists the items, prepares each one,
 
 `circle_packing/adaptive` is a fixture: small, deterministic and offline on purpose, so the whole loop can be tested and searched without a provider. The mode you create from your own brief is the real thing.
 
+**Run once** in the Modes panel (and `python -m refactory_dsh.console run`) also runs a fully
+automatic graph without a CEO model turn. The same DSH spine executes its commands,
+function gates, data passes and at most one flat fork/join pair. Every declared node must be
+automatic; a model node, manual/user gate, director or command-less step keeps the
+normal model-driven path, as does multiple/nested fork coordination. `refactory ceo` with its live conversation still uses a
+model; use `--headless` for automatic one-shot execution. Run identity, facts and
+the intent ledger are retained, but automatic execution does not interpret prose
+notes or translate them into graph edits. Knobs and runtime controls remain explicit.
+An operation may itself call an external service; this routing only removes the
+otherwise unnecessary CEO request.
+
 ## Try this next
 
 Run a mode on the runtime that ships, with your terminal attached so a gate reaches you:
