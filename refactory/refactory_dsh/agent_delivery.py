@@ -146,6 +146,20 @@ def finish(workdir: Path, node: str, *, final_response: str | None = None,
     return receipt
 
 
+def invalidate(workdir: Path, nodes: list[str], reason: str) -> None:
+    """Retire in-flight snapshots when an explicit redo invalidates their work."""
+    for node in nodes:
+        pending = _pending(workdir, node)
+        if not pending.exists():
+            continue
+        record = json.loads(pending.read_text())
+        receipt = workdir / ROOT / record['id'] / 'receipt.json'
+        previous = json.loads(receipt.read_text())
+        previous.update(status='superseded', finished=_now(), reason=reason)
+        receipt.write_text(json.dumps(previous, indent=2) + '\n')
+        pending.unlink()
+
+
 def receipts_in(workdir: Path) -> dict[str, dict[str, Any]]:
     """Latest receipts, with a separate comparison to the current artifact state.
 

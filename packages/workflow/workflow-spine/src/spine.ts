@@ -300,6 +300,15 @@ function reaches(
   return false
 }
 
+/** The runtime's facts invalidation and the cursor's corresponding restart. */
+export interface RedoPlan {
+  requested: string
+  start: string
+  nodes: string[]
+  resetPass: boolean
+  restartData: string[]
+}
+
 export class Spine {
   private readonly nodes: Map<string, WorkflowNode>
   private edges: WorkflowEdge[]
@@ -529,6 +538,7 @@ export class Spine {
     const entry = body.subgraph_entry ?? ''
     const exit = body.subgraph_exit ?? ''
     if (entry === '' || exit === '') throw new Error(`${node} declares no subgraph to iterate`)
+    this.invalidateNodes(this.descendants(entry, exit))
     this.pass = { node, count, index: 0, entry, exit, finished: false }
     this.cursor = [entry]
     this.afters = []
@@ -555,6 +565,7 @@ export class Spine {
     }
     if (pass.index + 1 < pass.count) {
       const index = pass.index + 1
+      this.invalidateNodes(this.descendants(pass.entry, pass.exit))
       this.pass = { ...pass, index, finished: false }
       this.cursor = [pass.entry]
       this.afters = []
@@ -813,34 +824,92 @@ export class Spine {
     return this.next()
   }
 
-  /**
-   * Reopen one completed node, so the next {@link next} reports it again.
-   *
-   * A person who says a step is wrong needs that step run again, with the
-   * corrected prompt or graph edit in force. The node's completion and skip
-   * records are cleared and the cursor is moved to exactly that node. A gate is
-   * routed with {@link verdict}, and a data node's passes belong to its runner,
-   * so neither can be reopened this way.
-   * @param node - the node id to reopen.
-   * @returns the spine's next state, whose cursor is that node.
-   */
-  redo(node: string): SpineNext {
+  /** All branches reachable from a node, including data bodies and fork targets. */
+  private descendants(start: string, stop?: string): Set<string> {
+    const found = new Set<string>()
+    const visited = new Set<string>()
+    const queue = [{ id: start, stop }]
+    for (const next of queue) {
+      const { id } = next
+      const key = JSON.stringify(next)
+      if (visited.has(key)) continue
+      visited.add(key)
+      found.add(id)
+      if (id === next.stop) continue
+      const targets = this.outgoing(id).map(edge => edge.target)
+      const successor = this.successors[id]
+      if (successor !== undefined) targets.push(successor)
+      const body = this.nodes.get(id)
+      if (body?._type === 'ForkNode') targets.push(...(body.targets ?? []))
+      queue.push(...targets.map(target => ({ id: target, stop: next.stop })))
+      if (body?._type === 'DataNode' && body.subgraph_entry !== undefined) {
+        queue.push({ id: body.subgraph_entry, stop: body.subgraph_exit })
+      }
+    }
+    return found
+  }
+
+  /** Clear current completion and gate decisions without erasing graph edits. */
+  private invalidateNodes(affected: Set<string>): void {
+    this.completed = this.completed.filter(entry => !affected.has(entry))
+    this.skipped = this.skipped.filter(entry => !affected.has(entry))
+    for (const id of affected) {
+      this.gateVerdicts.delete(id)
+      delete this.iterations[id]
+      delete this.feedback[id]
+    }
+  }
+
+  /** Describe invalidation before the runtime archives and clears current facts. */
+  planRedo(node: string): RedoPlan {
     const body = this.nodes.get(node)
     if (body === undefined) throw new Error(`unknown node ${node}`)
     if (body._type === 'GateNode') {
       throw new Error(`node ${node} is a gate; redo a completed upstream agent, then run the gate when due`)
     }
     if (body._type === 'DataNode') {
-      throw new Error(`node ${node} iterates its items and its passes are the runner's`)
+      throw new Error(`node ${node} iterates its items; redo a completed node in its body or upstream`)
     }
     if (!this.completed.includes(node)) {
       throw new Error(`node ${node} has not completed, so there is nothing to redo`)
     }
-    this.completed = this.completed.filter(entry => entry !== node)
-    this.skipped = this.skipped.filter(entry => entry !== node)
+    if (this.cursor.length > 1 || this.afters.length > 0) {
+      throw new Error('redo cannot discard concurrent branches; finish the fork before reopening completed work')
+    }
+    const owners = [...this.nodes.entries()].filter(([, candidate]) =>
+      candidate._type === 'DataNode' && candidate.subgraph_entry !== undefined
+      && this.descendants(candidate.subgraph_entry, candidate.subgraph_exit).has(node))
+    if (owners.length > 1) throw new Error(`node ${node} belongs to more than one data body; redo an unambiguous upstream node`)
+    const owner = owners[0]
+    const currentItem = owner !== undefined && this.pass?.node === owner[0]
+    // A finished dataset no longer has a current item. Reopening a body node
+    // therefore restarts its owning dataset, rather than running an orphan pass.
+    const start = owner !== undefined && !currentItem ? owner[0] : node
+    const affected = this.descendants(start, currentItem ? this.pass?.exit : undefined)
+    if (currentItem && owner !== undefined) {
+      for (const edge of this.outgoing(owner[0])) {
+        for (const id of this.descendants(edge.target)) affected.add(id)
+      }
+    }
+    const resetPass = this.pass !== undefined && affected.has(this.pass.node)
+    if (this.pass !== undefined && !currentItem && !resetPass) {
+      throw new Error(`redo of ${node} would abandon the unrelated active data pass ${this.pass.node}`)
+    }
+    return { requested: node, start, nodes: [...affected], resetPass,
+      restartData: [...affected].filter(id => this.nodes.get(id)?._type === 'DataNode') }
+  }
+
+  /** Reopen work and invalidate descendants; prompts and historical log remain. */
+  redo(node: string): SpineNext {
+    const plan = this.planRedo(node)
+    const affected = new Set(plan.nodes)
+    this.invalidateNodes(affected)
+    if (plan.resetPass) this.pass = undefined
+    else if (this.pass !== undefined) this.pass.finished = false
+    this.afters = []
     this.halted = undefined
-    this.cursor = [node]
-    this.log.push(`redid ${node}`)
+    this.cursor = [plan.start]
+    this.log.push(`redid ${node} at ${plan.start}; invalidated ${plan.nodes.join(', ')}`)
     return this.next()
   }
 

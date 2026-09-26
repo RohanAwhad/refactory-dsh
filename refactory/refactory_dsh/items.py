@@ -227,6 +227,85 @@ def command_end(node: Node, workdir: Path, index: int) -> dict[str, Any]:
     return score
 
 
+def command_reset(workdir: Path, request: dict[str, Any]) -> dict[str, Any]:
+    """Archive prior facts, then invalidate the facts of explicitly redone work.
+
+    A full dataset restart also archives affected node-owned outputs, excluding
+    the restart node's declared inputs. A current-item correction keeps artifacts
+    for its next attempt. Pending agent snapshots are retired in either case.
+    """
+    import uuid
+    from refactory_dsh.agent_delivery import invalidate
+
+    nodes = request.get('nodes')
+    if not isinstance(nodes, list) or not all(isinstance(node, str) for node in nodes):
+        raise ItemsError('reset needs the runtime redo plan with a list of node ids')
+    declarations = _declarations(workdir)
+    if not declarations:
+        raise ItemsError('reset requires the run declarations; re-lower this mode before redoing work')
+    names = {name for node in nodes for name in declarations.get(node, {}).get('produces', [])}
+    path = workdir / FACTS
+    prior = path.read_text() if path.exists() else '{}'
+    facts = json.loads(prior)
+    if not isinstance(facts, dict):
+        raise ItemsError('reset requires facts.json to contain an object')
+    cleared = sorted(names.intersection(facts))
+    for name in cleared:
+        facts.pop(name)
+    archive = workdir / '.refactory' / 'redo' / uuid.uuid4().hex
+    # Replaying the same selected items must not inherit op state such as an
+    # attempt counter in a declared output file. Keep explicit restart inputs,
+    # and archive by rename so the prior bytes stay inspectable without copies.
+    targets: list[Path] = []
+    retained: list[str] = []
+    if request.get('restartData'):
+        reads = [Path(name) for name in declarations.get(request.get('start'), {}).get('reads', [])]
+        writes = {name for node in nodes for name in declarations.get(node, {}).get('writes', [])}
+        for name in sorted(writes, key=lambda value: len(Path(value).parts)):
+            relative = Path(name)
+            if relative.is_absolute() or '..' in relative.parts or relative == Path('.'):
+                raise ItemsError(f'cannot reset output {name!r}: it must name an owned path inside the run')
+            if relative.parts[0] == '.refactory' or relative in (Path(FACTS), Path(ITEMS_OVERRIDE)):
+                raise ItemsError(f'cannot reset runtime-owned output {name!r}')
+            if any(relative == item or relative in item.parents or item in relative.parents for item in reads):
+                retained.append(name)
+                continue
+            path_to_reset = workdir / relative
+            if not path_to_reset.exists() and not path_to_reset.is_symlink():
+                continue
+            if path_to_reset.is_symlink() or not path_to_reset.resolve().is_relative_to(workdir.resolve()):
+                raise ItemsError(f'cannot reset output {name!r}: symlink or path outside the run')
+            if any(parent in relative.parents for parent in targets):
+                continue
+            targets.append(relative)
+    receipt = {**request, 'cleared_facts': cleared,
+               'archive': str(archive.relative_to(workdir)),
+               'archived_artifacts': [str(path) for path in targets],
+               'retained_inputs': retained}
+    archive.mkdir(parents=True)
+    (archive / FACTS).write_text(prior)
+    (archive / 'redo.json').write_text(json.dumps(receipt, indent=2) + '\n')
+    temporary = path.with_name('.facts-redo.tmp')
+    temporary.write_text(json.dumps(facts, indent=2, default=str) + '\n')
+    moved: list[Path] = []
+    try:
+        for relative in targets:
+            destination = archive / 'artifacts' / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            (workdir / relative).rename(destination)
+            moved.append(relative)
+        invalidate(workdir, nodes, f"redo {request.get('requested', '')}")
+        temporary.replace(path)
+    except Exception:
+        # A failed archive/reset must not strand partially moved node outputs.
+        for relative in reversed(moved):
+            (archive / 'artifacts' / relative).rename(workdir / relative)
+        temporary.unlink(missing_ok=True)
+        raise
+    return {key: receipt[key] for key in ('archive', 'cleared_facts', 'archived_artifacts', 'retained_inputs')}
+
+
+
 def _options(argv: list[str]) -> tuple[str, int]:
     """The ``--node`` id and ``--index`` one command line names."""
     node_id = ""
@@ -253,9 +332,9 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     usage = (
         "usage: python -m refactory_dsh.items "
-        "{list|begin|end} --node <id> [--index <n>]"
+        "{list|begin|end} --node <id> [--index <n>] | reset < redo-plan.json"
     )
-    if not argv or argv[0] not in ("list", "begin", "end"):
+    if not argv or argv[0] not in ("list", "begin", "end", "reset"):
         print(usage, file=sys.stderr)
         return 2
     verb = argv[0]
@@ -264,6 +343,10 @@ def main(argv: list[str] | None = None) -> int:
         from refactory_dsh.run import install_workspace_packages
 
         install_workspace_packages()
+        if verb == "reset":
+            produced = command_reset(workdir, json.load(sys.stdin))
+            print(json.dumps(produced, default=str))
+            return 0
         node_id, index = _options(argv[1:])
         node = data_node(workdir, node_id)
         if verb == "list":
