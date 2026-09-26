@@ -17,6 +17,8 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { Session, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
+import { CONFIGURED_RUN_SERVICE } from '@deepseek-ai/dsh-workflow-spine'
+import type { ConfiguredRun } from '@deepseek-ai/dsh-workflow-spine'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import { GRAPH_STARTUP_SERVICE, STATE_FILES } from './startup.ts'
 import type { GraphStartupValues } from './startup.ts'
@@ -25,7 +27,7 @@ import type { GraphStartupValues } from './startup.ts'
 export const name = 'graph-runner'
 
 /** Core services required before the CEO turn can start. */
-export const inject = ['agentDefaultModel', 'agents', 'sessions', GRAPH_STARTUP_SERVICE]
+export const inject = ['agentDefaultModel', 'agents', 'sessions', GRAPH_STARTUP_SERVICE, CONFIGURED_RUN_SERVICE]
 
 /**
  * The best score the mode's ops recorded, or `null` when none recorded one.
@@ -167,6 +169,43 @@ async function chat(agent: Agent, startup: GraphStartupValues, io: Io, firstSeq:
 async function run(ctx: Context, io: Io): Promise<void> {
   const startup = ctx.get(GRAPH_STARTUP_SERVICE) as GraphStartupValues | undefined
   await ctx.get('loader')?.await()
+  const configured = ctx.get(CONFIGURED_RUN_SERVICE) as ConfiguredRun | undefined
+  if (startup !== undefined && !startup.chat && configured?.automatic === true) {
+    // Keep the shipping spine, command/data bridges and status. A graph with no
+    // model-owned work needs no CEO just to request its deterministic drain.
+    // This path does not interpret prose steering or invent a model session.
+    let failure: string | undefined
+    try {
+      const priorStatus = join(startup.workdir, '.refactory', 'spine-status.json')
+      if (existsSync(priorStatus)) {
+        renameSync(priorStatus, join(startup.workdir, '.refactory', `spine-status.previous-automatic-${randomUUID()}.json`))
+      }
+      await configured.advance()
+    } catch (error: unknown) {
+      failure = error instanceof Error ? error.message : String(error)
+    }
+    const status = spineStatus(startup.workdir)
+    if (failure === undefined && status?.status !== 'done') {
+      failure = status === undefined
+        ? 'the graph did not start: no readable workflow status was recorded'
+        : `the graph did not finish (${status.status})${status.error === undefined ? '' : ` — ${status.error}`}`
+    }
+    io.stdout.write(JSON.stringify({
+      ok: failure === undefined,
+      status: status?.status ?? 'not-started',
+      ...(failure === undefined ? {} : { error: failure }),
+      mode: startup.mode,
+      task: startup.taskName,
+      budget: startup.budget,
+      best_score: bestScore(startup.workdir, startup.mode),
+      workdir: startup.workdir,
+      driver: 'automatic',
+      driver_model_calls: 0,
+    }, null, 2) + '\n')
+    if (failure !== undefined) io.stderr.write(`dsh: ${failure}\n`)
+    io.exit(failure === undefined ? 0 : 1)
+    return
+  }
   const agents = ctx.get('agents')
   const defaultModel = ctx.get('agentDefaultModel') as DefaultModelLike | undefined
   const sessions = ctx.get('sessions')
