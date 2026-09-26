@@ -541,6 +541,16 @@ def _read_json(path: Path) -> dict[str, Any]:
     return loaded if isinstance(loaded, dict) else {}
 
 
+def _facts_text(values: dict[str, Any]) -> dict[str, str]:
+    """Render facts before a JavaScript reader can round large JSON integers."""
+    return {
+        name: value if isinstance(value, str) else json.dumps(
+            value, ensure_ascii=False, separators=(",", ":"),
+        )
+        for name, value in values.items() if value is not None and value != ""
+    }
+
+
 def _running(run_root: Path, console: dict[str, Any]) -> bool:
     pid = console.get("pid")
     return bool(pid) and _alive(int(pid))
@@ -1480,10 +1490,12 @@ def main(argv: list[str] | None = None) -> int:
 
                 root = default_workdir(args.mode)
             if root.is_dir():
+                recorded_facts = _read_json(root / "facts.json")
                 payload["run"] = {
                     **status(root),
                     "mode": args.mode,
-                    "facts": _read_json(root / "facts.json"),
+                    "facts": recorded_facts,
+                    "facts_text": _facts_text(recorded_facts),
                 }
         elif args.verb == "open":
             payload = _open_mode(

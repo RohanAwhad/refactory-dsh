@@ -526,7 +526,9 @@ export class RefactoryConsole extends TypertRemoteService {
       finished: failed || single.finished === true,
       best_score: typeof single.best_score === 'number' ? single.best_score : null,
       authoring: failed && progress !== null ? { ...progress, error: failure } : progress,
-      facts: facts(single.facts),
+      // New consoles render before the JSON bridge so exact integers, including
+      // nested values, survive JavaScript's number range. Keep older consoles usable.
+      facts: facts(isRecord(single.facts_text) ? single.facts_text : single.facts),
       item_results: itemResults(single.item_results),
     }
   }
