@@ -44,9 +44,9 @@ The mount reads three lists at once over `remote.refactoryConsole`: `modes`, `st
 
 A refusal lands in one place: the three codes the Host names precisely — an unknown mode, an authoring mode, a disabled package — have copy of their own, and every other failure shows the console's own message through `error.failed`.
 
-State lives in the type's own store, bucketed by tab id: the choices read, the chosen mode, the knob values changed for it, the three chosen names, the run being read with its last frame and its ledger, the single run with its result, the last notice, and whether a package change is in flight. Choosing another mode drops the knobs and the single result that belonged to the last one. The owner's `signal` ends a bucket: on abort the tab is forgotten, and a read or a change that settles afterwards writes nothing.
+State lives in the type's own store, bucketed by tab id: the choices read, the chosen mode, the knob values changed for it, the three chosen names, the run being read with its last frame and its ledger, the single run with its result, the last notice, and whether a package change is in flight. Choosing another mode resets its knobs; an in-flight or completed one-shot keeps its own result and run directory. The owner's `signal` ends a bucket: on abort the tab is forgotten, and a read or a change that settles afterwards writes nothing.
 
-The ledger read is its own generation, so refreshing the run's status and refreshing its ledger are independent: a status frame that lands late does not retire the ledger, or the reverse. A note and a verdict both answer with the whole ledger, so the section that drew before a gesture draws what the Host said after it.
+Catalogue, status, ledger and candidate reads, package changes, starts, stops and one-shot runs have separate request ownership. Reloading or starting an optimizer cannot discard a one-shot result. The tab accepts only one one-shot at a time, including when its selected mode changes. A note and a verdict both answer with the whole ledger, so the section that drew before a gesture draws what the Host said after it.
 
 <a id="model-experience"></a>
 ## Model Experience

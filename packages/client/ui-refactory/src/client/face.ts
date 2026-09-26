@@ -271,8 +271,15 @@ export function refactoryFace(
     _sessionId: SessionId,
     actions: BoundActions<ReturnType<typeof createRefactoryStore>>,
   ): RefactoryInjected => {
-    /** Per tab: the read generation a settlement must match; the latest request wins. */
-    const generations = new Map<TabId, number>()
+    // Only a newer request for the same operation may retire its predecessor.
+    // In particular, catalogue/status reads cannot retire a long-running use.
+    const catalogueGenerations = new Map<TabId, number>()
+    const statusGenerations = new Map<TabId, number>()
+    const startGenerations = new Map<TabId, number>()
+    const runGenerations = new Map<TabId, number>()
+    const packageGenerations = new Map<TabId, number>()
+    const stopGenerations = new Map<TabId, number>()
+    const running = new Set<TabId>()
     /**
      * The same, for the ledger read: a status refresh and a ledger refresh are two
      * independent reads of one run, and retiring one must not drop the other.
@@ -281,8 +288,11 @@ export function refactoryFace(
     // A candidate read and a ledger read are two reads of the same tab and must not
     // retire each other; one control act refreshes both.
     const candidateGenerations = new Map<TabId, number>()
+    // Monotonic across bucket lifetimes: a late response from a closed tab must
+    // not match the first request when that id is used again.
+    let sequence = 0
     const nextGeneration = (generations: Map<TabId, number>, tabId: TabId): number => {
-      const generation = (generations.get(tabId) ?? 0) + 1
+      const generation = ++sequence
       generations.set(tabId, generation)
       return generation
     }
@@ -314,9 +324,9 @@ export function refactoryFace(
     /** Read one run's status into the store. */
     const readStatus = (tabId: TabId, run: string, after: number, signal: AbortSignal): void => {
       if (signal.aborted) return
-      const generation = nextGeneration(generations, tabId)
+      const generation = nextGeneration(statusGenerations, tabId)
       actions.frameLoading(tabId)
-      settle(generations, tabId, generation, remote.refactoryConsole.status(run, after, signal), (frame) => {
+      settle(statusGenerations, tabId, generation, remote.refactoryConsole.status(run, after, signal), (frame) => {
         actions.framed(tabId, frame)
       }, undefined, (failure) => { actions.frameFailed(tabId, failure.message) })
     }
@@ -343,9 +353,9 @@ export function refactoryFace(
       tabId: TabId,
       call: Promise<RemoteResult<readonly RefactoryPackageChoice[]>>,
     ): void => {
-      const generation = nextGeneration(generations, tabId)
+      const generation = nextGeneration(packageGenerations, tabId)
       actions.busy(tabId, true)
-      settle(generations, tabId, generation, call, (packages) => {
+      settle(packageGenerations, tabId, generation, call, (packages) => {
         actions.packages(tabId, packages)
       }, () => { actions.busy(tabId, false) })
     }
@@ -355,13 +365,13 @@ export function refactoryFace(
      * Both callers have already refused an ended record; this only reads.
      */
     const read = (tabId: TabId, signal: AbortSignal): void => {
-      const generation = nextGeneration(generations, tabId)
+      const generation = nextGeneration(catalogueGenerations, tabId)
       void Promise.all([
         console.modes(signal),
         console.strategies(signal),
         console.packages(signal),
       ]).then(([modes, strategies, packages]) => {
-        if (generations.get(tabId) !== generation) return
+        if (catalogueGenerations.get(tabId) !== generation) return
         if (!modes.ok) { actions.failed(tabId, modes.error.message); return }
         if (!strategies.ok) { actions.failed(tabId, strategies.error.message); return }
         if (!packages.ok) { actions.failed(tabId, packages.error.message); return }
@@ -372,6 +382,14 @@ export function refactoryFace(
       load(tabId, signal) {
         if (signal.aborted) return
         actions.start(tabId)
+        signal.addEventListener('abort', () => {
+          for (const generations of [
+            catalogueGenerations, statusGenerations, startGenerations, runGenerations,
+            packageGenerations, stopGenerations, steeringGenerations, candidateGenerations,
+          ]) generations.delete(tabId)
+          running.delete(tabId)
+          actions.forget(tabId)
+        }, { once: true })
         read(tabId, signal)
       },
       reload(tabId, signal) {
@@ -396,8 +414,8 @@ export function refactoryFace(
         if (settings.strategy !== '') chosen.strategy = settings.strategy
         if (settings.optimizer !== '') chosen.optimizer = settings.optimizer
         if (settings.evaluator !== '') chosen.evaluator = settings.evaluator
-        const generation = nextGeneration(generations, tabId)
-        settle(generations, tabId, generation, console.start(
+        const generation = nextGeneration(startGenerations, tabId)
+        settle(startGenerations, tabId, generation, console.start(
           { mode, settings: chosen, knobs: knobArguments(knobs) },
           signal,
         ), (receipt) => {
@@ -407,12 +425,13 @@ export function refactoryFace(
         })
       },
       run(tabId, mode, knobs, signal) {
-        if (signal.aborted) return
-        const generation = nextGeneration(generations, tabId)
+        if (signal.aborted || running.has(tabId)) return
+        running.add(tabId)
+        const generation = nextGeneration(runGenerations, tabId)
         actions.runLoading(tabId)
-        settle(generations, tabId, generation, console.run({ mode, knobs: knobArguments(knobs) }, signal), (run) => {
+        settle(runGenerations, tabId, generation, console.run({ mode, knobs: knobArguments(knobs) }, signal), (run) => {
           actions.ran(tabId, run)
-        }, undefined, (failure) => {
+        }, () => { running.delete(tabId) }, (failure) => {
           // A refused gesture is the notice, and the tab is no longer waiting on a
           // run that is never going to arrive.
           actions.noticed(tabId, { code: failure.code, message: failure.message })
@@ -469,8 +488,8 @@ export function refactoryFace(
       },
       stop(tabId, run, signal) {
         if (signal.aborted) return
-        const generation = nextGeneration(generations, tabId)
-        settle(generations, tabId, generation, console.stop(run, signal), () => {
+        const generation = nextGeneration(stopGenerations, tabId)
+        settle(stopGenerations, tabId, generation, console.stop(run, signal), () => {
           readStatus(tabId, run, 0, signal)
         })
       },

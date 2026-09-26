@@ -211,7 +211,7 @@ function Single({
   const authoring = single.authoring
   return (
     <div className={css.status} data-refactory-single={single.state}>
-      <p className={css.statusLine} data-refactory-single-run>{t('single.ran', { run: single.root })}</p>
+      <p className={css.statusLine} data-refactory-single-run>{t('single.ran', { mode: single.mode ?? single.run_id, run: single.root })}</p>
       <p className={css.statusLine}>{t('status.state')}: {single.state}</p>
       <p className={css.statusLine} data-refactory-single-score>
         {single.best_score === null ? t('status.noScore') : t('status.best', { score: single.best_score })}
