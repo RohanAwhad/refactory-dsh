@@ -975,7 +975,7 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.tools.register(defineTool({
     name: `${toolPrefix}_edit`,
-    description: 'Edit the live graph: `pause` arms a stop BEFORE the named node (including before data setup); `unpause` releases only that boundary after the person asks to continue. A paused run stays stopped across wf_next calls. `skip` hot-removes a node (and, for a fork, its targets); `unskip` restores it; `set-prompt` replaces an agent/llm node\'s prompt and `append-prompt` adds a paragraph to it. This is how a person\'s correction reaches the node\'s prompt — follow it with `wf_redo` to run that node again. Returns only a confirmation — call `wf_next` to learn the next node.',
+    description: 'Edit the live graph: `pause` arms a stop BEFORE the named node (including before data setup); `unpause` releases only that boundary after the person asks to continue. A paused run stays stopped across wf_next calls; skip, redo and expansion require explicit unpause first. An armed boundary cannot be skipped. `skip` hot-removes a node (and, for a fork, its targets); `unskip` restores it; `set-prompt` replaces an agent/llm node\'s prompt and `append-prompt` adds a paragraph to it. This is how a person\'s correction reaches the node\'s prompt — follow it with `wf_redo` to run that node again. Returns only a confirmation — call `wf_next` to learn the next node.',
     parameters: {
       node: { type: 'string', required: true, description: 'The node id to edit.' },
       action: { type: 'string', required: true, enum: ['skip', 'unskip', 'set-prompt', 'append-prompt', 'pause', 'unpause'], description: 'The edit.' },

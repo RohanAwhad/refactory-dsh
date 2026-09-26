@@ -821,8 +821,12 @@ export class Spine {
 
   /** Graph mutation: skip a node (and, for a fork, its targets). */
   skip(node: string): SpineNext {
+    if (this.isPaused()) throw new Error(`run paused before ${this.pausedAt().join(', ')}; explicitly unpause before skipping work`)
     const body = this.nodes.get(node)
     if (body === undefined) throw new Error(`unknown node ${node}`)
+    const removed = body._type === 'ForkNode' ? [node, ...(body.targets ?? [])] : [node]
+    const stops = removed.filter(id => this.pauseBoundaries.has(id))
+    if (stops.length > 0) throw new Error(`pause armed before ${stops.join(', ')}; explicitly unpause before skipping that boundary`)
     if (!this.skipped.includes(node)) {
       this.skipped.push(node)
       this.log.push(`skipped ${node}`)
@@ -892,6 +896,7 @@ export class Spine {
 
   /** Describe invalidation before the runtime archives and clears current facts. */
   planRedo(node: string): RedoPlan {
+    if (this.isPaused()) throw new Error(`run paused before ${this.pausedAt().join(', ')}; explicitly unpause before reopening work`)
     const body = this.nodes.get(node)
     if (body === undefined) throw new Error(`unknown node ${node}`)
     if (body._type === 'GateNode') {

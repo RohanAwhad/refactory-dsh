@@ -320,3 +320,8 @@ The shipped fixture modes and the `walker` evaluator run offline, so you can try
 - **`trimul` (GPU task) needs `numpy`** — not in the project's dependencies; the math tasks do not need it.
 - **The console's Remote face is stated by hand, not generated.** The pinned Typert generator emits `./typert` and `./remote` only when its own protocol package is a workspace project, and a pinned install resolves that protocol from `node_modules`. The Host gateway discovers the console from its runtime `@Remote` markers and binds arguments by the method parameter names; the picker sends those same names through the Connection's generic RPC (`connection.rpc.call('/api', 'refactoryConsole/<method>', { args })`), because the pinned Client Remote assembly is a prebuilt bundle that carries no namespace for a fork-local package. The generator would remove the chance of the two drifting.
 - **Ships as a repo plus `install.sh`**, not a single binary: bundling Node and Python into one per-platform executable was considered and deferred.
+
+While a stop is active, cursor-moving skip, redo and expansion are refused before
+state changes or output archival. Unpause that boundary explicitly before such
+edits. Skipping a future node (or fork target) with an armed pause is also refused;
+prompt amendments remain available while paused.
