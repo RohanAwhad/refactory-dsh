@@ -148,6 +148,16 @@ requires fresh synthesis before the gate can proceed.
 | `refactory package smoke <package>/<mode>` | run it once, in a sandbox, without a model (free). |
 | `refactory package smoke <package>/<mode> --model` | score a mode whose graph has an `agent` node, by supplying a model. |
 
+Package import uses the literal `PACKAGE.name` when available, even if the source
+folder has a different name. `--as` copies the package under a new identity and
+rewrites its literal self-qualified Python imports, module references and mode
+identifiers. Relative imports, comments, docstrings and external dependencies are
+preserved. A rename requires a direct literal `PACKAGE = Package(name=...)` (a
+positional literal name also works); dynamic identities and self-qualified
+f-strings must be prepared explicitly before import. Provenance records the source
+path or git URL/ref and original package identity. A refused import leaves no
+installed copy.
+
 `refactory package` also accepts `--json`, `--force` and `--project`.
 
 ### Use a mode
