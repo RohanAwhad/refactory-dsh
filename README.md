@@ -20,9 +20,10 @@ Create/edit validates the full emitted mode with a **3,600-second budget per smo
 pass**. Set `--knob smoke_timeout_s=7200` on `refactory ceo --mode create` or
 `--mode edit`, or set the same knob in the GUI Modes panel. The Python create/edit
 entry points expose `--smoke-timeout`. This whole-mode budget is separate from a
-single model completion's timeout. The CEO command runner currently has a separate
-ten-minute enclosing deadline ([#138](https://github.com/akashgit/refactory-dsh/issues/138));
-raising this knob does not yet raise that enclosing deadline. A timeout fails validation and records the
+single model completion's timeout. Lowering also resolves the enclosing CEO command
+allowance from this knob (up to three passes plus ten minutes of startup overhead),
+so the shell runner cannot cut it off at its ordinary ten-minute default. Other
+operations keep their existing command limit. A timeout fails validation and records the
 limit, elapsed time, current item when available, and preserved workdir in
 `smoke.json`, including return code 124. If a revision’s source comparison times
 out, `revision.json` records that incomplete pass separately and validation fails;
