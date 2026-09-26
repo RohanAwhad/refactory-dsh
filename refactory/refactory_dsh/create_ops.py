@@ -432,9 +432,7 @@ Write one JSON object and nothing else:
  "closest_existing": "<package>/<mode>, or 'none'",
  "knobs": [{"name": "...", "kind": "int|float|bool|str|enum", "default": ...,
             "lo": null, "hi": null, "enum": [], "description": "..."}],
- "nodes": [{"id": "...", "kind": "op|agent|gate",
-            "call": "<module>:<function>  (op and agent only)",
-            "evaluator": "<module>:<function>  (gate only, instead of call)",
+ "nodes": [{"id": "...", "kind": "op|agent|gate|fork|join|data",
             "reads": [], "writes": [], "produces": [], "knobs": [],
             "notes": "..."}],
  "edges": [{"source": "...", "target": "...", "condition": null}],
@@ -444,8 +442,35 @@ Write one JSON object and nothing else:
 Rules:
 - At least two approaches in `considered`. One approach is not a choice.
 - `nodes` and `edges` describe the graph you intend to write, so it can be checked
-  before any code exists. Use the operations declared in `knobs` on the nodes that
-  consume them.
+  before any code exists. The node fields above are common fields, not a closed
+  list. Add the fields required by each node's kind below, at the node's top level;
+  putting them only in `notes` does not declare them. List each declared knob in
+  `knobs` on the nodes that consume it.
+- An `op` requires `call: "<module>:<function>"`.
+- An `agent` requires a nonempty `prompt_template` containing its actual worker
+  instructions. A `call` or a module path to a prompt constant is not a substitute
+  for `prompt_template`. It may also declare `role` and `tools`.
+- A function `gate` requires `evaluator: "<module>:<function>"`. A person-answered
+  or agent-answered gate instead declares `gate_kind: "user"` or `"agent"` and no
+  evaluator. Gates need at least two outgoing edges with distinct, nonempty
+  `condition` verdicts, no unconditional edge, and a bounded `max_iterations`.
+- A `data` node requires `subgraph_entry` and `subgraph_exit`, naming the first
+  and last nodes of the per-item subgraph. Bind the requested `task_ref`, or use a
+  runtime `source_path` and `source_format`; do not bake instances into the graph.
+  It writes `current_item.json` before each pass; declare that write when consumed.
+  Declare `item_scores` in `produces` when score() aggregates Task verdicts.
+  The subgraph is entered through these fields, NOT through an ordinary edge.
+  The data node has at most one outgoing edge, to the continuation AFTER all items;
+  the per-item exit does not need an edge back to the data node or to that
+  continuation. For example, `items` with subgraph_entry=`solve` and
+  subgraph_exit=`publish` has per-item edges solve -> execute -> explain -> publish
+  and one outer edge items -> finish. Do not add items -> solve or publish -> finish.
+  When the requested harness is Task-bound, its start node is the data node.
+- A `fork` declares `targets` naming its branch entries. A `join` declares `sources`
+  naming the branch exits it waits for. These fields connect the parallel branches;
+  do not replace them with extra ordinary edges from the fork or to the join.
+- Omit kind-specific fields that do not apply to that node. All node ids named by
+  edges, subgraph boundaries, targets and sources must exist in `nodes`.
 - Every read must be written by some node, and every declared knob consumed.
 - `closest_existing` must name a mode from the survey, or be 'none' if none is close.
 """
