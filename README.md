@@ -255,7 +255,7 @@ dsh web: http://127.0.0.1:3081/?token=<per-process token>
 
 The token is per-process, and the bare `http://127.0.0.1:3081/` answers `401`. Leave off `--no-open` and your browser opens for you.
 
-1. **Pick the workspace.** Choose this checkout. The app remembers it next time.
+1. **Pick the workspace.** Choose this checkout. If the system folder picker is not visible, enter the checkout’s full path in **Workspace directory path** and press **Open workspace**. The app validates the directory and remembers it next time.
 2. **Send one message.** Any message will do — "hello". A session has to exist before the Sidebar's expand control appears in the header, which is the step that confuses people.
 3. **Open the panel:** press the expand control in the conversation header (its tooltip is `Open the sidebar`), then the **Modes** tab.
 

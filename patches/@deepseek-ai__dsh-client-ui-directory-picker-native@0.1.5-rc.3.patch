@@ -1,0 +1,246 @@
+diff --git a/lib/client.js b/lib/client.js
+index 556b9a0cfd..b5dd15b5e6 100644
+--- a/lib/client.js
++++ b/lib/client.js
+@@ -5,62 +5,101 @@ window.__ModuleLoader__.load({
+ 		var exports = module.exports;
+ 		Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
+ 		let react = require("react");
++		let primitives = require("@deepseek-ai/dsh-client-ui-primitives");
+ 		//#region lib/types/client/flow.js
+-		/**
+-		* The native picking occupant (package-internal; the `./client` surface
+-		* exposes only the Loader exports). Same-package tests exercise it directly
+-		* through this module.
+-		*/
+-		/**
+-		* Renderless flow occupant: each rising `open` edge runs exactly one pick and
+-		* reports exactly one outcome; the ref arms once per open so re-renders (and
+-		* an adoption keeping `open` true while `busy`) never launch a second
+-		* chooser. The owner withdrawing `open` re-arms the next request.
+-		* @param props - owner conversation plus the injected pick call.
+-		* @returns nothing — the native chooser renders on the host display.
+-		*/
++		/** Native chooser with a user-entered path fallback through the same owner. */
+ 		function NativeDirectoryFlow(props) {
+-			const { open, pick } = props;
+-			const armed = (0, react.useRef)(false);
+ 			const outcome = (0, react.useRef)(props);
+ 			outcome.current = props;
+-			const alive = (0, react.useRef)(true);
++			const controller = (0, react.useRef)(null);
++			const claimed = (0, react.useRef)(false);
++			const [path, setPath] = (0, react.useState)("");
++			const [nativeError, setNativeError] = (0, react.useState)("");
+ 			(0, react.useEffect)(() => {
+-				alive.current = true;
+-				return () => {
+-					alive.current = false;
+-				};
+-			}, []);
+-			(0, react.useEffect)(() => {
+-				if (!open) {
+-					armed.current = false;
+-					return;
+-				}
+-				if (armed.current) return;
+-				armed.current = true;
+-				pick().then((path) => {
+-					if (!alive.current) return;
+-					if (path === null) outcome.current.onCancel();
+-					else outcome.current.onPicked(path);
++				if (!props.open) return;
++				setPath("");
++				setNativeError("");
++				claimed.current = false;
++				const attempt = new AbortController();
++				controller.current = attempt;
++				outcome.current.pick(attempt.signal).then((selected) => {
++					if (attempt.signal.aborted || claimed.current) return;
++					claimed.current = true;
++					if (selected === null) outcome.current.onCancel();
++					else outcome.current.onPicked(selected);
+ 				}, (reason) => {
+-					if (!alive.current) return;
+-					outcome.current.onError(reason instanceof Error ? reason.message : String(reason));
++					if (attempt.signal.aborted || claimed.current) return;
++					setNativeError(reason instanceof Error ? reason.message : String(reason));
+ 				});
+-			}, [open, pick]);
+-			return null;
++				return () => { attempt.abort(); };
++			}, [props.open]);
++			const cancel = () => {
++				if (props.busy || claimed.current) return;
++				claimed.current = true;
++				controller.current?.abort();
++				props.onCancel();
++			};
++			const submit = (event) => {
++				event.preventDefault();
++				const selected = path.trim();
++				if (props.busy || claimed.current || selected === "") return;
++				claimed.current = true;
++				controller.current?.abort();
++				props.onPicked(selected);
++			};
++			const t = props.t;
++			return (0, react.createElement)(primitives.Modal, {
++				open: props.open, title: t("title"), onClose: cancel
++			}, (0, react.createElement)("form", {
++				onSubmit: submit, style: { display: "flex", flexDirection: "column", gap: "12px" }
++			}, (0, react.createElement)("p", null, t("help")),
++				nativeError && (0, react.createElement)("p", { role: "status" }, nativeError),
++				(0, react.createElement)("input", {
++					value: path, onChange: (event) => { setPath(event.target.value); },
++					"aria-label": t("path"), placeholder: t("path"), autoFocus: true,
++					disabled: props.busy, style: { padding: "8px", width: "100%", boxSizing: "border-box" }
++				}), (0, react.createElement)("div", { style: { display: "flex", gap: "12px" } },
++					(0, react.createElement)("button", { type: "button", disabled: props.busy, onClick: cancel }, t("cancel")),
++					(0, react.createElement)("button", { type: "submit", disabled: props.busy || path.trim() === "" }, t("open"))
++				)
++			));
+ 		}
+ 		//#endregion
+ 		//#region lib/types/client/index.js
+-		/** Required services (cordis fiber inject): the slot registry and workspace UI service. */
+-		const inject = ["slots", "uiWorkspace"];
++		/** Required services: slots, remote, remote.directoryPicker, and locale. */
++		const inject = ["slots", "remote", "remote.directoryPicker", "locale"];
+ 		/**
+-		* Client plugin body: register the renderless native flow into both
++		* Client plugin body: register the native picker and exact-path flow into both
+ 		* directory-flow holes through `slots.inject()` because the ui-workspace
+ 		* entries may activate later or replace their declarations.
+ 		* @param ctx - client root context.
+ 		*/
+ 		function apply(ctx) {
+-			const injected = () => ({ pick: () => ctx.uiWorkspace.pickDirectory() });
++			const namespace = "native-directory-path";
++			ctx.effect(() => {
++				const disposers = [];
++				try {
++					for (const [locale, copy] of [["en", {
++						title: "Select Workspace Directory", help: "Use the system picker, or enter the full directory path here.",
++						path: "Workspace directory path", cancel: "Cancel", open: "Open workspace"
++					}], ["zh", {
++						title: "选择工作区目录", help: "使用系统选择器，或在此输入完整目录路径。",
++						path: "工作区目录路径", cancel: "取消", open: "打开工作区"
++					}]]) disposers.push(ctx.locale.register(namespace, locale, copy));
++				} catch (error) {
++					for (const dispose of disposers.reverse()) dispose();
++					throw error;
++				}
++				return () => { for (const dispose of disposers) dispose(); };
++			}, "native-directory-picker: path fallback copy");
++			const injected = () => ({
++				pick: async (signal) => {
++					const result = await ctx.remote.directoryPicker.pick(signal);
++					if (!result.ok) throw new Error(`directory picker failed: ${result.error.message}`);
++					return result.value;
++				},
++				t: ctx.locale.bind(namespace)
++			});
+ 			ctx.slots.inject("conversation.hero.workspace.directoryFlow", () => ctx.slots.inject("sidebar.workspaces.directoryFlow", function* () {
+ 				yield ctx.slots.register({
+ 					name: "conversation.hero.workspace.directoryFlow",
+diff --git a/lib/types/client/index.d.ts b/lib/types/client/index.d.ts
+index 6899939b1a..c2313815fa 100644
+--- a/lib/types/client/index.d.ts
++++ b/lib/types/client/index.d.ts
+@@ -1,17 +1,17 @@
+ /**
+  * Browser half of the native directory-picker backend: fills ui-workspace's
+- * two directory-flow holes with a renderless occupant that answers each
+- * `open` by driving `directoryPicker/pick` (the node half's OS chooser) and
+- * reporting the one outcome — picked path, cancellation, or failure — back
++ * two directory-flow holes with a native chooser and exact-path fallback. Each
++ * `open` drives `directoryPicker/pick` (the node half's OS chooser) and
++ * reports the one outcome — picked path, cancellation, or failure — back
+  * through the owner conversation. Mounting this package therefore composes
+  * both sides of the native interaction with one cordis.yml row; no client
+  * code branches on a capability kind.
+  */
+ import type { Context as ClientContext } from '@deepseek-ai/cordis';
+-/** Required services (cordis fiber inject): the slot registry and workspace UI service. */
++/** Required services: slots, remote, remote.directoryPicker, and locale. */
+ export declare const inject: string[];
+ /**
+- * Client plugin body: register the renderless native flow into both
++ * Client plugin body: register the native picker and exact-path flow into both
+  * directory-flow holes through `slots.inject()` because the ui-workspace
+  * entries may activate later or replace their declarations.
+  * @param ctx - client root context.
+diff --git a/lib/types/client/flow.d.ts b/lib/types/client/flow.d.ts
+index f21646b184..02c821909e 100644
+--- a/lib/types/client/flow.d.ts
++++ b/lib/types/client/flow.d.ts
+@@ -3,15 +3,16 @@ import type { DirectoryFlowOwnerProps } from '@deepseek-ai/dsh-client-ui-workspa
+ /** Injected face: the wire call the flow drives (bound in apply's closure). */
+ export interface NativeFlowInjected {
+     /** Ask the local Host to open its native single-directory chooser. */
+-    pick: () => Promise<string | null>;
++    pick: (signal: AbortSignal) => Promise<string | null>;
++    /** Localized exact-path fallback copy. */
++    t: (key: string) => string;
+ }
+ /**
+- * Renderless flow occupant: each rising `open` edge runs exactly one pick and
+- * reports exactly one outcome; the ref arms once per open so re-renders (and
+- * an adoption keeping `open` true while `busy`) never launch a second
+- * chooser. The owner withdrawing `open` re-arms the next request.
++ * Native flow with an exact-path fallback: each rising `open` edge runs exactly one pick and
++ * reports exactly one outcome. Re-renders keep the same pending chooser; typed
++ * submission, cancellation, or unmount aborts its Remote call.
+  * @param props - owner conversation plus the injected pick call.
+- * @returns nothing — the native chooser renders on the host display.
++ * @returns the exact-path fallback; the native chooser renders on the host display.
+  */
+ export declare function NativeDirectoryFlow(props: DirectoryFlowOwnerProps & NativeFlowInjected): ReactElement | null;
+ //# sourceMappingURL=flow.d.ts.map
+\ No newline at end of file
+diff --git a/package.json b/package.json
+index d6977579d5..6ff00d02d2 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "@deepseek-ai/dsh-client-ui-directory-picker-native",
+-  "description": "Native directory-picker surface: the renderless workspace directory-flow occupant driving the host's OS chooser",
++  "description": "Native workspace directory picker with an exact-path fallback",
+   "version": "0.1.5-rc.3",
+   "publishConfig": {
+     "access": "public"
+@@ -29,7 +29,11 @@
+     "client": {
+       "inject": [
+         "@deepseek-ai/dsh-client-ui-renderer",
+-        "@deepseek-ai/dsh-client-ui-workspace"
++        "@deepseek-ai/dsh-client-ui-workspace",
++        "@deepseek-ai/dsh-api-remotes",
++        "@deepseek-ai/dsh-client-connection",
++        "@deepseek-ai/dsh-client-ui-primitives",
++        "@deepseek-ai/dsh-client-locale"
+       ],
+       "platform": "web"
+     }
+@@ -45,7 +49,11 @@
+     "react-dom": "^18.2.0",
+     "@deepseek-ai/dsh-client-ui-workspace": "^0.1.5-rc.3",
+     "@deepseek-ai/dsh-client-ui-renderer": "^0.1.5-rc.3",
+-    "@deepseek-ai/cordis": "4.0.2"
++    "@deepseek-ai/cordis": "4.0.2",
++    "@deepseek-ai/dsh-api-remotes": "^0.1.5-rc.3",
++    "@deepseek-ai/dsh-client-connection": "^0.1.5-rc.3",
++    "@deepseek-ai/dsh-client-ui-primitives": "^0.1.5-rc.3",
++    "@deepseek-ai/dsh-client-locale": "^0.1.5-rc.3"
+   },
+   "files": [
+     "lib/index.js",
+@@ -56,4 +64,4 @@
+     "bundle": "tsdown",
+     "watch": "tsdown --watch"
+   }
+-}
+\ No newline at end of file
++}
