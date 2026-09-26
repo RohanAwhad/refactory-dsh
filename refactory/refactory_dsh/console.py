@@ -1152,6 +1152,8 @@ def _parser() -> argparse.ArgumentParser:
     make = sub.add_parser("create", help="create a package of modes from a brief (model-driven)")
     make.add_argument("--name", required=True)
     make.add_argument("--brief", required=True)
+    make.add_argument("--provider", default="", help="provider route for this authoring run")
+    make.add_argument("--model", default="", help="model id for this authoring run")
     make.add_argument("--extends", default="")
     make.add_argument("--attempts", type=int, default=3)
     make.add_argument(
@@ -1188,6 +1190,8 @@ def _parser() -> argparse.ArgumentParser:
     revise.add_argument("--mode", required=True)
     revise.add_argument("--name", required=True)
     revise.add_argument("--brief", required=True)
+    revise.add_argument("--provider", default="", help="provider route for this authoring run")
+    revise.add_argument("--model", default="", help="model id for this authoring run")
     revise.add_argument("--allow-regression", action="store_true")
     revise.add_argument("--attempts", type=int, default=3)
     revise.add_argument("--workdir", default="", help="the run directory (default: .factory/edit/<name>)")
@@ -1204,6 +1208,8 @@ def _parser() -> argparse.ArgumentParser:
     artifact = sub.add_parser("design", help="design and check a software artifact (model-driven)")
     artifact.add_argument("--name", required=True)
     artifact.add_argument("--brief", required=True)
+    artifact.add_argument("--provider", default="", help="provider route for this authoring run")
+    artifact.add_argument("--model", default="", help="model id for this authoring run")
     artifact.add_argument("--check", default="", help="the command that proves the artifact works")
     artifact.add_argument("--attempts", type=int, default=3)
     artifact.add_argument("--workdir", default="", help="the run directory (default: .factory/design/<name>)")
@@ -1507,6 +1513,10 @@ def main(argv: list[str] | None = None) -> int:
                 forwarded.append("--single")
             for pair in args.verdict:
                 forwarded += ["--verdict", pair]
+            if args.provider:
+                forwarded += ["--provider", args.provider]
+            if args.model:
+                forwarded += ["--model", args.model]
             payload = _forward("create", forwarded)
             review = _design_review(project, args.name)
             if review:
@@ -1527,6 +1537,10 @@ def main(argv: list[str] | None = None) -> int:
                 forwarded.append("--allow-regression")
             for pair in args.verdict:
                 forwarded += ["--verdict", pair]
+            if args.provider:
+                forwarded += ["--provider", args.provider]
+            if args.model:
+                forwarded += ["--model", args.model]
             payload = _forward("edit", forwarded)
         elif args.verb == "design":
             forwarded = ["--name", args.name, "--brief", args.brief, "--attempts", str(args.attempts)]
@@ -1538,6 +1552,10 @@ def main(argv: list[str] | None = None) -> int:
                 forwarded += ["--check", args.check]
             for pair in args.verdict:
                 forwarded += ["--verdict", pair]
+            if args.provider:
+                forwarded += ["--provider", args.provider]
+            if args.model:
+                forwarded += ["--model", args.model]
             payload = _forward("design", forwarded)
         else:  # pragma: no cover - argparse rejects an unknown verb first
             raise ConsoleError(f"unknown verb {args.verb!r}")
