@@ -490,7 +490,9 @@ the choice real rather than decorative:
 - A walker that meets a `user` gate **refuses**, naming the node, rather than
   inventing a verdict. A run that pauses cannot quietly decide for the person; an
   invented verdict is indistinguishable from one they gave. The answer arrives through
-  `RunContext.verdicts`, which an interactive run fills and a resumed run replays.
+  explicit `RunContext.verdicts` standing authorization, or a one-use ledger
+  decision scoped to the current review inputs. Interactive answers are consumed;
+  a later gate visit asks again rather than replaying historical approval.
 
 **And a second defect, found by an existing test rather than by this work.** The first
 version of `Node.to_state` serialized `gate_kind` unconditionally, which changed

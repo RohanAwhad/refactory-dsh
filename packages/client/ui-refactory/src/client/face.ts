@@ -463,6 +463,9 @@ export function refactoryFace(
           readCandidates(tabId, run, signal)
         }, undefined, (failure) => {
           actions.noticed(tabId, { code: failure.code, message: failure.message })
+          // A refused adoption also has a durable receipt. Read it so the
+          // previously applied control is not left looking like this result.
+          loadSteering(tabId, run, signal)
         })
       },
       addNote(tabId, run, note, kind, signal) {

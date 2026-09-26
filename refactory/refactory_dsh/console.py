@@ -32,10 +32,12 @@ from typing import Any
 from refactory_dsh import observe
 from refactory_dsh import registry
 from refactory_dsh.adopt import AdoptionError
+from refactory_dsh.control import search_finished, search_owner, search_phase
 from refactory_dsh.history import find_runs
 from refactory_dsh.loop import Loop, LoopConfig, LoopError
 from refactory_dsh.nn import PackageError
 from refactory_dsh.paths import project_root
+from refactory_dsh.steering import SteeringError
 
 #: What the console records about a run it started.
 CONSOLE_FILE = "console.json"
@@ -241,6 +243,7 @@ def _run_id(mode: str) -> str:
 #: that resolves the bare `python` leads :func:`_node_environment`'s `PATH`.
 DATA_COMMAND = "python -m refactory_dsh.items"
 AGENT_COMMAND = "python -m refactory_dsh.agent_delivery"
+GATE_COMMAND = "python -m refactory_dsh.steering"
 
 
 def _node_environment(
@@ -286,6 +289,7 @@ def _open_mode(
     project: Path | None = None,
     workdir: Path | str | None = None,
     knobs: list[str] | None = None,
+    intent: str = "",
 ) -> dict[str, Any]:
     """Lower a mode for a caller that will drive its graph one node at a time.
 
@@ -329,7 +333,7 @@ def _open_mode(
 
     root = Path(workdir).expanduser().resolve()
     try:
-        name, graphs = interactive.prepare(mode, workdir=root, project=project, knobs=knobs)
+        name, graphs = interactive.prepare(mode, workdir=root, project=project, knobs=knobs, intent=intent)
         command_env = _node_environment(mode, project=project, workdir=root, knobs=knobs)
     except ValueError as error:
         # A malformed identifier is the caller's to fix, so it is a refusal with
@@ -344,6 +348,7 @@ def _open_mode(
         "commandEnv": command_env,
         "dataCommand": DATA_COMMAND,
         "agentCommand": AGENT_COMMAND,
+        "gateCommand": GATE_COMMAND,
     }
 
 
@@ -410,7 +415,7 @@ def status(run_root: Path, *, after: int = 0) -> dict[str, Any]:
     halted = spine.get("status") == "halted"
     # Terminal is not the same as successful: polling stops at a halt, while
     # the state still names the halt rather than claiming the work completed.
-    finished = (run_root / "report.json").exists() or spine.get("status") in {"done", "halted"}
+    finished = search_finished(run_root) or spine.get("status") in {"done", "halted"}
     state = _state(run_root, events, console)
     if spine:
         state = SPINE_STATES.get(str(spine.get("status")), state)
@@ -438,6 +443,9 @@ def _state(run_root: Path, events: list[dict[str, Any]], console: dict[str, Any]
     with a console record and no live process did not finish, and saying
     "running" would leave a reader waiting forever for a run that is gone.
     """
+    phase = search_phase(run_root)
+    if phase in ("running", "died", "failed"):
+        return phase
     if (run_root / "report.json").exists():
         report = _read_json(run_root / "report.json")
         return "failed" if report.get("exit_ok") is False else "finished"
@@ -488,10 +496,13 @@ def _console(run_root: Path) -> dict[str, Any]:
     the settings the console chose.
     """
     recorded = _read_json(run_root / CONSOLE_FILE)
-    if recorded:
+    owner = search_owner(run_root)
+    if owner:
+        recorded = {**recorded, "pid": owner.get("pid") if search_phase(run_root) == "running" else None}
+    if recorded.get("mode"):
         return recorded
     started = _read_json(run_root / "run.json")
-    return {"mode": started["mode"]} if isinstance(started.get("mode"), str) else {}
+    return {**recorded, "mode": started["mode"]} if isinstance(started.get("mode"), str) else recorded
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -645,6 +656,7 @@ def _steer(
     target: str | None = None,
     lineage: bool = False,
     as_name: str | None = None,
+    project: Path | None = None,
 ) -> dict[str, Any]:
     """Read the ledger, and optionally add to it.
 
@@ -662,6 +674,7 @@ def _steer(
     from refactory_dsh.steering import Ledger, chain, fidelity, outputs_in
 
     from refactory_dsh.agent_delivery import receipts_in
+    from refactory_dsh.finished_control import latest_receipt
 
     ledger = Ledger(run_root)
     if seed is not None:
@@ -685,6 +698,8 @@ def _steer(
         "chain": chain(ledger, outputs, deliveries=deliveries) if ledger.exists() else [],
         "problems": fidelity(ledger, outputs, deliveries=deliveries),
         "deliveries": deliveries,
+        "finished": search_finished(run_root),
+        "control": latest_receipt(run_root),
     }
     if with_gates:
         payload["gates"] = gates(run_root)
@@ -698,8 +713,9 @@ def _steer(
 
         try:
             payload["control"] = Control(run_root).request(
-                control, target=target, lineage=lineage, as_name=as_name
+                control, target=target, lineage=lineage, as_name=as_name, project=project
             )
+            payload["control"].setdefault("status", "queued")
         except ControlError as error:
             raise ConsoleError(str(error)) from error
     elif target or lineage or as_name:
@@ -994,6 +1010,7 @@ def _parser() -> argparse.ArgumentParser:
     # driving.
     opened = add(sub.add_parser("open", help="lower a mode for a caller that drives it node by node"))
     opened.add_argument("mode", help="the mode to lower, as <package>/<name>")
+    opened.add_argument("--intent", default="", help="the user's purpose for this run's ledger")
     opened.add_argument(
         "--workdir", default="",
         help="the run directory this caller drives (required); the graph, the "
@@ -1032,8 +1049,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     steer.add_argument(
         "--verdict", action="append", default=[],
-        help="record a gate verdict as <gate>=<value> (repeatable); the runtime "
-             "uses this so a person's answer is durable and a resume replays it",
+        help="record a one-use gate answer as <gate>=<value> (repeatable), scoped "
+             "to the current declared review inputs; changed inputs require a fresh answer",
     )
     steer.add_argument(
         "--gates", action="store_true",
@@ -1321,6 +1338,7 @@ def main(argv: list[str] | None = None) -> int:
                 target=args.keep or args.reject,
                 lineage=args.lineage,
                 as_name=args.as_name,
+                project=project,
             )
         elif args.verb == "best":
             payload = _best_payload(_root_for(args, project), keep_state=args.state)
@@ -1387,6 +1405,7 @@ def main(argv: list[str] | None = None) -> int:
                 project=project,
                 workdir=args.workdir,
                 knobs=args.knob,
+                intent=args.intent,
             )
         elif args.verb == "create":
             forwarded = ["--name", args.name, "--brief", args.brief, "--attempts", str(args.attempts)]
@@ -1442,7 +1461,7 @@ def main(argv: list[str] | None = None) -> int:
             payload = _forward("design", forwarded)
         else:  # pragma: no cover - argparse rejects an unknown verb first
             raise ConsoleError(f"unknown verb {args.verb!r}")
-    except (ConsoleError, LoopError, PackageError, AdoptionError) as error:
+    except (ConsoleError, LoopError, PackageError, AdoptionError, SteeringError) as error:
         print(json.dumps({"error": str(error)}), file=sys.stdout)
         return 2
     if isinstance(payload, dict) and payload.get("ok") is False:

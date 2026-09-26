@@ -107,16 +107,18 @@ export interface Config {
   dataCommand: string
   /** Optional shared agent artifact/provenance bridge, using a JSON stdin protocol. */
   agentCommand?: string
+  /** Optional review-scoped user-gate ledger bridge, using a JSON stdin protocol. */
+  gateCommand?: string
   /**
    * The command that reads the run's steering ledger, run as
-   * `<steerCommand> <steerArgs...> <workdir>`. When non-empty (and `workdir` is
-   * set) the plugin registers `<toolPrefix>_steer`, so a person's mid-run
+   * `<steerCommand> <steerArgs...> <workdir> [--note=<text> --kind=<kind>]`.
+   * When non-empty (and `workdir` is set) the plugin registers `<toolPrefix>_steer`, so a person's mid-run
    * correction reaches the driving agent. The command's owner is the ledger
    * format's owner: the spine learns only a command to run and returns the JSON
    * it prints, so it stays free of any knowledge of how a ledger is stored.
    */
   steerCommand: string
-  /** Arguments for {@link steerCommand}; the run's `workdir` is appended last. */
+  /** Arguments for {@link steerCommand}; the workdir and optional note flags follow. */
   steerArgs: string[]
   /** Foreground timeout for one node command. */
   commandTimeoutMs: number
@@ -159,6 +161,7 @@ export const Config = z.object({
   commandEnv: z.dict(z.string()).default({}),
   dataCommand: z.string().default(''),
   agentCommand: z.string().default(''),
+  gateCommand: z.string().default(''),
   steerCommand: z.string().default(''),
   steerArgs: z.array(z.string()).default([]),
   commandTimeoutMs: z.natural().default(600_000),
@@ -293,6 +296,8 @@ interface OpenRun {
   dataCommand: string
   /** Optional shared agent artifact/provenance bridge, using a JSON stdin protocol. */
   agentCommand: string
+  /** Shared user-gate decision bridge. */
+  gateCommand: string
 }
 
 /** The JSON `<openCommand>` prints: where it lowered the mode. */
@@ -315,6 +320,8 @@ interface OpenPayload {
   dataCommand?: unknown
   /** Optional agent artifact/provenance bridge owned by the opened mode runtime. */
   agentCommand?: unknown
+  /** Shared user-gate decision bridge. */
+  gateCommand?: unknown
 }
 
 /** The environment a payload names, or `undefined` when it is absent or malformed. */
@@ -407,6 +414,7 @@ export function apply(ctx: Context, config: Config): void {
     commandEnv: Record<string, string>
     dataCommand: string
     agentCommand: string
+    gateCommand: string
   } {
     if (configuredSpine !== undefined) {
       return {
@@ -415,6 +423,7 @@ export function apply(ctx: Context, config: Config): void {
         commandEnv: config.commandEnv,
         dataCommand: config.dataCommand,
         agentCommand: config.agentCommand ?? '',
+        gateCommand: config.gateCommand ?? '',
       }
     }
     if (opened === undefined) {
@@ -429,6 +438,7 @@ export function apply(ctx: Context, config: Config): void {
       commandEnv: opened.commandEnv,
       dataCommand: opened.dataCommand,
       agentCommand: opened.agentCommand,
+      gateCommand: opened.gateCommand,
     }
   }
 
@@ -692,6 +702,8 @@ export function apply(ctx: Context, config: Config): void {
     return json(ran === undefined ? view : { ...view, ran })
   }
 
+  const pendingQuestions = new WeakSet<Spine>()
+
   /**
    * The verdict a person gives at a `user` gate, asked by the runtime.
    *
@@ -713,13 +725,32 @@ export function apply(ctx: Context, config: Config): void {
     exec: ToolExec,
     workdir: string | undefined,
   ): Promise<string> {
+    if (pendingQuestions.has(spine)) throw new Error('a user-gate question is already pending for this run')
+    pendingQuestions.add(spine)
+    try {
+      return await askCurrentReview(gate, spine, view, exec, workdir)
+    } finally {
+      pendingQuestions.delete(spine)
+    }
+  }
+
+  async function askCurrentReview(
+    gate: string, spine: Spine, view: NodeView, exec: ToolExec, workdir: string | undefined,
+  ): Promise<string> {
+    const { gateCommand, commandEnv } = requireRun(exec)
+    const labels = spine.acceptedVerdicts(gate)
+    const request = { gate, reads: view.reads ?? [], labels }
+    const prior = gateCommand !== '' && workdir !== undefined
+      ? runtimeBridge(gateCommand, workdir, commandEnv, { ...request, action: 'begin' })
+      : undefined
+    if (typeof prior?.verdict === 'string' && prior.verdict !== '') return prior.verdict
+    const stateBefore = JSON.stringify(spine.state())
     if (userQuestions === undefined) {
       const message = `gate ${gate} is answered by a person and this composition mounts no user-questions `
         + 'channel, so it cannot be routed here; run it where a person can be asked'
       recordStatus(spine, workdir, 'refused', message)
       throw new Error(message)
     }
-    const labels = spine.acceptedVerdicts(gate)
     let answer
     try {
       answer = await userQuestions.ask({
@@ -742,6 +773,15 @@ export function apply(ctx: Context, config: Config): void {
     const verdict = (chosen?.selected[0] ?? chosen?.custom ?? '').trim()
     if (verdict === '') {
       throw new Error(`gate ${gate} was answered without a verdict`)
+    }
+    if (JSON.stringify(spine.state()) !== stateBefore) {
+      throw new Error(`gate ${gate} changed while awaiting the answer; ask again`)
+    }
+    if (!labels.includes(verdict)) throw new Error(`gate ${gate} does not accept ${verdict}`)
+    if (gateCommand !== '' && workdir !== undefined) {
+      runtimeBridge(gateCommand, workdir, commandEnv, {
+        ...request, action: 'answer', review: prior?.review, verdict,
+      })
     }
     return verdict
   }
@@ -789,6 +829,7 @@ export function apply(ctx: Context, config: Config): void {
       parameters: {
         mode: { type: 'string', required: true, description: 'The mode to run, as `<package>/<name>`.' },
         knobs: { type: 'array', items: { type: 'string' }, description: 'Knob overrides for this run, each as `NAME=VALUE` (repeatable).' },
+        intent: { type: 'string', description: 'The user’s purpose for this run, recorded in its intent ledger. Without one the ledger records the requested mode identifier.' },
         workdir: { type: 'string', description: 'The run directory to lower into. When absent the spine derives one from this session and the mode — `<cwd>/.factory/web/<session>/<package>-<mode>` — creates it, and passes it as `--workdir`; the console\'s `open` verb requires a workdir, so one is always sent.' },
       },
       output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
@@ -820,6 +861,7 @@ export function apply(ctx: Context, config: Config): void {
           : derivedWorkdir(owner, args.mode)
         argv.push('--workdir', requested)
         for (const knob of args.knobs ?? []) argv.push('--knob', knob)
+        if (args.intent !== undefined) argv.push(`--intent=${args.intent}`)
         const result = spawnSync(config.openCommand, argv, { encoding: 'utf8' })
         if (result.error !== undefined) {
           throw new Error(`${toolPrefix}_open could not run the open command: ${result.error.message}`)
@@ -891,6 +933,7 @@ export function apply(ctx: Context, config: Config): void {
           commandEnv: runEnv,
           dataCommand: runData,
           agentCommand: runAgent,
+          gateCommand: typeof payload.gateCommand === 'string' ? payload.gateCommand : (config.gateCommand ?? ''),
         }
         // A fresh spine has no materialised item. Keep the prior run's files
         // intact; its terminal claim is replaced only after this open succeeds.
@@ -1063,17 +1106,27 @@ export function apply(ctx: Context, config: Config): void {
     const steerArgs = [...config.steerArgs]
     ctx.tools.register(defineTool({
       name: `${toolPrefix}_steer`,
-      description: `Read what the person said about this run since you last looked, before deciding anything. Runs the run's steering command and returns its ledger payload unchanged: the origin, every entry (a note, a correction, a constraint), recorded gate verdicts, and the fidelity problems found. Read it before each \`${toolPrefix}_next\`; when it carries a correction, apply it to that node's prompt with \`${toolPrefix}_edit\` (\`set-prompt\`/\`append-prompt\`) and re-run the node with \`${toolPrefix}_redo\`. An unreadable or unavailable ledger is reported as \`status: 'unavailable'\`, never thrown, so it cannot stop the run.`,
-      parameters: {},
+      description: `Read the run’s intent ledger, or append the user’s stated note with optional kind (info, correction, constraint). A write returns the updated ledger; an invalid or failed write is an error, never a read-only success. Read what the person said about this run since you last looked, before deciding anything. Runs the run's steering command and returns its ledger payload unchanged: the origin, every entry (a note, a correction, a constraint), recorded gate verdicts, and the fidelity problems found. Read it before each \`${toolPrefix}_next\`; when it carries a correction, apply it to that node's prompt with \`${toolPrefix}_edit\` (\`set-prompt\`/\`append-prompt\`) and re-run the node with \`${toolPrefix}_redo\`. On a read, an unreadable or unavailable ledger is reported as \`status: 'unavailable'\`, never thrown, so it cannot stop the run.`,
+      parameters: {
+        note: { type: 'string', description: 'Append the user’s stated note, correction, or constraint to this run. Omit to read without writing.' },
+        kind: { type: 'string', enum: ['info', 'correction', 'constraint'], description: 'The note kind; defaults to info. Requires note.' },
+      },
       output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
-      execute(_args, exec) {
+      execute(args, exec) {
+        const unknown = Object.keys(args).filter(key => key !== 'note' && key !== 'kind')
+        if (unknown.length > 0) throw new Error(`${toolPrefix}_steer does not support: ${unknown.join(', ')}`)
+        if (args.kind !== undefined && args.note === undefined) throw new Error('kind requires a note')
+        if (args.note !== undefined && args.note.trim() === '') throw new Error('an empty note records nothing')
         // The ledger lives in the run directory, which for an opened run is the
         // one its `wf_open` payload named — not the composition's configured one.
         const run = requireRun(exec)
         if (run.workdir === undefined) {
+          if (args.note !== undefined) throw new Error('this run has no work directory to record a note')
           return sync(json({ status: 'unavailable', error: 'this run has no work directory to read' }))
         }
-        const result = spawnSync(command, [...steerArgs, run.workdir], { encoding: 'utf8' })
+        const argv = [...steerArgs, run.workdir]
+        if (args.note !== undefined) argv.push(`--note=${args.note}`, `--kind=${args.kind ?? 'info'}`)
+        const result = spawnSync(command, argv, { encoding: 'utf8' })
         if (result.status === 0) {
           try {
             return sync(json(JSON.parse(result.stdout)))
@@ -1082,7 +1135,8 @@ export function apply(ctx: Context, config: Config): void {
             // through to the unavailable payload instead of throwing.
           }
         }
-        const reason = lastLine(result.stderr) || lastLine(result.stdout) || 'no output'
+        const reason = result.error?.message || lastLine(result.stderr) || lastLine(result.stdout) || 'no output'
+        if (args.note !== undefined) throw new Error(`${toolPrefix}_steer could not record the note: ${reason}`)
         return sync(json({ status: 'unavailable', error: reason }))
       },
     }))

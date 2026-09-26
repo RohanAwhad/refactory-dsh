@@ -1,8 +1,17 @@
 diff --git a/cordis.patch.yml b/cordis.patch.yml
-index cf4603031f6f452891a4d7da420869b6472fb333..17c15da61980dfeabad2acb584f92f55e9c8c596 100644
 --- a/cordis.patch.yml
 +++ b/cordis.patch.yml
-@@ -105,6 +105,20 @@
+@@ -1,3 +1,9 @@
++# Advancing a stateful workflow uses identical arguments by design. Keep the
++# reminder for other tools; argument repetition is not workflow progress evidence.
++- id: repeat-tool-reminder
++  config:
++    exclude: [wf_next]
++
+ # The dsh-web-app bundle patch: the browser surface over the dsh-base layer.
+ # Applied after dsh-base's insert; rows here override base rows by id, with
+ # the profile's own cordis.patch.yml and any --patch overlays still to come.
+@@ -105,6 +111,20 @@
      - id: session-controller
        name: '@deepseek-ai/dsh-api-session-controller'
  
@@ -23,7 +32,7 @@ index cf4603031f6f452891a4d7da420869b6472fb333..17c15da61980dfeabad2acb584f92f55
      # Workspace file service: bounded read, directory listing, and the
      # agent-write change feed inside the session workspace root.
      - id: workspace-files
-@@ -234,6 +248,11 @@
+@@ -234,6 +254,11 @@
      - id: ui-sidebar-files
        name: '@deepseek-ai/dsh-client-ui-sidebar-files'
  
@@ -35,7 +44,7 @@ index cf4603031f6f452891a4d7da420869b6472fb333..17c15da61980dfeabad2acb584f92f55
      - id: ui-settings
        name: '@deepseek-ai/dsh-client-ui-settings'
  
-@@ -255,9 +274,14 @@
+@@ -255,9 +280,14 @@
      - id: ui-chat
        name: '@deepseek-ai/dsh-client-ui-chat'
  
@@ -51,7 +60,7 @@ index cf4603031f6f452891a4d7da420869b6472fb333..17c15da61980dfeabad2acb584f92f55
  
      - id: ui-attachment
        name: '@deepseek-ai/dsh-client-ui-attachment'
-@@ -481,4 +505,4 @@
+@@ -481,4 +511,4 @@
      - id: agent-presets
        name: '@deepseek-ai/dsh-agent-presets'
        config:

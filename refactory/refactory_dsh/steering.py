@@ -32,6 +32,10 @@ there would be no way to tell which was wrong.
 from __future__ import annotations
 
 import datetime
+import hashlib
+import json
+import sys
+import uuid
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -71,7 +75,8 @@ class Ledger:
 
     Append-only, timestamped, and written into the run directory so it travels with
     the run rather than with the session that started it. A ledger kept in the session
-    would be lost on resume, and re-asking the user is not the same run.
+    would be lost on resume. Historical answers remain audit evidence; only an
+    eligible pending answer or explicit upfront approval can authorize routing.
     """
 
     def __init__(self, root: Path) -> None:
@@ -123,45 +128,121 @@ class Ledger:
             handle.write(f"\n## [{entry['at']}] {kind}\n{body}\n")
         return entry
 
-    def verdict(self, gate: str, value: str) -> dict[str, Any]:
-        """Record the verdict a gate was answered with, so a resume replays it.
+    def verdict(
+        self, gate: str, value: str, *, approval: bool = False,
+        review: str | None = None, answered: bool = False,
+    ) -> dict[str, Any]:
+        """Record a one-use answer for the current review, or explicit upfront approval.
 
-        A verdict is a decision the run routed on. Writing it down is what makes a
-        resumed run the same run: re-asking the person would produce a second
-        answer to a question already answered, and inventing one would produce a
-        result nobody can account for. The last verdict for a gate wins, so a
-        person may change their mind while the run is paused.
+        Interactive answers are already used. A public steer answer is pending for
+        the exact declared input files, then consumed once. Only ``approval=True``
+        is standing authorization, as explicitly supplied by ``ceo --approve``.
         """
-        gate = (gate or "").strip()
-        value = (value or "").strip()
-        if not gate:
-            raise SteeringError("a verdict needs the gate it answers")
-        if not value:
-            raise SteeringError(f"gate {gate!r} was answered with an empty verdict")
-        entry = {"at": _now(), "kind": VERDICT_KIND, "gate": gate, "verdict": value}
-        self.root.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a") as handle:
-            handle.write(
-                f"\n## [{entry['at']}] {VERDICT_KIND}\ngate: {gate}\nverdict: {value}\n"
-            )
+        gate, value = (gate or "").strip(), (value or "").strip()
+        if not gate or not value or "\n" in gate or "\n" in value:
+            raise SteeringError("a verdict needs a single-line gate and nonempty value")
+        if approval and answered:
+            raise SteeringError("an interactive answer is not standing approval")
+        if review is None and not approval:
+            reads = self.gate_reads(gate)
+            if reads is None:
+                raise SteeringError(
+                    f"cannot scope an answer for gate {gate!r}: no unique user-gate declaration; "
+                    "open or run the mode to that gate before steering, or use ceo --approve "
+                    "for explicit upfront authorization"
+                )
+            review = self.review(gate, reads)
+        entry = {
+            "at": _now(), "kind": VERDICT_KIND, "id": uuid.uuid4().hex,
+            "gate": gate, "verdict": value,
+            "scope": "run" if approval else review,
+            "source": "upfront" if approval else "interactive" if answered else "steer",
+            "consumed": "yes" if answered else "no",
+        }
+        self._decision_entry(entry)
         return entry
 
+    def _decision_entry(self, entry: dict[str, Any]) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        body = "".join(f"{key}: {value}\n" for key, value in entry.items() if key not in ("at", "kind"))
+        with self.path.open("a") as handle:
+            handle.write(f"\n## [{entry['at']}] {entry['kind']}\n{body}")
+
+    @staticmethod
+    def _fields(entry: dict[str, Any]) -> dict[str, str]:
+        return {key.strip(): value.strip() for line in entry["text"].splitlines()
+                for key, separator, value in [line.partition(":")] if separator}
+
     def verdicts(self) -> dict[str, str]:
-        """Every gate verdict recorded so far, keyed by gate id."""
+        """Historical latest answers for display, never authorization to replay them."""
         found: dict[str, str] = {}
         for entry in self.entries():
-            if entry["kind"] != VERDICT_KIND:
-                continue
-            gate = verdict = ""
-            for line in entry["text"].splitlines():
-                key, _, value = line.partition(":")
-                if key.strip() == "gate":
-                    gate = value.strip()
-                elif key.strip() == "verdict":
-                    verdict = value.strip()
-            if gate and verdict:
-                found[gate] = verdict
+            fields = self._fields(entry)
+            if entry["kind"] == VERDICT_KIND and fields.get("gate") and fields.get("verdict"):
+                found[fields["gate"]] = fields["verdict"]
         return found
+
+    def gate_reads(self, gate: str) -> list[str] | None:
+        """Resolve steering from the actual latest visit, or a unique lowered gate."""
+        # A real visit is authoritative even when an old lowered graph remains.
+        # Walker runs need this declaration because Mode.run does not lower files.
+        for entry in reversed(self.entries()):
+            fields = self._fields(entry)
+            if entry["kind"] == "gate-visit" and fields.get("gate") == gate:
+                return json.loads(fields["reads"])
+        matches = []
+        for path in sorted((self.root / "graphs").glob("*.graph.json")):
+            graph = json.loads(path.read_text())
+            node = graph.get("nodes", {}).get(gate)
+            if isinstance(node, dict) and node.get("evaluator_type") == "user":
+                matches.append(list(node.get("reads") or []))
+        return matches[0] if len(matches) == 1 else None
+
+    def visit(self, gate: str, reads: list[str] | tuple[str, ...]) -> str:
+        """Record the current declared review inputs for public steering to discover."""
+        review = self.review(gate, reads)
+        self._decision_entry({"at": _now(), "kind": "gate-visit", "gate": gate,
+                              "review": review, "reads": json.dumps(list(reads))})
+        return review
+
+    def review(self, gate: str, reads: list[str] | tuple[str, ...]) -> str:
+        """Fingerprint the declared review inputs, including missing files."""
+        files: dict[str, Any] = {}
+        for rel in sorted(reads):
+            path = self.root / rel
+            if path.is_dir():
+                files[rel] = {
+                    str(child.relative_to(path)): hashlib.sha256(child.read_bytes()).hexdigest()
+                    for child in sorted(path.rglob("*")) if child.is_file()
+                }
+            else:
+                files[rel] = hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
+        body = json.dumps({"gate": gate, "files": files}, sort_keys=True)
+        return hashlib.sha256(body.encode()).hexdigest()
+
+    def take_verdict(self, gate: str, review: str, labels: list[str]) -> str:
+        """Consume the newest eligible answer; old/used/changed answers never replay.
+
+        Legacy records lack an explicit scope and cannot prove current approval.
+        They remain visible in the ledger, but require the person to answer again.
+        A mismatching pending answer expires so reverting a file cannot revive it.
+        """
+        entries = self.entries()
+        used = {self._fields(e).get("id") for e in entries if e["kind"] == "verdict-use"}
+        latest = next((self._fields(e) for e in reversed(entries)
+                       if e["kind"] == VERDICT_KIND and self._fields(e).get("gate") == gate), {})
+        value = latest.get("verdict", "")
+        if latest.get("scope") == "run" and latest.get("source") == "upfront":
+            if value not in labels:
+                raise SteeringError(f"upfront verdict {value!r} is not accepted by gate {gate!r}")
+            return value
+        decision = latest.get("id")
+        if not decision or decision in used or latest.get("consumed") == "yes":
+            return ""
+        valid = latest.get("scope") == review and value in labels
+        self._decision_entry({"at": _now(), "kind": "verdict-use", "id": decision,
+                              "gate": gate, "result": "used" if valid else "expired"})
+        return value if valid else ""
 
     # ── reading ────────────────────────────────────────────────────────────
     def exists(self) -> bool:
@@ -431,3 +512,34 @@ __all__ = [
     "interactive",
     "outputs_in",
 ]
+
+
+def main() -> int:
+    """Private JSON bridge used by both terminal and GUI workflow user gates."""
+    try:
+        request = json.load(sys.stdin)
+        ledger = Ledger(Path.cwd())
+        gate = str(request["gate"])
+        review = ledger.review(gate, request["reads"])
+        labels = request["labels"]
+        if request["action"] == "begin":
+            review = ledger.visit(gate, request["reads"])
+            result = {"review": review, "verdict": ledger.take_verdict(gate, review, labels)}
+        elif request["action"] == "answer":
+            if review != request["review"]:
+                raise SteeringError(f"gate {gate!r} review inputs changed while awaiting the answer; ask again")
+            verdict = request["verdict"]
+            if verdict not in labels:
+                raise SteeringError(f"gate {gate!r} does not accept {verdict!r}")
+            result = ledger.verdict(gate, verdict, review=review, answered=True)
+        else:
+            raise SteeringError("unknown user-gate decision action")
+        print(json.dumps(result))
+        return 0
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
