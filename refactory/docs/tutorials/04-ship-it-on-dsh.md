@@ -128,3 +128,25 @@ the gate routed `done` to the report, reaching the same best score as `Loop` doe
   equivalence suite fails — which is the point of having it.
 
 Next: [drive it from the GUI](05-drive-it-from-the-gui.md).
+
+### One execution owns its run directory
+
+`console run` and `ceo` keep the selected work directory exclusively owned from
+before input/ledger preparation until their DSH process settles. A second run, or
+`console open`, refuses an owned directory before archiving its invocation. Wait
+for the owner to finish or choose another `--workdir`. Once it finishes, a new
+invocation keeps the existing sequential archive behavior.
+
+`.refactory/invocation.lock` is an inert rendezvous file for a local OS lock, not a
+PID record. Leave it in place: normal exit, handled failure, and process exit
+release the descriptor automatically, so an old file does not need manual stale
+lock removal. On POSIX the owned DSH child inherits that descriptor; terminating
+only its Python parent does not free the directory while DSH still runs.
+
+This protects the Python launch/prepare boundary. `console open` alone owns only
+its lowering call; a separate long-lived `wf_open` driver must manage its own
+execution lifetime. It is not distributed locking, protection against external
+file deletion, or general descendant-process containment. The Windows byte-lock
+path protects the Python call; inherited-child behavior after abrupt parent exit
+has only been established on POSIX. Existing timeout/cancellation cleanup remains
+the selected runtime's responsibility.
