@@ -28,7 +28,7 @@ import type { UserQuestionService } from '@deepseek-ai/dsh-user-questions'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { Spine, validateGraph } from './spine.ts'
 import type { NodeView, SpineNext } from './spine.ts'
-import { isDeterministic, runDataCommand, runDeterministic } from './execute.ts'
+import { commandOf, isDeterministic, runDataCommand, runDeterministic } from './execute.ts'
 import type { CommandFailure } from './execute.ts'
 import type { WorkflowGraph } from './types.ts'
 
@@ -40,6 +40,17 @@ export type { WorkflowEdge, WorkflowGraph, WorkflowNode } from './types.ts'
 
 export const name = 'workflow-spine'
 export const inject = ['tools', 'systemPrompt']
+
+/** Configured-only driver: the same drain/status path used by `wf_next`. */
+export const CONFIGURED_RUN_SERVICE = 'workflowConfiguredRun'
+
+/** Trusted one-shot execution, without a model interpreting user prose. */
+export interface ConfiguredRun {
+  /** Every declared node is runtime-owned, including every data/fork branch. */
+  readonly automatic: boolean
+  /** Advance the configured spine; unfinished, paused and failed states remain visible. */
+  advance(): Promise<JsonValue>
+}
 
 /** Config: the workflow graph, tool naming, iteration bounds, and the CEO deny-list. */
 export interface Config {
@@ -724,6 +735,24 @@ export function apply(ctx: Context, config: Config): void {
     const current = spine.isPaused() ? { ...next, status: 'paused' } : next
     const view = item === undefined ? current : { ...current, item }
     return json(ran === undefined ? view : { ...view, ran })
+  }
+
+  if (configuredSpine !== undefined) {
+    const spine = configuredSpine
+    const nodes = Object.values(config.graph?.nodes ?? {})
+    // drain deliberately leaves mixed structural cursors to a driver. Keep
+    // multiple/nested forks on the CEO path rather than partially executing them.
+    const flatControls = nodes.filter(node => node._type === 'ForkNode').length <= 1
+      && nodes.filter(node => node._type === 'JoinNode').length <= 1
+    const automatic = config.executeCommands && flatControls && nodes.length > 0 && nodes.every(node =>
+      node.expand === undefined && (Boolean(commandOf(node)?.trim())
+        || node._type === 'ForkNode' || node._type === 'JoinNode'
+        || (node._type === 'DataNode' && config.dataCommand !== '')),
+    )
+    ctx.provide(CONFIGURED_RUN_SERVICE, {
+      automatic,
+      advance: () => report(spine, config.workdir, config.commandEnv, config.dataCommand, config.agentCommand ?? ''),
+    } satisfies ConfiguredRun)
   }
 
   const pendingQuestions = new WeakSet<Spine>()
