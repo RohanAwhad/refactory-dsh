@@ -9,8 +9,8 @@ out. DSH already exposes that as ``dsh --profile headless "<task>"``, which is
 the same mechanism the inner loop uses to run a mode, so nothing new is
 introduced to reach a model and the credentials come from the same place.
 
-The subprocess runs in a scratch directory: the headless profile is a full agent
-with tools, and an analysis prompt must not be able to write into the run.
+The subprocess runs in a scratch directory to separate temporary output. The
+configured worker permission policy determines which other paths its tools can access.
 """
 
 from __future__ import annotations
