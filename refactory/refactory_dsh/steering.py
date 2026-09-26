@@ -171,43 +171,45 @@ class Ledger:
         """Every entry, parsed back out: timestamps and kinds, not just the text."""
         if not self.exists():
             return []
-        found: list[dict[str, Any]] = []
-        current: dict[str, Any] | None = None
-        for line in self.path.read_text().splitlines():
-            if line.startswith("## ["):
-                if current is not None:
-                    found.append(current)
-                stamp, _, kind = line[4:].partition("] ")
-                current = {"at": stamp, "kind": kind.strip(), "text": ""}
-            elif current is not None:
-                current["text"] = (current["text"] + "\n" + line).strip()
-        if current is not None:
-            found.append(current)
-        return found
+        return parse_entries(self.path.read_text())
 
     def constraints(self) -> list[str]:
         return [entry["text"] for entry in self.entries() if entry["kind"] == "constraint"]
 
-    def render(self) -> str:
-        """The block folded into a prompt. **Empty when there is nothing to say.**
+    def render(self, *, entries: list[dict[str, Any]] | None = None) -> str:
+        """The prompt block, from current entries or one atomic dispatch snapshot."""
+        return render_entries(self.entries() if entries is None else entries)
 
-        Empty is the load-bearing case: it is what makes :func:`annotate` inert, and
-        therefore what lets a run nobody steered behave exactly as it did before this
-        module existed.
-        """
-        entries = self.entries()
-        if not entries:
-            return ""
-        lines = [
-            "## What the user has said",
-            "",
-            "This is the run's intent ledger: what was asked for, and everything said",
-            "since. Entries marked `constraint` must be respected, not merely known.",
-            "",
-        ]
-        for entry in entries:
-            lines.append(f"- **[{entry['kind']}]** {entry['text']}")
-        return "\n".join(lines)
+
+def parse_entries(text: str) -> list[dict[str, Any]]:
+    """Parse one ledger snapshot without reading a changing file again."""
+    found: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    for line in text.splitlines():
+        if line.startswith("## ["):
+            if current is not None:
+                found.append(current)
+            stamp, _, kind = line[4:].partition("] ")
+            current = {"at": stamp, "kind": kind.strip(), "text": ""}
+        elif current is not None:
+            current["text"] = (current["text"] + "\n" + line).strip()
+    if current is not None:
+        found.append(current)
+    return found
+
+
+def render_entries(entries: list[dict[str, Any]]) -> str:
+    """Render supplied entries; empty input leaves an unsteered prompt unchanged."""
+    if not entries:
+        return ""
+    lines = [
+        "## What the user has said", "",
+        "This is the run's intent ledger: what was asked for, and everything said",
+        "since. Entries marked `constraint` must be respected, not merely known.", "",
+    ]
+    for entry in entries:
+        lines.append(f"- **[{entry['at']}] [{entry['kind']}]** {entry['text']}")
+    return "\n".join(lines)
 
 
 def _is_agent_node(node: Any) -> bool:
@@ -221,25 +223,31 @@ def _is_agent_node(node: Any) -> bool:
     return node.__class__.__name__ == "AgentNode" or getattr(node, "kind", "") == "agent"
 
 
-def _citation_block(ledger: Ledger) -> str:
-    """The instruction that makes the chain from ledger to work checkable.
+STEERING_START = "<!-- refactory steering context -->"
+STEERING_END = "<!-- end refactory steering context -->"
 
-    It names the ledger's **path** as well as its contents, and tells the node to
-    read it live: the lowered graph is inlined at boot, so a note the person adds
-    *while the run goes* is not in the prompt this node received. Re-reading is what
-    makes "a note added mid-run reaches the nodes that run afterwards" true.
-    """
-    listed = ", ".join(f"`{entry['at']}`" for entry in ledger.entries())
+
+def _citation_block(ledger: Ledger) -> str:
+    """Keep live steering instructions separate from the node's output format."""
     return (
-        "\n\n## Trace your work to the ledger\n\n"
-        f"Read the live ledger at `{ledger.path}` before you act. It is appended to while "
-        "the run goes, so it may say more than this prompt does, and the newest entry wins.\n\n"
-        "End your output with a line naming the ledger entry you are serving:\n\n"
-        f"    {CITATION} <timestamp>\n\n"
-        f"The entries at the time this prompt was written are: {listed}. Work that names "
-        "no entry, or one that does not exist, is reported as not traceable to what the "
-        "person asked for."
+        "\n\nRead the live ledger at `" + str(ledger.path) + "` before acting. "
+        "Respect its constraints while preserving the node's required output format. "
+        "Do not append steering citations or other prose to code, JSON, or another "
+        "declared artifact. The runtime records supplied ledger context and artifact "
+        "hashes separately; that receipt does not certify semantic compliance."
     )
+
+
+def prompt_with_ledger(prompt: str, ledger: Ledger, *, entries: list[dict[str, Any]] | None = None) -> str:
+    """Replace only this layer's own block with current context at dispatch."""
+    start = prompt.find(STEERING_START)
+    end = prompt.find(STEERING_END, start)
+    if start >= 0 and end >= start:
+        prompt = prompt[:start].rstrip() + prompt[end + len(STEERING_END):]
+    block = ledger.render(entries=entries)
+    if not block:
+        return prompt
+    return f"{prompt}\n\n{STEERING_START}\n{block}{_citation_block(ledger)}\n{STEERING_END}"
 
 
 def annotate(workflow: Any, ledger: Ledger) -> Any:
@@ -253,12 +261,11 @@ def annotate(workflow: Any, ledger: Ledger) -> Any:
     block = ledger.render()
     if not block:
         return workflow
-    block += _citation_block(ledger)
     for node in workflow.nodes.values():
         if not _is_agent_node(node):
             continue
         existing = getattr(node, "prompt_template", "") or ""
-        node.prompt_template = f"{existing}\n\n{block}" if existing else block
+        node.prompt_template = prompt_with_ledger(existing, ledger)
     return workflow
 
 
@@ -287,18 +294,28 @@ def citations(text: str) -> list[str]:
     return found
 
 
-def chain(ledger: Ledger, outputs: Mapping[str, str]) -> list[str]:
+def chain(ledger: Ledger, outputs: Mapping[str, str], *, deliveries: Mapping[str, Any] | None = None) -> list[str]:
     """Problems with the chain from the ledger to the work, mechanically.
 
-    The cheap half of the fidelity question: whether every agent output names an
-    entry that exists. It cannot say the work *satisfies* the intent -- that is a
-    judgement and needs a model -- but a node that ignored the ledger is caught, and
-    the check costs no model call.
+    Current runtime receipts establish delivered context and artifact identity.
+    Legacy outputs can still cite entries inline. Neither establishes that the
+    model read, understood, or satisfied the intent; that remains a judgement.
     """
     known = {entry["at"] for entry in ledger.entries()}
     problems: list[str] = []
     for node_id in sorted(outputs):
-        cited = citations(outputs[node_id])
+        delivery = (deliveries or {}).get(node_id)
+        if delivery is not None:
+            if delivery.get("status") != "delivered":
+                problems.append(f"node {node_id!r} has no successful artifact delivery receipt")
+                continue
+            if delivery.get("missing_now"):
+                problems.append(f"node {node_id!r} delivered outputs that are now missing: "
+                                + ", ".join(delivery["missing_now"]))
+            cited = [entry["at"] for entry in delivery.get("entries", [])]
+        else:
+            # Existing runs can still establish their historical inline chain.
+            cited = citations(outputs[node_id])
         if not cited:
             problems.append(
                 f"node {node_id!r} produced work that cites no ledger entry, so it is "
@@ -323,7 +340,13 @@ def outputs_in(run_root: Path) -> dict[str, str]:
     """
     from refactory_dsh import lowering
 
+    from refactory_dsh.agent_delivery import receipts_in
+
     declared = lowering.read_declarations(Path(run_root))
+    # Direct Mode.evaluate() need not lower a graph. Its runtime receipts carry
+    # the same declarations without making steering depend on a second lowering.
+    for node_id, receipt in receipts_in(Path(run_root)).items():
+        declared.setdefault(node_id, {"kind": "agent", "writes": receipt.get("writes", [])})
     outputs: dict[str, str] = {}
     for node_id, entry in declared.items():
         if not isinstance(entry, dict) or entry.get("kind") != "agent":
@@ -331,13 +354,13 @@ def outputs_in(run_root: Path) -> dict[str, str]:
         text = ""
         for name in entry.get("writes") or ():
             path = Path(run_root) / str(name)
-            if path.exists():
+            if path.is_file():
                 text += "\n" + path.read_text(errors="replace")
         outputs[str(node_id)] = text
     return outputs
 
 
-def fidelity(ledger: Ledger, outputs: Mapping[str, str] | None = None) -> list[str]:
+def fidelity(ledger: Ledger, outputs: Mapping[str, str] | None = None, *, deliveries: Mapping[str, Any] | None = None) -> list[str]:
     """What is wrong with a ledger a run is about to be judged against.
 
     Says which half it is, because the halves differ in cost and in what they can
@@ -346,8 +369,8 @@ def fidelity(ledger: Ledger, outputs: Mapping[str, str] | None = None) -> list[s
     - **The precondition**, always. A ledger that is missing, empty, or holding the
       placeholder. Deterministic, free. BUG-05 was this half being broken while the
       gate reported a pass.
-    - **The chain**, when ``outputs`` is given. Every agent output must cite a ledger
-      entry that exists (``chain``). Deterministic, free.
+    - **The chain**, when ``outputs`` is given. Every agent output must have a delivery receipt for known
+      ledger entries, or legacy inline citations (``chain``). Deterministic, free.
     - **The judgement** -- whether the work *satisfies* the intent -- is **not here**.
       It needs a model to read the work against the ledger, and checking citations
       does not substitute for it. That limit is in `architecture.md` §12.
@@ -364,7 +387,7 @@ def fidelity(ledger: Ledger, outputs: Mapping[str, str] | None = None) -> list[s
     if origin == PLACEHOLDER:
         problems.append(f"the ledger's origin is the placeholder {PLACEHOLDER!r}")
     if outputs is not None:
-        problems.extend(chain(ledger, outputs))
+        problems.extend(chain(ledger, outputs, deliveries=deliveries))
     return problems
 
 

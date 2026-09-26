@@ -31,6 +31,7 @@ from typing import Any
 
 from refactory_dsh import observe
 from refactory_dsh import registry
+from refactory_dsh.adopt import AdoptionError
 from refactory_dsh.history import find_runs
 from refactory_dsh.loop import Loop, LoopConfig, LoopError
 from refactory_dsh.nn import PackageError
@@ -239,6 +240,7 @@ def _run_id(mode: str) -> str:
 #: graph bundle names the same module in its own `dataCommand`; the interpreter
 #: that resolves the bare `python` leads :func:`_node_environment`'s `PATH`.
 DATA_COMMAND = "python -m refactory_dsh.items"
+AGENT_COMMAND = "python -m refactory_dsh.agent_delivery"
 
 
 def _node_environment(
@@ -341,6 +343,7 @@ def _open_mode(
         "declarations": str((root / DECLARATIONS).resolve()),
         "commandEnv": command_env,
         "dataCommand": DATA_COMMAND,
+        "agentCommand": AGENT_COMMAND,
     }
 
 
@@ -436,7 +439,8 @@ def _state(run_root: Path, events: list[dict[str, Any]], console: dict[str, Any]
     "running" would leave a reader waiting forever for a run that is gone.
     """
     if (run_root / "report.json").exists():
-        return "finished"
+        report = _read_json(run_root / "report.json")
+        return "failed" if report.get("exit_ok") is False else "finished"
     if _running(run_root, console):
         return "running"
     if console.get("pid"):
@@ -455,14 +459,22 @@ def _counters(events: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _best(run_root: Path, events: list[dict[str, Any]]) -> float | None:
-    """The best score so far: the report's when it exists, else the progress tail."""
-    report = run_root / "report.json"
-    if report.exists():
+    """The current eligible winner, independent of the caller's progress cursor."""
+    from refactory_dsh.adopt import best
+    from refactory_dsh.history import JOURNAL
+
+    if (run_root / JOURNAL).exists():
         try:
-            return json.loads(report.read_text()).get("best_score")
-        except json.JSONDecodeError:
-            pass
-    scores = [e["score"] for e in events if isinstance(e.get("score"), (int, float))]
+            return float(best(run_root)["score"])
+        except AdoptionError:
+            return None
+    report = _read_json(run_root / "report.json")
+    if report.get("exit_ok") is True:
+        return report.get("best_score")
+    scores = [
+        event["score"] for event in events
+        if event.get("exit_ok") is True and isinstance(event.get("score"), (int, float))
+    ]
     return max(scores) if scores else None
 
 
@@ -649,6 +661,8 @@ def _steer(
     """
     from refactory_dsh.steering import Ledger, chain, fidelity, outputs_in
 
+    from refactory_dsh.agent_delivery import receipts_in
+
     ledger = Ledger(run_root)
     if seed is not None:
         Ledger.seed(run_root, seed)
@@ -660,6 +674,7 @@ def _steer(
     # The chain is checkable only when the run left agent outputs beside the ledger
     # (a single mode run does; an outer-loop run keeps its candidates in subdirs).
     outputs = outputs_in(run_root) if ledger.exists() else {}
+    deliveries = receipts_in(run_root)
     payload: dict[str, Any] = {
         "run": str(run_root),
         "ledger": str(ledger.path),
@@ -667,8 +682,9 @@ def _steer(
         "entries": ledger.entries(),
         "constraints": ledger.constraints(),
         "verdicts": ledger.verdicts(),
-        "chain": chain(ledger, outputs) if ledger.exists() else [],
-        "problems": fidelity(ledger, outputs),
+        "chain": chain(ledger, outputs, deliveries=deliveries) if ledger.exists() else [],
+        "problems": fidelity(ledger, outputs, deliveries=deliveries),
+        "deliveries": deliveries,
     }
     if with_gates:
         payload["gates"] = gates(run_root)
@@ -770,7 +786,8 @@ def leaderboard(run_root: Path, *, limit: int = 20) -> list[dict[str, Any]]:
     # acts in the table they are reading. A finished run carries the same two lists
     # in `report.json`'s rows; a live one has them only in `state.json`.
     kept, rejected = _person_lists(run_root)
-    for row in rows[:limit]:
+    eligible = [row for row in rows if row.get("exit_ok") is True]
+    for row in eligible[:limit]:
         record = dict(row)
         candidate_id = str(row.get("id") or "")
         record["kept"] = candidate_id in kept
@@ -1313,14 +1330,10 @@ def main(argv: list[str] | None = None) -> int:
 
             run_root = _root_for(args, project)
             audit = holdout(run_root) or {}
-            if audit.get("overfit") and not args.allow_overfit:
-                # The one place a person would otherwise carry an overfit winner into
-                # the catalogue without being told the score did not travel.
-                raise ConsoleError(
-                    f"refusing to adopt an overfit winner: {_overfit_finding(audit)}. "
-                    "Pass --allow-overfit to adopt it anyway."
-                )
-            payload = adopt_winner(run_root, as_name=args.as_name, project=project)
+            payload = adopt_winner(
+                run_root, as_name=args.as_name, project=project,
+                allow_overfit=args.allow_overfit,
+            )
             payload["holdout"] = audit or None
         elif args.verb == "stop":
             payload = stop(_root_for(args, project))
@@ -1430,7 +1443,7 @@ def main(argv: list[str] | None = None) -> int:
             payload = _forward("design", forwarded)
         else:  # pragma: no cover - argparse rejects an unknown verb first
             raise ConsoleError(f"unknown verb {args.verb!r}")
-    except (ConsoleError, LoopError, PackageError) as error:
+    except (ConsoleError, LoopError, PackageError, AdoptionError) as error:
         print(json.dumps({"error": str(error)}), file=sys.stdout)
         return 2
     if isinstance(payload, dict) and payload.get("ok") is False:
