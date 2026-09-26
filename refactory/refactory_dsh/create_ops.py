@@ -8,6 +8,7 @@ is only what it produces — a directory of Python that becomes a new package.
 from __future__ import annotations
 
 import importlib
+import hashlib
 import json
 import re
 import shutil
@@ -1342,57 +1343,134 @@ def marks(line: str, marker: str) -> bool:
 PASS_MARK = "VERDICT: PASS"
 
 
-def synthesize_qa(ctx: Any) -> dict[str, Any]:
-    """Merge the three reviews into one file, and count the blocking findings.
+def blocking_findings(text: str) -> list[str]:
+    """Current marked findings, without empty verdicts or appended old reports."""
+    findings: list[str] = []
+    historical = False
+    fence: tuple[str, int] | None = None
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        fence_line = re.match(r"^(`{3,}|~{3,})(.*)$", stripped)
+        if fence is not None:
+            if (fence_line and fence_line[1][0] == fence[0]
+                    and len(fence_line[1]) >= fence[1] and not fence_line[2].strip()):
+                fence = None
+            continue
+        if fence_line:
+            fence = (fence_line[1][0], len(fence_line[1]))
+            continue
+        heading = re.match(r"^#{1,6}\s+(.*)$", stripped)
+        if heading:
+            title = heading[1].strip(" *_`")
+            if re.match(r"^(?:current|latest) (?:review|findings|verdict|result|revision)\b", title, re.I):
+                historical = False
+            elif re.match(r"^(?:previous (?:review|run|attack)|superseded|historical (?:review|findings)|archived review)\b", title, re.I) or re.search(r"\(superseded\)", title, re.I):
+                historical = True
+        if historical:
+            continue
+        cleaned = stripped.lstrip("*-+>#` \t")
+        cleaned = re.sub(r"^\d+[.)]\s+", "", cleaned).lstrip("*_` ")
+        # Retain existing decorated/no-colon finding syntax. A bare BLOCKING
+        # heading or a 'Blocking findings' section title carries no finding.
+        marked = re.match(r"^BLOCKING(?:(?:[*_`]*\s*[:—–-][*_`]*\s*)|(?:[*_`]+\s+)|\s+)(.*)$", cleaned, re.I)
+        if marked is None:
+            continue
+        content = marked[1].strip()
+        if heading and not re.match(r"^BLOCKING[*_`]*\s*[:—–-]", cleaned, re.I):
+            continue
+        # 'none.' is a verdict; the following explanation does not turn it into
+        # a defect. 'none, except ...' remains actionable instead of being hidden.
+        verdict_text = re.sub(r"[*_`]", "", content)
+        verdict = re.split(r"[.!](?:\s|$)", verdict_text, maxsplit=1)[0].strip()
+        if not content or re.fullmatch(
+            r"(?:none|0|no(?: current)?(?: blocking)?(?: findings| issues| defects)?)"
+            r"(?:\s*\(current revision\))?", verdict, re.I,
+        ):
+            continue
+        continuation = []
+        for following in lines[index + 1:]:
+            if not following.strip() or following.lstrip().startswith(("#", "```", "~~~")) or marks(following, BLOCKING_MARK):
+                break
+            continuation.append(following.strip())
+        findings.append("\n".join([content, *continuation]))
+    return findings
 
-    A review that never ran is reported as missing rather than skipped: an absent
-    review is not a review that passed, which is the mistake this phase exists to
-    prevent.
-    """
-    sections: list[str] = []
+
+def _review_snapshot(ctx: Any) -> dict[str, Any]:
+    reviews: list[dict[str, Any]] = []
     missing: list[str] = []
     for name in QA_REVIEWS:
-        text = ctx.read_text(name).strip() if ctx.exists(name) else ""
-        if not text:
+        text = ctx.read_text(name) if ctx.exists(name) else ""
+        if not text.strip():
             missing.append(name)
             continue
-        sections.append(f"## {name}\n\n{text}")
-    # Only a review's own finding line counts. The header below mentions the marker,
-    # and a gate that searched the whole file for the word would read its own summary
-    # as a finding.
-    blocking = sum(
-        1
-        for section in sections
-        if any(marks(line, BLOCKING_MARK) for line in section.splitlines())
-    )
-    header = (
+        reviews.append({"path": name, "sha256": hashlib.sha256(text.encode()).hexdigest(),
+                        "findings": blocking_findings(text)})
+    return {"version": 1, "reviews": reviews, "missing": missing}
+
+
+def synthesize_qa(ctx: Any) -> dict[str, Any]:
+    """Preserve the full reports and publish the current findings used by the gate."""
+    snapshot = _review_snapshot(ctx)
+    blocking = sum(len(review["findings"]) for review in snapshot["reviews"])
+    missing = snapshot["missing"]
+    sections = [f"## {review['path']}\n\n{ctx.read_text(review['path']).strip()}"
+                for review in snapshot["reviews"]]
+    body = (
         "# QA synthesis\n\n"
         f"{len(sections)} review(s) merged, {blocking} blocking finding(s), "
         f"{len(missing)} review(s) missing.\n"
+        + ("\n## WARNING: NO REVIEW FROM " + ", ".join(missing) + "\n" if missing else "")
+        + "\n" + "\n\n".join(sections) + "\n"
     )
-    if missing:
-        header += "\n## WARNING: NO REVIEW FROM " + ", ".join(missing) + "\n"
-    body = header + "\n" + "\n\n".join(sections) + "\n"
+    manifest = {"version": 1, "digests": {review["path"]: review["sha256"] for review in snapshot["reviews"]},
+                "missing": missing}
+    body += "\n<!-- refactory-qa-snapshot " + json.dumps(manifest, sort_keys=True) + " -->\n"
     ctx.write_text("reviews/qa-synthesized.md", body)
     return {"qa": body, "qa_blocking": blocking, "qa_missing": len(missing)}
 
 
+def _legacy_reviews_match(ctx: Any, text: str, snapshot: dict[str, Any]) -> bool:
+    """Compare complete legacy report sections, never a matching substring."""
+    headings = list(re.finditer(r"^## (reviews/(?:health-check|code-review|qa)\.md)\s*$", text, re.M))
+    names = [heading[1] for heading in headings]
+    expected = [review["path"] for review in snapshot["reviews"]]
+    if names != expected or len(names) != len(set(names)):
+        return False
+    for index, heading in enumerate(headings):
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(text)
+        if text[heading.end():end].strip() != ctx.read_text(heading[1]).strip():
+            return False
+    return True
+
+
 def gate_qa(ctx: Any) -> str:
-    """Proceed only when every review ran and none named a blocking finding."""
+    """Route from current findings, checking the synthesis's review snapshots."""
     text = ctx.read_text("reviews/qa-synthesized.md")
-    if "WARNING: NO REVIEW FROM" in text:
-        reason = "reloop: a review did not run"
+    snapshot = _review_snapshot(ctx)
+    manifest = {"version": 1, "digests": {review["path"]: review["sha256"] for review in snapshot["reviews"]},
+                "missing": snapshot["missing"]}
+    recorded = re.search(r"<!-- refactory-qa-snapshot (.+) -->\s*$", text)
+    if recorded is not None:
+        try:
+            fresh = json.loads(recorded[1]) == manifest
+        except ValueError:
+            fresh = False
+    else:
+        # Historical synthesis already embeds each report verbatim. Accept that
+        # representation only while every present report still matches its text.
+        fresh = _legacy_reviews_match(ctx, text, snapshot)
+    if not fresh:
+        reason = "reloop: review reports changed after synthesis; run fresh reviews and synthesis"
+    elif snapshot["missing"]:
+        reason = "reloop: a review did not run: " + ", ".join(snapshot["missing"])
+    else:
+        findings = [f"{review['path']}: {finding}" for review in snapshot["reviews"]
+                    for finding in review["findings"]]
+        reason = "reloop: " + "\n".join(findings) if findings else ""
+    if reason:
         ctx.write_text("reviews/qa-gate.txt", reason + "\n")
-        ctx.set_fact("qa_gate", reason)
-        return "reloop"
-    blocking = [line.strip() for line in text.splitlines() if marks(line, BLOCKING_MARK)]
-    if blocking:
-        reason = "reloop: " + "\n".join(blocking)
-        ctx.write_text("reviews/qa-gate.txt", reason + "\n")
-        # A gate that reloops to `emit` has to say *why* into the prompt that rebuilds:
-        # the file is for a reader, the fact is for the next attempt. Without it the
-        # rebuild re-emits the same design — the hard sanity run burned two full review
-        # rounds (~an hour) refusing the same findings because nothing fed them back.
         ctx.set_fact("qa_gate", reason)
         return "reloop"
     ctx.write_text("reviews/qa-gate.txt", "proceed: no blocking finding\n")

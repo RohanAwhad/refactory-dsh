@@ -267,7 +267,8 @@ class DesignMode(Mode):
         ))
         graph.add(Node(
             "gate_qa", "gate", evaluator="refactory_dsh.create_ops:gate_qa",
-            reads=("reviews/qa-synthesized.md",),
+            reads=("reviews/qa-synthesized.md", "reviews/health-check.md",
+                   "reviews/code-review.md", "reviews/qa.md"),
             writes=("reviews/qa-gate.txt",),
             produces=("qa_gate",),
             max_iterations=4,
