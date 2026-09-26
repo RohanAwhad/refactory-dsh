@@ -46,6 +46,11 @@ DEFAULT_TIMEOUT_S = 1800
 #: work — so the client retries, and only a client that keeps failing fails the node.
 DEFAULT_ATTEMPTS = 3
 
+
+#: Allow the CLI's five-second root-disposal deadline to settle before escalation.
+#: SIGTERM invokes DSH's managed subprocess cleanup; SIGKILL cannot run it.
+SHUTDOWN_GRACE_S = 10
+
 #: What the child says when the failure was on the wire rather than in the model.
 #:
 #: `dsh` wraps provider transport errors with `TRANSPORT:`, and the socket-level
@@ -238,16 +243,15 @@ class DshModelClient:
         last = ""
         for attempt in range(1, self._attempts + 1):
             try:
-                proc = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    cwd=str(run_dir),
-                    env=self._environment(),
-                    timeout=self._timeout_s,
-                )
-            except subprocess.TimeoutExpired:
-                last = f"the completion timed out after {self._timeout_s}s"
+                proc = self._run_completion(cmd, run_dir)
+            except subprocess.TimeoutExpired as exc:
+                # A tool-using completion may already have changed its workdir.
+                # A deadline is not a transport failure: replaying the prompt can
+                # duplicate real work even after its subprocesses have shut down.
+                raise RuntimeError(
+                    f"model completion timed out after {self._timeout_s}s; "
+                    "requested runtime shutdown; not retried"
+                ) from exc
             else:
                 if proc.returncode == 0:
                     return proc.stdout
@@ -267,3 +271,48 @@ class DshModelClient:
         raise RuntimeError(
             f"model completion failed on the wire {self._attempts} time(s); last cause: {last}"
         )
+
+    def _run_completion(self, cmd: list[str], run_dir: Path) -> subprocess.CompletedProcess[str]:
+        """Keep the CLI alive long enough to dispose its managed tool processes.
+
+        ``subprocess.run(timeout=...)`` kills the immediate child before raising,
+        bypassing the DSH CLI's SIGTERM handler and stranding detached tool jobs.
+        Do not signal process names, inferred descendants, or unrelated groups.
+        """
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            cwd=str(run_dir), env=self._environment(),
+            # A terminal Ctrl-C reaches the Python caller only. Forward one
+            # shutdown request: DSH escalates a second signal to immediate exit.
+            start_new_session=os.name == "posix",
+        )
+        try:
+            stdout, stderr = proc.communicate(timeout=self._timeout_s)
+        except BaseException:
+            # Includes KeyboardInterrupt raised in this calling thread, not a
+            # main-thread interrupt while complete() runs in a fork worker.
+            # Cleanup precedes propagation; never reinterpret it as output.
+            try:
+                proc.terminate()
+            except ProcessLookupError:
+                pass
+            try:
+                proc.communicate(timeout=SHUTDOWN_GRACE_S)
+            except subprocess.TimeoutExpired as exc:
+                proc.kill()
+                # An uncooperative launcher may leave inherited output pipes
+                # open in a descendant. Do not wait on those pipes indefinitely.
+                try:
+                    proc.communicate(timeout=1)
+                except subprocess.TimeoutExpired:
+                    if proc.stdout is not None:
+                        proc.stdout.close()
+                    if proc.stderr is not None:
+                        proc.stderr.close()
+                    proc.wait(timeout=1)
+                raise RuntimeError(
+                    "model runtime did not finish shutdown within "
+                    f"{SHUTDOWN_GRACE_S}s; forced exit; child cleanup unconfirmed; not retried"
+                ) from exc
+            raise
+        return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
