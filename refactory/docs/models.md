@@ -86,3 +86,10 @@ DSH's normal profile loader may initialize a missing shipped headless profile; t
 makes no model request and does not write credential values. The local managed store is owner-only but does not
 isolate credentials from generated code running as the same OS user; stricter isolation
 requires a separate model-service boundary.
+
+For a DSH source checkout, set `DSH_ROOT` to its root after installing its dependencies.
+The source launcher resolves `tsx` and the checkout's TypeScript configuration there;
+agent processes still run in their item directories. `DSH_CLI` continues to select an
+external executable directly. A custom/source runtime must support the flags supplied
+to it: upstream headless profiles without this fork's `--provider`/`--model` extension
+can select their route through the profile's `agent-default-model` configuration.

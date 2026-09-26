@@ -93,10 +93,9 @@ def dsh_command(*, root: Path | None = None, cli: str | None = None) -> list[str
     uses the installed `dsh`, which is the only launcher left once the source copy is
     gone.
 
-    A caller that takes the source branch must run the child with its working
-    directory inside the checkout: ``--import tsx/esm`` resolves from there. The
-    installed branch has no such requirement, because the launcher resolves its own
-    modules.
+    The source preload resolves tsx and its source configuration from the selected
+    checkout. The child's working directory remains the caller's, so an agent can
+    read and write its own item artifacts without launching from the checkout.
     """
     override = (cli if cli is not None else os.environ.get("DSH_CLI", "")).strip()
     selected_root = Path(root) if root is not None else dsh_root()
@@ -104,7 +103,8 @@ def dsh_command(*, root: Path | None = None, cli: str | None = None) -> list[str
         return [override]
     source = selected_root / SOURCE_CLI_ENTRY
     if source.exists():
-        return [node_bin(), "--import", "tsx/esm", str(source)]
+        preload = Path(__file__).with_name("source_bootstrap.mjs").as_uri()
+        return [node_bin(), "--import", preload, str(source.resolve())]
     return [str(selected_root / "node_modules" / ".bin" / "dsh")]
 
 
