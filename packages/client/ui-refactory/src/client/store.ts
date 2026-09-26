@@ -44,7 +44,7 @@ export interface RefactoryChoices {
   readonly packages: readonly RefactoryPackageChoice[]
 }
 
-/** The three level-two names a run is started with; empty means the default. */
+/** Search implementation choices and optional candidate evaluation limits. */
 export interface RefactorySettings {
   /** The outer loop, from the `strategies` answer. */
   strategy: string
@@ -52,6 +52,35 @@ export interface RefactorySettings {
   optimizer: string
   /** The evaluator, from the `strategies` answer. */
   evaluator: string
+  /** Number of search epochs; absent keeps the console default. */
+  epochs?: string
+  /** Candidate proposals per epoch; absent keeps the console default. */
+  batch_size?: string
+  /** Maximum candidate evaluations; absent keeps the console default. */
+  max_evaluations?: string
+}
+
+/** Defaults of the console's LoopConfig, shown until a person changes a limit. */
+export const SEARCH_BUDGET_DEFAULTS = { epochs: 2, batch_size: 4, max_evaluations: 64 } as const
+
+/** The existing console settings exposed by the search budget fields. */
+export type RefactoryBudgetName = keyof typeof SEARCH_BUDGET_DEFAULTS
+
+/**
+ * Parse only explicitly entered limits; missing values retain console defaults.
+ * @param settings - the tab's choices, including in-progress numeric input.
+ * @returns admitted positive integers, or null when any edited field is invalid.
+ */
+export function searchBudget(settings: Pick<RefactorySettings, RefactoryBudgetName>): Partial<Record<RefactoryBudgetName, number>> | null {
+  const budget: Partial<Record<RefactoryBudgetName, number>> = {}
+  for (const name of Object.keys(SEARCH_BUDGET_DEFAULTS) as RefactoryBudgetName[]) {
+    const value = settings[name]
+    if (value === undefined) continue
+    const parsed = Number(value)
+    if (value.trim() === '' || !Number.isSafeInteger(parsed) || parsed < 1) return null
+    budget[name] = parsed
+  }
+  return budget
 }
 
 /** Why a gesture was refused: the Host's code, and the Host's own message. */
@@ -108,7 +137,7 @@ export interface RefactoryState {
   byTab: Record<TabId, RefactoryTabState>
 }
 
-/** The three names a run setting can be; the level-two seams. */
+/** Named search implementations and candidate evaluation limits. */
 export type RefactorySettingName = keyof RefactorySettings
 
 /**

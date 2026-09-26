@@ -31,8 +31,8 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {} from './locales.ts'
 import type { RefactoryInjected } from './face.ts'
-import type { Loadable, RefactoryNotice, RefactorySettingName, RefactorySingleState, createRefactoryStore } from './store.ts'
-import { knobValues } from './store.ts'
+import type { Loadable, RefactoryBudgetName, RefactoryNotice, RefactorySettingName, RefactorySingleState, createRefactoryStore } from './store.ts'
+import { knobValues, searchBudget, SEARCH_BUDGET_DEFAULTS } from './store.ts'
 import css from './RefactoryBody.module.css'
 
 /** The body's composed props: the tab it draws, its store, its face, and its copy. */
@@ -56,6 +56,7 @@ export function failureLine(t: TranslateNS<'sidebarRefactory'>, notice: Refactor
     case 'refactory/unknown-mode': return t('error.unknownMode')
     case 'refactory/authoring-mode': return t('error.authoringMode')
     case 'refactory/package-disabled': return t('error.packageDisabled')
+    case 'refactory/invalid-search-budget': return t('budget.invalid')
     // Carrier and unclassified Host failures reach the reader as themselves:
     // the picker knows nothing useful to add to a console's own message.
     default: return t('error.failed', { message: notice.message })
@@ -667,6 +668,7 @@ export function RefactoryBody({
   const { project, modes, strategies, packages } = choices.value
   const selected = chosen
   const run = state.watching
+  const validBudget = searchBudget(state.settings) !== null
   return (
     <div className={css.root} data-refactory-state="ready">
       <div className={css.header}>
@@ -767,12 +769,36 @@ export function RefactoryBody({
           t={t}
           onChoose={(value) => { setSetting(tab.id, 'evaluator', value) }}
         />
+        {selected?.action === 'start' && (
+          <div data-refactory-search-budget>
+            <h3 className={css.heading}>{t('budget.heading')}</h3>
+            {(Object.keys(SEARCH_BUDGET_DEFAULTS) as RefactoryBudgetName[]).map(name => (
+              <div className={css.field} key={name}>
+                <label className={css.label} htmlFor={`refactory-${name}`}>{t(`budget.${name}`)}</label>
+                <input
+                  id={`refactory-${name}`}
+                  className={css.control}
+                  type="number"
+                  min={1}
+                  max={Number.MAX_SAFE_INTEGER}
+                  step={1}
+                  value={state.settings[name] ?? SEARCH_BUDGET_DEFAULTS[name]}
+                  data-refactory-budget={name}
+                  aria-invalid={searchBudget({ [name]: state.settings[name] }) === null}
+                  onChange={event => { setSetting(tab.id, name, event.target.value) }}
+                />
+              </div>
+            ))}
+            <p className={css.note}>{t('budget.scope')}</p>
+            {!validBudget && <p className={css.notice} role="alert">{t('budget.invalid')}</p>}
+          </div>
+        )}
         {selected !== undefined && (
           <div className={css.gestures}>
             <button
               type="button"
               className={css.action}
-              disabled={!selected.enabled || selected.action !== 'start'}
+              disabled={!selected.enabled || selected.action !== 'start' || !validBudget}
               data-refactory-start
               onClick={() => { start(tab.id, selected.id, knobs, state.settings, signal) }}
             >
