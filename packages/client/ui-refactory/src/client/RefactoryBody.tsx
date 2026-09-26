@@ -303,7 +303,7 @@ function Status({
           <IconRefreshOutline16 />
           {t('status.refresh')}
         </button>
-        {!status.finished && status.authoring == null && (
+        {!status.finished && status.kind === 'optimizer' && (
           <button
             type="button"
             className={css.action}
@@ -529,6 +529,7 @@ function Steering({
         controlRun={controlRun}
       />}
       {optimizer === false && <p className={css.note}>{t('steering.graphControls')}</p>}
+      {optimizer === null && <p className={css.note}>{t('steering.unknownControls')}</p>}
       {ledger.problems.length > 0 && (
         <ul className={css.recorded} data-refactory-ledger="problems">
           {ledger.problems.map((problem, index) => (
@@ -536,7 +537,7 @@ function Steering({
           ))}
         </ul>
       )}
-      <form
+      {optimizer !== null && <form
         className={css.import}
         onSubmit={(event) => {
           event.preventDefault()
@@ -573,8 +574,8 @@ function Steering({
         >
           {t('steering.add')}
         </button>
-      </form>
-      {ledger.gates.length > 0 && (
+      </form>}
+      {optimizer !== null && ledger.gates.length > 0 && (
         <div className={css.status} data-refactory-gates="waiting">
           {ledger.gates.map(gate => (
             <div key={gate.id} data-refactory-gate={gate.id}>
@@ -818,7 +819,8 @@ export function RefactoryBody({
               steering={state.steering}
               candidates={state.candidates}
               statusFinished={state.frame?.kind === 'ready' ? state.frame.value.finished : undefined}
-              optimizer={state.frame?.kind === 'ready' ? state.frame.value.authoring == null : null}
+              optimizer={state.frame?.kind === 'ready' && state.frame.value.kind !== 'unknown'
+                ? state.frame.value.kind === 'optimizer' : null}
               signal={signal}
               t={t}
               readSteering={readSteering}

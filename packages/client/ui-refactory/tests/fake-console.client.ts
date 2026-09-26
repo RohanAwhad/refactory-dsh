@@ -95,6 +95,7 @@ export const STRATEGIES: RefactoryStrategies = {
 
 /** One status frame, mid-run. */
 export const FRAME: RefactoryRunStatus = {
+  kind: 'optimizer',
   run_id: 'live',
   root: '/runs/live',
   mode: 'p/adaptive',

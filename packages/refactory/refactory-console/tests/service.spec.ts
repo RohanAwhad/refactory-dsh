@@ -147,6 +147,7 @@ const RUN = { run_id: 'live', root: '/repo/.factory/loop/live', mode: 'p/adaptiv
 
 /** One status frame, as the console answers it. */
 const FRAME = {
+  kind: 'optimizer',
   run_id: 'live',
   root: '/repo/.factory/loop/live',
   mode: 'p/adaptive',
@@ -512,6 +513,7 @@ describe('refactoryConsole — reading a run', () => {  it('maps a status frame,
   const { service, subprocess } = await setup()
   subprocess.answer(FRAME)
   expect(await service.status('/runs/live', 3, signal())).toEqual({
+    kind: 'optimizer',
     run_id: 'live',
     root: '/repo/.factory/loop/live',
     mode: 'p/adaptive',

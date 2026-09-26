@@ -150,6 +150,8 @@ export interface RefactoryRunCounters {
 
 /** Where one run is, and what is new since the reader last looked. */
 export interface RefactoryRunStatus {
+  /** Persisted run layout; unrecognized directories expose no control actions. */
+  readonly kind: 'optimizer' | 'graph' | 'unknown'
   /** The run directory's name. */
   readonly run_id: string
   /** Absolute path of the run directory. */

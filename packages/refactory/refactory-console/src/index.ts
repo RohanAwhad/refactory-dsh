@@ -450,6 +450,7 @@ export class RefactoryConsole extends TypertRemoteService {
       run_id: text(answer.run_id),
       root: text(answer.root),
       mode: typeof answer.mode === 'string' ? answer.mode : null,
+      kind: answer.kind === 'optimizer' || answer.kind === 'graph' ? answer.kind : 'unknown',
       state: text(answer.state),
       events: events(answer.events),
       cursor: count(answer.cursor),

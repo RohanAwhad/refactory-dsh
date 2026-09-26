@@ -406,6 +406,16 @@ def _item_results(run_root: Path) -> dict[str, int] | None:
             "unclassified": len(rows) - passed - failed}
 
 
+def _run_kind(run_root: Path, spine: dict[str, Any]) -> str:
+    """Offer controls only for a recognized persisted run layout."""
+    config = _read_json(run_root / "config.json")
+    if isinstance(config.get("mode"), str) and isinstance(config.get("optimizer"), str):
+        return "optimizer"
+    if spine or any((run_root / "graphs").glob("*.graph.json")):
+        return "graph"
+    return "unknown"
+
+
 def status(run_root: Path, *, after: int = 0) -> dict[str, Any]:
     """Where the run is, and what is new since the reader last looked.
 
@@ -435,6 +445,7 @@ def status(run_root: Path, *, after: int = 0) -> dict[str, Any]:
         "run_id": run_root.name,
         "root": str(run_root),
         "mode": console.get("mode"),
+        "kind": _run_kind(run_root, spine),
         "state": state,
         "events": events,
         "cursor": after + len(events),
