@@ -392,6 +392,20 @@ def _authoring(run_root: Path, spine: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _item_results(run_root: Path) -> dict[str, int] | None:
+    """Count recorded Task verdicts without inventing a mode's scoring rule."""
+    values = _read_json(run_root / "facts.json").get("item_scores")
+    if not isinstance(values, list):
+        return None
+    rows = [value for value in values if isinstance(value, dict)]
+    if not rows:
+        return None
+    passed = sum(row.get("passed") is True for row in rows)
+    failed = sum(row.get("passed") is False for row in rows)
+    return {"count": len(rows), "passed": passed, "failed": failed,
+            "unclassified": len(rows) - passed - failed}
+
+
 def status(run_root: Path, *, after: int = 0) -> dict[str, Any]:
     """Where the run is, and what is new since the reader last looked.
 
@@ -429,6 +443,7 @@ def status(run_root: Path, *, after: int = 0) -> dict[str, Any]:
         "finished": finished,
         "running": not finished and (_running(run_root, console) or bool(spine)),
         "authoring": _authoring(run_root, spine) if spine else None,
+        "item_results": _item_results(run_root),
     }
 
 

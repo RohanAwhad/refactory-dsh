@@ -63,11 +63,11 @@ None; no Remote answer or store write reaches a model request.
 
 - **Status and the ledger are read on demand.** A run in flight does not update itself: the reader presses refresh (or starts a run, which reads the first frame and the ledger). Live polling needs a cadence the picker does not own yet.
 - **`Run once` holds the call for the whole run.** The console's `run` verb is synchronous — it drives the mode to quiescence before answering — so the panel shows the run in flight until it returns. The optimizer's `start` is the gesture that returns immediately.
-- **Steering follows the run the tab started.** The section reads the ledger and gates of the run `Start` made (the one the Run status section reports); a run opened from the chat with `wf_open` lives under the session's own `.factory/web/...` directory, which the console's `runs` listing does not cover, so the panel does not offer to steer it.
+- **Attach chat runs by their exact directory.** Paste the directory the CEO reports into **Existing run directory** and choose **Read this run**. Status and Steering follow that directory; notes and user-gate verdicts use the same ledger as the CEO. Ask the CEO to continue after recording a verdict. Graph runs do not show optimizer candidate or control buttons.
 - **The import source is free text**, as is a knob whose declaration names no set of accepted values — neither has a catalogue that could offer the value.
 - **Host messages are shown as the Host wrote them** — a console refusal reaches the reader in the console's English, through the localized `error.failed` line; only the three described-choice codes have copy of this package's own.
-- **No run history.** The picker reads the run it started; the `runs` listing exists on the Host and no screen offers it yet.
-- **A package change re-reads the whole catalogue** — enable, disable, remove and import each answer with the package list as it now stands, and the mode catalogue is not re-read, so a newly imported package's modes appear after a reload.
+- **No automatic chat-run history.** The picker reads a run it started or one attached by directory; the Host's `runs` listing is still scoped to optimizer runs.
+- **Package changes refresh the catalogue.** Enable, disable, remove and import refresh both packages and modes, so enabling a selected package makes its run controls available immediately.
 
 <a id="dev-note"></a>
 ### Dev Note

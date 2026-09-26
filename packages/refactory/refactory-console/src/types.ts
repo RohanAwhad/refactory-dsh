@@ -170,6 +170,10 @@ export interface RefactoryRunStatus {
   readonly finished: boolean
   /** Whether the run's process is alive. */
   readonly running: boolean
+  /** Graph progress for a chat-driven mode; null for an optimizer search. */
+  readonly authoring?: RefactoryAuthoringProgress | null
+  /** Recorded Task verdicts, when this run has per-item results. */
+  readonly item_results?: RefactoryItemResults | null
 }
 
 /** What the console recorded when it started a run. */
@@ -335,6 +339,14 @@ export interface RefactoryAuthoringProgress {
   readonly error: string
 }
 
+/** Task verdict counts, independent of the mode's aggregate scoring rule. */
+export interface RefactoryItemResults {
+  readonly count: number
+  readonly passed: number
+  readonly failed: number
+  readonly unclassified: number
+}
+
 /** One mode used once: where it ran, how it ended, and what it recorded. */
 export interface RefactorySingleRun {
   /** The run directory's name. */
@@ -356,6 +368,8 @@ export interface RefactorySingleRun {
   readonly authoring: RefactoryAuthoringProgress | null
   /** What the run wrote to `facts.json`, each value as text. */
   readonly facts: Readonly<Record<string, string>>
+  /** Recorded Task item verdict counts, without assuming an aggregate score. */
+  readonly item_results?: RefactoryItemResults | null
 }
 
 /** One run to start: the mode, where the run lives, and its settings. */

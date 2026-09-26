@@ -214,8 +214,15 @@ function Single({
       <p className={css.statusLine} data-refactory-single-run>{t('single.ran', { mode: single.mode ?? single.run_id, run: single.root })}</p>
       <p className={css.statusLine}>{t('status.state')}: {single.state}</p>
       <p className={css.statusLine} data-refactory-single-score>
-        {single.best_score === null ? t('status.noScore') : t('status.best', { score: single.best_score })}
+        {single.best_score === null
+          ? t(single.finished || ['finished', 'failed', 'died', 'halted'].includes(single.state) ? 'single.noAggregate' : 'status.noScore')
+          : t('status.best', { score: single.best_score })}
       </p>
+      {single.item_results != null && (
+        <p className={css.statusLine} data-refactory-item-results>
+          {t('single.itemResults', { ...single.item_results })}
+        </p>
+      )}
       {authoring !== null && (
         <p className={css.statusLine} data-refactory-single-spine={authoring.spine}>
           {t('single.spine')}: {authoring.spine}
@@ -276,11 +283,16 @@ function Status({
       <p className={css.statusLine} data-refactory-run>{run}</p>
       <p className={css.statusLine}>{t('status.state')}: {status.state}</p>
       <p className={css.statusLine} data-refactory-score>
-        {status.best_score === null ? t('status.noScore') : t('status.best', { score: status.best_score })}
+        {status.best_score === null
+          ? t(status.finished ? 'single.noAggregate' : 'status.noScore')
+          : t('status.best', { score: status.best_score })}
       </p>
-      <p className={css.statusLine} data-refactory-evaluations>
-        {t('status.evaluations', { count: status.counters.evaluations })}
-      </p>
+      {status.authoring != null
+        ? <p className={css.statusLine} data-refactory-watched-spine>{t('single.spine')}: {status.authoring.spine}</p>
+        : <p className={css.statusLine} data-refactory-evaluations>{t('status.evaluations', { count: status.counters.evaluations })}</p>}
+      {status.item_results != null && (
+        <p className={css.statusLine} data-refactory-watched-item-results>{t('single.itemResults', { ...status.item_results })}</p>
+      )}
       <div className={css.packageActions}>
         <button
           type="button"
@@ -291,7 +303,7 @@ function Status({
           <IconRefreshOutline16 />
           {t('status.refresh')}
         </button>
-        {!status.finished && (
+        {!status.finished && status.authoring == null && (
           <button
             type="button"
             className={css.action}
@@ -407,13 +419,14 @@ function Candidates({
 
 /** The watched run's intent ledger, and the gates it is stopped at. */
 function Steering({
-  tabId, run, steering, candidates, signal, t, readSteering, readCandidates, addNote,
+  tabId, run, steering, candidates, optimizer, signal, t, readSteering, readCandidates, addNote,
   answerGate, controlRun, statusFinished,
 }: {
   readonly tabId: Parameters<RefactoryInjected['refresh']>[0]
   readonly run: string
   readonly steering: Loadable<RefactorySteering> | null
   readonly candidates: Loadable<readonly RefactoryCandidateRow[]> | null
+  readonly optimizer: boolean | null
   readonly signal: AbortSignal
   readonly t: TranslateNS<'sidebarRefactory'>
   readonly readSteering: RefactoryInjected['readSteering']
@@ -439,7 +452,7 @@ function Steering({
   const finished = statusFinished === true || ledger.finished === true
   return (
     <div className={css.status} data-refactory-steering="ready">
-      {finished && <p className={css.note} data-refactory-controls-finished>{t('control.finished')}</p>}
+      {optimizer && finished && <p className={css.note} data-refactory-controls-finished>{t('control.finished')}</p>}
       {ledger.control != null && (
         <p className={css.note} data-refactory-control-receipt={ledger.control.status}>
           {t(`control.${ledger.control.status}`, { action: ledger.control.action })}
@@ -455,6 +468,7 @@ function Steering({
           {ledger.control.error && <> · {ledger.control.error}</>}
         </p>
       )}
+      <p className={css.note} data-refactory-steering-run>{ledger.run}</p>
       <div className={css.packageActions}>
         <button
           type="button"
@@ -465,7 +479,7 @@ function Steering({
           <IconRefreshOutline16 />
           {t('steering.refresh')}
         </button>
-        <button
+        {optimizer && <button
           type="button"
           className={css.action}
           data-refactory-control="pause"
@@ -473,8 +487,8 @@ function Steering({
           onClick={() => { controlRun(tabId, run, { control: 'pause' }, signal) }}
         >
           {t('control.pause')}
-        </button>
-        <button
+        </button>}
+        {optimizer && <button
           type="button"
           className={css.action}
           data-refactory-control="resume"
@@ -482,8 +496,8 @@ function Steering({
           onClick={() => { controlRun(tabId, run, { control: 'resume' }, signal) }}
         >
           {t('control.resume')}
-        </button>
-        <button
+        </button>}
+        {optimizer && <button
           type="button"
           className={css.action}
           data-refactory-control="stop"
@@ -491,7 +505,7 @@ function Steering({
           onClick={() => { controlRun(tabId, run, { control: 'stop' }, signal) }}
         >
           {t('control.stop')}
-        </button>
+        </button>}
       </div>
       {ledger.entries.length === 0
         ? <p className={css.note} data-refactory-ledger="empty">{t('steering.empty')}</p>
@@ -504,7 +518,7 @@ function Steering({
             ))}
           </ul>
         )}
-      <Candidates
+      {optimizer && <Candidates
         tabId={tabId}
         run={run}
         candidates={candidates}
@@ -513,7 +527,8 @@ function Steering({
         t={t}
         readCandidates={readCandidates}
         controlRun={controlRun}
-      />
+      />}
+      {optimizer === false && <p className={css.note}>{t('steering.graphControls')}</p>}
       {ledger.problems.length > 0 && (
         <ul className={css.recorded} data-refactory-ledger="problems">
           {ledger.problems.map((problem, index) => (
@@ -590,7 +605,7 @@ function Steering({
 
 /** The picker's body: the described choices, and the run they start. */
 export function RefactoryBody({
-  useTabInfo, useStore, choose, setKnob, setSetting, start, run: runOnce, load, reload, refresh, stop,
+  useTabInfo, useStore, choose, setKnob, setSetting, start, run: runOnce, load, reload, refresh, watch, stop,
   readSteering, readCandidates, addNote, answerGate, controlRun, setEnabled, remove,
   importPackage, t,
 }: RefactoryBodyProps): ReactNode {
@@ -599,6 +614,8 @@ export function RefactoryBody({
   const state = useStore(store => store.byTab[tab.id])
   const [source, setSource] = useState('')
   const [name, setName] = useState('')
+  const [watchedPath, setWatchedPath] = useState('')
+  useEffect(() => { setWatchedPath(state?.watching ?? '') }, [state?.watching])
   const chosen = state?.choices.kind === 'ready'
     ? state.choices.value.modes.find(mode => mode.id === state.chosen)
     : undefined
@@ -678,13 +695,24 @@ export function RefactoryBody({
             onChange={(changed) => { setKnob(tab.id, knob, changed) }}
           />
         ))}
-        {selected !== undefined && selected.action !== 'start' && (
+        {selected !== undefined && selected.enabled && selected.action !== 'start' && (
           <p className={css.note} data-refactory-authoring>
             {t('mode.authoring', { action: selected.action })}
           </p>
         )}
-        {selected !== undefined && selected.action === 'start' && !selected.enabled && (
-          <p className={css.note} data-refactory-disabled>{t('mode.disabled')}</p>
+        {selected !== undefined && !selected.enabled && (
+          <div>
+            <p className={css.note} data-refactory-disabled>{t('mode.disabled')}</p>
+            <button
+              type="button"
+              className={css.action}
+              disabled={state.busy}
+              data-refactory-enable-selected
+              onClick={() => { setEnabled(tab.id, selected.package, true, signal) }}
+            >
+              {t('packages.enable')}
+            </button>
+          </div>
         )}
         <Seam
           id="strategy"
@@ -715,6 +743,7 @@ export function RefactoryBody({
             <button
               type="button"
               className={css.action}
+              disabled={!selected.enabled || selected.action !== 'start'}
               data-refactory-start
               onClick={() => { start(tab.id, selected.id, knobs, state.settings, signal) }}
             >
@@ -725,7 +754,7 @@ export function RefactoryBody({
               <button
                 type="button"
                 className={css.action}
-                disabled={state.single?.kind === 'running'}
+                disabled={!selected.enabled || state.single?.kind === 'running'}
                 data-refactory-run-once
                 onClick={() => { runOnce(tab.id, selected.id, knobs, signal) }}
               >
@@ -740,10 +769,27 @@ export function RefactoryBody({
 
       <section className={css.section}>
         <h2 className={css.heading}>{t('status.heading')}</h2>
+        <form className={css.import} onSubmit={(event) => {
+          event.preventDefault()
+          watch(tab.id, watchedPath, signal)
+        }}>
+          <input
+            className={css.input}
+            value={watchedPath}
+            aria-label={t('status.runPath')}
+            placeholder={t('status.runPath')}
+            data-refactory-watch-path
+            onChange={(event) => { setWatchedPath(event.target.value) }}
+          />
+          <button type="submit" className={css.action} disabled={watchedPath.trim() === ''} data-refactory-watch>
+            {t('status.watch')}
+          </button>
+        </form>
+        <p className={css.note}>{t('status.watchHelp')}</p>
         {run !== null && (
           // Which run the gesture produced: the id is what `console status --run`
           // and `wf_state` take, so a person can follow it outside the panel.
-          <p className={css.note} data-refactory-started>{t('started', { run })}</p>
+          <p className={css.note} data-refactory-started>{t('watching', { run })}</p>
         )}
         {run === null
           ? <p className={css.note} data-refactory-status="none">{t('status.none')}</p>
@@ -766,11 +812,13 @@ export function RefactoryBody({
           ? <p className={css.note} data-refactory-steering="none">{t('steering.none')}</p>
           : (
             <Steering
+              key={run}
               tabId={tab.id}
               run={run}
               steering={state.steering}
               candidates={state.candidates}
               statusFinished={state.frame?.kind === 'ready' ? state.frame.value.finished : undefined}
+              optimizer={state.frame?.kind === 'ready' ? state.frame.value.authoring == null : null}
               signal={signal}
               t={t}
               readSteering={readSteering}

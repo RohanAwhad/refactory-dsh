@@ -42,6 +42,7 @@ import type {
   RefactoryAuthoringProgress,
   RefactoryCandidateRow,
   RefactoryGate,
+  RefactoryItemResults,
   RefactoryKnob,
   RefactoryKnobKind,
   RefactoryLedgerEntry,
@@ -190,6 +191,12 @@ function facts(value: unknown): Readonly<Record<string, string>> {
       ])
       .filter(([, written]) => written !== ''),
   )
+}
+
+/** Counts only recorded item verdicts; never invents a mode's aggregate score. */
+function itemResults(value: unknown): RefactoryItemResults | null {
+  if (!isRecord(value)) return null
+  return { count: count(value.count), passed: count(value.passed), failed: count(value.failed), unclassified: count(value.unclassified) }
 }
 
 /** Every entry of one intent ledger, as the console parsed it back. */
@@ -421,6 +428,7 @@ export class RefactoryConsole extends TypertRemoteService {
       best_score: typeof single.best_score === 'number' ? single.best_score : null,
       authoring: authoring(single.authoring),
       facts: facts(single.facts),
+      item_results: itemResults(single.item_results),
     }
   }
 
@@ -449,6 +457,8 @@ export class RefactoryConsole extends TypertRemoteService {
       best_score: typeof answer.best_score === 'number' ? answer.best_score : null,
       finished: answer.finished === true,
       running: answer.running === true,
+      authoring: authoring(answer.authoring),
+      item_results: itemResults(answer.item_results),
     }
   }
 
@@ -671,18 +681,18 @@ export class RefactoryConsole extends TypertRemoteService {
         { mode },
       )
     }
-    if (choice.action !== 'start') {
-      throw new RemoteError(
-        'refactory/authoring-mode',
-        `"${mode}" is an authoring mode, not a mode to run or search; use the "${choice.action}" action`,
-        { mode, action: choice.action },
-      )
-    }
     if (!choice.enabled) {
       throw new RemoteError(
         'refactory/package-disabled',
         `"${choice.package}" is disabled, so "${mode}" cannot run; enable the package first`,
         { mode, package: choice.package },
+      )
+    }
+    if (choice.action !== 'start') {
+      throw new RemoteError(
+        'refactory/authoring-mode',
+        `"${mode}" is an authoring mode, not a mode to run or search; use the "${choice.action}" action`,
+        { mode, action: choice.action },
       )
     }
     return mode

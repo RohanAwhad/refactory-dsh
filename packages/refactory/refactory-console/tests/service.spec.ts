@@ -389,6 +389,7 @@ describe('refactoryConsole — using one mode once', () => {
       finished: true,
       best_score: 0.75,
       authoring: { spine: 'done', nodes_due: [], error: '' },
+      item_results: null,
       // A list is carried as the JSON the run wrote; an empty member is no fact.
       facts: { name: 'demo', validation: 'ok', files: '["mode.py"]', count: '2', nested: '{"a":1}' },
     })
@@ -521,6 +522,8 @@ describe('refactoryConsole — reading a run', () => {  it('maps a status frame,
     best_score: 1.25,
     finished: false,
     running: true,
+    authoring: null,
+    item_results: null,
   })
   expect(subprocess.lastArgv).toEqual([
     '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'status', '--run', '/runs/live', '--after', '3',

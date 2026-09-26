@@ -178,6 +178,8 @@ export interface RefactoryInjected {
    * @param signal - the tab record's lifetime.
    */
   readonly refresh: (tabId: TabId, run: string, after: number, signal: AbortSignal) => void
+  /** Attach an existing run by the exact directory the CEO or terminal reported. */
+  readonly watch: (tabId: TabId, run: string, signal: AbortSignal) => void
   /**
    * Read the watched run's intent ledger and the gates it is stopped at.
    * @param tabId - the tab being drawn.
@@ -348,15 +350,27 @@ export function refactoryFace(
         actions.candidatesRead(tabId, candidates)
       }, undefined, (failure) => { actions.candidatesFailed(tabId, failure.message) })
     }
+    /** Change target without allowing the previous target's late replies to land. */
+    const watchRun = (tabId: TabId, run: string, signal: AbortSignal): void => {
+      if (signal.aborted || run.trim() === '') return
+      nextGeneration(startGenerations, tabId)
+      nextGeneration(candidateGenerations, tabId)
+      nextGeneration(stopGenerations, tabId)
+      actions.watching(tabId, run.trim())
+      readStatus(tabId, run.trim(), 0, signal)
+      loadSteering(tabId, run.trim(), signal)
+    }
     /** Take the packages a package gesture answered with. */
     const takePackages = (
       tabId: TabId,
       call: Promise<RemoteResult<readonly RefactoryPackageChoice[]>>,
+      signal: AbortSignal,
     ): void => {
       const generation = nextGeneration(packageGenerations, tabId)
       actions.busy(tabId, true)
       settle(packageGenerations, tabId, generation, call, (packages) => {
         actions.packages(tabId, packages)
+        read(tabId, signal)
       }, () => { actions.busy(tabId, false) })
     }
     const console = remote.refactoryConsole
@@ -419,9 +433,7 @@ export function refactoryFace(
           { mode, settings: chosen, knobs: knobArguments(knobs) },
           signal,
         ), (receipt) => {
-          actions.watching(tabId, receipt.root)
-          readStatus(tabId, receipt.root, 0, signal)
-          loadSteering(tabId, receipt.root, signal)
+          watchRun(tabId, receipt.root, signal)
         })
       },
       run(tabId, mode, knobs, signal) {
@@ -443,6 +455,9 @@ export function refactoryFace(
         // A ledger is appended to while the run goes, so a refresh of the run is
         // also a refresh of what has been said about it.
         loadSteering(tabId, run, signal)
+      },
+      watch(tabId, run, signal) {
+        watchRun(tabId, run, signal)
       },
       readSteering(tabId, run, signal) {
         loadSteering(tabId, run, signal)
@@ -498,15 +513,15 @@ export function refactoryFace(
       },
       setEnabled(tabId, name, enabled, signal) {
         if (signal.aborted) return
-        takePackages(tabId, console.setPackageEnabled(name, enabled, signal))
+        takePackages(tabId, console.setPackageEnabled(name, enabled, signal), signal)
       },
       remove(tabId, name, signal) {
         if (signal.aborted) return
-        takePackages(tabId, console.removePackage(name, signal))
+        takePackages(tabId, console.removePackage(name, signal), signal)
       },
       importPackage(tabId, source, name, signal) {
         if (signal.aborted) return
-        takePackages(tabId, console.importPackage(source, name, signal))
+        takePackages(tabId, console.importPackage(source, name, signal), signal)
       },
     }
   }
