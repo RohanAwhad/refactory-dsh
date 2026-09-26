@@ -17,8 +17,8 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join, resolve, sep } from 'node:path'
 import { homedir } from 'node:os'
 import z from '@deepseek-ai/schemastery'
 import { scopeChainOf, scopeOf } from '@deepseek-ai/dsh-scope'
@@ -256,6 +256,17 @@ function derivedWorkdir(session: string, mode: string): string {
   return dir
 }
 
+/** Resolve existing symlink ancestors even when the requested leaf is new. */
+function canonicalWorkdir(path: string): string {
+  let ancestor = resolve(path.replace(/^~(?=[/\\]|$)/, homedir()))
+  const tail: string[] = []
+  while (!existsSync(ancestor)) {
+    tail.unshift(basename(ancestor))
+    ancestor = dirname(ancestor)
+  }
+  return resolve(realpathSync(ancestor), ...tail)
+}
+
 /** The per-call execution facts a spine tool resolves its session from. */
 interface ToolExec {
   agent?: Agent
@@ -394,11 +405,9 @@ export function apply(ctx: Context, config: Config): void {
     configuredSpine = new Spine(config.graph, { maxIterations })
   }
 
-  // One in-session driven run at a time is the accepted v1: the `wf_*` tools are
-  // shared by the composition, so two sessions driving at once would each see the
-  // other's cursor. A run opened at run time is therefore claimed by its session,
-  // and every tool call resolves that claim before touching a spine.
-  let opened: OpenRun | undefined
+  // Tools are shared by the web composition; cursors and run settings are not.
+  // Keep each claim until that same session successfully opens its next run.
+  const openedBySession = new Map<string, OpenRun>()
 
   // Both runtimes return while an agent works inside a data pass. Keep setup's
   // result with that spine until the pass closes, never with one drain call.
@@ -437,11 +446,10 @@ export function apply(ctx: Context, config: Config): void {
         gateCommand: config.gateCommand ?? '',
       }
     }
+    const owner = sessionIdOf(exec)
+    const opened = owner === undefined ? undefined : openedBySession.get(owner)
     if (opened === undefined) {
       throw new Error(`no mode is open in this session; call ${toolPrefix}_open with a mode first`)
-    }
-    if (sessionIdOf(exec) !== opened.session) {
-      throw new Error('a run is already open in another session')
     }
     return {
       spine: opened.spine,
@@ -895,13 +903,12 @@ export function apply(ctx: Context, config: Config): void {
         if (session === undefined) {
           throw new Error(`${toolPrefix}_open requires an owning agent session`)
         }
-        // An active run remains exclusively claimed. A completed or halted run
-        // stays inspectable until the next successful open replaces its claim.
+        // Another chat's active or paused run does not block this session. A
+        // completed run remains inspectable until its own session opens another.
         const owner = String(session.id)
+        const opened = openedBySession.get(owner)
         if (opened !== undefined && opened.spine.next().status !== 'done') {
-          throw new Error(opened.session === owner
-            ? 'a run is already open in this session'
-            : 'a run is already open in another session')
+          throw new Error('a run is already open in this session')
         }
         if (config.openCommand === '') {
           throw new Error(
@@ -916,7 +923,20 @@ export function apply(ctx: Context, config: Config): void {
         const requested = args.workdir !== undefined && args.workdir !== ''
           ? args.workdir
           : derivedWorkdir(owner, args.mode)
-        argv.push('--workdir', requested)
+        const requestedPath = canonicalWorkdir(requested)
+        // Refuse before lowering, which can archive an existing invocation.
+        // Terminal claims also remain readable; do not let another session's
+        // next/state calls read or write a newly reused directory through them.
+        for (const run of openedBySession.values()) {
+          if (run.session === owner) continue
+          const claimedPath = canonicalWorkdir(run.workdir)
+          if (requestedPath === claimedPath
+            || requestedPath.startsWith(claimedPath.endsWith(sep) ? claimedPath : claimedPath + sep)
+            || claimedPath.startsWith(requestedPath.endsWith(sep) ? requestedPath : requestedPath + sep)) {
+            throw new Error('the run directory overlaps a run owned by another session; choose a different workdir')
+          }
+        }
+        argv.push('--workdir', requestedPath)
         for (const knob of args.knobs ?? []) argv.push('--knob', knob)
         if (args.intent !== undefined) argv.push(`--intent=${args.intent}`)
         const result = spawnSync(config.openCommand, argv, { encoding: 'utf8' })
@@ -980,7 +1000,7 @@ export function apply(ctx: Context, config: Config): void {
           ? payload.dataCommand
           : config.dataCommand
         const runAgent = typeof payload.agentCommand === 'string' ? payload.agentCommand : (config.agentCommand ?? '')
-        opened = {
+        openedBySession.set(owner, {
           session: owner,
           spine,
           workdir,
@@ -991,7 +1011,7 @@ export function apply(ctx: Context, config: Config): void {
           dataCommand: runData,
           agentCommand: runAgent,
           gateCommand: typeof payload.gateCommand === 'string' ? payload.gateCommand : (config.gateCommand ?? ''),
-        }
+        })
         // A fresh spine has no materialised item. Keep the prior run's files
         // intact; its terminal claim is replaced only after this open succeeds.
         // The post-drain view, not `spine.next()`: a deterministic start node runs
