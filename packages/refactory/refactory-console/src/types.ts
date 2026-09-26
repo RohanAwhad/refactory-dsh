@@ -392,6 +392,20 @@ export interface RefactoryStartRequest {
   readonly knobs?: readonly string[]
 }
 
+/** A current one-shot invocation before its final answer. */
+export interface RefactorySingleLaunch {
+  readonly mode: string
+  readonly root: string
+  /** Prepared means a fresh durable invocation exists, not that execution succeeded. */
+  readonly phase: 'starting' | 'prepared'
+  readonly invocation?: string
+}
+
+/** Ordered launch and completion events from the same owned console call. */
+export type RefactorySingleEvent =
+  | { readonly kind: 'launch'; readonly launch: RefactorySingleLaunch }
+  | { readonly kind: 'result'; readonly run: RefactorySingleRun }
+
 /** One mode to use once: the mode, and the knob values it uses. */
 export interface RefactorySingleRunRequest {
   /** `<package>/<mode>`, as the catalogue lists it. */
@@ -425,6 +439,8 @@ export interface RefactoryConsoleRemote {
   removePackage: (name: string, signal?: AbortSignal) => Promise<RemoteResult<readonly RefactoryPackageChoice[]>>
   /** @param request - the mode to use once and its knob values. @param signal - caller cancellation. @returns the single run's answer. */
   run: (request: RefactorySingleRunRequest, signal?: AbortSignal) => Promise<RemoteResult<RefactorySingleRun>>
+  /** @param request - one mode and its knobs. @param signal - cancels the owned console call. @returns launch identity, preparation evidence, then the final result. */
+  runStream: (request: RefactorySingleRunRequest, signal: AbortSignal) => AsyncIterable<RefactorySingleEvent>
   /** @param signal - caller cancellation. @returns the runs the console knows about. */
   runs: (signal?: AbortSignal) => Promise<RemoteResult<readonly RefactoryRunSummary[]>>
   /** @param name - package name to switch. @param enabled - the state to record. @param signal - caller cancellation. @returns the package list after the change. */

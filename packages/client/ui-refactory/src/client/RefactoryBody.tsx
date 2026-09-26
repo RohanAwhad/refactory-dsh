@@ -199,13 +199,23 @@ function KnobField({
 
 /** What using the chosen mode once left, or that the run is still going. */
 function Single({
-  run, t,
+  run, t, onWatch,
 }: {
+  readonly onWatch: (root: string) => void
   readonly run: RefactorySingleState
   readonly t: TranslateNS<'sidebarRefactory'>
 }): ReactNode {
-  if (run.kind === 'running') {
-    return <p className={css.note} data-refactory-single="running">{t('single.running')}</p>
+  if (run.kind !== 'ready') {
+    const launch = run.launch
+    return <div className={css.status} data-refactory-single={run.kind}>
+      <p className={css.note}>{t(run.kind === 'failed' ? 'single.failed' : launch?.phase === 'starting' ? 'single.starting' : 'single.running')}</p>
+      {launch !== undefined && <>
+        <p data-refactory-single-run>{t('single.active', { mode: launch.mode, run: launch.root })}</p>
+        <button type="button" className={css.action} disabled={launch.phase !== 'prepared'}
+          data-refactory-single-watch onClick={() => { onWatch(launch.root) }}>{t('single.watch')}</button>
+        <p className={css.note}>{t('single.watchHelp')}</p>
+      </>}
+    </div>
   }
   const single = run.value
   const authoring = single.authoring
@@ -783,7 +793,7 @@ export function RefactoryBody({
             )}
           </div>
         )}
-        {state.single !== null && <Single run={state.single} t={t} />}
+        {state.single !== null && <Single run={state.single} t={t} onWatch={root => { watch(tab.id, root, signal) }} />}
       </section>
 
       <section className={css.section}>
