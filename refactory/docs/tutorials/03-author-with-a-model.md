@@ -154,10 +154,21 @@ uv run refactory ceo "count words, lines and characters in a text file" \
   --mode design --name wordcount --check "python wordcount.py sample.txt"
 ```
 
-`--check` is required, and that is the design decision: the artifact is judged by
-**running it**, not by reviewing it. The graph has no register and no smoke step —
-it has a check gate, and a design that never passes its check fails loudly rather
-than landing half-built.
+`--check` is required and runs the artifact in its own directory. The graph has
+no register or smoke step: it has a check gate followed by reviews against the
+brief. A command that exits successfully proves only what it actually checks.
+Reviews compare the output semantics with the brief. Visual deliverables need
+rendered inspection; exchange files need acceptance by an established consumer
+or independent reader.
+Normal loading and loading that repairs the file are separate results.
+
+If a required renderer or consumer is unavailable, the reviewer preserves the
+artifact and evidence, names the missing dependency and the exact external
+validation needed, and leaves the requirement unverified. Re-authoring cannot
+supply a missing validation tool. These prompts add no automatic halt directive:
+the review gates still reloop with a four-visit bound, so external validation may
+need intervention by the CEO or person before that bound is exhausted. An
+unverified requirement must not be relabelled as passed to finish the run.
 
 The artifact is written beside the workspace, not into it.
 
