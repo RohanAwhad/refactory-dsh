@@ -342,6 +342,7 @@ function Candidates({
   readonly readCandidates: RefactoryInjected['readCandidates']
   readonly controlRun: RefactoryInjected['controlRun']
 }): ReactNode {
+  const [destination, setDestination] = useState('')
   return (
     <div className={css.status} data-refactory-candidates={candidates?.kind ?? 'none'}>
       <div className={css.packageActions}>
@@ -354,11 +355,22 @@ function Candidates({
           <IconRefreshOutline16 />
           {t('candidates.read')}
         </button>
+        <input
+          className={css.input}
+          value={destination}
+          aria-label={t('control.destination')}
+          placeholder={t('control.destination')}
+          data-refactory-adopt-name
+          onChange={(event) => { setDestination(event.target.value) }}
+        />
         <button
           type="button"
           className={css.action}
           data-refactory-control="adopt"
-          onClick={() => { controlRun(tabId, run, { control: 'adopt' }, signal) }}
+          onClick={() => {
+            const name = destination.trim()
+            controlRun(tabId, run, { control: 'adopt', ...name === '' ? {} : { as: name } }, signal)
+          }}
         >
           {t('control.adopt')}
         </button>
@@ -519,6 +531,7 @@ function Steering({
           </ul>
         )}
       {optimizer && <Candidates
+        key={run}
         tabId={tabId}
         run={run}
         candidates={candidates}
