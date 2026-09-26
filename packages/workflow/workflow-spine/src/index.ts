@@ -1054,12 +1054,19 @@ export function apply(ctx: Context, config: Config): void {
     },
     output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
     execute(args, exec) {
-      const { spine, workdir } = requireRun(exec)
+      const { spine, workdir, commandEnv, agentCommand } = requireRun(exec)
       if (args.action === 'pause' || args.action === 'unpause') {
         spine.pauseBefore(args.node, args.action === 'pause')
         recordStatus(spine, workdir, spine.isHalted() ? 'halted' : spine.isPaused() ? 'paused' : spine.next().status)
-      } else if (args.action === 'skip') spine.skip(args.node)
-      else if (args.action === 'unskip') spine.unskip(args.node)
+      } else if (args.action === 'skip') {
+        const nodes = spine.planSkip(args.node)
+        if (agentCommand !== '' && workdir !== undefined) {
+          runtimeBridge(agentCommand, workdir, commandEnv, {
+            action: 'invalidate', nodes, reason: `skip ${args.node}`,
+          })
+        }
+        spine.skip(args.node)
+      } else if (args.action === 'unskip') spine.unskip(args.node)
       else {
         if (args.text === undefined || args.text.trim() === '') {
           throw new Error(`${toolPrefix}_edit action '${args.action}' needs a non-empty prompt amendment in 'text'`)
