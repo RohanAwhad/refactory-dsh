@@ -1087,9 +1087,8 @@ def smoke(ctx: Any) -> dict[str, Any]:
 
     A mode that cannot score is not a deliverable, and a revision that scores lower
     than the mode it came from is not an improvement. The comparison happens here
-    rather than in the driver because this is the only step that has just scored the
-    new mode; the driver's own comparison only ran for `python -m refactory_dsh.edit`,
-    which is not the path a person takes.
+    rather than in an entry-point driver, so the CLI, Python API and CEO all use the
+    same measurement and the same comparability policy.
     """
     name = str(ctx.facts["name"])
     revision = str(ctx.facts.get("revision_of") or "").strip()
@@ -1255,16 +1254,34 @@ def _revision(
     except Exception as exc:
         raise ValueError(f"cannot revise {revision!r}: {exc}") from exc
     source = mode_class()
+    state = source.state_dict()
+    from refactory_dsh.optim.base import candidate_id
+
+    task = ctx.task if isinstance(getattr(ctx, "task", None), dict) else {}
+    original_state = task.get("revision_of_state")
+    if original_state is not None and state != original_state:
+        raise ValueError(
+            f"the revision source {revision} changed state during authoring; "
+            "start a new revision against its current state"
+        )
     reason = not_comparable
     if not reason and getattr(mode_class, "unscored_reason", ""):
         reason = f"{revision} is unscored, so there is no score to compare against"
     if not reason and [n for n in source.build().nodes.values() if n.kind == "agent"]:
         reason = f"{revision} calls a model, and one sample of it is not a score"
+    samples = _sample_knobs(ctx.knob("sample_knobs", ""))
+    missing_samples = sorted(set(samples) - set(state["knobs"]))
+    if not reason and missing_samples:
+        reason = (
+            f"{revision} does not accept the sample knobs {', '.join(missing_samples)}, "
+            "so the source cannot be measured on the revision's inputs"
+        )
 
     before: float | None = None
     if not reason:
         scored = sandbox.smoke(
             revision, ctx.workdir / "smoke-source", project=project,
+            knobs=samples or None,
             model_context=_model_context(ctx),
             timeout_s=int(ctx.knob("smoke_timeout_s", sandbox.DEFAULT_MODEL_SMOKE_TIMEOUT_S)),
         )
@@ -1277,15 +1294,21 @@ def _revision(
                 "before_score": None, "after_score": after, "regressed": None,
             })
             raise ValueError(f"the revision source {revision} did not finish a run: {scored.problem()}")
-        if scored.ok:
-            before = float(scored.payload.get("score") or 0.0)
-        else:
-            reason = f"{revision} could not be scored: {scored.problem()}"
+        if not scored.ok or scored.payload.get("exit_ok") is False:
+            error = scored.problem() if not scored.ok else (
+                scored.payload.get("error") or "it failed without saying why"
+            )
+            ctx.write_json("revision.json", {
+                "phase": "source-comparison", "revision_of": revision,
+                "before_score": None, "after_score": after, "regressed": None,
+                "exit_ok": False, "returncode": scored.returncode, "error": error,
+                "workdir": str(ctx.workdir / "smoke-source"), "sandboxed": True,
+                "sample_knobs": samples,
+            })
+            raise ValueError(f"the revision source {revision} did not finish a run: {error}")
+        before = float(scored.payload.get("score") or 0.0)
 
-    state = source.state_dict()
-    from refactory_dsh.optim.base import candidate_id
-
-    regressed = before is not None and after is not None and after < before
+    regressed = after < before if before is not None and after is not None else None
     allowed = bool(ctx.knob("allow_regression", 0))
     recorded = {
         "revision_of": revision,
@@ -1295,6 +1318,7 @@ def _revision(
         "after_score": after,
         "regressed": regressed,
         "allow_regression": allowed,
+        "brief": ctx.facts.get("brief", ""),
         "note": reason,
     }
     ctx.write_json("revision.json", recorded)
