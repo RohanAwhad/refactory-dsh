@@ -1,0 +1,12 @@
+diff --git a/lib/index.js b/lib/index.js
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -232,6 +232,8 @@ async function pickNativeDirectory(signal, internals = {}) {
+ 	const run = internals.run ?? runNativeCommand;
+ 	if (platform === "darwin") try {
+ 		return outputPath((await run("osascript", [
++			"-e",
++			"activate",
+ 			"-e",
+ 			"set selectedFolder to choose folder with prompt \"Select Workspace Directory\"",
+ 			"-e",
