@@ -165,3 +165,18 @@ restart/resume persistence.
 
 The Typert Remote faces are kept in step by hand. The generated artifacts would make that
 impossible to get wrong, and issue #85 carries why they are not generated.
+
+### Cursor integrity
+
+Completion and gate verdicts must name a node in the current cursor. A rejected
+completion or invalid verdict leaves the cursor and its history unchanged; a past
+completion does not authorize running that node's successor again. The data-pass
+runner alone restores the enclosing data continuation after grading its final item.
+When the composition runs commands, the CEO cannot certify a deterministic node or
+automatic gate with `wf_done` or `wf_verdict`: `wf_next` runs its actual operation or
+evaluator. A literal `halt` on a currently due automatic gate with no forward halt
+edge is recorded as cancellation, not a measured gate result.
+
+Explicit prompt edits, skip/unskip and redo remain steering actions. To recover a
+halted run, redo a completed agent deliberately; a verdict cannot implicitly reopen
+a halted gate outside the cursor. Restart/resume and pausing remain separate contracts.
