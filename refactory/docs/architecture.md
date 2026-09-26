@@ -456,6 +456,7 @@ mode declared a gate a person answers, so the path had nothing to exercise it.
 
 ```bash
 uv run refactory ceo review_pack/review \
+  --knob 'topic=circle packing' \
   --intent "draft a note about circle packing and let me approve it"
 ```
 

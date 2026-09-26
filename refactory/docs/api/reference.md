@@ -747,6 +747,7 @@ The per-item half of a data node, from the command line.
 | function | `command_begin` | `(node: 'Node', workdir: 'Path', index: 'int') -> 'dict[str, Any]'` |
 | function | `command_end` | `(node: 'Node', workdir: 'Path', index: 'int') -> 'dict[str, Any]'` |
 | function | `command_list` | `(node: 'Node', workdir: 'Path') -> 'dict[str, Any]'` |
+| function | `command_reset` | `(workdir: 'Path', request: 'dict[str, Any]') -> 'dict[str, Any]'` |
 | function | `data_node` | `(workdir: 'Path', node_id: 'str') -> 'Node'` |
 | function | `items_of` | `(node: 'Node', workdir: 'Path') -> 'list[dict[str, Any]]'` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
@@ -757,6 +758,7 @@ The per-item half of a data node, from the command line.
 - **`command_begin`** — Materialise one item and prepare the workspace for its pass.
 - **`command_end`** — The Task's verdict on one pass, folded into the run's facts.
 - **`command_list`** — How many items the node iterates, and what they are called.
+- **`command_reset`** — Archive prior facts, then invalidate the facts of explicitly redone work.
 - **`data_node`** — The data node the declarations describe, as the graph language's own node.
 - **`items_of`** — The data node's items, loaded the one way both runtimes load them.
 - **`source_override`** — What this run says the data node should read, or an empty answer.
