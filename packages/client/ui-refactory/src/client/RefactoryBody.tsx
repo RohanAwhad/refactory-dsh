@@ -319,11 +319,12 @@ const NOTE_KINDS: readonly RefactoryNoteKind[] = ['info', 'correction', 'constra
  * are the flags the person then sees.
  */
 function Candidates({
-  tabId, run, candidates, signal, t, readCandidates, controlRun,
+  tabId, run, candidates, finished, signal, t, readCandidates, controlRun,
 }: {
   readonly tabId: Parameters<RefactoryInjected['refresh']>[0]
   readonly run: string
   readonly candidates: Loadable<readonly RefactoryCandidateRow[]> | null
+  readonly finished: boolean
   readonly signal: AbortSignal
   readonly t: TranslateNS<'sidebarRefactory'>
   readonly readCandidates: RefactoryInjected['readCandidates']
@@ -376,7 +377,7 @@ function Candidates({
                   <button
                     type="button"
                     className={css.action}
-                    disabled={row.kept}
+                    disabled={finished || row.kept}
                     data-refactory-candidate-keep={row.id}
                     onClick={() => {
                       controlRun(tabId, run, { control: 'keep', target: row.id }, signal)
@@ -387,7 +388,7 @@ function Candidates({
                   <button
                     type="button"
                     className={css.action}
-                    disabled={row.rejected}
+                    disabled={finished || row.rejected}
                     data-refactory-candidate-reject={row.id}
                     onClick={() => {
                       controlRun(tabId, run, { control: 'reject', target: row.id }, signal)
@@ -434,8 +435,25 @@ function Steering({
     )
   }
   const ledger = steering.value
+  const finished = ledger.finished === true
   return (
     <div className={css.status} data-refactory-steering="ready">
+      {finished && <p className={css.note} data-refactory-controls-finished>{t('control.finished')}</p>}
+      {ledger.control != null && (
+        <p className={css.note} data-refactory-control-receipt={ledger.control.status}>
+          {t(`control.${ledger.control.status}`, { action: ledger.control.action })}
+          {ledger.control.target && <> {ledger.control.target}</>}
+          {ledger.control.as && <> · {ledger.control.as}</>}
+          {ledger.control.recovered && <> {t('control.recovered')}</>}
+          {ledger.control.recovered_control && (
+            <> {t('control.recovered')} {ledger.control.recovered_control.action} {ledger.control.recovered_control.target}</>
+          )}
+          {ledger.control.candidate && <> {ledger.control.candidate}</>}
+          {ledger.control.package_root && <> · {ledger.control.package_root}</>}
+          {ledger.control.message && <> · {ledger.control.message}</>}
+          {ledger.control.error && <> · {ledger.control.error}</>}
+        </p>
+      )}
       <div className={css.packageActions}>
         <button
           type="button"
@@ -450,6 +468,7 @@ function Steering({
           type="button"
           className={css.action}
           data-refactory-control="pause"
+          disabled={finished}
           onClick={() => { controlRun(tabId, run, { control: 'pause' }, signal) }}
         >
           {t('control.pause')}
@@ -458,6 +477,7 @@ function Steering({
           type="button"
           className={css.action}
           data-refactory-control="resume"
+          disabled={finished}
           onClick={() => { controlRun(tabId, run, { control: 'resume' }, signal) }}
         >
           {t('control.resume')}
@@ -466,6 +486,7 @@ function Steering({
           type="button"
           className={css.action}
           data-refactory-control="stop"
+          disabled={finished}
           onClick={() => { controlRun(tabId, run, { control: 'stop' }, signal) }}
         >
           {t('control.stop')}
@@ -486,6 +507,7 @@ function Steering({
         tabId={tabId}
         run={run}
         candidates={candidates}
+        finished={finished}
         signal={signal}
         t={t}
         readCandidates={readCandidates}

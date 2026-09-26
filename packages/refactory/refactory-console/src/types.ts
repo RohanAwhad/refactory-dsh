@@ -243,6 +243,21 @@ export interface RefactorySteering {
   readonly gates: readonly RefactoryGate[]
   /** What is wrong with the ledger, as the console's own fidelity check reports it. */
   readonly problems: readonly string[]
+  /** A completed optimizer has no future boundary to consume live controls. */
+  readonly finished?: boolean
+  /** Pending or most recent control, retained across panel refreshes. */
+  readonly control?: {
+    readonly action: string
+    readonly status: 'queued' | 'applied' | 'refused'
+    readonly candidate?: string
+    readonly target?: string
+    readonly as?: string
+    readonly package_root?: string
+    readonly message?: string
+    readonly error?: string
+    readonly recovered?: boolean
+    readonly recovered_control?: { readonly action: string; readonly target?: string }
+  } | null
 }
 
 /** One read of, or addition to, a run's intent ledger. */

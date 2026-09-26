@@ -263,7 +263,7 @@ Adopt a run's winner as a mode of its own.
 | function | `best` | `(run_root: 'Path') -> 'dict[str, Any]'` |
 
 - **`AdoptionError`** — A winner cannot be adopted. Always names what is wrong.
-- **`adopt`** — Write the winner as a new package, and leave both inputs untouched.
+- **`adopt`** — Write the winner as a new package, honoring a legacy pending selection.
 - **`best`** — The winner: the highest-scoring candidate whose state the run recorded.
 
 
