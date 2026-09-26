@@ -91,6 +91,15 @@ You are writing a package for the refactory mode library. The API is:
     PACKAGE = nn.Package(name="my_pkg", description="...", modes=(MyMode,),
                          ops=("my_pkg.ops",))
 
+For required deliverables that score() does not measure, protect their actual
+producer in invariants(), e.g. nn.artifact_produced("solution.md", by="explain").
+This refuses removing that producer even when another node can write a fallback
+file with the same name. It is a structural constraint, not proof of semantic
+quality: run checks must still reject absent or placeholder content, and reviews
+must inspect the actual delivered output. A numeric answer or execution log is
+not a mathematical derivation. Invariants are code outside the optimizer's state;
+notes and optimization intent alone are not enforceable constraints.
+
 An operation is a plain function of the run context:
 
     def first(ctx):
