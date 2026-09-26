@@ -354,7 +354,10 @@ def _open_mode(
 SPINE_STATUS = Path(".refactory") / "spine-status.json"
 
 #: The spine's states, in the words a reader of `status` already has.
-SPINE_STATES = {"done": "finished", "ready": "running", "failed": "failed", "refused": "failed"}
+SPINE_STATES = {
+    "done": "finished", "ready": "running", "failed": "failed", "refused": "failed",
+    "halted": "halted",
+}
 
 
 def _spine(run_root: Path) -> dict[str, Any]:
@@ -402,11 +405,14 @@ def status(run_root: Path, *, after: int = 0) -> dict[str, Any]:
     events = observe.progress(run_root, after=after)
     console = _console(run_root)
     spine = _spine(run_root)
-    finished = (run_root / "report.json").exists() or spine.get("status") == "done"
+    halted = spine.get("status") == "halted"
+    # Terminal is not the same as successful: polling stops at a halt, while
+    # the state still names the halt rather than claiming the work completed.
+    finished = (run_root / "report.json").exists() or spine.get("status") in {"done", "halted"}
     state = _state(run_root, events, console)
     if spine:
         state = SPINE_STATES.get(str(spine.get("status")), state)
-        if finished:
+        if finished and not halted:
             state = "finished"
     return {
         "run_id": run_root.name,
@@ -418,7 +424,7 @@ def status(run_root: Path, *, after: int = 0) -> dict[str, Any]:
         "counters": _counters(events),
         "best_score": _best(run_root, events),
         "finished": finished,
-        "running": _running(run_root, console) or (bool(spine) and not finished),
+        "running": not finished and (_running(run_root, console) or bool(spine)),
         "authoring": _authoring(run_root, spine) if spine else None,
     }
 

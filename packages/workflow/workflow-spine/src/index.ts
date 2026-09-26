@@ -231,7 +231,9 @@ function recordedStep(node: NodeView, workdir: string | undefined): RanStep {
  * @returns the absolute run directory, created.
  */
 function derivedWorkdir(session: string, mode: string): string {
-  const dir = join(process.cwd(), '.factory', 'web', session, mode.split('/').join('-'))
+  const base = join(process.cwd(), '.factory', 'web', session, mode.split('/').join('-'))
+  let dir = base
+  for (let suffix = 2; existsSync(dir); suffix += 1) dir = `${base}-${suffix}`
   mkdirSync(dir, { recursive: true })
   return dir
 }
@@ -372,11 +374,9 @@ export function apply(ctx: Context, config: Config): void {
   // and every tool call resolves that claim before touching a spine.
   let opened: OpenRun | undefined
 
-  // The item a pass already materialised, kept between calls rather than inside
-  // one `drain`. With `interactiveOpen` a call returns after a single
-  // deterministic node, so a pass's item outlives the call that began it and
-  // re-running `begin` for it would re-run the Task's setup once per node.
-  let materialised: Materialised | undefined
+  // Both runtimes return while an agent works inside a data pass. Keep setup's
+  // result with that spine until the pass closes, never with one drain call.
+  const materialised = new WeakMap<Spine, Materialised>()
 
   /** The id of the session an execution belongs to, when it has an agent. */
   function sessionIdOf(exec: ToolExec): string | undefined {
@@ -495,10 +495,6 @@ export function apply(ctx: Context, config: Config): void {
     dataCommand: string,
   ): Promise<{ next: SpineNext; failure?: CommandFailure; item?: unknown; ran?: RanStep | undefined }> {
     if (!config.executeCommands) return { next: spine.next() }
-    // A configured graph drains a whole pass within one call, so its materialised
-    // item is per-call state exactly as before; only the one-node interactive
-    // drain has to carry it across calls.
-    if (!interactiveOpen) materialised = undefined
     const shell = ctx.get('shell')
     if (shell === undefined) {
       // Without an executor nothing deterministic can run. That is only a problem
@@ -553,14 +549,15 @@ export function apply(ctx: Context, config: Config): void {
       const pass = spine.passOf()
       if (pass === undefined || pass.finished) return {}
       const key = `${pass.node}:${pass.index}`
-      if (materialised?.key === key) {
-        item = materialised.item
+      const current = materialised.get(spine)
+      if (current?.key === key) {
+        item = current.item
         return {}
       }
       const data = spine.view(pass.node)
       const started = await runDataCommand(shell, data, 'begin', runner, pass.index)
       if (!started.ok) return { failure: started }
-      materialised = { key, item: started.value }
+      materialised.set(spine, { key, item: started.value })
       item = started.value
       return {}
     }
@@ -568,11 +565,17 @@ export function apply(ctx: Context, config: Config): void {
     /** Close a finished pass: judge it, then move to the next item or finish. */
     const close = async (): Promise<{ failure?: CommandFailure }> => {
       const pass = spine.passOf()
-      if (pass === undefined || !pass.finished) return {}
+      if (pass === undefined || spine.isHalted()) return {}
+      if (!pass.finished) {
+        const pending = spine.next()
+        // A terminal refusal ends this item's branch too. The Task judges its
+        // missing answer, just as on the walker; it must not strand the dataset.
+        if (pending.status !== 'ready' || pending.nodes.length !== 0) return {}
+      }
       const data = spine.view(pass.node)
       const ended = await runDataCommand(shell, data, 'end', runner, pass.index)
       if (!ended.ok) return { failure: ended }
-      materialised = undefined
+      materialised.delete(spine)
       item = undefined
       spine.endPass()
       return {}
@@ -601,9 +604,15 @@ export function apply(ctx: Context, config: Config): void {
         if (!outcome.ok) return { next: state, failure: outcome, ran }
         if (outcome.verdict === undefined) spine.complete(node.id)
         else spine.verdict(node.id, outcome.verdict)
-        if (interactiveOpen) ran = recordedStep(node, workdir)
+        if (interactiveOpen) {
+          // Grading and advancing the data frame are bookkeeping, not another
+          // deterministic node. Finish them before exposing the public status.
+          const closed = await close()
+          ran = recordedStep(node, workdir)
+          if (closed.failure !== undefined) return { next: spine.next(), failure: closed.failure, ran }
+          return { next: spine.next(), item, ran }
+        }
       }
-      if (interactiveOpen) return { next: spine.next(), item, ran }
     }
   }
 
@@ -635,7 +644,7 @@ export function apply(ctx: Context, config: Config): void {
         stderr: failure.stderr,
       })
     }
-    recordStatus(spine, workdir, next.status === 'done' ? 'done' : 'ready')
+    recordStatus(spine, workdir, spine.isHalted() ? 'halted' : next.status === 'done' ? 'done' : 'ready')
     // The item being iterated travels with the node views, so the subagent for a
     // pass is handed the item rather than being sent to find it on disk. Under
     // `interactiveOpen` the node this call ran travels the same way, so the CEO
@@ -749,10 +758,10 @@ export function apply(ctx: Context, config: Config): void {
         if (session === undefined) {
           throw new Error(`${toolPrefix}_open requires an owning agent session`)
         }
-        // One in-session driven run at a time is the accepted v1; the claim is the
-        // session's, so a second open is refused rather than silently replacing it.
+        // An active run remains exclusively claimed. A completed or halted run
+        // stays inspectable until the next successful open replaces its claim.
         const owner = String(session.id)
-        if (opened !== undefined) {
+        if (opened !== undefined && opened.spine.next().status !== 'done') {
           throw new Error(opened.session === owner
             ? 'a run is already open in this session'
             : 'a run is already open in another session')
@@ -842,8 +851,8 @@ export function apply(ctx: Context, config: Config): void {
           commandEnv: runEnv,
           dataCommand: runData,
         }
-        // A new run owns no materialised item; a fresh claim cannot inherit one.
-        materialised = undefined
+        // A fresh spine has no materialised item. Keep the prior run's files
+        // intact; its terminal claim is replaced only after this open succeeds.
         // The post-drain view, not `spine.next()`: a deterministic start node runs
         // here, exactly as the next `<toolPrefix>_next` would, so it is never
         // reported as work the model owes.

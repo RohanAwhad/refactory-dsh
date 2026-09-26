@@ -70,13 +70,19 @@ export interface DataPass {
   finished: boolean
 }
 
+/** A gate stopped the run, rather than completing an item branch. */
+export interface TerminalHalt {
+  gate: string
+  reason: 'verdict' | 'max_iterations'
+}
+
 /**
  * The result of {@link Spine.next}: the nodes due now, or the end of the run with
  * the count of what completed.
  */
 export type SpineNext =
   | { status: 'ready'; nodes: NodeView[]; feedback?: Record<string, string>; completed?: number; skipped?: string[]; pass?: DataPass }
-  | { status: 'done'; nodes?: never; feedback?: Record<string, string>; completed?: number; skipped?: string[]; pass?: DataPass }
+  | { status: 'done'; nodes?: never; feedback?: Record<string, string>; completed?: number; skipped?: string[]; pass?: DataPass; halted?: TerminalHalt }
 
 /** How {@link Spine.amendPrompt} changes a node's prompt. */
 export type PromptAmendmentMode = 'set' | 'append'
@@ -310,6 +316,7 @@ export class Spine {
   private readonly log: string[]
   private readonly promptEdits: Set<string>
   private pass: DataPass | undefined
+  private halted: TerminalHalt | undefined
 
   constructor(graph: WorkflowGraph, options?: { maxIterations?: number }) {
     this.nodes = new Map(Object.entries(graph.nodes))
@@ -461,8 +468,11 @@ export class Spine {
   /** The node(s) due now, or `done`. */
   next(): SpineNext {
     const pass = this.pass === undefined ? {} : { pass: { ...this.pass } }
-    if (this.cursor.length === 0) {
-      return { status: 'done', completed: this.completed.length, skipped: [...this.skipped], ...pass }
+    if (this.halted !== undefined || (this.cursor.length === 0 && this.pass === undefined)) {
+      return {
+        status: 'done', completed: this.completed.length, skipped: [...this.skipped], ...pass,
+        ...(this.halted === undefined ? {} : { halted: { ...this.halted } }),
+      }
     }
     return {
       status: 'ready',
@@ -470,6 +480,11 @@ export class Spine {
       feedback: { ...this.feedback },
       ...pass,
     }
+  }
+
+  /** Whether a gate stopped the run before its remaining work completed. */
+  isHalted(): boolean {
+    return this.halted !== undefined
   }
 
   /**
@@ -522,7 +537,12 @@ export class Spine {
   endPass(): SpineNext {
     const pass = this.pass
     if (pass === undefined) throw new Error('no data pass is running')
-    if (!pass.finished) throw new Error(`item ${pass.index} of ${pass.node} has not finished`)
+    if (this.halted !== undefined) throw new Error(`run halted at ${this.halted.gate}; its item did not finish`)
+    // A terminal branch (for example an explicit refusal) also ends an item.
+    // The runner must still obtain its Task verdict before advancing the pass.
+    if (!pass.finished && this.cursor.length !== 0) {
+      throw new Error(`item ${pass.index} of ${pass.node} has not finished`)
+    }
     if (pass.index + 1 < pass.count) {
       const index = pass.index + 1
       this.pass = { ...pass, index, finished: false }
@@ -607,11 +627,13 @@ export class Spine {
       this.iterations[gate] = count
       if (count > cap) {
         this.gateVerdicts.set(gate, HALT)
+        this.halted = { gate, reason: 'max_iterations' }
         this.cursor = []
         this.afters = []
         this.log.push(`gate ${gate}: max iterations -> halt`)
         return this.next()
       }
+      this.halted = undefined
       this.feedback[target] = feedback
       this.uncompleteBetween(target, gate)
       this.cursor = [target]
@@ -619,6 +641,7 @@ export class Spine {
       this.log.push(`gate ${gate}: reloop -> ${target} (${count})`)
     } else if (outcome === HALT) {
       const target = this.conditionalTarget(gate, HALT)
+      this.halted = target === undefined ? { gate, reason: 'verdict' } : undefined
       this.cursor = target === undefined ? [] : [target]
       this.afters = []
       this.log.push(`gate ${gate}: halt`)
@@ -629,6 +652,7 @@ export class Spine {
         const allowed = this.acceptedVerdicts(gate)
         throw new Error(`${gate} has no '${outcome}' edge (accepts ${allowed.join(', ')})`)
       }
+      this.halted = undefined
       this.cursor = [target]
       this.afters = []
       this.log.push(`gate ${gate}: ${outcome} -> ${target}`)
@@ -778,6 +802,7 @@ export class Spine {
     }
     this.completed = this.completed.filter(entry => entry !== node)
     this.skipped = this.skipped.filter(entry => entry !== node)
+    this.halted = undefined
     this.cursor = [node]
     this.log.push(`redid ${node}`)
     return this.next()
@@ -827,6 +852,7 @@ export class Spine {
       feedback: { ...this.feedback },
       prompts,
       ...(this.pass === undefined ? {} : { pass: { ...this.pass } }),
+      ...(this.halted === undefined ? {} : { halted: { ...this.halted } }),
       log: [...this.log],
     }
   }
