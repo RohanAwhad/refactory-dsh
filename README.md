@@ -139,8 +139,12 @@ its legacy `task_ref` field is populated when there is exactly one distinct Task
 | `--headless` | run without a conversation: one task, one report, then exit, for scripts and CI. Without it the run is live — each turn prints as it happens and a line you type between turns reaches the CEO. |
 
 The create and design QA gate uses current `BLOCKING: <finding>` statements from
-all three review reports. `BLOCKING: none` is a clean verdict. Fenced transcripts
-and sections headed `Previous review`, `Superseded`, or `Archived review` are
+all three review reports. `BLOCKING: none` and scoped empty verdicts such as
+`BLOCKING: none in the current emitted artifact` are clean verdicts. A section
+title such as `## 11. BLOCKING: findings` is not itself a finding; actual findings
+under it still need their own `BLOCKING:` marker. `BLOCKING: none, except ...`
+remains blocking. Fenced transcripts and sections headed `Previous review`,
+`Superseded`, or `Archived review` are
 history; a `Current findings` heading resumes current findings. The synthesis
 preserves the full reports and their digests, so changing a report after synthesis
 requires fresh synthesis before the gate can proceed.

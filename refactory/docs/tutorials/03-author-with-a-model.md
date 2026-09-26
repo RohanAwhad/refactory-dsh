@@ -49,6 +49,15 @@ format it claims — a `.whl` with no `METADATA` or `WHEEL` beside its `RECORD`,
 archive that will not open. And `--resume .factory/edit/name` continues a run that died
 at the node it failed on, keeping every node that had already finished.
 
+Generated content guards should check the promised structure and substance, not
+reject harmless spelling. An unresolved template field needs its template context;
+punctuation, braces or an ordinary word alone do not establish missing content.
+The authoring reviews ask for both accepted and rejected cases through the public
+package interface: quoted prose, Unicode and mathematical notation (including
+nested LaTeX braces) when supported, alongside malformed inputs. These are review
+instructions, not a runtime proof of semantic correctness or a repair of previously
+generated packages.
+
 What happens, in order — and the gates are the point:
 
 1. **survey** — what already exists, so the model can build on it rather than
