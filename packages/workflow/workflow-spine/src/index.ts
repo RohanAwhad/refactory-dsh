@@ -516,8 +516,9 @@ export function apply(ctx: Context, config: Config): void {
    *
    * With `interactiveOpen` the loop stops after **one** deterministic node and
    * returns, so each `wf_next` is one node the CEO can watch and steer between.
-   * Opening and closing a data pass are loop bookkeeping, not nodes, so they do
-   * not consume that one-node budget and a pass that begins always continues on
+   * Static fork/join boundaries and opening/closing a data pass are bookkeeping,
+   * not executable nodes, so they do not consume that one-node budget. A pass
+   * that begins always continues on
    * the calls that follow. A configured graph (`interactiveOpen: false`) keeps
    * draining every deterministic node in one call.
    * @param spine - the run to advance.
@@ -532,12 +533,30 @@ export function apply(ctx: Context, config: Config): void {
     dataCommand: string,
   ): Promise<{ next: SpineNext; failure?: CommandFailure; item?: unknown; ran?: RanStep | undefined }> {
     if (!config.executeCommands) return { next: spine.next() }
+    // Structural boundaries have no worker or command to dispatch. Cross a sole
+    // due boundary before exposing branch prompts, so their delivery snapshots
+    // exist before a CEO can delegate them. Mixed cursors retain manual control:
+    // completing a fork there would replace its concurrent peers.
+    const structural = new Set<string>()
+    const advanceControl = (state: SpineNext): boolean => {
+      if (state.status !== 'ready' || spine.isPaused() || state.nodes.length !== 1) return false
+      const node = state.nodes[0]!
+      if (node._type !== 'ForkNode' && node._type !== 'JoinNode') {
+        structural.clear()
+        return false
+      }
+      if (structural.has(node.id)) throw new Error(`structural workflow cycle at ${node.id}`)
+      structural.add(node.id)
+      spine.complete(node.id)
+      return true
+    }
     const shell = ctx.get('shell')
     if (shell === undefined) {
       // Without an executor nothing deterministic can run. That is only a problem
       // when something is waiting to be run: a data node handed to the driving
       // agent would be a node the cursor never enters and never iterates.
-      const state = spine.next()
+      let state = spine.next()
+      while (advanceControl(state)) state = spine.next()
       const waiting = state.status === 'ready'
         ? state.nodes.find(node => node._type === 'DataNode')
         : undefined
@@ -615,6 +634,7 @@ export function apply(ctx: Context, config: Config): void {
       materialised.delete(spine)
       item = undefined
       spine.endPass()
+      structural.clear()
       return {}
     }
 
@@ -625,6 +645,7 @@ export function apply(ctx: Context, config: Config): void {
       if (state.status === 'done' || spine.isPaused()) return { next: state, item, ran }
       const started = await beginItem()
       if (started.failure !== undefined) return { next: state, failure: started.failure, ran }
+      if (advanceControl(state)) continue
       const data = state.nodes.find(node => node._type === 'DataNode')
       if (data !== undefined) {
         const openedPass = await openPass(data)
@@ -632,7 +653,7 @@ export function apply(ctx: Context, config: Config): void {
         continue
       }
       const automatic = state.nodes.filter(isDeterministic)
-      if (automatic.length === 0) return { next: state, item, ran }
+      if (automatic.length === 0 || (interactiveOpen && ran !== undefined)) return { next: state, item, ran }
       // One node per call is the interactive contract; the configured graph keeps
       // walking every automatic node the cursor is sitting on.
       const due = interactiveOpen ? automatic.slice(0, 1) : automatic
@@ -642,12 +663,9 @@ export function apply(ctx: Context, config: Config): void {
         if (outcome.verdict === undefined) spine.complete(node.id)
         else spine.verdict(node.id, outcome.verdict)
         if (interactiveOpen) {
-          // Grading and advancing the data frame are bookkeeping, not another
-          // deterministic node. Finish them before exposing the public status.
-          const closed = await close()
+          // Preserve the one-command budget while allowing structural boundaries
+          // and data-pass grading to settle before exposing the next ready work.
           ran = recordedStep(node, workdir)
-          if (closed.failure !== undefined) return { next: spine.next(), failure: closed.failure, ran }
-          return { next: spine.next(), item, ran }
         }
       }
     }
@@ -820,7 +838,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.systemPrompt.section({
     name: `tool:${toolPrefix}-spine`,
     order: ctx.systemPrompt.getSectionOrder('TOOL_WORKFLOW'),
-    text: `You are the CEO of a workflow run, and you are DRIVING A WORKFLOW GRAPH. Your coding tools (bash, write, edit, web, skill) are disabled — you cannot implement, edit files, or browse yourself. Advance only through the wf tools.${openInstruction} If the person requests a pause before a named node or deterministic dataset, arm it FIRST with ${toolPrefix}_edit action \`pause\` for that node, before any ${toolPrefix}_next that could reach it. Use ${toolPrefix}_state to inspect ids without executing work. When status is \`paused\`, end your turn and wait for the person. Only after an explicit request to continue, use ${toolPrefix}_edit action \`unpause\` on that boundary and resume. Repeated ${toolPrefix}_next calls do not release a pause; never skip or redo around it. ${toolPrefix}_state inspects the cursor without execution; ${toolPrefix}_next executes due deterministic work. After reading steering and arming any requested pause, call it to advance, and call it again after every ${toolPrefix}_done / ${toolPrefix}_verdict / ${toolPrefix}_edit / ${toolPrefix}_expand — those tools only confirm the mutation, they do not tell you what is next. When ${toolPrefix}_steer is available, read it before each ${toolPrefix}_next: it is what the person said about the run since you last looked. A correction from the person is applied to that node's prompt with ${toolPrefix}_edit (\`set-prompt\`/\`append-prompt\`) and the node is re-run with ${toolPrefix}_redo. For an AgentNode or LLMNode, spawn a subagent (the subagent tool) whose task is the node's prompt_template, and explicitly tell the subagent to read the node's reads files and write its result to the node's writes file (the filename in the node's writes field, e.g. candidate.py) — wait for it, then report the node with ${toolPrefix}_done. Every path in a node's reads and writes is relative to ${runDirectory}, and the subagent's own working directory is NOT that directory: give the subagent the absolute path (${runDirectory}/<the path>) for each file it must read or write, and tell it to write nowhere else. For a FnNode with a command, call ${toolPrefix}_next to execute it; only a command-less FnNode is yours to complete. Automatic gates also run through ${toolPrefix}_next; never supply their evaluator result. For a manually driven gate, use ${toolPrefix}_verdict with one of its listed outcomes. For a user gate the runtime asks the person itself and routes the answer they give: call ${toolPrefix}_verdict with the gate id and no verdict, and never answer for them — a verdict passed for their gate is refused. Fan out a director's plan with ${toolPrefix}_expand, and apply user steering ("skip the tests") with ${toolPrefix}_edit. When a person says a step is wrong, read the run's ledger if one is configured, then use ${toolPrefix}_edit with \`set-prompt\` or \`append-prompt\` to correct that node's prompt and ${toolPrefix}_redo to run the node again with the correction. A DataNode is iterated for you: the runtime selects its items and hands you the subgraph's nodes one pass at a time, with the item being processed in the payload's item field and on disk as the node's current item file. Do not try to iterate it yourself, and do not report the data node — or the pass's last node — before its work is done. Never skip, reorder, or bypass a node — the runner refuses to advance until you report the current node complete.`,
+    text: `You are the CEO of a workflow run, and you are DRIVING A WORKFLOW GRAPH. Your coding tools (bash, write, edit, web, skill) are disabled — you cannot implement, edit files, or browse yourself. Advance only through the wf tools.${openInstruction} If the person requests a pause before a named node or deterministic dataset, arm it FIRST with ${toolPrefix}_edit action \`pause\` for that node, before any ${toolPrefix}_next that could reach it. Use ${toolPrefix}_state to inspect ids without executing work. When status is \`paused\`, end your turn and wait for the person. Only after an explicit request to continue, use ${toolPrefix}_edit action \`unpause\` on that boundary and resume. Repeated ${toolPrefix}_next calls do not release a pause; never skip or redo around it. ${toolPrefix}_state inspects the cursor without execution; ${toolPrefix}_next executes due deterministic work. After reading steering and arming any requested pause, call it to advance, and call it again after every ${toolPrefix}_done / ${toolPrefix}_verdict / ${toolPrefix}_edit / ${toolPrefix}_expand — those tools only confirm the mutation, they do not tell you what is next. When ${toolPrefix}_steer is available, read it before each ${toolPrefix}_next: it is what the person said about the run since you last looked. A correction from the person is applied to that node's prompt with ${toolPrefix}_edit (\`set-prompt\`/\`append-prompt\`) and the node is re-run with ${toolPrefix}_redo. With automatic execution enabled, ${toolPrefix}_next crosses sole static ForkNode/JoinNode boundaries for you and establishes delivery contexts before returning the branch AgentNode/LLMNode prompts. Dispatch only those returned prompts in parallel; target ids in a state view are not dispatch instructions. If a ForkNode or JoinNode is explicitly returned (manual execution or a mixed cursor), acknowledge only that due control node with ${toolPrefix}_done, then call ${toolPrefix}_next before dispatching branch work. For an AgentNode or LLMNode, spawn a subagent (the subagent tool) whose task is the node's prompt_template, and explicitly tell the subagent to read the node's reads files and write its result to the node's writes file (the filename in the node's writes field, e.g. candidate.py) — wait for it, then report the node with ${toolPrefix}_done. Every path in a node's reads and writes is relative to ${runDirectory}, and the subagent's own working directory is NOT that directory: give the subagent the absolute path (${runDirectory}/<the path>) for each file it must read or write, and tell it to write nowhere else. For a FnNode with a command, call ${toolPrefix}_next to execute it; only a command-less FnNode is yours to complete. Automatic gates also run through ${toolPrefix}_next; never supply their evaluator result. For a manually driven gate, use ${toolPrefix}_verdict with one of its listed outcomes. For a user gate the runtime asks the person itself and routes the answer they give: call ${toolPrefix}_verdict with the gate id and no verdict, and never answer for them — a verdict passed for their gate is refused. Fan out a director's plan with ${toolPrefix}_expand, and apply user steering ("skip the tests") with ${toolPrefix}_edit. When a person says a step is wrong, read the run's ledger if one is configured, then use ${toolPrefix}_edit with \`set-prompt\` or \`append-prompt\` to correct that node's prompt and ${toolPrefix}_redo to run the node again with the correction. A DataNode is iterated for you: the runtime selects its items and hands you the subgraph's nodes one pass at a time, with the item being processed in the payload's item field and on disk as the node's current item file. Do not try to iterate it yourself, and do not report the data node — or the pass's last node — before its work is done. Never skip, reorder, or bypass a node — the runner refuses to advance until you report the current node complete.`,
   })
 
   // Open a mode's graph after boot, for a caller that will drive it node by node.
@@ -951,7 +969,7 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.tools.register(defineTool({
     name: `${toolPrefix}_next`,
-    description: 'Get the next node(s) the workflow graph says are due now. Deterministic nodes (a command an `fn` gate or an `FnNode` runs) and a data node\'s item passes are executed for you and do not appear, except that when a mode is open interactively exactly one deterministic node runs per call: that node is named under `ran` (with its id, declared outputs and the run\'s facts), and `nodes` then names what is due next — which may itself be deterministic, in which case call this tool again rather than running it or calling `wf_done`. Returns `{ status, nodes }`: for `ready`, the node views you must act on (agent task / one-shot LLM / user gate / fork) with the fields you need, plus `item` while a data node is iterating; for `done`, the run is complete; for `failed`, a deterministic node failed and the cursor has not moved. Always call this first and act only on what it returns — never skip or reorder.',
+    description: 'Get the next node(s) the workflow graph says are due now. Deterministic nodes (a command an `fn` gate or an `FnNode` runs) and a data node\'s item passes are executed for you and do not appear, except that when a mode is open interactively exactly one deterministic node runs per call: that node is named under `ran` (with its id, declared outputs and the run\'s facts), and `nodes` then names what is due next — which may itself be deterministic, in which case call this tool again rather than running it or calling `wf_done`. Returns `{ status, nodes }`: for `ready`, the node views you must act on (agent task / one-shot LLM / user gate / fork) with the fields you need, plus `item` while a data node is iterating; for `done`, the run is complete; for `failed`, a deterministic node failed and the cursor has not moved. With automatic execution, sole static ForkNode/JoinNode boundaries are crossed for you and returned branch prompts already have their delivery contexts. Dispatch only returned AgentNode/LLMNode prompts, never fork target ids from a state view. If a control node is explicitly returned (manual execution or a mixed cursor), acknowledge it with `wf_done`, then call this tool before dispatching branches. Always call this first and act only on what it returns — never skip or reorder.',
     parameters: {},
     output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
     execute(_args, exec) {
@@ -962,7 +980,7 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.tools.register(defineTool({
     name: `${toolPrefix}_done`,
-    description: 'Mark one non-gate node complete and advance the spine. Returns only a confirmation — call `wf_next` to learn the next node. Call this after the node `wf_next` returned is done (e.g. after the subagent for an AgentNode finishes). Never call this for a deterministic node (`FnNode`/`Study`, or an `fn` gate) when the composition runs commands: the runtime runs those itself on the next `wf_next`, and marking one complete here would skip its work.',
+    description: 'Mark one non-gate node complete and advance the spine. Returns only a confirmation — call `wf_next` to learn the next node. Static fork/join boundaries normally advance through `wf_next`. Only if it explicitly returns a due ForkNode/JoinNode, acknowledge that control here and call `wf_next` before dispatching branches. For an AgentNode/LLMNode, call this only after its dispatched worker finishes. Never call this for a deterministic node (`FnNode`/`Study`, or an `fn` gate) when the composition runs commands: the runtime runs those itself on the next `wf_next`, and marking one complete here would skip its work.',
     parameters: {
       node: { type: 'string', required: true, description: 'The node id to mark complete.' },
     },
