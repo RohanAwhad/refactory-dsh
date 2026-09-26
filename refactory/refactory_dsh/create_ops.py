@@ -1508,13 +1508,19 @@ def blocking_findings(text: str) -> list[str]:
         verdict_text = re.sub(r"[*_`]", "", content)
         # A numbered/code-formatted title such as "## 11. `BLOCKING:` findings"
         # names a section. Keep actual findings written as headings, however.
-        if heading and re.fullmatch(r"(?:findings|issues|defects|blockers)[.:]?", verdict_text, re.I):
+        if heading and re.fullmatch(r"(?:findings|issues|defects|items|blockers)[.:]?", verdict_text, re.I):
             continue
+        # Reviewers also label their verdict: "BLOCKING defects: none.".
+        # Strip only the category, then apply the same narrow negative verdict
+        # grammar; "defects: none, except ..." must remain a finding.
+        verdict_text = re.sub(
+            r"^(?:findings|issues|defects|items|blockers)\s*:\s*", "", verdict_text, flags=re.I,
+        )
         # 'none.' is a verdict; the following explanation does not turn it into
         # a defect. 'none, except ...' remains actionable instead of being hidden.
         verdict = re.split(r"[.!](?:\s|$)", verdict_text, maxsplit=1)[0].strip()
         if not content or re.fullmatch(
-            r"(?:none|0|no(?: current)?(?: blocking)?(?: findings| issues| defects| blockers)?)"
+            r"(?:none|0|no(?: current)?(?: blocking)?(?: findings| issues| defects| items| blockers)?)"
             r"(?:\s*\(current revision\)|\s+(?:in|for)\s+(?:(?:the\s+)?"
             r"(?:(?:current|latest|revised|emitted|reviewed)\s+)+|this\s+)"
             r"(?:artifact|revision|version|package|implementation|code))?", verdict, re.I,
