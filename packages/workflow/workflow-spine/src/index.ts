@@ -107,6 +107,8 @@ export interface Config {
   dataCommand: string
   /** Optional shared agent artifact/provenance bridge, using a JSON stdin protocol. */
   agentCommand?: string
+  /** Optional review-scoped user-gate ledger bridge, using a JSON stdin protocol. */
+  gateCommand?: string
   /**
    * The command that reads the run's steering ledger, run as
    * `<steerCommand> <steerArgs...> <workdir>`. When non-empty (and `workdir` is
@@ -159,6 +161,7 @@ export const Config = z.object({
   commandEnv: z.dict(z.string()).default({}),
   dataCommand: z.string().default(''),
   agentCommand: z.string().default(''),
+  gateCommand: z.string().default(''),
   steerCommand: z.string().default(''),
   steerArgs: z.array(z.string()).default([]),
   commandTimeoutMs: z.natural().default(600_000),
@@ -293,6 +296,8 @@ interface OpenRun {
   dataCommand: string
   /** Optional shared agent artifact/provenance bridge, using a JSON stdin protocol. */
   agentCommand: string
+  /** Shared user-gate decision bridge. */
+  gateCommand: string
 }
 
 /** The JSON `<openCommand>` prints: where it lowered the mode. */
@@ -315,6 +320,8 @@ interface OpenPayload {
   dataCommand?: unknown
   /** Optional agent artifact/provenance bridge owned by the opened mode runtime. */
   agentCommand?: unknown
+  /** Shared user-gate decision bridge. */
+  gateCommand?: unknown
 }
 
 /** The environment a payload names, or `undefined` when it is absent or malformed. */
@@ -407,6 +414,7 @@ export function apply(ctx: Context, config: Config): void {
     commandEnv: Record<string, string>
     dataCommand: string
     agentCommand: string
+    gateCommand: string
   } {
     if (configuredSpine !== undefined) {
       return {
@@ -415,6 +423,7 @@ export function apply(ctx: Context, config: Config): void {
         commandEnv: config.commandEnv,
         dataCommand: config.dataCommand,
         agentCommand: config.agentCommand ?? '',
+        gateCommand: config.gateCommand ?? '',
       }
     }
     if (opened === undefined) {
@@ -429,6 +438,7 @@ export function apply(ctx: Context, config: Config): void {
       commandEnv: opened.commandEnv,
       dataCommand: opened.dataCommand,
       agentCommand: opened.agentCommand,
+      gateCommand: opened.gateCommand,
     }
   }
 
@@ -690,6 +700,8 @@ export function apply(ctx: Context, config: Config): void {
     return json(ran === undefined ? view : { ...view, ran })
   }
 
+  const pendingQuestions = new WeakSet<Spine>()
+
   /**
    * The verdict a person gives at a `user` gate, asked by the runtime.
    *
@@ -711,13 +723,32 @@ export function apply(ctx: Context, config: Config): void {
     exec: ToolExec,
     workdir: string | undefined,
   ): Promise<string> {
+    if (pendingQuestions.has(spine)) throw new Error('a user-gate question is already pending for this run')
+    pendingQuestions.add(spine)
+    try {
+      return await askCurrentReview(gate, spine, view, exec, workdir)
+    } finally {
+      pendingQuestions.delete(spine)
+    }
+  }
+
+  async function askCurrentReview(
+    gate: string, spine: Spine, view: NodeView, exec: ToolExec, workdir: string | undefined,
+  ): Promise<string> {
+    const { gateCommand, commandEnv } = requireRun(exec)
+    const labels = spine.acceptedVerdicts(gate)
+    const request = { gate, reads: view.reads ?? [], labels }
+    const prior = gateCommand !== '' && workdir !== undefined
+      ? runtimeBridge(gateCommand, workdir, commandEnv, { ...request, action: 'begin' })
+      : undefined
+    if (typeof prior?.verdict === 'string' && prior.verdict !== '') return prior.verdict
+    const stateBefore = JSON.stringify(spine.state())
     if (userQuestions === undefined) {
       const message = `gate ${gate} is answered by a person and this composition mounts no user-questions `
         + 'channel, so it cannot be routed here; run it where a person can be asked'
       recordStatus(spine, workdir, 'refused', message)
       throw new Error(message)
     }
-    const labels = spine.acceptedVerdicts(gate)
     let answer
     try {
       answer = await userQuestions.ask({
@@ -740,6 +771,15 @@ export function apply(ctx: Context, config: Config): void {
     const verdict = (chosen?.selected[0] ?? chosen?.custom ?? '').trim()
     if (verdict === '') {
       throw new Error(`gate ${gate} was answered without a verdict`)
+    }
+    if (JSON.stringify(spine.state()) !== stateBefore) {
+      throw new Error(`gate ${gate} changed while awaiting the answer; ask again`)
+    }
+    if (!labels.includes(verdict)) throw new Error(`gate ${gate} does not accept ${verdict}`)
+    if (gateCommand !== '' && workdir !== undefined) {
+      runtimeBridge(gateCommand, workdir, commandEnv, {
+        ...request, action: 'answer', review: prior?.review, verdict,
+      })
     }
     return verdict
   }
@@ -889,6 +929,7 @@ export function apply(ctx: Context, config: Config): void {
           commandEnv: runEnv,
           dataCommand: runData,
           agentCommand: runAgent,
+          gateCommand: typeof payload.gateCommand === 'string' ? payload.gateCommand : (config.gateCommand ?? ''),
         }
         // A fresh spine has no materialised item. Keep the prior run's files
         // intact; its terminal claim is replaced only after this open succeeds.

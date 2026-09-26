@@ -63,6 +63,7 @@ const DEFAULT_VENV_BIN = resolveDep(process.env.VENV_BIN, '.venv/bin', join(proc
  */
 const DATA_COMMAND = 'python -m refactory_dsh.items'
 const AGENT_COMMAND = 'python -m refactory_dsh.agent_delivery'
+const GATE_COMMAND = 'python -m refactory_dsh.steering'
 
 /** Everything the run needs, resolved once from the command line. */
 export interface GraphStartupValues {
@@ -90,6 +91,8 @@ export interface GraphStartupValues {
   dataCommand: string
   /** Shared artifact delivery/provenance bridge for agent nodes. */
   agentCommand: string
+  /** Shared review-scoped user-gate ledger bridge. */
+  gateCommand: string
   /**
    * Whether the runner keeps a conversation with the person after the first turn.
    *
@@ -199,6 +202,7 @@ export function apply(ctx: Context): void {
       pythonBin,
       dataCommand: DATA_COMMAND,
       agentCommand: AGENT_COMMAND,
+      gateCommand: GATE_COMMAND,
       chat: options.chat === true,
     } satisfies GraphStartupValues)
   })
