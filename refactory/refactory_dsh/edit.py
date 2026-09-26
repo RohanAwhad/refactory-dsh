@@ -20,9 +20,9 @@ from pathlib import Path
 from typing import Any
 
 from refactory_dsh import registry
-from refactory_dsh.paths import project_root, project_for_nodes
+from refactory_dsh.paths import project_for_nodes
 from refactory_dsh.create import (
-    CreateConfig, CreateError, CreateMode, CreateResult, create, parse_verdicts,
+    CreateConfig, CreateError, CreateMode, parse_verdicts,
 )
 from refactory_dsh.model import DEFAULT_TIMEOUT_S
 from refactory_dsh.sandbox import DEFAULT_MODEL_SMOKE_TIMEOUT_S
@@ -49,20 +49,6 @@ class EditConfig(CreateConfig):
     allow_regression: bool = False
 
 
-def _smoke(identifier: str, project: Path, timeout_s: int) -> dict[str, Any]:
-    """Score a mode, so before and after are comparable."""
-    from refactory_dsh import sandbox
-
-    result = sandbox.smoke(identifier, project / ".factory" / "edit-smoke", project=project, timeout_s=timeout_s)
-    if not result.ok:
-        return {"exit_ok": False, "error": result.problem(), "score": None}
-    return {
-        "exit_ok": True,
-        "error": None,
-        "score": float(result.payload.get("score") or 0.0),
-    }
-
-
 def _digest(state: dict[str, Any]) -> str:
     """A short, stable name for one state, so two revisions can be compared.
 
@@ -77,9 +63,8 @@ def _digest(state: dict[str, Any]) -> str:
 def edit(config: EditConfig, client: Any = None) -> dict[str, Any]:
     """Revise a mode and report the before and after scores.
 
-    The revision is produced by the same machinery as a creation, so it validates,
-    registers and smoke-scores the same way. What is added here is the comparison,
-    because a revision has something to be worse than.
+    The graph owns validation, smoke and comparison on every entry point. This
+    driver retains its authoritative report instead of measuring it again keyless.
     """
     if not config.mode:
         raise CreateError(
@@ -90,14 +75,9 @@ def edit(config: EditConfig, client: Any = None) -> dict[str, Any]:
     # now, and it is recorded below so the revision can be reproduced against the
     # exact state it started from rather than against "whatever that mode was".
     _package, source_class = registry.resolve(project, config.mode)
-    source_mode = source_class()
+    source_state = source_class().state_dict()
     if not 1 <= config.smoke_timeout_s <= 86400:
         raise CreateError("smoke_timeout_s must be between 1 and 86400 seconds")
-    before = _smoke(config.mode, project, config.smoke_timeout_s)
-    if not before["exit_ok"]:
-        raise CreateError(
-            f"cannot revise {config.mode!r}: its own smoke run failed: {before['error']}"
-        )
 
     mode_class = EditMode
     run_workdir = Path(config.workdir)
@@ -109,6 +89,7 @@ def edit(config: EditConfig, client: Any = None) -> dict[str, Any]:
     state["knobs"]["smoke_timeout_s"]["value"] = int(config.smoke_timeout_s)
     state["knobs"]["task_ref"]["value"] = config.task_ref
     state["knobs"]["data_node"]["value"] = bool(config.data_node)
+    state["knobs"]["sample_knobs"]["value"] = json.dumps(list(config.samples))
     # The graph's smoke step is what compares before and after, so the person's
     # answer to "may it regress" has to travel as the knob that step reads.
     state["knobs"]["allow_regression"]["value"] = bool(config.allow_regression)
@@ -121,6 +102,9 @@ def edit(config: EditConfig, client: Any = None) -> dict[str, Any]:
             "brief": config.brief,
             "extends": config.extends or config.mode,
             "mode": config.mode,
+            # Persisted with the run, including across resume. The canonical smoke
+            # refuses if the source state changed during authoring.
+            "revision_of_state": source_state,
             "intent": EditMode.intent,
         },
         max_steps=config.max_steps,
@@ -131,51 +115,14 @@ def edit(config: EditConfig, client: Any = None) -> dict[str, Any]:
     if not run.exit_ok:
         raise CreateError(f"revising {config.mode!r} failed: {run.error}")
 
-    name = str(run.facts.get("name") or config.name)
-    after = _smoke(f"{name}/{registry.load(name, project).modes[0].name}", project, config.smoke_timeout_s)
-    if not after["exit_ok"]:
-        raise CreateError(f"the revision does not run: {after['error']}")
-
-    regressed = (
-        before["score"] is not None
-        and after["score"] is not None
-        and after["score"] < before["score"]
-    )
-    if regressed and not config.allow_regression:
-        raise CreateError(
-            f"the revision scores {after['score']} where {config.mode} scored "
-            f"{before['score']}; pass --allow-regression if that is intended"
-        )
-
-    # Provenance: what it came from, **at which state**, and what it scored.
-    #
-    # The state, not only the identifier. A mode is not a fixed thing — the outer
-    # loop edits it — so "revised from circle_packing/adaptive" names a class that
-    # may have changed since. Recording the state makes the revision reproducible,
-    # lets the two be diffed, and is the only way to tell later whether the
-    # revision was made against the current baseline or an older one.
-    source_state = source_mode.state_dict()
-    origin = registry.workspace_root(project) / name / registry.ORIGIN
-    recorded = json.loads(origin.read_text()) if origin.exists() else {}
-    recorded.update({
-        "revision_of": config.mode,
-        "revision_of_state": source_state,
-        "revision_of_digest": _digest(source_state),
-        "before_score": before["score"],
-        "after_score": after["score"],
-        "brief": config.brief,
-    })
-    origin.write_text(json.dumps(recorded, indent=2))
-
+    # The report node's payload also contains the Task/artifact contract and the
+    # reason a model-based revision was not compared. Keep those fields intact.
+    created = json.loads(run.facts["created"])
+    name = str(created["package"])
     return {
-        "package": name,
-        "mode": f"{name}/{registry.load(name, project).modes[0].name}",
-        "revision_of": config.mode,
+        **created,
+        "mode": registry.load(name, project).ids()[0],
         "revision_of_digest": _digest(source_state),
-        "before_score": before["score"],
-        "after_score": after["score"],
-        "regressed": regressed,
-        "files": list(run.facts.get("files") or []),
         "workdir": str(run_workdir),
     }
 
