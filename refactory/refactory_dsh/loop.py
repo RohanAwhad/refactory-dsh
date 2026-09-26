@@ -180,7 +180,7 @@ class LoopConfig:
     provider: str = ""
     model: str = ""
     effort: str = ""
-    permission_mode: str = ""
+    permission_mode: str = "skip"
     role_routes: dict[str, Any] = dataclasses.field(default_factory=dict)
     node_routes: dict[str, Any] = dataclasses.field(default_factory=dict)
     max_elapsed_s: float | None = None
