@@ -92,7 +92,9 @@ A public `steer --verdict approve=proceed` is likewise scoped to the declared re
 inputs and consumed once. First open the mode and reach its gate so the runtime
 knows what is being reviewed; an unknown or ambiguous gate is refused. To grant
 standing authorization deliberately, use `ceo --approve approve=proceed` or an
-explicit Python `RunContext.verdicts` mapping. A consumed or legacy unscoped ledger
+explicit Python `RunContext.verdicts` mapping. A ledger-backed upfront approval
+persists across later invocations in that same work directory; use a new directory
+when a fresh approval policy is required. A consumed or legacy unscoped ledger
 answer does not substitute for that authorization.
 
 ## Steering while it runs

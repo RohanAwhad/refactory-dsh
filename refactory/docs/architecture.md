@@ -407,7 +407,9 @@ interactive answer or public `steer --verdict` authorizes one matching gate visi
 changed inputs expire an unused answer, and a later visit asks again even when the
 files are identical. Legacy unscoped answers remain history, not authorization.
 Explicit upfront `--approve` or `RunContext.verdicts` remains standing authorization
-from the caller. Without a current scoped answer or standing authorization, a
+from the caller. A ledger-backed upfront approval remains active when that same
+work directory is reopened; it has no separate invocation identifier. Without a
+current scoped answer or standing authorization, a
 headless run **refuses** at the gate and names it.
 
 **It is inert when unused.** An empty ledger renders the empty string and `annotate`
