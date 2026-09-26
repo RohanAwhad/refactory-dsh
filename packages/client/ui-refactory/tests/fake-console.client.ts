@@ -227,6 +227,7 @@ export function fakeConsole(): FakeConsole {
     status: vi.fn(async () => ok(FRAME)),
     leaderboard: vi.fn(async () => ok<readonly RefactoryCandidateRow[]>(CANDIDATES)),
     steer: vi.fn(async () => ok(STEERING)),
+    runs: vi.fn(async () => ok([])),
     stop: vi.fn(async () => ok({ stopped: true })),
     setPackageEnabled: vi.fn(async () => ok<readonly RefactoryPackageChoice[]>([])),
     removePackage: vi.fn(async () => ok<readonly RefactoryPackageChoice[]>([])),

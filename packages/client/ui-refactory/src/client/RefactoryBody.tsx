@@ -34,6 +34,9 @@ import type { RefactoryInjected } from './face.ts'
 import type { Loadable, RefactoryBudgetName, RefactoryNotice, RefactorySettingName, RefactorySingleState, createRefactoryStore } from './store.ts'
 import { knobValues, searchBudget, SEARCH_BUDGET_DEFAULTS } from './store.ts'
 import css from './RefactoryBody.module.css'
+import { GraphControls, RunList } from './GraphControls.tsx'
+import { RunActivity } from './RunActivity.tsx'
+import { ProfileControls, CandidateComparison, RuntimeControls } from './ProfileControls.tsx'
 
 /** The body's composed props: the tab it draws, its store, its face, and its copy. */
 export type RefactoryBodyProps =
@@ -292,6 +295,7 @@ function Status({
   return (
     <div className={css.status} data-refactory-status={status.state}>
       <p className={css.statusLine} data-refactory-run>{run}</p>
+      <RunActivity activity={status.activity} />
       <p className={css.statusLine}>{t('status.state')}: {status.state}</p>
       <p className={css.statusLine} data-refactory-score>
         {status.best_score === null
@@ -632,7 +636,7 @@ function Steering({
 export function RefactoryBody({
   useTabInfo, useStore, choose, setKnob, setSetting, start, run: runOnce, load, reload, refresh, watch, stop,
   readSteering, readCandidates, addNote, answerGate, controlRun, setEnabled, remove,
-  importPackage, t,
+  importPackage, listRuns, graphControl, profileApi, t,
 }: RefactoryBodyProps): ReactNode {
   const { tab } = useTabInfo()
   const { signal } = tab
@@ -690,6 +694,7 @@ export function RefactoryBody({
         <code className={css.projectPath}>{project}</code>
         <p className={css.note}>{t('project.explanation')}</p>
       </section>
+      {run && profileApi && <CandidateComparison key={run} api={profileApi} run={run} signal={signal} />}
       {state.notice !== null && (
         <p className={css.notice} data-refactory-notice={state.notice.code}>{failureLine(t, state.notice)}</p>
       )}
@@ -745,6 +750,9 @@ export function RefactoryBody({
             </button>
           </div>
         )}
+        {selected && !selected.scored && <RuntimeControls configuration={state.settings.configuration || '{}'} onChange={value => { setSetting(tab.id, 'configuration', value) }} />}
+        {selected?.scored && profileApi && <ProfileControls api={profileApi} mode={selected.id} settings={state.settings} knobs={knobs} knobDefaults={knobValues(selected, {})} signal={signal}
+          onField={(key, value) => { setSetting(tab.id, key, value) }} onKnob={(key, value) => { setKnob(tab.id, key, value) }} />}
         <Seam
           id="strategy"
           label={t('strategy.label')}
@@ -805,13 +813,13 @@ export function RefactoryBody({
               <IconPlayOutline16 />
               {t('start')}
             </button>
-            {selected.action === 'start' && (
+            {selected.enabled && (
               <button
                 type="button"
                 className={css.action}
                 disabled={!selected.enabled || state.single?.kind === 'running'}
                 data-refactory-run-once
-                onClick={() => { runOnce(tab.id, selected.id, knobs, signal) }}
+                onClick={() => { runOnce(tab.id, selected.id, knobs, signal, state.settings) }}
               >
                 <IconPlayOutline16 />
                 {t('runOnce')}
@@ -841,6 +849,7 @@ export function RefactoryBody({
           </button>
         </form>
         <p className={css.note}>{t('status.watchHelp')}</p>
+        {listRuns !== undefined && <RunList signal={signal} read={listRuns} watch={root => { watch(tab.id, root, signal) }} />}
         {run !== null && (
           // Which run the gesture produced: the id is what `console status --run`
           // and `wf_state` take, so a person can follow it outside the panel.
@@ -861,6 +870,8 @@ export function RefactoryBody({
           )}
       </section>
 
+      {run !== null && state.frame?.kind === 'ready' && state.frame.value.kind === 'graph' && graphControl !== undefined &&
+        <GraphControls key={run} run={run} signal={signal} control={graphControl} />}
       <section className={css.section}>
         <h2 className={css.heading}>{t('steering.heading')}</h2>
         {run === null

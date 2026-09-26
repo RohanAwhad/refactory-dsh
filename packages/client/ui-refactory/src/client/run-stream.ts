@@ -1,6 +1,6 @@
 /** The one explicit Remote contribution needed by the panel's launch stream. */
 import type { TypertRemoteContribution } from '@deepseek-ai/dsh-typert-protocol'
-import type { RefactorySingleEvent, RefactorySingleRunRequest } from '@deepseek-ai/dsh-refactory-console/types'
+import type { RefactorySingleEvent, RefactorySingleRunRequest, RefactoryWatchFrame } from '@deepseek-ai/dsh-refactory-console/types'
 
 function record(value: unknown): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('Expected a run stream object')
@@ -60,5 +60,35 @@ export const runStreamContribution: TypertRemoteContribution = {
     } }],
     cancellation: { parameter: 'signal' },
     result: { mode: 'strict', typeSymbol: 'RefactorySingleEvent', schema: { parse: singleEvent } },
+  }],
+}
+
+/** Reconnectable, read-only observation of a durable run. */
+export function watchFrame(value: unknown): RefactoryWatchFrame {
+  const frame = record(value)
+  const status = record(frame.status)
+  const steering = record(frame.steering)
+  if (!textFields(status, ['run_id', 'root', 'state']) || typeof status.cursor !== 'number'
+    || !textFields(steering, ['run']) || !Array.isArray(steering.gates)) throw new Error('Invalid durable run frame')
+  return frame as unknown as RefactoryWatchFrame
+}
+export const watchStreamContribution: TypertRemoteContribution = {
+  package: '@deepseek-ai/dsh-refactory-console',
+  descriptors: [{
+    id: '@deepseek-ai/dsh-refactory-console#refactoryConsole/watchStream',
+    service: 'refactoryConsole', namespace: 'refactoryConsole', method: 'watchStream', mode: 'stream',
+    invocation: { kind: 'direct' },
+    parameters: [
+      { name: 'run', wire: 'run', source: 'json', codec: { mode: 'strict', typeSymbol: 'string', schema: { parse(value: unknown) {
+        if (typeof value !== 'string' || value.trim() === '') throw new Error('A run is required')
+        return value
+      } } } },
+      { name: 'after', wire: 'after', source: 'json', codec: { mode: 'strict', typeSymbol: 'number', schema: { parse(value: unknown) {
+        if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw new Error('Invalid cursor')
+        return value
+      } } } },
+    ],
+    cancellation: { parameter: 'signal' },
+    result: { mode: 'strict', typeSymbol: 'RefactoryWatchFrame', schema: { parse: watchFrame } },
   }],
 }

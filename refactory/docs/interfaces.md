@@ -1,19 +1,19 @@
 # Terminal and GUI
 
-Both interfaces use the same mode catalogue and run artifacts. The terminal is useful for repeatable commands; GUI chat is useful for conversation and node-by-node control; the Modes panel exposes common run and search settings.
+Both interfaces use the same mode catalogue and run artifacts. The terminal is useful for repeatable commands; GUI chat is useful for conversation and node-by-node control; the Modes panel exposes full search profiles, worker routing and shared resource settings.
 
 ## Pick the right surface
 
 | Action | Terminal | GUI |
 |---|---|---|
-| Create, Edit, Design | `refactory ceo` with the authoring mode | Ask the CEO in chat to open and drive the authoring workflow |
+| Create, Edit, Design | `refactory ceo` with the authoring mode | CEO chat for stepwise control; select a full/fast mode and **Run once** for execution |
 | Run an existing mode interactively | `refactory ceo package/mode` | CEO chat for stepwise control; **Run once** for execution |
-| Configure and start optimization | `refactory optimize` | Modes: mode, knobs, outer loop, optimizer, evaluator and search budgets → **Start** |
-| Inspect an existing run | `status`, `artifacts`, `leaderboard`, `candidate` | **Existing run directory → Read this run**, status and Steering |
+| Configure and start optimization | `refactory optimize` | Modes: saved profile or explicit controls → **Preview launch contract** → **Start** |
+| Inspect an existing run | `status --follow`, `artifacts`, `comparison`, `candidate` | **Runs and pending questions** or **Existing run directory → Read this run**; live activity and Steering |
 | Add instructions or answer gates | Conversation and `refactory steer` | Chat and the attached run's Steering controls |
 | Keep/reject candidates, pause/resume, adopt | `refactory steer`, `refactory adopt` | Optimizer controls in Steering |
 
-Authoring entries do not use the panel's ordinary **Start/Run once** buttons. Follow their authoring guidance in chat. Each CEO session owns one open workflow at a time; use a separate session and distinct work directory for another concurrent workflow.
+**Start** searches scored modes. **Run once** also runs enabled authoring modes, including `create_fast`, `edit_fast` and `design_fast`; supply their required knobs first. Each CEO session owns one open workflow at a time. Use a separate session and distinct work directory for another concurrent workflow; opening a viewer never claims ownership of the run.
 
 ## What runs the graph
 
@@ -33,20 +33,24 @@ The same mode can run through the Python walker for evaluation. Agent nodes ther
 
 Use the exact directory returned by the run, including for runs opened in chat. Do not infer an id from a mode name.
 
-## What you can configure today
+## Configure a launch
 
-The Modes panel exposes starting knobs, strategy, optimizer, evaluator, epochs, candidates per epoch and maximum candidate evaluations. The CLI/API additionally expose edit presets, elite count, attempts, random seed, holdout fraction, parsimony and model options. See [the command reference](cli.md#optimization).
+CLI and GUI share the same resolved configuration: strategy, optimizer, evaluator, starting/frozen knobs, permitted edits, epochs, batch size, candidate cap, retained parents, proposal attempts, seed, holdout and parsimony. The panel also exposes bounded repeats, resource limits/reserves, backend/provider/model/effort and role/node routing. Capability-aware controls disable unsupported external-backend options. See [profiles](optimization-profiles.md), [resources and fast modes](budgets-fast-modes.md) and [worker routing](models.md).
 
-Evaluation counts are not token or elapsed-time limits. Final held-out checks are additional. Global resource budgets and complete GUI profile controls are planned in [#234](https://github.com/akashgit/refactory-dsh/issues/234) and [#236](https://github.com/akashgit/refactory-dsh/issues/236).
+A named profile version is reusable. A historical run's `resolved-profile.json` records the exact settings and contract it used. Save objective or required-artifact changes as a new version; preview again after changing launch settings. Task definitions, scoring and invariants remain owned by the mode.
 
-## What is live today
+Candidate counts do not substitute for time or token budgets. Repeated measurements and final validation consume the shared allocation. Candidate comparison keeps failed/unmeasured outcomes visible and reports unavailable cost/usage without inventing zero. Adoption keeps the exact eligible winner and its audit.
 
-Terminal CEO turns and optimization events stream as work happens. **Run once** has its own launch/run identity and execution stream. The panel's attached status and Steering snapshots are also readable during work, but some require manual refresh; they are not yet a unified continuously updated graph/worker dashboard. That is the scope of [#235](https://github.com/akashgit/refactory-dsh/issues/235).
+## Follow activity and questions
 
-Check actual status and receipts before interpreting a quiet chat or an older snapshot. A gate waiting for input, a failed node, a requested cancellation and a completed run are different states.
+`refactory status --run RUN_DIR --follow` and the attached native panel read durable state and activity. The panel shows current/completed nodes, worker status and observed routes, usage, wait reasons, instruction-delivery receipts and output/check evidence. **Runs and pending questions** helps discover a gate waiting in another saved run. No estimated completion percentage is inferred.
+
+Select a run to read its pending question and allowed verdicts. An answer is scoped to that run and invocation; a queued note or control is not proof that a worker consumed it. Reopening the view reconnects observation without starting work. See [live control and recovery](live-control.md) for timing, correction and ownership rules.
 
 ## Recovery and output
 
-Use documented resume APIs/commands for continuation. Opening a mode again can create a fresh invocation and archive previous declared outputs; it is not a generic resume operation. [The interactive tutorial](tutorials/06-run-it-with-a-person.md#reusing-a-work-directory) describes these boundaries.
+Pause/resume/stop controls apply at the owning graph or optimizer boundary; an in-flight worker may need to settle first. To correct a completed graph node, preview its affected results, then explicitly confirm the recorded revision. Prior evidence is archived and dependent results invalidated before rerun.
 
-Modes and artifacts have separate outputs: created/adopted packages live in `.factory/packages/`, Design artifacts in `.factory/artifacts/`, and execution receipts in the selected run directory. A report's exact paths are the authority. A Task's per-item results and a mode's aggregate score are distinct; the GUI does not invent a score when the run produced none.
+Recovery is explicit and limited to a verified saved boundary. An unknown worker outcome, changed inputs/outputs or changed prepared configuration prevents automatic continuation. Reopening a mode can create a new invocation and archive outputs; it is not generic recovery. Native worker sessions are not resumed by this bridge. [Recovery details](live-control.md#recover-a-known-boundary) · [Work-directory lifecycle](tutorials/06-run-it-with-a-person.md#reusing-a-work-directory).
+
+Created/adopted packages live in `.factory/packages/`, Design artifacts in `.factory/artifacts/`, and execution receipts in the selected run directory. A report's exact paths are authoritative. Task item results, aggregate score, execution completion and artifact quality are separate facts. Current release acceptance remains bounded and incomplete; see [validation status](../../README.md#release-capabilities-and-validation).

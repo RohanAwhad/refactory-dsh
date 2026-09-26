@@ -87,6 +87,8 @@ export interface RefactoryStrategies {
 
 /** One run under the run root, as the console lists it. */
 export interface RefactoryRunSummary {
+  readonly state?: string
+  readonly pending_questions?: number
   /** The run directory's name. */
   readonly run_id: string
   /** Absolute path of the run directory. */
@@ -150,6 +152,8 @@ export interface RefactoryRunCounters {
 
 /** Where one run is, and what is new since the reader last looked. */
 export interface RefactoryRunStatus {
+  /** Durable activity; absent on runs from older releases. */
+  readonly activity?: RefactoryActivity | null
   /** Persisted run layout; unrecognized directories expose no control actions. */
   readonly kind: 'optimizer' | 'graph' | 'unknown'
   /** The run directory's name. */
@@ -176,6 +180,29 @@ export interface RefactoryRunStatus {
   readonly authoring?: RefactoryAuthoringProgress | null
   /** Recorded Task verdicts, when this run has per-item results. */
   readonly item_results?: RefactoryItemResults | null
+}
+
+export interface RefactoryActivity {
+  readonly schema_version: number
+  readonly run_id: string
+  readonly invocation: string | null
+  readonly cursor: number
+  readonly last_event_at: string | null
+  readonly started_at: string | null
+  readonly nodes: readonly string[]
+  readonly completed: readonly string[]
+  readonly wait_reason: string | null
+  readonly workers: readonly Readonly<Record<string, unknown>>[]
+  readonly deliveries: readonly Readonly<Record<string, unknown>>[]
+  readonly events: readonly Readonly<Record<string, unknown>>[]
+  readonly outputs: Readonly<Record<string, unknown>>
+  readonly resources: Readonly<Record<string, unknown>> | null
+  readonly control: Readonly<Record<string, unknown>> | null
+}
+
+export interface RefactoryWatchFrame {
+  readonly status: RefactoryRunStatus
+  readonly steering: RefactorySteering
 }
 
 /** What the console recorded when it started a run. */
@@ -408,6 +435,8 @@ export type RefactorySingleEvent =
 
 /** One mode to use once: the mode, and the knob values it uses. */
 export interface RefactorySingleRunRequest {
+  /** Worker/model route and shared resource limits, passed to the same CLI flags. */
+  readonly settings?: Readonly<Record<string, string | number>>
   /** `<package>/<mode>`, as the catalogue lists it. */
   readonly mode: string
   /** Knob values this run uses, as `NAME=VALUE`; the console's default when absent. */
@@ -425,6 +454,14 @@ export interface RefactorySingleRunRequest {
  * still has to select this contribution in its own assembly.
  */
 export interface RefactoryConsoleRemote {
+  /** Saved recipes; immutable versions differ from historical resolved snapshots. */
+  profiles?: (signal?: AbortSignal) => Promise<RemoteResult<readonly RefactoryProfile[]>>
+  /** Save an explicit new objective/settings version. */
+  profileSave?: (name: string, spec: RefactoryProfileSpec, signal?: AbortSignal) => Promise<RemoteResult<RefactoryProfile>>
+  /** Resolve the exact effective contract before launch. */
+  profileResolve?: (request: RefactoryStartRequest, signal?: AbortSignal) => Promise<RemoteResult<Record<string, unknown>>>
+  /** Includes failed and unmeasured candidates, not only eligible leaderboard rows. */
+  comparison?: (run: string, signal?: AbortSignal) => Promise<RemoteResult<Record<string, unknown>>>
   /** @param signal - caller cancellation. @returns the configured console project directory. */
   project: (signal?: AbortSignal) => Promise<RemoteResult<string>>
   /** @param source - package source the mode comes from. @param name - mode package name. @param signal - caller cancellation. @returns the package list after the import. */
@@ -449,12 +486,28 @@ export interface RefactoryConsoleRemote {
   start: (request: RefactoryStartRequest, signal?: AbortSignal) => Promise<RemoteResult<RefactoryStartReceipt>>
   /** @param run - the run being read. @param after - byte offset already read. @param signal - caller cancellation. @returns the run's status frame. */
   status: (run: string, after: number, signal?: AbortSignal) => Promise<RemoteResult<RefactoryRunStatus>>
+  graphControl?: (request: { run: string; action: string; node?: string; text?: string; revision?: string }, signal?: AbortSignal) => Promise<RemoteResult<Record<string, unknown>>>
+  /** Observe without acquiring execution ownership or launching work. */
+  watchStream?: (run: string, after: number, signal?: AbortSignal) => AsyncIterable<RefactoryWatchFrame>
   /** @param request - the run whose ledger is read, and what to append to it. @param signal - caller cancellation. @returns the ledger, and the gates the run is stopped at. */
   steer: (request: RefactorySteerRequest, signal?: AbortSignal) => Promise<RemoteResult<RefactorySteering>>
   /** @param run - the run to stop. @param signal - caller cancellation. @returns the stop receipt. */
   stop: (run: string, signal?: AbortSignal) => Promise<RemoteResult<RefactoryStopReceipt>>
   /** @param signal - caller cancellation. @returns the named outer loops, optimizers and evaluators. */
   strategies: (signal?: AbortSignal) => Promise<RemoteResult<RefactoryStrategies>>
+}
+
+/** One editable recipe, with immutable mode scoring and optional extra outputs. */
+export interface RefactoryProfileSpec {
+  readonly settings: Readonly<Record<string, unknown>>
+  readonly contract: { readonly objective: string; readonly required_artifacts: readonly string[] }
+}
+
+/** A saved recipe version; launching writes a separate resolved snapshot. */
+export interface RefactoryProfile extends RefactoryProfileSpec {
+  readonly name: string
+  readonly version: number
+  readonly schema_version: number
 }
 
 declare module '@deepseek-ai/dsh-typert-protocol' {

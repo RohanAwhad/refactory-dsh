@@ -5,6 +5,9 @@ Start with [Get started](getting-started.md) or [Terminal and GUI](interfaces.md
 
 Every command is `uv run refactory <verb>`. `uv run refactory <verb> --help` is the current truth for one verb.
 
+For `create_fast`, `edit_fast`, `design_fast`, focused QA, repair bounds and shared
+elapsed/token controls, see [Fast modes and run budgets](budgets-fast-modes.md). Saved configurations use [optimization profiles](optimization-profiles.md); durable observation and explicit recovery use [live controls](live-control.md).
+
 ## Create and build
 
 | command | what it does |
@@ -22,9 +25,15 @@ its legacy `task_ref` field is populated when there is exactly one distinct Task
 
 | option | what it does |
 |---|---|
-| `--mode <mode>` | `design` (the default), `create`, `edit`, or `<package>/<mode>`. |
+| `--mode <mode>` | `design` (the default), `create`, `edit`, `design_fast`, `create_fast`, `edit_fast`, or `<package>/<mode>`. |
 | `--name <name>` | the package or artifact name; without it your words become the name. |
-| `--check "<command>"` | design only: run inside the artifact directory; failures enter the bounded repair path. |
+| `--check "<command>"` | run inside the Design artifact; fast Create/Edit also accept a focused package check. Failures enter the bounded repair path. |
+| `--repair-attempts <n>` | fast authoring repairs after the first implementation, from 0 to 3 (default 1). |
+| `--source-project <dir>` | fast Design: copy an existing project into the output artifact before applying a change. |
+| `--worker-backend dsh\|codex\|claude_code` | the explicit coding-worker runtime; DSH is the default. |
+| `--effort <value>` / `--permission-mode <value>` | supported reasoning and permission controls; see [worker capabilities](models.md#model-provider-versus-coding-agent). |
+| `--max-elapsed-s <n>` / `--max-tokens <n>` | the shared resource allocation, including nested work and validation. |
+| `--validation-reserve-s <n>` / `--validation-reserve-tokens <n>` | keep part of that allocation available for required final validation. |
 | `--revise <package>/<mode>` | edit only: the mode being revised. |
 | `--task <module:Class>` | create only: the class of work the produced harness binds a `data` node to. One of `--task` or `--single` is required. |
 | `--single` | create only: build a harness for one run of one thing. |
@@ -35,7 +44,7 @@ its legacy `task_ref` field is populated when there is exactly one distinct Task
 | `--approve <gate>=<value>` | answer a gate up front, e.g. `gate_strategy=proceed`, for a run with nobody at it. A gate a person would be asked at is theirs: run without this and answer it, or drive the mode node by node with the `wf_open` tool. `modes` marks a person's gate `(user)`. |
 | `--headless` | run without a conversation: one task, one report, then exit, for scripts and CI. Without it the run is live — each turn prints as it happens and a line you type between turns reaches the CEO. |
 
-The create and design QA gate uses current `BLOCKING: <finding>` statements from
+The full create and design QA gate uses current `BLOCKING: <finding>` statements from
 all three review reports. `BLOCKING: none` and scoped empty verdicts such as
 `BLOCKING: none in the current emitted artifact` are clean verdicts. A section
 title such as `## 11. BLOCKING: findings` is not itself a finding; actual findings
@@ -103,6 +112,10 @@ installed copy.
 | `--strategy <name>` | which outer loop drives the search: `default`, `best_of_n`, `reflective`, `reflective_sampler`, `tree_search`, `staged_curriculum`, `staged_v1`, `adaptive_meta`, `autoscientists`, `research_then_optimize` | the harness's own (`default`) |
 | `--evaluator walker\|dsh` | which runtime scores a candidate: fast in-process, or the one that ships | `walker` |
 | `--preset <name>` | which edits are allowed: `broad`, `structure`, `conservative`, `knob_only` | `broad` |
+| `--allowed-ops <name>` | narrow the chosen preset to listed edit operations; repeat for multiple names | the preset |
+| `--frozen <name>` | additional knob protected from edits; repeat for multiple names | mode-declared frozen knobs |
+| `--profile <name>` / `--profile-version <n>` | load an immutable saved configuration; explicit overrides remain visible in the snapshot | none / latest |
+| `--repeats <n>` | independent trials per candidate and winner audit, from 1 to 10 | 1 |
 | `--seed <n>` | seed the search RNG; model outputs can still vary | 0 |
 | `--elite <n>` | how many parents each round proposes against | 3 |
 | `--max-evaluations <n>` | a hard ceiling on evaluated candidates | 64 |
@@ -111,8 +124,13 @@ installed copy.
 | `--attempts <n>` | retries per batch after a refusal | 3 |
 | `--runs-root <dir>` | the run directory itself; read it back with `--run <this path>` | `.factory/loop` |
 | `--intent "<words>"` | what the run is for; seeds the ledger the agents read | empty |
-| `--model <name>` | model for proposals and default walker agent nodes; the DSH evaluator uses runtime settings | the configured route |
+| `--model <name>` | model for proposals and evaluated agent nodes; both evaluators carry the same routing context | the configured route |
 | `--provider <route>` | the provider route that model is on | your settings default |
+| `--worker-backend dsh\|codex\|claude_code` | worker runtime, independent of provider choice | `dsh` |
+| `--role-routes <JSON>` / `--node-routes <JSON>` | route overrides; node takes precedence over role, then run | empty |
+| `--max-elapsed-s <n>` / `--max-tokens <n>` | shared limits for proposals, trials, nested work and final validation | unlimited |
+| `--validation-reserve-s <n>` / `--validation-reserve-tokens <n>` | part of the shared allocation reserved for validation | 0 |
+| `--resume` | continue a compatible saved search and retain consumed resources | off |
 | `--verbose` | print every event, and each candidate's own run output, not only the meaningful ones | off |
 
 **For Task-bound modes, candidates use the training items and the winner is audited on held-out items.** Modes without a data split report holdout as not applicable. The part travels in the run directory (`subset.json` beside each candidate), not in a knob, so a search cannot choose its own exam; the audit lands in `<run root>/holdout.json` and in the report as `{"train", "holdout", "gap", "overfit", "threshold", "instances"}`, with `overfit` true when `train − holdout` exceeds 0.15. The score the search compares has the size cost taken off it, and the unpenalised number is recorded beside it as `raw_score`. `refactory best` reports the audit, and `refactory adopt` refuses an overfit winner unless you pass `--allow-overfit`.
@@ -122,6 +140,10 @@ installed copy.
 | command | what it does |
 |---|---|
 | `refactory runs` | every run under the root, newest first. |
+| `refactory profiles` | list saved versions; `profile-save --name NAME --spec JSON` creates a new version. |
+| `refactory profile-resolve <package>/<mode> --profile NAME` | preview the exact launch settings and fixed contract. |
+| `refactory comparison --run <id>` | all measured, failed and unmeasured candidates, with trial/cost/latency evidence and audit. |
+| `refactory status --run <id> --follow` | stream durable state changes without starting or owning work. |
 | `refactory status --run <id>` | where it is, and the events since an offset. |
 | `refactory leaderboard --run <id>` | candidates by score, each with its diff against its parent. |
 | `refactory candidate <id> --run <id>` | one candidate, exactly what it changed. |
@@ -136,7 +158,7 @@ installed copy.
 | `refactory steer --run <id> --keep <candidate>` | follow that candidate up: it stays a parent even once a newer batch outscores it. Add `--lineage` for its descendants too. |
 | `refactory steer --run <id> --reject <candidate>` | stop searching around that candidate: it leaves the leaderboard, so it cannot be proposed from, reported best or adopted. Add `--lineage` for the whole branch. |
 | `refactory steer --run <id> --adopt [--as <package>]` | write the run's current winner as a package now, without ending the search. |
-| `refactory stop --run <id>` | ask a run to stop now. |
+| `refactory stop --run <id>` | request interruption of its recorded owned process; the receipt distinguishes requested cancellation from confirmed termination. |
 
 **A search says what it is doing while it does it.** `refactory optimize` prints the meaningful events as they happen — each candidate's score, the best so far, what the optimizer kept and refused with the running rule tally, each epoch's best, and the held-out audit — while the final JSON stays on stdout for a caller to parse. `--verbose` adds every event and each candidate's own run output, and `refactory status --run <id>` shows the same records, which is what the Web panel reads.
 
@@ -152,6 +174,6 @@ The read verbs pass through the console's own `--project`, `--runs-root`, `--aft
 
 ## Model selection and runtime limits
 
-Read [Models](models.md) for managed credentials, per-run model selection and the separate DSH evaluator routing caveat. A random seed does not make provider responses deterministic. Candidate limits do not bound total time or tokens; final holdout measurements are additional.
+Read [Models](models.md) for managed credentials, resolved routing, worker receipts and unsupported backend capabilities. A random seed does not make provider responses deterministic. Candidate counts, elapsed time and tokens have separate limits; repeated trials and final holdout measurements consume the shared resource allocation. Token enforcement occurs at usage boundaries and can overshoot during an in-flight request.
 
 For samples and resume on authoring APIs, use the documented Python Create/Edit/Design entry points and their `--help`; those flags are not all aliases on `refactory ceo`. [Authoring guide](tutorials/03-author-with-a-model.md).
