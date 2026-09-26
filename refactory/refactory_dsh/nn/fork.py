@@ -160,6 +160,10 @@ def run_fork(executor: Executor, node: Node) -> str | None:
             model=branch_model, memory=ctx.memory, enforce_writes=ctx.enforce_writes,
         )
         child = Executor(executor.graph, child_ctx, max_steps=executor.max_steps)
+        # Branch gate IDs are disjoint. Keep their own counters across a later
+        # outer re-entry of this fork, as the DSH spine does; a new child object
+        # must not grant a fresh retry allowance.
+        child._gate_iterations = executor._gate_iterations
         child._reserve_step = reserve
         children.append(child)
 

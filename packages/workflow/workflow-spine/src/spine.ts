@@ -7,6 +7,7 @@
  * @module @deepseek-ai/dsh-workflow-spine/spine
  */
 
+import { retryEdges, retryKey } from './loops.ts'
 import type { DirectorExpansion, WorkflowEdge, WorkflowGraph, WorkflowNode } from './types.ts'
 
 /** The model-facing view of one node returned by {@link Spine.next}. */
@@ -198,6 +199,11 @@ export function validateGraph(graph: WorkflowGraph): GraphIssue[] {
   for (const issue of unreachableNodes(graph, ids, outgoing)) {
     issues.push({ node: issue, message: 'unreachable from start_node' })
   }
+  try {
+    retryEdges(graph.nodes, graph.edges)
+  } catch (error) {
+    issues.push({ message: error instanceof Error ? error.message : String(error) })
+  }
   return issues
 }
 
@@ -345,6 +351,13 @@ export class Spine {
     this.successors = {}
     this.log = []
     this.promptEdits = new Set()
+    this.retryEdges()
+  }
+
+  /** Recompute after expansion; remembered continuations are control edges too. */
+  private retryEdges(): Set<string> {
+    const continuations = Object.entries(this.successors).map(([source, target]) => ({ source, target }))
+    return retryEdges(Object.fromEntries(this.nodes), [...this.edges, ...continuations])
   }
 
   private outgoing(nid: string): WorkflowEdge[] {
@@ -517,6 +530,7 @@ export class Spine {
 
   /** The node(s) due now, or `done`. */
   next(): SpineNext {
+    this.retryEdges()
     this.advanceSkipped()
     const pass = this.pass === undefined ? {} : { pass: { ...this.pass } }
     if (this.halted !== undefined || (this.cursor.length === 0 && this.pass === undefined)) {
@@ -712,9 +726,14 @@ export class Spine {
       this.gateVerdicts.set(gate, outcome)
     }
 
-    if (outcome === RELOOP) {
-      const target = this.conditionalTarget(gate, RELOOP)
-      if (target === undefined) throw new Error(`${gate} has no reloop edge`)
+    const selected = this.outgoing(gate).find(edge =>
+      edge.condition != null && label(edge.condition) === outcome)
+      ?? (outcome === PROCEED ? this.outgoing(gate).find(edge => edge.condition == null) : undefined)
+    if (outcome === RELOOP && selected === undefined) throw new Error(`${gate} has no reloop edge`)
+    const retry = selected !== undefined
+      && this.retryEdges().has(retryKey(gate, selected.target, selected.condition))
+    if (retry) {
+      const target = selected!.target
       record()
       const cap = this.reloopCap(gate)
       const count = (this.iterations[gate] ?? 0) + 1
@@ -732,7 +751,7 @@ export class Spine {
       this.uncompleteBetween(target, gate)
       this.cursor = [target]
       this.afters = []
-      this.log.push(`gate ${gate}: reloop -> ${target} (${count})`)
+      this.log.push(`gate ${gate}: ${outcome} -> ${target} (${count})`)
     } else if (outcome === HALT) {
       const target = this.conditionalTarget(gate, HALT)
       record()

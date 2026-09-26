@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Protocol
 
 from .graph import Graph, Node
+from .loops import loop_edges
 from .mode import RunResult
 from .resolve import resolve
 
@@ -347,6 +348,8 @@ class Executor:
     model_calls: int = 0
     _reserve_step: Callable[[], bool] | None = field(default=None, repr=False)
 
+    _gate_iterations: dict[str, int] = field(default_factory=dict, init=False, repr=False)
+
     def _record(
         self, node: str, *, error: str | None = None,
         branches: dict[str, Any] | None = None,
@@ -379,9 +382,16 @@ class Executor:
 
     def run(self, *, start: str | None = None) -> RunResult:
         started = time.time()
-        visits: dict[str, int] = {}
+        visits = self._gate_iterations
         current: str | None = start or self.graph.start or None
         error: str | None = None
+        try:
+            retries = loop_edges(self.graph)
+        except ValueError as exc:
+            error = str(exc)
+            self._record(current or "", error=error)
+            return RunResult(facts=dict(self.ctx.facts), exit_ok=False, error=error,
+                             workdir=self.ctx.workdir)
 
         while current is not None:
             node = self.graph.nodes.get(current)
@@ -391,16 +401,6 @@ class Executor:
             if len(self.steps) >= self.max_steps:
                 error = f"the run exceeded {self.max_steps} steps"
                 break
-            # Only a gate can create a cycle, so only a gate carries an iteration
-            # bound. A non-gate node may be visited again on the next pass.
-            if node.kind == "gate" and visits.get(current, 0) > node.max_iterations:
-                error = (
-                    f"gate {current!r} returned a looping verdict {visits[current]} "
-                    f"times, past its max_iterations of {node.max_iterations}"
-                )
-                break
-            visits[current] = visits.get(current, 0) + 1
-
             if node.kind == "fork":
                 from .fork import run_fork
 
@@ -451,7 +451,7 @@ class Executor:
                     self.ctx._produced = set()  # noqa: SLF001
                     self.ctx.write_json(CURRENT_ITEM, item)
                     branch_error = self._walk_branch(
-                        node.subgraph_entry, node.subgraph_exit, include_barrier=True
+                        node.subgraph_entry, node.subgraph_exit, include_barrier=True, iterations={}
                     )
                     if branch_error is not None:
                         error = branch_error
@@ -482,6 +482,7 @@ class Executor:
             try:
                 current, verdict = self._visit(node)
                 self.ctx._check_produces()  # noqa: SLF001
+                self._count_retry(node, current, verdict, retries, visits)
             except Exception as exc:  # a failing node ends the run, visibly
                 self.steps.append(
                     Step(node.id, node.kind, time.time() - step_started,
@@ -515,7 +516,8 @@ class Executor:
 
     # ── one branch of a fork, or one pass of a data node ───────────────────
     def _walk_branch(
-        self, start: str, barrier: str | None, *, include_barrier: bool = False
+        self, start: str, barrier: str | None, *, include_barrier: bool = False,
+        iterations: dict[str, int] | None = None,
     ) -> str | None:
         """Run from ``start`` up to ``barrier``, and report why it failed.
 
@@ -524,7 +526,11 @@ class Executor:
         the last one of the subgraph, not the one after it.
         """
         current: str | None = start
-        visits: dict[str, int] = {}
+        visits = self._gate_iterations if iterations is None else iterations
+        try:
+            retries = loop_edges(self.graph)
+        except ValueError as exc:
+            return str(exc)
         while current is not None and (current != barrier or include_barrier):
             if include_barrier and current == barrier:
                 barrier = None  # the exit is visited once, then the pass ends
@@ -533,9 +539,6 @@ class Executor:
                 return f"node {current!r} does not exist"
             if len(self.steps) >= self.max_steps or (self._reserve_step and not self._reserve_step()):
                 return f"the run exceeded {self.max_steps} steps"
-            if node.kind == "gate" and visits.get(current, 0) > node.max_iterations:
-                return f"gate {current!r} exceeded its max_iterations of {node.max_iterations}"
-            visits[current] = visits.get(current, 0) + 1
             self.ctx.iteration = len(self.steps)
             self.ctx.node_id = current
             self.ctx._declared = node.writes  # noqa: SLF001 - the run owns the context
@@ -546,6 +549,7 @@ class Executor:
             try:
                 current, verdict = self._visit(node)
                 self.ctx._check_produces()  # noqa: SLF001
+                self._count_retry(node, current, verdict, retries, visits)
             except Exception as exc:  # a failing branch ends the run, visibly
                 self.steps.append(
                     Step(node.id, node.kind, time.time() - started,
@@ -556,6 +560,21 @@ class Executor:
                 Step(node.id, node.kind, time.time() - started, verdict=verdict)
             )
         return None
+
+    @staticmethod
+    def _count_retry(
+        node: Node, target: str | None, verdict: str | None,
+        retries: set[tuple[str, str, str]], visits: dict[str, int],
+    ) -> None:
+        if (node.id, target, verdict or "") not in retries:
+            return
+        count = visits.get(node.id, 0) + 1
+        visits[node.id] = count
+        if count > node.max_iterations:
+            raise ExecutionError(
+                f"gate {node.id!r} exceeded max_iterations of {node.max_iterations}; "
+                f"retry {verdict!r} was refused before dispatching {target!r}"
+            )
 
     # ── one node ───────────────────────────────────────────────────────────
     def _visit(self, node: Node) -> tuple[str | None, str | None]:

@@ -208,6 +208,18 @@ Every node also declares:
 | `max_iterations` | for a gate: its reloop cap — the bound that makes a cycle terminate |
 | `score_effect` | `affects` (default) or `none`: a block that cannot move the score says so, so an optimizer is not invited to try it |
 
+A gate may select up to `max_iterations` retry transitions; the next retry halts
+**before** its body runs. A final forward outcome still runs after the last
+allowed retry. `reloop` explicitly marks a retry. After removing those edges,
+a remaining cyclic region with exactly one gate identifies that gate's custom retry
+labels (such as `retry`, `loop`, or `again`). A remaining multi-gate cycle is
+ambiguous and is refused before work: name its intended retry edges `reloop`.
+Forward outcomes inside an outer explicit loop do not spend their own gate's
+budget. Counts are per gate in one execution, including fork re-entry; each
+Data item starts a fresh allowance for its body. Python previously reset a fork
+branch's counts each time it was admitted; it now retains them, matching DSH.
+Explicit redo keeps its existing reset behavior. No new field is added to a saved mode state.
+
 Two of those declarations are load-bearing rather than decorative. `reads` and
 `writes` are what the validator checks ("every file a node reads is written by a
 node on a path from the start to a terminal"), and `produces` is what makes

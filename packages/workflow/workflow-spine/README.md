@@ -265,3 +265,15 @@ failed or unfinished status is never converted to success.
 The automatic result names its driver and zero **driver** model calls, not a
 claim about arbitrary operation internals. Prose steering remains durable context,
 not an interpreted command; conversational or model/manual graphs keep the CEO.
+
+Gate retry caps are checked on the decision, before dispatching another body.
+An allowed final forward verdict never spends retry budget. Explicit `reloop`
+edges identify retries; after those edges are cut, custom labels in a residual
+single-gate cyclic region also retry. Cycles that bypass every gate remain
+invalid. Residual multi-gate cycles refuse before work with
+instructions to mark the intended retry edges `reloop`; no DFS-order guess or
+new graph field is used. Classification is refreshed after director expansion,
+including its remembered continuation. Per-gate counts survive outer fork
+re-entry; ordinary Data item/explicit-redo invalidation retains its prior reset.
+Python fork re-entry previously reset branch counters; retaining the named gate's
+allowance is an intentional compatibility change.

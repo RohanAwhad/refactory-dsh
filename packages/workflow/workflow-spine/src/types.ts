@@ -91,8 +91,9 @@ export interface WorkflowEdge {
   /**
    * The verdict label that routes along this edge, or null/absent for the
    * unconditional edge. `proceed` / `reloop` / `halt` carry their usual
-   * meaning; any other label is a gate-named forward outcome (a switch), e.g.
-   * `draft` / `improve` / `debug`. Labels are compared in lowercase.
+   * meaning. Other labels are forward outcomes unless a residual single-gate
+   * cycle identifies a retry. Ambiguous multi-gate cycles must mark their retry
+   * edges `reloop`. Labels are compared in lowercase.
    */
   condition?: string | null
 }
