@@ -215,7 +215,7 @@ def cmd_ui(args: argparse.Namespace) -> int:
 
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Whether this machine can run a mode, and what to do about anything missing."""
-    checks: list[tuple[str, bool, str]] = []
+    checks: list[tuple[str, bool | None, str]] = []
     interpreter = Path(sys.executable)
     version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     checks.append(("python >= 3.12", sys.version_info >= (3, 12), version))
@@ -250,19 +250,25 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         client = DshModelClient(provider=getattr(args, "provider", ""), model=getattr(args, "model", ""))
         with TemporaryDirectory(prefix="refactory-readiness-") as work:
             readiness = model_readiness(Path(work), model_context=client.context())
-        checks.append(("sandbox model configuration", True,
-                       f"{readiness['provider']}/{readiness['model']}: {readiness['status']}; authentication not tested"))
+        unverified = readiness.get("status") == "diagnostic-unavailable"
+        checks.append(("sandbox model configuration", None if unverified else True,
+                       f"{readiness['provider']}/{readiness['model']}: {readiness['status']}; authentication not tested"
+                       + (f"; {readiness['warning']}" if readiness.get("warning") else "")))
     except Exception as exc:
         checks.append(("sandbox model configuration", False, str(exc)))
 
     width = max(len(name) for name, _ok, _detail in checks)
     for name, ok, detail in checks:
-        print(f"  {'ok  ' if ok else 'MISS'}  {name:<{width}}  {detail}")
-    bad = [name for name, ok, _detail in checks if not ok]
+        marker = "ok  " if ok is True else "MISS" if ok is False else "WARN"
+        print(f"  {marker}  {name:<{width}}  {detail}")
+    bad = [name for name, ok, _detail in checks if ok is False]
     if bad:
         print(f"\nrefactory doctor: {len(bad)} problem(s): {', '.join(bad)}")
         return 1
-    print("\nrefactory doctor: local configuration ready (authentication not tested) — try `refactory list`, or `refactory ceo \"an idea\" --mode design`")
+    if any(ok is None for _name, ok, _detail in checks):
+        print("\nrefactory doctor: local prerequisites ready; model configuration unverified (authentication not tested)")
+    else:
+        print("\nrefactory doctor: local configuration ready (authentication not tested) — try `refactory list`, or `refactory ceo \"an idea\" --mode design`")
     return 0
 
 

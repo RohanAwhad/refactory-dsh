@@ -359,7 +359,10 @@ def model_readiness(workdir: Path, *, model_context: dict[str, str] | None = Non
         f"print(json.dumps(DshModelClient(**{context!r}).readiness(workdir=Path.cwd())))\n"
     )
     result = run_sandboxed(code, workdir=workdir, timeout_s=40)
-    if not result.ok or result.payload.get("ready") is not True:
+    if not result.ok or not (
+        result.payload.get("ready") is True
+        or (result.payload.get("ready") is None and result.payload.get("status") == "diagnostic-unavailable")
+    ):
         raise SandboxError(result.problem() or "sandbox model configuration is not ready; run refactory doctor")
     return result.payload
 

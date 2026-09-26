@@ -6,6 +6,11 @@ import { pathToFileURL } from 'node:url'
 const [repo, requestedProvider, requestedModel] = process.argv.slice(2)
 const fibers = []
 let stage = 'installed DSH modules'
+let provider = requestedProvider || '(runtime default)'
+let model = requestedModel || '(runtime default)'
+class DiagnosticUnavailable extends Error {
+  constructor(reason) { super(reason); this.reason = reason }
+}
 try {
   // Follow the pinned installation's public dependency graph, never pnpm hashes.
   const project = createRequire(join(repo, 'package.json'))
@@ -16,6 +21,7 @@ try {
   const { Context } = await load('@deepseek-ai/cordis', installed)
   const { loadProfile, composeEntries, loadOptionalPatches, loadLayeredEnv } = await load('@deepseek-ai/dsh-app-boot', installed)
   const { resolveDshHome } = await load('@deepseek-ai/dsh-home-paths', installed)
+  const { isJsExpr } = await load('@deepseek-ai/cordis-plugin-loader', createRequire(installed.resolve('@deepseek-ai/dsh-app-boot/package.json')))
   const { default: Credentials } = await load('@deepseek-ai/dsh-credentials-local')
   const { credentialRef } = await load('@deepseek-ai/dsh-credentials', createRequire(base.resolve('@deepseek-ai/dsh-credentials-local/package.json')))
   const { default: Settings } = await load('@deepseek-ai/dsh-settings-file')
@@ -31,11 +37,12 @@ try {
   // treated as the local file provider, and !!js config is not reimplemented here.
   const config = (id, name) => {
     const entry = entries.find(candidate => candidate.id === id)
-    if (!entry || entry.name !== name || entry.disabled) throw new Error('unsupported composition')
-    const plain = value => value === null || ['string', 'number', 'boolean', 'undefined'].includes(typeof value)
+    if (!entry || entry.name !== name || entry.disabled) throw new DiagnosticUnavailable('unsupported-headless-composition')
+    const plain = value => !isJsExpr(value) && (value === null
+      || ['string', 'number', 'boolean', 'undefined'].includes(typeof value)
       || (Array.isArray(value) ? value.every(plain) : typeof value === 'object'
-        && Object.getPrototypeOf(value) === Object.prototype && Object.values(value).every(plain))
-    if (!plain(entry.config ?? {})) throw new Error('dynamic configuration requires the full profile')
+        && Object.getPrototypeOf(value) === Object.prototype && Object.values(value).every(plain)))
+    if (!plain(entry.config ?? {})) throw new DiagnosticUnavailable('dynamic-profile-configuration')
     return entry.config ?? {}
   }
   const ctx = new Context()
@@ -53,8 +60,8 @@ try {
   await mount(Settings, { ...config('settings', '@deepseek-ai/dsh-settings-file'), watch: false })
   await mount(DefaultModel, config('agent-default-model', '@deepseek-ai/dsh-agent-default-model'))
   const selection = ctx.agentDefaultModel.currentSelection()
-  const provider = requestedProvider || selection.provider
-  const model = requestedModel || selection.model
+  provider = requestedProvider || selection.provider
+  model = requestedModel || selection.model
   let connection
   if (provider === 'deepseek-official') {
     const { Config } = await load('@deepseek-ai/dsh-llm-deepseek')
@@ -67,7 +74,7 @@ try {
       base: config('llm-pi-ai', '@deepseek-ai/dsh-llm-pi-ai'),
     }).get()
     connection = settings.providers?.[provider]
-    if (!connection) throw new Error('provider absent from configuration')
+    if (!connection) throw new DiagnosticUnavailable('provider-inspection-unavailable')
   }
   const ref = connection.apiKeyEnv
   const hasCredentialReference = ref !== undefined
@@ -82,11 +89,22 @@ try {
     ...(ready ? {} : { error: `Sandbox model credential ${ref} is not configured for ${provider}. Save it through DSH Settings → Models in the configured DSH home; exported keys are intentionally scrubbed. Authentication has not been tested.` }),
   }))
   if (!ready) process.exitCode = 1
-} catch {
+} catch (error) {
   // A parser exception may quote a secret-bearing document. Emit only our stage.
-  console.log(JSON.stringify({ ready: false, authenticated: false,
-    error: `Model readiness could not describe ${stage}. Check the configured headless profile, settings and managed credential store; no authenticated request was made.` }))
-  process.exitCode = 1
+  // An inspector's missing capability is not evidence of missing credentials.
+  if (error instanceof DiagnosticUnavailable || stage === 'installed DSH modules') {
+    console.log(JSON.stringify({ ready: null, status: 'diagnostic-unavailable',
+      reason: error instanceof DiagnosticUnavailable ? error.reason : 'installed-inspector-unavailable',
+      provider, model, authenticated: false,
+      warning: 'Credential diagnostic unavailable for the selected runtime/configuration; credential readiness is unverified. Normal execution will perform its own checks.',
+    }))
+  } else {
+    console.log(JSON.stringify({ ready: false, status: 'invalid-configuration',
+      reason: stage, provider, model, authenticated: false,
+      error: `Model readiness found invalid ${stage}. Check the selected headless profile, settings and managed credential store; no authenticated request was made.`,
+    }))
+    process.exitCode = 1
+  }
 } finally {
   for (const fiber of fibers.reverse()) await fiber.dispose()
 }

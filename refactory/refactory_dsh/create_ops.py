@@ -171,10 +171,14 @@ def prepare(ctx: Any) -> dict[str, Any]:
 
     client = getattr(ctx, "model", None)
     if client is None or isinstance(client, DshModelClient):
-        model_readiness(
+        readiness = model_readiness(
             ctx.workdir / ".model-readiness",
             model_context=client.context() if isinstance(client, DshModelClient) else None,
         )
+        if readiness.get("warning"):
+            import sys
+
+            print(f"refactory: warning: {readiness['warning']}", file=sys.stderr)
     reference = _revision_source(revision) if revision else _reference(extends)
     ctx.write_json("brief.json", {
         "name": name, "brief": brief, "extends": extends, "mode": revision,

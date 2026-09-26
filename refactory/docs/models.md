@@ -77,7 +77,12 @@ API-key reference is reported as `native-auth-unverified`, not as a verified cre
 
 The local diagnostic uses the installed headless profile's supported file-backed
 credential/settings services and adapter schemas. A replaced service or dynamic `!!js`
-configuration is reported as unavailable for this diagnostic, rather than inspected with
-a guessed credential location. The local managed store is owner-only but does not
+configuration, an external `DSH_CLI`, or a source-checkout launcher is reported as
+`diagnostic-unavailable`: the doctor prints **WARN** and authoring continues with an
+explicit unverified-readiness warning. The actual selected runtime performs its normal
+checks. Confirmed missing references and malformed known credential/settings configuration
+still stop authoring before research. The diagnostic never guesses a credential location.
+DSH's normal profile loader may initialize a missing shipped headless profile; the check
+makes no model request and does not write credential values. The local managed store is owner-only but does not
 isolate credentials from generated code running as the same OS user; stricter isolation
 requires a separate model-service boundary.
