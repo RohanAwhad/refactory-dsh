@@ -123,6 +123,17 @@ matter:
   compared** with the reason, because one sample of a model call is not a score to
   refuse on. `revision.json` in the run directory, and `revision_of`, `before_score`
   and `after_score` in the package's `.origin.json`, say which of the two happened.
+  An unmeasured comparison has `before_score: null` and `regressed: null`; a failed
+  deterministic source run fails the revision instead of counting as score zero.
+
+The Python `edit(EditConfig(...))` API and `python -m refactory_dsh.edit` use that
+same graph result, including its comparison reason and Task contract. They do not
+run extra keyless before/after passes. The API captures the source state before
+authoring and refuses if that state changes before comparison; its persisted task
+keeps this identity across resume. `--sample NAME=VALUE` reaches the revised smoke
+and, when the source accepts those knobs, its comparison pass. A newly introduced
+input knob makes the comparison unavailable with an explicit reason rather than
+comparing the new input against the source's default input.
 
 Note what it does *not* do: it writes a **new** package. `circle_packing` is
 unchanged, so "did the revision help?" stays a question you can still ask.
