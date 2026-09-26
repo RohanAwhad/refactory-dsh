@@ -29,11 +29,8 @@ def test_prepare_seeds_the_ledger_then_folds_it_into_the_graph(tmp_path):
     assert (tmp_path / "run" / "intent-ledger.md").exists()
 
     graph = json.loads((graphs / f"{name}.graph.json").read_text())
-    prompts = " ".join(
-        node.get("prompt_template") or ""
-        for node in graph["nodes"].values()
-        if node.get("_type") == "AgentNode"
-    )
+    specs = [json.loads(path.read_text()) for path in (tmp_path / 'run/.refactory/worker-specs').glob('*.json')]
+    prompts = ' '.join(spec['prompt'] for spec in specs)
     assert "write a counter mode" in prompts, (
         "the graph the profile loads does not carry the intent, so nobody steered it"
     )

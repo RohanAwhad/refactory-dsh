@@ -99,13 +99,15 @@ def prepare(
             steering.Ledger.seed(workdir, intent.strip() or f"Run {identifier}.")
 
         from refactory_dsh import invocations, workers
+        from refactory_dsh.model import DshModelClient
+        routing_context = dict(model_context or {})
+        if resource_limits:
+            routing_context.pop('budget_ledger', None)
+        # Persist a concrete policy before lowering, including console/API opens.
+        model_context = DshModelClient(**routing_context).context()
         if resource_limits:
             from refactory_dsh.budgets import LEDGER, ResourceLimits
-            from refactory_dsh.model import DshModelClient
             ResourceLimits.from_dict(resource_limits)
-            routing_context = dict(model_context or {})
-            routing_context.pop('budget_ledger', None)
-            model_context = DshModelClient(**routing_context).context()
             model_context['budget_ledger'] = str(workdir / LEDGER)
 
         name = f"{package}-{mode_name}"
@@ -202,7 +204,7 @@ def run(
     headless: bool = False,
     worker_backend: str = "dsh",
     effort: str = "",
-    permission_mode: str = "default",
+    permission_mode: str = "",
     role_routes: dict[str, Any] | None = None,
     node_routes: dict[str, Any] | None = None,
     model_context: dict[str, Any] | None = None,
@@ -224,7 +226,7 @@ def run(
     workdir = Path(workdir).expanduser().resolve()
     with ownership(workdir) as owner:
         if resume:
-            if source or source_format not in ('', 'directory') or approve or knobs or intent or model_context or provider or model or worker_backend != 'dsh' or effort or permission_mode != 'default' or role_routes or node_routes:
+            if source or source_format not in ('', 'directory') or approve or knobs or intent or model_context or provider or model or worker_backend != 'dsh' or effort or permission_mode or role_routes or node_routes:
                 raise ValueError('resume retains saved inputs, knobs, instructions and routes; changes require explicit invalidation')
             import json
 
@@ -237,6 +239,8 @@ def run(
             project = Path(saved['project'])
             knobs = saved.get('knobs') or []
             model_context = saved.get('model_context')
+            if model_context is not None:
+                model_context = {**model_context, 'permission_mode': model_context.get('permission_mode') or 'default'}
             resource_limits = effective_limits
             if model_context:
                 provider = model_context.get('provider', '')
@@ -248,7 +252,7 @@ def run(
             # The harness's input port, fed at run time: the mode keeps the Task it was
             # built for and this run says which items to read instead.
             write_source(workdir, source_path=source, source_format=source_format or "directory")
-        if model_context is None and (provider or model or worker_backend != "dsh" or effort or role_routes or node_routes):
+        if not resume and model_context is None:
             from refactory_dsh.model import DshModelClient
             model_context = DshModelClient(provider=provider, model=model, worker_backend=worker_backend,
                                            effort=effort, permission_mode=permission_mode,
@@ -293,7 +297,9 @@ def run(
             if model_context is not None or resource_limits:
                 from refactory_dsh.model import DshModelClient
                 from refactory_dsh.workers import run_graph_command
-                context = model_context or DshModelClient().context()
+                # Older unrouted checkpoints did not record a worker policy.
+                # Keep their native policy instead of upgrading them to skip.
+                context = model_context or DshModelClient(permission_mode='default').context()
                 code = run_graph_command(argv, workdir=workdir, context=context, cwd=str(REPO_ROOT),
                                          timeout=timeout_s, env=env, **inherited).returncode
             else:
@@ -393,7 +399,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--worker-backend", choices=["dsh", "codex", "claude_code"], default="dsh")
     parser.add_argument("--effort", default="")
-    parser.add_argument("--permission-mode", default="default")
+    parser.add_argument("--permission-mode", default="", help="worker permissions: skip (new-run default), default (native policy), or a backend-specific mode")
     import json
     parser.add_argument("--role-routes", type=json.loads, default=None)
     parser.add_argument("--node-routes", type=json.loads, default=None)

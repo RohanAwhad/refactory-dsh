@@ -165,11 +165,11 @@ export function RuntimeControls({ configuration, onChange }: { readonly configur
   const backend = String(value.worker_backend || 'dsh')
   const [routeError, setRouteError] = useState('')
   const change = (key: string, next: unknown): void => { onChange(JSON.stringify({ ...value, [key]: next })) }
-  const permissions = backend === 'codex' ? ['default', 'never', 'approve-for-me'] : backend === 'claude_code' ? ['default', 'dontAsk', 'acceptEdits', 'auto', 'plan'] : ['default']
+  const permissions = backend === 'codex' ? ['skip', 'default', 'never', 'approve-for-me', 'dangerously-bypass-approvals-and-sandbox'] : backend === 'claude_code' ? ['skip', 'default', 'dontAsk', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'] : ['skip', 'default']
   return <details data-refactory-runtime-controls open>
     <summary className={css.heading}>Worker routing and shared resources</summary>
     <label className={css.label} htmlFor="refactory-worker-backend">Coding worker backend</label>
-    <select className={css.control} id="refactory-worker-backend" value={backend} onChange={event => { onChange(JSON.stringify({ ...value, worker_backend: event.target.value, provider: '', model: '', effort: '', permission_mode: 'default', max_tokens: null, validation_reserve_tokens: 0 })) }}>
+    <select className={css.control} id="refactory-worker-backend" value={backend} onChange={event => { onChange(JSON.stringify({ ...value, worker_backend: event.target.value, provider: '', model: '', effort: '', permission_mode: 'skip', max_tokens: null, validation_reserve_tokens: 0 })) }}>
       <option value="dsh">DSH (default)</option><option value="codex">Codex (opt in)</option><option value="claude_code">Claude Code (opt in)</option>
     </select>
     {(['provider', 'model', 'effort'] as const).map(key => <div className={css.field} key={key}>
@@ -178,9 +178,10 @@ export function RuntimeControls({ configuration, onChange }: { readonly configur
         onChange={event => { change(key, event.target.value) }} />
     </div>)}
     <label className={css.label} htmlFor="refactory-permission-mode">Worker permission mode</label>
-    <select className={css.control} id="refactory-permission-mode" value={String(value.permission_mode || 'default')} onChange={event => { change('permission_mode', event.target.value) }}>
-      {permissions.map(permission => <option key={permission}>{permission}</option>)}
+    <select className={css.control} id="refactory-permission-mode" value={String(value.permission_mode || 'skip')} onChange={event => { change('permission_mode', event.target.value) }}>
+      {permissions.map(permission => <option key={permission} value={permission}>{permission === 'skip' ? 'Skip permission checks (default)' : permission === 'default' ? 'Native permission policy' : permission}</option>)}
     </select>
+    <p className={css.note}>Skip mode lets worker tools run without permission approval. Codex and DSH also run without their own sandbox restrictions. Select a native policy to retain those checks.</p>
     {(['max_elapsed_s', 'max_tokens', 'validation_reserve_s', 'validation_reserve_tokens'] as const).map(key => <div className={css.field} key={key}>
       <label className={css.label} htmlFor={`refactory-profile-${key}`}>{({ max_elapsed_s: 'Total elapsed seconds', max_tokens: 'Total tokens', validation_reserve_s: 'Seconds reserved for final validation', validation_reserve_tokens: 'Tokens reserved for final validation' })[key]}</label>
       <input className={css.input} id={`refactory-profile-${key}`} type="number" step="any" value={String(value[key] ?? '')} placeholder={key.startsWith('validation') ? '0' : 'Unlimited'}

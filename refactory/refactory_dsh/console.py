@@ -346,13 +346,9 @@ def _open_mode(
                                            **({"model_context": model_context} if model_context else {}),
                                            **({"resource_limits": resource_limits} if resource_limits else {}))
         command_env = _node_environment(mode, project=project, workdir=root, knobs=knobs)
-        if model_context or resource_limits:
-            from refactory_dsh import workers
-            context = dict(model_context or {})
-            if resource_limits:
-                from refactory_dsh.budgets import RunBudget
-                context["budget_ledger"] = str(RunBudget.open(root).path)
-            command_env.update(workers.environment(context))
+        from refactory_dsh import workers
+        context = json.loads((root / '.refactory/run-config.json').read_text())['model_context']
+        command_env.update(workers.environment(context))
     except ValueError as error:
         # A malformed identifier is the caller's to fix, so it is a refusal with
         # the reason rather than a traceback.

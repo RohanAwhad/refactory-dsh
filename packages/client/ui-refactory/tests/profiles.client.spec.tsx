@@ -69,7 +69,17 @@ describe('profile and worker controls', () => {
     const changed = vi.fn()
     render(<RuntimeControls configuration={JSON.stringify({ worker_backend: 'dsh', provider: 'openai', model: 'old', effort: 'high' })} onChange={changed} />)
     fireEvent.change(screen.getByLabelText('Coding worker backend'), { target: { value: 'codex' } })
-    expect(JSON.parse(changed.mock.calls[0]?.[0] as string)).toMatchObject({ worker_backend: 'codex', provider: '', model: '', effort: '', permission_mode: 'default' })
+    expect(JSON.parse(changed.mock.calls[0]?.[0] as string)).toMatchObject({ worker_backend: 'codex', provider: '', model: '', effort: '', permission_mode: 'skip' })
+  })
+
+  it('defaults to skip while preserving an explicit native permission policy', () => {
+    const changed = vi.fn()
+    const view = render(<RuntimeControls configuration='{"worker_backend":"codex"}' onChange={changed} />)
+    expect((screen.getByLabelText('Worker permission mode') as HTMLSelectElement).value).toBe('skip')
+    view.rerender(<RuntimeControls configuration='{"worker_backend":"claude_code","permission_mode":"default"}' onChange={changed} />)
+    expect((screen.getByLabelText('Worker permission mode') as HTMLSelectElement).value).toBe('default')
+    fireEvent.change(screen.getByLabelText('Worker permission mode'), { target: { value: 'skip' } })
+    expect(JSON.parse(changed.mock.calls[0]?.[0] as string).permission_mode).toBe('skip')
   })
 
   it('Run once carries route/resource settings and JSON overrides without search-only settings', () => {
