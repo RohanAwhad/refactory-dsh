@@ -990,6 +990,10 @@ def _parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="verb", required=True)
     add = with_common
 
+    runtime = add(sub.add_parser("runtime", help="nonsecret nested model context and configured readiness; no model request"))
+    runtime.add_argument("--provider", default="", help="provider route to inspect (default: DSH settings)")
+    runtime.add_argument("--model", default="", help="model selection to inspect (default: DSH settings)")
+
     add(sub.add_parser("modes", help="the catalogue of startable modes"))
     add(sub.add_parser("runs", help="every run under the root"))
     add(sub.add_parser("strategies", help="the named outer loops, optimizers and evaluators"))
@@ -1313,14 +1317,64 @@ def _root_for(args: argparse.Namespace, project: Path) -> Path:
     return found.pop()
 
 
+def runtime_context(project: Path, *, provider: str = "", model: str = "") -> dict[str, Any]:
+    """Describe the existing nested model configuration without a model request.
+
+    Only selected nonsecret fields cross this boundary. The readiness helper's
+    detailed credential reference, parser errors, and launch environment do not.
+    """
+    from tempfile import TemporaryDirectory
+    from refactory_dsh.model import DshModelClient
+    from refactory_dsh.sandbox import model_readiness
+
+    client = DshModelClient(provider=provider, model=model)
+    context = client.context()
+    try:
+        with TemporaryDirectory(prefix="refactory-runtime-") as work:
+            result = model_readiness(Path(work), model_context=context, require_ready=False)
+    except Exception:
+        # A failed inspector is not proof of a bad key. Never relay arbitrary
+        # exception text from a custom runtime or secret-bearing configuration.
+        result = {"ready": None, "status": "diagnostic-unavailable"}
+    messages = {
+        "configured": "Local credential configuration is present. Authentication, quota, and network access have not been tested.",
+        "missing-credential": "Nested model credentials are missing. Save the provider key through Settings → Models in the DSH home shown before authoring.",
+        "invalid-configuration": "Local model configuration is invalid. Inspect refactory doctor and the selected DSH profile/settings before authoring.",
+        "native-auth-unverified": "Provider-native authentication has not been verified. Normal execution performs its own checks.",
+        "diagnostic-unavailable": "This runtime could not be inspected. Readiness is unverified; normal execution performs its own checks.",
+    }
+    status = result.get("status")
+    if status not in messages:
+        status = "diagnostic-unavailable"
+    credential = result.get("credential")
+    return {
+        "project": str(project.resolve()),
+        "dsh_home": context["dsh_home"],
+        "nested": {
+            "provider": result.get("provider") or context["provider"] or "(runtime default)",
+            "model": result.get("model") or context["model"] or "(runtime default)",
+            "ready": result.get("ready") if status != "diagnostic-unavailable" else None,
+            "status": status,
+            "credential_configured": credential.get("configured") if isinstance(credential, dict) else None,
+            "authenticated": False,
+            "reasoning_effort": None,
+            "reasoning_note": "The credential diagnostic does not resolve nested reasoning effort; the current session's effort is not proof of a child's selection.",
+            "message": messages[status],
+        },
+        "inheritance": "wf_open inherits the owning session provider/model and the host DSH home. Create/edit check nested readiness before research. Keep inherited settings unless the user requests a change.",
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     # The forwarding verbs carry their own addressing flags, so `--project` is
     # absent on them; a missing one is "the found root", not a crash.
     project = Path(getattr(args, "project", None)) if getattr(args, "project", None) else project_root()
     try:
-        if args.verb == "modes":
-            payload: Any = catalogue(project=project)
+        if args.verb == "runtime":
+            payload: Any = runtime_context(project, provider=args.provider, model=args.model)
+        elif args.verb == "modes":
+            payload = catalogue(project=project)
         elif args.verb == "strategies":
             payload = level_two()
         elif args.verb == "runs":

@@ -51,6 +51,7 @@ export const Config: z<Config> = z.object({
 
 /** The verbs the tool exposes, and the one thing each needs to be addressed. */
 const VERBS = {
+  runtime: 'Read current session model selection, host DSH home and nested local credential readiness before wf_open. Uses inherited settings, never changes them or makes a model request; configured does not mean authenticated.',
   modes: 'List the modes a run can be started from: the verb that runs each, that wf_open can drive it node by node, its gates with a person\'s marked, and its parameters.',
   strategies: 'List the named outer loops, optimizers and evaluators, each with what it is. Choose settings.optimizer/strategy/evaluator from these names.',
   runs: 'List runs under the run root, newest first.',
@@ -281,6 +282,7 @@ export function invocationFor(args: Args): {
         },
       }
     }
+    case 'runtime':
     case 'modes':
     case 'strategies':
     case 'runs':
@@ -348,6 +350,10 @@ export function renderResult(args: Args, value: unknown): ContentBlock[] {
   const data = isRecord(value) ? value : {}
   const lines: string[] = []
   switch (args.action) {
+    case 'runtime': {
+      lines.push(JSON.stringify(data, null, 2))
+      break
+    }
     case 'modes': {
       const modes = Array.isArray(value) ? value : []
       lines.push(`${modes.length} mode(s):`)
@@ -558,7 +564,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.systemPrompt.section({
     name: `tool:${resolved.toolName}`,
     order: ctx.systemPrompt.getSectionOrder('TOOL_WORKFLOW'),
-    text: `Use the ${resolved.toolName} tool to run and read a refactory outer-loop run. A run starts in its own process and continues after the call returns, so start it, then watch it with the "status" action (pass an "after" offset to read only what is new) instead of blocking on it.`,
+    text: `Use the ${resolved.toolName} tool to run and read a refactory outer-loop run. A run starts in its own process and continues after the call returns, so start it, then watch it with the "status" action (pass an "after" offset to read only what is new) instead of blocking on it. Before asking the user to repeat model/home setup, call action "runtime": it reads the owning session route and nested configured-readiness without changing settings or testing authentication. Keep inherited values unless the user requests a change. Follow explicit Task/fixture constraints without asking for the same confirmation again.`,
   })
 
   ctx.tools.register(defineTool({
@@ -646,14 +652,30 @@ export function apply(ctx: Context, config: Config): void {
     },
     async execute(args, exec) {
       const typed = args as unknown as Args
-      const invocation = invocationFor(typed)
+      const base = invocationFor(typed)
+      const header = exec.agent?.session.requestHeader()?.config
+      const selection = header ?? exec.agent?.options
+      const current = selection === undefined ? null : {
+        provider: selection.provider ?? null,
+        model: selection.model ?? null,
+        reasoning_effort: selection.reasoningEffort ?? null,
+        source: header === undefined ? 'agent-options' : 'request-header',
+      }
+      // Only the diagnostic uses the owning selection. Never let a caller's
+      // optional provider/model fields relabel the session being inspected.
+      const invocation = typed.action === 'runtime'
+        ? { ...base, options: { provider: selection?.provider, model: selection?.model } }
+        : base
       const result: ConsoleResult = await console.run(invocation, exec.signal)
       if (!result.ok) {
         // A refusal carries the console's own reason. Surface it as a tool error
         // so the model corrects the call rather than reading a silent success.
         throw new Error(`${resolved.toolName} ${typed.action} failed: ${result.error}`)
       }
-      return { action: typed.action, data: result.value as JsonValue }
+      const data = typed.action === 'runtime' && isRecord(result.value)
+        ? { ...result.value, current_session: current }
+        : result.value
+      return { action: typed.action, data: data as JsonValue }
     },
     presentCall: args => presentCall(args as unknown as Args),
     presentResult: (args, result) => presentResult(args as unknown as Args, result),
