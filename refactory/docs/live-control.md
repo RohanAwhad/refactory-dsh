@@ -53,6 +53,6 @@ Recovery requires a recognized checkpoint, a stopped owner, matching prepared co
 
 Inspect side effects and outputs when continuation is refused. Use explicit invalidation where a valid replay plan exists, or start a new run deliberately. Reopening the mode is not an implicit retry. No mechanism here can infer whether an unacknowledged external side effect happened before a crash.
 
-Release checks exercised live CLI observation and native gate answers, pause/resume, reviewed replay and owned stop. Recovery admission and actual checkpoint restoration have separate deterministic evidence; a complete registered dead-owner resume through both public interfaces remains unverified. See the [validation record](release-validation-20260926.md).
+Release checks exercised live CLI observation and native gate answers, pause/resume, reviewed replay and owned stop. Separate registered dead-owner recovery checks passed through public CLI resume and the native Resume control, preserving completed artifacts, saved configuration and accumulated resources while executing only the remaining node. An unavailable-provider guard prevented model execution. See the [validation record](release-validation-20260926.md).
 
 [Profiles and candidate evidence](optimization-profiles.md) · [Fast modes and resource recovery](budgets-fast-modes.md) · [Worker capabilities](models.md#model-provider-versus-coding-agent)
