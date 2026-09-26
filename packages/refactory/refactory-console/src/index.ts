@@ -411,22 +411,29 @@ export class RefactoryConsole extends TypertRemoteService {
     const result = await this.consoleCall(runInvocation({ mode, knobs: request.knobs }), signal)
     const answer = isRecord(result.value) ? result.value : {}
     const single = answer.run
-    if (!isRecord(single)) {
-      // No run directory was left, so the console's failure is the whole answer.
+    const progress = isRecord(single) ? authoring(single.authoring) : null
+    const failed = !result.ok || answer.ok === false
+      || (typeof answer.exit_code === 'number' && answer.exit_code !== 0)
+    const failure = !result.ok ? result.error
+      : typeof answer.error === 'string' ? answer.error : `the run of "${mode}" failed (exit ${String(answer.exit_code)})`
+    const stopped = progress !== null && ['failed', 'refused', 'halted'].includes(progress.spine)
+    if (!isRecord(single) || (failed && !stopped)) {
+      // Preparing a directory is not a successful launch. In particular, missing
+      // or previously successful spine status cannot mask a new process failure.
       throw new RemoteError(
         'refactory/console-failed',
-        result.ok ? `the console left no run directory for "${mode}"` : result.error,
-        { argv: result.argv },
+        failed ? failure : `the console left no run directory for "${mode}"`,
+        { argv: result.argv, ...(isRecord(single) ? { run: single.root } : {}) },
       )
     }
     return {
       run_id: text(single.run_id),
       root: text(single.root),
       mode: typeof single.mode === 'string' ? single.mode : null,
-      state: text(single.state),
-      finished: single.finished === true,
+      state: failed ? 'failed' : text(single.state),
+      finished: failed || single.finished === true,
       best_score: typeof single.best_score === 'number' ? single.best_score : null,
-      authoring: authoring(single.authoring),
+      authoring: failed && progress !== null ? { ...progress, error: failure } : progress,
       facts: facts(single.facts),
       item_results: itemResults(single.item_results),
     }
