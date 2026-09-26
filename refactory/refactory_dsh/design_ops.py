@@ -44,6 +44,20 @@ def prepare_design(ctx: Any) -> dict[str, Any]:
             "design-mode needs a check: the command that decides whether the artifact "
             "works, e.g. {'check': 'python -m pytest -q'}"
         )
+    # Match create/edit: inspect the exact nested route before launching research.
+    # Other ModelClient implementations retain their own readiness contract.
+    from refactory_dsh.model import DshModelClient
+
+    client = getattr(ctx, "model", None)
+    if client is None or isinstance(client, DshModelClient):
+        readiness = sandbox.model_readiness(
+            ctx.workdir / ".model-readiness",
+            model_context=client.context() if isinstance(client, DshModelClient) else None,
+        )
+        if readiness.get("warning"):
+            import sys
+
+            print(f"refactory: warning: {readiness['warning']}", file=sys.stderr)
     ctx.write_json("brief.json", {"name": name, "brief": brief, "check": check})
     return {"name": name, "brief": brief, "check": check, "validation": "(no check has run yet)"}
 
