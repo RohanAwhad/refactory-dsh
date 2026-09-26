@@ -641,17 +641,8 @@ def create(config: CreateConfig, client: Any = None) -> CreateResult:
 
     name = str(run.facts.get("name") or config.name)
     package = registry.load(name, project_for_nodes())
-    (workdir / "create.json").write_text(
-        json.dumps(
-            {"package": name, "smoke_score": run.facts.get("smoke_score"),
-             "files": run.facts.get("files", []),
-             "task_ref": run.facts.get("task_ref"),
-             "class_of_work": run.facts.get("class_of_work"),
-             "data_node": run.facts.get("data_node")},
-            indent=2,
-            default=str,
-        )
-    )
+    # The report node owns create.json and derives its contract from the emitted
+    # package. Preparation facts describe the request, not necessarily the result.
     return CreateResult(
         package=name,
         mode=package.ids()[0],
