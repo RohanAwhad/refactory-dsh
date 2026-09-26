@@ -21,16 +21,138 @@ Three acts carry a target and are one-shot:
 has an opinion about *that* candidate; ``adopt`` carries the destination name for
 the same reason. The loop consumes a one-shot request so the next boundary does not
 repeat it.
+
+A finished search rejects new live controls. Adoption runs immediately through
+the ordinary winner/audit guard, first recovering any legacy queued selection.
 """
 
 from __future__ import annotations
 
+import errno
 import json
+import os
 import time
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 #: The file's name inside a run directory.
 CONTROL = "control.json"
+SEARCH_STATE = Path(".refactory/optimizer-status.json")
+SEARCH_LOCK = Path(".refactory/optimizer.lock")
+
+
+def search_owner(root: Path) -> dict:
+    """Read the actual strategy owner's lifecycle; init/report alone has none."""
+    path = Path(root) / SEARCH_STATE
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def search_phase(root: Path) -> str | None:
+    owner = search_owner(root)
+    phase = owner.get("status")
+    if phase == "running":
+        try:
+            os.kill(int(owner["pid"]), 0)
+        except (ProcessLookupError, ValueError, KeyError, TypeError):
+            return "died"
+        except PermissionError:
+            pass  # another user's live process still owns its run
+        return "running"
+    return str(phase) if phase in ("finished", "failed") else None
+
+
+def search_finished(root: Path) -> bool:
+    phase = search_phase(root)
+    if phase is not None:
+        return phase != "running"
+    return (Path(root) / "report.json").exists()
+
+
+def request_identity(request: dict) -> dict:
+    """A particular request, including its time and complete target semantics."""
+    return {key: request[key] for key in ('action', 'at', 'target', 'lineage', 'as') if key in request}
+
+
+@contextmanager
+def _search_lock(root: Path):
+    """Hold one OS-owned lock until strategy execution ends, including on death.
+
+    The persistent file is only the lock's inode: never unlink it, since another
+    process may already have opened it. The OS releases ownership on process exit.
+    """
+    path = root / SEARCH_LOCK
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('a+b') as handle:
+        if os.name == 'nt':
+            import msvcrt
+
+            if handle.tell() == 0:
+                handle.write(b'\0')
+                handle.flush()
+            handle.seek(0)
+            lock = lambda: msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            unlock = lambda: msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            lock = lambda: fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            unlock = lambda: fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        try:
+            lock()
+        except OSError as error:
+            if error.errno not in (errno.EACCES, errno.EAGAIN):
+                raise
+            raise ControlError(f"an optimizer already owns {root}") from error
+        try:
+            yield
+        finally:
+            unlock()
+
+
+@contextmanager
+def running_search(root: Path):
+    """Exclusively own actual strategy execution and retire a terminal report."""
+    root = Path(root)
+    with _search_lock(root), _running_search(root):
+        yield
+
+
+@contextmanager
+def _running_search(root: Path):
+    # Retain the PID check inside the lock for an owner started by an older
+    # version that wrote lifecycle state but did not acquire the OS lock.
+    if search_phase(root) == "running":
+        raise ControlError(f"an optimizer already owns {root}")
+    path = root / SEARCH_STATE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {"status": "running", "pid": os.getpid(), "started": time.time(), "id": uuid.uuid4().hex}
+
+    def save() -> None:
+        temporary = path.with_suffix(f'.{record["id"]}.tmp')
+        temporary.write_text(json.dumps(record) + '\n')
+        temporary.replace(path)
+
+    save()
+    try:
+        previous = path.parent / 'previous-reports' / record['id']
+        for name in ('report.json', 'report.md'):
+            old = root / name
+            if old.exists():
+                previous.mkdir(parents=True, exist_ok=True)
+                old.replace(previous / name)
+        yield
+    except BaseException:
+        record.update(status="failed", ended=time.time())
+        save()
+        raise
+    else:
+        record.update(status="finished" if (root / 'report.json').exists() else "failed", ended=time.time())
+        save()
 
 #: The actions a caller may ask for. `resume` releases a `pause`; `stop` ends the run
 #: with a reason naming the person's request.
@@ -90,6 +212,7 @@ class Control:
         target: str | None = None,
         lineage: bool = False,
         as_name: str | None = None,
+        project: Path | None = None,
     ) -> dict:
         """Ask for one action; refuses one that cannot be honored as written."""
         if action not in ACTIONS:
@@ -115,6 +238,16 @@ class Control:
             entry["lineage"] = True
         if as_name is not None:
             entry["as"] = as_name
+
+        if search_finished(self.root):
+            if action != "adopt":
+                raise ControlError(
+                    f"this search is finished; {action} requires a live optimizer "
+                    "and was not queued. Adopt can apply the audited winner now."
+                )
+            from refactory_dsh.finished_control import adopt_finished
+
+            return adopt_finished(self.root, entry, project=project)
 
         # One act at a time, and the file is where that is enforced. A one-shot act
         # that is still in the file has not been honored yet, so a second one would

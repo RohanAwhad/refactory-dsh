@@ -230,6 +230,21 @@ class Loop(OuterLoop):
 
     name = "default"
 
+    def run(self) -> dict[str, Any]:
+        """Own strategy execution; a report-only replay does not start a search."""
+        from refactory_dsh.control import running_search
+
+        with running_search(self.root):
+            self._executing_strategy = True
+            try:
+                result = super().run()
+                # A same-bound resume stops before the scheduler. Persist that
+                # final reason too, so a later report-only replay retains it.
+                self._journal("bound", bound=self.bound)
+                return result
+            finally:
+                self._executing_strategy = False
+
     def __init__(
         self,
         mode_id: str,
@@ -390,6 +405,12 @@ class Loop(OuterLoop):
             )
         )
         if resumed:
+            if getattr(self, "_executing_strategy", False) and self.bound:
+                # A previous stop reason is history, not the new strategy's
+                # decision. Its current bounds are checked before another epoch.
+                previous_bound, self.bound = self.bound, ""
+                self._journal("bound", bound="", previous_bound=previous_bound,
+                              reason="explicit search resume")
             self._write_state()
             self._progress("init", resumed=True, population=len(self.population))
             return
@@ -1245,7 +1266,11 @@ class Loop(OuterLoop):
         target = str(request.get("target") or "")
         lineage = bool(request.get("lineage"))
         known = {candidate.id for candidate in self.population}
-        outcome: dict[str, Any] = {"action": action}
+        from refactory_dsh.control import request_identity
+
+        outcome: dict[str, Any] = {"action": action, "request": request_identity(request)}
+        if request.get("recovered"):
+            outcome.update(recovered=True, requested_at=request.get("at"), status="applied")
         if target:
             outcome["target"] = target
         if lineage:
@@ -2105,7 +2130,7 @@ class Loop(OuterLoop):
                 self.generation = int(record.get("generation") or self.generation)
                 self._refusal_pressure = float(record.get("refusal_pressure") or 0.0)
             elif event == "bound":
-                self.bound = str(record.get("bound") or self.bound)
+                self.bound = str(record.get("bound") or "")
             elif event == "loss":
                 self.loss = {
                     key: value

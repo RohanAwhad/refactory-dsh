@@ -599,6 +599,14 @@ request at a time**: a one-shot act still in the file has not been honored yet, 
 a second one is refused rather than silently replacing it. `pause`/`resume`/`stop`
 may overwrite anyway; a stop is not something to hold up behind a candidate act.
 
+After the search finishes, live-run controls are refused and disabled in the panel.
+Adopt applies immediately through the same successful-winner and held-out-audit
+guards as direct adoption. The panel and `steer` reads expose queued, applied or
+refused receipts. Legacy queued Keep/Reject choices are recovered before either
+adoption route selects a winner; a changed winner requires its own audit. The
+[steering tutorial](tutorials/06-run-it-with-a-person.md) shows how to obtain that
+audit without new proposals or epochs.
+
 ## 8. The GUI
 
 ```bash

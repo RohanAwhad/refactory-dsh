@@ -222,6 +222,32 @@ function gateVerdicts(value: unknown): Readonly<Record<string, string>> {
   return Object.fromEntries(Object.entries(value).map(([gate, verdict]) => [gate, scalar(verdict)]))
 }
 
+/** A durable control receipt, including refusals and recovered legacy choices. */
+function controlReceipt(value: unknown): Exclude<RefactorySteering['control'], undefined> {
+  if (value == null) return null
+  const entry = objectOf(value, 'control receipt')
+  if (entry.status !== 'queued' && entry.status !== 'applied' && entry.status !== 'refused') {
+    throw new Error('the console\'s control receipt has an unknown status')
+  }
+  return {
+    action: text(entry.action),
+    status: entry.status,
+    candidate: text(entry.candidate),
+    target: text(entry.target),
+    as: text(entry.as),
+    package_root: text(entry.package_root),
+    message: text(entry.message),
+    error: text(entry.error),
+    recovered: entry.recovered === true,
+    ...isRecord(entry.recovered_control) ? {
+      recovered_control: {
+        action: text(entry.recovered_control.action),
+        target: text(entry.recovered_control.target),
+      },
+    } : {},
+  }
+}
+
 /** Host Remote service over the refactory console. */
 export class RefactoryConsole extends TypertRemoteService {
   static inject = ['subprocess', 'typert']
@@ -490,6 +516,8 @@ export class RefactoryConsole extends TypertRemoteService {
       verdicts: gateVerdicts(answer.verdicts),
       gates: gateList(answer.gates),
       problems: stringList(answer.problems, 'ledger problems'),
+      finished: answer.finished === true,
+      control: controlReceipt(answer.control),
     }
   }
 

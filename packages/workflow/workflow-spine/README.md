@@ -170,3 +170,28 @@ argument-only repeat reminder: identical arguments legitimately advance the
 cursor or a data pass. Other tools remain covered. This does not claim to detect
 lack of workflow progress; cursor, gate, and iteration controls remain responsible
 for workflow validity.
+
+### Redo and current Task grades
+
+`wf_redo` invalidates the requested node and all reachable descendants, including
+nested data bodies. Refactory archives the prior `facts.json` and cursor state in
+`.refactory/redo/<id>/` before clearing the facts those nodes declare they produce.
+Only the resulting current facts are scored; archived grades remain inspectable.
+A full dataset restart archives affected node-owned outputs there too, retaining
+only the restart node's declared read inputs. This resets state such as per-item
+attempt counters. A current-item correction keeps its artifacts. Affected pending
+agent deliveries are retired and new attempts must deliver fresh outputs.
+Unsafe output declarations (runtime-owned paths, escaping paths, or symlinks) are
+refused instead of moved.
+
+Redo within an active data item keeps that item's setup and earlier item grades.
+Redo of a completed body node after its dataset has finished restarts the owning
+dataset from item zero; the tool reports this explicitly as `start` and
+`restartData`. Redo upstream of an active dataset discards its pass and cached
+setup before restarting. Concurrent forks must finish before redo, and a node
+shared by multiple data bodies is refused as ambiguous. Prompt edits persist.
+
+The existing `dataCommand` protocol also supplies `reset`, accepting the redo
+plan on JSON stdin and returning a receipt. A custom loader must implement that
+bookkeeping verb; a failed reset leaves the live cursor unchanged. Graphs without
+a loader retain cursor-only redo and have no runtime-owned Task facts to reset.
