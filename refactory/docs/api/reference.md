@@ -259,7 +259,7 @@ Adopt a run's winner as a mode of its own.
 | kind | name | signature |
 |---|---|---|
 | class | `AdoptionError` | `` |
-| function | `adopt` | `(run_root: 'Path', *, as_name: 'str', project: 'Path \| None' = None, mode: 'str' = '') -> 'dict[str, Any]'` |
+| function | `adopt` | `(run_root: 'Path', *, as_name: 'str', project: 'Path \| None' = None, mode: 'str' = '', allow_overfit: 'bool' = False) -> 'dict[str, Any]'` |
 | function | `best` | `(run_root: 'Path') -> 'dict[str, Any]'` |
 
 - **`AdoptionError`** — A winner cannot be adopted. Always names what is wrong.
@@ -565,11 +565,12 @@ Running code we did not write.
 | function | `describe_package` | `(name: 'str', *, project: 'Path \| None' = None, **kwargs: 'Any') -> 'SandboxResult'` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
 | function | `missing_init` | `(root: 'Path') -> 'str'` |
+| function | `model_readiness` | `(workdir: 'Path', *, model_context: 'dict[str, str] \| None' = None) -> 'dict[str, Any]'` |
 | function | `promote` | `(project: 'Path', name: 'str', *, note: 'str' = '') -> 'dict[str, Any]'` |
 | function | `run_command` | `(command: 'str', *, workdir: 'Path', timeout_s: 'int' = 180, memory_mb: 'int' = 2048, cpu_s: 'int' = 120, file_mb: 'int' = 64, env: 'dict[str, str] \| None' = None) -> 'SandboxResult'` |
 | function | `run_sandboxed` | `(code: 'str', *, workdir: 'Path', timeout_s: 'int' = 180, memory_mb: 'int' = 2048, cpu_s: 'int' = 120, file_mb: 'int' = 64, env: 'dict[str, str] \| None' = None, forwarded: 'dict[str, str] \| None' = None) -> 'SandboxResult'` |
 | function | `scrub` | `(env: 'dict[str, str] \| None' = None) -> 'dict[str, str]'` |
-| function | `smoke` | `(identifier: 'str', workdir: 'Path', *, project: 'Path \| None' = None, model: 'bool' = False, knobs: 'dict[str, Any] \| None' = None, **kwargs: 'Any') -> 'SandboxResult'` |
+| function | `smoke` | `(identifier: 'str', workdir: 'Path', *, project: 'Path \| None' = None, model: 'bool' = False, knobs: 'dict[str, Any] \| None' = None, model_context: 'dict[str, str] \| None' = None, **kwargs: 'Any') -> 'SandboxResult'` |
 | function | `usage` | `() -> 'str'` |
 | function | `verify_sandboxed` | `(name: 'str', *, project: 'Path \| None' = None, requires_data_node: 'bool' = False, requires_task_ref: 'str' = '', requires_input: 'tuple[str, ...]' = (), **kwargs: 'Any') -> 'SandboxResult'` |
 
@@ -579,6 +580,7 @@ Running code we did not write.
 - **`describe_package`** — A package's manifest and mode ids, read without importing it here.
 - **`main`** — ``python -m refactory_dsh.sandbox --ast <pkg> | --smoke <pkg>/<mode>``.
 - **`missing_init`** — Why a package root has no `__init__.py`, and what it holds instead.
+- **`model_readiness`** — Check the model path after the same scrub/HOME rewrite as real smoke.
 - **`promote`** — Mark a package trusted, explicitly, and record who did it.
 - **`run_command`** — Run a shell command under the same containment as a code snippet.
 - **`run_sandboxed`** — Run a snippet in a subprocess with limits, from the workspace, scrubbed.

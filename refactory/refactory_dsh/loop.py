@@ -1307,7 +1307,9 @@ class Loop(OuterLoop):
 
         The winner is read from the journal the run is writing right now, which is
         the only artifact that carries a candidate's *state*, so this works while the
-        run is live. A refusal is recorded as an event: adopting never overwrites, and
+        run is live. An explicit live adoption audits that winner first; ordinary
+        search evaluations remain training-only. A refusal is recorded as an event:
+        adopting never overwrites, and
         a second adopt is a person's mistake rather than a reason to lose the search.
         """
         from refactory_dsh.adopt import adopt as adopt_winner
@@ -1319,6 +1321,7 @@ class Loop(OuterLoop):
         name = as_name or f"{self.mode_id.split('/', 1)[0]}_adopted"
         outcome["as"] = name
         try:
+            self.audit_holdout()
             written = adopt_winner(
                 self.root, as_name=name, project=self.project, mode=self.mode_id
             )
@@ -1338,7 +1341,15 @@ class Loop(OuterLoop):
 
     def should_stop(self, run: Run) -> str | None:
         """A reason to stop before the bound, or ``None``. The bound is the default."""
-        return run.stopped
+        if run.stopped:
+            return run.stopped
+        # A resumed completed epoch must not buy another proposal round. An
+        # interrupted open epoch may still finish its bookkeeping at this limit.
+        if not self._epoch_open and self.epoch >= self.config.epochs:
+            return "epochs"
+        if not self._epoch_open and self.evaluations >= self.config.max_evaluations:
+            return "max_evaluations"
+        return None
 
     def accepts(self, run: Run, candidate: Candidate) -> bool:
         """Whether a validated candidate is kept. A loser can still be archived."""
@@ -1406,7 +1417,7 @@ class Loop(OuterLoop):
             [
                 c
                 for c in self._evaluated()
-                if c.score is not None and c.id not in self.rejected
+                if c.exit_ok and c.score is not None and c.id not in self.rejected
             ],
             key=lambda c: (-(c.score or 0.0), c.id),
         )
@@ -1457,7 +1468,17 @@ class Loop(OuterLoop):
         audit = self.audit_holdout()
         board = self.leaderboard()
         best = board[0] if board else None
+        exit_ok = (
+            best is not None and audit.get("winner") == best.id
+            and audit.get("status") in ("measured", "not_applicable")
+        )
         payload = {
+            "exit_ok": exit_ok,
+            "error": (
+                None if exit_ok else
+                "no successfully evaluated candidate is eligible to win" if best is None else
+                str(audit.get("note") or "the required held-out audit is unavailable")
+            ),
             "mode": self.mode_id,
             "bound": self.bound,
             "epochs": self.config.epochs,
@@ -1471,10 +1492,11 @@ class Loop(OuterLoop):
             "best": self._row(best) if best else None,
             "best_score": best.score if best else None,
             "raw_best_score": best.raw_score if best else None,
-            "seed_score": self.population[0].score if self.population else None,
-            "seed_raw_score": self.population[0].raw_score if self.population else None,
+            "seed_score": self.population[0].score if self.population and self.population[0].exit_ok else None,
+            "seed_raw_score": self.population[0].raw_score if self.population and self.population[0].exit_ok else None,
             "scoring": self.scoring(),
             "leaderboard": [self._row(c) for c in board],
+            "failed_candidates": [self._row(c) for c in self._evaluated() if not c.exit_ok],
             "kept": list(self.kept),
             "rejected": list(self.rejected),
             "adoptions": list(self.adoptions),
@@ -1527,11 +1549,12 @@ class Loop(OuterLoop):
         against. A winner that only works on its training items is reported rather
         than rewarded.
         """
-        if self.holdout_audit is not None:
-            return self.holdout_audit
-
         board = self.leaderboard()
         winner = board[0] if board else None
+        winner_id = winner.id if winner is not None else None
+        if self.holdout_audit is not None and self.holdout_audit.get("winner") == winner_id:
+            return self.holdout_audit
+
         items, data_nodes = self._audit_items(
             winner.state if winner is not None else {}
         )
@@ -1543,9 +1566,11 @@ class Loop(OuterLoop):
         train = winner.raw_score if winner is not None else None
         holdout: float | None = None
         note = ""
+        status = "unavailable"
         if winner is None:
-            note = "the run evaluated no candidate, so there is no winner to audit"
+            note = "the run has no successfully evaluated winner to audit"
         elif not data_nodes:
+            status = "not_applicable"
             note = (
                 "the mode has no data node, so it iterates no items and there is "
                 "nothing to hold out"
@@ -1556,12 +1581,14 @@ class Loop(OuterLoop):
                 "run directory, so no holdout was scored"
             )
         elif instances[task_module.HOLDOUT] == 0:
+            status = "not_applicable"
             note = (
                 "the selection holds one item or none, so it cannot be split; the "
                 "winner was searched on every item it has and no holdout exists"
             )
         else:
             holdout, note = self._holdout_score(winner)
+            status = "measured" if holdout is not None else "failed"
 
         gap = (
             train - holdout
@@ -1569,10 +1596,11 @@ class Loop(OuterLoop):
             else None
         )
         audit: dict[str, Any] = {
+            "status": status,
             "train": train,
             "holdout": holdout,
             "gap": gap,
-            "overfit": bool(gap is not None and gap > OVERFIT_THRESHOLD),
+            "overfit": gap > OVERFIT_THRESHOLD if gap is not None else None,
             "threshold": OVERFIT_THRESHOLD,
             "instances": instances,
             "winner": winner.id if winner is not None else None,
@@ -2045,7 +2073,10 @@ class Loop(OuterLoop):
                 # one too.
                 raw = record.get("raw_score", record.get("score"))
                 candidate.raw_score = None if raw is None else float(raw)
-                candidate.exit_ok = bool(record.get("exit_ok", True))
+                # Old records without an explicit outcome cannot establish a
+                # successful run. Keep them inspectable but ineligible, matching
+                # adoption and console winner selection.
+                candidate.exit_ok = record.get("exit_ok") is True
                 candidate.error = record.get("error")
                 candidate.duration_s = float(record.get("duration_s") or 0.0)
                 candidate.model_calls = int(record.get("model_calls") or 0)
@@ -2409,6 +2440,8 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(
             {
                 "mode": report["mode"],
+                "exit_ok": report["exit_ok"],
+                "error": report["error"],
                 "optimizer": report["optimizer"],
                 "evaluator": loop.config.evaluator,
                 "bound": report["bound"],
@@ -2427,7 +2460,7 @@ def main(argv: list[str] | None = None) -> int:
             default=str,
         )
     )
-    return 0
+    return 0 if report["exit_ok"] else 1
 
 
 if __name__ == "__main__":  # pragma: no cover - the entry point

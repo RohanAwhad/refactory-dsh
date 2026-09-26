@@ -81,8 +81,12 @@ def _score_by_id(entries: list[dict[str, Any]]) -> dict[str, float]:
     scored: dict[str, float] = {}
     for entry in entries:
         if entry.get("event") == "score" and entry.get("id") is not None:
+            candidate_id = str(entry["id"])
+            if entry.get("exit_ok") is not True:
+                scored.pop(candidate_id, None)
+                continue
             try:
-                scored[str(entry["id"])] = float(entry.get("score") or 0.0)
+                scored[candidate_id] = float(entry.get("score") or 0.0)
             except (TypeError, ValueError):
                 continue
     return scored
@@ -148,7 +152,7 @@ def best(run_root: Path) -> dict[str, Any]:
 
     if not scored:
         raise AdoptionError(
-            f"{run_root} recorded no candidate that both scored and kept its state; "
+            f"{run_root} recorded no candidate that ran successfully, scored and kept its state; "
             "there is nothing to adopt"
         )
     winner_score, winner_id, winner_state, winner_edits = min(
@@ -213,18 +217,50 @@ def _class_name(package: str, mode_name: str, project: Path) -> str:
     )
 
 
+def _check_holdout(run_root: Path, candidate_id: str, *, allow_overfit: bool) -> None:
+    """Require a completed audit for this winner, including an explicit no-holdout result."""
+    path = run_root / "holdout.json"
+    try:
+        audit = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise AdoptionError(
+            "no readable held-out audit is recorded; finish the search before adopting"
+        ) from error
+    if not isinstance(audit, dict) or audit.get("winner") != candidate_id:
+        raise AdoptionError("the held-out audit does not describe the current winner; re-audit it before adopting")
+    status = audit.get("status")
+    if status is None:
+        # Older journals did not name audit status. Accept their actual measured
+        # score or explicit lack of a split, never a failed/unavailable measurement.
+        instances = audit.get("instances") or {}
+        if audit.get("holdout") is not None:
+            status = "measured"
+        elif instances.get("holdout") == 0 or str(audit.get("note", "")).startswith("the mode has no data node"):
+            status = "not_applicable"
+    if status not in ("measured", "not_applicable"):
+        raise AdoptionError(f"cannot adopt: {audit.get('note') or 'the required held-out audit is unavailable'}")
+    if audit.get("overfit") and not allow_overfit:
+        raise AdoptionError(
+            f"the winner's held-out gap {audit.get('gap')} exceeds {audit.get('threshold')}; "
+            "pass --allow-overfit to adopt it anyway"
+        )
+
+
 def adopt(
     run_root: Path,
     *,
     as_name: str,
     project: Path | None = None,
     mode: str = "",
+    allow_overfit: bool = False,
 ) -> dict[str, Any]:
     """Write the winner as a new package, and leave both inputs untouched.
 
     ``mode`` is the identifier the run searched, as ``<package>/<name>``. It is
     read from the run's own journal when not given, so a caller does not have to
-    remember what a run was about.
+    remember what a run was about. A completed held-out audit must describe the
+    winner. ``allow_overfit`` acknowledges a measured gap; it does not override
+    an execution failure or a missing audit.
     """
     run_root = Path(run_root)
     project = Path(project or Path("."))
@@ -234,6 +270,7 @@ def adopt(
     # filesystem said about a path that is not one component.
     _check_name(as_name)
     winner = best(run_root)
+    _check_holdout(run_root, winner["candidate"], allow_overfit=allow_overfit)
 
     if not mode:
         for entry in _journal_entries(run_root):

@@ -23,7 +23,7 @@ uv run refactory optimize circle_packing/adaptive \
   "best_score": 0.875,
   "raw_best_score": 0.955,
   "scoring": {"compared": "penalized", "parsimony": 0.01, ...},
-  "holdout": {"train": 0.955, "holdout": null, "overfit": false,
+  "holdout": {"status": "not_applicable", "train": 0.955, "holdout": null, "overfit": null,
               "note": "the mode has no data node, so it iterates no items and there is nothing to hold out"},
   "structural_wins": 1,
   "rejection_codes": {"E-shape": 1, "I:fact_produced": 4, "V10": 2, "V2": 3, ...},
@@ -39,6 +39,20 @@ Three things to notice:
 - **Nothing is held out when there is nothing to hold out.** `circle_packing/adaptive` has no data node and iterates no items, so the audit records `holdout: null` and says why instead of inventing a number. A mode bound to a Task is audited on the items it was not tuned on.
 - **Refusals cost nothing.** `rejection_codes` lists every proposal the validator
   rejected *before* it could be evaluated.
+
+Execution failures remain in `failed_candidates`, with their errors, but cannot
+win or be adopted. If every evaluated candidate fails, the report has no winner,
+`exit_ok: false`, and the CLI exits nonzero. The holdout status distinguishes a
+measurement from a failed or unavailable audit and from a mode with no split.
+Adoption requires a completed audit for the current winner; `--allow-overfit`
+acknowledges a measured gap but cannot override a missing or failed audit.
+An explicit live Adopt request audits its current winner before writing the package;
+a later winner receives its own audit. Legacy score records without an explicit
+successful exit remain visible in history but are ineligible until re-evaluated.
+
+Resuming a completed search through `LoopConfig(resume=True)` honors its existing
+epoch and evaluation bounds. It can consume a queued selection change and audit
+the resulting winner without spending another proposal epoch.
 
 ## The steps, in order
 
