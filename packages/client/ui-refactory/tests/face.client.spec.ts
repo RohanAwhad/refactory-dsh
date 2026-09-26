@@ -215,6 +215,43 @@ describe('refactoryFace — starting a run', () => {
 })
 
 describe('refactoryFace — using one mode once', () => {
+  it.each(['before launch', 'after launch'] as const)('keeps the selected run and its gates when Watch changes %s', async (timing) => {
+    const { instance, scripted, face, signal } = harness()
+    const prepared = deferred<void>()
+    const completed = deferred<void>()
+    scripted.remote.refactoryConsole.runStream = async function* () {
+      await prepared.promise
+      yield { kind: 'launch', launch: { mode: MODE.id, root: SINGLE.root, phase: 'prepared' } }
+      await completed.promise
+      yield { kind: 'result', run: SINGLE }
+    }
+    scripted.status.mockImplementation(async (run: string) => ok({ ...FRAME, root: run }))
+    scripted.steer.mockImplementation(async ({ run }: { run: string }) => ok({
+      ...GATED_STEERING, run, gates: [{ id: 'approve', prompt: `Approve only ${run}`, verdicts: ['proceed'] }],
+    }))
+    face.run(TAB, MODE.id, [], signal)
+    if (timing === 'after launch') {
+      prepared.resolve()
+      await settle()
+      expect(tab(instance)?.watching).toBe(SINGLE.root)
+    }
+    face.watch(TAB, '/runs/other', signal)
+    await settle()
+    prepared.resolve()
+    await settle()
+    expect(tab(instance)?.watching).toBe('/runs/other')
+    completed.resolve()
+    await settle()
+    await settle()
+    expect(tab(instance)?.single).toEqual({ kind: 'ready', value: SINGLE })
+    expect(tab(instance)?.watching).toBe('/runs/other')
+    expect(tab(instance)?.frame).toMatchObject({ kind: 'ready', value: { root: '/runs/other' } })
+    expect(tab(instance)?.steering).toMatchObject({ kind: 'ready', value: {
+      run: '/runs/other', gates: [{ id: 'approve', prompt: 'Approve only /runs/other' }],
+    } })
+    expect(signal.aborted).toBe(false)
+  })
+
   it('uses the chosen mode once with the same knob values, and keeps the result', async () => {
     const { instance, scripted, face, signal } = harness()
     answer(scripted.run, ok(SINGLE))

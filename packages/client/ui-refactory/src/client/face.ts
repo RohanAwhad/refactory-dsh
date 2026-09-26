@@ -309,6 +309,7 @@ export function refactoryFace(
     const runGenerations = new Map<TabId, number>()
     const packageGenerations = new Map<TabId, number>()
     const stopGenerations = new Map<TabId, number>()
+    const watchGenerations = new Map<TabId, number>()
     const running = new Set<TabId>()
     const watchers = new Map<TabId, AbortController>()
     /**
@@ -382,6 +383,7 @@ export function refactoryFace(
     /** Change target without allowing the previous target's late replies to land. */
     const watchRun = (tabId: TabId, run: string, signal: AbortSignal): void => {
       if (signal.aborted || run.trim() === '') return
+      nextGeneration(watchGenerations, tabId)
       nextGeneration(startGenerations, tabId)
       nextGeneration(candidateGenerations, tabId)
       nextGeneration(stopGenerations, tabId)
@@ -465,7 +467,7 @@ export function refactoryFace(
         signal.addEventListener('abort', () => {
           for (const generations of [
             catalogueGenerations, statusGenerations, startGenerations, runGenerations,
-            packageGenerations, stopGenerations, steeringGenerations, candidateGenerations,
+            packageGenerations, stopGenerations, steeringGenerations, candidateGenerations, watchGenerations,
           ]) generations.delete(tabId)
           running.delete(tabId)
           watchers.get(tabId)?.abort()
@@ -516,6 +518,7 @@ export function refactoryFace(
         if (signal.aborted || running.has(tabId)) return
         running.add(tabId)
         const generation = nextGeneration(runGenerations, tabId)
+        const watchGeneration = watchGenerations.get(tabId)
         actions.runLoading(tabId)
         const current = (): boolean => !signal.aborted && runGenerations.get(tabId) === generation
         void (async () => {
@@ -527,9 +530,15 @@ export function refactoryFace(
               if (!current()) return
               if (event.kind === 'launch') {
                 actions.runLaunched(tabId, event.launch)
-                if (event.launch.phase === 'prepared') watchRun(tabId, event.launch.root, signal)
+                // A later explicit Watch owns the view, even while this launch
+                // is still preparing. Its worker/result remain independently owned.
+                if (event.launch.phase === 'prepared' && watchGenerations.get(tabId) === watchGeneration) {
+                  watchRun(tabId, event.launch.root, signal)
+                }
               }
-              else { actions.ran(tabId, event.run); loadSteering(tabId, event.run.root, signal); answered = true }
+              // The durable watcher owns the ledger. A completed use must not
+              // put its gates under another run selected in the meantime.
+              else { actions.ran(tabId, event.run); answered = true }
             }
             if (!answered && current()) throw new Error('The run stream ended without a final result; inspect its run directory before retrying.')
           } catch (error) {
