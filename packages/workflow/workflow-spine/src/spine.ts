@@ -82,7 +82,7 @@ export interface TerminalHalt {
  * the count of what completed.
  */
 export type SpineNext =
-  | { status: 'ready'; nodes: NodeView[]; feedback?: Record<string, string>; completed?: number; skipped?: string[]; pass?: DataPass }
+  | { status: 'ready'; nodes: NodeView[]; paused?: string[]; feedback?: Record<string, string>; completed?: number; skipped?: string[]; pass?: DataPass }
   | { status: 'done'; nodes?: never; feedback?: Record<string, string>; completed?: number; skipped?: string[]; pass?: DataPass; halted?: TerminalHalt }
 
 /** How {@link Spine.amendPrompt} changes a node's prompt. */
@@ -327,6 +327,7 @@ export class Spine {
   private readonly promptEdits: Set<string>
   private pass: DataPass | undefined
   private halted: TerminalHalt | undefined
+  private readonly pauseBoundaries = new Set<string>()
 
   constructor(graph: WorkflowGraph, options?: { maxIterations?: number }) {
     this.nodes = new Map(Object.entries(graph.nodes))
@@ -468,6 +469,8 @@ export class Spine {
   /** Refuse a mutation unless this node is currently due, before any side effect. */
   assertDue(node: string): void {
     if (!this.nodes.has(node)) throw new Error(`unknown node ${node}`)
+    const paused = this.pausedAt()
+    if (paused.length > 0) throw new Error(`run paused before ${paused.join(', ')}; explicitly unpause the boundary after the person asks to continue`)
     if (this.halted !== undefined || !this.cursor.includes(node)) {
       throw new Error(`node ${node} is not due (current: ${this.cursor.join(', ') || 'none'}); use explicit redo to reopen completed work`)
     }
@@ -495,10 +498,29 @@ export class Spine {
     }
     return {
       status: 'ready',
+      ...(this.isPaused() ? { paused: this.pausedAt() } : {}),
       nodes: this.cursor.map(nid => this.describe(nid)),
       feedback: { ...this.feedback },
       ...pass,
     }
+  }
+
+  /** Arm or release one explicit stop boundary; unrelated stops remain intact. */
+  pauseBefore(node: string, paused: boolean): void {
+    if (!this.nodes.has(node)) throw new Error(`unknown node ${node}`)
+    if (paused) this.pauseBoundaries.add(node)
+    else this.pauseBoundaries.delete(node)
+    this.log.push(`${paused ? 'pause before' : 'unpaused'} ${node}`)
+  }
+
+  /** The armed boundaries currently preventing execution. */
+  pausedAt(): string[] {
+    return this.halted === undefined ? this.cursor.filter(node => this.pauseBoundaries.has(node)) : []
+  }
+
+  /** Whether the current cursor must yield to the person before any work runs. */
+  isPaused(): boolean {
+    return this.pausedAt().length > 0
   }
 
   /** Whether a gate stopped the run before its remaining work completed. */
@@ -577,12 +599,19 @@ export class Spine {
     // Restore the enclosing data continuation before completing it. Its body
     // exhausted the cursor, but only this bookkeeping may resume the parent.
     this.cursor = [pass.node]
-    return this.complete(pass.node)
+    // This node entered before a boundary may have been armed. Closing that
+    // admitted pass is bookkeeping, not a new entry across the pause boundary.
+    return this.completeDue(pass.node)
   }
 
   /** Mark a non-gate node complete and advance. */
   complete(node: string): SpineNext {
     this.assertDue(node)
+    return this.completeDue(node)
+  }
+
+  /** Completion after public admission, or the runner closing its admitted pass. */
+  private completeDue(node: string): SpineNext {
     const body = this.nodes.get(node)
     if (body === undefined) throw new Error(`unknown node ${node}`)
     if (body._type === 'GateNode') throw new Error(`${node} is a gate — use verdict()`)
@@ -709,6 +738,7 @@ export class Spine {
 
   /** Hot-plug a director's N child agents (a graph edit). */
   expand(director: string, entries: Array<Record<string, unknown>>): { expanded: string; children: string[]; next: SpineNext } {
+    if (this.isPaused()) throw new Error(`run paused before ${this.pausedAt().join(', ')}; unpause before dispatching an expansion`)
     const node = this.nodes.get(director)
     const expansion = node?.expand
     if (expansion === undefined) throw new Error(`${director} has no expand annotation`)
@@ -952,6 +982,7 @@ export class Spine {
       cursor: [...this.cursor],
       completed: [...this.completed],
       skipped: [...this.skipped],
+      pause_before: [...this.pauseBoundaries],
       gate_verdicts: Object.fromEntries(this.gateVerdicts),
       iterations: { ...this.iterations },
       feedback: { ...this.feedback },

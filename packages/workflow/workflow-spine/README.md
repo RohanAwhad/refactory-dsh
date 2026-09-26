@@ -176,3 +176,23 @@ The existing `dataCommand` protocol also supplies `reset`, accepting the redo
 plan on JSON stdin and returning a receipt. A custom loader must implement that
 bookkeeping verb; a failed reset leaves the live cursor unchanged. Graphs without
 a loader retain cursor-only redo and have no runtime-owned Task facts to reset.
+
+### Pause before a node
+
+Arm an explicit boundary with `wf_edit {node: "items", action: "pause"}` before
+calling `wf_next` that could reach it. The runtime stops before that node, including
+before a data node lists or sets up its first item, and reports `status: "paused"`.
+Repeated `wf_next` calls remain stopped, and completion/verdict calls cannot cross
+the boundary. The startup driving request reads the intent ledger before the
+first advance, so the CEO can arm a requested boundary before deterministic work.
+It yields for a follow-up instead of draining through the dataset. Use `wf_state` to inspect node ids without executing work.
+
+After the person asks to continue, `wf_edit {node: "items", action: "unpause"}`
+releases that boundary. Other armed boundaries and terminal halts remain intact;
+redo does not erase pauses. Arming a data node after its pass started does not
+interrupt that pass's grading/closure; it stops a later entry to the data node.
+No pause is installed for ordinary runs. This is an
+explicit workflow control; interpreting a free-form request and arming the correct
+node remains the CEO's responsibility. `wf_open` still performs its documented
+initial deterministic step, so an initial-node pause in terminal use should be
+armed on the configured graph before its first `wf_next`.

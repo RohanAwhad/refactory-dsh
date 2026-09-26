@@ -181,7 +181,11 @@ export function apply(ctx: Context): void {
     }
 
     ctx.provide(GRAPH_STARTUP_SERVICE, {
-      task: 'Drive the workflow graph to completion. Call wf_next first and after every wf_done/wf_verdict. '
+      task: 'Drive the workflow graph subject to the person\'s current steering. BEFORE the first wf_next, '
+        + 'read wf_steer when available; its ledger contains the actual user request. Use wf_state for '
+        + 'inspection without execution. Arm any requested stop with wf_edit pause on that node before '
+        + 'advancing. When paused, yield your turn and wait for the person; only explicit permission to '
+        + 'continue authorizes wf_edit unpause. Otherwise call wf_next after every wf_done/wf_verdict. '
         + 'For each AgentNode or LLMNode, spawn a subagent and give it a tight brief: it must write ONLY '
         + 'the exact files in that node\'s `writes` list (reading only its `reads`), then stop and return '
         + 'a one-line summary. The subagent must NOT run the eval, run tests, iterate, edit other files, or '

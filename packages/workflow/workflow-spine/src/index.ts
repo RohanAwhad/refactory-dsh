@@ -479,7 +479,8 @@ export function apply(ctx: Context, config: Config): void {
           {
             status,
             ...(detail === undefined ? {} : { error: detail }),
-            ...(status === 'ready' ? { nodes: state.cursor as string[], completed: state.completed as string[] } : {}),
+            ...(status === 'ready' || status === 'paused' ? { nodes: state.cursor as string[], completed: state.completed as string[] } : {}),
+            ...(status === 'paused' ? { paused_before: spine.pausedAt() } : {}),
           },
           null,
           2,
@@ -611,7 +612,7 @@ export function apply(ctx: Context, config: Config): void {
       const closed = await close()
       if (closed.failure !== undefined) return { next: spine.next(), failure: closed.failure, ran }
       const state = spine.next()
-      if (state.status === 'done') return { next: state, item, ran }
+      if (state.status === 'done' || spine.isPaused()) return { next: state, item, ran }
       const started = await beginItem()
       if (started.failure !== undefined) return { next: state, failure: started.failure, ran }
       const data = state.nodes.find(node => node._type === 'DataNode')
@@ -671,7 +672,7 @@ export function apply(ctx: Context, config: Config): void {
         stderr: failure.stderr,
       })
     }
-    if (next.status === 'ready' && agentCommand !== '' && workdir !== undefined) {
+    if (next.status === 'ready' && !spine.isPaused() && agentCommand !== '' && workdir !== undefined) {
       for (const node of next.nodes) {
         if (node._type !== 'AgentNode' && node._type !== 'LLMNode') continue
         const receipt = runtimeBridge(agentCommand, workdir, commandEnv, {
@@ -681,12 +682,13 @@ export function apply(ctx: Context, config: Config): void {
         node.prompt_template = receipt.prompt
       }
     }
-    recordStatus(spine, workdir, spine.isHalted() ? 'halted' : next.status === 'done' ? 'done' : 'ready')
+    recordStatus(spine, workdir, spine.isHalted() ? 'halted' : spine.isPaused() ? 'paused' : next.status === 'done' ? 'done' : 'ready')
     // The item being iterated travels with the node views, so the subagent for a
     // pass is handed the item rather than being sent to find it on disk. Under
     // `interactiveOpen` the node this call ran travels the same way, so the CEO
     // can say which one it was and what it left behind.
-    const view = item === undefined ? next : { ...next, item }
+    const current = spine.isPaused() ? { ...next, status: 'paused' } : next
+    const view = item === undefined ? current : { ...current, item }
     return json(ran === undefined ? view : { ...view, ran })
   }
 
@@ -774,7 +776,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.systemPrompt.section({
     name: `tool:${toolPrefix}-spine`,
     order: ctx.systemPrompt.getSectionOrder('TOOL_WORKFLOW'),
-    text: `You are the CEO of a workflow run, and you are DRIVING A WORKFLOW GRAPH. Your coding tools (bash, write, edit, web, skill) are disabled — you cannot implement, edit files, or browse yourself. Advance only through the wf tools.${openInstruction} ${toolPrefix}_next is the ONLY way to learn what is due now: call it first, and call it again after every ${toolPrefix}_done / ${toolPrefix}_verdict / ${toolPrefix}_edit / ${toolPrefix}_expand — those tools only confirm the mutation, they do not tell you what is next. When ${toolPrefix}_steer is available, read it before each ${toolPrefix}_next: it is what the person said about the run since you last looked. A correction from the person is applied to that node's prompt with ${toolPrefix}_edit (\`set-prompt\`/\`append-prompt\`) and the node is re-run with ${toolPrefix}_redo. For an AgentNode or LLMNode, spawn a subagent (the subagent tool) whose task is the node's prompt_template, and explicitly tell the subagent to read the node's reads files and write its result to the node's writes file (the filename in the node's writes field, e.g. candidate.py) — wait for it, then report the node with ${toolPrefix}_done. Every path in a node's reads and writes is relative to ${runDirectory}, and the subagent's own working directory is NOT that directory: give the subagent the absolute path (${runDirectory}/<the path>) for each file it must read or write, and tell it to write nowhere else. For a FnNode with a command, call ${toolPrefix}_next to execute it; only a command-less FnNode is yours to complete. Automatic gates also run through ${toolPrefix}_next; never supply their evaluator result. For a manually driven gate, use ${toolPrefix}_verdict with one of its listed outcomes. For a user gate the runtime asks the person itself and routes the answer they give: call ${toolPrefix}_verdict with the gate id and no verdict, and never answer for them — a verdict passed for their gate is refused. Fan out a director's plan with ${toolPrefix}_expand, and apply user steering ("skip the tests") with ${toolPrefix}_edit. When a person says a step is wrong, read the run's ledger if one is configured, then use ${toolPrefix}_edit with \`set-prompt\` or \`append-prompt\` to correct that node's prompt and ${toolPrefix}_redo to run the node again with the correction. A DataNode is iterated for you: the runtime selects its items and hands you the subgraph's nodes one pass at a time, with the item being processed in the payload's item field and on disk as the node's current item file. Do not try to iterate it yourself, and do not report the data node — or the pass's last node — before its work is done. Never skip, reorder, or bypass a node — the runner refuses to advance until you report the current node complete.`,
+    text: `You are the CEO of a workflow run, and you are DRIVING A WORKFLOW GRAPH. Your coding tools (bash, write, edit, web, skill) are disabled — you cannot implement, edit files, or browse yourself. Advance only through the wf tools.${openInstruction} If the person requests a pause before a named node or deterministic dataset, arm it FIRST with ${toolPrefix}_edit action \`pause\` for that node, before any ${toolPrefix}_next that could reach it. Use ${toolPrefix}_state to inspect ids without executing work. When status is \`paused\`, end your turn and wait for the person. Only after an explicit request to continue, use ${toolPrefix}_edit action \`unpause\` on that boundary and resume. Repeated ${toolPrefix}_next calls do not release a pause; never skip or redo around it. ${toolPrefix}_state inspects the cursor without execution; ${toolPrefix}_next executes due deterministic work. After reading steering and arming any requested pause, call it to advance, and call it again after every ${toolPrefix}_done / ${toolPrefix}_verdict / ${toolPrefix}_edit / ${toolPrefix}_expand — those tools only confirm the mutation, they do not tell you what is next. When ${toolPrefix}_steer is available, read it before each ${toolPrefix}_next: it is what the person said about the run since you last looked. A correction from the person is applied to that node's prompt with ${toolPrefix}_edit (\`set-prompt\`/\`append-prompt\`) and the node is re-run with ${toolPrefix}_redo. For an AgentNode or LLMNode, spawn a subagent (the subagent tool) whose task is the node's prompt_template, and explicitly tell the subagent to read the node's reads files and write its result to the node's writes file (the filename in the node's writes field, e.g. candidate.py) — wait for it, then report the node with ${toolPrefix}_done. Every path in a node's reads and writes is relative to ${runDirectory}, and the subagent's own working directory is NOT that directory: give the subagent the absolute path (${runDirectory}/<the path>) for each file it must read or write, and tell it to write nowhere else. For a FnNode with a command, call ${toolPrefix}_next to execute it; only a command-less FnNode is yours to complete. Automatic gates also run through ${toolPrefix}_next; never supply their evaluator result. For a manually driven gate, use ${toolPrefix}_verdict with one of its listed outcomes. For a user gate the runtime asks the person itself and routes the answer they give: call ${toolPrefix}_verdict with the gate id and no verdict, and never answer for them — a verdict passed for their gate is refused. Fan out a director's plan with ${toolPrefix}_expand, and apply user steering ("skip the tests") with ${toolPrefix}_edit. When a person says a step is wrong, read the run's ledger if one is configured, then use ${toolPrefix}_edit with \`set-prompt\` or \`append-prompt\` to correct that node's prompt and ${toolPrefix}_redo to run the node again with the correction. A DataNode is iterated for you: the runtime selects its items and hands you the subgraph's nodes one pass at a time, with the item being processed in the payload's item field and on disk as the node's current item file. Do not try to iterate it yourself, and do not report the data node — or the pass's last node — before its work is done. Never skip, reorder, or bypass a node — the runner refuses to advance until you report the current node complete.`,
   })
 
   // Open a mode's graph after boot, for a caller that will drive it node by node.
@@ -973,16 +975,19 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.tools.register(defineTool({
     name: `${toolPrefix}_edit`,
-    description: 'Edit the live graph: `skip` hot-removes a node (and, for a fork, its targets); `unskip` restores it; `set-prompt` replaces an agent/llm node\'s prompt and `append-prompt` adds a paragraph to it. This is how a person\'s correction reaches the node\'s prompt — follow it with `wf_redo` to run that node again. Returns only a confirmation — call `wf_next` to learn the next node.',
+    description: 'Edit the live graph: `pause` arms a stop BEFORE the named node (including before data setup); `unpause` releases only that boundary after the person asks to continue. A paused run stays stopped across wf_next calls. `skip` hot-removes a node (and, for a fork, its targets); `unskip` restores it; `set-prompt` replaces an agent/llm node\'s prompt and `append-prompt` adds a paragraph to it. This is how a person\'s correction reaches the node\'s prompt — follow it with `wf_redo` to run that node again. Returns only a confirmation — call `wf_next` to learn the next node.',
     parameters: {
       node: { type: 'string', required: true, description: 'The node id to edit.' },
-      action: { type: 'string', required: true, enum: ['skip', 'unskip', 'set-prompt', 'append-prompt'], description: 'The edit.' },
+      action: { type: 'string', required: true, enum: ['skip', 'unskip', 'set-prompt', 'append-prompt', 'pause', 'unpause'], description: 'The edit.' },
       text: { type: 'string', description: 'The new prompt text; required for `set-prompt` and `append-prompt`.' },
     },
     output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
     execute(args, exec) {
-      const { spine } = requireRun(exec)
-      if (args.action === 'skip') spine.skip(args.node)
+      const { spine, workdir } = requireRun(exec)
+      if (args.action === 'pause' || args.action === 'unpause') {
+        spine.pauseBefore(args.node, args.action === 'pause')
+        recordStatus(spine, workdir, spine.isHalted() ? 'halted' : spine.isPaused() ? 'paused' : spine.next().status)
+      } else if (args.action === 'skip') spine.skip(args.node)
       else if (args.action === 'unskip') spine.unskip(args.node)
       else {
         if (args.text === undefined || args.text.trim() === '') {
@@ -1014,7 +1019,7 @@ export function apply(ctx: Context, config: Config): void {
         : undefined
       spine.redo(args.node)
       if (plan.resetPass) materialised.delete(spine)
-      recordStatus(spine, workdir, 'ready')
+      recordStatus(spine, workdir, spine.isPaused() ? 'paused' : 'ready')
       return sync(json({ status: 'redone', node: args.node, ...plan, ...(receipt === undefined ? {} : { receipt }) }))
     },
   }))
