@@ -48,6 +48,13 @@ is `.venv/bin/python -m refactory_dsh.console`.
 The panel is the right Sidebar's own tab, beside the files view, so it keeps its place
 while you read the conversation.
 
+Each CEO chat owns its own `wf_open` run. You can leave one chat paused at a
+review gate and drive another mode in a different chat; state, edits and steering
+stay with the calling session. A session must finish its current run before
+opening another. Use distinct run directories across sessions (omitting `workdir`
+derives one from the session); overlapping directories are refused before lowering,
+including a completed run another session still has open for inspection.
+
 ## What each control does
 
 | control | what it does | the console call behind it |
