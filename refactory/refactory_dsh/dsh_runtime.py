@@ -33,7 +33,7 @@ from refactory_dsh.run import FACTS
 #: What the CEO is asked to do. A deterministic mode needs the CEO only to advance
 #: the cursor; the bundle mounts the spine with `executeCommands: true`, so the
 #: nodes themselves run in-process.
-TASK = "Call wf_next repeatedly until it reports done. Do nothing else."
+TASK = "Read current user steering before advancing; honor requested pause boundaries, then use wf_next to execute the graph."
 
 #: Wall-clock ceiling for one inner run on DSH.
 DEFAULT_TIMEOUT_S = 900

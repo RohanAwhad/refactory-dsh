@@ -54,12 +54,22 @@ from one a person gave, so it must not be invented.
 
 ```bash
 uv run refactory ceo review_pack/review \
+  --knob 'topic=circle packing' \
   --intent "draft a note about circle packing and let me approve it"
 ```
+
+The frozen `topic` knob supplies the draft's subject. The intent describes how to
+run and review it; it does not substitute input for a deterministic operation.
+In the Modes panel, fill the `topic` field. In CEO chat, ask it to launch
+`review_pack/review` with `topic=circle packing`. Programmatic callers may still
+pass `task={"topic": "circle packing"}` (or `brief`); an explicit task takes
+precedence over the knob.
+
 
 It lowers the mode with that intent folded into every agent node and starts the
 `graph` profile with your terminal attached. At the gate the author's note is the
 question:
+
 
 ```
 [gate approve] the person approves the draft, or halts the run

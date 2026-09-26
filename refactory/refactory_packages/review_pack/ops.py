@@ -25,7 +25,8 @@ MIN_WORDS = 8
 
 def task_input(ctx: Any) -> dict[str, Any]:
     """Materialize the run's task, so the draft has a subject."""
-    topic = str(ctx.task.get("topic") or ctx.task.get("brief") or "a short note")
+    topic = str(ctx.task.get("topic") or ctx.task.get("brief")
+                or ctx.knob("topic", "a short note") or "a short note")
     ctx.write_text(TASK, json.dumps({"topic": topic}, indent=2))
     return {"topic": topic}
 

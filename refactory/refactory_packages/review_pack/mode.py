@@ -27,6 +27,10 @@ class Review(nn.Mode):
     @classmethod
     def declare(cls) -> dict[str, nn.Knob]:
         return {
+            "topic": nn.Knob(
+                "a short note", "str", frozen=True,
+                description="the subject to draft and review; an input, not a search parameter",
+            ),
             "rounds": nn.Knob(
                 3, "int", lo=1, hi=6,
                 description="how many points the draft makes; more clears the check sooner",
@@ -37,6 +41,7 @@ class Review(nn.Mode):
         graph = nn.Graph()
         graph.add(nn.Node(
             "task_input", "op", call=f"{OPS}:task_input",
+            knobs=("topic",),
             writes=("task.json",),
             produces=("topic",),
             notes="materialize the task, so the draft has a subject",
