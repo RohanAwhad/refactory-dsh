@@ -240,6 +240,7 @@ def _run_id(mode: str) -> str:
 #: graph bundle names the same module in its own `dataCommand`; the interpreter
 #: that resolves the bare `python` leads :func:`_node_environment`'s `PATH`.
 DATA_COMMAND = "python -m refactory_dsh.items"
+AGENT_COMMAND = "python -m refactory_dsh.agent_delivery"
 
 
 def _node_environment(
@@ -342,6 +343,7 @@ def _open_mode(
         "declarations": str((root / DECLARATIONS).resolve()),
         "commandEnv": command_env,
         "dataCommand": DATA_COMMAND,
+        "agentCommand": AGENT_COMMAND,
     }
 
 
@@ -659,6 +661,8 @@ def _steer(
     """
     from refactory_dsh.steering import Ledger, chain, fidelity, outputs_in
 
+    from refactory_dsh.agent_delivery import receipts_in
+
     ledger = Ledger(run_root)
     if seed is not None:
         Ledger.seed(run_root, seed)
@@ -670,6 +674,7 @@ def _steer(
     # The chain is checkable only when the run left agent outputs beside the ledger
     # (a single mode run does; an outer-loop run keeps its candidates in subdirs).
     outputs = outputs_in(run_root) if ledger.exists() else {}
+    deliveries = receipts_in(run_root)
     payload: dict[str, Any] = {
         "run": str(run_root),
         "ledger": str(ledger.path),
@@ -677,8 +682,9 @@ def _steer(
         "entries": ledger.entries(),
         "constraints": ledger.constraints(),
         "verdicts": ledger.verdicts(),
-        "chain": chain(ledger, outputs) if ledger.exists() else [],
-        "problems": fidelity(ledger, outputs),
+        "chain": chain(ledger, outputs, deliveries=deliveries) if ledger.exists() else [],
+        "problems": fidelity(ledger, outputs, deliveries=deliveries),
+        "deliveries": deliveries,
     }
     if with_gates:
         payload["gates"] = gates(run_root)
