@@ -106,9 +106,14 @@ A `DshModelClient` deadline fails the completion without replaying its prompt: t
 agent may already have written files or started tool work. Explicit transport
 failures retain their bounded retry policy. On POSIX, a deadline or caller
 `KeyboardInterrupt` raised in the thread calling `complete()` sends one SIGTERM
-to the selected CLI and allows ten seconds for shutdown. A main-thread interrupt
-during a concurrent fork does not propagate into its completion worker threads;
-this helper does not implement concurrent fork cancellation. The shipped CLI disposes its context and managed subprocesses,
+to the selected CLI and allows ten seconds for shutdown. The Python walker's
+concurrent fork also owns a cooperative cancellation scope: a main-thread
+interrupt stops queued branches and asks active shipped DSH clients to shut down
+before propagating that original interruption. Cancelled branches are recorded at
+the fork, without merging their facts or acknowledging its join. Each fork binds
+an independent client copy; cancellation does not change the original client or
+other runs. Completion polling retains one absolute deadline and accumulated
+output, and cancellation also stops retry launches and backoff waits. The shipped CLI disposes its context and managed subprocesses,
 including ordinary tool jobs launched in separate process groups. A separate CLI
 session prevents terminal Ctrl-C from also delivering a second shutdown signal.
 Valid work that finishes inside the deadline follows normal CLI disposal.
@@ -120,4 +125,6 @@ shutdown, and Windows termination does not provide the POSIX graceful signal
 path. The local provider's macOS process-group fallback cannot contain arbitrary
 descendants that escape its managed range. Python SIGKILL, abrupt parent death,
 and process-wide SIGTERM without a caller exception also need external supervision.
-The client does not undo files written before failure or certify their reuse.
+Arbitrary in-flight Python operations are awaited, not forcibly interrupted;
+custom model clients retain caller-thread serial execution and their own cleanup
+contract. The client does not undo files written before failure or certify their reuse.
