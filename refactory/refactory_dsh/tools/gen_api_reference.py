@@ -20,8 +20,9 @@ import argparse
 import importlib
 import inspect
 import sys
+import types
 from pathlib import Path
-from typing import Any
+from typing import Any, Union, get_args, get_origin
 
 #: Modules a reader may import from, in the order the reference presents them.
 MODULES: tuple[str, ...] = (
@@ -77,10 +78,35 @@ Prose for a module's *purpose* lives in the [architecture overview](../architect
 this page is the index.
 """
 
+class _AnnotationText:
+    """Render an evaluated annotation without turning it into a quoted string."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+    def __repr__(self) -> str:
+        return self.text
+
+
+def _stable_annotation(annotation: Any) -> Any:
+    """Keep evaluated union signatures stable across Python's typing repr change."""
+    if get_origin(annotation) not in (Union, types.UnionType):
+        return annotation
+    return _AnnotationText(" | ".join(
+        "None" if arg is type(None) else inspect.formatannotation(_stable_annotation(arg))
+        for arg in get_args(annotation)
+    ))
+
+
 #: A signature's rendered form, or empty when the object takes no arguments.
 def _signature(obj: Any) -> str:
     try:
-        return str(inspect.signature(obj))
+        signature = inspect.signature(obj)
+        return str(signature.replace(
+            parameters=[parameter.replace(annotation=_stable_annotation(parameter.annotation))
+                        for parameter in signature.parameters.values()],
+            return_annotation=_stable_annotation(signature.return_annotation),
+        ))
     except (TypeError, ValueError):
         return ""
 
