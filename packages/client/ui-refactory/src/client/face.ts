@@ -467,6 +467,9 @@ export function refactoryFace(
       },
       controlRun(tabId, run, act, signal) {
         if (signal.aborted) return
+        // Replace the previous gesture's notice before dispatch. A later failure
+        // from another operation must not be erased by this control's success.
+        actions.noticed(tabId, null)
         const generation = nextGeneration(steeringGenerations, tabId)
         settle(steeringGenerations, tabId, generation, console.steer(
           { run, ...act },

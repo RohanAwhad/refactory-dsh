@@ -44,6 +44,8 @@ The mount reads three lists at once over `remote.refactoryConsole`: `modes`, `st
 
 A refusal lands in one place: the three codes the Host names precisely — an unknown mode, an authoring mode, a disabled package — have copy of their own, and every other failure shows the console's own message through `error.failed`.
 
+Adopt best now accepts an optional destination package name. Leave it blank to use the console's default, or choose an unused name after an existing-destination refusal. Adoption never overwrites a package; its applied or refused receipt includes the chosen name.
+
 State lives in the type's own store, bucketed by tab id: the choices read, the chosen mode, the knob values changed for it, the three chosen names, the run being read with its last frame and its ledger, the single run with its result, the last notice, and whether a package change is in flight. Choosing another mode resets its knobs; an in-flight or completed one-shot keeps its own result and run directory. The owner's `signal` ends a bucket: on abort the tab is forgotten, and a read or a change that settles afterwards writes nothing.
 
 Catalogue, status, ledger and candidate reads, package changes, starts, stops and one-shot runs have separate request ownership. Reloading or starting an optimizer cannot discard a one-shot result. The tab accepts only one one-shot at a time, including when its selected mode changes. A note and a verdict both answer with the whole ledger, so the section that drew before a gesture draws what the Host said after it.
