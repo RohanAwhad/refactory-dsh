@@ -477,8 +477,8 @@ class CreateMode(Mode):
             "smoke", "op", call=f"{OPS}:smoke",
             knobs=("allow_regression", "sample_knobs", "smoke_timeout_s"),
             writes=("smoke.json", "revision.json"),
-            produces=("smoke_score", "smoke_ok", "before_score", "after_score",
-                      "regressed", "revision_note"),
+            produces=("smoke_score", "smoke_ok", "smoke_model", "smoke_reason",
+                      "before_score", "after_score", "regressed", "revision_note"),
             notes="run the new mode once, and compare a revision with the mode it "
                   "revises; a mode that cannot score is not finished",
         ))
