@@ -27,6 +27,7 @@ from refactory_dsh import registry
 from refactory_dsh.paths import project_root, project_for_nodes
 from refactory_dsh.create_ops import CREATION_DIRECTIVE, RESEARCH_SCHEMA, STRATEGY_SCHEMA
 from refactory_dsh.model import DEFAULT_TIMEOUT_S
+from refactory_dsh.sandbox import DEFAULT_MODEL_SMOKE_TIMEOUT_S
 from refactory_dsh.nn import Graph, Knob, Mode, Node, RunResult
 
 OPS = "refactory_dsh.create_ops"
@@ -80,9 +81,11 @@ class CreateMode(Mode):
                             "binding; the explicit alternative to naming a Task, and "
                             "one of the two is required",
             ),
-            # What the brief says the mode operates on. `validate` cannot read the
-            # brief, so this is how "the mode must take a Python package" becomes
-            # something checked instead of something assumed.
+            "smoke_timeout_s": Knob(
+                DEFAULT_MODEL_SMOKE_TIMEOUT_S, "int", lo=1, hi=86400,
+                description="wall-clock seconds allowed for each full mode validation "
+                            "pass, including its model calls; timeout fails creation",
+            ),
             "sample_knobs": Knob(
                 "", "str",
                 description="knob values a validation run should use, as a JSON array "
@@ -90,6 +93,9 @@ class CreateMode(Mode):
                             "declared defaults, which for an input-taking mode is the "
                             "built-in fixture",
             ),
+            # What the brief says the mode operates on. `validate` cannot read the
+            # brief, so this is how "the mode must take a Python package" becomes
+            # something checked instead of something assumed.
             "requires_input": Knob(
                 "", "str",
                 description="the inputs the produced mode must accept, comma-separated "
@@ -141,7 +147,7 @@ class CreateMode(Mode):
             # are knobs. Naming no Task and not asking for `single_shot` is refused
             # here, before the first model call.
             knobs=("name", "brief", "task_ref", "single_shot", "data_node",
-                   "revision_of", "requires_input"),
+                   "revision_of", "requires_input", "smoke_timeout_s"),
             writes=("brief.json",),
             produces=("name", "brief", "extends", "revision_of", "intent", "validation",
                       "design_review", "api", "reference", "task_ref", "class_of_work",
@@ -468,7 +474,7 @@ class CreateMode(Mode):
         ))
         graph.add(Node(
             "smoke", "op", call=f"{OPS}:smoke",
-            knobs=("allow_regression", "sample_knobs"),
+            knobs=("allow_regression", "sample_knobs", "smoke_timeout_s"),
             writes=("smoke.json", "revision.json"),
             produces=("smoke_score", "smoke_ok", "before_score", "after_score",
                       "regressed", "revision_note"),
@@ -527,6 +533,8 @@ class CreateConfig:
     #: code, so the ceiling exists to catch a hung subprocess rather than to bound the
     #: work; raise it for a slower route or a larger package.
     model_timeout_s: int = DEFAULT_TIMEOUT_S
+    #: Wall-clock seconds for each full mode validation pass, separate from one completion.
+    smoke_timeout_s: int = DEFAULT_MODEL_SMOKE_TIMEOUT_S
     #: A Task class the produced mode must satisfy (create-v2's `--task`).
     task_ref: str = ""
     #: The inputs the brief says the mode takes, comma-separated. Checked against the
@@ -597,9 +605,12 @@ def create(config: CreateConfig, client: Any = None) -> CreateResult:
     # case has not said what it is building.
     if not config.task_ref and not config.single_shot:
         raise CreateError(CREATION_DIRECTIVE)
+    if not 1 <= config.smoke_timeout_s <= 86400:
+        raise CreateError("smoke_timeout_s must be between 1 and 86400 seconds")
     mode = CreateMode()
     state = mode.state_dict()
     state["knobs"]["attempts"]["value"] = int(config.attempts)
+    state["knobs"]["smoke_timeout_s"]["value"] = int(config.smoke_timeout_s)
     state["knobs"]["task_ref"]["value"] = config.task_ref
     state["knobs"]["single_shot"]["value"] = bool(config.single_shot)
     state["knobs"]["data_node"]["value"] = bool(config.data_node)
@@ -721,6 +732,10 @@ def main(argv: list[str] | None = None) -> int:
         help="seconds one model completion may take before it is called hung",
     )
     parser.add_argument(
+        "--smoke-timeout", type=int, default=DEFAULT_MODEL_SMOKE_TIMEOUT_S, dest="smoke_timeout_s",
+        help="seconds for each full mode validation pass (default: 3600); independent of --model-timeout",
+    )
+    parser.add_argument(
         "--verdict", action="append", default=[], metavar="GATE=VALUE",
         help="answer a gate a person owns, as <gate>=<value> (repeatable); "
              "gate_strategy is one, so a headless run must be told the answer",
@@ -766,6 +781,7 @@ def main(argv: list[str] | None = None) -> int:
                 requires_input=", ".join(args.inputs),
                 samples=list(args.samples),
                 model_timeout_s=int(args.model_timeout_s),
+                smoke_timeout_s=int(args.smoke_timeout_s),
                 verdicts=parse_verdicts(args.verdict),
             ),
             client=client,

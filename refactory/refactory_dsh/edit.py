@@ -25,6 +25,7 @@ from refactory_dsh.create import (
     CreateConfig, CreateError, CreateMode, CreateResult, create, parse_verdicts,
 )
 from refactory_dsh.model import DEFAULT_TIMEOUT_S
+from refactory_dsh.sandbox import DEFAULT_MODEL_SMOKE_TIMEOUT_S
 
 
 class EditMode(CreateMode):
@@ -48,11 +49,11 @@ class EditConfig(CreateConfig):
     allow_regression: bool = False
 
 
-def _smoke(identifier: str, project: Path) -> dict[str, Any]:
+def _smoke(identifier: str, project: Path, timeout_s: int) -> dict[str, Any]:
     """Score a mode, so before and after are comparable."""
     from refactory_dsh import sandbox
 
-    result = sandbox.smoke(identifier, project / ".factory" / "edit-smoke", project=project)
+    result = sandbox.smoke(identifier, project / ".factory" / "edit-smoke", project=project, timeout_s=timeout_s)
     if not result.ok:
         return {"exit_ok": False, "error": result.problem(), "score": None}
     return {
@@ -90,7 +91,9 @@ def edit(config: EditConfig, client: Any = None) -> dict[str, Any]:
     # exact state it started from rather than against "whatever that mode was".
     _package, source_class = registry.resolve(project, config.mode)
     source_mode = source_class()
-    before = _smoke(config.mode, project)
+    if not 1 <= config.smoke_timeout_s <= 86400:
+        raise CreateError("smoke_timeout_s must be between 1 and 86400 seconds")
+    before = _smoke(config.mode, project, config.smoke_timeout_s)
     if not before["exit_ok"]:
         raise CreateError(
             f"cannot revise {config.mode!r}: its own smoke run failed: {before['error']}"
@@ -103,6 +106,7 @@ def edit(config: EditConfig, client: Any = None) -> dict[str, Any]:
     mode = mode_class()
     state = mode.state_dict()
     state["knobs"]["attempts"]["value"] = int(config.attempts)
+    state["knobs"]["smoke_timeout_s"]["value"] = int(config.smoke_timeout_s)
     state["knobs"]["task_ref"]["value"] = config.task_ref
     state["knobs"]["data_node"]["value"] = bool(config.data_node)
     # The graph's smoke step is what compares before and after, so the person's
@@ -128,7 +132,7 @@ def edit(config: EditConfig, client: Any = None) -> dict[str, Any]:
         raise CreateError(f"revising {config.mode!r} failed: {run.error}")
 
     name = str(run.facts.get("name") or config.name)
-    after = _smoke(f"{name}/{registry.load(name, project).modes[0].name}", project)
+    after = _smoke(f"{name}/{registry.load(name, project).modes[0].name}", project, config.smoke_timeout_s)
     if not after["exit_ok"]:
         raise CreateError(f"the revision does not run: {after['error']}")
 
@@ -210,6 +214,10 @@ def main(argv: list[str] | None = None) -> int:
         help="seconds one model completion may take before it is called hung",
     )
     parser.add_argument(
+        "--smoke-timeout", type=int, default=DEFAULT_MODEL_SMOKE_TIMEOUT_S, dest="smoke_timeout_s",
+        help="seconds for each full mode validation pass (default: 3600)",
+    )
+    parser.add_argument(
         "--verdict", action="append", default=[], metavar="GATE=VALUE",
         help="answer a gate a person owns, as <gate>=<value> (repeatable)",
     )
@@ -244,6 +252,7 @@ def main(argv: list[str] | None = None) -> int:
                 workdir=Path(args.workdir or f".factory/edit/{args.name}"),
                 samples=list(args.samples),
                 model_timeout_s=int(args.model_timeout_s),
+                smoke_timeout_s=int(args.smoke_timeout_s),
                 verdicts=parse_verdicts(args.verdict),
             ),
             client=DshModelClient(

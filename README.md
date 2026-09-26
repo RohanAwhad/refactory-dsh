@@ -16,6 +16,19 @@ uv run refactory package smoke circle_packing/adaptive
 
 `install.sh` installs the Node workspace and one Python project, then creates the DSH profile a mode runs on. It needs Node `^22.19` or `>=24`, [uv](https://docs.astral.sh/uv) and git; it finds or installs the pinned pnpm itself. Save your provider key through **Settings → Models** before model-backed work. Nested create/edit smoke uses the managed DSH credential store; an exported or checkout `.env` key alone does not survive its deliberate secret scrub. See [model setup](refactory/docs/models.md#credentials-for-nested-execution).
 
+Create/edit validates the full emitted mode with a **3,600-second budget per smoke
+pass**. Set `--knob smoke_timeout_s=7200` on `refactory ceo --mode create` or
+`--mode edit`, or set the same knob in the GUI Modes panel. The Python create/edit
+entry points expose `--smoke-timeout`. This whole-mode budget is separate from a
+single model completion's timeout. A timeout fails validation and records the
+limit, elapsed time, current item when available, and preserved workdir in
+`smoke.json`, including return code 124. If a revision’s source comparison times
+out, `revision.json` records that incomplete pass separately and validation fails;
+no non-regression result or package provenance is written for it. On a timed-out
+model pass, `model: requested` describes intent, not proof that a request reached
+the provider. Partial work is not a measured score. Generic non-model sandbox
+commands retain their 180-second default.
+
 `refactory doctor` checks local prerequisites and downstream credential configuration without calling a model. Its ready result does not verify authentication or quota:
 
 ```
@@ -89,7 +102,7 @@ Every command is `uv run refactory <verb>`. `uv run refactory <verb> --help` is 
 
 | command | what it does |
 |---|---|
-| `refactory ceo "<what you want>" --mode create --task <module:Class>` | build a harness for a class of work: the Task lists the items and judges each pass, and the produced package binds a `data` node to it. Research, a strategy you approve, a build, three parallel reviews, an audit, then register and smoke (20–30 minutes). |
+| `refactory ceo "<what you want>" --mode create --task <module:Class>` | build a harness for a class of work: the Task lists the items and judges each pass, and the produced package binds a `data` node to it. Research, a strategy you approve, a build, three parallel reviews, an audit, then register and smoke; runtime depends on model latency and the number of review/repair cycles. |
 | `refactory ceo "<what you want>" --mode create --single` | the special case: a harness that runs once, for one input, with no Task binding. |
 | `refactory ceo "<what you want>" --mode design --check "<command>"` | design a checked artifact instead of a package; this is the default mode. |
 | `refactory ceo "<what you want>" --mode edit --revise <package>/<mode>` | revise an existing mode and refuse a regression. |

@@ -26,6 +26,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,8 @@ from refactory_dsh.paths import project_root, project_for_nodes
 
 #: Ceilings for one sandboxed run.
 DEFAULT_TIMEOUT_S = 180
+#: Whole-mode smoke budget when model calls are required; independently configurable.
+DEFAULT_MODEL_SMOKE_TIMEOUT_S = 3600
 DEFAULT_MEMORY_MB = 2048
 DEFAULT_CPU_S = 120
 DEFAULT_FILE_MB = 64
@@ -65,10 +68,14 @@ class SandboxResult:
     stdout: str = ""
     stderr: str = ""
     timed_out: bool = False
+    timeout_s: int | None = None
+    elapsed_s: float | None = None
+    progress: dict[str, Any] = field(default_factory=dict)
 
     def problem(self) -> str:
         if self.timed_out:
-            return "the run exceeded its time limit"
+            limit = f" of {self.timeout_s}s" if self.timeout_s is not None else ""
+            return f"the run exceeded its time limit{limit}; partial artifacts remain in the workdir"
         if self.returncode != 0:
             tail = self.stderr.strip().splitlines()
             return tail[-1] if tail else f"exit {self.returncode}"
@@ -239,6 +246,24 @@ def _apply_forwarded(child_env: dict[str, str], forwarded: dict[str, str] | None
         child_env[name] = value
 
 
+def _progress_at(workdir: Path) -> dict[str, Any]:
+    """Read existing runtime progress without inventing a completion count."""
+    progress: dict[str, Any] = {}
+    for key, relative in (("runtime", ".refactory/progress.json"), ("item", "current_item.json")):
+        try:
+            value = json.loads((workdir / relative).read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(value, dict):
+            continue
+        if key == "item":
+            progress["current_item_id"] = value.get("id")
+        else:
+            progress["next_node"] = value.get("node")
+            progress["recorded_steps"] = value.get("steps")
+    return progress
+
+
 def run_sandboxed(
     code: str,
     *,
@@ -265,6 +290,7 @@ def run_sandboxed(
     kwargs: dict[str, Any] = {}
     if sys.platform != "win32":
         kwargs["preexec_fn"] = _limits(memory_mb, cpu_s, file_mb)
+    started = time.monotonic()
     try:
         result = subprocess.run(
             [sys.executable, "-c", code],
@@ -279,8 +305,12 @@ def run_sandboxed(
         return SandboxResult(
             ok=False,
             timed_out=True,
+            returncode=124,
+            timeout_s=timeout_s,
+            elapsed_s=round(time.monotonic() - started, 3),
+            progress=_progress_at(workdir),
             stdout=(exc.stdout or b"").decode() if isinstance(exc.stdout, bytes) else (exc.stdout or ""),
-            stderr="timed out",
+            stderr=f"timed out after {timeout_s}s",
         )
     payload: dict[str, Any] = {}
     for line in reversed(result.stdout.strip().splitlines()):
@@ -293,6 +323,8 @@ def run_sandboxed(
             break
     return SandboxResult(
         ok=result.returncode == 0,
+        timeout_s=timeout_s,
+        elapsed_s=round(time.monotonic() - started, 3),
         payload=payload,
         returncode=result.returncode,
         stdout=result.stdout,
@@ -323,6 +355,7 @@ def run_command(
     kwargs: dict[str, Any] = {}
     if sys.platform != "win32":
         kwargs["preexec_fn"] = _limits(memory_mb, cpu_s, file_mb)
+    started = time.monotonic()
     try:
         result = subprocess.run(
             command,
@@ -335,9 +368,15 @@ def run_command(
             **kwargs,
         )
     except subprocess.TimeoutExpired:
-        return SandboxResult(ok=False, timed_out=True, stderr="timed out")
+        return SandboxResult(
+            ok=False, timed_out=True, returncode=124, timeout_s=timeout_s,
+            elapsed_s=round(time.monotonic() - started, 3), progress=_progress_at(workdir),
+            stderr=f"timed out after {timeout_s}s",
+        )
     return SandboxResult(
         ok=result.returncode == 0,
+        timeout_s=timeout_s,
+        elapsed_s=round(time.monotonic() - started, 3),
         returncode=result.returncode,
         stdout=result.stdout,
         stderr=result.stderr,
@@ -433,6 +472,7 @@ def smoke(
     from refactory_dsh import toolchain
 
     forwarded = toolchain.tool_env(identifier.split("/", 1)[0], project)
+    kwargs.setdefault("timeout_s", DEFAULT_MODEL_SMOKE_TIMEOUT_S if model else DEFAULT_TIMEOUT_S)
     return run_sandboxed(
         code, workdir=Path(workdir), env=dict(os.environ), forwarded=forwarded, **kwargs
     )

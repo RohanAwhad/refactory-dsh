@@ -560,7 +560,7 @@ Running code we did not write.
 | kind | name | signature |
 |---|---|---|
 | class | `SandboxError` | `` |
-| class | `SandboxResult` | `(ok: 'bool', payload: 'dict[str, Any]' = <factory>, returncode: 'int' = 0, stdout: 'str' = '', stderr: 'str' = '', timed_out: 'bool' = False) -> None` |
+| class | `SandboxResult` | `(ok: 'bool', payload: 'dict[str, Any]' = <factory>, returncode: 'int' = 0, stdout: 'str' = '', stderr: 'str' = '', timed_out: 'bool' = False, timeout_s: 'int \| None' = None, elapsed_s: 'float \| None' = None, progress: 'dict[str, Any]' = <factory>) -> None` |
 | function | `ast_check` | `(name: 'str', project: 'Path \| None' = None) -> 'list[str]'` |
 | function | `describe_package` | `(name: 'str', *, project: 'Path \| None' = None, **kwargs: 'Any') -> 'SandboxResult'` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
@@ -598,7 +598,7 @@ create-mode: a mode whose output is a whole package.
 
 | kind | name | signature |
 |---|---|---|
-| class | `CreateConfig` | `(name: 'str', brief: 'str', extends: 'str' = '', attempts: 'int' = 3, workdir: 'Path' = PosixPath('.factory/create'), max_steps: 'int' = 200, seed: 'int' = 0, model_timeout_s: 'int' = 1800, task_ref: 'str' = '', requires_input: 'str' = '', samples: 'list[str]' = <factory>, data_node: 'bool' = False, single_shot: 'bool' = False, verdicts: 'dict[str, str]' = <factory>) -> None` |
+| class | `CreateConfig` | `(name: 'str', brief: 'str', extends: 'str' = '', attempts: 'int' = 3, workdir: 'Path' = PosixPath('.factory/create'), max_steps: 'int' = 200, seed: 'int' = 0, model_timeout_s: 'int' = 1800, smoke_timeout_s: 'int' = 3600, task_ref: 'str' = '', requires_input: 'str' = '', samples: 'list[str]' = <factory>, data_node: 'bool' = False, single_shot: 'bool' = False, verdicts: 'dict[str, str]' = <factory>) -> None` |
 | class | `CreateError` | `` |
 | class | `CreateMode` | `(state: 'dict[str, Any] \| None' = None) -> 'None'` |
 | class | `CreateResult` | `(package: 'str', mode: 'str', path: 'Path', files: 'list[str]' = <factory>, smoke_score: 'float \| None' = None, iterations: 'int' = 0, duration_s: 'float' = 0.0) -> None` |
@@ -625,7 +625,7 @@ Revise an existing mode from a brief.
 
 | kind | name | signature |
 |---|---|---|
-| class | `EditConfig` | `(name: 'str', brief: 'str', extends: 'str' = '', attempts: 'int' = 3, workdir: 'Path' = PosixPath('.factory/create'), max_steps: 'int' = 200, seed: 'int' = 0, model_timeout_s: 'int' = 1800, task_ref: 'str' = '', requires_input: 'str' = '', samples: 'list[str]' = <factory>, data_node: 'bool' = False, single_shot: 'bool' = False, verdicts: 'dict[str, str]' = <factory>, mode: 'str' = '', allow_regression: 'bool' = False) -> None` |
+| class | `EditConfig` | `(name: 'str', brief: 'str', extends: 'str' = '', attempts: 'int' = 3, workdir: 'Path' = PosixPath('.factory/create'), max_steps: 'int' = 200, seed: 'int' = 0, model_timeout_s: 'int' = 1800, smoke_timeout_s: 'int' = 3600, task_ref: 'str' = '', requires_input: 'str' = '', samples: 'list[str]' = <factory>, data_node: 'bool' = False, single_shot: 'bool' = False, verdicts: 'dict[str, str]' = <factory>, mode: 'str' = '', allow_regression: 'bool' = False) -> None` |
 | class | `EditMode` | `(state: 'dict[str, Any] \| None' = None) -> 'None'` |
 | function | `edit` | `(config: 'EditConfig', client: 'Any' = None) -> 'dict[str, Any]'` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
