@@ -200,3 +200,12 @@ model-facing summary for anything it does not know.
   read the same JSON.
 
 Back to the [tutorial index](index.md).
+
+## Background work and active goals
+
+When the CEO ends a turn while its background agents are still working, an active
+DSH goal waits for their completion instead of spending additional goal rounds
+polling for reports. Child completion notices and your chat messages can still
+wake the CEO. A child that has completed and remains available in session history
+does not hold the goal open. Waiting does not mark the goal blocked or authorize
+shortening a worker's required checks.

@@ -1,0 +1,64 @@
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -62,6 +62,7 @@
+ 			agent,
+ 			attempt: void 0,
+ 			competingQueued: false,
++			pendingSubagents: new Set(),
+ 			needsCheckpoint: false,
+ 			requested: false,
+ 			run: void 0,
+@@ -75,9 +76,18 @@
+ 		if (ctx.agents.get(state.agent.id) !== state.agent) return void 0;
+ 		return ctx.goals.get(state.agent);
+ 	}
++	/**
++	* A yielded parent has no automatic work while an owned child is live.
++	* Continuable children leave the registry after their inbox, descendants and
++	* final flush settle; their durable, resumable conversations do not count.
++	* Exact runtime ownership avoids blocking unrelated or resumed root agents.
++	*/
++	function hasOwnedChild(agent) {
++		return (states.get(agent)?.pendingSubagents.size ?? 0) > 0 || ctx.agents.list().some((child) => ctx.agents.isOwnedBy(child.id, agent));
++	}
+ 	/** Whether this exact lifecycle is quiescent with no competing prompt. */
+ 	function readyToDrive(state) {
+-		return ctx.fiber.state === 2 && !state.stopping && ctx.agents.get(state.agent.id) === state.agent && state.agent.status === "idle" && !state.competingQueued;
++		return ctx.fiber.state === 2 && !state.stopping && ctx.agents.get(state.agent.id) === state.agent && state.agent.status === "idle" && !state.competingQueued && !hasOwnedChild(state.agent);
+ 	}
+ 	/** Recheck every condition that an awaited checkpoint may have changed. */
+ 	function readyAfterCheckpoint(state) {
+@@ -206,6 +216,24 @@
+ 		});
+ 		ctx.on("agent/disposed", ({ agent }) => {
+ 			states.delete(agent);
++			// Wake generic owned-agent users too. A paired subagent run remains
++			// pending until its end; continuable end follows its settlement notice.
++			// Recheck every goal/agent/inbox fence; disposal grants no authority.
++			queueMicrotask(() => {
++				for (const state of states.values()) requestDrive(state);
++			});
++		});
++		// Observe paired public lifecycle edges when the subagent service is
++		// present. Registry removal can precede its asynchronous final delivery.
++		ctx.on("subagent/start", (info) => {
++			for (const state of states.values()) {
++				if (ctx.agents.isOwnedBy(info.id, state.agent)) state.pendingSubagents.add(info.runId);
++			}
++		});
++		ctx.on("subagent/end", (info) => {
++			for (const state of states.values()) {
++				if (state.pendingSubagents.delete(info.runId)) requestDrive(state);
++			}
+ 		});
+ 		ctx.on("agent/session-start", ({ agent }) => {
+ 			const state = stateFor(agent);
+@@ -277,7 +305,7 @@
+ 		function validReservation(state, content, source) {
+ 			const attempt = state.attempt;
+ 			const goal = currentGoal(state);
+-			return ctx.fiber.state === 2 && !state.stopping && attempt !== void 0 && attempt.phase === "claimed" && !attempt.stale && sameQueued(content, source, attempt) && goal !== void 0 && goal.id === source.goalId && goal.revision === source.revision && goal.phase === "active" && goal.activation === "armed" && source.round === goal.roundsStarted + 1;
++			return ctx.fiber.state === 2 && !state.stopping && !hasOwnedChild(state.agent) && attempt !== void 0 && attempt.phase === "claimed" && !attempt.stale && sameQueued(content, source, attempt) && goal !== void 0 && goal.id === source.goalId && goal.revision === source.revision && goal.phase === "active" && goal.activation === "armed" && source.round === goal.roundsStarted + 1;
+ 		}
+ 		ctx.on("agent/pre-step", async ({ agent, messages, signal }, next) => {
+ 			const submitted = messages.find((message) => isGoalRoundSource(message.source));
