@@ -14,9 +14,9 @@ uv run refactory doctor
 uv run refactory package smoke circle_packing/adaptive
 ```
 
-`install.sh` installs the Node workspace and one Python project, then creates the DSH profile a mode runs on. It needs Node `^22.19` or `>=24`, [uv](https://docs.astral.sh/uv) and git; it finds or installs the pinned pnpm itself. Put a DeepSeek API key in `.env` before you run anything that calls a model.
+`install.sh` installs the Node workspace and one Python project, then creates the DSH profile a mode runs on. It needs Node `^22.19` or `>=24`, [uv](https://docs.astral.sh/uv) and git; it finds or installs the pinned pnpm itself. Save your provider key through **Settings → Models** before model-backed work. Nested create/edit smoke uses the managed DSH credential store; an exported or checkout `.env` key alone does not survive its deliberate secret scrub. See [model setup](refactory/docs/models.md#credentials-for-nested-execution).
 
-`refactory doctor` prints one `ok` line per prerequisite and ends with `ready` when this machine can run a mode:
+`refactory doctor` checks local prerequisites and downstream credential configuration without calling a model. Its ready result does not verify authentication or quota:
 
 ```
   ok    python >= 3.12        3.13.2
@@ -26,7 +26,7 @@ uv run refactory package smoke circle_packing/adaptive
   ok    DSH profile 'graph'   /Users/you/.dsh/profiles/graph
   ok    packages of modes     10 package(s) under /Users/you/refactory-dsh
 
-refactory doctor: ready — try `refactory list`, or `refactory ceo "an idea" --mode design`
+refactory doctor: local configuration ready (authentication not tested) — try `refactory list`, or `refactory ceo "an idea" --mode design`
 ```
 
 The package count is the line that is yours rather than the tool's: it counts the packages the checkout ships plus whatever you create under `.factory/packages`. A fresh clone reports ten.
@@ -271,7 +271,7 @@ Add `--run-integration` to pytest to make real model calls, and `--tier model` t
 - Node `^22.19` or `>=24`, with npm. The installer finds the pinned pnpm or installs it.
 - [uv](https://docs.astral.sh/uv) and git.
 - Python 3.12 or newer; `uv sync` creates the virtual environment.
-- A DeepSeek API key in `.env` for anything that calls a model: `refactory ceo`, and any mode whose graph has an `agent` node.
+- A provider key saved through **Settings → Models** for nested model execution: `refactory ceo`, and any mode whose graph has an `agent` node.
 
 The shipped fixture modes and the `walker` evaluator run offline, so you can try the whole loop without a key.
 

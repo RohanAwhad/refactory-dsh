@@ -15,11 +15,12 @@ with tools, and an analysis prompt must not be able to write into the run.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
 
-from refactory_dsh.paths import dsh_command
+from refactory_dsh.paths import SOURCE_CLI_ENTRY, dsh_command, dsh_root, node_bin
 
 #: The overlay that keeps a node's completion from backgrounding its own work. Checked
 #: in rather than generated, so what a node's model call is configured with is
@@ -107,12 +108,74 @@ class DshModelClient:
         provider: str = "",
         attempts: int = DEFAULT_ATTEMPTS,
         backoff_s: float = 1.0,
+        dsh_home: str | Path | None = None,
+        runtime_root: str | Path | None = None,
+        dsh_cli: str | None = None,
     ) -> None:
         self._timeout_s = timeout_s
-        self._model = model
-        self._provider = provider
+        self._runtime_root = Path(runtime_root or dsh_root()).expanduser().resolve()
+        self._dsh_cli = (dsh_cli if dsh_cli is not None else os.environ.get("DSH_CLI", "")).strip()
+        self._model = model or os.environ.get("REFACTORY_MODEL_ID", "")
+        self._provider = provider or os.environ.get("REFACTORY_MODEL_PROVIDER", "")
+        # Resolve before containment rewrites HOME. This is a location, never a key.
+        selected_home = dsh_home or os.environ.get("REFACTORY_MODEL_DSH_HOME") or os.environ.get("DSH_HOME", "").strip()
+        self._dsh_home = Path(selected_home or Path.home() / ".dsh").expanduser().resolve()
         self._attempts = max(1, int(attempts))
         self._backoff_s = max(0.0, float(backoff_s))
+
+    def context(self) -> dict[str, str]:
+        """Nonsecret settings safe to carry across the model subprocess boundary."""
+        return {
+            "dsh_home": str(self._dsh_home), "provider": self._provider, "model": self._model,
+            "runtime_root": str(self._runtime_root), "dsh_cli": self._dsh_cli,
+        }
+
+    def _environment(self) -> dict[str, str]:
+        # Never resolve a credential here or copy it into the environment. The DSH
+        # credentials service reads its managed store in the selected home.
+        return {**os.environ, "DSH_HOME": str(self._dsh_home)}
+
+    def _readiness_unavailable(self, reason: str) -> dict[str, object]:
+        return {
+            "ready": None, "status": "diagnostic-unavailable", "reason": reason,
+            "provider": self._provider or "(runtime default)",
+            "model": self._model or "(runtime default)", "authenticated": False,
+            "warning": "Credential diagnostic unavailable for the selected runtime/configuration; "
+                       "credential readiness is unverified. Normal execution will perform its own checks.",
+        }
+
+    def readiness(self, *, workdir: Path) -> dict[str, object]:
+        """Describe local configuration, or explicitly leave unsupported runtimes unverified."""
+        # Inspect only the runtime this client will actually launch. A custom CLI
+        # or source checkout need not use the repository's installed composition.
+        if self._dsh_cli:
+            return self._readiness_unavailable("external-launcher")
+        if (self._runtime_root / SOURCE_CLI_ENTRY).exists():
+            return self._readiness_unavailable("source-launcher")
+        probe = Path(__file__).with_name("model_readiness.mjs")
+        try:
+            proc = subprocess.run(
+                [node_bin(), str(probe), str(self._runtime_root), self._provider, self._model],
+                cwd=str(workdir), env=self._environment(), capture_output=True, text=True,
+                timeout=30,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return self._readiness_unavailable("diagnostic-process-unavailable")
+        try:
+            result = json.loads(proc.stdout)
+        except (ValueError, TypeError):
+            # Provider parse errors can quote document values: never relay stderr.
+            return self._readiness_unavailable("diagnostic-response-unavailable")
+        if not isinstance(result, dict):
+            return self._readiness_unavailable("diagnostic-response-unavailable")
+        if result.get("status") in ("missing-credential", "invalid-configuration"):
+            raise RuntimeError(str(result.get("error") or "model credential configuration is invalid"))
+        if proc.returncode or not (
+            result.get("ready") is True
+            or (result.get("ready") is None and result.get("status") == "diagnostic-unavailable")
+        ):
+            return self._readiness_unavailable("diagnostic-response-unavailable")
+        return result
 
     def complete(
         self, prompt: str, *, system: str = "", workdir: Path | None = None
@@ -140,7 +203,7 @@ class DshModelClient:
         # The launcher resolves its own entry; the child's working directory stays
         # the node's, not the checkout's.
         cmd = [
-            *dsh_command(),
+            *dsh_command(root=self._runtime_root, cli=self._dsh_cli),
             "--profile",
             "headless",
             # A node is one completion whose answer is the node's output, so a model
@@ -170,6 +233,7 @@ class DshModelClient:
                     capture_output=True,
                     text=True,
                     cwd=str(run_dir),
+                    env=self._environment(),
                     timeout=self._timeout_s,
                 )
             except subprocess.TimeoutExpired:

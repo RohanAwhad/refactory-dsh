@@ -9,6 +9,7 @@
  */
 
 import { join, resolve } from 'node:path'
+import { homedir } from 'node:os'
 import type { SubprocessHandle } from '@deepseek-ai/dsh-subprocess'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 
@@ -217,6 +218,9 @@ export class Console {
     const handle: SubprocessHandle = this.subprocess.spawn({
       argv,
       cwd: this.settings.repoRoot,
+      // The provider intentionally scrubs DSH_* and secret variables. Carry only
+      // the trusted location so nested DSH reads its managed credential store.
+      env: { DSH_HOME: resolve((process.env.DSH_HOME?.trim() || join(homedir(), '.dsh')).replace(/^~(?=[/\\]|$)/, homedir())) },
       stdio: {
         stdin: 'ignore',
         stdout: { maxBytes: this.settings.collectBytes },

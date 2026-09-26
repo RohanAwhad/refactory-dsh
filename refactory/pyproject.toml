@@ -26,3 +26,6 @@ include = ["refactory_dsh*", "refactory_packages*"]
 
 [tool.setuptools]
 py-modules = []
+
+[tool.setuptools.package-data]
+refactory_dsh = ["*.mjs", "patches/*.yml"]

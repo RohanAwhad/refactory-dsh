@@ -344,6 +344,29 @@ def run_command(
     )
 
 
+def model_readiness(workdir: Path, *, model_context: dict[str, str] | None = None) -> dict[str, Any]:
+    """Check the model path after the same scrub/HOME rewrite as real smoke.
+
+    No package is imported and no model is called. Presence is not proof that the
+    provider will accept the key; the later real smoke remains mandatory.
+    """
+    from refactory_dsh.model import DshModelClient
+
+    context = model_context if model_context is not None else DshModelClient().context()
+    code = (
+        "import json\nfrom pathlib import Path\n"
+        "from refactory_dsh.model import DshModelClient\n"
+        f"print(json.dumps(DshModelClient(**{context!r}).readiness(workdir=Path.cwd())))\n"
+    )
+    result = run_sandboxed(code, workdir=workdir, timeout_s=40)
+    if not result.ok or not (
+        result.payload.get("ready") is True
+        or (result.payload.get("ready") is None and result.payload.get("status") == "diagnostic-unavailable")
+    ):
+        raise SandboxError(result.problem() or "sandbox model configuration is not ready; run refactory doctor")
+    return result.payload
+
+
 def smoke(
     identifier: str,
     workdir: Path,
@@ -351,6 +374,7 @@ def smoke(
     project: Path | None = None,
     model: bool = False,
     knobs: dict[str, Any] | None = None,
+    model_context: dict[str, str] | None = None,
     **kwargs: Any,
 ) -> SandboxResult:
     """Run one mode once, in a sandbox, and report what it scored.
@@ -366,7 +390,9 @@ def smoke(
     report "not measured" for the common case, which makes the check vacuous exactly
     where it matters. The client reaches a model the same way every other path does
     (`DshModelClient`, which runs the one-shot DSH profile from the checkout), so the
-    contained process needs no credential of its own.
+    contained process receives only the trusted model context. DSH reads the managed
+    credential store itself; it does not materialize a key into the environment.
+    This local same-user store is not a filesystem secret-isolation boundary.
 
     ``knobs`` overrides the mode's declared defaults for this run. Without it a smoke
     exercises the *default* path only, so a mode whose new input path is broken --
@@ -378,7 +404,12 @@ def smoke(
         if model
         else ""
     )
-    call = "model=DshModelClient()" if model else ""
+    from refactory_dsh.model import DshModelClient
+
+    # Bind the trusted parent's home/route before HOME becomes the smoke directory.
+    # The generated package still receives no credential environment variables.
+    context = model_context if model_context is not None else DshModelClient().context()
+    call = f"model=DshModelClient(**{context!r})" if model else ""
     code = (
         "import json\n"
         "from pathlib import Path\n"

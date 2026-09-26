@@ -83,7 +83,7 @@ def installed_dsh() -> Path:
     return dsh_root() / "node_modules" / ".bin" / "dsh"
 
 
-def dsh_command() -> list[str]:
+def dsh_command(*, root: Path | None = None, cli: str | None = None) -> list[str]:
     """The argv prefix that launches DSH, before DSH's own arguments.
 
     Three answers, in order. ``DSH_CLI`` names an executable outright, which is how a
@@ -98,13 +98,14 @@ def dsh_command() -> list[str]:
     installed branch has no such requirement, because the launcher resolves its own
     modules.
     """
-    override = (os.environ.get("DSH_CLI") or "").strip()
+    override = (cli if cli is not None else os.environ.get("DSH_CLI", "")).strip()
+    selected_root = Path(root) if root is not None else dsh_root()
     if override:
         return [override]
-    source = dsh_root() / SOURCE_CLI_ENTRY
+    source = selected_root / SOURCE_CLI_ENTRY
     if source.exists():
         return [node_bin(), "--import", "tsx/esm", str(source)]
-    return [str(installed_dsh())]
+    return [str(selected_root / "node_modules" / ".bin" / "dsh")]
 
 
 def venv_bin() -> Path:
