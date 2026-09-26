@@ -1178,17 +1178,16 @@ def _forward(module: str, argv: list[str]) -> dict[str, Any]:
     rather than lost — a forwarded command that half-printed before failing is
     exactly the case a caller needs to see.
     """
-    import contextlib
-    import importlib
-    import io
-
-    entry = importlib.import_module(f"refactory_dsh.{module}")
-    buffer = io.StringIO()
-    errors = io.StringIO()
-    with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(errors):
-        code = int(entry.main(argv) or 0)
-    text = buffer.getvalue().strip()
-    stderr = errors.getvalue().strip()
+    # Capture at the process boundary, not just Python's sys.stdout: forwarded
+    # commands spawn DSH with inherited file descriptors. redirect_stdout leaves
+    # that child's prose and report on the console's machine-readable stdout.
+    completed = subprocess.run(
+        [sys.executable, "-m", f"refactory_dsh.{module}", *argv],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    code = completed.returncode
+    text = completed.stdout.strip()
+    stderr = completed.stderr.strip()
     try:
         payload: Any = json.loads(text)
     except json.JSONDecodeError:
@@ -1345,7 +1344,7 @@ def main(argv: list[str] | None = None) -> int:
             forwarded += extra
             payload = _forward("registry", forwarded)
         elif args.verb == "run":
-            forwarded = [args.mode]
+            forwarded = [args.mode, "--headless"]
             if args.intent:
                 forwarded += ["--intent", args.intent]
             if args.workdir:
@@ -1365,9 +1364,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.model:
                 forwarded += ["--model", args.model]
             payload = _forward("interactive", forwarded)
-            # The one-shot runner prints its report from the child process, whose
-            # stdout is the terminal's rather than this buffer, so the JSON contract
-            # would otherwise carry nothing. The run directory is the durable answer:
+            # The captured child output is diagnostic text; the run directory is
+            # the durable structured answer:
             # where it is, how it ended and what it recorded -- and it is the
             # directory the runner itself chose, so this reads the run it made rather
             # than a second guess at where a run would have gone.
@@ -1380,6 +1378,7 @@ def main(argv: list[str] | None = None) -> int:
             if root.is_dir():
                 payload["run"] = {
                     **status(root),
+                    "mode": args.mode,
                     "facts": _read_json(root / "facts.json"),
                 }
         elif args.verb == "open":
