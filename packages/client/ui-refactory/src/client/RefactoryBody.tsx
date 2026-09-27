@@ -39,6 +39,7 @@ import { WorkflowArt, stateTone } from './WorkflowArt.tsx'
 import { RunActivity } from './RunActivity.tsx'
 import { FieldHelp, FieldLabel } from './FieldHelp.tsx'
 import { BriefEditor } from './BriefEditor.tsx'
+import { SteeringLedger } from './SteeringLedger.tsx'
 import { ProfileControls, CandidateComparison, RuntimeControls } from './ProfileControls.tsx'
 
 /** The body's composed props: the tab it draws, its store, its face, and its copy. */
@@ -474,20 +475,22 @@ function Steering({
 }): ReactNode {
   const [said, setSaid] = useState('')
   const [kind, setKind] = useState<RefactoryNoteKind>('info')
+  const [saving, setSaving] = useState(false)
+  const history = <SteeringLedger steering={steering} refresh={() => { readSteering(tabId, run, signal) }} t={t} />
   if (steering === null || steering.kind === 'loading') {
-    return <p className={css.note} data-refactory-steering="reading">{t('steering.reading')}</p>
+    return <>{history}<p className={css.note} data-refactory-steering="reading">{t('steering.reading')}</p></>
   }
   if (steering.kind === 'failed') {
     return (
-      <p className={css.note} data-refactory-steering="failed">
+      <>{history}<p className={css.note} data-refactory-steering="failed">
         {t('error.failed', { message: steering.message })}
-      </p>
+      </p></>
     )
   }
   const ledger = steering.value
   const finished = statusFinished === true || ledger.finished === true
   return (
-    <div className={css.status} data-refactory-steering="ready">
+    <>{history}<div className={css.status} data-refactory-steering="ready">
       {optimizer !== null && ledger.gates.length > 0 && (
         <div className={css.questions} data-refactory-gates="waiting">
           {ledger.gates.map(gate => (
@@ -568,17 +571,6 @@ function Steering({
           {t('control.stop')}
         </button>}
       </div>
-      {ledger.entries.length === 0
-        ? <p className={css.note} data-refactory-ledger="empty">{t('steering.empty')}</p>
-        : (
-          <ul className={css.recorded} data-refactory-ledger="entries">
-            {ledger.entries.map((entry, index) => (
-              <li key={`${entry.at}-${String(index)}`} data-refactory-entry={entry.kind}>
-                <span className={css.name}>{entry.kind}</span> {entry.text}
-              </li>
-            ))}
-          </ul>
-        )}
       {optimizer && <Candidates
         key={run}
         tabId={tabId}
@@ -604,14 +596,16 @@ function Steering({
         onSubmit={(event) => {
           event.preventDefault()
           const note = said.trim()
-          if (note === '') return
-          addNote(tabId, run, note, kind, signal)
-          setSaid('')
+          if (note === '' || saving) return
+          setSaving(true)
+          void addNote(tabId, run, note, kind, signal).then(recorded => {
+            if (recorded) setSaid(current => current.trim() === note ? '' : current)
+          }).finally(() => { setSaving(false) })
         }}
       >
         <FieldLabel htmlFor={`note-${tabId}`} help={t('help.note')}>{t('steering.note')}</FieldLabel>
-        <input id={`note-${tabId}`}
-          className={css.input}
+        <textarea id={`note-${tabId}`}
+          className={`${css.input} ${css.noteDraft}`} rows={3}
           value={said}
           aria-label={t('steering.note')}
           placeholder={t('steering.note')}
@@ -633,14 +627,14 @@ function Steering({
         <button
           type="submit"
           className={css.action}
-          disabled={said.trim() === ''}
+          disabled={saving || said.trim() === ''}
           data-refactory-note-add
         >
-          {t('steering.add')}
+          {saving ? t('steering.saving') : t('steering.add')}
         </button>
       </form>}
 
-    </div>
+    </div></>
   )
 }
 

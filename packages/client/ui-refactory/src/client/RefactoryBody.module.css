@@ -176,3 +176,22 @@
 .briefDraft { box-sizing: border-box; display: block; width: 100%; min-height: min(360px,48vh); max-height: 58vh; resize: vertical; margin: 20px 0; padding: 16px; border: 1px solid var(--rf-border); border-radius: 9px; background: var(--rf-canvas); color: inherit; font: 15px/1.7 system-ui,sans-serif; }
 .briefFooter { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 14px; }
 .briefFooter > span { color: var(--rf-muted); font-size: 12px; }
+.ledgerPreview { display: flex; flex-direction: column; gap: 8px; width: 100%; padding: 14px; border: 1px solid var(--rf-border); border-radius: 10px; color: inherit; background: var(--rf-canvas); text-align: left; font: inherit; cursor: pointer; }
+.ledgerPreview:hover, .ledgerPreview:focus-visible { border-color: var(--rf-accent); }
+.ledgerPreviewTitle { display: flex; justify-content: space-between; gap: 12px; color: var(--rf-accent); font-weight: 600; }
+.ledgerPreview > .briefText { color: var(--rf-muted); font-size: 12px; line-height: 1.6; }
+.ledgerDialog { width: min(880px,calc(100vw - 32px)); height: min(820px,calc(100vh - 48px)); }
+.ledgerDialog[open] { display: flex; flex-direction: column; gap: 14px; }
+.ledgerDialog p { margin: 0; }
+.ledgerDialog .briefHeader p { line-height: 1.6; }
+.ledgerPath { font: 11px/1.5 ui-monospace,monospace; color: var(--rf-muted); overflow-wrap: anywhere; }
+.ledgerToolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.ledgerToolbar input { flex: 1 1 220px; min-width: 0; }
+.ledgerScroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.ledgerEntries { display: flex; flex-direction: column; gap: 14px; margin: 0; padding: 0; list-style: none; }
+.ledgerEntries > li { padding: 16px; border: 1px solid var(--rf-border); border-radius: 10px; background: var(--rf-canvas); }
+.ledgerMeta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; margin-bottom: 12px; color: var(--rf-muted); font: 11px/1.5 ui-monospace,monospace; overflow-wrap: anywhere; }
+.ledgerKind { padding: 3px 8px; color: var(--rf-accent); border: 1px solid var(--rf-border); border-radius: 5px; font: 600 12px/1.5 system-ui,sans-serif; }
+.ledgerText { white-space: pre-wrap; overflow-wrap: anywhere; font: 14px/1.75 system-ui,sans-serif; }
+.ledgerFooter { display: flex; justify-content: flex-end; padding-top: 12px; border-top: 1px solid var(--rf-border); }
+.noteDraft { box-sizing: border-box; resize: vertical; min-height: 84px; line-height: 1.6; }

@@ -7,7 +7,7 @@
  * does — choosing from a select, pressing a button — and reads the store and the
  * scripted Remote afterwards.
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { makeTranslate } from './translate.client.ts'
 import { failureLine } from '../src/client/RefactoryBody.tsx'
@@ -17,13 +17,20 @@ import {
   PACKAGE, RECEIPT, SINGLE, STEERED, STEERING, STRATEGIES, ok,
 } from './fake-console.client.ts'
 import { TAB, mountBody } from './mount.client.tsx'
+import { mockDialog } from './dialog.client.ts'
 
 const CHOICES = { project: '/repo', modes: [MODE, AUTHORING, DISABLED], strategies: STRATEGIES, packages: [PACKAGE] }
 
 /** The knob values Start and Run once send before anything is changed. */
 const KNOBS = ['rounds=3', 'temperature=0.5', 'source_root=/tmp/src', 'preset=broad', 'verbose=false']
 
-afterEach(cleanup)
+let restoreDialog = () => {}
+afterEach(() => { cleanup(); vi.restoreAllMocks(); restoreDialog() })
+
+function openLedger(view: { container: HTMLElement }): void {
+  restoreDialog = mockDialog()
+  fireEvent.click(at(view, 'data-refactory-ledger-open'))
+}
 
 /** The one element a spec addresses by its data attribute. */
 function at(view: { container: HTMLElement }, attribute: string, value?: string): HTMLElement {
@@ -257,6 +264,7 @@ describe('the steering the picker offers for the run it reads', () => {
       steering: { kind: 'ready', value: STEERING },
     })
     expect(at(view, 'data-refactory-steering', 'ready')).toBeDefined()
+    openLedger(view)
     const entries = [...view.container.querySelectorAll('[data-refactory-entry]')]
     expect(entries.map(node => node.getAttribute('data-refactory-entry'))).toEqual(['Initial Idea', 'correction'])
     expect(entries[0]?.textContent).toContain('make it better')
@@ -304,7 +312,8 @@ describe('the steering the picker offers for the run it reads', () => {
       )
     })
     // The field is cleared, and the entry the Host answered with is drawn.
-    expect(note.value).toBe('')
+    await waitFor(() => { expect(note.value).toBe('') })
+    openLedger(view)
     await waitFor(() => { expect(at(view, 'data-refactory-entry', 'info').textContent).toContain('try the other seed') })
   })
 

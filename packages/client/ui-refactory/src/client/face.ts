@@ -2,7 +2,8 @@
  * The picker's asynchronous half: reading the described choices and the run's
  * status into the store, and dispatching the gestures that change the Host.
  *
- * The component never awaits anything. It calls `load` / `choose` / `setKnob` /
+ * Most gestures return immediately. The note form awaits confirmation before
+ * clearing its draft. The component calls `load` / `choose` / `setKnob` /
  * `setSetting` / `start` / `run` / `refresh` / `stop` and the package gestures, and
  * this face performs the Remote call and writes the outcome through the store's own
  * actions — the Slot-standard `inject` face, so the write set stays the store's and
@@ -246,8 +247,9 @@ export interface RefactoryInjected {
    * @param note - what the person said.
    * @param kind - what the note is.
    * @param signal - the tab record's lifetime.
+   * @returns whether this submission was confirmed for the current watched run.
    */
-  readonly addNote: (tabId: TabId, run: string, note: string, kind: RefactoryNoteKind, signal: AbortSignal) => void
+  readonly addNote: (tabId: TabId, run: string, note: string, kind: RefactoryNoteKind, signal: AbortSignal) => Promise<boolean>
   /**
    * Record a verdict for a gate the watched run is stopped at, and take the ledger
    * it answers with.
@@ -603,14 +605,21 @@ export function refactoryFace(
           loadSteering(tabId, run, signal)
         })
       },
-      addNote(tabId, run, note, kind, signal) {
-        if (signal.aborted) return
+      async addNote(tabId, run, note, kind, signal) {
+        if (signal.aborted) return false
+        actions.noticed(tabId, null)
         const generation = nextGeneration(steeringGenerations, tabId)
-        settle(steeringGenerations, tabId, generation, console.steer({ run, note, kind }, signal), (steering) => {
-          actions.steered(tabId, steering)
-        }, undefined, (failure) => {
-          actions.noticed(tabId, { code: failure.code, message: failure.message })
-        })
+        try {
+          const result = await console.steer({ run, note, kind }, signal)
+          if (signal.aborted || steeringGenerations.get(tabId) !== generation) return false
+          if (result.ok) { actions.steered(tabId, result.value); return true }
+          actions.noticed(tabId, { code: result.error.code, message: result.error.message })
+        } catch (error) {
+          if (!signal.aborted && steeringGenerations.get(tabId) === generation) {
+            actions.noticed(tabId, { code: 'refactory/console-failed', message: error instanceof Error ? error.message : String(error) })
+          }
+        }
+        return false
       },
       answerGate(tabId, run, gate, verdict, signal) {
         if (signal.aborted) return
