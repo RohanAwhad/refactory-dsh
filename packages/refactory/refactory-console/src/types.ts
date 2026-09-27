@@ -463,6 +463,10 @@ export interface RefactorySingleRunRequest {
  * still has to select this contribution in its own assembly.
  */
 export interface RefactoryConsoleRemote {
+  /** Live schemas and reviewed interface guidance. */
+  help?: (topic: string, signal?: AbortSignal) => Promise<RemoteResult<Record<string, unknown>>>
+  /** Read-only project worker defaults and provenance. */
+  workers?: (signal?: AbortSignal) => Promise<RemoteResult<Record<string, unknown>>>
   /** Saved recipes; immutable versions differ from historical resolved snapshots. */
   profiles?: (signal?: AbortSignal) => Promise<RemoteResult<readonly RefactoryProfile[]>>
   /** Save an explicit new objective/settings version. */

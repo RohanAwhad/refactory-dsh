@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RefactoryProfile, RefactoryStartRequest } from '@deepseek-ai/dsh-refactory-console/types'
-import { CandidateComparison, ProfileControls, RuntimeControls } from '../src/client/ProfileControls.tsx'
+import { CandidateComparison, DiscoveryControls, ProfileControls, RuntimeControls } from '../src/client/ProfileControls.tsx'
 import { runtimeSettings } from '../src/client/face.ts'
 import type { RefactorySettings } from '../src/client/store.ts'
 
@@ -111,4 +111,16 @@ describe('profile and worker controls', () => {
     expect(JSON.parse(changed.mock.calls[1]![0])).toEqual({})
   })
 
+  it('reads the current mode contract and project defaults without launching work', async () => {
+    const signal = new AbortController().signal
+    const api = { help: vi.fn(async () => ({ ok: true as const, value: { build_id: 'tested-build', nodes: [{ id: 'emit', role: 'builder' }] } })),
+      workers: vi.fn(async () => ({ ok: true as const, value: { settings: { worker_backend: 'codex' } } })) }
+    const view = render(<DiscoveryControls api={api} mode="pack/first" signal={signal} />)
+    fireEvent.click(screen.getByText('Read help and project defaults'))
+    await screen.findByText(/tested-build/)
+    expect(api.help).toHaveBeenCalledWith('pack/first', signal)
+    expect(api.workers).toHaveBeenCalledWith(signal)
+    view.rerender(<DiscoveryControls api={api} mode="pack/second" signal={signal} />)
+    expect(screen.queryByText(/tested-build/)).toBeNull()
+  })
 })

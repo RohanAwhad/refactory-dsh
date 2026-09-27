@@ -73,7 +73,7 @@ describe('the picker service against the real loop', () => {
     // than the one the loop would refuse.
     const authoring = modes.filter(mode => !mode.scored && mode.action !== 'start')
     expect(authoring.length).toBeGreaterThan(0)
-    expect(authoring.every(mode => ['create', 'edit', 'design'].includes(mode.action))).toBe(true)
+    expect(authoring.every(mode => ['create', 'edit', 'design', 'run'].includes(mode.action))).toBe(true)
   }, 120_000)
 
   it('answers with every declared knob of a mode, as a panel draws them', async () => {

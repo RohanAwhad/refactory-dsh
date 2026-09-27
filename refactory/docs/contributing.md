@@ -179,3 +179,11 @@ Each of these happened, and the shape of the code is the response.
   name rather than guessing a package, and the registry refuses a name that exists
   in both roots rather than picking one.
 - **Do not repair a state.** Refuse it and report the reason.
+
+## Public capability coverage
+
+See [discovery](discovery.md) for the shared parser/mode contract, semantic review
+metadata, offline generation and extension checklist. Run `pnpm run docs:generate`
+after reviewed changes and `pnpm run docs:check` before building. New public
+operations, mode schemas and worker capabilities require current explanations,
+examples and explicit CLI/chat/panel routes.

@@ -40,7 +40,7 @@ import { RunActivity } from './RunActivity.tsx'
 import { FieldHelp, FieldLabel } from './FieldHelp.tsx'
 import { BriefEditor } from './BriefEditor.tsx'
 import { SteeringLedger } from './SteeringLedger.tsx'
-import { ProfileControls, CandidateComparison, RuntimeControls } from './ProfileControls.tsx'
+import { ProfileControls, CandidateComparison, RuntimeControls, DiscoveryControls } from './ProfileControls.tsx'
 
 /** The body's composed props: the tab it draws, its store, its face, and its copy. */
 export type RefactoryBodyProps =
@@ -642,7 +642,7 @@ function Steering({
 export function RefactoryBody({
   useTabInfo, useStore, choose, choosePackage, chooseIntent, setKnob, setSetting, start, run: runOnce, load, reload, refresh, watch, stop,
   readSteering, readCandidates, addNote, answerGate, controlRun, setEnabled, remove,
-  importPackage, listRuns, graphControl, profileApi, t,
+  importPackage, listRuns, graphControl, profileApi, discoveryApi, t,
 }: RefactoryBodyProps): ReactNode {
   const { tab } = useTabInfo()
   const { signal } = tab
@@ -799,6 +799,7 @@ export function RefactoryBody({
             </button>
           </div>
         )}
+        {selected && discoveryApi && <DiscoveryControls api={discoveryApi} mode={selected.id} signal={signal} />}
         {selected && <RuntimeControls configuration={state.settings.configuration || '{}'} onChange={value => { setSetting(tab.id, 'configuration', value) }} />}
         <div role="tabpanel" id={`${setupId}-optimize-pane`} aria-labelledby={`${setupId}-optimize-tab`}
           hidden={intent !== 'optimize'} className={css.setupPane}>

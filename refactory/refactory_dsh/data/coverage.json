@@ -1,0 +1,1301 @@
+{
+  "modes": {
+    "annealing_pack/anneal": {
+      "doc": "refactory/docs/concepts.md",
+      "examples": [
+        {
+          "explanation": "A small starting configuration; use a fresh workdir and inspect required ports and user gates before launch.",
+          "knobs": {
+            "iterations": 200,
+            "seed": 7,
+            "step": 0.02
+          }
+        }
+      ],
+      "interfaces": {
+        "chat": "wf_open mode=annealing_pack/anneal; use refactory help topic=annealing_pack/anneal first",
+        "cli": "refactory ceo annealing_pack/anneal",
+        "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
+      },
+      "purpose": "hill-climb a greedy circle packing by accepting non-worsening moves. Inspect declared ports and Task inputs before launch. Optimize only when scored; higher is better.",
+      "reviewed_schema": "5525d21774439d37661d6d5f8c0c7377a861819fc47e0819fffe0a3775d3e575"
+    },
+    "circle_packing/adaptive": {
+      "doc": "refactory/docs/concepts.md",
+      "examples": [
+        {
+          "explanation": "A small starting configuration; use a fresh workdir and inspect required ports and user gates before launch.",
+          "knobs": {
+            "acceptance_mode": "strict",
+            "budget": 3,
+            "grid": 10,
+            "order": "desc",
+            "seed": 7,
+            "selector": "best"
+          }
+        }
+      ],
+      "interfaces": {
+        "chat": "wf_open mode=circle_packing/adaptive; use refactory help topic=circle_packing/adaptive first",
+        "cli": "refactory ceo circle_packing/adaptive",
+        "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
+      },
+      "purpose": "population search over circle placements with a budget gate. Inspect declared ports and Task inputs before launch. Optimize only when scored; higher is better.",
+      "reviewed_schema": "80a9c4120a323827e48f9c5b98ec138bf855d174b69ed60c914a886eb37bf3b4"
+    },
+    "counting_pack/fixed_step": {
+      "doc": "refactory/docs/getting-started.md",
+      "examples": [
+        {
+          "explanation": "A small starting configuration; use a fresh workdir and inspect required ports and user gates before launch.",
+          "knobs": {
+            "step": 1,
+            "target": 5
+          }
+        }
+      ],
+      "interfaces": {
+        "chat": "wf_open mode=counting_pack/fixed_step; use refactory help topic=counting_pack/fixed_step first",
+        "cli": "refactory ceo counting_pack/fixed_step",
+        "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
+      },
+      "purpose": "count up to a target in fixed steps; no RNG, so no seed knob. Inspect declared ports and Task inputs before launch. Optimize only when scored; higher is better.",
+      "reviewed_schema": "f5978d4e1d50a2299c2fa964de170706703cc39a8365ffd82989c4f2e166572e"
+    },
+    "counting_pack/random_walk": {
+      "doc": "refactory/docs/getting-started.md",
+      "examples": [
+        {
+          "explanation": "A small starting configuration; use a fresh workdir and inspect required ports and user gates before launch.",
+          "knobs": {
+            "step": 1,
+            "target": 5
+          }
+        }
+      ],
+      "interfaces": {
+        "chat": "wf_open mode=counting_pack/random_walk; use refactory help topic=counting_pack/random_walk first",
+        "cli": "refactory ceo counting_pack/random_walk",
+        "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
+      },
+      "purpose": "count up to a target in reproducible random steps, one draw per step. Inspect declared ports and Task inputs before launch. Optimize only when scored; higher is better.",
+      "reviewed_schema": "7fd9e50acc0286e73bd8098d1f7bbd5a4a3b938cfb1a92e8633134973540a961"
+    },
+    "dataset_probe/dataset": {
+      "doc": "refactory/docs/concepts.md",
+      "examples": [
+        {
+          "explanation": "A small starting configuration; use a fresh workdir and inspect required ports and user gates before launch.",
+          "knobs": {
+            "min_items": 1
+          }
+        }
+      ],
+      "interfaces": {
+        "chat": "wf_open mode=dataset_probe/dataset; use refactory help topic=dataset_probe/dataset first",
+        "cli": "refactory ceo dataset_probe/dataset",
+        "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
+      },
+      "purpose": "iterate a Task's items and score the passes it verified. Inspect declared ports and Task inputs before launch. Optimize only when scored; higher is better.",
+      "reviewed_schema": "4a645d4ac8caa90d798ac0cbece1fb13944b682f9d0e3991b41f40bcdedf3f07"
+    },
+    "default_pack/create": {
+      "doc": "refactory/docs/authoring-validation.md",
+      "examples": [
+        {
+          "explanation": "A small starting configuration; use a fresh workdir and inspect required ports and user gates before launch.",
+          "knobs": {
+            "brief": "Write a tiny counter with an exact output check",
+            "name": "tiny_example",
+            "single_shot": true
+          }
+        }
+      ],
+      "interfaces": {
+        "chat": "wf_open mode=default_pack/create; use refactory help topic=default_pack/create first",
+        "cli": "refactory ceo default_pack/create",
+        "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
+      },
+      "purpose": "Build a reusable mode package from a brief, name and task/single-shot inputs. Canonical smoke runs before separate QA and Overwatch; repair shares the attempt bound and completion needs current validation and intent evidence.",
+      "reviewed_schema": "7b2557e667506b09ea5c76f8cb26c3a9610d5288ace452ac027b8d94eae10417"
+    },
+    "default_pack/create_fast": {
+      "doc": "refactory/docs/authoring-validation.md",
+      "examples": [
+        {
+          "explanation": "A small starting configuration; use a fresh workdir and inspect required ports and user gates before launch.",
+          "knobs": {
+            "brief": "Write a tiny counter with an exact output check",
+            "name": "tiny_example",
+            "single_shot": true
+          }
+        }
+      ],
+      "interfaces": {
+        "chat": "wf_open mode=default_pack/create_fast; use refactory help topic=default_pack/create_fast first",
+        "cli": "refactory ceo default_pack/create_fast",
+        "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
+      },
+      "purpose": "Build a small reusable package with a strategist, coder and focused QA. Canonical smoke precedes focused QA; structural, runtime and review failures share repair_attempts. Supply a brief, name and task/single-shot inputs.",
+      "reviewed_schema": "4105c13aaa04a3ae327cf03784e123dd585275c00bc34a310e3ff70a6a4271fb"
+    },
+    "default_pack/design": {
+      "doc": "refactory/docs/authoring-validation.md",
+      "examples": [
+        {
+          "explanation": "A small starting configuration; use a fresh workdir and inspect required ports and user gates before launch.",
+          "knobs": {
+            "brief": "Write hello.txt containing hello",
+            "check": "test -s hello.txt",
+            "name": "tiny_example"
+          }
+        }
+      ],
+      "interfaces": {
+        "chat": "wf_open mode=default_pack/design; use refactory help topic=default_pack/design first",
+        "cli": "refactory ceo default_pack/design",
+        "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
+      },
+      "purpose": "Build a software artifact from a brief, name and acceptance command. The command runs before separate QA and Overwatch; final current validation and intent evidence are required.",
+      "reviewed_schema": "0cbf41c2f755b749855ccd7570697ffee8a058891e8535addc2c02e16b666918"
+    },
+    "default_pack/design_fast": {
+      "doc": "refactory/docs/budgets-fast-modes.md",
+      "examples": [
+        {
+          "explanation": "A small starting configuration; use a fresh workdir and inspect required ports and user gates before launch.",
+          "knobs": {
+            "brief": "Write hello.txt containing hello",
+            "check": "test -s hello.txt",
+            "name": "tiny_example"
+          }
+        }
+      ],
+      "interfaces": {
+        "chat": "wf_open mode=default_pack/design_fast; use refactory help topic=default_pack/design_fast first",
+        "cli": "refactory ceo default_pack/design_fast",
+        "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
+      },
+      "purpose": "build a small artifact with one sequential strategist, coder and QA agent. Produces a checked software artifact; supply a brief, name and acceptance check.",
+      "reviewed_schema": "da2a471f0e1bc360bbdb1231712eb53b16da0ee5ddbff053358138e7d5aeacfb"
+    },
+    "default_pack/edit": {
+      "doc": "refactory/docs/authoring-validation.md",
+      "examples": [
+        {
+          "explanation": "A small starting configuration; use a fresh workdir and inspect required ports and user gates before launch.",
+          "knobs": {
+            "brief": "Write a tiny counter with an exact output check",
+            "name": "tiny_example",
+            "revision_of": "counting_pack/fixed_step"
+          }
+        }
+      ],
+      "interfaces": {
+        "chat": "wf_open mode=default_pack/edit; use refactory help topic=default_pack/edit first",
+        "cli": "refactory ceo default_pack/edit",
+        "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
+      },
+      "purpose": "Revise an existing mode package and validate the revision before separate QA and Overwatch. Supply revision_of, name and brief. allow_regression=true skips original execution and numerical comparison, while revised execution and intent evidence remain mandatory.",
+      "reviewed_schema": "95b561df3f3281e46d8d1d9b8e31edaaf12aaa597ce9a85361826b8df6391d96"
+    },
+    "default_pack/edit_fast": {
+      "doc": "refactory/docs/authoring-validation.md",
+      "examples": [
+        {
+          "explanation": "A small starting configuration; use a fresh workdir and inspect required ports and user gates before launch.",
+          "knobs": {
+            "brief": "Write a tiny counter with an exact output check",
+            "name": "tiny_example",
+            "revision_of": "counting_pack/fixed_step"
+          }
+        }
+      ],
+      "interfaces": {
+        "chat": "wf_open mode=default_pack/edit_fast; use refactory help topic=default_pack/edit_fast first",
+        "cli": "refactory ceo default_pack/edit_fast",
+        "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
+      },
+      "purpose": "Revise a small mode package with a coder and focused QA after canonical validation. Supply revision_of, name and brief. allow_regression=true skips original execution/comparison but still requires revised validation and intent evidence.",
+      "reviewed_schema": "f87d2ec83e6c8b2fc7c318b4119429dfe80f0c2ef84aee04da57b12fb79cb8a1"
+    },
+    "java_build_pack/build": {
+      "doc": "refactory/docs/concepts.md",
+      "examples": [
+        {
+          "explanation": "A small starting configuration; use a fresh workdir and inspect required ports and user gates before launch.",
+          "knobs": {
+            "source_release": 17
+          }
+        }
+      ],
+      "interfaces": {
+        "chat": "wf_open mode=java_build_pack/build; use refactory help topic=java_build_pack/build first",
+        "cli": "refactory ceo java_build_pack/build",
+        "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
+      },
+      "purpose": "write a build script that compiles and runs any small Java tree. Inspect declared ports and Task inputs before launch. Optimize only when scored; higher is better.",
+      "reviewed_schema": "807476be36a5ee933220bc9e03ed580dfb230544df75da326c20f9d56ec3d7e2"
+    },
+    "lean_pack/prover": {
+      "doc": "refactory/docs/concepts.md",
+      "examples": [
+        {
+          "explanation": "A small starting configuration; use a fresh workdir and inspect required ports and user gates before launch.",
+          "knobs": {
+            "attempts": 4,
+            "library": "core",
+            "strategy": "omega",
+            "timeout_s": 180
+          }
+        }
+      ],
+      "interfaces": {
+        "chat": "wf_open mode=lean_pack/prover; use refactory help topic=lean_pack/prover first",
+        "cli": "refactory ceo lean_pack/prover",
+        "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
+      },
+      "purpose": "prove a theorem in Lean and score what the Lean checker accepted. Inspect declared ports and Task inputs before launch. Optimize only when scored; higher is better.",
+      "reviewed_schema": "f6d0144cf23fcce624f495f873690711972933fbcf05aa374221ff3fbf542a2c"
+    },
+    "loop_mode/loop": {
+      "doc": "refactory/docs/optimization-profiles.md",
+      "examples": [
+        {
+          "explanation": "A small starting configuration; use a fresh workdir and inspect required ports and user gates before launch.",
+          "knobs": {
+            "epochs": 1,
+            "max_evaluations": 2,
+            "target": "counting_pack/fixed_step"
+          }
+        }
+      ],
+      "interfaces": {
+        "chat": "wf_open mode=loop_mode/loop; use refactory help topic=loop_mode/loop first",
+        "cli": "refactory ceo loop_mode/loop",
+        "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
+      },
+      "purpose": "The optimizer loop's eight steps as a runnable, searchable graph.. Inspect declared ports and Task inputs before launch. Optimize only when scored; higher is better.",
+      "reviewed_schema": "eea0c9de727f5053b1af8bd4c7b64d7feb317da412fcfe7a1126f4ecd222fd01"
+    },
+    "review_pack/review": {
+      "doc": "refactory/docs/tutorials/06-run-it-with-a-person.md",
+      "examples": [
+        {
+          "explanation": "A small starting configuration; use a fresh workdir and inspect required ports and user gates before launch.",
+          "knobs": {
+            "rounds": 1,
+            "topic": "A short note about exact counting"
+          }
+        }
+      ],
+      "interfaces": {
+        "chat": "wf_open mode=review_pack/review; use refactory help topic=review_pack/review first",
+        "cli": "refactory ceo review_pack/review",
+        "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
+      },
+      "purpose": "draft, check, and let a person approve before publishing. Inspect declared ports and Task inputs before launch. Optimize only when scored; higher is better.",
+      "reviewed_schema": "dffe322d53699f95ce1f401b7a297232487846418c63fc6f5c08ae7f9f204d8d"
+    },
+    "sympy_pack/exact": {
+      "doc": "refactory/docs/concepts.md",
+      "examples": [
+        {
+          "explanation": "A small starting configuration; use a fresh workdir and inspect required ports and user gates before launch.",
+          "knobs": {
+            "candidates": 1,
+            "problems": 3,
+            "route": "simplify"
+          }
+        }
+      ],
+      "interfaces": {
+        "chat": "wf_open mode=sympy_pack/exact; use refactory help topic=sympy_pack/exact first",
+        "cli": "refactory ceo sympy_pack/exact",
+        "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
+      },
+      "purpose": "establish closed forms of sums with sympy and score what checked out. Inspect declared ports and Task inputs before launch. Optimize only when scored; higher is better.",
+      "reviewed_schema": "3fe98d311be0af3d62ac7f88789db0452a6e5a032d15b6eb859d3507a8ab8e79"
+    }
+  },
+  "operations": {
+    "adopt": {
+      "chat": {
+        "fields": {
+          "as": "as_name",
+          "run": "run",
+          "runsRoot": "runs_root"
+        },
+        "order": [
+          "run",
+          "runsRoot",
+          "as"
+        ],
+        "required": [
+          "run",
+          "as"
+        ]
+      },
+      "doc": "refactory/docs/cli.md",
+      "examples": [
+        {
+          "arguments": {
+            "as_name": "adopted_counter",
+            "run": "/tmp/example-run"
+          },
+          "explanation": "Publish the exact measured winner as a new package without changing the source; overfit adoption needs the explicit CLI override."
+        }
+      ],
+      "interfaces": {
+        "chat": "refactory action adopt",
+        "cli": "python -m refactory_dsh.console adopt",
+        "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
+      },
+      "purpose": "Publish the exact measured winner as a new package without changing the source; overfit adoption needs the explicit CLI override.",
+      "reviewed_schema": "d4dafae92597c273780a175cda59116f2a6eca4f24f4991aeb227ac25ef64e25"
+    },
+    "artifacts": {
+      "chat": {
+        "fields": {
+          "contents": "contents",
+          "run": "run",
+          "runsRoot": "runs_root"
+        },
+        "order": [
+          "run",
+          "runsRoot",
+          "contents"
+        ],
+        "required": [
+          "run"
+        ]
+      },
+      "doc": "refactory/docs/cli.md",
+      "examples": [
+        {
+          "arguments": {
+            "run": "/tmp/example-run"
+          },
+          "explanation": "List recorded run artifacts; optionally include contents for evidence review."
+        }
+      ],
+      "interfaces": {
+        "chat": "refactory action artifacts",
+        "cli": "python -m refactory_dsh.console artifacts",
+        "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
+      },
+      "purpose": "List recorded run artifacts; optionally include contents for evidence review.",
+      "reviewed_schema": "a570bee9d50a25384ffcb48dd60808791fbe9bb7f0602b14e3cd11964d1ce357"
+    },
+    "best": {
+      "chat": {
+        "fields": {
+          "run": "run",
+          "runsRoot": "runs_root",
+          "state": "state"
+        },
+        "order": [
+          "run",
+          "runsRoot",
+          "state"
+        ],
+        "required": [
+          "run"
+        ]
+      },
+      "doc": "refactory/docs/cli.md",
+      "examples": [
+        {
+          "arguments": {
+            "run": "/tmp/example-run"
+          },
+          "explanation": "Read the measured winning state before adoption; inspect held-out validation and required artifacts."
+        }
+      ],
+      "interfaces": {
+        "chat": "refactory action best",
+        "cli": "python -m refactory_dsh.console best",
+        "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
+      },
+      "purpose": "Read the measured winning state before adoption; inspect held-out validation and required artifacts.",
+      "reviewed_schema": "e785c49de6a5e4839a79f9b0067d01c910c94132f4e4b74cbf640322fced832e"
+    },
+    "candidate": {
+      "chat": {
+        "fields": {
+          "candidate": "candidate",
+          "run": "run",
+          "runsRoot": "runs_root"
+        },
+        "order": [
+          "run",
+          "runsRoot",
+          "candidate"
+        ],
+        "required": [
+          "run",
+          "candidate"
+        ]
+      },
+      "doc": "refactory/docs/cli.md",
+      "examples": [
+        {
+          "arguments": {
+            "candidate": "candidate-id",
+            "run": "/tmp/example-run"
+          },
+          "explanation": "Read one candidate and its parent diff using the run and candidate IDs."
+        }
+      ],
+      "interfaces": {
+        "chat": "refactory action candidate",
+        "cli": "python -m refactory_dsh.console candidate",
+        "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
+      },
+      "purpose": "Read one candidate and its parent diff using the run and candidate IDs.",
+      "reviewed_schema": "94afab565e1fcda9c75ccda9a93b861a75c546a40ccd8ff970a4f12f782c7f5d"
+    },
+    "cli:ceo": {
+      "doc": "refactory/docs/cli.md",
+      "examples": [
+        {
+          "arguments": {
+            "knob": [
+              "step=1",
+              "target=5"
+            ],
+            "what": "counting_pack/fixed_step"
+          },
+          "explanation": "Run a named mode or author a package/artifact from a brief in the terminal; worker file defaults apply at preparation. CEO conversation and graph worker routes are distinct."
+        }
+      ],
+      "interfaces": {
+        "chat": "Unavailable as a direct chat mutation; use the documented CLI/panel route.",
+        "cli": "refactory ceo",
+        "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
+      },
+      "purpose": "Run a named mode or author a package/artifact from a brief in the terminal; worker file defaults apply at preparation. CEO conversation and graph worker routes are distinct.",
+      "reviewed_schema": "452a64059dc07d4794e43907c69da6cdafa7ecf1d3dda18271e4fa5709de44ad"
+    },
+    "cli:doctor": {
+      "doc": "refactory/docs/cli.md",
+      "examples": [
+        {
+          "arguments": {},
+          "explanation": "Inspect prerequisites and configured credentials without a model call; configured does not mean authenticated."
+        }
+      ],
+      "interfaces": {
+        "chat": "Unavailable as a direct chat mutation; use the documented CLI/panel route.",
+        "cli": "refactory doctor",
+        "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
+      },
+      "purpose": "Inspect prerequisites and configured credentials without a model call; configured does not mean authenticated.",
+      "reviewed_schema": "4e5762fd76050e80185bfba003afaadb79684ea7d61fc91e1c086a5ccbcd1d76"
+    },
+    "cli:list": {
+      "doc": "refactory/docs/cli.md",
+      "examples": [
+        {
+          "arguments": {
+            "json": true,
+            "what": "modes"
+          },
+          "explanation": "List installed modes or packages in the terminal; JSON preserves the same catalogue consumed by chat and panel."
+        }
+      ],
+      "interfaces": {
+        "chat": "Unavailable as a direct chat mutation; use the documented CLI/panel route.",
+        "cli": "refactory list",
+        "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
+      },
+      "purpose": "List installed modes or packages in the terminal; JSON preserves the same catalogue consumed by chat and panel.",
+      "reviewed_schema": "63eeb3d2acd8663ae55a5aa065bb4cb6537794e5f076d4e38721388f8c494833"
+    },
+    "cli:optimize": {
+      "doc": "refactory/docs/optimization-profiles.md",
+      "examples": [
+        {
+          "arguments": {
+            "max_evaluations": 2,
+            "mode": "counting_pack/fixed_step",
+            "optimizer": "random"
+          },
+          "explanation": "Search a scored mode through the terminal with profile/project defaults and explicit overrides; resume retains the saved run identity."
+        }
+      ],
+      "interfaces": {
+        "chat": "Unavailable as a direct chat mutation; use the documented CLI/panel route.",
+        "cli": "refactory optimize",
+        "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
+      },
+      "purpose": "Search a scored mode through the terminal with profile/project defaults and explicit overrides; resume retains the saved run identity.",
+      "reviewed_schema": "045bce71b5c93b704b9c4afab3b023261340e41aaff22a9241dc3b261f76d779"
+    },
+    "cli:package": {
+      "doc": "refactory/docs/cli.md",
+      "examples": [
+        {
+          "arguments": {
+            "what": "list"
+          },
+          "explanation": "Manage installed mode packages through registry subcommands; read their help before mutations."
+        }
+      ],
+      "interfaces": {
+        "chat": "Unavailable as a direct chat mutation; use the documented CLI/panel route.",
+        "cli": "refactory package",
+        "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
+      },
+      "purpose": "Manage installed mode packages through registry subcommands; read their help before mutations.",
+      "reviewed_schema": "be7bcd90aa83a34d63c41828e491c54b431cab1fdcea3ce59520246693aebaf0"
+    },
+    "cli:ui": {
+      "doc": "refactory/docs/cli.md",
+      "examples": [
+        {
+          "arguments": {
+            "no_open": true
+          },
+          "explanation": "Launch the native Refactory web interface for conversations and the run/optimization panel."
+        }
+      ],
+      "interfaces": {
+        "chat": "Unavailable as a direct chat mutation; use the documented CLI/panel route.",
+        "cli": "refactory ui",
+        "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
+      },
+      "purpose": "Launch the native Refactory web interface for conversations and the run/optimization panel.",
+      "reviewed_schema": "c26f686b485231f8b89ffd7106b8cb61b150517f2b924c0739f6592d62f4f33a"
+    },
+    "comparison": {
+      "chat": {
+        "fields": {
+          "run": "run",
+          "runsRoot": "runs_root"
+        },
+        "order": [
+          "run",
+          "runsRoot"
+        ],
+        "required": [
+          "run"
+        ]
+      },
+      "doc": "refactory/docs/optimization-profiles.md",
+      "examples": [
+        {
+          "arguments": {
+            "run": "/tmp/example-run"
+          },
+          "explanation": "Inspect all optimization trials, including failed and unmeasured candidates, plus exact resolved settings."
+        }
+      ],
+      "interfaces": {
+        "chat": "refactory action comparison",
+        "cli": "python -m refactory_dsh.console comparison",
+        "panel": "Candidate comparison."
+      },
+      "purpose": "Inspect all optimization trials, including failed and unmeasured candidates, plus exact resolved settings.",
+      "reviewed_schema": "4eb7b3f4aff8f58866e02394f5b1784489d90afa35719ebf06438548a3f5abb3"
+    },
+    "create": {
+      "chat": {
+        "fields": {
+          "approve": "verdict",
+          "attempts": "attempts",
+          "brief": "brief",
+          "dataNode": "data_node",
+          "extends": "extends",
+          "inputs": "input",
+          "model": "model",
+          "name": "name",
+          "provider": "provider",
+          "resume": "resume",
+          "sample": "sample",
+          "singleShot": "single_shot",
+          "task": "task_ref"
+        },
+        "order": [
+          "name",
+          "brief",
+          "extends",
+          "attempts",
+          "dataNode",
+          "task",
+          "singleShot",
+          "approve",
+          "inputs",
+          "provider",
+          "model",
+          "resume",
+          "sample"
+        ],
+        "required": [
+          "name",
+          "brief"
+        ]
+      },
+      "doc": "refactory/docs/cli.md",
+      "examples": [
+        {
+          "arguments": {
+            "brief": "Create a reusable counter mode with an exact output check",
+            "name": "counter",
+            "single_shot": true
+          },
+          "explanation": "Create a reusable mode package from a brief; declare task or singleShot. For user gates prefer wf_open default_pack/create; headless approvals require explicit authorization."
+        }
+      ],
+      "interfaces": {
+        "chat": "refactory action create",
+        "cli": "python -m refactory_dsh.console create",
+        "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
+      },
+      "purpose": "Create a reusable mode package from a brief; declare task or singleShot. For user gates prefer wf_open default_pack/create; headless approvals require explicit authorization.",
+      "reviewed_schema": "22d7d037bc452851ddc7afb71aaf473264ad47bd223797acd5963e54461a30b0"
+    },
+    "design": {
+      "chat": {
+        "fields": {
+          "approve": "verdict",
+          "attempts": "attempts",
+          "brief": "brief",
+          "check": "check",
+          "model": "model",
+          "name": "name",
+          "provider": "provider",
+          "resume": "resume"
+        },
+        "order": [
+          "name",
+          "brief",
+          "check",
+          "attempts",
+          "approve",
+          "provider",
+          "model",
+          "resume"
+        ],
+        "required": [
+          "name",
+          "brief",
+          "check"
+        ]
+      },
+      "doc": "refactory/docs/cli.md",
+      "examples": [
+        {
+          "arguments": {
+            "brief": "Write hello.txt containing hello",
+            "check": "test -s hello.txt",
+            "name": "hello"
+          },
+          "explanation": "Build and check a software artifact from a brief and a check command; no reusable mode is required. Prefer wf_open default_pack/design with user gates."
+        }
+      ],
+      "interfaces": {
+        "chat": "refactory action design",
+        "cli": "python -m refactory_dsh.console design",
+        "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
+      },
+      "purpose": "Build and check a software artifact from a brief and a check command; no reusable mode is required. Prefer wf_open default_pack/design with user gates.",
+      "reviewed_schema": "988e6cf73c9ecdeb321f73c518c44b19998f4352f84d1f72227441ccde6c152e"
+    },
+    "docs": {
+      "chat": {
+        "fields": {
+          "limit": "limit",
+          "offset": "offset",
+          "page": "page",
+          "query": "query",
+          "section": "section"
+        },
+        "order": [
+          "page",
+          "query",
+          "section",
+          "offset",
+          "limit"
+        ],
+        "required": []
+      },
+      "doc": "refactory/docs/discovery.md",
+      "examples": [
+        {
+          "arguments": {
+            "query": "worker routing"
+          },
+          "explanation": "Search or read bounded sections of the complete shipped documentation by exact index IDs; omit page/query for the index."
+        }
+      ],
+      "interfaces": {
+        "chat": "refactory action docs",
+        "cli": "python -m refactory_dsh.console docs",
+        "panel": "Chat documentation retrieval; no separate panel docs browser."
+      },
+      "purpose": "Search or read bounded sections of the complete shipped documentation by exact index IDs; omit page/query for the index.",
+      "reviewed_schema": "7b7f655536392d66467bf9783de141e856538ccd707bf5f2b970cb20148ddf7a"
+    },
+    "edit": {
+      "chat": {
+        "fields": {
+          "allowRegression": "allow_regression",
+          "approve": "verdict",
+          "attempts": "attempts",
+          "brief": "brief",
+          "mode": "mode",
+          "model": "model",
+          "name": "name",
+          "provider": "provider",
+          "resume": "resume",
+          "sample": "sample"
+        },
+        "order": [
+          "mode",
+          "name",
+          "brief",
+          "allowRegression",
+          "attempts",
+          "approve",
+          "provider",
+          "model",
+          "resume",
+          "sample"
+        ],
+        "required": [
+          "mode",
+          "name",
+          "brief"
+        ]
+      },
+      "doc": "refactory/docs/cli.md",
+      "examples": [
+        {
+          "arguments": {
+            "brief": "Document the step input while preserving behavior",
+            "mode": "counting_pack/fixed_step",
+            "name": "counter_revision"
+          },
+          "explanation": "Revise a reusable mode package and validate it before QA and final intent audit. allow_regression skips original execution/comparison; revised validation remains mandatory. Prefer wf_open default_pack/edit when a person is present."
+        }
+      ],
+      "interfaces": {
+        "chat": "refactory action edit",
+        "cli": "python -m refactory_dsh.console edit",
+        "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
+      },
+      "purpose": "Revise a reusable mode package and validate it before QA and final intent audit. allow_regression skips original execution/comparison; revised validation remains mandatory. Prefer wf_open default_pack/edit when a person is present.",
+      "reviewed_schema": "fb35ee05e06f1fd48592a8515767fbf8ae7aa6aa48b9815dab474e0251d9decc"
+    },
+    "graph-control": {
+      "doc": "refactory/docs/live-control.md",
+      "examples": [
+        {
+          "arguments": {
+            "action": "preview",
+            "node": "emit",
+            "run": "/tmp/example-run"
+          },
+          "explanation": "Preview or queue boundary pause/resume/stop/rerun controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints."
+        }
+      ],
+      "interfaces": {
+        "chat": "Unavailable as a direct chat mutation; use the documented CLI/panel route.",
+        "cli": "python -m refactory_dsh.console graph-control",
+        "panel": "Graph boundary controls and recovery preview."
+      },
+      "purpose": "Preview or queue boundary pause/resume/stop/rerun controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints.",
+      "reviewed_schema": "b6730bfc5092237a38578f41c8a680d0281a61a193b317a34fd3f8d4824d2e0b"
+    },
+    "help": {
+      "chat": {
+        "fields": {
+          "topic": "topic"
+        },
+        "order": [
+          "topic"
+        ],
+        "required": []
+      },
+      "doc": "refactory/docs/discovery.md",
+      "examples": [
+        {
+          "arguments": {
+            "topic": "counting_pack/fixed_step"
+          },
+          "explanation": "Discover live mode/operation schemas and supported interfaces before constructing a request; topic selects one capability."
+        }
+      ],
+      "interfaces": {
+        "chat": "refactory action help",
+        "cli": "python -m refactory_dsh.console help",
+        "panel": "Mode help and effective project workers disclosure uses the same live help contract."
+      },
+      "purpose": "Discover live mode/operation schemas and supported interfaces before constructing a request; topic selects one capability.",
+      "reviewed_schema": "3141e796834a4848e52fbc107ff59be2ef4dc6820b635fd0e53218cca8047b52"
+    },
+    "leaderboard": {
+      "chat": {
+        "fields": {
+          "limit": "limit",
+          "run": "run",
+          "runsRoot": "runs_root"
+        },
+        "order": [
+          "run",
+          "runsRoot",
+          "limit"
+        ],
+        "required": [
+          "run"
+        ]
+      },
+      "doc": "refactory/docs/cli.md",
+      "examples": [
+        {
+          "arguments": {
+            "run": "/tmp/example-run"
+          },
+          "explanation": "Compare measured candidate scores and parent diffs; failed/unmeasured candidates are not winners."
+        }
+      ],
+      "interfaces": {
+        "chat": "refactory action leaderboard",
+        "cli": "python -m refactory_dsh.console leaderboard",
+        "panel": "Candidates view."
+      },
+      "purpose": "Compare measured candidate scores and parent diffs; failed/unmeasured candidates are not winners.",
+      "reviewed_schema": "f37a422f0f9ea76ae6a183a5cf940c0686a541321c6a57821266534fd88137b7"
+    },
+    "modes": {
+      "chat": {
+        "fields": {},
+        "order": [],
+        "required": []
+      },
+      "doc": "refactory/docs/cli.md",
+      "examples": [
+        {
+          "arguments": {},
+          "explanation": "Choose from the actual installed modes, full knob constraints, nodes/roles, ports and user gates. Unscored modes must be run, not optimized."
+        }
+      ],
+      "interfaces": {
+        "chat": "refactory action modes",
+        "cli": "python -m refactory_dsh.console modes",
+        "panel": "Mode picker uses refactoryConsole.modes."
+      },
+      "purpose": "Choose from the actual installed modes, full knob constraints, nodes/roles, ports and user gates. Unscored modes must be run, not optimized.",
+      "reviewed_schema": "b0a541560ce54882774893bcd8f832043e44fe200319d7835a941de9aae4c302"
+    },
+    "open": {
+      "doc": "refactory/docs/cli.md",
+      "examples": [
+        {
+          "arguments": {
+            "knob": [
+              "step=1",
+              "target=5"
+            ],
+            "mode": "counting_pack/fixed_step",
+            "workdir": "/tmp/refactory-example"
+          },
+          "explanation": "Prepare a mode and resolved project worker context for graph execution. Chat uses wf_open with knobs, intent and an absolute workdir, then workflow tools drive the graph."
+        }
+      ],
+      "interfaces": {
+        "chat": "wf_open and workflow tools; no direct refactory open action",
+        "cli": "python -m refactory_dsh.console open",
+        "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
+      },
+      "purpose": "Prepare a mode and resolved project worker context for graph execution. Chat uses wf_open with knobs, intent and an absolute workdir, then workflow tools drive the graph.",
+      "reviewed_schema": "f74c0d7281f3f46500118949e608c4f16c07e9b8a675c2a79baee970b19a78eb"
+    },
+    "profile-resolve": {
+      "chat": {
+        "fields": {
+          "knobs": "knob",
+          "mode": "mode"
+        },
+        "order": [
+          "mode",
+          "knobs"
+        ],
+        "required": [
+          "mode"
+        ],
+        "settings": true
+      },
+      "doc": "refactory/docs/optimization-profiles.md",
+      "examples": [
+        {
+          "arguments": {
+            "mode": "counting_pack/fixed_step"
+          },
+          "explanation": "Preview a scored mode\u2019s effective optimization settings, immutable contract and worker provenance without launching a search."
+        }
+      ],
+      "interfaces": {
+        "chat": "refactory action profile-resolve",
+        "cli": "python -m refactory_dsh.console profile-resolve",
+        "panel": "Preview resolved configuration button."
+      },
+      "purpose": "Preview a scored mode\u2019s effective optimization settings, immutable contract and worker provenance without launching a search.",
+      "reviewed_schema": "ce3053cdd05577c7558f8faafc3329f90c6851d2b10aeba2080dfd09a0a0d541"
+    },
+    "profile-save": {
+      "doc": "refactory/docs/optimization-profiles.md",
+      "examples": [
+        {
+          "arguments": {
+            "name": "tiny",
+            "spec": {
+              "settings": {
+                "max_evaluations": 2,
+                "optimizer": "random"
+              }
+            }
+          },
+          "explanation": "Save a new immutable optimization profile version, including objective and required artifacts; unsupported scoring contracts are refused."
+        }
+      ],
+      "interfaces": {
+        "chat": "Unavailable as a direct chat mutation; use the documented CLI/panel route.",
+        "cli": "python -m refactory_dsh.console profile-save",
+        "panel": "Save profile version button."
+      },
+      "purpose": "Save a new immutable optimization profile version, including objective and required artifacts; unsupported scoring contracts are refused.",
+      "reviewed_schema": "6afff67993a73d21278fa1d3cd8b11091d1e3f03e354afb462b739b0b0c0db6d"
+    },
+    "profiles": {
+      "chat": {
+        "fields": {},
+        "order": [],
+        "required": []
+      },
+      "doc": "refactory/docs/optimization-profiles.md",
+      "examples": [
+        {
+          "arguments": {},
+          "explanation": "List immutable saved optimization profiles and versions before selecting one."
+        }
+      ],
+      "interfaces": {
+        "chat": "refactory action profiles",
+        "cli": "python -m refactory_dsh.console profiles",
+        "panel": "Saved profiles selector."
+      },
+      "purpose": "List immutable saved optimization profiles and versions before selecting one.",
+      "reviewed_schema": "c035a33e305d722a3c9f22cdc22fd0d43eb2deaf3eaaded0691c481672fc7214"
+    },
+    "registry": {
+      "chat": {
+        "defaults": {
+          "packages": "list",
+          "target": ""
+        },
+        "fields": {
+          "args": "args",
+          "packages": "registry_verb",
+          "target": "target"
+        },
+        "order": [
+          "packages",
+          "target",
+          "args"
+        ],
+        "required": []
+      },
+      "doc": "refactory/docs/cli.md",
+      "examples": [
+        {
+          "arguments": {
+            "registry_verb": "list"
+          },
+          "explanation": "Discover or manage mode packages using registered subcommands. Enabling/importing packages changes live discovery without rebuilding docs."
+        }
+      ],
+      "interfaces": {
+        "chat": "refactory action registry",
+        "cli": "python -m refactory_dsh.console registry",
+        "panel": "Package management controls; advanced subcommands use CLI/chat."
+      },
+      "purpose": "Discover or manage mode packages using registered subcommands. Enabling/importing packages changes live discovery without rebuilding docs.",
+      "reviewed_schema": "94e361effd710cd702a2b2c0e3ff952ad1887fe9426ecc2f10de9f0c63799d4a"
+    },
+    "run": {
+      "chat": {
+        "fields": {
+          "approve": "verdict",
+          "intent": "intent",
+          "knobs": "knob",
+          "mode": "mode",
+          "model": "model",
+          "provider": "provider"
+        },
+        "order": [
+          "mode",
+          "intent",
+          "provider",
+          "model",
+          "approve",
+          "knobs"
+        ],
+        "required": [
+          "mode"
+        ]
+      },
+      "doc": "refactory/docs/cli.md",
+      "examples": [
+        {
+          "arguments": {
+            "knob": [
+              "step=1",
+              "target=5"
+            ],
+            "mode": "counting_pack/fixed_step"
+          },
+          "explanation": "Use a mode once. For a person present prefer wf_open so runtime user gates can ask; console run executes headlessly and reports durable output."
+        }
+      ],
+      "interfaces": {
+        "chat": "refactory action run",
+        "cli": "python -m refactory_dsh.console run",
+        "panel": "Run once executes enabled modes including full and fast authoring; chat offers stepwise gate control."
+      },
+      "purpose": "Use a mode once. For a person present prefer wf_open so runtime user gates can ask; console run executes headlessly and reports durable output.",
+      "reviewed_schema": "23b48615a063ca1be7468dbc4652affafbfdc7eb5751e97bcc9cdbb72fd46e97"
+    },
+    "runs": {
+      "chat": {
+        "fields": {
+          "runsRoot": "runs_root"
+        },
+        "order": [
+          "runsRoot"
+        ],
+        "required": []
+      },
+      "doc": "refactory/docs/cli.md",
+      "examples": [
+        {
+          "arguments": {},
+          "explanation": "List durable runs under the selected runs root; historical in-flight state is not permission to resume."
+        }
+      ],
+      "interfaces": {
+        "chat": "refactory action runs",
+        "cli": "python -m refactory_dsh.console runs",
+        "panel": "Run list."
+      },
+      "purpose": "List durable runs under the selected runs root; historical in-flight state is not permission to resume.",
+      "reviewed_schema": "0cf193fbcce3cb1c36e64f59454f9f272d08c99d20e971e41d960eea9b3507e2"
+    },
+    "runtime": {
+      "chat": {
+        "fields": {},
+        "order": [],
+        "required": []
+      },
+      "doc": "refactory/docs/cli.md",
+      "examples": [
+        {
+          "arguments": {},
+          "explanation": "Inspect local configured credential readiness and current session selection before asking setup questions; this does not test authentication."
+        }
+      ],
+      "interfaces": {
+        "chat": "refactory action runtime",
+        "cli": "python -m refactory_dsh.console runtime",
+        "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
+      },
+      "purpose": "Inspect local configured credential readiness and current session selection before asking setup questions; this does not test authentication.",
+      "reviewed_schema": "3b2e5f7f74576a4de682a0d56c7c0faeb590bc37e776d73e01d234793db2eb55"
+    },
+    "start": {
+      "chat": {
+        "fields": {
+          "knobs": "knob",
+          "mode": "mode",
+          "runId": "run_id",
+          "runsRoot": "runs_root"
+        },
+        "order": [
+          "mode",
+          "runId",
+          "runsRoot",
+          "knobs"
+        ],
+        "required": [
+          "mode"
+        ],
+        "settings": true
+      },
+      "doc": "refactory/docs/optimization-profiles.md",
+      "examples": [
+        {
+          "arguments": {
+            "epochs": 1,
+            "max_evaluations": 2,
+            "mode": "counting_pack/fixed_step",
+            "optimizer": "random"
+          },
+          "explanation": "Optimize a scored mode in a separate process; returns a durable run ID for status. Project defaults, profile and explicit settings resolve before launch."
+        }
+      ],
+      "interfaces": {
+        "chat": "refactory action start",
+        "cli": "python -m refactory_dsh.console start",
+        "panel": "Optimize button."
+      },
+      "purpose": "Optimize a scored mode in a separate process; returns a durable run ID for status. Project defaults, profile and explicit settings resolve before launch.",
+      "reviewed_schema": "c6a0ba3a32bee7d3bd157bbdc028ea5d4b5919aa367c51c2c6723555d57dc7ed"
+    },
+    "status": {
+      "chat": {
+        "fields": {
+          "after": "after",
+          "run": "run",
+          "runsRoot": "runs_root"
+        },
+        "order": [
+          "run",
+          "runsRoot",
+          "after"
+        ],
+        "required": [
+          "run"
+        ]
+      },
+      "doc": "refactory/docs/cli.md",
+      "examples": [
+        {
+          "arguments": {
+            "run": "/tmp/example-run"
+          },
+          "explanation": "Read durable run state and incremental events using after. A live process or receipt is not proof of successful output."
+        }
+      ],
+      "interfaces": {
+        "chat": "refactory action status",
+        "cli": "python -m refactory_dsh.console status",
+        "panel": "Live run view."
+      },
+      "purpose": "Read durable run state and incremental events using after. A live process or receipt is not proof of successful output.",
+      "reviewed_schema": "2b225312f5e01da962a3e1b5fc62b1026df0b65a3250a1c2dfa5d12f781e7fae"
+    },
+    "steer": {
+      "chat": {
+        "fields": {
+          "intent": "seed",
+          "kind": "kind",
+          "note": "note",
+          "run": "run",
+          "runsRoot": "runs_root"
+        },
+        "order": [
+          "run",
+          "runsRoot",
+          "intent",
+          "note",
+          "kind"
+        ],
+        "required": [
+          "run"
+        ]
+      },
+      "doc": "refactory/docs/cli.md",
+      "examples": [
+        {
+          "arguments": {
+            "kind": "constraint",
+            "note": "Keep the output text unchanged",
+            "run": "/tmp/example-run"
+          },
+          "explanation": "Read or append to the run\u2019s intent ledger. CLI/panel also expose gate answers and boundary controls; chat only exposes notes, constraints and seed."
+        }
+      ],
+      "interfaces": {
+        "chat": "refactory action steer",
+        "cli": "python -m refactory_dsh.console steer",
+        "panel": "Steering and user gate controls."
+      },
+      "purpose": "Read or append to the run\u2019s intent ledger. CLI/panel also expose gate answers and boundary controls; chat only exposes notes, constraints and seed.",
+      "reviewed_schema": "79e772f6d213848272ffa48a4f009e9ad9b09af4cc08f5a32dc4d9543d2898b2"
+    },
+    "stop": {
+      "chat": {
+        "fields": {
+          "run": "run",
+          "runsRoot": "runs_root"
+        },
+        "order": [
+          "run",
+          "runsRoot"
+        ],
+        "required": [
+          "run"
+        ]
+      },
+      "doc": "refactory/docs/cli.md",
+      "examples": [
+        {
+          "arguments": {
+            "run": "/tmp/example-run"
+          },
+          "explanation": "Request an owned run to stop and inspect its final durable state; this does not resume or delete it."
+        }
+      ],
+      "interfaces": {
+        "chat": "refactory action stop",
+        "cli": "python -m refactory_dsh.console stop",
+        "panel": "Stop button."
+      },
+      "purpose": "Request an owned run to stop and inspect its final durable state; this does not resume or delete it.",
+      "reviewed_schema": "2fb7b609d5e889b2fe2d2ce6a145528dfe33b67f450e031d348ebfd281ace2bc"
+    },
+    "strategies": {
+      "chat": {
+        "fields": {},
+        "order": [],
+        "required": []
+      },
+      "doc": "refactory/docs/cli.md",
+      "examples": [
+        {
+          "arguments": {},
+          "explanation": "Discover registered optimizer, evaluator and outer-loop names before selecting search settings."
+        }
+      ],
+      "interfaces": {
+        "chat": "refactory action strategies",
+        "cli": "python -m refactory_dsh.console strategies",
+        "panel": "Search controls use refactoryConsole.strategies."
+      },
+      "purpose": "Discover registered optimizer, evaluator and outer-loop names before selecting search settings.",
+      "reviewed_schema": "ae7efe1fa53ed67fe14a6193de58118626f5e69dec24f5053da65af03d5d3811"
+    },
+    "workers": {
+      "chat": {
+        "fields": {},
+        "order": [],
+        "required": []
+      },
+      "doc": "refactory/docs/worker-routing.md",
+      "examples": [
+        {
+          "arguments": {},
+          "explanation": "Inspect effective project worker routing and provenance. Configure refactory.workers.json, CLI or panel; this read-only action never changes workers or the CEO model."
+        }
+      ],
+      "interfaces": {
+        "chat": "refactory action workers",
+        "cli": "python -m refactory_dsh.console workers",
+        "panel": "Read help and project defaults button shows effective routing and provenance. RuntimeControls selects explicit overrides."
+      },
+      "purpose": "Inspect effective project worker routing and provenance. Configure refactory.workers.json, CLI or panel; this read-only action never changes workers or the CEO model.",
+      "reviewed_schema": "84a551289daca9ed2f17696415b1bfb3943b6eb0f8521f3ee191b0ef02b7409a"
+    }
+  }
+}

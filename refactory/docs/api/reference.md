@@ -741,6 +741,31 @@ Driving a run from a GUI: the catalogue, a live run, and what it produced.
 - **`stop`** — Ask the run to stop, and say whether it did.
 
 
+<a id="refactory_dsh-discovery"></a>
+
+## `refactory_dsh.discovery`
+
+Live public schemas and bounded, installation-owned documentation retrieval.
+
+| kind | name | signature |
+|---|---|---|
+| function | `bundle` | `() -> 'dict[str, Any]'` |
+| function | `coverage` | `() -> 'dict[str, Any]'` |
+| function | `digest` | `(value: 'Any') -> 'str'` |
+| function | `doc_index` | `() -> 'list[dict[str, Any]]'` |
+| function | `docs` | `(*, page: 'str' = '', query: 'str' = '', offset: 'int' = 0, limit: 'int' = 6000, section: 'str' = '') -> 'dict[str, Any]'` |
+| function | `help_contract` | `(project: 'Path', topic: 'str' = '') -> 'dict[str, Any]'` |
+| function | `identity` | `() -> 'dict[str, Any]'` |
+| function | `mode_facts` | `(entry: 'dict[str, Any]') -> 'dict[str, Any]'` |
+| function | `mode_help` | `(entry: 'dict[str, Any]', authored: 'dict[str, Any] \| None' = None) -> 'dict[str, Any]'` |
+| function | `operations` | `() -> 'dict[str, Any]'` |
+| function | `operations_schema` | `(entry: 'dict[str, Any]') -> 'dict[str, Any]'` |
+| function | `parser_operations` | `(parser: 'argparse.ArgumentParser') -> 'dict[str, Any]'` |
+
+- **`docs`** — Read exact indexed IDs only; no filesystem path or arbitrary file reads.
+- **`parser_operations`** — Use the invocation parser itself, including aliases, types and defaults.
+
+
 <a id="refactory_dsh-worker_config"></a>
 
 ## `refactory_dsh.worker_config`

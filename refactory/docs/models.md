@@ -198,7 +198,8 @@ Arbitrary in-flight Python operations are awaited, not forcibly interrupted;
 custom model clients retain caller-thread serial execution and their own cleanup
 contract. The client does not undo files written before failure or certify their reuse.
 
-## Project worker defaults
+## Project defaults and discovery
 
 [Worker routing](worker-routing.md) documents `refactory.workers.json`, coder-only
-selection and precedence. `refactory workers` reports effective defaults.
+selection and precedence. [Live help and docs](discovery.md) provide current-build
+read-only discovery in chat and the terminal without source inspection.

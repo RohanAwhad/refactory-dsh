@@ -78,7 +78,8 @@ The Modes panel uses Refactory’s original two-gear identity and blue theme in 
 
 The [panel guide](tutorials/07-pick-and-watch-from-the-panel.md#find-the-controls) describes navigation. [Presentation acceptance](panel-validation-20260927.md) and the [UX follow-up](panel-ux-validation-20260927.md) record native screenshots and bounded checks. [Upstream compatibility](upstream-compatibility.md) documents the published DSH dependency and pre-existing patch boundary.
 
-## Project worker defaults
+## Project defaults and discovery
 
 [Worker routing](worker-routing.md) documents `refactory.workers.json`, coder-only
-selection and precedence. `refactory workers` reports effective defaults.
+selection and precedence. [Live help and docs](discovery.md) provide current-build
+read-only discovery in chat and the terminal without source inspection.

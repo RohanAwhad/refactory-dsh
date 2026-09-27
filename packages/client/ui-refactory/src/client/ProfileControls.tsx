@@ -233,3 +233,28 @@ export function RuntimeControls({ configuration, onChange }: { readonly configur
     {routeError && <p role="alert">{routeError}</p>}
   </details>
 }
+
+/** Read the same current contract the restricted CEO can read. */
+export function DiscoveryControls({ api, mode, signal }: {
+  readonly api: Pick<RefactoryConsoleRemote, 'help' | 'workers'>
+  readonly mode: string
+  readonly signal: AbortSignal
+}): ReactNode {
+  const [answer, setAnswer] = useState<{ mode: string; text: string } | null>(null)
+  const [busy, setBusy] = useState(false)
+  return <details className={css.disclosure} data-refactory-discovery>
+    <summary>Mode help and effective project workers</summary>
+    <p className={css.note}>Read live inputs, node roles, guidance and project defaults before launch. Explicit launch settings can override these defaults.</p>
+    <button className={css.action} disabled={busy || !api.help || !api.workers} onClick={() => {
+      if (!api.help || !api.workers) return
+      setBusy(true)
+      void Promise.all([api.help(mode, signal), api.workers(signal)]).then(([help, workers]) => {
+        if (signal.aborted) return
+        setAnswer({ mode, text: JSON.stringify({ help: help.ok ? help.value : help.error.message,
+          workers: workers.ok ? workers.value : workers.error.message }, null, 2) })
+      }).catch(error => { if (!signal.aborted) setAnswer({ mode, text: String(error) }) })
+        .finally(() => { if (!signal.aborted) setBusy(false) })
+    }}>Read help and project defaults</button>
+    {answer?.mode === mode && <pre data-refactory-discovery-result>{answer.text}</pre>}
+  </details>
+}

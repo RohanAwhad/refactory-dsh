@@ -305,6 +305,18 @@ export class RefactoryConsole extends TypertRemoteService {
    * @param signal - caller cancellation.
    * @returns the console's catalogue, as the choices it describes.
    */
+  /** Read-only live discovery uses the same contract as the CEO and terminal. */
+  @Remote
+  async help(topic: string, signal: AbortSignal): Promise<Record<string, unknown>> {
+    return objectOf(await this.call({ verb: 'help', options: { topic } }, signal), 'help')
+  }
+
+  /** Effective project worker defaults and provenance; never launches a worker. */
+  @Remote
+  async workers(signal: AbortSignal): Promise<Record<string, unknown>> {
+    return objectOf(await this.call({ verb: 'workers' }, signal), 'workers')
+  }
+
   @Remote
   async modes(signal: AbortSignal): Promise<readonly RefactoryModeChoice[]> {
     const answer = await this.call({ verb: 'modes' }, signal)

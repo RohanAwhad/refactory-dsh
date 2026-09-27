@@ -123,12 +123,13 @@ def catalogue(*, project: Path | None = None) -> list[dict[str, Any]]:
                 "action": (
                     "start" if mode.is_scored()
                     else entry["name"] if entry["name"] in ("create", "edit", "design")
-                    else "start"
+                    else "run"
                 ),
                 "guidance": described["guidance"],
                 "preferred_edits": described["preferred_edits"],
                 "parameters": described["knobs"],
                 "nodes": described["nodes"],
+                "edges": described["edges"],
                 "ports": described["ports"],
                 # The second route to every mode: the workflow spine lowers the same
                 # mode and hands it over one node at a time, which is how a run that
@@ -146,7 +147,8 @@ def catalogue(*, project: Path | None = None) -> list[dict[str, Any]]:
                     if node["kind"] == "gate"
                 ],
             })
-    return sorted(found, key=lambda item: item["id"])
+    from refactory_dsh.discovery import mode_help
+    return [mode_help(entry) for entry in sorted(found, key=lambda item: item["id"])]
 
 
 # ── starting a run ─────────────────────────────────────────────────────────
@@ -1076,6 +1078,14 @@ def _parser() -> argparse.ArgumentParser:
     runtime.add_argument("--provider", default="", help="provider route to inspect (default: DSH settings)")
     runtime.add_argument("--model", default="", help="model selection to inspect (default: DSH settings)")
 
+    help_parser = add(sub.add_parser("help", help="live capability schemas, interfaces and CEO operating guide"))
+    help_parser.add_argument("--topic", default="", help="operation or mode ID; omit for the live index")
+    docs_parser = add(sub.add_parser("docs", help="read/search the documentation shipped with this build"))
+    docs_parser.add_argument("--page", default="", help="exact page ID from the docs index")
+    docs_parser.add_argument("--query", default="", help="words to search in shipped documentation")
+    docs_parser.add_argument("--section", default="", help="section ID from the docs index")
+    docs_parser.add_argument("--offset", type=int, default=0, help="character offset within page or section")
+    docs_parser.add_argument("--limit", type=int, default=6000, help="maximum text characters, 1..12000")
     add(sub.add_parser("workers", help="effective project worker defaults and provenance; read only"))
     add(sub.add_parser("modes", help="the catalogue of startable modes"))
     add(sub.add_parser("runs", help="every run under the root"))
@@ -1494,6 +1504,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.verb == "runtime":
             payload: Any = runtime_context(project, provider=args.provider, model=args.model)
+        elif args.verb == "help":
+            from refactory_dsh.discovery import help_contract
+            payload = help_contract(project, args.topic)
+        elif args.verb == "docs":
+            from refactory_dsh.discovery import docs
+            payload = docs(page=args.page, query=args.query, section=args.section, offset=args.offset, limit=args.limit)
         elif args.verb == "workers":
             from refactory_dsh.worker_config import effective
             payload = effective(project)

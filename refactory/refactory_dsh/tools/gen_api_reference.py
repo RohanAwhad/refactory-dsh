@@ -53,6 +53,7 @@ MODULES: tuple[str, ...] = (
     "refactory_dsh.observe",
     "refactory_dsh.cli",
     "refactory_dsh.console",
+    "refactory_dsh.discovery",
     "refactory_dsh.worker_config",
     "refactory_dsh.workers",
     "refactory_dsh.profiles",
