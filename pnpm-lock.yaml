@@ -192,6 +192,12 @@ importers:
       '@deepseek-ai/dsh-client-locale':
         specifier: 0.1.5-rc.3
         version: 0.1.5-rc.3(@deepseek-ai/cordis@4.0.2)
+      '@deepseek-ai/dsh-client-store':
+        specifier: 0.1.5-rc.3
+        version: 0.1.5-rc.3(@deepseek-ai/cordis@4.0.2)
+      '@deepseek-ai/dsh-client-ui-agent-preset':
+        specifier: 0.1.5-rc.3
+        version: 0.1.5-rc.3(@deepseek-ai/cordis@4.0.2)
       '@deepseek-ai/dsh-client-ui-conversation':
         specifier: 0.1.5-rc.3
         version: 0.1.5-rc.3(patch_hash=601191bdd1d3703e3bab55ea269e625104813898ace809c32b606ced380466a9)(@deepseek-ai/cordis@4.0.2)

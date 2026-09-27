@@ -21,6 +21,35 @@ export function installTitle(doc: Document): () => void {
   return () => { observer.disconnect() }
 }
 
+/**
+ * The pinned settings shell lists raw registrations instead of slot winners.
+ * A shadowed section therefore gets two identical navigation buttons. Scope
+ * this reversible presentation bridge to the public shell wrapper and the
+ * localized preset label; keep the native button, controller and focus behavior.
+ */
+export function installPresetNavigation(doc: Document, label: () => string): () => void {
+  const hidden = new Map<HTMLElement, { value: string; priority: string }>()
+  const restore = (button: HTMLElement, style: { value: string; priority: string }): void => {
+    button.style.setProperty('display', style.value, style.priority)
+  }
+  const refresh = (): void => {
+    const duplicates = new Set<HTMLElement>()
+    for (const nav of doc.querySelectorAll('[data-slot="sidebar.settings"] nav')) {
+      const matches = [...nav.querySelectorAll<HTMLButtonElement>('button')].filter(button => button.textContent?.trim() === label())
+      for (const button of matches.slice(1)) duplicates.add(button)
+    }
+    for (const [button, style] of hidden) if (!duplicates.has(button)) { restore(button, style); hidden.delete(button) }
+    for (const button of duplicates) {
+      if (!hidden.has(button)) hidden.set(button, { value: button.style.getPropertyValue('display'), priority: button.style.getPropertyPriority('display') })
+      button.style.setProperty('display', 'none', 'important')
+    }
+  }
+  const observer = new MutationObserver(refresh)
+  observer.observe(doc.body, { childList: true, subtree: true, characterData: true })
+  refresh()
+  return () => { observer.disconnect(); for (const [button, style] of hidden) restore(button, style) }
+}
+
 /** Scoped to our own slot marker, independent of upstream CSS module hashes. */
 export const HERO_STYLE = [
   'span:has(> [data-slot="conversation.hero.brand.mark"]) { width:auto!important; height:auto!important; grid-column:1 / -1; cursor:default!important }',
