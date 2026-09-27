@@ -5,11 +5,12 @@ emit, validate, and regenerate with the reasons when validation refuses. The
 identical validate/reject/regenerate loop is what makes the outer loop safe, so
 it is the same loop here, run by the same executor over the same kind of graph.
 
-    prepare -> design -> emit -> materialise -> validate
-                   ^                                |
-                   |                reloop -> emit  |
-                   |                proceed -> register -> smoke -> report
-                   +--------------------------------+
+    prepare -> research -> accepted strategy/design -> emit -> materialise
+    -> validate -> register -> canonical smoke -> health/code/adversarial QA
+    -> Overwatch intent audit -> report
+
+Admission, smoke and review failures return to emit within one attempt bound.
+Missing validation dependencies and uncertain execution stop with diagnostics.
 
 The gate is deterministic. A model's package is imported, its graph is built,
 every call it names is resolved, and its score is checked to be real before the
@@ -132,8 +133,8 @@ class CreateMode(Mode):
             # has to be sayable before the run rather than discovered as a failure.
             "allow_regression": Knob(
                 False, "bool",
-                description="for an edit: accept a revision whose smoke score is lower "
-                            "than the mode it revises",
+                description="for an edit: skip original-mode execution and score comparison; "
+                            "still validate the revised mode (default false)",
             ),
         }
 
@@ -148,10 +149,10 @@ class CreateMode(Mode):
             # here, before the first model call.
             knobs=("name", "brief", "task_ref", "single_shot", "data_node",
                    "revision_of", "requires_input", "smoke_timeout_s"),
-            writes=("brief.json",),
+            writes=("brief.json", "research-review.txt", "strategy-review.txt", "validation.txt"),
             produces=("name", "brief", "extends", "revision_of", "intent", "validation",
                       "design_review", "api", "reference", "task_ref", "class_of_work",
-                      "data_node", "requires_input"),
+                      "data_node", "requires_input", "research_review"),
             notes="read the brief and publish it to the prompts",
         ))
         graph.add(Node(
@@ -393,11 +394,8 @@ class CreateMode(Mode):
                 "Brief: {{brief}}\n\n## The design\n{{design}}\n\n"
                 "You are the health checker. Run the created package the way a user "
                 "would: import it, list its modes, check its declared tools, and run "
-                "bounded interface and artifact checks. The mandatory smoke node after "
-                "the reviews owns the full model/Task run against the final package. "
-                "Do not repeat that full run here or claim it has already passed. "
-                "Record full-run criteria as pending canonical smoke; this pending "
-                "stage alone is not a review defect. A targeted extra model check must "
+                "bounded interface and artifact checks. Canonical smoke has already run. "
+                "Use its authoritative receipt and outputs. A targeted extra model check must "
                 "name a concrete unmet criterion and its bounded scope. Record every "
                 "command and its exact output in `reviews/health-check.md`. If anything "
                 "fails or is missing, write the line `BLOCKING:` followed by what failed. "
@@ -437,10 +435,9 @@ class CreateMode(Mode):
                 "it)\n{{strategy}}\n\n"
                 "You are the QA director. Design adversarial checks against this "
                 "package — the cases a friendly reviewer would not try — and run them. "
-                "Full model/Task validation belongs to the mandatory smoke node after "
-                "review: identify those criteria as pending that stage, not as passed "
-                "or blocking merely because the stage has not run yet. Do not repeat "
-                "the full feed by default. Missing semantic checks, required output "
+                "Full model/Task validation has already run in canonical smoke. Inspect its "
+                "receipt and delivered outputs; do not repeat the full feed by default. "
+                "Missing semantic checks, required output "
                 "contracts, or other prerequisites remain blocking. "
                 "Read the actual delivered files against the brief: mathematical "
                 "explanations need the formula or state/transition, why it counts the "
@@ -493,17 +490,11 @@ class CreateMode(Mode):
                 "and say what evidence proves it — a command and its output — or that "
                 "nothing does. Reproduce bounded spot checks on what the reviews claim "
                 "passed: import the package, read back its knobs, and inspect actual "
-                "artifacts. The mandatory smoke node still follows this review and "
-                "owns full model/Task validation of the final package. Record those "
-                "criteria as pending canonical smoke; do not rerun the full feed here "
-                "or treat a review's PASS as a completed runtime check. A pending "
-                "canonical smoke alone is not blocking; absent structural or semantic "
-                "prerequisites still are. A targeted extra model check must name its "
-                "unmet criterion and bounded scope. Write `reviews/overwatch.md` ending "
-                "with a line that is exactly "
-                "`VERDICT: PASS` or `VERDICT: FAIL`, and name every ask with no evidence "
-                "behind it, distinguishing pending canonical validation from missing "
-                "review evidence. A claim you could not reproduce is not evidence."
+                "artifacts. Audit actual final validation receipts and the accepted design "
+                "against the brief and latest intent ledger. Required behavior without "
+                "adequate evidence is failed or unverified with a precise reason. "
+                "Write `reviews/overwatch.md` ending with exactly `VERDICT: PASS` or "
+                "`VERDICT: FAIL`. A missing required check cannot pass."
             ),
             reads=("brief.json", "strategy.json", "reviews/qa-synthesized.md", "design.md"),
             writes=("reviews/overwatch.md",),
@@ -526,11 +517,13 @@ class CreateMode(Mode):
             notes="confirm the registry lists the new package",
         ))
         graph.add(Node(
-            "smoke", "op", call=f"{OPS}:smoke", role="validation",
-            knobs=("allow_regression", "sample_knobs", "smoke_timeout_s"),
-            writes=("smoke.json", "revision.json"),
+            "smoke", "gate", evaluator=f"{OPS}:gate_smoke", role="validation",
+            resource_role="final_validation", max_iterations=12,
+            knobs=("allow_regression", "sample_knobs", "smoke_timeout_s", "attempts"),
+            writes=("smoke.json", "revision.json", "authoring-evidence.json", "validation.txt"),
             produces=("smoke_score", "smoke_ok", "smoke_model", "smoke_reason",
-                      "before_score", "after_score", "regressed", "revision_note"),
+                      "before_score", "after_score", "regressed", "revision_note",
+                      "runtime_evidence", "validation", "attempts_used"),
             notes="run the new mode once, and compare a revision with the mode it "
                   "revises; a mode that cannot score is not finished",
         ))
@@ -557,7 +550,7 @@ class CreateMode(Mode):
         graph.connect("emit", "materialise")
         graph.connect("materialise", "validate")
         graph.connect("validate", "emit", condition="reloop")
-        graph.connect("validate", "fork_qa", condition="proceed")
+        graph.connect("validate", "register", condition="proceed")
         graph.connect("fork_qa", "join_qa")
         graph.connect("join_qa", "synthesize_qa")
         graph.connect("synthesize_qa", "gate_qa")
@@ -565,9 +558,12 @@ class CreateMode(Mode):
         graph.connect("gate_qa", "overwatch", condition="proceed")
         graph.connect("overwatch", "gate_overwatch")
         graph.connect("gate_overwatch", "emit", condition="reloop")
-        graph.connect("gate_overwatch", "register", condition="proceed")
+        graph.connect("gate_overwatch", "report", condition="proceed")
         graph.connect("register", "smoke")
-        graph.connect("smoke", "report")
+        graph.connect("smoke", "fork_qa", condition="proceed")
+        graph.connect("smoke", "emit", condition="reloop")
+        from refactory_dsh.authoring_evidence import wire_reviews
+        wire_reviews(graph)
         return graph
 
 

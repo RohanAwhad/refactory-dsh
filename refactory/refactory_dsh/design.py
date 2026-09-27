@@ -69,7 +69,7 @@ class DesignMode(Mode):
         graph.add(Node(
             "prepare", "op", call=f"{OPS}:prepare_design",
             knobs=("name", "brief", "check"),
-            writes=("brief.json",),
+            writes=("brief.json", "research-review.txt", "check.txt"),
             produces=("name", "brief", "check", "validation"),
             notes="read the brief and the command that decides whether it is done",
         ))
@@ -218,10 +218,11 @@ class DesignMode(Mode):
             notes="write the artifact into its own directory",
         ))
         graph.add(Node(
-            "check", "gate", evaluator=f"{OPS}:check_artifact",
+            "check", "gate", evaluator=f"{OPS}:check_artifact", role="validation",
+            resource_role="final_validation",
             reads=("brief.json",),
-            writes=("check.txt",),
-            produces=("validation", "check_attempts_used"),
+            writes=("check.txt", "validation.txt", "authoring-evidence.json"),
+            produces=("validation", "check_attempts_used", "attempts_used", "runtime_evidence"),
             knobs=("check_attempts", "check_timeout_s"),
             max_iterations=8,
             notes="run the brief's check, in a sandbox",
@@ -241,7 +242,8 @@ class DesignMode(Mode):
                 "## The design\n{{design}}\n\n"
                 + _ACCEPTANCE_BASELINE
                 + "You are the health checker. Run the artifact the way a user would: run "
-                "its check, and run it from a clean directory. Record every command and "
+                "targeted checks for uncovered requirements. Reuse the canonical acceptance "
+                "receipt for the check already executed. Record every command and "
                 "its exact output in `reviews/health-check.md`. For visual deliverables, "
                 "render actual representative output and inspect it at a useful size; "
                 "record the renderer and image path. Text existing in SVG/XML does not "
@@ -410,6 +412,8 @@ class DesignMode(Mode):
         graph.connect("overwatch", "gate_overwatch")
         graph.connect("gate_overwatch", "emit", condition="reloop")
         graph.connect("gate_overwatch", "report", condition="proceed")
+        from refactory_dsh.authoring_evidence import wire_reviews
+        wire_reviews(graph)
         return graph
 
     def invariants(self) -> tuple[Any, ...]:

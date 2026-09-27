@@ -127,6 +127,7 @@ class GateNode(Node):
     evaluator_type: Literal["agent", "fn", "user"] = "agent"
     evaluator_role: AgentRole | None = None
     evaluator_command: str | None = None
+    command_timeout_s: int | None = Field(default=None, gt=0, le=2_147_483)
     gate_prompt: str = ""
     max_iterations: int | None = None
     """Cap for this gate's reloop edge. ``None`` leaves the cap to the runtime."""

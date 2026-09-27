@@ -29,6 +29,14 @@ While driving a graph, the CEO's direct coding and skill tools are disabled. A c
 
 The same mode can run through the Python walker for evaluation. Agent nodes there use the configured model client; an agent completion can include multiple tool calls and model turns.
 
+## Authoring evidence and comparison
+
+Terminal CEO, Python/headless adapters, native chat and the panel use the same graph operations. Create/Edit stage the package, execute canonical smoke and route repairable failures back to the coder before review. Design runs its acceptance command before review. Full modes keep independent health, code, adversarial QA and Overwatch; fast modes retain one focused QA worker.
+
+In Edit, the panel's **allow_regression** knob and chat's `allowRegression` option mean “skip original-mode execution and score comparison.” CEO uses `--knob allow_regression=true`; the direct Edit command uses `--allow-regression`. All default to false. Revised-mode correctness checks still run. `revision_note` explains an intentional skip, `before_score` and `regressed` remain null, and `after_score` records only the revised measurement. Historical reports remain readable.
+
+Inspect `authoring-evidence.json`, `intent-audit.json`, `smoke.json` and `revision.json` in the exact run directory. A listed package is staging, not proof of completion. Missing evidence blocks success; changed source or later intent makes old review stale. [Developer contract and graphs](authoring-validation.md).
+
 ## Steering is precise about timing
 
 - A note is persisted context. Delivery to a node is not proof of semantic compliance by its output.

@@ -612,7 +612,7 @@ export function apply(ctx: Context, config: Config): void {
       brief: { type: 'string', description: 'For "create"/"edit"/"design": what to build or change, in the asker\'s words.' },
       extends: { type: 'string', description: 'For action "create": a <package>/<mode> to use as a reference.' },
       check: { type: 'string', description: 'For action "design": the command that decides whether the artifact works. Required by "design".' },
-      allowRegression: { type: 'boolean', description: 'For action "edit": allow a revision that scores worse than the mode it came from.' },
+      allowRegression: { type: 'boolean', description: 'For action "edit": skip original-mode execution and score comparison; still validate the revised mode. Defaults to false.' },
       approve: {
         type: 'array',
         items: { type: 'string' },

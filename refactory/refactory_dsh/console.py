@@ -407,6 +407,8 @@ def _authoring(run_root: Path, spine: dict[str, Any]) -> dict[str, Any]:
         "files": facts.get("files") or [],
         "before_score": facts.get("before_score"),
         "after_score": facts.get("after_score"),
+        "regressed": facts.get("regressed"),
+        "revision_note": facts.get("revision_note"),
     }
 
 
@@ -1296,7 +1298,8 @@ def _parser() -> argparse.ArgumentParser:
     revise.add_argument("--brief", required=True)
     revise.add_argument("--provider", default="", help="provider route for this authoring run")
     revise.add_argument("--model", default="", help="model id for this authoring run")
-    revise.add_argument("--allow-regression", action="store_true")
+    revise.add_argument("--allow-regression", action="store_true",
+                        help="skip original-mode execution and comparison; still validate the revision")
     revise.add_argument("--attempts", type=int, default=3)
     revise.add_argument("--workdir", default="", help="the run directory (default: .factory/edit/<name>)")
     revise.add_argument("--resume", default="", metavar="RUN_DIR", help="continue a failed run from its directory")

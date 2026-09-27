@@ -113,11 +113,11 @@ def test_create_fast_keeps_admission_and_canonical_smoke(tmp_path, monkeypatch):
 def test_qa_cannot_silently_repair_or_invalidate_checked_source(tmp_path, monkeypatch):
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
     class MutatingQA(FakeModel):
-        def complete(self, *args, **kwargs):
+        def complete(self, *args, workdir=None, **kwargs):
             if len(self.prompts) == 2:
                 artifact = tmp_path / ".factory/artifacts/immutable_qa/answer.py"
                 artifact.write_text("assert False\n")
-            return super().complete(*args, **kwargs)
+            return super().complete(*args, workdir=workdir, **kwargs)
     mode = DesignFastMode()
     state = mode.state_dict()
     state["knobs"]["repair_attempts"]["value"] = 0

@@ -66,8 +66,7 @@ QA_PROMPT = (
     '"status":"pass" or "fail" or "not_run", "evidence":"actual output or specific source finding"}], '
     '"findings":["unresolved defects"], "not_run":["checks outside this focused scope"]}. '
     "At least one substantive check is required. A required check not run is a failure. "
-    "Structural admission, this model-authored review and the separate runtime "
-    "validation are different evidence; do not claim pending validation passed. "
+    "Structural admission, runtime validation and this review are different evidence. "
     "After writing focused-qa.json, return a short completion message. The runtime "
     "reads that file, applies the repair bound and advances the graph; do not run "
     "the gate, generate extra reports or repeat completed checks for handoff."
@@ -77,24 +76,29 @@ QA_PROMPT = (
 def _qa_nodes(graph: Graph, *, artifact: bool) -> None:
     graph.add(Node(
         "focused_check", "op", call=f"{OPS}:focused_check", role="validation" if artifact else "ceo",
-        resource_role="final_validation" if artifact else "work",
-        knobs=("check", "check_timeout_s"), reads=("emit.txt",),
-        writes=("focused-check.json", "focused-source.json"),
-        produces=("focused_check", "output_path", "review_files"),
+        resource_role="final_validation",
+        knobs=("check", "check_timeout_s"),
+        reads=("emit.txt",) + (() if artifact else ("authoring-evidence.json", "smoke.json")),
+        writes=("focused-check.json", "focused-source.json", "authoring-evidence.json"),
+        produces=("focused_check", "output_path", "review_files", "runtime_evidence"),
         notes="run the explicitly requested bounded check; no implicit full evaluation",
     ))
+    from refactory_dsh.authoring_evidence import REVIEW_CONTEXT, AUDIT_INSTRUCTIONS
+
     graph.add(Node(
-        "focused_qa", "agent", role="code_reviewer", prompt_template=QA_PROMPT,
-        resource_role="final_validation" if artifact else "work",
-        reads=("brief.json", "focused-check.json"), writes=("focused-qa.json",),
+        "focused_qa", "agent", role="code_reviewer", prompt_template=QA_PROMPT + REVIEW_CONTEXT + AUDIT_INSTRUCTIONS,
+        resource_role="final_validation",
+        reads=("brief.json", "focused-check.json", "authoring-evidence.json"),
+        writes=("focused-qa.json", "intent-audit.json"),
         produces=("focused_qa",), notes="one light focused QA stage; no reviewer fan-out",
     ))
     graph.add(Node(
         "gate_qa", "gate", evaluator=f"{OPS}:gate_qa",
-        resource_role="final_validation" if artifact else "work",
-        knobs=("repair_attempts",), reads=("focused-qa.json", "focused-check.json", "focused-source.json"),
+        resource_role="final_validation",
+        knobs=("repair_attempts",), reads=("focused-qa.json", "focused-check.json", "focused-source.json",
+                                          "authoring-evidence.json", "intent-audit.json"),
         writes=("fast-report.json", "repair.txt"),
-        produces=("repair_feedback", "repairs_used", "qa_passed"), max_iterations=3,
+        produces=("repair_feedback", "repairs_used", "qa_passed"), max_iterations=4,
         notes="repair only within the shared bound; unresolved findings are failure",
     ))
     graph.connect("focused_check", "focused_qa")
@@ -113,7 +117,7 @@ class CreateFastMode(CreateMode):
         for name in ("research_attempts", "design_attempts", "attempts"):
             knobs.pop(name, None)
         knobs.update({
-            "repair_attempts": Knob(1, "int", lo=0, hi=3, description="total repairs across structural admission and focused QA"),
+            "repair_attempts": Knob(1, "int", lo=0, hi=3, description="total repairs across admission, runtime validation and focused QA"),
             "check": Knob("", "str", description="explicit focused check command in the emitted package; empty means not requested"),
             "check_timeout_s": Knob(60, "int", lo=1, hi=600, description="seconds allowed for the explicit focused check"),
         })
@@ -161,11 +165,15 @@ class CreateFastMode(CreateMode):
         graph.add(replace(full.nodes["validate"], evaluator=f"{OPS}:validate_package",
                           resource_role="work",
                           writes=("validation.txt", "repair.txt", "fast-report.json"),
-                          knobs=("repair_attempts",), max_iterations=3,
+                          knobs=("repair_attempts",), max_iterations=4,
                           produces=("validation", "repair_feedback", "repairs_used")))
         _qa_nodes(graph, artifact=False)
         graph.add(replace(full.nodes["register"], resource_role="work"))
-        graph.add(replace(full.nodes["smoke"], call=f"{OPS}:smoke", resource_role="final_validation"))
+        graph.add(replace(full.nodes["smoke"], evaluator="refactory_dsh.create_ops:gate_smoke",
+                          knobs=("allow_regression", "sample_knobs", "smoke_timeout_s", "repair_attempts"),
+                          writes=(*full.nodes["smoke"].writes, "repair.txt", "fast-report.json"),
+                          produces=(*full.nodes["smoke"].produces, "repair_feedback", "repairs_used"),
+                          resource_role="final_validation", max_iterations=4))
         graph.add(replace(full.nodes["report"], call=f"{OPS}:report_package",
                           resource_role="final_validation",
                           writes=("create.json", "fast-report.json")))
@@ -176,11 +184,13 @@ class CreateFastMode(CreateMode):
             graph.connect("survey", "emit")
         for source, target in (("prepare", "survey"),
                                ("emit", "materialise"), ("materialise", "validate"),
-                               ("register", "smoke"), ("smoke", "report")):
+                               ("register", "smoke")):
             graph.connect(source, target)
         graph.connect("validate", "emit", condition="reloop")
-        graph.connect("validate", "focused_check", condition="proceed")
-        graph.connect("gate_qa", "register", condition="proceed")
+        graph.connect("validate", "register", condition="proceed")
+        graph.connect("smoke", "focused_check", condition="proceed")
+        graph.connect("smoke", "emit", condition="reloop")
+        graph.connect("gate_qa", "report", condition="proceed")
         return graph
 
 
@@ -209,7 +219,7 @@ class DesignFastMode(DesignMode):
         graph.add(Node(
             "prepare", "op", call=f"{OPS}:prepare_artifact", resource_role="work",
             knobs=("name", "brief", "check", "source_project"),
-            writes=("brief.json", "source-manifest.json", "repair.txt"),
+            writes=("brief.json", "source-manifest.json", "repair.txt", "research-review.txt", "check.txt"),
             produces=("name", "brief", "check", "validation", "source_project", "source_files", "repair_feedback", "repairs_used"),
             notes="read the artifact brief and capture the source project identity",
         ))

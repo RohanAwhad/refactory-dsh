@@ -12,7 +12,7 @@ elapsed/token controls, see [Fast modes and run budgets](budgets-fast-modes.md).
 
 | command | what it does |
 |---|---|
-| `refactory ceo "<what you want>" --mode create --task <module:Class>` | build a harness for a class of work: the Task lists the items and judges each pass, and the produced package binds a `data` node to it. Research, a strategy you approve, a build, three parallel reviews, an audit, then register and smoke; runtime depends on model latency and the number of review/repair cycles. |
+| `refactory ceo "<what you want>" --mode create --task <module:Class>` | build a harness for a class of work: the Task lists the items and judges each pass, and the produced package binds a `data` node to it. Research, a strategy you approve, a build, structural admission, registration and canonical smoke, then three parallel reviews and an audit; runtime depends on model latency and the number of review/repair cycles. |
 | `refactory ceo "<what you want>" --mode create --single` | the special case: a harness that runs once, for one input, with no Task binding. |
 | `refactory ceo "<what you want>" --mode design --check "<command>"` | design a checked artifact instead of a package; this is the default mode. |
 | `refactory ceo "<what you want>" --mode edit --revise <package>/<mode>` | revise a mode; refuse a measured regression by default and report unavailable comparisons explicitly. |
@@ -47,7 +47,7 @@ its legacy `task_ref` field is populated when there is exactly one distinct Task
 | `--timeout <seconds>` | bound the interactive graph process, including authoring; 0 supplies no separate wait limit. An explicit shared elapsed allocation can impose a shorter deadline. |
 
 Fast Create and Design use one strategist, coder and QA agent sequentially. Fast
-Edit starts with the coder and retains source-contract and regression checks.
+Edit starts with the coder and retains source-contract checks. Canonical smoke precedes QA; repairable failures share the repair bound. `allow_regression=true` skips original execution and comparison, retaining revised-mode validation and provenance; false remains the default.
 The CLI passes `--check` through the same declared `check` knob exposed in the
 native form; use `--knob check_timeout_s=45` to bound that command separately.
 These small graphs omit research and reviewer fan-out; [acceptance status](budgets-fast-modes.md#acceptance-status)

@@ -5,11 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import re
 import shutil
 import tempfile
 from typing import Any
 
-from refactory_dsh import create_ops, design_ops, sandbox
+from refactory_dsh import create_ops, design_ops, sandbox, authoring_evidence as evidence
 
 
 def prepare_package(ctx: Any) -> dict[str, Any]:
@@ -170,6 +171,22 @@ def focused_check(ctx: Any) -> dict[str, Any]:
     ctx.write_json("focused-source.json", {"root": output, "files": _source_manifest(Path(output)),
                                           "review_files": review_files})
     ctx.write_json("focused-check.json", payload)
+    if payload["status"] == "fail":
+        detail = f"requested runtime check failed (exit {payload.get('returncode')}): {payload.get('stderr') or payload.get('stdout')}"
+        kind = evidence.failure_kind(detail, timed_out=bool(payload.get("timed_out")), returncode=payload.get("returncode"))
+        if kind != "code_failure":
+            evidence.record(ctx, {**payload, "status": kind})
+            evidence.stop_unrepairable(kind, detail)
+    if ctx.facts.get("package_path"):
+        problems = evidence.current_problems(ctx)
+        if problems:
+            raise ValueError("; ".join(problems))
+    outcome = {"status": "pass" if payload["status"] != "fail" else "code_failure",
+               "focused_check": payload}
+    if ctx.facts.get("package_path"):
+        outcome["smoke"] = ctx.read_json("smoke.json", {})
+        outcome["revision"] = ctx.read_json("revision.json", None)
+    evidence.record(ctx, outcome)
     return {"focused_check": json.dumps(payload), "output_path": output,
             "review_files": json.dumps(review_files)}
 
@@ -190,6 +207,9 @@ def gate_qa(ctx: Any) -> str:
     if not isinstance(qa, dict):
         findings.append("focused QA did not deliver a JSON report")
     else:
+        unavailable = re.search(r"UNAVAILABLE:[^\n\"]*", json.dumps(qa), re.I)
+        if unavailable:
+            evidence.stop_unrepairable("unavailable", unavailable[0])
         checks = qa.get("checks")
         if not isinstance(checks, list) or not checks:
             findings.append("focused QA recorded no checks")
@@ -207,10 +227,17 @@ def gate_qa(ctx: Any) -> str:
             findings.extend(str(item) for item in qa["findings"] if str(item).strip())
     if check.get("status") == "fail":
         findings.append(f"requested runtime check failed (exit {check.get('returncode')})")
+    # Keep concrete runtime diagnostics ahead of the coverage/freshness findings.
+    if check.get("status") == "fail":
+        findings[-1] += f": {check.get('stderr') or check.get('stdout')}"
+    findings.extend(evidence.current_problems(ctx, ("focused_qa",)))
+    findings.extend(evidence.audit_problems(ctx))
     if findings:
+        detail = "\n".join(findings)
+        evidence.stop_unrepairable(evidence.failure_kind(detail), detail)
         return _repair(ctx, findings)
     ctx.set_fact("qa_passed", True)
-    ctx.write_json("fast-report.json", _report(ctx, "qa_passed_validation_pending", []))
+    ctx.write_json("fast-report.json", _report(ctx, "qa_passed", []))
     return "proceed"
 
 

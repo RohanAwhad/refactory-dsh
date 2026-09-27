@@ -98,6 +98,8 @@ def prepare_design(ctx: Any) -> dict[str, Any]:
 
             print(f"refactory: warning: {readiness['warning']}", file=sys.stderr)
     ctx.write_json("brief.json", {"name": name, "brief": brief, "check": check})
+    for feedback in ("research-review.txt", "check.txt"):
+        ctx.write_text(feedback, "not run: initial authoring pass; no prior feedback\n")
     return {"name": name, "brief": brief, "check": check, "validation": "(no check has run yet)"}
 
 
@@ -157,36 +159,40 @@ def check_artifact(ctx: Any) -> str:
     if Path(str(ctx.facts["artifact"])) != root:
         raise ValueError("artifact location is stale or ambiguous; materialise again before checking")
     command = str(ctx.facts["check"])
-    attempts = int(ctx.knob("check_attempts", 2))
+    from refactory_dsh import authoring_evidence as evidence
+    from refactory_dsh.create_ops import repair
+
     result = sandbox.run_command(
-        command,
-        workdir=root,
-        timeout_s=int(ctx.knob("check_timeout_s", 180)),
+        command, workdir=root, timeout_s=int(ctx.knob("check_timeout_s", 180)),
+        budget=getattr(ctx, "budget", None),
     )
-    tail = (result.stderr or result.stdout).strip().splitlines()
-    detail = tail[-1] if tail else ""
+    detail = "\n".join((result.problem(), result.stdout or "", result.stderr or "")).strip()
+    outcome = {"command": command, "status": "pass" if result.ok else evidence.failure_kind(
+        detail, timed_out=result.timed_out, returncode=result.returncode),
+        "stdout": result.stdout, "stderr": result.stderr, "returncode": result.returncode,
+        "timed_out": result.timed_out, "elapsed_s": result.elapsed_s}
+    ctx.write_text("check.txt", detail or "ok\n")
+    evidence.record(ctx, outcome)
     if result.ok:
-        ctx.write_text("check.txt", "ok\n")
         ctx.set_fact("validation", "(the check passed)")
         return "proceed"
-    report = result.problem() + (f": {detail}" if detail else "")
-    ctx.write_text("check.txt", report + "\n")
-    ctx.set_fact("validation", report)
-    used = int(ctx.facts.get("check_attempts_used", 0)) + 1
-    if used >= attempts:
-        raise ValueError(f"the artifact still does not pass its check: {report}")
-    ctx.set_fact("check_attempts_used", used)
-    return "reloop"
+    evidence.stop_unrepairable(outcome["status"], detail)
+    return repair(ctx, [detail])
 
 
 def report_artifact(ctx: Any) -> dict[str, Any]:
     """Say what was produced, so a run's output is discoverable rather than inferred."""
+    from refactory_dsh.authoring_evidence import require_completion
+
+    require_completion(ctx)
     payload = {
         "name": ctx.facts.get("name"),
         "artifact": ctx.facts.get("artifact"),
         "files": ctx.facts.get("files", []),
         "check": ctx.facts.get("check"),
         "checked": True,
+        "validation_evidence": ctx.read_json("authoring-evidence.json", None),
+        "intent_audit": ctx.read_json("intent-audit.json", None),
     }
     ctx.write_json("design.json", payload)
     return {"designed": json.dumps(payload, default=str)}
