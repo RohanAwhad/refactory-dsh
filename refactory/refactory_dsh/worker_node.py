@@ -18,8 +18,9 @@ def execute(spec: dict[str, Any], workdir: Path) -> dict[str, Any]:
     from refactory_dsh.nn.executor import RunContext, render
     from refactory_dsh.run import _knobs, _read_facts
     context = RunContext(workdir, knobs=_knobs(), facts=_read_facts(workdir))
-    delivery = begin(workdir, node, render(spec['prompt'], context), spec['writes'])
     client = DshModelClient(**spec['model_context']).for_node(node)
+    delivery = begin(workdir, node, render(spec['prompt'], context), spec['writes'],
+                     reads=spec['reads'], model_context=client.context())
     output = client.complete(delivery['prompt'], workdir=workdir)
     receipt = finish(workdir, node, final_response=output, capture_final=client.route()["worker_backend"] == "dsh")
     for check in spec.get('post_checks', []):

@@ -165,7 +165,8 @@ def test_worker_bridge_renders_knobs_and_preserves_agent_facts(monkeypatch, tmp_
     monkeypatch.setattr(DshModelClient, 'complete', complete)
     execute({'schema_version': 1, 'node_id': 'build', 'reads': [], 'writes': ['only.txt'],
              'prompt': 'Return {{number}}', 'model_context': {}}, tmp_path)
-    assert seen == ['Return 42']
+    assert len(seen) == 1 and seen[0].endswith('Return 42')
+    assert str(tmp_path / 'only.txt') in seen[0]
     assert json.loads((tmp_path/'facts.json').read_text())['answer'] == '42'
 
 
@@ -210,7 +211,8 @@ def test_deterministic_nested_environment_keeps_route_and_limits(monkeypatch, tm
     assert nested.for_node('build','builder').route()['worker_backend'] == 'codex'
 
 
-def test_worker_shell_keeps_selected_python_through_actual_dsh_scrub(monkeypatch, tmp_path):
+@pytest.mark.parametrize('python_command', ['python3', 'declared'])
+def test_worker_shell_keeps_selected_python_through_actual_dsh_scrub(monkeypatch, tmp_path, python_command):
     import shutil
     import sys
     root = Path(__file__).resolve().parents[2]
@@ -231,7 +233,10 @@ def test_worker_shell_keeps_selected_python_through_actual_dsh_scrub(monkeypatch
         assert DshModelClient(**recreated.context()).context()['python_bin'] == bindir
     expression = 'import json,sys,refactory_dsh; print(json.dumps({"executable":sys.executable,"module":refactory_dsh.__file__}))'
     import shlex
-    command = 'python3 -c ' + shlex.quote(expression)
+    from refactory_dsh.agent_delivery import begin
+    delivery = begin(tmp_path, 'runtime-check', 'Import the installed API.', [], model_context=client.context())
+    executable = delivery['execution']['python'] if python_command == 'declared' else python_command
+    command = shlex.quote(executable) + ' -c ' + shlex.quote(expression)
     script = (f'import {{scrubbedParentEnv}} from {json.dumps(modules[0].as_uri())};'
               'import {spawnSync} from "node:child_process";'
               'const env=scrubbedParentEnv(); if("REFACTORY_TEST_SECRET" in env)throw Error("secret leaked");'

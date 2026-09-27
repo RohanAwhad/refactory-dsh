@@ -169,7 +169,7 @@ def cmd_ceo(args: argparse.Namespace) -> int:
         if args.single_shot:
             knobs.append("single_shot=1")
     if check:
-        knobs.append(f"{'focused_check' if mode in ('create_fast', 'edit_fast') else 'check'}={check}")
+        knobs.append(f"check={check}")
     if getattr(args, "repair_attempts", None) is not None:
         knobs.append(f"repair_attempts={args.repair_attempts}")
     if getattr(args, "source_project", ""):
@@ -179,6 +179,8 @@ def cmd_ceo(args: argparse.Namespace) -> int:
     # Last, so a person's own setting wins over the one derived from the flags above.
     knobs.extend(str(pair) for pair in args.knob)
     forwarded = [identifier, "--intent", target]
+    if args.timeout:
+        forwarded += ["--timeout", str(args.timeout)]
     for pair in knobs:
         forwarded += ["--knob", pair]
     if args.provider:
@@ -352,10 +354,10 @@ def build_parser() -> argparse.ArgumentParser:
     ceo.add_argument("what", help="what you want, or <package>/<mode> to run")
     ceo.add_argument(
         "--mode", default="",
-        help="design (the default), create, edit, or <package>/<mode>",
+        help="design (the default), create, edit, their _fast variants, or <package>/<mode>",
     )
     ceo.add_argument("--name", default="", help="the package or artifact name (default: from what you said)")
-    ceo.add_argument("--check", default="", help="design only: the command that decides whether it works")
+    ceo.add_argument("--check", default="", help="required for design; optional focused check for create_fast/edit_fast")
     ceo.add_argument("--revise", default="", metavar="PKG/MODE", help="edit only: the mode to revise")
     ceo.add_argument(
         "--task", default="", metavar="TASK_REF", dest="task_ref",

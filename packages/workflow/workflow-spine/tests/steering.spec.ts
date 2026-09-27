@@ -84,6 +84,22 @@ async function call(ctx: Context, name: string): Promise<unknown> {
 }
 
 describe('the steer tool', () => {
+  it('supplies declared inputs and outputs to the worker delivery bridge', async () => {
+    const workdir = scratch()
+    const request = join(workdir, 'delivery-request.json')
+    const graph: WorkflowGraph = {
+      ...AGENT_GRAPH,
+      nodes: { a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', reads: ['input.txt'], writes: ['result.txt'] } },
+    }
+    const ctx = await mount({ graph, workdir,
+      agentCommand: executable(`cat > '${request}'\nprintf '%s' '{"prompt":"oriented task"}'`),
+    })
+    await call(ctx, 'wf_next')
+    expect(JSON.parse(readFileSync(request, 'utf8'))).toEqual({
+      action: 'begin', node: 'a', prompt: 'A', reads: ['input.txt'], writes: ['result.txt'],
+    })
+  })
+
   it('returns the payload the configured command prints, unchanged', async () => {
     const payload = {
       run: '/tmp/run',

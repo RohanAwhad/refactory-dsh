@@ -7,8 +7,9 @@ A required check must still pass; removing a cutoff does not establish correctne
 
 The current product already leaves run-wide token and elapsed limits unset by
 default. The 150,000-token/360-second settings in the September release checks were
-acceptance-test allocations, not product defaults. No larger allocation or fresh
-model run was used to produce this analysis.
+acceptance-test allocations, not product defaults. The initial analysis reused
+saved receipts. Subsequent scoped CLI checks are recorded below; they do not
+establish a universal allocation or remove any explicitly selected limit.
 
 ## What the failed checks measured
 
@@ -35,9 +36,13 @@ Five implementation workers made no write/edit tool calls before exhaustion.
 Their calls explored framework, source and delivery files despite the prompt
 already containing the emission instructions and relevant API/reference text.
 The original CLI Create/Edit traces also showed a child Python import failure
-followed by source discovery. The subsequent selected-Python propagation fix has
-regression coverage; its benefit to full fast authoring is not yet established by
-a successful live run. Increasing the same cap would not diagnose these detours.
+followed by source discovery. The selected-Python propagation fix and worker
+orientation now supply the interpreter, node identity, exact input/output paths
+and delivery boundary directly. Fast prompts give the coder its API/reference
+context and give QA the changed-file list plus the executed check result.
+Workers are instructed to return after delivering the current node, without
+rediscovering runtime protocols or executing later stages. These are implemented
+changes; they do not guarantee compliant or efficient model behavior.
 
 CLI Design completed implementation at 69,799 tokens and used another 92,550 for
 QA. Its passing QA JSON was written at 133,008 total tokens; two further requests
@@ -53,7 +58,7 @@ allocation or prove that more tokens would produce a good result.
 
 | Control | Purpose | Current behavior |
 |---|---|---|
-| Small graph and repair bound | Keep the requested work finite and focused | One implementation, one focused QA stage and at most one repair by default; required checks remain in the graph |
+| Small graph and repair bound | Keep the requested work finite and focused | Create/Design use one strategist, coder and QA agent sequentially; Edit uses coder and QA directly. At most one repair by default; required checks remain in the graph |
 | Worker/check timeout | Stop a hung or excessively slow operation | Separate from the optional run-wide elapsed limit |
 | Optional elapsed/token limit | Honor an explicitly chosen resource boundary | Shared across descendants and validation; exhaustion is reported and does not become success |
 | Validation reserve | Retain part of an explicit allocation for required checks | Validation may use the reserve; returning to implementation must use the work allowance |
@@ -86,10 +91,9 @@ from that remaining validation allocation. Reaching the total limit still fails.
 This fixes reserve ownership; it does not fix unproductive exploration or prove
 successful model-backed fast authoring.
 
-## Next acceptance sequence
+## Scoped acceptance sequence
 
-The next check should test a changed execution strategy rather than repeat the
-six-run matrix with another arbitrary number:
+The revised checks use the changed execution strategy:
 
 1. Verify the actual loaded runtime, selected Python/imports and reference paths
    without a model call. Keep unrelated run histories out of the task context.
@@ -102,15 +106,31 @@ six-run matrix with another arbitrary number:
    the evidence supports the execution strategy. Reuse unchanged interface and
    accounting evidence.
 
-This sequence has not yet run. [Issue #234](https://github.com/akashgit/refactory-dsh/issues/234)
-remains open.
+The representative CLI Design task corrected a tiny copied helper and completed
+the three sequential roles, focused check, QA gate and final report at 135,727
+observed tokens in 31.77 seconds, with no repair. A subsequent CLI Create attempt
+emitted its package but reached 156,775 tokens before worker handback or QA;
+the configured 150,000-token limit stopped the run. The emitted file is partial
+progress, not a completed package or QA result.
 
-Further improvements worth implementing are advisory stage estimates, earlier
-checks for repetitive unproductive tool use, smaller stage-specific context/tool
-surfaces, and durable finalization of a completed worker contract before admitting
-more paid work. These are recommendations, not controls currently promised by the
-product. A file appearing on disk is never enough by itself to stop a worker or
-certify success: its declared contract, checks and side-effect boundary still
-need to be resolved.
+The user authorized further checks with six-minute elapsed limits, one
+repair and no cumulative-token cap: CLI Create retry/Edit and native
+Create/Edit/Design. Native Design completed at 128,567 tokens in 29.02 seconds,
+with no repair. CLI Create completed at 1,210,437 tokens in 143.47 seconds,
+including one actual structural repair, focused QA and canonical smoke. CLI Edit
+completed at 831,836 tokens in 132.58 seconds with no repair or measured regression.
+These results demonstrate completion under the selected time/repair bounds, not
+token efficiency or a lower cost. Cached input remains included in the observed
+totals. Native Edit completed at 757,421 tokens in 130.15 seconds with one
+structural repair and no measured regression. Native Create failed after one
+repair on a framework API example import defect. After that example was corrected,
+native Create completed at 655,160 tokens in 99.89 seconds with no repair. All six
+CLI/native paths now have positive completion evidence; the earlier failures
+remain in the [validation record](release-validation-20260926.md#fast-mode-outcomes).
+
+Node orientation and focused prompts define each worker's task; they do not cap
+cumulative context processing or guarantee efficient tool use. A file appearing
+on disk is never enough by itself to stop a worker or certify success: its
+declared contract, checks and side-effect boundary still need to be resolved.
 
 [Resource settings and recovery](budgets-fast-modes.md) · [Worker capabilities](models.md)

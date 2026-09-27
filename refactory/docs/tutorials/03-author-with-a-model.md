@@ -70,6 +70,6 @@ Create/Edit's `smoke_timeout_s` knob bounds each full smoke pass (default 3600 s
 
 Use the exact work directory returned by the launch. Research, design, review, progress and final report files belong to that run. Do not confuse authoring evidence with an optimizer's `analysis/generation-*.md` records.
 
-Fast Create/Edit/Design graphs with one focused QA stage and bounded repair are implemented. Their complete CLI/GUI acceptance remains open in [#234](https://github.com/akashgit/refactory-dsh/issues/234) after the bounded checks exhausted their token allocations; see [fast modes and budgets](../budgets-fast-modes.md). Users can define their own modes today; research and QA are graph choices, and the platform does not require every mode to use the full authoring pipeline.
+For a small task, fast Create and Design use one strategist, coder and focused QA agent sequentially; fast Edit goes directly to the coder and QA. They omit research and reviewer fan-out, allow one repair by default, and retain the required checks. All three fast modes completed bounded CLI/GUI acceptance, including required validation and actual structural repairs; see [fast modes and budgets](../budgets-fast-modes.md) for the tested scope, resource choices and retained failures. Users can define their own modes; research and QA are graph choices, and the platform does not require every mode to use the full authoring pipeline.
 
 Next: [run with a person](06-run-it-with-a-person.md) or [drive GUI chat](05-drive-it-from-the-gui.md).

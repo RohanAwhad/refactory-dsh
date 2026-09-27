@@ -30,7 +30,7 @@ For a class of work, supply the importable Task reference instead of the single-
 
 > Use Design to build wordcount.py and sample.txt, with a check command of `python wordcount.py sample.txt`. Show me the design before implementing it, and verify the reported counts.
 
-Design produces an artifact rather than a registered mode. Its supplied command and reviews determine acceptance. The current full authoring modes include substantial research and review; [fast modes with focused QA](../budgets-fast-modes.md) are implemented, with complete acceptance still pending in [#234](https://github.com/akashgit/refactory-dsh/issues/234).
+Design produces an artifact rather than a registered mode. Its supplied command and reviews determine acceptance. The current full authoring modes include substantial research and review; [fast modes with focused QA](../budgets-fast-modes.md) use smaller graphs and completed bounded CLI/native GUI acceptance. Required checks and repair limits still apply.
 
 ## Steer and correct
 

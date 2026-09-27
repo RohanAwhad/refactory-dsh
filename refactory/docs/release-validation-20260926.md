@@ -1,25 +1,25 @@
-# Bounded release validation — 26 September 2026
+# Bounded release validation — 26–27 September 2026
 
 Implementation started from main `a339605c69` in an isolated clone. These checks concern execution, controls and reported evidence. They are not broad repository certification or a claim about generated-artifact quality. Historical evaluation campaigns stayed stopped. The original checkout and its user-owned swap file were left untouched.
 
 ## Readiness
 
-**Three of the four release issues are closed:** [#235](https://github.com/akashgit/refactory-dsh/issues/235), [#236](https://github.com/akashgit/refactory-dsh/issues/236) and [#237](https://github.com/akashgit/refactory-dsh/issues/237). Their supported controls, profiles and worker paths passed separate CLI and native GUI acceptance. **The full four-issue release is not yet acceptance-complete:** [#234](https://github.com/akashgit/refactory-dsh/issues/234) remains open because none of the six bounded fast-authoring runs reached complete authoring/QA/repair acceptance.
+**All four release capabilities have completed bounded acceptance:** fast authoring/resources ([#234](https://github.com/akashgit/refactory-dsh/issues/234)), live controls/recovery ([#235](https://github.com/akashgit/refactory-dsh/issues/235)), profiles ([#236](https://github.com/akashgit/refactory-dsh/issues/236)) and worker routing ([#237](https://github.com/akashgit/refactory-dsh/issues/237)). Each has separate CLI and native GUI evidence. All three fast modes completed their required validation; actual structural repairs and explicit unresolved failures were also observed. These results establish the tested contracts, not general artifact quality or token efficiency.
 
-Implementation was merged in [PR #239](https://github.com/akashgit/refactory-dsh/pull/239) and [PR #240](https://github.com/akashgit/refactory-dsh/pull/240). [PR #241](https://github.com/akashgit/refactory-dsh/pull/241) added the requested full-bypass worker default and positive native worker checks; [PR #242](https://github.com/akashgit/refactory-dsh/pull/242) recorded successful public recovery. The records below retain unsuccessful attempts and capability limits as well as the positive evidence. This status update reused those records and made no new model calls.
+Implementation was merged in [PR #239](https://github.com/akashgit/refactory-dsh/pull/239) and [PR #240](https://github.com/akashgit/refactory-dsh/pull/240). [PR #241](https://github.com/akashgit/refactory-dsh/pull/241) added the requested full-bypass worker default and positive native worker checks; [PR #242](https://github.com/akashgit/refactory-dsh/pull/242) recorded successful public recovery. [PR #243](https://github.com/akashgit/refactory-dsh/pull/243) corrected validation-reserve ownership; [PR #244](https://github.com/akashgit/refactory-dsh/pull/244) finalizes fast stage scope, CLI forwarding, worker context and the package API correction. The records below retain unsuccessful attempts and capability limits as well as the positive evidence.
 
 ## Issue and interface evidence
 
 | Issue | CLI evidence | Native GUI evidence | Remaining acceptance |
 |---|---|---|---|
-| [#234](https://github.com/akashgit/refactory-dsh/issues/234) | Create/Edit/Design fast graphs launched with shared resources; all exhausted tokens before completion. Focused Design check and a QA artifact ran, but the graph did not finish. | All three variants selected and launched; actual routes, resource consumption and failed states displayed. | Successful complete fast paths through QA and bounded repair in both interfaces. Issue remains open. |
+| [#234](https://github.com/akashgit/refactory-dsh/issues/234) | All three fast modes completed required QA/checks and reports. Create used one structural repair; Edit retained score 0.5 with no regression. Capped failures remain below. The deterministic known-defect control reached the real unresolved QA gate. | All three modes completed checks, QA and reports. Edit used one structural repair with no measured regression; corrected Create completed without repair. Its earlier import failure is retained. The deterministic known-defect control visibly reported the failed assertion and unresolved gate. | Complete for the bounded tasks. Required checks, structural repairs and unresolved outcomes are distinct evidence. |
 | [#235](https://github.com/akashgit/refactory-dsh/issues/235) | Actual live `status --follow`, boundary resume, persisted questions and control receipts, and public recovery of a registered run after its owner stopped. | Pending gate discovery and verdict, pause/resume, reviewed invalidation/replay, concurrent ownership, owned stop, and native Resume of a registered stopped owner. | Both interfaces complete for supported boundaries. Unknown in-flight side effects and partial-fork recovery remain explicitly refused. |
 | [#236](https://github.com/akashgit/refactory-dsh/issues/236) | Versioned profiles, exact configuration, 2 candidates × 2 trials, failed required-artifact control, separated holdout audit, adoption and replay. | Saved-version selection, profile creation and objective edit into a new version, same bounded search, candidate comparison, actual keep/reject/resume, exact adoption and replay. | No stochastic improvement is claimed; missing cost/usage remains unavailable. |
 | [#237](https://github.com/akashgit/refactory-dsh/issues/237) | DSH passed; corrected native Codex and Claude Code dispatch both passed artifact and graph checks with explicit native edit permissions. | DSH passed. Codex and Claude Code passed the exact artifact and graph checks with the new `skip` default; actual native routes and versions displayed. | Both interfaces complete. Unsupported capabilities and usage coverage remain explicit below. |
 
 ## Fast-mode outcomes
 
-Each approved fast check selected a 150,000-token allocation, 360-second limit and at most one repair. Allocation is enforced at admission/completion boundaries: an in-flight completion can take the observed total beyond the threshold. This is not a strict provider-side token ceiling.
+The original six fast checks selected a 150,000-token allocation, 360-second limit and at most one repair. Allocation is enforced at admission/completion boundaries: an in-flight completion can take the observed total beyond the threshold. This is not a strict provider-side token ceiling.
 
 | Interface | Mode | Observed tokens | Outcome |
 |---|---|---:|---|
@@ -30,7 +30,55 @@ Each approved fast check selected a 150,000-token allocation, 360-second limit a
 | Native GUI | Edit fast | 156,722 | Exhaustion during emission |
 | Native GUI | Design fast | 169,929 | Exhaustion during emission |
 
-The six runs consumed 931,293 observed tokens, including completion-boundary overshoot of the requested aggregate allocation. Earlier 60,000-token failures and a zero-model preflight failure are retained separately. No automatic polishing, artifact repair campaign or further fast-mode rerun followed. Resource exhaustion is failure evidence, not successful authoring. The [budget strategy analysis](budget-strategy.md) reconciles these receipts to provider usage and explains why repeating the same fixed-cap checks is not the next acceptance strategy.
+These six runs consumed 931,293 observed tokens, including completion-boundary overshoot of the requested aggregate allocation. Earlier 60,000-token failures and a zero-model preflight failure are retained separately. Resource exhaustion is failure evidence, not successful authoring. The [budget strategy analysis](budget-strategy.md) reconciles these receipts to provider usage and explains the subsequent scoped changes.
+
+After the public CLI check/timeout forwarding fix, worker orientation and focused
+stage changes, two further CLI checks used the same 150,000-token/360-second
+limits and one-repair bound:
+
+| Interface | Mode | Observed tokens | Outcome |
+|---|---|---:|---|
+| CLI, revised | Design fast | 135,727 | Completed in 31.77 seconds: sequential strategist, coder and QA; actual check passed, gate and report completed; zero repairs |
+| CLI, revised | Create fast | 156,775 | Emitted package text, then token exhaustion before handback/QA; no completed authoring result |
+
+The completed Design run changed only the copied tiny helper artifact; its source
+was retained. A file emitted by the failed Create worker is not evidence of
+structural admission, focused QA or canonical smoke.
+
+The final scoped checks retain the six-minute elapsed limit and one-repair bound.
+At the user's explicit request, the subsequent checks omit the optional
+cumulative-token cap. Usage remains measured, including cached input; these
+completion results do not establish token efficiency or reduced cost.
+
+| Interface | Mode | Observed tokens | Elapsed | Outcome |
+|---|---|---:|---:|---|
+| CLI | Create fast | 1,210,437 | 143.47 s | Completed after one structural repair; focused QA, canonical smoke and report passed |
+| CLI | Edit fast | 831,836 | 132.58 s | Completed with zero repairs; canonical score 0.5 → 0.5, `regressed=false`; default/changed inputs and sibling mode retained their contracts |
+| Native GUI | Design fast | 128,567 | 29.02 s | Sequential strategist, coder and QA; focused check, gate and report passed; zero repairs |
+| Native GUI | Edit fast | 757,421 | 130.15 s | Completed after one structural repair of a package-name mismatch; focused QA/check, canonical smoke and report passed; score 0.5 → 0.5, no regression |
+| Native GUI | Create fast, failed attempt | 723,770 | 101.56 s | Failed after one structural repair on an unqualified package import; no focused QA, canonical smoke or final success report; resources were not exhausted |
+| Native GUI | Create fast, corrected example | 655,160 | 99.89 s | Completed with zero repairs; structural admission, focused check/QA, canonical smoke (score 1) and report passed |
+
+Native Create failed after its one repair: the supplied framework API example
+used an unqualified package import. That failed run is retained. Five targeted
+regressions verified the narrow example correction. The corrected
+native Create run completed without repair. The successful capped CLI Design
+above supplies the sixth interface path; it was not repeated. Default and changed
+inputs were independently checked for the generated packages; Edit retained the
+existing contracts and score, and the Design source remained unchanged.
+
+The explicitly registered `fast_defect_acceptance/known_defect` control ran once
+through the public CLI with no agent nodes and an impossible model route. The
+actual helper assertion failed; production `focused_check` and `gate_qa` recorded
+`unresolved` at `repair_attempts=0`, and no `design.json` was written. It exited
+in 2.25 seconds within a 30-second/1,000-token allocation. The automatic driver
+reported zero model calls; token telemetry remained unavailable. This is
+deterministic failure/gate evidence, not model-authored QA or successful repair.
+The native GUI **Run once** control independently showed the failed assertion and
+unresolved gate with the same zero-repair bound, no `design.json`, and no budget
+exhaustion. Its ledger recorded 2.19 seconds; it also used no agent nodes and the
+impossible model route. Both interfaces therefore exposed the actual known-defect
+failure without claiming a model review.
 
 ## Profiles and live controls
 
@@ -77,6 +125,6 @@ The actual graph/headless profile packages were pinned to the isolated checkout.
 
 ## Verification limits
 
-Focused integrated Python checks passed (168 tests), followed by the relevant worker and primary-CLI regressions. Host/client TypeScript checks, builds and normal commit/push hooks passed. Two deferred-stream UI regressions fail on the preceding implementation and pass with the fix that keeps watched run B's state and gates after run A completes. Existing unrelated JavaScript test failures were reproduced on the comparison baseline and remain outside this change; no clean full-suite claim is made.
+Initial focused integrated Python checks passed (168 tests), followed by the relevant worker regressions. The final fast-mode slice passed 124 focused Python tests, five new API regression cases, 27 native execution/steering tests and 19 documentation tests. One optional external graph-reference oracle was skipped. Host/client TypeScript checks, builds and normal commit/push hooks passed. Two deferred-stream UI regressions fail on the preceding implementation and pass with the fix that keeps watched run B's state and gates after run A completes. Existing unrelated test failures remain outside this change; no clean full-suite claim is made.
 
 Raw receipts, run directories and local acceptance reports remain in the isolated task checkout. Credential files, token-bearing server URLs and private runtime logs are not published.

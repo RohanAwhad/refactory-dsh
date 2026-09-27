@@ -183,7 +183,7 @@ uv run refactory modes | head -14
   same acts asked for in words, which the CEO performs with the `refactory` tool.
 - **Authoring** — [Author with a model](03-author-with-a-model.md) — `create`, `edit`
   and `design`, available through **Run once** or stepwise chat. Fast variants
-  have [incomplete release acceptance](../budgets-fast-modes.md#acceptance-status).
+  have [completed bounded CLI/native GUI acceptance](../budgets-fast-modes.md#acceptance-status).
 - **A person at a gate** — [Run it with a person](06-run-it-with-a-person.md).
 - **Datasets** — [Datasets and Tasks](../datasets.md) — a mode that iterates items,
   and the Task that supplies and judges them.

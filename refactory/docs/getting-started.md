@@ -92,7 +92,7 @@ To author a reusable mode, follow [Create and Edit](tutorials/03-author-with-a-m
 
 ## 5. Stay involved
 
-In GUI chat, ask: “Open counting_pack/fixed_step with target=20 and step=2. Walk it one node at a time.” Ask to pause before a node, correct an instruction, or answer a gate. In the Modes panel, choose a mode and set its knobs: **Run once** executes it, including full and fast authoring modes; **Start** optimizes a scored mode. Chat supports stepwise authoring and user gates. Fast authoring remains available with [incomplete release acceptance](budgets-fast-modes.md#acceptance-status).
+In GUI chat, ask: “Open counting_pack/fixed_step with target=20 and step=2. Walk it one node at a time.” Ask to pause before a node, correct an instruction, or answer a gate. In the Modes panel, choose a mode and set its knobs: **Run once** executes it, including full and fast authoring modes; **Start** optimizes a scored mode. Chat supports stepwise authoring and user gates. Fast authoring uses smaller graphs with focused QA and bounded repair; see its [tested scope and resource choices](budgets-fast-modes.md#acceptance-status).
 
 Attach the run's exact directory with **Existing run directory → Read this run** to follow persisted live activity, worker receipts and pending questions. Reading a run does not execute it. Use **resume** explicitly for a supported saved boundary after its owner stops; completed work and consumed resources are retained. [Interface guide](interfaces.md) explains what is interactive, what updates automatically, and when controls take effect.
 
