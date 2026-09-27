@@ -299,6 +299,14 @@ class Mode:
         from refactory_dsh.budgets import LEDGER, ResourceLimits, RunBudget
 
         budget = RunBudget.inherited(model)
+        # Direct Python/legacy CLI authoring resumes use their recorded routes,
+        # just as interactive/console recovery does. Later project edits are not
+        # permission to change the identity of completed work.
+        if record.get("model_context"):
+            from refactory_dsh.model import DshModelClient
+            model = DshModelClient(**record["model_context"])
+            if budget is not None:
+                model = model.with_budget(budget)
         owns_budget = budget is None and (Path(workdir) / LEDGER).exists()
         if owns_budget:
             budget = RunBudget.from_path(Path(workdir) / LEDGER)

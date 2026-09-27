@@ -23,7 +23,7 @@ from typing import Any
 
 from refactory_dsh import lowering, registry, steering
 from refactory_dsh.dsh_runtime import TASK
-from refactory_dsh.paths import REPO_ROOT, dsh_command, venv_bin
+from refactory_dsh.paths import REPO_ROOT, dsh_command, venv_bin, project_root
 from refactory_dsh.run_ownership import ownership
 from refactory_dsh.owned_process import run_owned
 
@@ -75,7 +75,7 @@ def prepare(
     """
     workdir = Path(workdir).expanduser().resolve()
     with ownership(workdir):
-        project = Path(project or ".")
+        project = Path(project or project_root())
         if resume:
             if knobs or intent or model_context:
                 raise ValueError('resume retains saved knobs, instructions and route; changes require explicit invalidation')
@@ -104,7 +104,7 @@ def prepare(
         if resource_limits:
             routing_context.pop('budget_ledger', None)
         # Persist a concrete policy before lowering, including console/API opens.
-        model_context = DshModelClient(**routing_context).context()
+        model_context = DshModelClient(project=project, **routing_context).context()
         if resource_limits:
             from refactory_dsh.budgets import LEDGER, ResourceLimits
             ResourceLimits.from_dict(resource_limits)
@@ -202,7 +202,7 @@ def run(
     provider: str = "",
     model: str = "",
     headless: bool = False,
-    worker_backend: str = "dsh",
+    worker_backend: str = "",
     effort: str = "",
     permission_mode: str = "",
     role_routes: dict[str, Any] | None = None,
@@ -226,7 +226,7 @@ def run(
     workdir = Path(workdir).expanduser().resolve()
     with ownership(workdir) as owner:
         if resume:
-            if source or source_format not in ('', 'directory') or approve or knobs or intent or model_context or provider or model or worker_backend != 'dsh' or effort or permission_mode or role_routes or node_routes:
+            if source or source_format not in ('', 'directory') or approve or knobs or intent or model_context or provider or model or bool(worker_backend) or effort or permission_mode or role_routes or node_routes:
                 raise ValueError('resume retains saved inputs, knobs, instructions and routes; changes require explicit invalidation')
             import json
 
@@ -261,7 +261,7 @@ def run(
             write_source(workdir, source_path=source, source_format=source_format or "directory")
         if not resume and model_context is None:
             from refactory_dsh.model import DshModelClient
-            model_context = DshModelClient(provider=provider, model=model, worker_backend=worker_backend,
+            model_context = DshModelClient(project=Path(project or project_root()), provider=provider, model=model, worker_backend=worker_backend,
                                            effort=effort, permission_mode=permission_mode,
                                            role_routes=role_routes, node_routes=node_routes).context()
         if not resume:
@@ -404,7 +404,7 @@ def main(argv: list[str] | None = None) -> int:
              "and CI expect; without it the run is live and a line you type between "
              "turns reaches the CEO",
     )
-    parser.add_argument("--worker-backend", choices=["dsh", "codex", "claude_code"], default="dsh")
+    parser.add_argument("--worker-backend", choices=["dsh", "codex", "claude_code"], default="")
     parser.add_argument("--effort", default="")
     parser.add_argument("--permission-mode", default="", help="worker permissions: skip (new-run default), default (native policy), or a backend-specific mode")
     import json

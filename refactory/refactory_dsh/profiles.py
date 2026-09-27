@@ -139,8 +139,11 @@ def save(project: Path, name: str, spec: dict[str, Any]) -> dict[str, Any]:
     required = contract.get("required_artifacts") or []
     if not isinstance(required, list) or any(not isinstance(p, str) or Path(p).is_absolute() or ".." in Path(p).parts for p in required):
         raise ProfileError("required_artifacts must be relative paths within the candidate directory")
+    from refactory_dsh.worker_config import resolve as resolve_workers
+    supplied = spec.get("settings") or {}
+    routing = resolve_workers(project, supplied)
     profile = {"schema_version": SCHEMA_VERSION, "name": name, "version": max(versions, default=0) + 1,
-               "settings": normalize(spec.get("settings") or {}),
+               "settings": normalize({**supplied, **routing["settings"]}),
                "contract": {"objective": str(contract.get("objective") or "Maximize the mode's immutable score"),
                             "required_artifacts": required, "selection_rule": SELECTION_RULE}}
     path = root / f"{profile['version']}.json"
@@ -163,7 +166,13 @@ def resolve(project: Path, mode_id: str, *, name: str = "", version: int | None 
     from refactory_dsh import registry
     from refactory_dsh.nn import edits
     profile = recipe if recipe is not None else load(project, name, version) if name else {"settings": {}, "contract": {}}
+    from refactory_dsh.worker_config import FIELDS, resolve as resolve_workers
     chosen = {**profile["settings"], **(overrides or {})}
+    routing = None
+    if recipe is None and validate_settings:
+        routing = resolve_workers(project, {key: value for key, value in (overrides or {}).items() if key in FIELDS},
+                                  profile={key: value for key, value in profile["settings"].items() if key in FIELDS})
+        chosen.update(routing["settings"])
     settings = normalize(chosen) if validate_settings else {**defaults(), **chosen}
     _package, klass = registry.resolve(project, mode_id)
     mode = klass()
@@ -218,6 +227,7 @@ def resolve(project: Path, mode_id: str, *, name: str = "", version: int | None 
                "settings": digest(evaluation_fields)}
     return {"schema_version": SCHEMA_VERSION, "profile": {"name": name, "version": profile.get("version")} if name else None,
             "mode": mode_id, "settings": settings, "contract": contract,
+            "worker_configuration": routing,
             "evaluation_context": context, "context_hash": digest(context)}
 
 
@@ -227,6 +237,7 @@ def refresh(project: Path, mode_id: str, settings: dict[str, Any], previous: dic
               "version": (previous.get("contract") or {}).get("version", 1)}
     result = resolve(project, mode_id, overrides=settings, recipe=recipe, validate_settings=False, model_client=model_client)
     result["profile"] = previous.get("profile")
+    result["worker_configuration"] = previous.get("worker_configuration")
     return result
 
 
@@ -235,9 +246,9 @@ def runtime_identity(settings: dict[str, Any], project: Path, *, uses_models: bo
     if not uses_models:
         return {"status": "no_model_required_by_current_graph_or_optimizer"}
     from refactory_dsh.model import DshModelClient
-    model = model_client if callable(getattr(model_client, "route", None)) and callable(getattr(model_client, "readiness", None)) else DshModelClient(**{key: settings[key] for key in
+    model = model_client if callable(getattr(model_client, "route", None)) and callable(getattr(model_client, "readiness", None)) else DshModelClient(routes_resolved=True, **{key: settings[key] for key in
         ("worker_backend", "provider", "model", "effort", "permission_mode", "role_routes", "node_routes")
-        if settings[key] not in ("", {})})
+        })
     readiness = model.readiness(workdir=project, require_ready=False)
     route = model.route()
     for key in ("provider", "model"):

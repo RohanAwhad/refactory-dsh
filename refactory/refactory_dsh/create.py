@@ -802,8 +802,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     from refactory_dsh.model import DshModelClient
+    from refactory_dsh.paths import project_root
 
     client = DshModelClient(
+        project=None if args.resume else project_root(),
         timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
     )
     if args.resume:

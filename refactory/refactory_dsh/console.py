@@ -1076,6 +1076,7 @@ def _parser() -> argparse.ArgumentParser:
     runtime.add_argument("--provider", default="", help="provider route to inspect (default: DSH settings)")
     runtime.add_argument("--model", default="", help="model selection to inspect (default: DSH settings)")
 
+    add(sub.add_parser("workers", help="effective project worker defaults and provenance; read only"))
     add(sub.add_parser("modes", help="the catalogue of startable modes"))
     add(sub.add_parser("runs", help="every run under the root"))
     add(sub.add_parser("strategies", help="the named outer loops, optimizers and evaluators"))
@@ -1465,7 +1466,9 @@ def runtime_context(project: Path, *, provider: str = "", model: str = "") -> di
     if status not in messages:
         status = "diagnostic-unavailable"
     credential = result.get("credential")
+    from refactory_dsh.worker_config import effective
     return {
+        "worker_configuration": effective(project),
         "project": str(project.resolve()),
         "dsh_home": context["dsh_home"],
         "nested": {
@@ -1479,7 +1482,7 @@ def runtime_context(project: Path, *, provider: str = "", model: str = "") -> di
             "reasoning_note": "The credential diagnostic does not resolve nested reasoning effort; the current session's effort is not proof of a child's selection.",
             "message": messages[status],
         },
-        "inheritance": "wf_open inherits the owning session provider/model and the host DSH home. Create/edit check nested readiness before research. Keep inherited settings unless the user requests a change.",
+        "inheritance": "This readiness diagnostic describes the selected DSH context, not an executed worker. worker_configuration reports project worker defaults; prepared runs and inherited children retain resolved routes independently of the CEO conversation model.",
     }
 
 
@@ -1491,6 +1494,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.verb == "runtime":
             payload: Any = runtime_context(project, provider=args.provider, model=args.model)
+        elif args.verb == "workers":
+            from refactory_dsh.worker_config import effective
+            payload = effective(project)
         elif args.verb == "modes":
             payload = catalogue(project=project)
         elif args.verb == "strategies":
@@ -1707,7 +1713,7 @@ def main(argv: list[str] | None = None) -> int:
             payload = _forward("design", forwarded)
         else:  # pragma: no cover - argparse rejects an unknown verb first
             raise ConsoleError(f"unknown verb {args.verb!r}")
-    except (profiles.ProfileError, ConsoleError, LoopError, PackageError, AdoptionError, SteeringError) as error:
+    except (ValueError, ConsoleError, LoopError, PackageError, AdoptionError, SteeringError) as error:
         print(json.dumps({"error": str(error)}), file=sys.stdout)
         return 2
     if isinstance(payload, dict) and payload.get("ok") is False:

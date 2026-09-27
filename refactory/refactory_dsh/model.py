@@ -133,16 +133,33 @@ class DshModelClient:
         node_routes: dict[str, Any] | None = None,
         budget_ledger: str | Path | None = None,
         python_bin: str | Path | None = None,
+        project: Path | None = None,
+        routes_resolved: bool = False,
+        routing_provenance: dict[str, Any] | None = None,
     ) -> None:
         from refactory_dsh.workers import validate_route
         inherited = json.loads(os.environ.get("REFACTORY_WORKER_CONTEXT") or "{}")
         if not isinstance(inherited, dict):
             raise ValueError("REFACTORY_WORKER_CONTEXT must contain an object")
+        if not routes_resolved and (project is not None or inherited.get("routes_resolved")):
+            from refactory_dsh.worker_config import resolve
+            selected = resolve(project or Path("."), {key: value for key, value in {
+                "worker_backend": worker_backend, "provider": provider, "model": model,
+                "effort": effort, "permission_mode": permission_mode,
+                "role_routes": role_routes, "node_routes": node_routes,
+            }.items() if value is not None and value != ""}, inherited=inherited)
+            route = selected["settings"]
+            worker_backend, provider, model, effort, permission_mode = (route[key] for key in
+                ("worker_backend", "provider", "model", "effort", "permission_mode"))
+            role_routes, node_routes = route["role_routes"], route["node_routes"]
+            routing_provenance = inherited.get("routing_provenance", selected["provenance"])
+            routes_resolved = True
+        routing_provenance = routing_provenance or inherited.get("routing_provenance")
         inherited_route = inherited if not worker_backend or worker_backend == inherited.get("worker_backend") else {}
         worker_backend = worker_backend or inherited.get("worker_backend", "")
-        provider = provider or inherited_route.get("provider", "")
-        model = model or inherited_route.get("model", "")
-        effort = effort or inherited_route.get("effort", "")
+        provider = provider if routes_resolved else provider or inherited_route.get("provider", "")
+        model = model if routes_resolved else model or inherited_route.get("model", "")
+        effort = effort if routes_resolved else effort or inherited_route.get("effort", "")
         # Shared policies retain their meaning across backends. Native-specific
         # values only inherit within their own product, unlike default/skip.
         inherited_permission = inherited_route.get("permission_mode")
@@ -160,10 +177,11 @@ class DshModelClient:
         attempts = inherited.get("attempts", attempts) if attempts == DEFAULT_ATTEMPTS else attempts
         self._timeout_s = timeout_s
         self._worker_backend = worker_backend or os.environ.get("REFACTORY_WORKER_BACKEND", "dsh")
-        self._effort = effort or (os.environ.get("REFACTORY_MODEL_EFFORT", "") if self._worker_backend == "dsh" else "")
+        self._effort = effort or (os.environ.get("REFACTORY_MODEL_EFFORT", "") if self._worker_backend == "dsh" and not routes_resolved else "")
         self._permission_mode = permission_mode
         self._role_routes = copy.deepcopy(role_routes or {})
         self._node_routes = copy.deepcopy(node_routes or {})
+        self._routing_provenance = copy.deepcopy(routing_provenance or {})
         self._node_id = ""
         self._role = "worker"
         self._worker_receipt: Path | None = None
@@ -175,8 +193,8 @@ class DshModelClient:
         self._runtime_root = Path(runtime_root or dsh_root()).expanduser().resolve()
         self._python_bin = Path(python_bin or venv_bin()).expanduser().resolve()
         self._dsh_cli = (dsh_cli if dsh_cli is not None else os.environ.get("DSH_CLI", "")).strip()
-        self._model = model or (os.environ.get("REFACTORY_MODEL_ID", "") if self._worker_backend == "dsh" else "")
-        self._provider = provider or (os.environ.get("REFACTORY_MODEL_PROVIDER", "") if self._worker_backend == "dsh" else "")
+        self._model = model or (os.environ.get("REFACTORY_MODEL_ID", "") if self._worker_backend == "dsh" and not routes_resolved else "")
+        self._provider = provider or (os.environ.get("REFACTORY_MODEL_PROVIDER", "") if self._worker_backend == "dsh" and not routes_resolved else "")
         # Resolve before containment rewrites HOME. This is a location, never a key.
         selected_home = dsh_home or os.environ.get("REFACTORY_MODEL_DSH_HOME") or os.environ.get("DSH_HOME", "").strip()
         self._dsh_home = Path(selected_home or Path.home() / ".dsh").expanduser().resolve()
@@ -231,6 +249,7 @@ class DshModelClient:
     def context(self) -> dict[str, Any]:
         """Nonsecret settings safe to carry across the model subprocess boundary."""
         return {
+            "routes_resolved": True, "routing_provenance": copy.deepcopy(self._routing_provenance),
             "dsh_home": str(self._dsh_home), "provider": self._provider, "model": self._model,
             "timeout_s": self._timeout_s, "attempts": self._attempts, "backoff_s": self._backoff_s,
             "runtime_root": str(self._runtime_root), "dsh_cli": self._dsh_cli,

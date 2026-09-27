@@ -29,8 +29,8 @@ const controlHelp: Record<string, string> = {
   "max_tokens": "Optional shared token budget for DSH workers. Blank means no added limit. External backends do not support this control.",
   "validation_reserve_s": "Time kept for final validation within the total elapsed-time budget, in seconds. Zero adds no reserve.",
   "validation_reserve_tokens": "Tokens kept for final validation within the DSH token budget. Zero adds no reserve.",
-  "role_routes": "JSON object mapping worker roles to routing overrides. More specific node overrides take precedence. An empty object inherits the run-wide route.",
-  "node_routes": "JSON object mapping node IDs to routing overrides. These take precedence over role and run-wide routes. An empty object adds no overrides."
+  "role_routes": "JSON object mapping worker roles to routing overrides. More specific node overrides take precedence. Blank inherits the project map; an explicit empty object clears it.",
+  "node_routes": "JSON object mapping node IDs to routing overrides. These take precedence over role and run-wide routes. Blank inherits the project map; an explicit empty object clears it."
 }
 
 type ProfileApi = Pick<RefactoryConsoleRemote, 'profiles' | 'profileSave' | 'profileResolve' | 'comparison'>
@@ -189,36 +189,44 @@ export function CandidateComparison({ api, run, signal }: { readonly api: Profil
 /** Capability-aware routing and resources shared by search and Run once. */
 export function RuntimeControls({ configuration, onChange }: { readonly configuration: string; readonly onChange: (value: string) => void }): ReactNode {
   const value = JSON.parse(configuration) as Record<string, unknown>
-  const backend = String(value.worker_backend || 'dsh')
+  const backend = String(value.worker_backend || '')
   const [routeError, setRouteError] = useState('')
-  const change = (key: string, next: unknown): void => { onChange(JSON.stringify({ ...value, [key]: next })) }
+  const change = (key: string, next: unknown): void => { const updated = { ...value, [key]: next }; if (next === '') delete updated[key]; onChange(JSON.stringify(updated)) }
   const permissions = backend === 'codex' ? ['skip', 'default', 'never', 'approve-for-me', 'dangerously-bypass-approvals-and-sandbox'] : backend === 'claude_code' ? ['skip', 'default', 'dontAsk', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'] : ['skip', 'default']
   return <details className={css.disclosure} data-refactory-runtime-controls>
     <summary className={css.heading}>Worker routing and shared resources</summary>
     <FieldLabel htmlFor="refactory-worker-backend" help={controlHelp['backend']!}>Coding worker backend</FieldLabel>
-    <select className={css.control} id="refactory-worker-backend" value={backend} onChange={event => { onChange(JSON.stringify({ ...value, worker_backend: event.target.value, provider: '', model: '', effort: '', permission_mode: value.permission_mode === 'default' ? 'default' : 'skip', max_tokens: null, validation_reserve_tokens: 0 })) }}>
-      <option value="dsh">DSH (default)</option><option value="codex">Codex (opt in)</option><option value="claude_code">Claude Code (opt in)</option>
+    <select className={css.control} id="refactory-worker-backend" value={backend} onChange={event => { if (event.target.value === '') { const updated = { ...value }; for (const key of ['worker_backend', 'provider', 'model', 'effort', 'permission_mode']) delete updated[key]; onChange(JSON.stringify(updated)); return }; onChange(JSON.stringify({ ...value, worker_backend: event.target.value, provider: '', model: '', effort: '', permission_mode: value.permission_mode === 'default' ? 'default' : 'skip', max_tokens: null, validation_reserve_tokens: 0 })) }}>
+      <option value="">Use project defaults</option><option value="dsh">DSH</option><option value="codex">Codex (opt in)</option><option value="claude_code">Claude Code (opt in)</option>
     </select>
     {(['provider', 'model', 'effort'] as const).map(key => <div className={css.field} key={key}>
       <FieldLabel htmlFor={`refactory-profile-${key}`} help={controlHelp[key]!}>{key}</FieldLabel>
-      <input className={css.input} id={`refactory-profile-${key}`} value={String(value[key] ?? '')} disabled={backend !== 'dsh' && key !== 'model'} placeholder="Inherit runtime selection"
+      <input className={css.input} id={`refactory-profile-${key}`} value={String(value[key] ?? '')} disabled={backend !== '' && backend !== 'dsh' && key !== 'model'} placeholder="Inherit runtime selection"
         onChange={event => { change(key, event.target.value) }} />
     </div>)}
     <FieldLabel htmlFor="refactory-permission-mode" help={controlHelp['permission']!}>Worker permission mode</FieldLabel>
-    <select className={css.control} id="refactory-permission-mode" value={String(value.permission_mode || 'skip')} onChange={event => { change('permission_mode', event.target.value) }}>
+    <select className={css.control} id="refactory-permission-mode" value={String(value.permission_mode || '')} onChange={event => { change('permission_mode', event.target.value) }}>
+      <option value="">Use project default (skip if unset)</option>
       {permissions.map(permission => <option key={permission} value={permission}>{permission === 'skip' ? 'Skip permission checks (default)' : permission === 'default' ? 'Native permission policy' : permission}</option>)}
     </select>
+    <p className={css.note}>New runs load refactory.workers.json from the project root. Explicit selections override it. Saved runs keep their routes. Use refactory workers to inspect effective defaults.</p>
     <p className={css.note}>Skip mode lets worker tools run without permission approval. Codex and DSH also run without their own sandbox restrictions. Select a native policy to retain those checks.</p>
     {(['max_elapsed_s', 'max_tokens', 'validation_reserve_s', 'validation_reserve_tokens'] as const).map(key => <div className={css.field} key={key}>
       <FieldLabel htmlFor={`refactory-profile-${key}`} help={controlHelp[key]!}>{({ max_elapsed_s: 'Total elapsed seconds', max_tokens: 'Total tokens', validation_reserve_s: 'Seconds reserved for final validation', validation_reserve_tokens: 'Tokens reserved for final validation' })[key]}</FieldLabel>
       <input className={css.input} id={`refactory-profile-${key}`} type="number" step="any" value={String(value[key] ?? '')} placeholder={key.startsWith('validation') ? '0' : 'Unlimited'}
-        disabled={backend !== 'dsh' && key.includes('tokens')} onChange={event => { change(key, event.target.value === '' ? null : Number(event.target.value)) }} />
+        disabled={backend !== '' && backend !== 'dsh' && key.includes('tokens')} onChange={event => { change(key, event.target.value === '' ? null : Number(event.target.value)) }} />
     </div>)}
-    {backend !== 'dsh' && <p className={css.note}>This backend uses native provider settings. Provider/effort overrides and token limits are unsupported; an installed provider and native authentication are required. Steering applies at the next node boundary.</p>}
+    {backend !== '' && backend !== 'dsh' && <p className={css.note}>This backend uses native provider settings. Provider/effort overrides and token limits are unsupported; an installed provider and native authentication are required. Steering applies at the next node boundary.</p>}
     {(['role_routes', 'node_routes'] as const).map(key => <div className={css.field} key={key}>
       <FieldLabel htmlFor={`refactory-profile-${key}`} help={controlHelp[key]!}>{key === 'role_routes' ? 'Role route overrides (JSON object)' : 'Node route overrides (JSON object)'}</FieldLabel>
-      <textarea className={css.input} id={`refactory-profile-${key}`} defaultValue={JSON.stringify(value[key] || {})} key={`${backend}-${key}-${JSON.stringify(value[key])}`} onBlur={event => {
-        try { const parsed: unknown = JSON.parse(event.target.value); if (parsed === null || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error('Enter a JSON object'); change(key, parsed); setRouteError('') }
+      <textarea className={css.input} id={`refactory-profile-${key}`} placeholder="Inherit project routes" defaultValue={value[key] === undefined ? '' : JSON.stringify(value[key])} key={`${backend}-${key}-${JSON.stringify(value[key])}`} onBlur={event => {
+        try {
+          if (event.target.value.trim() === '') { if (value[key] !== undefined) change(key, ''); setRouteError(''); return }
+          const parsed: unknown = JSON.parse(event.target.value)
+          if (parsed === null || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error('Enter a JSON object')
+          if (JSON.stringify(parsed) !== JSON.stringify(value[key])) change(key, parsed)
+          setRouteError('')
+        }
         catch (error) { setRouteError(error instanceof Error ? error.message : String(error)) }
       }} />
     </div>)}
