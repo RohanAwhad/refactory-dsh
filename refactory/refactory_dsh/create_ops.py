@@ -65,12 +65,12 @@ You are writing a package for the refactory mode library. The API is:
 
         def build(self):                   # pure: no I/O, no randomness, no clock
             graph = nn.Graph()
-            graph.add(nn.Node("first", "op", call="my_pkg.ops:first",
+            graph.add(nn.Node("first", "op", call="refactory_packages.my_pkg.ops:first",
                               reads=(), writes=("a.json",), produces=("a",),
                               knobs=("rounds",), notes="what it does"))
-            graph.add(nn.Node("check", "gate", evaluator="my_pkg.ops:check",
+            graph.add(nn.Node("check", "gate", evaluator="refactory_packages.my_pkg.ops:check",
                               reads=("a.json",), produces=("ok",), max_iterations=8))
-            graph.add(nn.Node("done", "op", call="my_pkg.ops:done",
+            graph.add(nn.Node("done", "op", call="refactory_packages.my_pkg.ops:done",
                               reads=("a.json",), writes=("best.json",), produces=("best",)))
             graph.connect("first", "check")
             graph.connect("check", "first", condition="retry")
@@ -84,12 +84,12 @@ You are writing a package for the refactory mode library. The API is:
             return (nn.fact_produced("best"),)
 
         def insertable(self):              # blocks a structural edit may add
-            return (nn.Node("observe", "op", call="my_pkg.ops:observe",
+            return (nn.Node("observe", "op", call="refactory_packages.my_pkg.ops:observe",
                             reads=("a.json",), writes=("observations.json",),
                             produces=("spread",)),)
 
     PACKAGE = nn.Package(name="my_pkg", description="...", modes=(MyMode,),
-                         ops=("my_pkg.ops",))
+                         ops=("refactory_packages.my_pkg.ops",))
 
 For required deliverables that score() does not measure, protect their actual
 producer in invariants(), e.g. nn.artifact_produced("solution.md", by="explain").
@@ -111,6 +111,10 @@ The context offers `ctx.knob(name, default)`, `ctx.read_json(name, default)`,
 `ctx.write_json(name, payload)`, `ctx.write_text`, `ctx.append_text`,
 `ctx.read_text`, `ctx.exists`, `ctx.set_fact(name, value)`, `ctx.facts`,
 `ctx.workdir`, `ctx.iteration` and `ctx.model`.
+
+Generated packages live under `.factory/packages/<name>/` and are imported as
+`refactory_packages.<name>`. Use that qualified namespace for `call`, `evaluator`
+and `PACKAGE.ops`; the package name itself remains the bare name, e.g. `my_pkg`.
 
 Rules the validator enforces on every candidate, so a violation is a refusal:
 - every node is reachable from the start node, and the graph has a terminal
