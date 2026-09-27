@@ -19,6 +19,17 @@ def prepare_package(ctx: Any) -> dict[str, Any]:
     return {**prepared, "repair_feedback": "(initial implementation)", "repairs_used": 0}
 
 
+def survey_package(ctx: Any) -> dict[str, Any]:
+    """Fast authoring has a selected source, not a package-discovery stage."""
+    selected = str(ctx.facts.get("revision_of") or ctx.facts.get("extends") or "")
+    package = selected.split("/", 1)[0] if selected else ""
+    packages = [{"package": package, "reference": selected}] if package else []
+    ctx.write_json("survey.json", {"packages": packages})
+    return {"existing": [package] if package else [],
+            "survey": (f"Use the supplied source for {selected}; no other package survey is needed."
+                       if selected else "No reference package requested; implement from the supplied API and brief.")}
+
+
 def _source_manifest(root: Path) -> dict[str, str]:
     ignored = {".git", ".factory", ".venv", "node_modules", "__pycache__", ".pytest_cache"}
     result = {}
@@ -45,7 +56,8 @@ def prepare_artifact(ctx: Any) -> dict[str, Any]:
         source = str(root)
         manifest = _source_manifest(root)
     ctx.write_json("source-manifest.json", {"source_project": source, "files": manifest})
-    return {**prepared, "source_project": source, "repair_feedback": "(initial implementation)", "repairs_used": 0}
+    return {**prepared, "source_project": source, "source_files": json.dumps(sorted(manifest)),
+            "repair_feedback": "(initial implementation)", "repairs_used": 0}
 
 
 def materialise_artifact(ctx: Any) -> dict[str, Any]:
@@ -154,9 +166,12 @@ def focused_check(ctx: Any) -> dict[str, Any]:
         if budget is not None:
             budget.checkpoint()
     # Bind the check and later QA verdict to these exact materialized files.
-    ctx.write_json("focused-source.json", {"root": output, "files": _source_manifest(Path(output))})
+    review_files = sorted(create_ops.parse_files(ctx.read_text("emit.txt")))
+    ctx.write_json("focused-source.json", {"root": output, "files": _source_manifest(Path(output)),
+                                          "review_files": review_files})
     ctx.write_json("focused-check.json", payload)
-    return {"focused_check": json.dumps(payload), "output_path": output}
+    return {"focused_check": json.dumps(payload), "output_path": output,
+            "review_files": json.dumps(review_files)}
 
 
 def gate_qa(ctx: Any) -> str:
