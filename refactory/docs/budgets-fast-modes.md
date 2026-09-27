@@ -17,13 +17,17 @@ and is not an optimization target.
 
 ## Acceptance status
 
-Fast modes are implemented and selectable from the CLI and native GUI. After the
-original six token-exhausted checks, revised CLI Design completed its three
-sequential workers, required check, focused QA and report at 135,727 tokens in
-31.77 seconds, with no repair. Revised CLI Create emitted files but exhausted its
-150,000-token allocation at 156,775 observed tokens before handback or QA.
-[Issue #234](https://github.com/akashgit/refactory-dsh/issues/234) remains open:
-the remaining successful CLI/native paths are pending. See the
+All three fast modes completed their required checks and reports in separate
+CLI and native GUI runs. CLI Create and native Edit each exercised one actual
+structural repair; Edit retained its measured score. Both interfaces also showed
+an explicit unresolved known-defect control with zero permitted repairs.
+
+The final checks used six-minute elapsed limits and one repair. Successful CLI
+Design retained a 150,000-token cap; the user chose no cumulative-token cap for
+the subsequent checks. All usage remained measured. The earlier capped failures
+and a native Create import failure are retained alongside the corrected success.
+These results establish the sampled artifact contracts, not token efficiency or
+arbitrary project quality. See the
 [recorded outcomes](release-validation-20260926.md#fast-mode-outcomes).
 
 ## Choose the graph

@@ -113,18 +113,24 @@ emitted its package but reached 156,775 tokens before worker handback or QA;
 the configured 150,000-token limit stopped the run. The emitted file is partial
 progress, not a completed package or QA result.
 
-An attempted uncapped launch was rejected by approval review before execution;
-no uncapped model run occurred. Five additional checks—CLI Create retry and Edit,
-then native Create/Edit/Design—are proposed with six-minute elapsed limits and
-one repair. Their allocation approval and results remain pending.
-[Issue #234](https://github.com/akashgit/refactory-dsh/issues/234) remains open.
+The user authorized further checks with six-minute elapsed limits, one
+repair and no cumulative-token cap: CLI Create retry/Edit and native
+Create/Edit/Design. Native Design completed at 128,567 tokens in 29.02 seconds,
+with no repair. CLI Create completed at 1,210,437 tokens in 143.47 seconds,
+including one actual structural repair, focused QA and canonical smoke. CLI Edit
+completed at 831,836 tokens in 132.58 seconds with no repair or measured regression.
+These results demonstrate completion under the selected time/repair bounds, not
+token efficiency or a lower cost. Cached input remains included in the observed
+totals. Native Edit completed at 757,421 tokens in 130.15 seconds with one
+structural repair and no measured regression. Native Create failed after one
+repair on a framework API example import defect. After that example was corrected,
+native Create completed at 655,160 tokens in 99.89 seconds with no repair. All six
+CLI/native paths now have positive completion evidence; the earlier failures
+remain in the [validation record](release-validation-20260926.md#fast-mode-outcomes).
 
-Further improvements worth implementing are advisory stage estimates, earlier
-checks for repetitive unproductive tool use, restricted stage-specific tool
-surfaces, and durable finalization of a completed worker contract before admitting
-more paid work. These remain recommendations; the supplied node orientation and
-focused prompts are already implemented. A file appearing on disk is never
-enough by itself to stop a worker or certify success: its declared contract,
-checks and side-effect boundary still need to be resolved.
+Node orientation and focused prompts define each worker's task; they do not cap
+cumulative context processing or guarantee efficient tool use. A file appearing
+on disk is never enough by itself to stop a worker or certify success: its
+declared contract, checks and side-effect boundary still need to be resolved.
 
 [Resource settings and recovery](budgets-fast-modes.md) · [Worker capabilities](models.md)

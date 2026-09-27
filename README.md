@@ -99,7 +99,7 @@ Chat supports Create, Edit and Design. The Modes panel's **Start** button launch
 
 These commands call a model and can take substantial time. The current full authoring modes include research and reviews; you approve the strategy/design before implementation. Generated packages live in `.factory/packages/`; Design artifacts live in `.factory/artifacts/`. Exact paths and validation outcomes are recorded in the run.
 
-For a small, focused task, choose `create_fast`, `edit_fast` or `design_fast`. Create plans a minimal reusable graph, then runs one coder and one QA agent sequentially; structural admission and canonical smoke remain required. Design uses the same three sequential roles for a tiny checked artifact, such as a one-file helper. Edit goes directly to one coder and one QA agent while preserving the source contract and regression validation. These graphs omit research and reviewer fan-out and allow one repair by default. A revised CLI Design check completed; complete CLI/GUI acceptance remains pending, and prior token-exhaustion failures are retained. See [fast modes and shared budgets](refactory/docs/budgets-fast-modes.md).
+For a small, focused task, choose `create_fast`, `edit_fast` or `design_fast`. Create plans a minimal reusable graph, then runs one coder and one QA agent sequentially; structural admission and canonical smoke remain required. Design uses the same three sequential roles for a tiny checked artifact, such as a one-file helper. Edit goes directly to one coder and one QA agent while preserving the source contract and regression validation. These graphs omit research and reviewer fan-out and allow one repair by default. All three fast paths completed their bounded CLI and native GUI checks, including real structural repairs and independent artifact checks. Prior failures are retained. See [fast modes and shared budgets](refactory/docs/budgets-fast-modes.md).
 
 Design produces the artifact itself. It does not need to produce a scored mode or enter the optimizer. [Authoring guide →](refactory/docs/tutorials/03-author-with-a-model.md)
 
@@ -121,11 +121,11 @@ New workers default to **`skip`**, which bypasses native permission checks and, 
 
 ## Release capabilities and validation
 
-**Three of four release items have completed acceptance.** The remaining gap is successful fast-mode completion in both interfaces; implementation being merged does not close that gap.
+**All four release capabilities have completed bounded CLI and native GUI acceptance.** The checks cover the supported paths and sampled artifact contracts; they do not certify arbitrary generated projects or equal model performance.
 
 | Capability | CLI and native GUI acceptance | Guide / issue |
 |---|---|---|
-| Shared resource accounting and fast Create/Edit/Design graphs | **Incomplete:** revised CLI Design completed; remaining fast CLI/GUI acceptance is pending | [Fast modes and budgets](refactory/docs/budgets-fast-modes.md) · [#234 open](https://github.com/akashgit/refactory-dsh/issues/234) |
+| Shared resource accounting and fast Create/Edit/Design graphs | **Complete:** all three fast modes, required validation, actual bounded repairs and explicit unresolved failure | [Fast modes and budgets](refactory/docs/budgets-fast-modes.md) · [#234](https://github.com/akashgit/refactory-dsh/issues/234) |
 | Live activity, questions, boundary controls and supported recovery | **Complete** | [Live control and recovery](refactory/docs/live-control.md) · [#235 closed](https://github.com/akashgit/refactory-dsh/issues/235) |
 | Versioned profiles, candidate comparison, exact adoption and replay | **Complete** | [Optimization profiles](refactory/docs/optimization-profiles.md) · [#236 closed](https://github.com/akashgit/refactory-dsh/issues/236) |
 | Routing and optional DSH/Codex/Claude Code workers | **Complete** | [Models and workers](refactory/docs/models.md) · [#237 closed](https://github.com/akashgit/refactory-dsh/issues/237) |

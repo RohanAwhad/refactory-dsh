@@ -1,10 +1,10 @@
-# Bounded release validation — 26 September 2026
+# Bounded release validation — 26–27 September 2026
 
 Implementation started from main `a339605c69` in an isolated clone. These checks concern execution, controls and reported evidence. They are not broad repository certification or a claim about generated-artifact quality. Historical evaluation campaigns stayed stopped. The original checkout and its user-owned swap file were left untouched.
 
 ## Readiness
 
-**Three of the four release issues are closed:** [#235](https://github.com/akashgit/refactory-dsh/issues/235), [#236](https://github.com/akashgit/refactory-dsh/issues/236) and [#237](https://github.com/akashgit/refactory-dsh/issues/237). Their supported controls, profiles and worker paths passed separate CLI and native GUI acceptance. **The full four-issue release is not yet acceptance-complete:** revised CLI Design passed, but [#234](https://github.com/akashgit/refactory-dsh/issues/234) remains open for the remaining complete fast paths in both interfaces.
+**All four release capabilities have completed bounded acceptance:** fast authoring/resources ([#234](https://github.com/akashgit/refactory-dsh/issues/234)), live controls/recovery ([#235](https://github.com/akashgit/refactory-dsh/issues/235)), profiles ([#236](https://github.com/akashgit/refactory-dsh/issues/236)) and worker routing ([#237](https://github.com/akashgit/refactory-dsh/issues/237)). Each has separate CLI and native GUI evidence. All three fast modes completed their required validation; actual structural repairs and explicit unresolved failures were also observed. These results establish the tested contracts, not general artifact quality or token efficiency.
 
 Implementation was merged in [PR #239](https://github.com/akashgit/refactory-dsh/pull/239) and [PR #240](https://github.com/akashgit/refactory-dsh/pull/240). [PR #241](https://github.com/akashgit/refactory-dsh/pull/241) added the requested full-bypass worker default and positive native worker checks; [PR #242](https://github.com/akashgit/refactory-dsh/pull/242) recorded successful public recovery. The records below retain unsuccessful attempts and capability limits as well as the positive evidence, including the subsequent scoped fast checks.
 
@@ -12,7 +12,7 @@ Implementation was merged in [PR #239](https://github.com/akashgit/refactory-dsh
 
 | Issue | CLI evidence | Native GUI evidence | Remaining acceptance |
 |---|---|---|---|
-| [#234](https://github.com/akashgit/refactory-dsh/issues/234) | Revised Design completed its check, QA and report; revised Create emitted but exhausted tokens before handback/QA. The original three failures remain below. A deterministic known-defect control reached the real unresolved QA gate. | Original three variants selected and launched; actual routes, resource consumption and failed states displayed. The deterministic known-defect control visibly reported the failed assertion and unresolved gate. Revised successful paths remain pending. | Complete remaining fast paths in both interfaces. No model repair has been observed; deterministic control is labelled separately. Issue remains open. |
+| [#234](https://github.com/akashgit/refactory-dsh/issues/234) | All three fast modes completed required QA/checks and reports. Create used one structural repair; Edit retained score 0.5 with no regression. Capped failures remain below. The deterministic known-defect control reached the real unresolved QA gate. | All three modes completed checks, QA and reports. Edit used one structural repair with no measured regression; corrected Create completed without repair. Its earlier import failure is retained. The deterministic known-defect control visibly reported the failed assertion and unresolved gate. | Complete for the bounded tasks. Required checks, structural repairs and unresolved outcomes are distinct evidence. |
 | [#235](https://github.com/akashgit/refactory-dsh/issues/235) | Actual live `status --follow`, boundary resume, persisted questions and control receipts, and public recovery of a registered run after its owner stopped. | Pending gate discovery and verdict, pause/resume, reviewed invalidation/replay, concurrent ownership, owned stop, and native Resume of a registered stopped owner. | Both interfaces complete for supported boundaries. Unknown in-flight side effects and partial-fork recovery remain explicitly refused. |
 | [#236](https://github.com/akashgit/refactory-dsh/issues/236) | Versioned profiles, exact configuration, 2 candidates × 2 trials, failed required-artifact control, separated holdout audit, adoption and replay. | Saved-version selection, profile creation and objective edit into a new version, same bounded search, candidate comparison, actual keep/reject/resume, exact adoption and replay. | No stochastic improvement is claimed; missing cost/usage remains unavailable. |
 | [#237](https://github.com/akashgit/refactory-dsh/issues/237) | DSH passed; corrected native Codex and Claude Code dispatch both passed artifact and graph checks with explicit native edit permissions. | DSH passed. Codex and Claude Code passed the exact artifact and graph checks with the new `skip` default; actual native routes and versions displayed. | Both interfaces complete. Unsupported capabilities and usage coverage remain explicit below. |
@@ -43,10 +43,29 @@ limits and one-repair bound:
 
 The completed Design run changed only the copied tiny helper artifact; its source
 was retained. A file emitted by the failed Create worker is not evidence of
-structural admission, focused QA or canonical smoke. Automatic review rejected
-an uncapped launch before execution. Approval is pending for five further
-six-minute, one-repair checks: CLI Create retry/Edit and all three native paths.
-No uncapped launch or successful remaining path is claimed here.
+structural admission, focused QA or canonical smoke.
+
+The final scoped checks retain the six-minute elapsed limit and one-repair bound.
+At the user's explicit request, the subsequent checks omit the optional
+cumulative-token cap. Usage remains measured, including cached input; these
+completion results do not establish token efficiency or reduced cost.
+
+| Interface | Mode | Observed tokens | Elapsed | Outcome |
+|---|---|---:|---:|---|
+| CLI | Create fast | 1,210,437 | 143.47 s | Completed after one structural repair; focused QA, canonical smoke and report passed |
+| CLI | Edit fast | 831,836 | 132.58 s | Completed with zero repairs; canonical score 0.5 → 0.5, `regressed=false`; default/changed inputs and sibling mode retained their contracts |
+| Native GUI | Design fast | 128,567 | 29.02 s | Sequential strategist, coder and QA; focused check, gate and report passed; zero repairs |
+| Native GUI | Edit fast | 757,421 | 130.15 s | Completed after one structural repair of a package-name mismatch; focused QA/check, canonical smoke and report passed; score 0.5 → 0.5, no regression |
+| Native GUI | Create fast, failed attempt | 723,770 | 101.56 s | Failed after one structural repair on an unqualified package import; no focused QA, canonical smoke or final success report; resources were not exhausted |
+| Native GUI | Create fast, corrected example | 655,160 | 99.89 s | Completed with zero repairs; structural admission, focused check/QA, canonical smoke (score 1) and report passed |
+
+Native Create failed after its one repair: the supplied framework API example
+used an unqualified package import. That failed run is retained. Five targeted
+regressions verified the narrow example correction. The corrected
+native Create run completed without repair. The successful capped CLI Design
+above supplies the sixth interface path; it was not repeated. Default and changed
+inputs were independently checked for the generated packages; Edit retained the
+existing contracts and score, and the Design source remained unchanged.
 
 The explicitly registered `fast_defect_acceptance/known_defect` control ran once
 through the public CLI with no agent nodes and an impossible model route. The
