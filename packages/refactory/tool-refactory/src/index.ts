@@ -20,9 +20,11 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { ToolCallView, ToolResultView } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import {
-  CONSOLE_DEFAULTS, Console, isRecord, registryInvocation, resolveConsoleSettings, startInvocation,
+  CONSOLE_DEFAULTS, Console, isRecord, resolveConsoleSettings,
   type ConsoleResult,
 } from './console.ts'
+
+import { CHAT, PARAMETERS, OPERATING_GUIDE, BUILD_ID } from './generated-help.ts'
 
 export const name = 'tool-refactory'
 export const inject = ['tools', 'subprocess', 'systemPrompt']
@@ -49,54 +51,18 @@ export const Config: z<Config> = z.object({
   collectBytes: z.natural().min(1024).default(CONSOLE_DEFAULTS.collectBytes),
 })
 
-/** The verbs the tool exposes, and the one thing each needs to be addressed. */
-const VERBS = {
-  runtime: 'Read current session model selection, host DSH home and nested local credential readiness before wf_open. Uses inherited settings, never changes them or makes a model request; configured does not mean authenticated.',
-  modes: 'List the modes a run can be started from: the verb that runs each, that wf_open can drive it node by node, its gates with a person\'s marked, and its parameters.',
-  strategies: 'List the named outer loops, optimizers and evaluators, each with what it is. Choose settings.optimizer/strategy/evaluator from these names.',
-  runs: 'List runs under the run root, newest first.',
-  start: 'Optimize a mode: start an outer-loop run in its own process and return the run id to watch it with.',
-  run: 'Use a mode once: run it on DSH and report the result and where its artifacts are. This is the CLI\'s "run", not the optimizer.',
-  status: 'Where a run is, and the events since an offset.',
-  artifacts: 'What a run left on disk, optionally with contents.',
-  leaderboard: 'The run\'s candidates by score, each with its diff against its parent.',
-  candidate: 'One candidate, with what it changed against the parent it came from.',
-  steer: 'Read an existing run\'s intent ledger, or add what the person said to it. Use the absolute run directory returned by start, or repeat its runsRoot.',
-  best: 'The winner of a run, with the state that scored it.',
-  adopt: 'Write a run\'s winner as a new package, leaving the run and its source untouched.',
-  registry: 'List packages of modes, or verify, smoke, add, import, remove, enable or disable one.',
-  create: 'Create a package of modes from a brief (model-driven); runs for many minutes, and answers its gates through "approve" with "headless" (a person present is asked through wf_open instead).',
-  edit: 'Revise an existing mode from a brief (model-driven), refusing a regression; runs for many minutes, and answers its gates through "approve" with "headless" (a person present is asked through wf_open instead).',
-  design: 'Design, emit and check a software artifact from a brief (model-driven); runs for many minutes, and answers its gates through "approve" with "headless" (a person present is asked through wf_open instead).',
-  stop: 'Ask a run to stop.',
-} as const
-
-/** A console verb name. */
-type Verb = keyof typeof VERBS
-
-/** The verbs that address an existing run. */
-const RUN_SCOPED: readonly Verb[] = [
-  'status', 'artifacts', 'leaderboard', 'candidate', 'steer', 'best', 'adopt', 'stop',
-]
-
-// One physical line per paragraph: the description reaches the tool catalog
-// verbatim, and a paragraph broken across source lines is a paragraph the
-// markdown wrapper has to reject.
-const DESCRIPTION = [
-  'Drive and read a refactory outer-loop run: the optimizer loop that proposes edits to a mode, evaluates them, and keeps what improves the score. Use it to start a run, watch it while it is in flight, and read what it produced.',
-  '',
-  `Actions: ${Object.entries(VERBS).map(([verb, help]) => `${verb} (${help})`).join(' ')}`,
-  '',
-  'The loop runs in its own process, so a run continues after the call returns and after the session ends; watch it with action "status" and an "after" offset. Prefer this tool over running the loop in a shell: it is the same console the Web view renders, and a run started in a shell will not appear in the view unless it lives under the run root.',
-  '',
-  'Which action to use: "modes" answers with each mode\'s id, the verb that runs it (a scored mode by "start", an authoring mode by its own verb "create", "edit" or "design"), that it can also be driven node by node with "wf_open", the gates it declares with the ones a person answers marked "(user)", and its knobs. Read those fields rather than trying "start" and reading the refusal. "strategies" names every outer loop, optimizer and evaluator before you choose settings. Start with "modes", then "start" for a scored mode or the named authoring verb, then "status" until it finishes, then "leaderboard", "candidate", "artifacts" and "best".',
-  '',
-  'Every mode has two routes, and "modes" names both. "start" (or the mode\'s own authoring verb, "create", "edit" or "design") runs it to completion in a process of its own: it cannot pause to ask anyone anything, so a gate it stops at is answered only if "approve" carries the answer, which is why "approve" requires "headless" — say with it that nobody is at the keyboard. The other route is the workflow spine: "wf_open <package>/<name>" lowers the same mode and hands it over one node at a time, and its "user" gates are put to the person by the runtime, who answers them. So when a person is here, use "wf_open" and let them answer; never pass "approve" for a gate "modes" marks "(user)", because that records an answer they never gave. An authoring run chooses its strategy at "gate_strategy", which is one of those person gates in the shipped authoring modes.',
-].join('\n')
+/** Generated from the console parser and reviewed interface metadata. */
+type Verb = keyof typeof CHAT
+const DESCRIPTION = 'Discover and use Refactory. Begin with action help, then help topic=<mode or operation> for full live argument schemas and supported interfaces. Action docs searches/reads current-build product documentation without shell or source access. Run uses a mode; start optimizes a scored mode. For interactive user gates use wf_open.'
 
 /** Input the tool accepts, after the registry's schema check. */
 interface Args {
   action: Verb
+  topic?: string
+  page?: string
+  query?: string
+  section?: string
+  offset?: number
   mode?: string
   run?: string
   runId?: string
@@ -105,7 +71,7 @@ interface Args {
   contents?: boolean
   limit?: number
   runsRoot?: string
-  settings?: Record<string, string | number>
+  settings?: Record<string, string | number | boolean | Record<string, unknown> | string[]>
   intent?: string
   note?: string
   kind?: string
@@ -133,162 +99,44 @@ interface Args {
   singleShot?: boolean
 }
 
-/** One run's setting, as the console's `--<flag> value` pair. */
-function settingsOf(args: Args): Readonly<Record<string, string | number>> {
-  const settings = args.settings ?? {}
-  return Object.fromEntries(Object.entries(settings))
-}
-
-/**
- * The console invocation one call maps to. Every argument is passed through as
- * an option or positional; nothing is interpreted here, so a new console flag is
- * usable from the tool the moment the console declares it. The authoring and
- * package actions forward to the entry points the console now carries.
- * @param args - the model's arguments, already schema-checked.
- * @returns the verb, positionals, and options for one console call.
- */
+/** Shared generated mappings are the actual invocation adapter, not a second help list. */
 export function invocationFor(args: Args): {
   verb: Verb
   positional: readonly string[]
   options: Readonly<Record<string, string | number | boolean | readonly string[] | undefined>>
 } {
-  if (RUN_SCOPED.includes(args.action) && args.run === undefined) {
-    throw new Error(`action "${args.action}" needs \`run\`: the run id or directory to read`)
+  type Spec = { flags: readonly string[]; positional: boolean; type: string; position?: number }
+  type Mapping = { verb: Verb; order: readonly string[]; fields: Readonly<Record<string, string>>; required: readonly string[];
+    arguments: Readonly<Record<string, Spec>>; defaults?: Readonly<Record<string, unknown>>; settings?: boolean }
+  const mapping = CHAT[args.action] as Mapping
+  const values = { ...mapping.defaults, ...args } as Record<string, unknown>
+  if (mapping.required.some(key => values[key] === undefined)) {
+    const names = mapping.required.map(key => '`' + key + '`')
+    const required = names.length > 1 ? names.slice(0, -1).join(', ') + ' and ' + names.at(-1) : names[0]
+    throw new Error(`action "${args.action}" needs ${required}`)
   }
-  // `approve` answers a gate on the person's behalf, and these verbs run headless:
-  // the call cannot pause to ask them, so an answer passed here is the only answer
-  // the run will ever see. That is right for a run nobody is sitting at and wrong
-  // for one they are: the same mode can be driven node by node with `wf_open`, and
-  // the runtime puts its `user` gates to the person itself. Requiring the caller to
-  // say which case this is makes pre-answering a person's gate impossible by
-  // accident, which is the mistake this tool used to invite (#92).
   if ((args.approve?.length ?? 0) > 0 && args.headless !== true) {
-    throw new Error(
-      '`approve` answers a gate for a run nobody can ask, so it needs `headless: true`. '
-      + 'When a person is here, do not pre-answer their gate: open the mode with '
-      + '`wf_open <package>/<name>` and drive it — the runtime puts a `user` gate to '
-      + 'them. `modes` marks which gates those are.',
-    )
+    throw new Error('`approve` answers a gate on the person’s behalf and needs `headless: true`. When a person is here use wf_open so the runtime asks their user gate.')
   }
-  const run: Record<string, string | number | boolean | readonly string[] | undefined> = {
-    run: args.run,
-    'runs-root': args.runsRoot,
+  const positional: string[] = []
+  const options: Record<string, string | number | boolean | readonly string[] | undefined> = {}
+  for (const alias of mapping.order) {
+    const spec = mapping.arguments[alias]!
+    const value = values[alias]
+    if (spec.positional) {
+      if (value !== undefined) positional.push(String(value))
+    } else {
+      const flag = spec.flags[0]!.replace(/^--/, '')
+      options[flag] = spec.type === 'object' && value !== undefined ? JSON.stringify(value)
+        : value as string | number | boolean | readonly string[] | undefined
+    }
   }
-  switch (args.action) {
-    case 'start': {
-      if (args.mode === undefined) {
-        throw new Error('action "start" needs `mode`: the <package>/<name> to run')
-      }
-      const { positional = [], options = {} } = startInvocation({
-        mode: args.mode,
-        runId: args.runId,
-        runsRoot: args.runsRoot,
-        settings: settingsOf(args),
-        knobs: args.knobs,
-      })
-      return { verb: args.action, positional, options }
+  if (mapping.settings) {
+    for (const [key, value] of Object.entries(args.settings ?? {})) {
+      options[key] = typeof value === 'object' ? JSON.stringify(value) : value
     }
-    case 'run': {
-      if (args.mode === undefined) {
-        throw new Error('action "run" needs `mode`: the <package>/<name> to run once')
-      }
-      return {
-        verb: args.action,
-        positional: [args.mode],
-        options: {
-          intent: args.intent,
-          verdict: args.approve,
-          provider: args.provider,
-          model: args.model,
-        },
-      }
-    }
-    case 'candidate': {
-      if (args.candidate === undefined) {
-        throw new Error('action "candidate" needs `candidate`: the candidate id to read')
-      }
-      return { verb: args.action, positional: [args.candidate], options: run }
-    }
-    case 'status':
-      return { verb: args.action, positional: [], options: { ...run, after: args.after } }
-    case 'artifacts':
-      return { verb: args.action, positional: [], options: { ...run, contents: args.contents } }
-    case 'leaderboard':
-      return { verb: args.action, positional: [], options: { ...run, limit: args.limit } }
-    case 'steer':
-      return {
-        verb: args.action,
-        positional: [],
-        options: { ...run, seed: args.intent, note: args.note, kind: args.kind },
-      }
-    case 'best':
-      return { verb: args.action, positional: [], options: { ...run, state: args.state } }
-    case 'adopt': {
-      if (args.as === undefined) {
-        throw new Error('action "adopt" needs `as`: the new package name')
-      }
-      return { verb: args.action, positional: [], options: { ...run, as: args.as } }
-    }
-    case 'registry': {
-      const { positional = [], options = {} } = registryInvocation(
-        args.packages ?? 'list',
-        args.target ?? '',
-        args.args,
-      )
-      return { verb: args.action, positional, options }
-    }
-    case 'create': {
-      if (args.name === undefined || args.brief === undefined) {
-        throw new Error('action "create" needs `name` and `brief`')
-      }
-      return {
-        verb: args.action,
-        positional: [],
-        options: {
-          name: args.name, brief: args.brief, extends: args.extends, attempts: args.attempts,
-          'data-node': args.dataNode, task: args.task, single: args.singleShot,
-          verdict: args.approve,
-          input: args.inputs, provider: args.provider, model: args.model, resume: args.resume,
-          sample: args.sample,
-        },
-      }
-    }
-    case 'edit': {
-      if (args.mode === undefined || args.name === undefined || args.brief === undefined) {
-        throw new Error('action "edit" needs `mode`, `name` and `brief`')
-      }
-      return {
-        verb: args.action,
-        positional: [],
-        options: {
-          mode: args.mode, name: args.name, brief: args.brief,
-          'allow-regression': args.allowRegression, attempts: args.attempts,
-          verdict: args.approve, provider: args.provider, model: args.model, resume: args.resume,
-          sample: args.sample,
-        },
-      }
-    }
-    case 'design': {
-      if (args.name === undefined || args.brief === undefined || args.check === undefined) {
-        throw new Error('action "design" needs `name`, `brief` and `check`')
-      }
-      return {
-        verb: args.action,
-        positional: [],
-        options: {
-          name: args.name, brief: args.brief, check: args.check, attempts: args.attempts,
-          verdict: args.approve, provider: args.provider, model: args.model, resume: args.resume,
-          sample: args.sample,
-        },
-      }
-    }
-    case 'runtime':
-    case 'modes':
-    case 'strategies':
-    case 'runs':
-    case 'stop':
-      return { verb: args.action, positional: [], options: run }
   }
+  return { verb: mapping.verb, positional, options }
 }
 
 /**
@@ -354,12 +202,21 @@ export function renderResult(args: Args, value: unknown): ContentBlock[] {
       lines.push(JSON.stringify(data, null, 2))
       break
     }
+    case 'help':
+    case 'docs':
+    case 'workers':
+    case 'profiles':
+    case 'profile-resolve':
+    case 'comparison':
+      lines.push(JSON.stringify(value, null, 2))
+      break
     case 'modes': {
       const modes = Array.isArray(value) ? value : []
       lines.push(`${modes.length} mode(s):`)
       for (const mode of modes) {
         if (!isRecord(mode)) continue
         lines.push(`- ${scalar(mode.id)} — ${modeSummary(mode)}`)
+        lines.push(JSON.stringify(mode))
       }
       break
     }
@@ -564,80 +421,13 @@ export function apply(ctx: Context, config: Config): void {
   ctx.systemPrompt.section({
     name: `tool:${resolved.toolName}`,
     order: ctx.systemPrompt.getSectionOrder('TOOL_WORKFLOW'),
-    text: `Use the ${resolved.toolName} tool to run and read a refactory outer-loop run. A run starts in its own process and continues after the call returns, so start it, then watch it with the "status" action (pass an "after" offset to read only what is new) instead of blocking on it. Before asking the user to repeat model/home setup, call action "runtime": it reads the owning session route and nested configured-readiness without changing settings or testing authentication. Keep inherited values unless the user requests a change. Follow explicit Task/fixture constraints without asking for the same confirmation again.`,
+    text: `${OPERATING_GUIDE}\nTool: ${resolved.toolName}. Tool build identity: ${BUILD_ID}.`,
   })
 
   ctx.tools.register(defineTool({
     name: resolved.toolName,
     description: DESCRIPTION,
-    parameters: {
-      action: {
-        type: 'string',
-        required: true,
-        enum: Object.keys(VERBS),
-        description: `The verb. ${Object.entries(VERBS).map(([verb, help]) => `${verb}: ${help}`).join(' ')}`,
-      },
-      mode: { type: 'string', description: 'Mode to run, as <package>/<name>. Required by action "start".' },
-      run: {
-        type: 'string',
-        description: 'The run id or absolute run directory. Required by status, artifacts, leaderboard, candidate, stop.',
-      },
-      runId: { type: 'string', description: 'Run id to claim, for action "start" (default: derived from the mode and the time).' },
-      candidate: { type: 'string', description: 'Candidate id to read. Required by action "candidate".' },
-      after: { type: 'integer', description: 'For action "status": only return events after this many progress lines, so a poll reads what is new.' },
-      contents: { type: 'boolean', description: 'For action "artifacts": include each artifact\'s contents.' },
-      limit: { type: 'integer', description: 'For action "leaderboard": how many rows to return.' },
-      runsRoot: { type: 'string', description: 'Directory holding the runs (default: <repoRoot>/.factory/loop).' },
-      knobs: {
-        type: 'array',
-        items: { type: 'string' },
-        description: 'For action "start": knob values the search starts from, as "NAME=VALUE" (repeatable). A mode whose inputs are frozen knobs (an input path, a command) cannot be searched without one — every candidate would run the defaults and score the same thing.',
-      },
-      settings: {
-        type: 'object',
-        additionalProperties: true,
-        description: 'Run settings for action "start": epochs, batch_size, optimizer, strategy, evaluator, seed, elite, attempts, preset, max_evaluations. The optimizer, strategy and evaluator must be names from the "strategies" action, which lists each with what it is. Passed through as console flags.',
-      },
-      intent: { type: 'string', description: 'For actions "steer" and "run": what the run is for, in the user\'s words. For "run" it seeds the intent ledger every agent node reads.' },
-      provider: { type: 'string', description: 'For actions "run", "create", "edit" and "design": the provider route the model runs on (default: the settings default).' },
-      model: { type: 'string', description: 'For actions "run", "create", "edit" and "design": the model id to run on (default: the settings default).' },
-      note: { type: 'string', description: 'For action "steer": something said while the run goes, appended to the ledger.' },
-      kind: { type: 'string', enum: ['info', 'correction', 'constraint'], description: 'For action "steer": what the note is. A constraint must be respected, not merely known.' },
-      state: { type: 'boolean', description: 'For action "best": include the winner\'s full state dict.' },
-      as: { type: 'string', description: 'For action "adopt": the new package name. Required by "adopt".' },
-      packages: { type: 'string', enum: ['list', 'show', 'verify', 'smoke', 'tools', 'add', 'import', 'remove', 'enable', 'disable'], description: 'For action "registry": which package verb to run (default "list").' },
-      target: { type: 'string', description: 'For action "registry": the package name, <package>/<mode>, or directory the verb acts on.' },
-      args: { type: 'string', description: 'For action "registry": extra flags for that verb, as a shell-quoted string (e.g. "--as renamed --force").' },
-      name: { type: 'string', description: 'For "create"/"edit"/"design": the package or artifact name to write.' },
-      brief: { type: 'string', description: 'For "create"/"edit"/"design": what to build or change, in the asker\'s words.' },
-      extends: { type: 'string', description: 'For action "create": a <package>/<mode> to use as a reference.' },
-      check: { type: 'string', description: 'For action "design": the command that decides whether the artifact works. Required by "design".' },
-      allowRegression: { type: 'boolean', description: 'For action "edit": skip original-mode execution and score comparison; still validate the revised mode. Defaults to false.' },
-      approve: {
-        type: 'array',
-        items: { type: 'string' },
-        description: 'For "create"/"edit"/"design": answers to the gates the run pauses at, as "GATE=VALUE" (e.g. "gate_strategy=proceed"), for a run nobody can ask — it requires `headless: true`. These verbs run headless, so a gate the run stops at gets no answer unless one is passed; but when a person is here, their gate is theirs: open the mode with `wf_open <package>/<name>` instead and the runtime puts it to them. `modes` marks which gates belong to a person with `(user)`.',
-      },
-      headless: {
-        type: 'boolean',
-        description: 'For "create"/"edit"/"design": that nobody is at the keyboard for this run, which is the only case in which `approve` may answer a gate. Omit it for a run a person can answer, and drive the mode with `wf_open` so they are asked.',
-      },
-      attempts: { type: 'integer', description: 'For "create"/"edit"/"design": how many times the model may retry before the run fails.' },
-      dataNode: { type: 'boolean', description: 'For action "create": require that the produced mode declares a DataNode that runs its subgraph once per item. A requirement on top of `task` rather than a directive of its own: `task` already implies the data node, and the run is refused if the produced mode does not declare one.' },
-      task: { type: 'string', description: 'For action "create": the class of work, as a Task class (module:Class or a registered name). The produced package binds a data node to it, runs its subgraph once per item, and is judged per item; the run is refused if the produced mode is not bound to it. Naming neither `task` nor `singleShot` is refused, because a harness built for one hardcoded example is the special case.' },
-      singleShot: { type: 'boolean', description: 'For action "create": build a harness for one run of one thing, with no Task binding. One of `task` or `singleShot` is required.' },
-      sample: {
-        type: 'array',
-        items: { type: 'string' },
-        description: 'For "create"/"edit"/"design": knob values the validation run should use, as "NAME=VALUE" (repeatable). Give the input the brief is about so the smoke exercises that path instead of the built-in fixture; the run is also refused when the artifact it produces is not the format it claims (a .whl without METADATA and WHEEL beside its RECORD, an unreadable .zip).',
-      },
-      resume: { type: 'string', description: 'For "create"/"edit"/"design": a run directory to continue instead of starting a new run. Every node that already finished is kept, and the run continues at the one that failed — use it after a transport failure or a killed call rather than paying for the finished work again.' },
-      inputs: {
-        type: 'array',
-        items: { type: 'string' },
-        description: 'For action "create": the inputs the mode must accept, each named the way a knob or a file would be (e.g. "package", "source_tree"). The run is refused when the produced mode has no way to receive one — no knob named after it and no read under that name — so state them when the brief is about operating on something the caller supplies.',
-      },
-    },
+    parameters: PARAMETERS,
     output: {
       schema: {
         type: 'object',

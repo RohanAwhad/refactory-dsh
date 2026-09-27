@@ -434,6 +434,7 @@ class Mode:
             low, high = knob.range()
             knobs[name] = {
                 "value": entry["value"],
+                "default": knob.default,
                 "kind": knob.kind,
                 # Named separately: an enum has members, a str knob may declare
                 # values, and a numeric knob is a range. One overloaded "bounds"
@@ -450,6 +451,7 @@ class Mode:
                 {
                     "id": node.id,
                     "kind": node.kind,
+                    "role": node.role,
                     "call": node.call or node.evaluator,
                     "knobs": list(node.knobs),
                     "notes": node.notes,

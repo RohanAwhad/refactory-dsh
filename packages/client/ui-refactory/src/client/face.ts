@@ -39,7 +39,7 @@ import { searchBudget } from './store.ts'
 export type RefactoryRemote = {
   readonly refactoryConsole: Pick<
     RefactoryConsoleRemote,
-    'project' | 'modes' | 'strategies' | 'packages' | 'start' | 'run' | 'runStream' | 'status' | 'leaderboard'
+    'help' | 'workers' | 'project' | 'modes' | 'strategies' | 'packages' | 'start' | 'run' | 'runStream' | 'status' | 'leaderboard'
       | 'runs' | 'graphControl' | 'watchStream' | 'steer' | 'stop' | 'setPackageEnabled' | 'removePackage' | 'importPackage'
       | 'profiles' | 'profileSave' | 'profileResolve' | 'comparison'
       | 'steer' | 'stop' | 'setPackageEnabled' | 'removePackage' | 'importPackage'
@@ -90,6 +90,8 @@ export function refactoryConsoleOverConnection(
         if (!result.ok) throw new Error(result.error.message)
         yield { kind: 'result' as const, run: result.value }
       }),
+      help: (topic, signal) => call('help', { topic }, signal),
+      workers: signal => call('workers', {}, signal),
       status: (run, after, signal) => call('status', { run, after }, signal),
       leaderboard: (run, signal) => call('leaderboard', { run }, signal),
       steer: (request, signal) => call('steer', { request }, signal),
@@ -135,6 +137,7 @@ export interface RefactoryInjected {
   readonly graphControl?: (request: { run: string; action: string; node?: string; text?: string; revision?: string }, signal: AbortSignal) => Promise<Record<string, unknown>>
 
   /** Direct profile operations keep the saved recipe separate from the watched run. */
+  readonly discoveryApi?: Pick<RefactoryConsoleRemote, 'help' | 'workers'>
   readonly profileApi?: Pick<RefactoryConsoleRemote, 'profiles' | 'profileSave' | 'profileResolve' | 'comparison'>
 
   /**
@@ -465,6 +468,7 @@ export function refactoryFace(
         return result.value
       },
       profileApi: console,
+      discoveryApi: console,
       load(tabId, signal) {
         if (signal.aborted) return
         actions.start(tabId)

@@ -28,8 +28,8 @@ Keep other workers on DSH and select Codex only for the shipped authoring coder:
 
 Replace `codex` with `claude_code` for a Claude Code coder. Optional `model` selects
 a native model. DSH also accepts `provider` and `effort`; native backends reject
-those fields. Use `refactory list --json` to inspect actual node
-IDs; custom modes may not call their coder `emit`. `role_routes` uses
+those fields. Use `refactory help --topic <package/mode>` to inspect actual node
+IDs and roles; custom modes may not call their coder `emit`. `role_routes` uses
 the same objects keyed by declared worker role. Node beats role beats run.
 
 For a new run the precedence is built-in defaults, environment selection, project
@@ -66,4 +66,4 @@ bypass their own sandbox). An explicit `permission_mode: "default"` retains nati
 checks. Native authentication remains with Codex/Claude Code; DSH uses its managed
 credential store. See [models](models.md) for installation and authentication.
 Token caps remain optional and unset; whole-tree caps are unsupported for native
-backends.
+backends. See [CEO discovery](discovery.md) for extending the checked help contract.

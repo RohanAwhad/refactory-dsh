@@ -591,3 +591,11 @@ invocation, not a resume or an implicit redo. Unmanaged files and declared cross
 memory are not swept away; only recorded output ownership and runtime paths are
 retired. An old run lacking ownership declarations refuses reuse rather than
 guessing which files to move.
+
+## Public capability coverage
+
+See [discovery](discovery.md) for the shared parser/mode contract, semantic review
+metadata, offline generation and extension checklist. Run `pnpm run docs:generate`
+after reviewed changes and `pnpm run docs:check` before building. New public
+operations, mode schemas and worker capabilities require current explanations,
+examples and explicit CLI/chat/panel routes.

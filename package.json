@@ -22,7 +22,9 @@
     }
   },
   "scripts": {
-    "build": "pnpm run typecheck && tsdown --env.DSH_BUILD_FACE host && tsdown --env.DSH_BUILD_FACE client",
+    "docs:generate": ".venv/bin/python -m refactory_dsh.tools.gen_api_reference && .venv/bin/python -m refactory_dsh.tools.gen_discovery",
+    "docs:check": ".venv/bin/python -m refactory_dsh.tools.gen_api_reference --check && .venv/bin/python -m refactory_dsh.tools.gen_discovery --check",
+    "build": "pnpm run docs:check && pnpm run typecheck && tsdown --env.DSH_BUILD_FACE host && tsdown --env.DSH_BUILD_FACE client",
     "typecheck": "tsc -b tsconfig.host.json && tsc -b tsconfig.client.json",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",

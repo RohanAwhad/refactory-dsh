@@ -13,6 +13,7 @@ import type {
 } from '@deepseek-ai/dsh-subprocess'
 
 import * as tool from '../src/index.ts'
+import { CHAT } from '../src/generated-help.ts'
 import { CONSOLE_DEFAULTS, Console } from '../src/console.ts'
 
 /**
@@ -115,10 +116,8 @@ describe('dsh-tool-refactory', () => {
     const schema = ctx.tools.schemas().find(entry => entry.name === 'refactory')
     expect(schema).toBeDefined()
     const action = (schema!.parameters as { properties: Record<string, { enum?: string[] }> }).properties.action
-    expect(action?.enum).toEqual([
-      'runtime', 'modes', 'strategies', 'runs', 'start', 'run', 'status', 'artifacts', 'leaderboard',
-      'candidate', 'steer', 'best', 'adopt', 'registry', 'create', 'edit', 'design', 'stop',
-    ])
+    expect(action?.enum).toEqual(Object.keys(CHAT))
+    expect(action?.enum).toEqual(expect.arrayContaining(['help', 'docs', 'workers', 'profiles', 'profile-resolve']))
   })
 
   it('runs the console through the subprocess capability with the configured interpreter', async () => {
@@ -188,7 +187,7 @@ describe('dsh-tool-refactory', () => {
     const { ctx, subprocess } = await setup()
     expect(text(await call(ctx, { action: 'status' }))).toContain('needs `run`')
     expect(text(await call(ctx, { action: 'start' }))).toContain('needs `mode`')
-    expect(text(await call(ctx, { action: 'candidate', run: 'r1' }))).toContain('needs `candidate`')
+    expect(text(await call(ctx, { action: 'candidate', run: 'r1' }))).toContain('`candidate`')
     expect(subprocess.spawns).toHaveLength(0)
   })
 
@@ -246,7 +245,8 @@ describe('dsh-tool-refactory', () => {
       expect(summary.length, action).toBeGreaterThan(0)
       // The summary is prose about the payload; the payload itself travels
       // structured, for the card, and must not also be dumped into the text.
-      expect(summary, action).not.toContain('{"')
+      if (action === 'modes') expect(summary).toContain(JSON.stringify((payload as unknown[])[0]))
+      else expect(summary, action).not.toContain('{"')
     }
   })
 
@@ -305,19 +305,19 @@ describe('dsh-tool-refactory', () => {
   it('refuses an adopt with no package name before spawning', async () => {
     const { ctx, subprocess } = await setup()
     subprocess.handler = () => runResult('{}')
-    expect(text(await call(ctx, { action: 'adopt', run: 'r1' }))).toContain('needs `as`')
+    expect(text(await call(ctx, { action: 'adopt', run: 'r1' }))).toContain('`as`')
     expect(subprocess.spawns).toHaveLength(0)
   })
 
   it('registers a prompt section telling the model a run outlives the call', async () => {
     const { ctx } = await setup()
-    expect(await promptText(ctx)).toContain('continues after the call returns')
+    expect(await promptText(ctx)).toContain('can outlive a chat')
   })
 
   it('honours a renamed tool', async () => {
     const { ctx } = await setup({ toolName: 'loop' })
     expect(ctx.tools.schemas().map(entry => entry.name)).toContain('loop')
-    expect(await promptText(ctx)).toContain('loop tool to run and read')
+    expect(await promptText(ctx)).toContain('Tool: loop.')
   })
 
   it('presents through the registered definition, so the runtime renders the same view', async () => {
@@ -590,10 +590,10 @@ it('tells the model which action runs which kind of mode', async () => {
   const definition = ctx.tools.get('refactory')
   // Both routes, and who a gate belongs to: a caller told only the headless verb
   // picks it and pre-answers a gate the person would have been asked at (#92).
-  expect(definition?.description).toContain('Every mode has two routes')
-  expect(definition?.description).toContain('authoring mode by its own verb')
-  expect(definition?.description).toContain('wf_open <package>/<name>')
-  expect(definition?.description).toContain('never pass "approve" for a gate "modes" marks "(user)"')
+  expect(definition?.description).toContain('start optimizes a scored mode')
+  expect(definition?.description).toContain('use wf_open')
+  expect(await promptText(ctx)).toContain('never invent their verdicts')
+  expect(await promptText(ctx)).toContain('headless: true')
 })
 
 describe('authoring from the Web GUI', () => {
@@ -816,4 +816,24 @@ describe('seeding a search with the knobs a mode needs', () => {
     expect(argv).toContain('source_root=/tmp/demo_pkg')
     expect(argv).toContain('test_command=pytest -q')
   })
+})
+
+it('retains complete mode constraints, role metadata and coverage warnings in model-visible output', async () => {
+  const { ctx, subprocess } = await setup()
+  const mode = { id: 'fixture/new', startable: true, parameters: {
+    extra: { kind: 'int', default: 3, value: 3, range: [1, 8], values: [], frozen: false, description: 'Example count' },
+  }, nodes: [{ id: 'emit', role: 'builder', kind: 'agent' }], coverage_warnings: ['Missing guidance'] }
+  subprocess.handler = () => runResult(JSON.stringify([mode]))
+  const rendered = text(await call(ctx, { action: 'modes' }))
+  expect(rendered).toContain(JSON.stringify(mode))
+})
+
+it('read-only help/docs keep identity and bounded page text in the actual tool output', async () => {
+  const { ctx, subprocess } = await setup()
+  subprocess.handler = () => runResult(JSON.stringify({ build_id: 'running-build', documentation_id: 'running-docs', text: 'Worker routing', next_offset: 14 }))
+  const answer = await call(ctx, { action: 'docs', page: 'refactory/docs/worker-routing.md', limit: 14 })
+  expect(text(answer)).toContain('running-build')
+  expect(text(answer)).toContain('next_offset')
+  expect(subprocess.spawns[0]!.argv).toContain('--page')
+  expect(subprocess.spawns[0]!.argv).not.toContain('bash')
 })

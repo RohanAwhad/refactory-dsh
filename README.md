@@ -157,7 +157,13 @@ The full [command reference](refactory/docs/cli.md) covers authoring, packages, 
 
 Refactory is under active development. Execution success, declared check results and the quality of generated content are separate evidence; inspect each when deciding whether an artifact meets your needs.
 
-### Project worker defaults
+### Live help and project workers
+
+The CEO starts with a compact operating guide and can discover current mode and
+operation schemas through `refactory help`, then search/read complete shipped docs
+with `refactory docs`. Mode knobs, node roles, gates, examples and supported
+interface routes stay visible to the model. Builds check documentation coverage
+and reject stale generated references. See [discovery and extension checklist](refactory/docs/discovery.md).
 
 Put `refactory.workers.json` at the project root to select DSH, Codex or Claude Code
 workers, including a coder-only `node_routes.emit` override. CLI, native panel,
