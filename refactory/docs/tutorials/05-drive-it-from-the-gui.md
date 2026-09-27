@@ -52,7 +52,7 @@ The original two-gear Refactory lockup identifies empty chat. Open **Modes** for
 
 Copy the exact run directory reported by chat into **Existing run directory → Read this run**. The attached status and Steering sections refer to that directory. The attached view streams persisted graph/worker activity, wait reasons, completed nodes and pending questions. Reading or reconnecting does not execute the run; [supported recovery](../live-control.md#recover-a-known-boundary) requires explicit resume.
 
-For optimization, choose a scored mode in Modes, select its starting knobs, outer loop, optimizer, evaluator and search budgets, then **Start**. Inspect candidates and use the optimizer-specific steering/adoption controls. Use **Run once** for an authoring mode after supplying its required knobs, or chat for stepwise control and approval gates.
+For optimization, select **Optimize** in Modes, choose a scored mode, set its starting inputs and search limits, and press **Start optimization**. Search methods and saved profiles are expandable. Inspect candidates and use the optimizer-specific steering/adoption controls. Use **Run once** for an authoring mode after supplying its required knobs, or chat for stepwise control and approval gates.
 
 The same run can be inspected from a second terminal:
 

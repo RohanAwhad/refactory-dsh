@@ -15,7 +15,7 @@
  * started and not used once: the row says which action runs it, and the Host
  * refuses what the loop cannot search.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type {
   RefactoryCandidateRow,
@@ -37,6 +37,8 @@ import css from './RefactoryBody.module.css'
 import { GraphControls, RunList } from './GraphControls.tsx'
 import { WorkflowArt, stateTone } from './WorkflowArt.tsx'
 import { RunActivity } from './RunActivity.tsx'
+import { FieldHelp, FieldLabel } from './FieldHelp.tsx'
+import { BriefEditor } from './BriefEditor.tsx'
 import { ProfileControls, CandidateComparison, RuntimeControls } from './ProfileControls.tsx'
 
 /** The body's composed props: the tab it draws, its store, its face, and its copy. */
@@ -96,7 +98,7 @@ function Seam({
 }): ReactNode {
   return (
     <div className={css.field}>
-      <label className={css.label} htmlFor={`refactory-${id}`}>{label}</label>
+      <FieldLabel htmlFor={`refactory-${id}`} help={t(`help.${id as 'strategy' | 'optimizer' | 'evaluator'}`)}>{label}</FieldLabel>
       <select
         id={`refactory-${id}`}
         className={css.control}
@@ -154,11 +156,14 @@ function KnobField({
   readonly onChange: (value: string) => void
 }): ReactNode {
   const control = controlOf(knob)
-  const id = `refactory-knob-${name}`
+  const unique = useId()
+  const id = `refactory-knob-${name}-${unique}`
   return (
-    <div className={css.field}>
-      <label className={css.label} htmlFor={id}>{name}</label>
-      {control.kind === 'choice'
+    <div className={name === 'brief' ? `${css.field} ${css.fullField}` : css.field}>
+      <FieldLabel htmlFor={id} help={knob.description || t('help.knob', { name, kind: knob.kind })}>{name}</FieldLabel>
+      {name === 'brief' && control.kind === 'text'
+        ? <BriefEditor id={id} value={value} description={knob.description} onChange={onChange} t={t} />
+        : control.kind === 'choice'
         ? (
           <select
             id={id}
@@ -195,7 +200,7 @@ function KnobField({
             />
           )}
       {knob.description !== '' && (
-        <p className={css.note} data-refactory-knob-description={name}>{knob.description}</p>
+        <p className={css.srOnly} data-refactory-knob-description={name}>{knob.description}</p>
       )}
       {knob.frozen && <p className={css.note} data-refactory-knob-frozen={name}>{t('knob.frozen')}</p>}
     </div>
@@ -358,6 +363,7 @@ function Candidates({
   readonly controlRun: RefactoryInjected['controlRun']
 }): ReactNode {
   const [destination, setDestination] = useState('')
+  const destinationId = useId()
   return (
     <div className={css.status} data-refactory-candidates={candidates?.kind ?? 'none'}>
       <div className={css.packageActions}>
@@ -370,7 +376,9 @@ function Candidates({
           <IconRefreshOutline16 />
           {t('candidates.read')}
         </button>
-        <input
+        <div className={css.field}>
+        <FieldLabel htmlFor={destinationId} help={t('help.destination')}>{t('control.destination')}</FieldLabel>
+        <input id={destinationId}
           className={css.input}
           value={destination}
           aria-label={t('control.destination')}
@@ -378,6 +386,7 @@ function Candidates({
           data-refactory-adopt-name
           onChange={(event) => { setDestination(event.target.value) }}
         />
+        </div>
         <button
           type="button"
           className={css.action}
@@ -600,7 +609,8 @@ function Steering({
           setSaid('')
         }}
       >
-        <input
+        <FieldLabel htmlFor={`note-${tabId}`} help={t('help.note')}>{t('steering.note')}</FieldLabel>
+        <input id={`note-${tabId}`}
           className={css.input}
           value={said}
           aria-label={t('steering.note')}
@@ -608,7 +618,8 @@ function Steering({
           data-refactory-note
           onChange={(event) => { setSaid(event.target.value) }}
         />
-        <select
+        <FieldLabel htmlFor={`note-kind-${tabId}`} help={t('help.noteKind')}>{t('steering.kind')}</FieldLabel>
+        <select id={`note-kind-${tabId}`}
           className={css.control}
           value={kind}
           aria-label={t('steering.kind')}
@@ -635,7 +646,7 @@ function Steering({
 
 /** The picker's body: the described choices, and the run they start. */
 export function RefactoryBody({
-  useTabInfo, useStore, choose, choosePackage, setKnob, setSetting, start, run: runOnce, load, reload, refresh, watch, stop,
+  useTabInfo, useStore, choose, choosePackage, chooseIntent, setKnob, setSetting, start, run: runOnce, load, reload, refresh, watch, stop,
   readSteering, readCandidates, addNote, answerGate, controlRun, setEnabled, remove,
   importPackage, listRuns, graphControl, profileApi, t,
 }: RefactoryBodyProps): ReactNode {
@@ -645,6 +656,9 @@ export function RefactoryBody({
   const [source, setSource] = useState('')
   const [name, setName] = useState('')
   const [watchedPath, setWatchedPath] = useState('')
+  const intent = state?.setupIntent ?? 'run'
+  const setIntent = (value: 'run' | 'optimize'): void => { chooseIntent(tab.id, value) }
+  const setupId = useId()
   useEffect(() => { setWatchedPath(state?.watching ?? '') }, [state?.watching])
   const chosen = state?.choices.kind === 'ready'
     ? state.choices.value.modes.find(mode => mode.id === state.chosen)
@@ -713,8 +727,21 @@ export function RefactoryBody({
       <div className={css.content}>
       <section className={css.section} data-refactory-configuration>
         <h2 className={css.heading}>{t('run.heading')}</h2>
+        <div className={css.setupTabs} role="tablist" aria-label={t('setup.label')}>
+          {(['run', 'optimize'] as const).map(view => <button key={view} type="button" role="tab"
+            id={`${setupId}-${view}-tab`} aria-controls={`${setupId}-${view}-pane`} aria-selected={intent === view}
+            tabIndex={intent === view ? 0 : -1} data-refactory-intent={view} onClick={() => { setIntent(view) }}
+            onKeyDown={event => {
+              if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+              event.preventDefault()
+              const next = event.key === 'Home' ? 'run' : event.key === 'End' ? 'optimize' : view === 'run' ? 'optimize' : 'run'
+              setIntent(next)
+              document.getElementById(`${setupId}-${next}-tab`)?.focus()
+            }}>{t(`setup.${view}`)}</button>)}
+        </div>
+        <p className={css.note}>{t(intent === 'run' ? 'panel.onceHelp' : 'panel.startHelp')}</p>
         <div className={css.field}>
-          <label className={css.label} htmlFor="refactory-package">{t('package.label')}</label>
+          <FieldLabel htmlFor="refactory-package" help={t('help.package')}>{t('package.label')}</FieldLabel>
           <select id="refactory-package" className={css.control} data-refactory-package value={state.selectedPackage ?? ''}
             onChange={event => { choosePackage(tab.id, event.target.value || null) }}>
             <option value="">{t('package.choose')}</option>
@@ -722,7 +749,7 @@ export function RefactoryBody({
           </select>
         </div>
         <div className={css.field}>
-          <label className={css.label} htmlFor="refactory-mode">{t('mode.label')}</label>
+          <FieldLabel htmlFor="refactory-mode" help={t('help.mode')}>{t('mode.label')}</FieldLabel>
           <select
             id="refactory-mode"
             className={css.control}
@@ -746,9 +773,9 @@ export function RefactoryBody({
         {knobs.length > 0 && <details className={css.disclosure} open data-refactory-inputs>
           <summary>{t('panel.inputs')} · {knobs.length}</summary>
           <div className={css.fields}>
-        {knobs.map(({ name: knob, knob: declaration, value }) => (
+        {[...knobs].sort((a, b) => Number(b.name === 'brief') - Number(a.name === 'brief')).map(({ name: knob, knob: declaration, value }) => (
           <KnobField
-            key={knob}
+            key={`${selected?.id}:${knob}`}
             name={knob}
             knob={declaration}
             value={value}
@@ -779,11 +806,40 @@ export function RefactoryBody({
           </div>
         )}
         {selected && <RuntimeControls configuration={state.settings.configuration || '{}'} onChange={value => { setSetting(tab.id, 'configuration', value) }} />}
+        <div role="tabpanel" id={`${setupId}-optimize-pane`} aria-labelledby={`${setupId}-optimize-tab`}
+          hidden={intent !== 'optimize'} className={css.setupPane}>
+        {selected && !selected.scored && <p className={css.note}>{t('setup.scoredOnly')}</p>}
         {selected?.scored && profileApi && <ProfileControls api={profileApi} mode={selected.id} settings={state.settings} knobs={knobs} knobDefaults={knobValues(selected, {})} signal={signal}
           onField={(key, value) => { setSetting(tab.id, key, value) }} onKnob={(key, value) => { setKnob(tab.id, key, value) }} />}
-        <details className={css.disclosure} data-refactory-search-settings>
+        <details className={css.disclosure} open data-refactory-search-settings>
           <summary>{t('panel.search')}</summary>
-          <div className={css.fields}>
+          <div className={css.status}>
+        {selected?.action === 'start' && (
+          <div className={css.status} data-refactory-search-budget>
+            <div className={css.fields}>
+            {(Object.keys(SEARCH_BUDGET_DEFAULTS) as RefactoryBudgetName[]).map(name => (
+              <div className={css.field} key={name}>
+                <FieldLabel htmlFor={`refactory-${name}`} help={t(`help.${name}`)}>{t(`budget.${name}`)}</FieldLabel>
+                <input
+                  id={`refactory-${name}`}
+                  className={css.control}
+                  type="number"
+                  min={1}
+                  max={Number.MAX_SAFE_INTEGER}
+                  step={1}
+                  value={state.settings[name] ?? SEARCH_BUDGET_DEFAULTS[name]}
+                  data-refactory-budget={name}
+                  aria-invalid={searchBudget({ [name]: state.settings[name] }) === null}
+                  onChange={event => { setSetting(tab.id, name, event.target.value) }}
+                />
+              </div>
+            ))}
+            </div>
+            <p className={css.note}>{t('budget.scope')}</p>
+          </div>
+        )}
+          <details className={css.disclosure} data-refactory-search-method>
+            <summary>{t('setup.method')}</summary>
         <Seam
           id="strategy"
           label={t('strategy.label')}
@@ -808,75 +864,43 @@ export function RefactoryBody({
           t={t}
           onChoose={(value) => { setSetting(tab.id, 'evaluator', value) }}
         />
-        {selected?.action === 'start' && (
-          <div className={css.status} data-refactory-search-budget>
-            <h3 className={css.heading}>{t('budget.heading')}</h3>
-            {(Object.keys(SEARCH_BUDGET_DEFAULTS) as RefactoryBudgetName[]).map(name => (
-              <div className={css.field} key={name}>
-                <label className={css.label} htmlFor={`refactory-${name}`}>{t(`budget.${name}`)}</label>
-                <input
-                  id={`refactory-${name}`}
-                  className={css.control}
-                  type="number"
-                  min={1}
-                  max={Number.MAX_SAFE_INTEGER}
-                  step={1}
-                  value={state.settings[name] ?? SEARCH_BUDGET_DEFAULTS[name]}
-                  data-refactory-budget={name}
-                  aria-invalid={searchBudget({ [name]: state.settings[name] }) === null}
-                  onChange={event => { setSetting(tab.id, name, event.target.value) }}
-                />
-              </div>
-            ))}
-            <p className={css.note}>{t('budget.scope')}</p>
-          </div>
-        )}
+          </details>
           </div>
         </details>
         {!validBudget && <p className={css.notice} role="alert">{t('budget.invalid')}</p>}
-        {selected !== undefined && (
-          <div className={css.launch}>
-            <div>
-            <button
-              type="button"
-              className={selected.action === 'start' ? `${css.action} ${css.primary}` : css.action}
-              disabled={state.starting || state.busy || !selected.enabled || selected.action !== 'start' || !validBudget}
-              data-refactory-start
-              onClick={() => { start(tab.id, selected.id, knobs, state.settings, signal) }}
-            >
-              <IconPlayOutline16 />
-              {t('start')}
+        {selected !== undefined && <div className={css.launchSingle}>
+          <p className={css.launchSummary}>{t('setup.optimizeSummary', { mode: selected.id })}</p>
+          <button type="button" className={`${css.action} ${css.primary}`}
+            disabled={state.starting || state.busy || !selected.enabled || !selected.scored || selected.action !== 'start' || !validBudget}
+            data-refactory-start onClick={() => { start(tab.id, selected.id, knobs, state.settings, signal) }}>
+            <IconPlayOutline16 />{t(state.starting ? 'setup.starting' : 'setup.start')}
+          </button>
+          <p className={css.note}>{t('budget.scope')}</p>
+        </div>}
+        </div>
+        <div role="tabpanel" id={`${setupId}-run-pane`} aria-labelledby={`${setupId}-run-tab`}
+          hidden={intent !== 'run'} className={css.setupPane}>
+          {selected?.enabled && <div className={css.launchSingle}>
+            <p className={css.launchSummary}>{t('setup.runSummary', { mode: selected.id })}</p>
+            <button type="button" className={`${css.action} ${css.primary}`} disabled={state.single?.kind === 'running'}
+              data-refactory-run-once onClick={() => { runOnce(tab.id, selected.id, knobs, signal, state.settings) }}>
+              <IconPlayOutline16 />{t('runOnce')}
             </button>
-            <p className={css.note}>{t('panel.startHelp')}</p>
-            </div>
-            <div>
-            {selected.enabled && (
-              <button
-                type="button"
-                className={selected.action !== 'start' ? `${css.action} ${css.primary}` : css.action}
-                disabled={!selected.enabled || state.single?.kind === 'running'}
-                data-refactory-run-once
-                onClick={() => { runOnce(tab.id, selected.id, knobs, signal, state.settings) }}
-              >
-                <IconPlayOutline16 />
-                {t('runOnce')}
-              </button>
-            )}
-            <p className={css.note}>{t('panel.onceHelp')}</p>
-            </div>
-          </div>
-        )}
+          </div>}
+        </div>
         {state.single !== null && <Single run={state.single} t={t} onWatch={root => { watch(tab.id, root, signal) }} />}
       </section>
 
       <div className={css.monitor}>
       <section className={css.section}>
-        <h2 className={css.heading}>{t('status.heading')}</h2>
+        <div className={css.fieldLabel}><h2 className={css.heading}>{t('status.heading')}</h2><FieldHelp label={t('status.heading')}>{t('help.activity')}</FieldHelp></div>
         <form className={css.import} onSubmit={(event) => {
           event.preventDefault()
           watch(tab.id, watchedPath, signal)
         }}>
+          <FieldLabel htmlFor={`${setupId}-watch`} help={t('status.watchHelp')}>{t('status.runPath')}</FieldLabel>
           <input
+            id={`${setupId}-watch`}
             className={css.input}
             value={watchedPath}
             aria-label={t('status.runPath')}
@@ -1000,7 +1024,8 @@ export function RefactoryBody({
             setName('')
           }}
         >
-          <input
+          <FieldLabel htmlFor={`${setupId}-import-source`} help={t('help.importSource')}>{t('packages.importSource')}</FieldLabel>
+          <input id={`${setupId}-import-source`}
             className={css.input}
             value={source}
             aria-label={t('packages.importSource')}
@@ -1008,7 +1033,8 @@ export function RefactoryBody({
             data-refactory-import-source
             onChange={(event) => { setSource(event.target.value) }}
           />
-          <input
+          <FieldLabel htmlFor={`${setupId}-import-name`} help={t('help.importName')}>{t('packages.importName')}</FieldLabel>
+          <input id={`${setupId}-import-name`}
             className={css.input}
             value={name}
             aria-label={t('packages.importName')}

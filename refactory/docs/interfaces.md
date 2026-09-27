@@ -8,12 +8,12 @@ Both interfaces use the same mode catalogue and run artifacts. The terminal is u
 |---|---|---|
 | Create, Edit, Design | `refactory ceo` with the authoring mode | CEO chat for stepwise control; select a full/fast mode and **Run once** for execution |
 | Run an existing mode interactively | `refactory ceo package/mode` | CEO chat for stepwise control; **Run once** for execution |
-| Configure and start optimization | `refactory optimize` | CEO chat can launch a saved profile through Refactory tools; Modes: saved profile or explicit controls → **Preview launch contract** → **Start** |
+| Configure and start optimization | `refactory optimize` | CEO chat can launch a saved profile through Refactory tools; Modes → **Optimize**: saved profile or explicit controls → **Preview launch contract** → **Start optimization** |
 | Inspect an existing run | `status --follow`, `artifacts`, `comparison`, `candidate` | **Runs and pending questions** or **Existing run directory → Read this run**; live activity and Steering |
 | Add instructions or answer gates | Conversation and `refactory steer` | Chat and the attached run's Steering controls |
 | Keep/reject candidates, pause/resume, adopt | `refactory steer`, `refactory adopt` | Optimizer controls in Steering |
 
-**Start** searches scored modes. **Run once** also runs enabled authoring modes, including `create_fast`, `edit_fast` and `design_fast`; supply their required knobs first. Each CEO session owns one open workflow at a time. Use a separate session and distinct work directory for another concurrent workflow; opening a viewer never claims ownership of the run.
+**Optimize → Start optimization** searches scored modes. **Run once** also runs enabled authoring modes, including `create_fast`, `edit_fast` and `design_fast`; supply their required knobs first. Each CEO session owns one open workflow at a time. Use a separate session and distinct work directory for another concurrent workflow; opening a viewer never claims ownership of the run.
 
 For chat-driven optimization, name the scored mode and saved profile/version, ask
 the CEO to launch it, inspect the completed search, adopt the exact winner and
@@ -66,6 +66,6 @@ Created/adopted packages live in `.factory/packages/`, Design artifacts in `.fac
 
 ## Panel presentation
 
-The Modes panel uses Refactory’s original two-gear identity and blue theme in both color schemes. **Configure a run**, **Activity & results**, **Graph controls** and **Steering** separate setup, observation and actions. Advanced settings and package management expand without discarding inputs. A pending-question banner links to the available answers. Narrow and split panels stack the same controls; expanded panels place configuration beside activity.
+The Modes panel uses Refactory’s original two-gear identity and blue theme in both color schemes. **Configure a run**, **Activity & results**, **Graph controls** and **Steering** separate setup, observation and actions. Run and Optimize have separate launch actions while sharing inputs and the watched run. Help buttons explain fields, and clicking brief opens a large draft editor with Apply/Cancel. Advanced settings and package management expand without discarding inputs. A pending-question banner links to the available answers. Narrow and split panels stack the same controls; expanded panels place configuration beside activity.
 
-The [panel guide](tutorials/07-pick-and-watch-from-the-panel.md#find-the-controls) describes navigation. [Presentation acceptance](panel-validation-20260927.md) records native screenshots and bounded checks. [Upstream compatibility](upstream-compatibility.md) documents the published DSH dependency and pre-existing patch boundary.
+The [panel guide](tutorials/07-pick-and-watch-from-the-panel.md#find-the-controls) describes navigation. [Presentation acceptance](panel-validation-20260927.md) and the [UX follow-up](panel-ux-validation-20260927.md) record native screenshots and bounded checks. [Upstream compatibility](upstream-compatibility.md) documents the published DSH dependency and pre-existing patch boundary.

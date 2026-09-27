@@ -3,7 +3,35 @@ import type { ReactNode } from 'react'
 import type { RefactoryConsoleRemote, RefactoryProfile } from '@deepseek-ai/dsh-refactory-console/types'
 import type { RefactoryKnobSetting, RefactorySettings, RefactorySettingName } from './store.ts'
 import { searchBudget } from './store.ts'
+import { FieldLabel } from './FieldHelp.tsx'
 import css from './RefactoryBody.module.css'
+
+const controlHelp: Record<string, string> = {
+  "profile-select": "Load a saved, immutable version of search settings and its objective. Your edits become a new version only when you save.",
+  "elite": "How many leading candidates remain available as parents for the next generation.",
+  "attempts": "Maximum proposal attempts when a proposed candidate cannot be accepted.",
+  "seed": "Seed for reproducible random choices, where the selected optimizer supports it.",
+  "holdout": "Fraction of task data reserved for final winner validation rather than candidate ranking.",
+  "parsimony": "Penalty per graph node, subtracted from validated score to prefer smaller solutions when scores are otherwise comparable.",
+  "repeats": "How many trials measure each candidate and the winner. Repetition reports variability; it does not guarantee improvement.",
+  "preset": "Choose the permitted families of candidate edits. Task definitions, scoring and validation remain fixed.",
+  "frozen": "Comma-separated input names the search must keep unchanged. You can still set their initial values above.",
+  "allowed_ops": "Comma-separated edit operations to allow. Leave empty to use the selected edit preset.",
+  "name": "Name under which to save this search recipe. Saving appends an immutable version.",
+  "objective": "Human-readable goal recorded in the search contract. Save a version to apply an objective change; it does not replace the mode’s score.",
+  "artifacts": "Additional output files required by the contract, one relative path per line. Save a version to apply changes.",
+  "backend": "Runtime used for coding workers. DSH is the default; optional backends require installation and their own authentication.",
+  "provider": "Model provider override for DSH workers. Leave blank to inherit the runtime selection.",
+  "model": "Model identifier used by workers. Leave blank to inherit the selected backend’s model.",
+  "effort": "Reasoning effort override for DSH workers, such as a value supported by the selected model. Blank inherits the runtime selection.",
+  "permission": "Permission policy for worker tools. Skip uses the existing approval/sandbox bypass defaults; a native policy retains the backend’s checks.",
+  "max_elapsed_s": "Optional total elapsed-time budget for the run, in seconds. Blank means no added limit.",
+  "max_tokens": "Optional shared token budget for DSH workers. Blank means no added limit. External backends do not support this control.",
+  "validation_reserve_s": "Time kept for final validation within the total elapsed-time budget, in seconds. Zero adds no reserve.",
+  "validation_reserve_tokens": "Tokens kept for final validation within the DSH token budget. Zero adds no reserve.",
+  "role_routes": "JSON object mapping worker roles to routing overrides. More specific node overrides take precedence. An empty object inherits the run-wide route.",
+  "node_routes": "JSON object mapping node IDs to routing overrides. These take precedence over role and run-wide routes. An empty object adds no overrides."
+}
 
 type ProfileApi = Pick<RefactoryConsoleRemote, 'profiles' | 'profileSave' | 'profileResolve' | 'comparison'>
 
@@ -76,8 +104,8 @@ export function ProfileControls({ api, mode, settings, knobs, knobDefaults = [],
     setResolved(null)
   }
   return <details className={css.disclosure} data-refactory-profiles>
-    <summary className={css.heading}>Optimization profiles and full search controls</summary>
-    <label className={css.label} htmlFor="refactory-profile-select">Saved profile version</label>
+    <summary className={css.heading}>Saved profiles and advanced search</summary>
+    <FieldLabel htmlFor="refactory-profile-select" help={controlHelp['profile-select']!}>Saved profile version</FieldLabel>
     <select id="refactory-profile-select" className={css.control} value={`${settings.profile || ''}:${settings.profile_version || ''}`}
       onChange={event => {
         const profile = profiles.find(p => `${p.name}:${p.version}` === event.target.value)
@@ -88,26 +116,26 @@ export function ProfileControls({ api, mode, settings, knobs, knobDefaults = [],
       {profiles.map(profile => <option key={`${profile.name}:${profile.version}`} value={`${profile.name}:${profile.version}`}>{profile.name} · version {profile.version}</option>)}
     </select>
     {NUMBERS.map(([key, label, fallback]) => <div className={css.field} key={key}>
-      <label className={css.label} htmlFor={`refactory-profile-${key}`}>{label}</label>
+      <FieldLabel htmlFor={`refactory-profile-${key}`} help={controlHelp[key]!}>{label}</FieldLabel>
       <input className={css.input} id={`refactory-profile-${key}`} type="number" step="any"
         value={String(additional[key] ?? fallback ?? '')} placeholder={fallback === null ? 'Unlimited' : undefined}
         onChange={event => { change(key, event.target.value === '' ? null : Number(event.target.value)) }} />
     </div>)}
-    <label className={css.label} htmlFor="refactory-preset">Permitted edit preset</label>
+    <FieldLabel htmlFor="refactory-preset" help={controlHelp['preset']!}>Permitted edit preset</FieldLabel>
     <select className={css.control} id="refactory-preset" value={String(additional.edit_preset ?? 'broad')} onChange={event => { change('edit_preset', event.target.value) }}>
       {['broad', 'conservative', 'knob_only', 'structure'].map(value => <option key={value}>{value}</option>)}
     </select>
     {(['frozen', 'allowed_ops'] as const).map(key => <div className={css.field} key={key}>
-      <label className={css.label} htmlFor={`refactory-profile-${key}`}>{key === 'frozen' ? 'Frozen knobs (comma separated)' : 'Allowed operations (comma separated; empty uses preset)'}</label>
+      <FieldLabel htmlFor={`refactory-profile-${key}`} help={controlHelp[key]!}>{key === 'frozen' ? 'Frozen knobs (comma separated)' : 'Allowed operations (comma separated; empty uses preset)'}</FieldLabel>
       <input className={css.input} id={`refactory-profile-${key}`} value={Array.isArray(additional[key]) ? additional[key].join(', ') : ''}
         onChange={event => { change(key, event.target.value.split(',').map(s => s.trim()).filter(Boolean)) }} />
     </div>)}
     <p className={css.note}>Task definitions, scoring and invariants stay fixed. Ranking uses mean validated score minus size penalty. Cost and latency are reported; missing measurements confer no advantage. Repeated trials report observed variability, not proof of improvement.</p>
-    <label className={css.label} htmlFor="refactory-profile-name">Profile name</label>
+    <FieldLabel htmlFor="refactory-profile-name" help={controlHelp['name']!}>Profile name</FieldLabel>
     <input className={css.input} id="refactory-profile-name" value={name} onChange={event => { setName(event.target.value) }} />
-    <label className={css.label} htmlFor="refactory-profile-objective">Search objective</label>
+    <FieldLabel htmlFor="refactory-profile-objective" help={controlHelp['objective']!}>Search objective</FieldLabel>
     <textarea className={css.input} id="refactory-profile-objective" value={objective} onChange={event => { setObjective(event.target.value) }} />
-    <label className={css.label} htmlFor="refactory-profile-artifacts">Additional required artifacts (one relative path per line)</label>
+    <FieldLabel htmlFor="refactory-profile-artifacts" help={controlHelp['artifacts']!}>Additional required artifacts (one relative path per line)</FieldLabel>
     <textarea className={css.input} id="refactory-profile-artifacts" value={required} onChange={event => { setRequired(event.target.value) }} />
     <p className={css.note}>Save a version to apply changes to the objective or required artifacts. Every launch records a separate exact snapshot.</p>
     <div className={css.gestures}>
@@ -167,28 +195,28 @@ export function RuntimeControls({ configuration, onChange }: { readonly configur
   const permissions = backend === 'codex' ? ['skip', 'default', 'never', 'approve-for-me', 'dangerously-bypass-approvals-and-sandbox'] : backend === 'claude_code' ? ['skip', 'default', 'dontAsk', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'] : ['skip', 'default']
   return <details className={css.disclosure} data-refactory-runtime-controls>
     <summary className={css.heading}>Worker routing and shared resources</summary>
-    <label className={css.label} htmlFor="refactory-worker-backend">Coding worker backend</label>
+    <FieldLabel htmlFor="refactory-worker-backend" help={controlHelp['backend']!}>Coding worker backend</FieldLabel>
     <select className={css.control} id="refactory-worker-backend" value={backend} onChange={event => { onChange(JSON.stringify({ ...value, worker_backend: event.target.value, provider: '', model: '', effort: '', permission_mode: value.permission_mode === 'default' ? 'default' : 'skip', max_tokens: null, validation_reserve_tokens: 0 })) }}>
       <option value="dsh">DSH (default)</option><option value="codex">Codex (opt in)</option><option value="claude_code">Claude Code (opt in)</option>
     </select>
     {(['provider', 'model', 'effort'] as const).map(key => <div className={css.field} key={key}>
-      <label className={css.label} htmlFor={`refactory-profile-${key}`}>{key}</label>
+      <FieldLabel htmlFor={`refactory-profile-${key}`} help={controlHelp[key]!}>{key}</FieldLabel>
       <input className={css.input} id={`refactory-profile-${key}`} value={String(value[key] ?? '')} disabled={backend !== 'dsh' && key !== 'model'} placeholder="Inherit runtime selection"
         onChange={event => { change(key, event.target.value) }} />
     </div>)}
-    <label className={css.label} htmlFor="refactory-permission-mode">Worker permission mode</label>
+    <FieldLabel htmlFor="refactory-permission-mode" help={controlHelp['permission']!}>Worker permission mode</FieldLabel>
     <select className={css.control} id="refactory-permission-mode" value={String(value.permission_mode || 'skip')} onChange={event => { change('permission_mode', event.target.value) }}>
       {permissions.map(permission => <option key={permission} value={permission}>{permission === 'skip' ? 'Skip permission checks (default)' : permission === 'default' ? 'Native permission policy' : permission}</option>)}
     </select>
     <p className={css.note}>Skip mode lets worker tools run without permission approval. Codex and DSH also run without their own sandbox restrictions. Select a native policy to retain those checks.</p>
     {(['max_elapsed_s', 'max_tokens', 'validation_reserve_s', 'validation_reserve_tokens'] as const).map(key => <div className={css.field} key={key}>
-      <label className={css.label} htmlFor={`refactory-profile-${key}`}>{({ max_elapsed_s: 'Total elapsed seconds', max_tokens: 'Total tokens', validation_reserve_s: 'Seconds reserved for final validation', validation_reserve_tokens: 'Tokens reserved for final validation' })[key]}</label>
+      <FieldLabel htmlFor={`refactory-profile-${key}`} help={controlHelp[key]!}>{({ max_elapsed_s: 'Total elapsed seconds', max_tokens: 'Total tokens', validation_reserve_s: 'Seconds reserved for final validation', validation_reserve_tokens: 'Tokens reserved for final validation' })[key]}</FieldLabel>
       <input className={css.input} id={`refactory-profile-${key}`} type="number" step="any" value={String(value[key] ?? '')} placeholder={key.startsWith('validation') ? '0' : 'Unlimited'}
         disabled={backend !== 'dsh' && key.includes('tokens')} onChange={event => { change(key, event.target.value === '' ? null : Number(event.target.value)) }} />
     </div>)}
     {backend !== 'dsh' && <p className={css.note}>This backend uses native provider settings. Provider/effort overrides and token limits are unsupported; an installed provider and native authentication are required. Steering applies at the next node boundary.</p>}
     {(['role_routes', 'node_routes'] as const).map(key => <div className={css.field} key={key}>
-      <label className={css.label} htmlFor={`refactory-profile-${key}`}>{key === 'role_routes' ? 'Role route overrides (JSON object)' : 'Node route overrides (JSON object)'}</label>
+      <FieldLabel htmlFor={`refactory-profile-${key}`} help={controlHelp[key]!}>{key === 'role_routes' ? 'Role route overrides (JSON object)' : 'Node route overrides (JSON object)'}</FieldLabel>
       <textarea className={css.input} id={`refactory-profile-${key}`} defaultValue={JSON.stringify(value[key] || {})} key={`${backend}-${key}-${JSON.stringify(value[key])}`} onBlur={event => {
         try { const parsed: unknown = JSON.parse(event.target.value); if (parsed === null || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error('Enter a JSON object'); change(key, parsed); setRouteError('') }
         catch (error) { setRouteError(error instanceof Error ? error.message : String(error)) }
