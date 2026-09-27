@@ -72,10 +72,10 @@ describe('profile and worker controls', () => {
     expect(JSON.parse(changed.mock.calls[0]?.[0] as string)).toMatchObject({ worker_backend: 'codex', provider: '', model: '', effort: '', permission_mode: 'skip' })
   })
 
-  it('defaults to skip while preserving an explicit native permission policy', () => {
+  it('inherits project permissions while preserving an explicit native permission policy', () => {
     const changed = vi.fn()
     const view = render(<RuntimeControls configuration='{"worker_backend":"codex"}' onChange={changed} />)
-    expect((screen.getByLabelText('Worker permission mode') as HTMLSelectElement).value).toBe('skip')
+    expect((screen.getByLabelText('Worker permission mode') as HTMLSelectElement).value).toBe('')
     view.rerender(<RuntimeControls configuration='{"worker_backend":"claude_code","permission_mode":"default"}' onChange={changed} />)
     expect((screen.getByLabelText('Worker permission mode') as HTMLSelectElement).value).toBe('default')
     fireEvent.change(screen.getByLabelText('Worker permission mode'), { target: { value: 'skip' } })
@@ -94,4 +94,21 @@ describe('profile and worker controls', () => {
     expect(runtimeSettings(JSON.stringify({ repeats: 3, optimizer: 'random', worker_backend: 'codex', model: 'selected', max_elapsed_s: 40, max_tokens: null, node_routes: { repair: { worker_backend: 'dsh' } } })))
       .toEqual({ worker_backend: 'codex', model: 'selected', max_elapsed_s: 40, node_routes: '{"repair":{"worker_backend":"dsh"}}' })
   })
+
+  it('keeps untouched project routes inherited and allows explicit clearing and restoration', () => {
+    const changed = vi.fn()
+    const view = render(<RuntimeControls configuration="{}" onChange={changed} />)
+    const field = screen.getByLabelText('Node route overrides (JSON object)')
+    fireEvent.blur(field)
+    expect(changed).not.toHaveBeenCalled()
+    expect((screen.getByLabelText('Coding worker backend') as HTMLSelectElement).value).toBe('')
+    fireEvent.change(field, { target: { value: '{}' } })
+    fireEvent.blur(field)
+    expect(JSON.parse(changed.mock.calls[0]![0])).toEqual({ node_routes: {} })
+    view.rerender(<RuntimeControls configuration='{"node_routes":{}}' onChange={changed} />)
+    fireEvent.change(screen.getByLabelText('Node route overrides (JSON object)'), { target: { value: '' } })
+    fireEvent.blur(screen.getByLabelText('Node route overrides (JSON object)'))
+    expect(JSON.parse(changed.mock.calls[1]![0])).toEqual({})
+  })
+
 })

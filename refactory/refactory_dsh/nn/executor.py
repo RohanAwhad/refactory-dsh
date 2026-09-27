@@ -381,6 +381,7 @@ class Executor:
                 "steps": len(self.steps),
                 "outcome": outcome,
                 "graph": self.graph.to_state(),
+                **({"model_context": self.ctx.model.context()} if callable(getattr(self.ctx.model, "context", None)) else {}),
                 **({"branches": branches} if branches is not None else {}),
                 **({"schedule": schedule} if schedule is not None else {}),
             }, indent=2, default=str))

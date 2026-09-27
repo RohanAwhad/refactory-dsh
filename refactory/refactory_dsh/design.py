@@ -462,9 +462,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     from refactory_dsh.model import DshModelClient
+    from refactory_dsh.paths import project_root
 
     if args.resume:
         client = DshModelClient(
+            project=None if args.resume else project_root(),
             timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
         )
         try:
@@ -494,6 +496,7 @@ def main(argv: list[str] | None = None) -> int:
     result = mode.run(
         Path(args.workdir or f".factory/design/{args.name}"),
         model=DshModelClient(
+            project=None if args.resume else project_root(),
             timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
         ),
         task={"name": args.name, "brief": args.brief, "check": args.check, "source_project": args.source_project},

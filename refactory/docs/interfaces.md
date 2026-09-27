@@ -77,3 +77,8 @@ Created/adopted packages live in `.factory/packages/`, Design artifacts in `.fac
 The Modes panel uses Refactory’s original two-gear identity and blue theme in both color schemes. **Configure a run**, **Activity & results**, **Graph controls** and **Steering** separate setup, observation and actions. Run and Optimize have separate launch actions while sharing inputs and the watched run. Help buttons explain fields, and clicking brief opens a large draft editor with Apply/Cancel. Advanced settings and package management expand without discarding inputs. A pending-question banner links to the available answers. Narrow and split panels stack the same controls; expanded panels place configuration beside activity.
 
 The [panel guide](tutorials/07-pick-and-watch-from-the-panel.md#find-the-controls) describes navigation. [Presentation acceptance](panel-validation-20260927.md) and the [UX follow-up](panel-ux-validation-20260927.md) record native screenshots and bounded checks. [Upstream compatibility](upstream-compatibility.md) documents the published DSH dependency and pre-existing patch boundary.
+
+## Project worker defaults
+
+[Worker routing](worker-routing.md) documents `refactory.workers.json`, coder-only
+selection and precedence. `refactory workers` reports effective defaults.

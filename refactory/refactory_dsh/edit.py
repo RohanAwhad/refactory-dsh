@@ -186,9 +186,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     from refactory_dsh.model import DshModelClient
+    from refactory_dsh.paths import project_root
 
     if args.resume:
         client = DshModelClient(
+            project=None if args.resume else project_root(),
             timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
         )
         try:
@@ -224,6 +226,7 @@ def main(argv: list[str] | None = None) -> int:
                 resource_limits=arguments(args),
             ),
             client=DshModelClient(
+                project=None if args.resume else project_root(),
                 timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
             ),
         )

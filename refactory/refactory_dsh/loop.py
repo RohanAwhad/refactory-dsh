@@ -2574,9 +2574,9 @@ def main(argv: list[str] | None = None) -> int:
                                             version=args.profile_version, overrides=overrides)
         settings = snapshot["settings"]
         from refactory_dsh.model import DshModelClient
-        model = DshModelClient(**{key: settings[key] for key in
+        model = DshModelClient(routes_resolved=True, routing_provenance=(snapshot.get("worker_configuration") or {}).get("provenance"), **{key: settings[key] for key in
             ("worker_backend", "provider", "model", "effort", "permission_mode", "role_routes", "node_routes")
-            if settings[key] not in ("", {})})
+            })
         config = LoopConfig.from_dict({**settings, "runs_root": args.runs_root,
                                       "print_events": True, "verbose": args.verbose,
                                       "resume": args.resume, "resolved_profile": snapshot})

@@ -741,6 +741,84 @@ Driving a run from a GUI: the catalogue, a live run, and what it produced.
 - **`stop`** — Ask the run to stop, and say whether it did.
 
 
+<a id="refactory_dsh-worker_config"></a>
+
+## `refactory_dsh.worker_config`
+
+Project defaults over the existing worker route schema, resolved once per run.
+
+| kind | name | signature |
+|---|---|---|
+| function | `effective` | `(project: 'Path') -> 'dict[str, Any]'` |
+| function | `resolve` | `(project: 'Path', overrides: 'dict[str, Any] \| None' = None, *, inherited: 'dict[str, Any] \| None' = None, profile: 'dict[str, Any] \| None' = None) -> 'dict[str, Any]'` |
+| function | `validate` | `(settings: 'dict[str, Any]') -> 'None'` |
+
+- **`effective`** — Read-only route preview used by terminal, panel and CEO discovery.
+- **`resolve`** — Return nonsecret effective settings and per-field provenance.
+- **`validate`** — Validate partial defaults and each override without dispatching a worker.
+
+
+<a id="refactory_dsh-workers"></a>
+
+## `refactory_dsh.workers`
+
+Worker routes and durable receipts over DSH's named-provider registry.
+
+| kind | name | signature |
+|---|---|---|
+| class | `GraphTelemetry` | `(workdir: 'Path', context: 'dict[str, Any]', budget: 'Any' = None)` |
+| function | `account_usage` | `(budget: 'Any', receipt: 'dict[str, Any]', *, final: 'bool' = False) -> 'None'` |
+| function | `begin` | `(workdir: 'Path', route: 'dict[str, Any]', *, node: 'str' = '', role: 'str' = 'worker') -> 'Path'` |
+| function | `capabilities` | `(backend: 'str') -> 'dict[str, Any]'` |
+| function | `environment` | `(context: 'dict[str, Any] \| None') -> 'dict[str, str]'` |
+| function | `event` | `(workdir: 'Path', record: 'dict[str, Any]', state: 'str', summary: 'str') -> 'None'` |
+| function | `finish` | `(path: 'Path', state: 'str', *, error: 'str \| None' = None) -> 'dict[str, Any]'` |
+| function | `lower_workflow` | `(workflow: 'Any', workdir: 'Path', model_context: 'dict[str, Any] \| None', declarations: 'dict[str, Any] \| None' = None) -> 'Any'` |
+| function | `now` | `() -> 'str'` |
+| function | `observer_patch` | `(path: 'Path', route: 'dict[str, Any]') -> 'None'` |
+| function | `permission_patch` | `(route: 'dict[str, Any]') -> 'list[dict[str, Any]]'` |
+| function | `resolve_route` | `(base: 'dict[str, Any]', *, role: 'str' = 'worker', node: 'str' = '', role_routes: 'dict[str, Any] \| None' = None, node_routes: 'dict[str, Any] \| None' = None) -> 'dict[str, Any]'` |
+| function | `run_graph_command` | `(argv: 'list[str]', *, workdir: 'Path', context: 'dict[str, Any]', timeout: 'float \| None' = None, env: 'dict[str, str] \| None' = None, **kwargs: 'Any') -> 'Any'` |
+| function | `validate_route` | `(route: 'dict[str, Any]') -> 'dict[str, Any]'` |
+| function | `write_patch` | `(path: 'Path', runtime_root: 'Path', route: 'dict[str, Any]') -> 'None'` |
+
+- **`GraphTelemetry`** — One coordinator receipt; node subprocesses own distinct worker receipts.
+- **`account_usage`** — Keep measured DSH calls while exposing incomplete delegated coverage.
+- **`environment`** — Nonsecret resolved context for graph-owned deterministic nested calls.
+- **`lower_workflow`** — Resolve explicit node workers before graph dispatch, preserving all edges.
+- **`permission_patch`** — Scope DSH bypass to this runtime, without leaking through child env.
+- **`resolve_route`** — Explicit node overrides role overrides run; runtime supplies empty fields.
+- **`run_graph_command`** — Inherit terminal IO while polling graph resource and coordinator receipts.
+- **`write_patch`** — Compose installed DSH services, never a parallel agent wire protocol.
+
+
+<a id="refactory_dsh-profiles"></a>
+
+## `refactory_dsh.profiles`
+
+Versioned search recipes and immutable, resolved run snapshots.
+
+| kind | name | signature |
+|---|---|---|
+| class | `ProfileError` | `` |
+| function | `add_arguments` | `(parser: 'Any') -> 'None'` |
+| function | `defaults` | `() -> 'dict[str, Any]'` |
+| function | `digest` | `(value: 'Any') -> 'str'` |
+| function | `list_profiles` | `(project: 'Path') -> 'list[dict[str, Any]]'` |
+| function | `load` | `(project: 'Path', name: 'str', version: 'int \| None' = None) -> 'dict[str, Any]'` |
+| function | `normalize` | `(settings: 'dict[str, Any]') -> 'dict[str, Any]'` |
+| function | `refresh` | `(project: 'Path', mode_id: 'str', settings: 'dict[str, Any]', previous: 'dict[str, Any]', *, model_client: 'Any' = None) -> 'dict[str, Any]'` |
+| function | `resolve` | `(project: 'Path', mode_id: 'str', *, name: 'str' = '', version: 'int \| None' = None, overrides: 'dict[str, Any] \| None' = None, validate_settings: 'bool' = True, recipe: 'dict[str, Any] \| None' = None, model_client: 'Any' = None) -> 'dict[str, Any]'` |
+| function | `runtime_identity` | `(settings: 'dict[str, Any]', project: 'Path', *, uses_models: 'bool', model_client: 'Any' = None) -> 'dict[str, Any]'` |
+| function | `save` | `(project: 'Path', name: 'str', spec: 'dict[str, Any]') -> 'dict[str, Any]'` |
+
+- **`ProfileError`** — A profile cannot be resolved without changing its declared contract.
+- **`add_arguments`** — All launch surfaces parse this same optional configuration vocabulary.
+- **`refresh`** — Recheck source/input identity without relying on a still-existing recipe.
+- **`runtime_identity`** — Read nonsecret effective configuration; this is not authentication evidence.
+- **`save`** — Save a new immutable version. Editing a recipe always creates a version.
+
+
 <a id="refactory_dsh-items"></a>
 
 ## `refactory_dsh.items`

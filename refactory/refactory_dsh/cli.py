@@ -44,7 +44,7 @@ AUTHORING: dict[str, str] = {
 
 #: Verbs the console already answers, so `refactory <verb>` is `console <verb>`.
 READ_VERBS: tuple[str, ...] = (
-    "profiles", "profile-save", "profile-resolve", "comparison",
+    "workers", "profiles", "profile-save", "profile-resolve", "comparison",
     "runtime", "status", "graph-control", "runs", "artifacts", "leaderboard", "candidate", "best", "adopt", "steer", "stop",
 )
 
