@@ -128,6 +128,32 @@ def test_the_ledger_survives_being_reopened(tmp_path):
     assert reopened.constraints() == ["no new dependencies"]
 
 
+def test_past_multiline_text_survives_round_trip_and_console_reads(tmp_path):
+    from refactory_dsh.console import _steer
+
+    original = "Build the workflow.\n\nAcceptance:\n  - Keep upstream portable\n  - Keep the gears"
+    correction = "Use this shape:\n\n```python\ndef run():\n    return 42\n```\n\nPreserve all past notes."
+    ledger = Ledger.seed(tmp_path, original)
+    ledger.note("correction", correction)
+    ledger.note("constraint", "Never replace the original brief.")
+    entries = _steer(tmp_path)["entries"]
+    assert [entry["text"] for entry in entries] == [original, correction, "Never replace the original brief."]
+    assert [entry["kind"] for entry in entries] == ["Initial Idea", "correction", "constraint"]
+    assert original in ledger.render() and correction in ledger.render()
+
+
+def test_full_history_keeps_gate_decisions_without_replaying_a_used_answer(tmp_path):
+    ledger = Ledger.seed(tmp_path, "Review this workflow.\n\nKeep the original request.")
+    review = ledger.visit("review", [])
+    ledger.verdict("review", "proceed")
+    assert ledger.take_verdict("review", review, ["proceed", "halt"]) == "proceed"
+    assert ledger.take_verdict("review", review, ["proceed", "halt"]) == ""
+    entries = Ledger(tmp_path).entries()
+    assert [entry["kind"] for entry in entries] == ["Initial Idea", "gate-visit", "verdict", "verdict-use"]
+    assert "verdict: proceed" in entries[2]["text"]
+    assert "result: used" in entries[3]["text"]
+
+
 def test_seeding_twice_is_refused(tmp_path):
     """A second seed would put two origins in one ledger."""
     Ledger.seed(tmp_path, "build a mode")

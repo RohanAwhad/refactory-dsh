@@ -266,15 +266,19 @@ def parse_entries(text: str) -> list[dict[str, Any]]:
     """Parse one ledger snapshot without reading a changing file again."""
     found: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None
+    body: list[str] = []
     for line in text.splitlines():
         if line.startswith("## ["):
             if current is not None:
+                current["text"] = "\n".join(body).strip()
                 found.append(current)
             stamp, _, kind = line[4:].partition("] ")
             current = {"at": stamp, "kind": kind.strip(), "text": ""}
+            body = []
         elif current is not None:
-            current["text"] = (current["text"] + "\n" + line).strip()
+            body.append(line)
     if current is not None:
+        current["text"] = "\n".join(body).strip()
         found.append(current)
     return found
 
