@@ -2,6 +2,7 @@ import { useId } from 'react'
 import type { SidebarBrandMarkOwnerProps } from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import { GEARS_BLUE, GEARS_INK, LOGO_BLUE, LOGO_INK } from '../artwork.ts'
 import { PRODUCT_NAME } from '../identity.ts'
+import { HERO_STYLE } from './presentation.ts'
 
 /** Recolor the original artwork's alpha layers without redrawing its geometry. */
 function Artwork({ mark, width }: { mark: boolean, width: number }) {
@@ -30,5 +31,5 @@ export function RefactoryBrandName() {
 
 /** The complete original lockup owns the blank-chat hero. */
 export function RefactoryHeroMark() {
-  return <span data-refactory-hero style={{ display: 'inline-flex', maxWidth: '100%' }}><Artwork mark={false} width={280} /></span>
+  return <span data-refactory-hero style={{ display: 'inline-flex', maxWidth: '100%' }}><style>{HERO_STYLE}</style><Artwork mark={false} width={280} /></span>
 }

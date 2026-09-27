@@ -116,6 +116,8 @@ export interface RefactoryTabState {
   chosen: string | null
   /** Package filter; selection never changes the watched run. */
   selectedPackage: string | null
+  /** Presentation intent survives dock remounts, without changing execution settings. */
+  setupIntent: 'run' | 'optimize'
   /**
    * The knob values a person changed for the chosen mode, by knob name. A knob
    * that is absent keeps the value its own declaration gives it.
@@ -169,6 +171,7 @@ type RefactoryActions = {
   loaded: (draft: RefactoryState, tabId: TabId, choices: RefactoryChoices) => void
   failed: (draft: RefactoryState, tabId: TabId, message: string) => void
   chosePackage: (draft: RefactoryState, tabId: TabId, name: string | null) => void
+  setupIntent: (draft: RefactoryState, tabId: TabId, intent: 'run' | 'optimize') => void
   chose: (draft: RefactoryState, tabId: TabId, id: string | null) => void
   knob: (draft: RefactoryState, tabId: TabId, name: string, value: string) => void
   setting: (draft: RefactoryState, tabId: TabId, name: RefactorySettingName, value: string) => void
@@ -254,6 +257,7 @@ export function createRefactoryStore(): EngineStoreHandle<RefactoryState, Refact
           choices: { kind: 'loading' },
           chosen: null,
           selectedPackage: null,
+          setupIntent: 'run',
           knobs: {},
           settings: { ...NO_SETTINGS },
           watching: null,
@@ -310,6 +314,7 @@ export function createRefactoryStore(): EngineStoreHandle<RefactoryState, Refact
         tab.chosen = null
         tab.knobs = {}
       },
+      setupIntent: (d, tabId: TabId, intent: 'run' | 'optimize') => { bucket(d, tabId).setupIntent = intent },
       chose: (d, tabId: TabId, id: string | null) => {
         const tab = bucket(d, tabId)
         tab.chosen = id

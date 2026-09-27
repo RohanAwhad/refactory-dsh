@@ -1,13 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { RefactoryRunSummary } from '@deepseek-ai/dsh-refactory-console/types'
 import type { RefactoryInjected } from './face.ts'
 import css from './RefactoryBody.module.css'
+import { FieldLabel } from './FieldHelp.tsx'
 
 export function GraphControls({ run, signal, control }: {
   readonly run: string; readonly signal: AbortSignal; readonly control: NonNullable<RefactoryInjected['graphControl']>
 }): ReactNode {
   const [node, setNode] = useState('')
+  const fieldId = useId()
   const [correction, setCorrection] = useState('')
   const [receipt, setReceipt] = useState<Record<string, unknown> | null>(null)
   const [error, setError] = useState('')
@@ -28,8 +30,10 @@ export function GraphControls({ run, signal, control }: {
     <p className={css.note}>Controls apply at the next graph boundary. Continue in the owning session after resume. In-flight worker steering and termination are only available when the backend advertises them.</p>
     <div className={css.gestures}>{['pause', 'resume', 'stop'].map(action => <button type="button" className={css.action} key={action} disabled={busy} onClick={() => { void act(action) }}>{action}</button>)}</div>
     <details className={css.disclosure}><summary>Correct completed work</summary>
-    <label>Completed node to correct<input className={css.input} value={node} onChange={event => { setNode(event.target.value); setReceipt(null) }} /></label>
-    <label>Prompt correction<textarea className={css.input} value={correction} onChange={event => { setCorrection(event.target.value); setReceipt(null) }} /></label>
+    <FieldLabel htmlFor={`${fieldId}-node`} help="Exact ID of a completed node. Preview shows which dependent results would become stale before you confirm a rerun.">Completed node to correct</FieldLabel>
+    <input id={`${fieldId}-node`} className={css.input} value={node} onChange={event => { setNode(event.target.value); setReceipt(null) }} />
+    <FieldLabel htmlFor={`${fieldId}-correction`} help="Updated guidance for the node. Preview first, then explicitly confirm correction and rerun to apply it.">Prompt correction</FieldLabel>
+    <textarea id={`${fieldId}-correction`} className={css.input} value={correction} onChange={event => { setCorrection(event.target.value); setReceipt(null) }} />
     <button type="button" className={css.action} disabled={busy || !node.trim()} onClick={() => { void act('preview') }}>Preview affected results</button>
     {receipt?.status === 'preview' && <>
       <p>Results that become stale: {Array.isArray(receipt.invalidated) ? receipt.invalidated.join(', ') : 'unavailable'}</p>

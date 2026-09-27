@@ -5,7 +5,7 @@ import { cleanup, render } from '@testing-library/react'
 import { apply, inject } from '../src/client/index.ts'
 import { RefactoryBrandMark, RefactoryBrandName, RefactoryHeroMark } from '../src/client/Brand.tsx'
 import { brandIndex, apply as hostApply } from '../src/index.ts'
-import { HERO_STYLE, installTitle, installWelcome, productTitle } from '../src/client/presentation.ts'
+import { installTitle, installWelcome, productTitle } from '../src/client/presentation.ts'
 import { FAVICON } from '../src/identity.ts'
 
 const contexts: Context[] = []
@@ -250,9 +250,13 @@ describe('transparent Refactory identity', () => {
 
 describe('upstream presentation bridges', () => {
   it('hides the full stock headline through the public slot wrapper', () => {
-    const { container } = render(<><style>{HERO_STYLE}</style><div><span><div data-slot="conversation.hero.brand.mark"><RefactoryHeroMark /></div></span><span data-stock-headline>Into the Unknown <span>Preview</span></span></div></>)
+    const { container, rerender } = render(<div><span><div data-slot="conversation.hero.brand.mark"><RefactoryHeroMark /></div></span><span data-stock-headline>Into the Unknown <span>Preview</span></span></div>)
     expect(getComputedStyle(container.querySelector('[data-stock-headline]')!).display).toBe('none')
     expect(getComputedStyle(container.querySelector('[data-refactory-hero]')!).display).not.toBe('none')
+    rerender(<div />)
+    expect(container.querySelector('style')).toBeNull()
+    rerender(<div><span><div data-slot="conversation.hero.brand.mark"><RefactoryHeroMark /></div></span><span data-stock-headline>Into the Unknown <span>Preview</span></span></div>)
+    expect(getComputedStyle(container.querySelector('[data-stock-headline]')!).display).toBe('none')
   })
 
   it('changes welcome copy in both locales while retaining the original controller props', () => {

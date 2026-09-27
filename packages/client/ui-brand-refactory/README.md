@@ -25,7 +25,7 @@ Mount the host and browser halves through the existing web-profile composition, 
 
 ## Lifecycle and boundaries
 
-Slot declarations may arrive before or after this plugin. Contributions, CSS, title observer and theme overrides dispose with the owning fiber. Host metadata applies before browser scripts run. The upstream welcome component retains acknowledgement, focus handling, errors and untranslated business strings. Provider names, authentication endpoints, package identifiers, license attribution and runtime receipts stay truthful. This plugin registers no model tools or prompt content.
+Slot declarations may arrive before or after this plugin. Slot contributions, title observer and theme overrides dispose with the owning fiber. Hero CSS is mounted with the logo component so a reload cannot leave the logo without its headline suppression. Host metadata applies before browser scripts run. The upstream welcome component retains acknowledgement, focus handling, errors and untranslated business strings. Provider names, authentication endpoints, package identifiers, license attribution and runtime receipts stay truthful. This plugin registers no model tools or prompt content.
 
 ## Verification and limitations
 

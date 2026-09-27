@@ -2,7 +2,7 @@ import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
-import { installTitle, installWelcome, HERO_STYLE } from './presentation.ts'
+import { installTitle, installWelcome } from './presentation.ts'
 import { RefactoryBrandMark, RefactoryBrandName, RefactoryHeroMark } from './Brand.tsx'
 
 /** Required service: the UI slot registry. */
@@ -16,13 +16,6 @@ export const inject = ['slots', 'locale']
  */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => installTitle(document))
-  ctx.effect(() => {
-    const style = document.createElement('style')
-    style.dataset.refactoryBrand = ''
-    style.textContent = HERO_STYLE
-    document.head.append(style)
-    return () => { style.remove() }
-  })
   installWelcome(ctx)
 
   // Accent: logo blue, both schemes (the override layer disposes with the fiber).

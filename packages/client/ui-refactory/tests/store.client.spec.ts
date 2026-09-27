@@ -25,6 +25,7 @@ describe('createRefactoryStore', () => {
       choices: { kind: 'loading' },
       chosen: null,
       selectedPackage: null,
+      setupIntent: 'run',
       knobs: {},
       settings: { ...NO_SETTINGS },
       watching: null,

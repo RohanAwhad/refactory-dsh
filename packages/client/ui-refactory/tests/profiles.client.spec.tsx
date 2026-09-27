@@ -24,7 +24,7 @@ describe('profile and worker controls', () => {
         onField={(name, value) => { setSettings(current => ({ ...current, [name]: value })) }} onKnob={() => {}} />
     }
     render(<Harness />)
-    fireEvent.click(screen.getByText('Optimization profiles and full search controls'))
+    fireEvent.click(screen.getByText('Saved profiles and advanced search'))
     await screen.findByRole('option', { name: 'small · version 1' })
     fireEvent.change(screen.getByLabelText('Saved profile version'), { target: { value: 'small:1' } })
     expect((screen.getByLabelText('Trials per candidate and winner audit (1–10)') as HTMLInputElement).value).toBe('2')

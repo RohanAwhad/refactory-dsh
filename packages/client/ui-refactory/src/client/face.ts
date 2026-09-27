@@ -154,6 +154,7 @@ export interface RefactoryInjected {
    * @param id - the chosen catalogue id, or `null`.
    */
   readonly choosePackage: (tabId: TabId, name: string | null) => void
+  readonly chooseIntent: (tabId: TabId, intent: 'run' | 'optimize') => void
   readonly choose: (tabId: TabId, id: string | null) => void
   /**
    * Change one of the chosen mode's declared knobs for this run.
@@ -484,6 +485,7 @@ export function refactoryFace(
         read(tabId, signal)
       },
       choosePackage(tabId, name) { actions.chosePackage(tabId, name) },
+      chooseIntent(tabId, intent) { actions.setupIntent(tabId, intent) },
       choose(tabId, id) {
         actions.chose(tabId, id)
       },
