@@ -8,12 +8,18 @@ Both interfaces use the same mode catalogue and run artifacts. The terminal is u
 |---|---|---|
 | Create, Edit, Design | `refactory ceo` with the authoring mode | CEO chat for stepwise control; select a full/fast mode and **Run once** for execution |
 | Run an existing mode interactively | `refactory ceo package/mode` | CEO chat for stepwise control; **Run once** for execution |
-| Configure and start optimization | `refactory optimize` | Modes: saved profile or explicit controls → **Preview launch contract** → **Start** |
+| Configure and start optimization | `refactory optimize` | CEO chat can launch a saved profile through Refactory tools; Modes: saved profile or explicit controls → **Preview launch contract** → **Start** |
 | Inspect an existing run | `status --follow`, `artifacts`, `comparison`, `candidate` | **Runs and pending questions** or **Existing run directory → Read this run**; live activity and Steering |
 | Add instructions or answer gates | Conversation and `refactory steer` | Chat and the attached run's Steering controls |
 | Keep/reject candidates, pause/resume, adopt | `refactory steer`, `refactory adopt` | Optimizer controls in Steering |
 
 **Start** searches scored modes. **Run once** also runs enabled authoring modes, including `create_fast`, `edit_fast` and `design_fast`; supply their required knobs first. Each CEO session owns one open workflow at a time. Use a separate session and distinct work directory for another concurrent workflow; opening a viewer never claims ownership of the run.
+
+For chat-driven optimization, name the scored mode and saved profile/version, ask
+the CEO to launch it, inspect the completed search, adopt the exact winner and
+smoke the adopted mode. Chat and panel have separate
+[actual-use evidence](release-validation-20260926.md#gui-chat-optimization-follow-up);
+selecting a model or optimizer alone does not prove that it ran.
 
 ## What runs the graph
 

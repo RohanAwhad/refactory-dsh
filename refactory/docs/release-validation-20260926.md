@@ -88,6 +88,65 @@ Native profile versioning preserved the prior objective when a new version was s
 
 The live graph check used the real Cordis spine, shell execution and user-question bridge with deterministic operations. An explicit verdict was consumed once. Pausing did not invent a verdict. Correcting a completed node required a revision-bound preview; prior owned artifacts/facts were archived, dependent checks invalidated and unrelated input retained. The new draft reached a fresh gate rather than reusing the prior answer. A separate native ownership check ran a 15-second deterministic one-shot A while watching B at that gate: A completed successfully and B retained its identity, pending question and steering ledger. Fixture-only setup mistakes and their honest refusal receipts are retained separately from product evidence. Actual checkpoint restoration reused completed work without rerunning commands. The subsequent registered public recovery checks below cover the terminal and native panel separately.
 
+## GUI chat optimization follow-up
+
+On main `6ca5a57a84`, a fresh native CEO chat independently exercised the public
+Refactory tool path. Earlier GUI optimization evidence above covered the panel;
+it did not establish a chat-launched search.
+
+The chat selected `bounded-search` version 1 and launched exactly one
+`circle_packing/adaptive` search, `gui-chat-optimization-20260927`. Its saved
+configuration retained random proposals, walker evaluation, one epoch, two
+candidate evaluations, two trials, seed 9, 30 elapsed seconds with three reserved
+for validation, and no token cap. The search completed four measurements in
+0.179 seconds. Winner `83ebe63e958b` tied the seed: raw 0.875, adjusted 0.795,
+with no improvement. Holdout was explicitly not applicable to this mode without
+a data node; the separate Task holdout controls above remain the holdout evidence.
+
+In that same chat, public tool calls inspected the winner, adopted it as
+`issue236_chat_verified`, and smoked `issue236_chat_verified/adaptive`: exit OK,
+score 0.875, 21 iterations. The native chat displayed the final result. Session
+`session-e34a04ad-45ac-4fed-a2cb-e1fbfca94a86` records the actual start, status,
+candidate, adoption and smoke calls; no shell substitute launched the search.
+Two package-only registry targets were refused, then corrected to qualified mode
+IDs without restarting the search. Source and saved-profile hashes were unchanged.
+
+The chat used DSH / `deepseek-official` / `deepseek-flash`, low effort. Its turn
+took 62.13 seconds and 25 model completions: 905,387 measured tokens, including
+847,744 cached input, 50,159 uncached input and 7,484 output. The deterministic
+search used no model workers. Chat orchestration usage is separate from that
+search ledger; no efficiency or monetary-cost claim is made. The chat performed
+source discovery to identify profile arguments, which remains observed overhead.
+
+### Chat changes the optimizer to autoresearch
+
+A second request in the same native chat launched one fresh run,
+`gui-chat-autoresearch-20260927`, with per-run overrides selecting `autoresearch`,
+two epochs, batch/elite size one, two evaluations, one trial, one admission attempt,
+no prior-run history, 180 elapsed seconds with 15 reserved for validation, and no
+token cap. The selected proposer route was DSH / official DeepSeek Flash / low
+effort / skip permissions. The saved profile and source remained unchanged.
+
+The run completed in **29.47 seconds**. Starting with only the seed ensured that
+the next evaluated candidate came from the actual model proposer. Candidate
+`3e50cd6446e7`, recorded with origin `optimizer`, changed the mode's `budget` knob
+from 3 to 8 and was evaluated successfully: raw 0.875, adjusted 0.795, equal to the
+seed. Both proposer calls completed with no errors and measured usage of 13,532
+and 11,833 tokens (25,365 total). Worker receipts and provider-request records
+confirmed the requested route. No improvement is claimed.
+
+The existing pipeline also proposed `e160c2dbcfa1` (`grid` 10 → 24) at the end of
+the final epoch. It remained explicitly unevaluated, with no invented score. No
+search retry, source correction, additional adoption or replay followed; the first
+chat check supplies adoption/replay evidence.
+
+The second chat turn completed in 54.52 seconds and 20 model completions, using
+1,294,169 tokens including 1,267,712 cached input. This orchestration usage is
+separate from the 25,365 proposer tokens. Repeated status polling contributed to
+the chat overhead; the result demonstrates functional configuration and execution,
+not efficient chat orchestration. Both searches ended, all proposer workers
+completed, resource clocks paused, and the temporary GUI server was stopped.
+
 ## Native workers and permissions
 
 Earlier apparent Codex/Claude successes were withdrawn: the named-provider patch had left DSH active. The dispatch fix disables that entry before inserting the selected native worker and refuses DSH fallback. A composition regression verifies the actual installed loader's match semantics.
