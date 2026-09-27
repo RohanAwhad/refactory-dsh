@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -229,6 +229,23 @@ describe('reading a gate verdict', () => {
 
 
 describe('shared resource boundaries', () => {
+  it('uses serialized Design phases to finish QA but refuses repair from validation reserve', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'spine-repair-resources-'))
+    try {
+      const prepared = spawnSync(resolve('.venv/bin/python'), ['-c',
+        'import json,sys; from pathlib import Path; from refactory_dsh.budgets import RunBudget,ResourceLimits; from refactory_dsh.fast import DesignFastMode; from refactory_dsh.lowering import to_workflow; b=RunBudget.open(Path(sys.argv[1]),ResourceLimits(max_tokens=100,validation_reserve_tokens=20)); b.record_usage("prior",85); print(json.dumps(to_workflow(DesignFastMode().state_dict()).to_dict()["nodes"]))', root], { encoding: 'utf8' })
+      expect(prepared.status, prepared.stderr).toBe(0)
+      const nodes = JSON.parse(prepared.stdout) as Record<string, NodeView>
+      const bounded = { ...config, workdir: root, env: { PATH: `${resolve('.venv/bin')}:${process.env.PATH}`, REFACTORY_BUDGET_LEDGER: join(root, '.refactory/resource-usage.json') } }
+      const phaseNode = (id: string, command: string): NodeView => ({ ...fn(id, command), ...(nodes[id]?.resource_role === undefined ? {} : { resource_role: nodes[id].resource_role }) })
+      for (const id of ['focused_check', 'focused_qa', 'gate_qa', 'report']) {
+        expect(completed(await runDeterministic(localShell, phaseNode(id, `echo ${id}`), bounded)).stdout).toBe(id)
+      }
+      await expect(runDeterministic(localShell, phaseNode('emit', 'touch repair-dispatched'), bounded)).rejects.toThrow(/reserve retained/)
+      expect(existsSync(join(root, 'repair-dispatched'))).toBe(false)
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  })
+
   it('retains final validation reserve, then lets validation and reporting finish within it', async () => {
     const root = mkdtempSync(join(tmpdir(), 'spine-resources-'))
     try {

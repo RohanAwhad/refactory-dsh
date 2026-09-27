@@ -8,6 +8,8 @@ Refactory turns agentic work into reusable **modes**: explicit graphs of coding 
 
 [Get started](refactory/docs/getting-started.md) · [Terminal & GUI](refactory/docs/interfaces.md) · [Command reference](refactory/docs/cli.md) · [Write a mode](refactory/docs/tutorials/01-write-a-mode.md)
 
+**Release status · 26 September 2026:** Profiles, live controls/recovery and DSH/Codex/Claude Code workers have completed bounded CLI and native GUI acceptance. Fast authoring is implemented, but successful completion through QA and bounded repair remains unverified. [Readiness and evidence ↓](#release-capabilities-and-validation)
+
 ## What you can build
 
 - **A reusable harness:** Create turns a brief into a package of modes. Bind a Task to work over a class of inputs, or choose a single-run harness.
@@ -97,7 +99,7 @@ Chat supports Create, Edit and Design. The Modes panel's **Start** button launch
 
 These commands call a model and can take substantial time. The current full authoring modes include research and reviews; you approve the strategy/design before implementation. Generated packages live in `.factory/packages/`; Design artifacts live in `.factory/artifacts/`. Exact paths and validation outcomes are recorded in the run.
 
-For a smaller graph, choose `create_fast`, `edit_fast` or `design_fast`. Each retains one focused QA stage and bounded repair; research and review stages remain customizable graph choices. See [fast modes and shared budgets](refactory/docs/budgets-fast-modes.md).
+For a smaller graph, choose `create_fast`, `edit_fast` or `design_fast`. Each retains one focused QA stage and bounded repair; research and review stages remain customizable graph choices. All six bounded release checks exhausted their token allocation before completion, so these variants have not yet passed full CLI/GUI acceptance. See [fast modes and shared budgets](refactory/docs/budgets-fast-modes.md).
 
 Design produces the artifact itself. It does not need to produce a scored mode or enter the optimizer. [Authoring guide →](refactory/docs/tutorials/03-author-with-a-model.md)
 
@@ -107,7 +109,7 @@ Choose an outer-loop strategy, a candidate proposer, an evaluator and permitted 
 
 During a search you can add instructions, keep or reject candidate branches, pause/resume/stop at generation boundaries, and request adoption. A failed or unaudited candidate cannot be treated as a verified winner. A run may finish without finding an improvement.
 
-**Candidate limits, elapsed limits and token limits are separate controls.** Opt-in repeated trials and final holdout validation consume the shared run allocation; validation can have a reserved portion. Missing usage stays unavailable. Different models can change quality, cost and latency. [Optimization tutorial →](refactory/docs/tutorials/02-optimize-it.md)
+**Candidate limits, elapsed limits and token limits are separate controls.** Run-wide token/elapsed caps are optional and unset by default; fast work is bounded by its graph, repair policy and operation timeouts. [Choose a budget](refactory/docs/budget-strategy.md) using progress and measured usage rather than treating one token quota as a completion guarantee. Opt-in repeated trials and final holdout validation consume the shared run allocation; validation can have a reserved portion. Missing usage stays unavailable. Different models can change quality, cost and latency. [Optimization tutorial →](refactory/docs/tutorials/02-optimize-it.md)
 
 ## Models and coding workers
 
@@ -115,16 +117,20 @@ DSH remains the default worker runtime, composed with Cordis. Its providers incl
 
 Codex and Claude Code are explicit, optional worker backends through the installed DSH provider registry. They retain native authentication and product settings; unsupported capabilities fail before dispatch. External token-limited runs are refused because complete nested accounting is not established. Refactory still owns graph order, validation and gates.
 
+New workers default to **`skip`**, which bypasses native permission checks and, for DSH/Codex, their sandbox restrictions. Tools have the access available to your OS account. Choose `--permission-mode default` or **Native permission policy** in the GUI to retain the backend's checks. Existing saved runs and profiles preserve their policies. [Permission details](refactory/docs/models.md#model-provider-versus-coding-agent)
+
 ## Release capabilities and validation
 
-| Implemented surface | Guide | Tracking |
-|---|---|---|
-| Shared resource accounting and fast Create/Edit/Design graphs | [Fast modes and budgets](refactory/docs/budgets-fast-modes.md) | [#234](https://github.com/akashgit/refactory-dsh/issues/234) |
-| Durable live activity, pending questions and explicit boundary controls | [Live control and recovery](refactory/docs/live-control.md) | [#235](https://github.com/akashgit/refactory-dsh/issues/235) |
-| Versioned search profiles, full controls and candidate comparison | [Optimization profiles](refactory/docs/optimization-profiles.md) | [#236](https://github.com/akashgit/refactory-dsh/issues/236) |
-| Shared routing and optional coding workers | [Models and workers](refactory/docs/models.md) | [#237](https://github.com/akashgit/refactory-dsh/issues/237) |
+**Three of four release items have completed acceptance.** The remaining gap is successful fast-mode completion in both interfaces; implementation being merged does not close that gap.
 
-Bounded CLI and native GUI checks establish profile configuration, candidate measurements, exact adoption/replay and live boundary controls. All six fast-authoring checks stopped on token exhaustion before graph completion. Codex and Claude Code passed CLI editing/checks with explicit native edit permissions and native GUI checks with the new full-bypass `skip` default. Saved policies remain preserved. Registered dead-owner recovery passed through both public interfaces. Successful complete fast-mode acceptance remains open. See the [release validation record](refactory/docs/release-validation-20260926.md) for evidence and limits. Prior artifacts support unchanged contracts; they do not establish generated-artifact quality or equal backend performance.
+| Capability | CLI and native GUI acceptance | Guide / issue |
+|---|---|---|
+| Shared resource accounting and fast Create/Edit/Design graphs | **Incomplete:** budget exhaustion was observed; complete fast QA/repair paths remain pending | [Fast modes and budgets](refactory/docs/budgets-fast-modes.md) · [#234 open](https://github.com/akashgit/refactory-dsh/issues/234) |
+| Live activity, questions, boundary controls and supported recovery | **Complete** | [Live control and recovery](refactory/docs/live-control.md) · [#235 closed](https://github.com/akashgit/refactory-dsh/issues/235) |
+| Versioned profiles, candidate comparison, exact adoption and replay | **Complete** | [Optimization profiles](refactory/docs/optimization-profiles.md) · [#236 closed](https://github.com/akashgit/refactory-dsh/issues/236) |
+| Routing and optional DSH/Codex/Claude Code workers | **Complete** | [Models and workers](refactory/docs/models.md) · [#237 closed](https://github.com/akashgit/refactory-dsh/issues/237) |
+
+The [release validation record](refactory/docs/release-validation-20260926.md) contains separate CLI/GUI evidence and resource limits. Codex and Claude Code passed native GUI artifact checks with the new `skip` default; registered stopped-owner recovery preserved completed work in both interfaces. External whole-tree token caps and in-flight worker-session resume remain unsupported. These bounded checks do not certify generated-artifact quality, equal backend performance or a clean full-repository test suite.
 
 ## The command line
 

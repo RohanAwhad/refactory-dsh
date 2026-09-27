@@ -30,7 +30,7 @@ For a class of work, supply the importable Task reference instead of the single-
 
 > Use Design to build wordcount.py and sample.txt, with a check command of `python wordcount.py sample.txt`. Show me the design before implementing it, and verify the reported counts.
 
-Design produces an artifact rather than a registered mode. Its supplied command and reviews determine acceptance. The current full authoring modes include substantial research and review; fast modes with light QA are planned in [#234](https://github.com/akashgit/refactory-dsh/issues/234).
+Design produces an artifact rather than a registered mode. Its supplied command and reviews determine acceptance. The current full authoring modes include substantial research and review; [fast modes with focused QA](../budgets-fast-modes.md) are implemented, with complete acceptance still pending in [#234](https://github.com/akashgit/refactory-dsh/issues/234).
 
 ## Steer and correct
 
@@ -48,9 +48,9 @@ A session owns one open workflow. Use another session with a distinct run direct
 
 ## Follow a run in the panel
 
-Copy the exact run directory reported by chat into **Existing run directory → Read this run**. The attached status and Steering sections refer to that directory. Refresh those snapshots when needed; a unified live graph/worker view is planned in [#235](https://github.com/akashgit/refactory-dsh/issues/235).
+Copy the exact run directory reported by chat into **Existing run directory → Read this run**. The attached status and Steering sections refer to that directory. The attached view streams persisted graph/worker activity, wait reasons, completed nodes and pending questions. Reading or reconnecting does not execute the run; [supported recovery](../live-control.md#recover-a-known-boundary) requires explicit resume.
 
-For optimization, choose a scored mode in Modes, select its starting knobs, outer loop, optimizer, evaluator and search budgets, then **Start**. Inspect candidates and use the optimizer-specific steering/adoption controls. Authoring entries are driven from chat instead of the ordinary Start button.
+For optimization, choose a scored mode in Modes, select its starting knobs, outer loop, optimizer, evaluator and search budgets, then **Start**. Inspect candidates and use the optimizer-specific steering/adoption controls. Use **Run once** for an authoring mode after supplying its required knobs, or chat for stepwise control and approval gates.
 
 The same run can be inspected from a second terminal:
 

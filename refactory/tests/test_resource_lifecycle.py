@@ -48,6 +48,41 @@ def test_final_validation_role_survives_lowering_and_worker_bridge(tmp_path):
                         resource_limits={"max_elapsed_s": 60, "validation_reserve_s": 10})
     graph = json.loads((tmp_path / "graphs/default_pack-design_fast.graph.json").read_text())
     assert graph["nodes"]["focused_check"]["resource_role"] == "final_validation"
+    assert graph["nodes"]["emit"]["resource_role"] == "work"
+    assert graph["nodes"]["focused_qa"]["resource_role"] == "final_validation"
+    assert graph["nodes"]["focused_qa"]["_type"] == "FnNode"
+
+
+def test_resource_phase_is_optional_serializable_and_independent_of_routing():
+    from refactory_dsh.nn import Graph, Node
+    from refactory_dsh.ir import Workflow
+
+    legacy = Node("legacy", "op", call="refactory_dsh.fast_ops:report_artifact")
+    assert "resource_role" not in legacy.to_state()
+    assert Node.from_state(legacy.to_state()).to_state() == legacy.to_state()
+    assert legacy.resource_phase is None
+    assert Node("validation", "op", call=legacy.call, role="validation").resource_phase == "final_validation"
+    graph = Graph()
+    graph.add(legacy)
+    graph.add(Node("review", "agent", prompt_template="review", role="code_reviewer", resource_role="final_validation"))
+    graph.add(Node("repair", "agent", prompt_template="repair", role="builder", resource_role="work"))
+    graph.connect("legacy", "review")
+    graph.connect("review", "repair")
+    state = {"graph": graph.to_state()}
+    payload = lowering.to_workflow(state).to_dict()
+    assert "resource_role" not in payload["nodes"]["legacy"]
+    assert payload["nodes"]["review"]["resource_role"] == "final_validation"
+    assert payload["nodes"]["review"]["role"] == "code_reviewer"
+    assert payload["nodes"]["repair"]["resource_role"] == "work"
+    assert Workflow.from_dict(payload).to_dict() == payload
+    assert Graph.from_state(graph.to_state()).to_state() == graph.to_state()
+
+
+def test_unknown_resource_phase_is_refused():
+    from refactory_dsh.nn import Node
+
+    with pytest.raises(ValueError, match="unknown resource_role"):
+        Node("invalid", "agent", prompt_template="invalid", resource_role="free")
 
 
 def test_graph_parent_timeout_keeps_final_reserve_and_pauses_after_failure(tmp_path, monkeypatch):

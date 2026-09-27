@@ -2,6 +2,12 @@
 
 Implementation started from main `a339605c69` in an isolated clone. These checks concern execution, controls and reported evidence. They are not broad repository certification or a claim about generated-artifact quality. Historical evaluation campaigns stayed stopped. The original checkout and its user-owned swap file were left untouched.
 
+## Readiness
+
+**Three of the four release issues are closed:** [#235](https://github.com/akashgit/refactory-dsh/issues/235), [#236](https://github.com/akashgit/refactory-dsh/issues/236) and [#237](https://github.com/akashgit/refactory-dsh/issues/237). Their supported controls, profiles and worker paths passed separate CLI and native GUI acceptance. **The full four-issue release is not yet acceptance-complete:** [#234](https://github.com/akashgit/refactory-dsh/issues/234) remains open because none of the six bounded fast-authoring runs reached complete authoring/QA/repair acceptance.
+
+Implementation was merged in [PR #239](https://github.com/akashgit/refactory-dsh/pull/239) and [PR #240](https://github.com/akashgit/refactory-dsh/pull/240). [PR #241](https://github.com/akashgit/refactory-dsh/pull/241) added the requested full-bypass worker default and positive native worker checks; [PR #242](https://github.com/akashgit/refactory-dsh/pull/242) recorded successful public recovery. The records below retain unsuccessful attempts and capability limits as well as the positive evidence. This status update reused those records and made no new model calls.
+
 ## Issue and interface evidence
 
 | Issue | CLI evidence | Native GUI evidence | Remaining acceptance |
@@ -24,7 +30,7 @@ Each approved fast check selected a 150,000-token allocation, 360-second limit a
 | Native GUI | Edit fast | 156,722 | Exhaustion during emission |
 | Native GUI | Design fast | 169,929 | Exhaustion during emission |
 
-The six runs consumed 931,293 observed tokens, including completion-boundary overshoot of the requested aggregate allocation. Earlier 60,000-token failures and a zero-model preflight failure are retained separately. No automatic polishing, artifact repair campaign or further fast-mode rerun followed. Resource exhaustion is failure evidence, not successful authoring.
+The six runs consumed 931,293 observed tokens, including completion-boundary overshoot of the requested aggregate allocation. Earlier 60,000-token failures and a zero-model preflight failure are retained separately. No automatic polishing, artifact repair campaign or further fast-mode rerun followed. Resource exhaustion is failure evidence, not successful authoring. The [budget strategy analysis](budget-strategy.md) reconciles these receipts to provider usage and explains why repeating the same fixed-cap checks is not the next acceptance strategy.
 
 ## Profiles and live controls
 

@@ -36,17 +36,20 @@ QA_PROMPT = (
 def _qa_nodes(graph: Graph, *, artifact: bool) -> None:
     graph.add(Node(
         "focused_check", "op", call=f"{OPS}:focused_check", role="validation" if artifact else "ceo",
+        resource_role="final_validation" if artifact else "work",
         knobs=("check", "check_timeout_s"), writes=("focused-check.json", "focused-source.json"),
         produces=("focused_check", "output_path"),
         notes="run the explicitly requested bounded check; no implicit full evaluation",
     ))
     graph.add(Node(
         "focused_qa", "agent", role="code_reviewer", prompt_template=QA_PROMPT,
+        resource_role="final_validation" if artifact else "work",
         reads=("brief.json", "focused-check.json"), writes=("focused-qa.json",),
         produces=("focused_qa",), notes="one light focused QA stage; no reviewer fan-out",
     ))
     graph.add(Node(
         "gate_qa", "gate", evaluator=f"{OPS}:gate_qa",
+        resource_role="final_validation" if artifact else "work",
         knobs=("repair_attempts",), reads=("focused-qa.json", "focused-check.json", "focused-source.json"),
         writes=("fast-report.json", "repair.txt"),
         produces=("repair_feedback", "repairs_used", "qa_passed"), max_iterations=3,
@@ -77,11 +80,12 @@ class CreateFastMode(CreateMode):
         full = super().build()
         graph = Graph()
         graph.add(replace(full.nodes["prepare"], call=f"{OPS}:prepare_package",
+                          resource_role="work",
                           writes=(*full.nodes["prepare"].writes, "repair.txt", "validation.txt"),
                           produces=(*full.nodes["prepare"].produces, "repair_feedback", "repairs_used")))
-        graph.add(full.nodes["survey"])
+        graph.add(replace(full.nodes["survey"], resource_role="work"))
         graph.add(Node(
-            "emit", "agent", role="builder",
+            "emit", "agent", role="builder", resource_role="work",
             prompt_template=(
                 self.intent + "\nPackage name: {{name}}\nBrief: {{brief}}\n"
                 "Class of work: {{class_of_work}}\nInputs: {{requires_input}}\n"
@@ -97,15 +101,17 @@ class CreateFastMode(CreateMode):
             ), reads=("brief.json", "survey.json", "repair.txt", "validation.txt"),
             writes=("emit.txt",), produces=("emit",), notes="implement directly from the brief and current source",
         ))
-        graph.add(full.nodes["materialise"])
+        graph.add(replace(full.nodes["materialise"], resource_role="work"))
         graph.add(replace(full.nodes["validate"], evaluator=f"{OPS}:validate_package",
+                          resource_role="work",
                           writes=("validation.txt", "repair.txt", "fast-report.json"),
                           knobs=("repair_attempts",), max_iterations=3,
                           produces=("validation", "repair_feedback", "repairs_used")))
         _qa_nodes(graph, artifact=False)
-        graph.add(full.nodes["register"])
-        graph.add(replace(full.nodes["smoke"], call=f"{OPS}:smoke"))
+        graph.add(replace(full.nodes["register"], resource_role="work"))
+        graph.add(replace(full.nodes["smoke"], call=f"{OPS}:smoke", resource_role="final_validation"))
         graph.add(replace(full.nodes["report"], call=f"{OPS}:report_package",
+                          resource_role="final_validation",
                           writes=("create.json", "fast-report.json")))
         for source, target in (("prepare", "survey"), ("survey", "emit"),
                                ("emit", "materialise"), ("materialise", "validate"),
@@ -139,14 +145,14 @@ class DesignFastMode(DesignMode):
     def build(self) -> Graph:
         graph = Graph()
         graph.add(Node(
-            "prepare", "op", call=f"{OPS}:prepare_artifact",
+            "prepare", "op", call=f"{OPS}:prepare_artifact", resource_role="work",
             knobs=("name", "brief", "check", "source_project"),
             writes=("brief.json", "source-manifest.json", "repair.txt"),
             produces=("name", "brief", "check", "validation", "source_project", "repair_feedback", "repairs_used"),
             notes="read the artifact brief and capture the source project identity",
         ))
         graph.add(Node(
-            "emit", "agent", role="builder",
+            "emit", "agent", role="builder", resource_role="work",
             prompt_template=(
                 "Build artifact {{name}}. Brief: {{brief}}\n"
                 "Existing source project (read only): {{source_project}}\n"
@@ -163,13 +169,13 @@ class DesignFastMode(DesignMode):
             writes=("emit.txt",), produces=("emit",), notes="implement the small artifact/change directly",
         ))
         graph.add(Node(
-            "materialise", "op", call=f"{OPS}:materialise_artifact",
+            "materialise", "op", call=f"{OPS}:materialise_artifact", resource_role="work",
             reads=("emit.txt", "source-manifest.json"), produces=("artifact", "files"),
             notes="copy the source and apply emitted files to the separate output artifact",
         ))
         _qa_nodes(graph, artifact=True)
         graph.add(Node(
-            "report", "op", call=f"{OPS}:report_artifact",
+            "report", "op", call=f"{OPS}:report_artifact", resource_role="final_validation",
             reads=("focused-qa.json", "focused-check.json"), writes=("design.json", "fast-report.json"),
             produces=("designed",), notes="report only observed checks and the actual repair limit",
         ))

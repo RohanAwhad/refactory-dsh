@@ -70,7 +70,7 @@ LOOP_OPTIONS: tuple[tuple[str, str, str], ...] = (
     ("--runs-root", "the run directory to write; read it back with `console --run <this path>`", ".factory/loop/<mode>-<time>"),
     ("--intent", "what the run is for, in your words; seeds the intent ledger the agents read", "empty"),
     ("--project", "the project root packages resolve against", "the checkout"),
-    ("--model", "model for proposals and walker agent nodes; the DSH evaluator uses runtime defaults", "the default route"),
+    ("--model", "model for proposals and agent nodes in both evaluators; inspect actual worker receipts", "the default route"),
 )
 
 #: The loop's own steps, in order. The default strategy's names, and what each does.
@@ -894,12 +894,16 @@ TEMPLATE = """<!DOCTYPE html>
 
       <h3>The panel, if you would rather click</h3>
       <p>Start the GUI from this checkout (<code>uv run refactory ui</code>), open the printed token URL, pick the
-      workspace, send one message so a session exists, then <strong>Open the sidebar → Modes</strong>. The mode,
-      the three level-two names and the packages are described choices read from the same console; press
-      <strong>Start</strong> and the RUN STATUS section reads the run it names. The Modes tab belongs to
-      <code>ui-refactory</code>, which the pinned harness's own web profile does not compose, so a GUI started
-      this way shows the conversation and not the panel; every choice it offers is reachable from
-      <code>uv run refactory</code>.</p>
+      workspace, create a session, then <strong>Open the sidebar → Modes</strong>. A blank session can open
+      the panel without an introductory model call. Choose <strong>Start</strong> to optimize a scored mode
+      or <strong>Run once</strong> to execute an enabled mode, including authoring modes. Supply its required
+      knobs first. The installed profile composes the Modes panel and the console it reads.</p>
+      <p>Attach an exact run directory to stream durable graph/worker activity, see pending questions and
+      use boundary controls. Reading a saved run does not execute it; recovery requires explicit resume.
+      See <a href="interfaces.md">Terminal and GUI</a> for controls and
+      <a href="release-validation-20260926.md">release validation</a> for the remaining fast-mode acceptance
+      gap. New workers default to <a href="models.md#model-provider-versus-coding-agent">full native permission
+      bypass</a>; saved policies are retained.</p>
 
       <div class="callout warn">
         <strong>A person's gate is still a person's.</strong> If a mode has a <code>user</code> gate (create's

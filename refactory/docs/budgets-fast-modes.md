@@ -11,6 +11,16 @@ admission and canonical runtime smoke; Edit retains regression comparison.
 Design produces an artifact, including a small change in a copied existing
 project. It is not an optimization target.
 
+## Acceptance status
+
+Fast modes are implemented and selectable from the CLI and native GUI, but their
+complete authoring paths have not yet passed release acceptance. All six bounded
+Create/Edit/Design checks exhausted their token allocations before graph completion.
+The CLI Design run reached a focused check and QA artifact; that partial result is
+not a completed fast run. [Issue #234](https://github.com/akashgit/refactory-dsh/issues/234)
+remains open for successful completion through focused QA and bounded repair in both
+interfaces. See the [recorded outcomes](release-validation-20260926.md#fast-mode-outcomes).
+
 ## Choose the graph
 
 In the terminal, choose `--mode create_fast`, `--mode edit_fast` or
@@ -46,6 +56,12 @@ no success report. A model's favorable review is not proof of artifact quality.
 
 ## Allocate resources
 
+Run-wide token and elapsed limits are **optional and unset by default**. Fast mode
+is defined by its smaller graph and repair bound, not a universal token quota.
+The release-check cutoff was a test allocation. Read [Choosing a budget](budget-strategy.md)
+for the usage breakdown, tradeoffs and revised acceptance strategy before selecting
+another limit.
+
 Elapsed time and tokens are separate from candidate counts, graph steps and one
 completion's hang timeout. CLI controls are `--max-elapsed-s`, `--max-tokens`,
 `--validation-reserve-s` and `--validation-reserve-tokens`. The GUI exposes the
@@ -60,12 +76,20 @@ run = mode.run(
 )
 ```
 
+The values above illustrate accounting controls; they are not an allocation known to
+complete fast authoring.
+
 The shared `.refactory/resource-usage.json` ledger aggregates coordinator and
 nested-worker usage, retries and validation. Repeated cumulative receipts for
 the same worker replace its previous total instead of counting it twice. The
 outer loop reserves validation resources before admitting another candidate;
 required final validation can use the reserve. Fast package smoke and fast
-Design's check are explicit validation stages.
+Design's check are explicit validation stages. Fast graph nodes declare their resource
+phase independently of the worker role. Design uses final-validation resources for
+its check, QA, gate and report; Create/Edit retain that reserve for canonical smoke
+and reporting. A repair returns to the work allocation. Mode authors can set
+`nn.Node.resource_role` to `work` or `final_validation`; omission retains the prior
+role-based/inherited behavior.
 
 Elapsed limits are checked at graph boundaries and while owned model/check
 processes run. Arbitrary in-process Python operations are checked when they

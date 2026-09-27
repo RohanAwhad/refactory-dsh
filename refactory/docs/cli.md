@@ -31,7 +31,8 @@ its legacy `task_ref` field is populated when there is exactly one distinct Task
 | `--repair-attempts <n>` | fast authoring repairs after the first implementation, from 0 to 3 (default 1). |
 | `--source-project <dir>` | fast Design: copy an existing project into the output artifact before applying a change. |
 | `--worker-backend dsh\|codex\|claude_code` | the explicit coding-worker runtime; DSH is the default. |
-| `--effort <value>` / `--permission-mode <value>` | supported reasoning and permission controls; see [worker capabilities](models.md#model-provider-versus-coding-agent). |
+| `--effort <value>` | DSH reasoning-effort override; external workers use native product settings. |
+| `--permission-mode <value>` | New workers default to `skip` (full native permission bypass). Choose `default` for native checks, or a supported backend-specific policy. Saved runs/profiles retain their policies; see [worker permissions](models.md#model-provider-versus-coding-agent). |
 | `--max-elapsed-s <n>` / `--max-tokens <n>` | the shared resource allocation, including nested work and validation. |
 | `--validation-reserve-s <n>` / `--validation-reserve-tokens <n>` | keep part of that allocation available for required final validation. |
 | `--revise <package>/<mode>` | edit only: the mode being revised. |

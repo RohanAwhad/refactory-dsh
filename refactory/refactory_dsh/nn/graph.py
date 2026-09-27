@@ -40,6 +40,7 @@ _NODE_FIELDS = frozenset(
         "produces",
         "prompt_template",
         "role",
+        "resource_role",
         "tools",
         "max_iterations",
         "notes",
@@ -112,6 +113,9 @@ class Node:
     source_format: str = ""
     inline_items: tuple[dict[str, Any], ...] = ()
     limit: int = 0
+    #: Resource phase is independent of worker routing. Unset preserves the
+    #: enclosing phase, except the legacy validation role enters validation.
+    resource_role: str | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in NODE_KINDS:
@@ -158,6 +162,13 @@ class Node:
                 f"node {self.id!r}: unknown score_effect {self.score_effect!r}; "
                 "known: affects, none"
             )
+        if self.resource_role not in (None, "work", "final_validation"):
+            raise GraphError(f"node {self.id!r}: unknown resource_role {self.resource_role!r}")
+
+    @property
+    def resource_phase(self) -> str | None:
+        """Explicit resource scope, with the historical validator fallback."""
+        return self.resource_role or ("final_validation" if self.role == "validation" else None)
 
     def to_state(self) -> dict[str, Any]:
         return {
@@ -176,6 +187,7 @@ class Node:
             "produces": list(self.produces),
             "prompt_template": self.prompt_template,
             "role": self.role,
+            **({"resource_role": self.resource_role} if self.resource_role is not None else {}),
             "tools": list(self.tools),
             "max_iterations": self.max_iterations,
             "notes": self.notes,
@@ -212,6 +224,7 @@ class Node:
             produces=tuple(state.get("produces") or ()),
             prompt_template=str(state.get("prompt_template", "")),
             role=str(state.get("role", "ceo")),
+            resource_role=state.get("resource_role"),
             tools=tuple(state.get("tools") or ()),
             max_iterations=int(state.get("max_iterations", 1)),
             notes=str(state.get("notes", "")),

@@ -84,7 +84,7 @@ def node_declarations(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "reads": sorted(node.reads),
             "writes": sorted(node.writes),
             "produces": sorted(node.produces),
-            "resource_role": "final_validation" if node.role == "validation" else "work",
+            "resource_role": node.resource_phase,
         }
         if node.kind == "data":
             entry["data"] = {
@@ -165,7 +165,7 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
             "reads": set(node.reads),
             "writes": set(node.writes),
             "blocking": node.blocking,
-            "resource_role": "final_validation" if node.role == "validation" else "work",
+            "resource_role": node.resource_phase,
         }
         if node.kind == "op":
             command_timeout_s = None

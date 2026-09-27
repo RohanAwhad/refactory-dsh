@@ -26,7 +26,7 @@ The mode library: the ``nn`` of the harness world.
 | class | `Knob` | `(default: 'Any', kind: 'str' = 'float', lo: 'float \| None' = None, hi: 'float \| None' = None, enum: 'tuple[Any, ...]' = (), values: 'tuple[str, ...]' = (), frozen: 'bool' = False, description: 'str' = '') -> None` |
 | class | `Memory` | `(namespace: 'str', kind: 'str' = 'log', retention: 'str' = 'run', description: 'str' = '') -> None` |
 | class | `Mode` | `(state: 'dict[str, Any] \| None' = None) -> 'None'` |
-| class | `Node` | `(id: 'str', kind: 'str', call: 'str' = '', evaluator: 'str' = '', gate_kind: 'str' = 'fn', knobs: 'tuple[str, ...]' = (), reads: 'tuple[str, ...]' = (), writes: 'tuple[str, ...]' = (), produces: 'tuple[str, ...]' = (), prompt_template: 'str' = '', role: 'str' = 'ceo', tools: 'tuple[str, ...]' = (), max_iterations: 'int' = 1, notes: 'str' = '', blocking: 'bool' = True, score_effect: 'str' = 'affects', targets: 'tuple[str, ...]' = (), sources: 'tuple[str, ...]' = (), subgraph_entry: 'str' = '', subgraph_exit: 'str' = '', task_ref: 'str' = '', source_path: 'str' = '', source_format: 'str' = '', inline_items: 'tuple[dict[str, Any], ...]' = (), limit: 'int' = 0) -> None` |
+| class | `Node` | `(id: 'str', kind: 'str', call: 'str' = '', evaluator: 'str' = '', gate_kind: 'str' = 'fn', knobs: 'tuple[str, ...]' = (), reads: 'tuple[str, ...]' = (), writes: 'tuple[str, ...]' = (), produces: 'tuple[str, ...]' = (), prompt_template: 'str' = '', role: 'str' = 'ceo', tools: 'tuple[str, ...]' = (), max_iterations: 'int' = 1, notes: 'str' = '', blocking: 'bool' = True, score_effect: 'str' = 'affects', targets: 'tuple[str, ...]' = (), sources: 'tuple[str, ...]' = (), subgraph_entry: 'str' = '', subgraph_exit: 'str' = '', task_ref: 'str' = '', source_path: 'str' = '', source_format: 'str' = '', inline_items: 'tuple[dict[str, Any], ...]' = (), limit: 'int' = 0, resource_role: 'str \| None' = None) -> None` |
 | class | `Package` | `(name: 'str', description: 'str' = '', version: 'str' = '0.1.0', modes: "tuple[type['Mode'], ...]" = (), ops: 'tuple[str, ...]' = (), extends: 'str' = '', requires: 'tuple[str, ...]' = (), trust: 'str' = 'trusted', origin: 'str' = '') -> None` |
 | class | `Port` | `(name: 'str', path: 'str', media_type: 'str' = 'text/markdown', description: 'str' = '') -> None` |
 
@@ -52,7 +52,7 @@ The structure of a mode: nodes, edges, and their canonical serialization.
 | class | `Edge` | `(source: 'str', target: 'str', condition: 'str \| None' = None) -> None` |
 | class | `Graph` | `(*, auto_start: 'bool' = True) -> 'None'` |
 | class | `GraphError` | `` |
-| class | `Node` | `(id: 'str', kind: 'str', call: 'str' = '', evaluator: 'str' = '', gate_kind: 'str' = 'fn', knobs: 'tuple[str, ...]' = (), reads: 'tuple[str, ...]' = (), writes: 'tuple[str, ...]' = (), produces: 'tuple[str, ...]' = (), prompt_template: 'str' = '', role: 'str' = 'ceo', tools: 'tuple[str, ...]' = (), max_iterations: 'int' = 1, notes: 'str' = '', blocking: 'bool' = True, score_effect: 'str' = 'affects', targets: 'tuple[str, ...]' = (), sources: 'tuple[str, ...]' = (), subgraph_entry: 'str' = '', subgraph_exit: 'str' = '', task_ref: 'str' = '', source_path: 'str' = '', source_format: 'str' = '', inline_items: 'tuple[dict[str, Any], ...]' = (), limit: 'int' = 0) -> None` |
+| class | `Node` | `(id: 'str', kind: 'str', call: 'str' = '', evaluator: 'str' = '', gate_kind: 'str' = 'fn', knobs: 'tuple[str, ...]' = (), reads: 'tuple[str, ...]' = (), writes: 'tuple[str, ...]' = (), produces: 'tuple[str, ...]' = (), prompt_template: 'str' = '', role: 'str' = 'ceo', tools: 'tuple[str, ...]' = (), max_iterations: 'int' = 1, notes: 'str' = '', blocking: 'bool' = True, score_effect: 'str' = 'affects', targets: 'tuple[str, ...]' = (), sources: 'tuple[str, ...]' = (), subgraph_entry: 'str' = '', subgraph_exit: 'str' = '', task_ref: 'str' = '', source_path: 'str' = '', source_format: 'str' = '', inline_items: 'tuple[dict[str, Any], ...]' = (), limit: 'int' = 0, resource_role: 'str \| None' = None) -> None` |
 
 - **`Edge`** — One connection between two nodes, and the verdict that selects it.
 - **`Graph`** — A mutable graph. Edits mutate it; serialization canonicalizes it.
@@ -236,7 +236,7 @@ How a mode is run to get the score the loop learns from.
 
 | kind | name | signature |
 |---|---|---|
-| class | `DshEvaluator` | `(*, timeout_s: 'int \| None' = None, on_output: 'Callable[[str], None] \| None' = None) -> 'None'` |
+| class | `DshEvaluator` | `(*, timeout_s: 'int \| None' = None, on_output: 'Callable[[str], None] \| None' = None, model: 'Any' = None) -> 'None'` |
 | class | `Evaluator` | `()` |
 | class | `EvaluatorError` | `` |
 | class | `WalkerEvaluator` | `(*, model: 'Any' = None, project: 'Path \| None' = None, memory_global_root: 'Path \| None' = None, max_steps: 'int' = 1000) -> 'None'` |
@@ -349,7 +349,7 @@ The optimizer loop, named like one.
 |---|---|---|
 | class | `EpochSummary` | `(epoch: 'int', evaluated: 'int', best: 'float \| None', mean: 'float \| None', improved: 'bool', proposed: 'int', accepted: 'int', rejected: 'int', structural_accepted: 'int') -> None` |
 | class | `Loop` | `(mode_id: 'str', config: 'LoopConfig \| None' = None, *, project: 'Path \| None' = None, model: 'Any' = None, optimizer: 'Optimizer \| None' = None) -> 'None'` |
-| class | `LoopConfig` | `(epochs: 'int' = 2, batch_size: 'int' = 4, optimizer: 'str' = 'autoresearch', edit_preset: 'str' = 'broad', seed: 'int' = 0, elite: 'int' = 3, max_evaluations: 'int' = 64, holdout: 'float' = 0.3, parsimony: 'float' = 0.01, runs_root: 'Path' = PosixPath('.factory/loop'), max_steps: 'int' = 2000, attempts: 'int' = 3, frozen: 'tuple[str, ...]' = (), intent: 'str' = '', knobs: 'dict[str, Any]' = <factory>, history_limit: 'int' = 200, prior_runs: 'int' = 3, memory_global_root: 'Path \| None' = None, evaluator: 'str' = 'walker', dsh_timeout_s: 'int' = 900, resume: 'bool' = False, progress: 'bool' = True, print_events: 'bool' = False, verbose: 'bool' = False, control_poll_s: 'float' = 1.0) -> None` |
+| class | `LoopConfig` | `(epochs: 'int' = 2, batch_size: 'int' = 4, optimizer: 'str' = 'autoresearch', edit_preset: 'str' = 'broad', seed: 'int' = 0, elite: 'int' = 3, max_evaluations: 'int' = 64, holdout: 'float' = 0.3, parsimony: 'float' = 0.01, runs_root: 'Path' = PosixPath('.factory/loop'), max_steps: 'int' = 2000, attempts: 'int' = 3, frozen: 'tuple[str, ...]' = (), intent: 'str' = '', knobs: 'dict[str, Any]' = <factory>, history_limit: 'int' = 200, prior_runs: 'int' = 3, memory_global_root: 'Path \| None' = None, evaluator: 'str' = 'walker', dsh_timeout_s: 'int' = 900, resume: 'bool' = False, progress: 'bool' = True, print_events: 'bool' = False, verbose: 'bool' = False, control_poll_s: 'float' = 1.0, strategy: 'str' = 'default', repeats: 'int' = 1, allowed_ops: 'tuple[str, ...]' = (), worker_backend: 'str' = 'dsh', provider: 'str' = '', model: 'str' = '', effort: 'str' = '', permission_mode: 'str' = 'skip', role_routes: 'dict[str, Any]' = <factory>, node_routes: 'dict[str, Any]' = <factory>, max_elapsed_s: 'float \| None' = None, max_tokens: 'int \| None' = None, validation_reserve_s: 'float' = 0, validation_reserve_tokens: 'int' = 0, resolved_profile: 'dict[str, Any]' = <factory>) -> None` |
 | class | `LoopError` | `` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
 | function | `node_count` | `(state: 'dict[str, Any]') -> 'int'` |
@@ -394,17 +394,17 @@ The workflow IR this package owns and lowers a mode state into.
 | kind | name | signature |
 |---|---|---|
 | class | `AgentConfig` | `(*, role: refactory_dsh.ir.AgentRole, model: str, timeout: int = 600) -> None` |
-| class | `AgentNode` | `(*, id: str, reads: set[str] = <factory>, writes: set[str] = <factory>, blocking: bool = True, role: refactory_dsh.ir.AgentRole, model: str = '', prompt_template: str = '', tools: list[str] = <factory>, timeout: int \| None = None, max_iterations: int = 1, post_checks: list[refactory_dsh.ir.ArtifactCheck] = <factory>) -> None` |
+| class | `AgentNode` | `(*, id: str, reads: set[str] = <factory>, writes: set[str] = <factory>, blocking: bool = True, resource_role: Literal['work', 'final_validation'] \| None = None, role: refactory_dsh.ir.AgentRole, model: str = '', prompt_template: str = '', tools: list[str] = <factory>, timeout: int \| None = None, max_iterations: int = 1, post_checks: list[refactory_dsh.ir.ArtifactCheck] = <factory>) -> None` |
 | class | `AgentRole` | `(*values)` |
 | class | `ArtifactCheck` | `(*, path: str, must_exist: bool = True, min_size: int = 0, must_contain: list[str] = <factory>) -> None` |
 | class | `DataItem` | `(*, id: str, path: str \| None = None, metadata: dict[str, typing.Any] = <factory>, prompt: str = '') -> None` |
-| class | `DataNode` | `(*, id: str, reads: set[str] = <factory>, writes: set[str] = <factory>, blocking: bool = True, task_ref: str \| None = None, source_path: str \| None = None, source_format: Literal['directory', 'jsonl', 'csv'] \| None = None, inline_items: list[refactory_dsh.ir.DataItem] = <factory>, subgraph_entry: str, subgraph_exit: str, parallelism: Annotated[int, Ge(ge=1)] = 1, split: Literal['train', 'val', 'test', 'all'] = 'all', shuffle: bool = False, shuffle_seed: int \| None = None, limit: int \| None = None, max_items: int = 500) -> None` |
+| class | `DataNode` | `(*, id: str, reads: set[str] = <factory>, writes: set[str] = <factory>, blocking: bool = True, resource_role: Literal['work', 'final_validation'] \| None = None, task_ref: str \| None = None, source_path: str \| None = None, source_format: Literal['directory', 'jsonl', 'csv'] \| None = None, inline_items: list[refactory_dsh.ir.DataItem] = <factory>, subgraph_entry: str, subgraph_exit: str, parallelism: Annotated[int, Ge(ge=1)] = 1, split: Literal['train', 'val', 'test', 'all'] = 'all', shuffle: bool = False, shuffle_seed: int \| None = None, limit: int \| None = None, max_items: int = 500) -> None` |
 | class | `Edge` | `(*, source: str, target: str, condition: refactory_dsh.ir.VerdictType \| str \| None = None) -> None` |
-| class | `FnNode` | `(*, id: str, reads: set[str] = <factory>, writes: set[str] = <factory>, blocking: bool = True, command: str = '', callable_name: str \| None = None, notes: str = '', command_timeout_s: Annotated[int \| None, Gt(gt=0), Le(le=2147483)] = None) -> None` |
-| class | `ForkNode` | `(*, id: str, reads: set[str] = <factory>, writes: set[str] = <factory>, blocking: bool = True, targets: list[str]) -> None` |
-| class | `GateNode` | `(*, id: str, reads: set[str] = <factory>, writes: set[str] = <factory>, blocking: bool = True, evaluator_type: Literal['agent', 'fn', 'user'] = 'agent', evaluator_role: refactory_dsh.ir.AgentRole \| None = None, evaluator_command: str \| None = None, gate_prompt: str = '', max_iterations: int \| None = None) -> None` |
-| class | `JoinNode` | `(*, id: str, reads: set[str] = <factory>, writes: set[str] = <factory>, blocking: bool = True, sources: list[str]) -> None` |
-| class | `Node` | `(*, id: str, reads: set[str] = <factory>, writes: set[str] = <factory>, blocking: bool = True) -> None` |
+| class | `FnNode` | `(*, id: str, reads: set[str] = <factory>, writes: set[str] = <factory>, blocking: bool = True, resource_role: Literal['work', 'final_validation'] \| None = None, command: str = '', callable_name: str \| None = None, notes: str = '', command_timeout_s: Annotated[int \| None, Gt(gt=0), Le(le=2147483)] = None) -> None` |
+| class | `ForkNode` | `(*, id: str, reads: set[str] = <factory>, writes: set[str] = <factory>, blocking: bool = True, resource_role: Literal['work', 'final_validation'] \| None = None, targets: list[str]) -> None` |
+| class | `GateNode` | `(*, id: str, reads: set[str] = <factory>, writes: set[str] = <factory>, blocking: bool = True, resource_role: Literal['work', 'final_validation'] \| None = None, evaluator_type: Literal['agent', 'fn', 'user'] = 'agent', evaluator_role: refactory_dsh.ir.AgentRole \| None = None, evaluator_command: str \| None = None, gate_prompt: str = '', max_iterations: int \| None = None) -> None` |
+| class | `JoinNode` | `(*, id: str, reads: set[str] = <factory>, writes: set[str] = <factory>, blocking: bool = True, resource_role: Literal['work', 'final_validation'] \| None = None, sources: list[str]) -> None` |
+| class | `Node` | `(*, id: str, reads: set[str] = <factory>, writes: set[str] = <factory>, blocking: bool = True, resource_role: Literal['work', 'final_validation'] \| None = None) -> None` |
 | class | `VerdictType` | `(*values)` |
 | class | `Workflow` | `(*, name: str, nodes: dict[str, refactory_dsh.ir.AgentNode \| refactory_dsh.ir.FnNode \| refactory_dsh.ir.GateNode \| refactory_dsh.ir.ForkNode \| refactory_dsh.ir.JoinNode \| refactory_dsh.ir.DataNode], edges: list[refactory_dsh.ir.Edge], start_node: str, terminal: bool = False, task: str \| None = None, knob_values: dict[str, str \| float] = <factory>, knob_bounds: dict[str, list[str \| float]] = <factory>, knob_expandable: dict[str, str] = <factory>, knob_specs: dict[str, dict[str, typing.Any]] = <factory>, declared_capabilities: frozenset[str] = frozenset()) -> None` |
 
@@ -569,7 +569,7 @@ Running code we did not write.
 | function | `missing_init` | `(root: 'Path') -> 'str'` |
 | function | `model_readiness` | `(workdir: 'Path', *, model_context: 'dict[str, str] \| None' = None, require_ready: 'bool' = True) -> 'dict[str, Any]'` |
 | function | `promote` | `(project: 'Path', name: 'str', *, note: 'str' = '') -> 'dict[str, Any]'` |
-| function | `run_command` | `(command: 'str', *, workdir: 'Path', timeout_s: 'int' = 180, memory_mb: 'int' = 2048, cpu_s: 'int' = 120, file_mb: 'int' = 64, env: 'dict[str, str] \| None' = None) -> 'SandboxResult'` |
+| function | `run_command` | `(command: 'str', *, workdir: 'Path', timeout_s: 'int' = 180, memory_mb: 'int' = 2048, cpu_s: 'int' = 120, file_mb: 'int' = 64, env: 'dict[str, str] \| None' = None, budget: 'Any' = None) -> 'SandboxResult'` |
 | function | `run_sandboxed` | `(code: 'str', *, workdir: 'Path', timeout_s: 'int' = 180, memory_mb: 'int' = 2048, cpu_s: 'int' = 120, file_mb: 'int' = 64, env: 'dict[str, str] \| None' = None, forwarded: 'dict[str, str] \| None' = None) -> 'SandboxResult'` |
 | function | `scrub` | `(env: 'dict[str, str] \| None' = None) -> 'dict[str, str]'` |
 | function | `smoke` | `(identifier: 'str', workdir: 'Path', *, project: 'Path \| None' = None, model: 'bool' = False, knobs: 'dict[str, Any] \| None' = None, model_context: 'dict[str, str] \| None' = None, **kwargs: 'Any') -> 'SandboxResult'` |
@@ -600,7 +600,7 @@ create-mode: a mode whose output is a whole package.
 
 | kind | name | signature |
 |---|---|---|
-| class | `CreateConfig` | `(name: 'str', brief: 'str', extends: 'str' = '', attempts: 'int' = 3, workdir: 'Path' = PosixPath('.factory/create'), max_steps: 'int' = 200, seed: 'int' = 0, model_timeout_s: 'int' = 1800, smoke_timeout_s: 'int' = 3600, task_ref: 'str' = '', requires_input: 'str' = '', samples: 'list[str]' = <factory>, data_node: 'bool' = False, single_shot: 'bool' = False, verdicts: 'dict[str, str]' = <factory>) -> None` |
+| class | `CreateConfig` | `(name: 'str', brief: 'str', extends: 'str' = '', attempts: 'int' = 3, workdir: 'Path' = PosixPath('.factory/create'), max_steps: 'int' = 200, seed: 'int' = 0, model_timeout_s: 'int' = 1800, smoke_timeout_s: 'int' = 3600, task_ref: 'str' = '', requires_input: 'str' = '', samples: 'list[str]' = <factory>, data_node: 'bool' = False, single_shot: 'bool' = False, verdicts: 'dict[str, str]' = <factory>, fast: 'bool' = False, repair_attempts: 'int' = 1, check: 'str' = '', check_timeout_s: 'int' = 60, resource_limits: 'dict[str, Any] \| None' = None) -> None` |
 | class | `CreateError` | `` |
 | class | `CreateMode` | `(state: 'dict[str, Any] \| None' = None) -> 'None'` |
 | class | `CreateResult` | `(package: 'str', mode: 'str', path: 'Path', files: 'list[str]' = <factory>, smoke_score: 'float \| None' = None, iterations: 'int' = 0, duration_s: 'float' = 0.0) -> None` |
@@ -627,7 +627,7 @@ Revise an existing mode from a brief.
 
 | kind | name | signature |
 |---|---|---|
-| class | `EditConfig` | `(name: 'str', brief: 'str', extends: 'str' = '', attempts: 'int' = 3, workdir: 'Path' = PosixPath('.factory/create'), max_steps: 'int' = 200, seed: 'int' = 0, model_timeout_s: 'int' = 1800, smoke_timeout_s: 'int' = 3600, task_ref: 'str' = '', requires_input: 'str' = '', samples: 'list[str]' = <factory>, data_node: 'bool' = False, single_shot: 'bool' = False, verdicts: 'dict[str, str]' = <factory>, mode: 'str' = '', allow_regression: 'bool' = False) -> None` |
+| class | `EditConfig` | `(name: 'str', brief: 'str', extends: 'str' = '', attempts: 'int' = 3, workdir: 'Path' = PosixPath('.factory/create'), max_steps: 'int' = 200, seed: 'int' = 0, model_timeout_s: 'int' = 1800, smoke_timeout_s: 'int' = 3600, task_ref: 'str' = '', requires_input: 'str' = '', samples: 'list[str]' = <factory>, data_node: 'bool' = False, single_shot: 'bool' = False, verdicts: 'dict[str, str]' = <factory>, fast: 'bool' = False, repair_attempts: 'int' = 1, check: 'str' = '', check_timeout_s: 'int' = 60, resource_limits: 'dict[str, Any] \| None' = None, mode: 'str' = '', allow_regression: 'bool' = False) -> None` |
 | class | `EditMode` | `(state: 'dict[str, Any] \| None' = None) -> 'None'` |
 | function | `edit` | `(config: 'EditConfig', client: 'Any' = None) -> 'dict[str, Any]'` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
@@ -713,6 +713,7 @@ Driving a run from a GUI: the catalogue, a live run, and what it produced.
 | function | `artifacts` | `(run_root: 'Path', *, contents: 'bool' = False) -> 'dict[str, Any]'` |
 | function | `candidate` | `(run_root: 'Path', candidate_id: 'str') -> 'dict[str, Any]'` |
 | function | `catalogue` | `(*, project: 'Path \| None' = None) -> 'list[dict[str, Any]]'` |
+| function | `comparison` | `(run_root: 'Path') -> 'dict[str, Any]'` |
 | function | `gates` | `(run_root: 'Path') -> 'list[dict[str, Any]]'` |
 | function | `holdout` | `(run_root: 'Path') -> 'dict[str, Any] \| None'` |
 | function | `leaderboard` | `(run_root: 'Path', *, limit: 'int' = 20) -> 'list[dict[str, Any]]'` |
@@ -728,6 +729,7 @@ Driving a run from a GUI: the catalogue, a live run, and what it produced.
 - **`artifacts`** — What the run left, and — when asked — what is in it.
 - **`candidate`** — One candidate, with what it changed against the parent it came from.
 - **`catalogue`** — Every mode a run can be started from, with the surface it exposes.
+- **`comparison`** — Compare measured and unmeasured states without promoting missing metrics.
 - **`gates`** — The `user` gates this run is stopped at, and the verdicts each accepts.
 - **`holdout`** — The held-out audit a run recorded, or ``None`` when it recorded none.
 - **`leaderboard`** — The candidates by score, with each one's diff against its parent.

@@ -262,19 +262,18 @@ def test_the_readme_points_at_the_documentation():
 
 
 def test_every_document_the_readme_links_opens():
-    """The names on the README's Documentation table are promises, not prose.
+    """The README's local links must resolve regardless of section titles.
 
     The table is hand-written, so a moved or renamed file leaves a row pointing at
     nothing. Resolving each link is what turns the table into a check.
     """
     readme = (ROOT / "README.md").read_text()
-    section = readme.split("## Documentation", 1)[1].split("\n## ", 1)[0]
     links = [
         target
-        for target in re.findall(r"\]\(([^)#]+)\)", section)
+        for target in re.findall(r"\]\(([^)#]+)(?:#[^)]*)?\)", readme)
         if not target.startswith(("http://", "https://"))
     ]
-    assert links, "the README's Documentation section links nothing"
+    assert links, "the README links no local documentation"
     for target in links:
         assert (ROOT / target).exists(), (
             f"README.md links {target}, which does not exist"
@@ -340,6 +339,8 @@ def _documented_paths(text: str) -> set[str]:
                     parent = token
                     found.add(token)
 
+    # Authoring checks run against generated artifacts, not repository scripts.
+    text = re.sub(r"--check\s+([\"']).*?\1", "", text, flags=re.DOTALL)
     for match in re.finditer(r"(?:python3?|\.venv/bin/python)\s+([\w./-]+\.py)", text):
         found.add(match.group(1))
     return found

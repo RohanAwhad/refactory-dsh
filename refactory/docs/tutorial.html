@@ -100,8 +100,8 @@
     <strong>design-v2</strong> build one, what the <strong>outer loop</strong> is and every option it takes, and how
     to ask the CEO for any of it in the GUI. Commands are the real ones, output is the real output.</p>
     <div class="chips">
-      <span>13 modes</span>
-      <span>4 call a model</span>
+      <span>16 modes</span>
+      <span>7 call a model</span>
       <span>2 runtimes: walker &amp; DSH</span>
       <span>16 CEO actions</span>
     </div>
@@ -199,7 +199,7 @@
       and the CEO see. <span class="badge badge-run">run it</span> means the outer loop can search it;
       <span class="badge badge-author">create/edit/design</span> means it <em>makes</em> something and is run by
       its own command instead.</p>
-      <table class="modes"><thead><tr><th>mode</th><th>what it does</th><th>to use it</th><th>model calls</th><th>knobs</th></tr></thead><tbody><tr><td><code>annealing_pack/anneal</code><br><span class="muted">annealing_pack</span></td><td>hill-climb a greedy circle packing by accepting non-worsening moves</td><td><span class="badge badge-run">run it</span></td><td><span class="muted">none — deterministic</span></td><td class="knobs">iterations, step, seed</td></tr><tr><td><code>circle_packing/adaptive</code><br><span class="muted">circle_packing</span></td><td>population search over circle placements with a budget gate</td><td><span class="badge badge-run">run it</span></td><td><span class="muted">none — deterministic</span></td><td class="knobs">grid, order, selector, acceptance_mode, budget, seed</td></tr><tr><td><code>counting_pack/fixed_step</code><br><span class="muted">counting_pack</span></td><td>count up to a target in fixed steps; no RNG, so no seed knob</td><td><span class="badge badge-run">run it</span></td><td><span class="muted">none — deterministic</span></td><td class="knobs">target, step</td></tr><tr><td><code>counting_pack/random_walk</code><br><span class="muted">counting_pack</span></td><td>count up to a target in reproducible random steps, one draw per step</td><td><span class="badge badge-run">run it</span></td><td><span class="muted">none — deterministic</span></td><td class="knobs">target, step, seed</td></tr><tr><td><code>dataset_probe/dataset</code><br><span class="muted">dataset_probe</span></td><td>iterate a Task&#x27;s items and score the passes it verified</td><td><span class="badge badge-run">run it</span></td><td><span class="muted">none — deterministic</span></td><td class="knobs">min_items</td></tr><tr><td><code>default_pack/create</code><br><span class="muted">default_pack</span></td><td>design, emit and validate a whole package from a brief</td><td><span class="badge badge-author">create</span></td><td><span class="yes">9 agent node(s)</span></td><td class="knobs">attempts, research_attempts, design_attempts, task_ref, single_shot, smoke_timeout_s, sample_knobs, requires_input, data_node, name, brief, revision_of, allow_regression</td></tr><tr><td><code>default_pack/design</code><br><span class="muted">default_pack</span></td><td>design, emit and check a software artifact from a brief</td><td><span class="badge badge-author">design</span></td><td><span class="yes">9 agent node(s)</span></td><td class="knobs">research_attempts, check_attempts, check_timeout_s, name, brief, check</td></tr><tr><td><code>default_pack/edit</code><br><span class="muted">default_pack</span></td><td>revise an existing mode from a brief, and check it did not regress</td><td><span class="badge badge-author">edit</span></td><td><span class="yes">9 agent node(s)</span></td><td class="knobs">attempts, research_attempts, design_attempts, task_ref, single_shot, smoke_timeout_s, sample_knobs, requires_input, data_node, name, brief, revision_of, allow_regression</td></tr><tr><td><code>java_build_pack/build</code><br><span class="muted">java_build_pack</span></td><td>write a build script that compiles and runs any small Java tree</td><td><span class="badge badge-run">run it</span></td><td><span class="yes">1 agent node(s)</span></td><td class="knobs">source_release</td></tr><tr><td><code>lean_pack/prover</code><br><span class="muted">lean_pack</span></td><td>prove a theorem in Lean and score what the Lean checker accepted</td><td><span class="badge badge-run">run it</span></td><td><span class="muted">none — deterministic</span></td><td class="knobs">library, strategy, attempts, timeout_s</td></tr><tr><td><code>loop_mode/loop</code><br><span class="muted">loop_mode</span></td><td>The optimizer loop&#x27;s eight steps as a runnable, searchable graph.</td><td><span class="badge badge-run">run it</span></td><td><span class="muted">none — deterministic</span></td><td class="knobs">target, epochs, batch_size, project, optimizer, elite, attempts, max_evaluations, seed</td></tr><tr><td><code>review_pack/review</code><br><span class="muted">review_pack</span></td><td>draft, check, and let a person approve before publishing</td><td><span class="badge badge-run">run it</span></td><td><span class="muted">none — deterministic</span></td><td class="knobs">topic, rounds</td></tr><tr><td><code>sympy_pack/exact</code><br><span class="muted">sympy_pack</span></td><td>establish closed forms of sums with sympy and score what checked out</td><td><span class="badge badge-run">run it</span></td><td><span class="muted">none — deterministic</span></td><td class="knobs">candidates, problems, route</td></tr></tbody></table>
+      <table class="modes"><thead><tr><th>mode</th><th>what it does</th><th>to use it</th><th>model calls</th><th>knobs</th></tr></thead><tbody><tr><td><code>annealing_pack/anneal</code><br><span class="muted">annealing_pack</span></td><td>hill-climb a greedy circle packing by accepting non-worsening moves</td><td><span class="badge badge-run">run it</span></td><td><span class="muted">none — deterministic</span></td><td class="knobs">iterations, step, seed</td></tr><tr><td><code>circle_packing/adaptive</code><br><span class="muted">circle_packing</span></td><td>population search over circle placements with a budget gate</td><td><span class="badge badge-run">run it</span></td><td><span class="muted">none — deterministic</span></td><td class="knobs">grid, order, selector, acceptance_mode, budget, seed</td></tr><tr><td><code>counting_pack/fixed_step</code><br><span class="muted">counting_pack</span></td><td>count up to a target in fixed steps; no RNG, so no seed knob</td><td><span class="badge badge-run">run it</span></td><td><span class="muted">none — deterministic</span></td><td class="knobs">target, step</td></tr><tr><td><code>counting_pack/random_walk</code><br><span class="muted">counting_pack</span></td><td>count up to a target in reproducible random steps, one draw per step</td><td><span class="badge badge-run">run it</span></td><td><span class="muted">none — deterministic</span></td><td class="knobs">target, step, seed</td></tr><tr><td><code>dataset_probe/dataset</code><br><span class="muted">dataset_probe</span></td><td>iterate a Task&#x27;s items and score the passes it verified</td><td><span class="badge badge-run">run it</span></td><td><span class="muted">none — deterministic</span></td><td class="knobs">min_items</td></tr><tr><td><code>default_pack/create</code><br><span class="muted">default_pack</span></td><td>design, emit and validate a whole package from a brief</td><td><span class="badge badge-author">create</span></td><td><span class="yes">9 agent node(s)</span></td><td class="knobs">attempts, research_attempts, design_attempts, task_ref, single_shot, smoke_timeout_s, sample_knobs, requires_input, data_node, name, brief, revision_of, allow_regression</td></tr><tr><td><code>default_pack/create_fast</code><br><span class="muted">default_pack</span></td><td>create a small package with focused QA and at most one repair by default</td><td><span class="badge badge-run">run it</span></td><td><span class="yes">2 agent node(s)</span></td><td class="knobs">task_ref, single_shot, smoke_timeout_s, sample_knobs, requires_input, data_node, name, brief, revision_of, allow_regression, repair_attempts, check, check_timeout_s</td></tr><tr><td><code>default_pack/design</code><br><span class="muted">default_pack</span></td><td>design, emit and check a software artifact from a brief</td><td><span class="badge badge-author">design</span></td><td><span class="yes">9 agent node(s)</span></td><td class="knobs">research_attempts, check_attempts, check_timeout_s, name, brief, check</td></tr><tr><td><code>default_pack/design_fast</code><br><span class="muted">default_pack</span></td><td>build a small artifact or a feature in a copied project with focused QA</td><td><span class="badge badge-run">run it</span></td><td><span class="yes">2 agent node(s)</span></td><td class="knobs">check_timeout_s, name, brief, check, repair_attempts, source_project</td></tr><tr><td><code>default_pack/edit</code><br><span class="muted">default_pack</span></td><td>revise an existing mode from a brief, and check it did not regress</td><td><span class="badge badge-author">edit</span></td><td><span class="yes">9 agent node(s)</span></td><td class="knobs">attempts, research_attempts, design_attempts, task_ref, single_shot, smoke_timeout_s, sample_knobs, requires_input, data_node, name, brief, revision_of, allow_regression</td></tr><tr><td><code>default_pack/edit_fast</code><br><span class="muted">default_pack</span></td><td>revise a package with focused QA, bounded repair and regression validation</td><td><span class="badge badge-run">run it</span></td><td><span class="yes">2 agent node(s)</span></td><td class="knobs">task_ref, single_shot, smoke_timeout_s, sample_knobs, requires_input, data_node, name, brief, revision_of, allow_regression, repair_attempts, check, check_timeout_s</td></tr><tr><td><code>java_build_pack/build</code><br><span class="muted">java_build_pack</span></td><td>write a build script that compiles and runs any small Java tree</td><td><span class="badge badge-run">run it</span></td><td><span class="yes">1 agent node(s)</span></td><td class="knobs">source_release</td></tr><tr><td><code>lean_pack/prover</code><br><span class="muted">lean_pack</span></td><td>prove a theorem in Lean and score what the Lean checker accepted</td><td><span class="badge badge-run">run it</span></td><td><span class="muted">none — deterministic</span></td><td class="knobs">library, strategy, attempts, timeout_s</td></tr><tr><td><code>loop_mode/loop</code><br><span class="muted">loop_mode</span></td><td>The optimizer loop&#x27;s eight steps as a runnable, searchable graph.</td><td><span class="badge badge-run">run it</span></td><td><span class="muted">none — deterministic</span></td><td class="knobs">target, epochs, batch_size, project, optimizer, elite, attempts, max_evaluations, seed</td></tr><tr><td><code>review_pack/review</code><br><span class="muted">review_pack</span></td><td>draft, check, and let a person approve before publishing</td><td><span class="badge badge-run">run it</span></td><td><span class="muted">none — deterministic</span></td><td class="knobs">topic, rounds</td></tr><tr><td><code>sympy_pack/exact</code><br><span class="muted">sympy_pack</span></td><td>establish closed forms of sums with sympy and score what checked out</td><td><span class="badge badge-run">run it</span></td><td><span class="muted">none — deterministic</span></td><td class="knobs">candidates, problems, route</td></tr></tbody></table>
     </section>
 
     <section id="create">
@@ -240,11 +240,18 @@
       </div>
       <details><summary>Every option, from the command's own <code>--help</code></summary><pre><code>usage: python -m refactory_dsh.create [-h] --name NAME --brief BRIEF
                                       [--extends EXTENDS]
-                                      [--attempts ATTEMPTS] [--data-node]
-                                      [--input NAME] [--sample NAME=VALUE]
-                                      [--task TASK_REF] [--single]
-                                      [--workdir WORKDIR] [--resume RUN_DIR]
-                                      [--model MODEL] [--provider PROVIDER]
+                                      [--attempts ATTEMPTS] [--fast]
+                                      [--repair-attempts REPAIR_ATTEMPTS]
+                                      [--check CHECK]
+                                      [--max-elapsed-s MAX_ELAPSED_S]
+                                      [--max-tokens MAX_TOKENS]
+                                      [--validation-reserve-s VALIDATION_RESERVE_S]
+                                      [--validation-reserve-tokens VALIDATION_RESERVE_TOKENS]
+                                      [--data-node] [--input NAME]
+                                      [--sample NAME=VALUE] [--task TASK_REF]
+                                      [--single] [--workdir WORKDIR]
+                                      [--resume RUN_DIR] [--model MODEL]
+                                      [--provider PROVIDER]
                                       [--model-timeout MODEL_TIMEOUT_S]
                                       [--smoke-timeout SMOKE_TIMEOUT_S]
                                       [--verdict GATE=VALUE]
@@ -257,6 +264,19 @@ options:
   --brief BRIEF         what the package should do
   --extends EXTENDS     a &lt;package&gt;/&lt;mode&gt; to use as a reference
   --attempts ATTEMPTS
+  --fast                use the inspectable create_fast graph with focused QA
+  --repair-attempts REPAIR_ATTEMPTS
+                        fast graph repair limit (0..3)
+  --check CHECK         fast graph&#x27;s explicit focused check command
+  --max-elapsed-s MAX_ELAPSED_S
+                        shared elapsed seconds, including nested work and
+                        validation
+  --max-tokens MAX_TOKENS
+                        shared tokens; requires provider usage telemetry
+  --validation-reserve-s VALIDATION_RESERVE_S
+                        elapsed seconds retained for required final validation
+  --validation-reserve-tokens VALIDATION_RESERVE_TOKENS
+                        tokens retained for required final validation
   --data-node           build the package as a DataNode that runs its subgraph
                         once per item; naming a Task implies this, so it is
                         only for a caller that wants to be explicit
@@ -331,22 +351,40 @@ options:
       same catalogue as everyone else.</p>
 
       <h3>Every option</h3>
-      <table><thead><tr><th>option</th><th>what it does</th><th>default</th></tr></thead><tbody><tr><td><code>MODE</code></td><td>the mode to optimize, as `&lt;package&gt;/&lt;name&gt;`</td><td><code>—</code></td></tr><tr><td><code>--epochs</code></td><td>how many rounds of propose → validate → evaluate → select</td><td><code>2</code></td></tr><tr><td><code>--batch-size</code></td><td>candidates proposed per epoch</td><td><code>4</code></td></tr><tr><td><code>--optimizer</code></td><td>how the next candidates are proposed (table below)</td><td><code>autoresearch</code></td></tr><tr><td><code>--strategy</code></td><td>which outer loop drives the search (table below)</td><td><code>the harness&#x27;s own</code></td></tr><tr><td><code>--evaluator</code></td><td>which runtime scores a candidate: `walker` (fast) or `dsh` (ships)</td><td><code>walker</code></td></tr><tr><td><code>--preset</code></td><td>which edits the optimizer may use: `broad`, `structure`, `conservative`, `knob_only`</td><td><code>broad</code></td></tr><tr><td><code>--seed</code></td><td>the search RNG seed; model responses can still vary</td><td><code>0</code></td></tr><tr><td><code>--elite</code></td><td>how many parents each round proposes against</td><td><code>3</code></td></tr><tr><td><code>--max-evaluations</code></td><td>a hard ceiling on evaluated candidates, whatever the epochs say</td><td><code>64</code></td></tr><tr><td><code>--attempts</code></td><td>retries per batch after a refusal, before the batch is short</td><td><code>3</code></td></tr><tr><td><code>--runs-root</code></td><td>the run directory to write; read it back with `console --run &lt;this path&gt;`</td><td><code>.factory/loop/&lt;mode&gt;-&lt;time&gt;</code></td></tr><tr><td><code>--intent</code></td><td>what the run is for, in your words; seeds the intent ledger the agents read</td><td><code>empty</code></td></tr><tr><td><code>--project</code></td><td>the project root packages resolve against</td><td><code>the checkout</code></td></tr><tr><td><code>--model</code></td><td>model for proposals and walker agent nodes; the DSH evaluator uses runtime defaults</td><td><code>the default route</code></td></tr></tbody></table>
+      <table><thead><tr><th>option</th><th>what it does</th><th>default</th></tr></thead><tbody><tr><td><code>MODE</code></td><td>the mode to optimize, as `&lt;package&gt;/&lt;name&gt;`</td><td><code>—</code></td></tr><tr><td><code>--epochs</code></td><td>how many rounds of propose → validate → evaluate → select</td><td><code>2</code></td></tr><tr><td><code>--batch-size</code></td><td>candidates proposed per epoch</td><td><code>4</code></td></tr><tr><td><code>--optimizer</code></td><td>how the next candidates are proposed (table below)</td><td><code>autoresearch</code></td></tr><tr><td><code>--strategy</code></td><td>which outer loop drives the search (table below)</td><td><code>the harness&#x27;s own</code></td></tr><tr><td><code>--evaluator</code></td><td>which runtime scores a candidate: `walker` (fast) or `dsh` (ships)</td><td><code>walker</code></td></tr><tr><td><code>--preset</code></td><td>which edits the optimizer may use: `broad`, `structure`, `conservative`, `knob_only`</td><td><code>broad</code></td></tr><tr><td><code>--seed</code></td><td>the search RNG seed; model responses can still vary</td><td><code>0</code></td></tr><tr><td><code>--elite</code></td><td>how many parents each round proposes against</td><td><code>3</code></td></tr><tr><td><code>--max-evaluations</code></td><td>a hard ceiling on evaluated candidates, whatever the epochs say</td><td><code>64</code></td></tr><tr><td><code>--attempts</code></td><td>retries per batch after a refusal, before the batch is short</td><td><code>3</code></td></tr><tr><td><code>--runs-root</code></td><td>the run directory to write; read it back with `console --run &lt;this path&gt;`</td><td><code>.factory/loop/&lt;mode&gt;-&lt;time&gt;</code></td></tr><tr><td><code>--intent</code></td><td>what the run is for, in your words; seeds the intent ledger the agents read</td><td><code>empty</code></td></tr><tr><td><code>--project</code></td><td>the project root packages resolve against</td><td><code>the checkout</code></td></tr><tr><td><code>--model</code></td><td>model for proposals and agent nodes in both evaluators; inspect actual worker receipts</td><td><code>the default route</code></td></tr></tbody></table>
       <p class="muted">Proven complete against the command's own <code>--help</code> by the generator's test.</p>
       <details><summary>The real <code>--help</code></summary><pre><code>usage: python -m refactory_dsh.loop [-h] [--epochs EPOCHS]
                                     [--batch-size BATCH_SIZE]
-                                    [--optimizer {archive,autoresearch,evolutionary,hill_climb,islands,map_elites,random}]
-                                    [--strategy {adaptive_meta,autoscientists,best_of_n,default,reflective,reflective_sampler,research_then_optimize,staged_curriculum,staged_v1,tree_search}]
-                                    [--evaluator {walker,dsh}]
-                                    [--preset PRESET] [--seed SEED]
+                                    [--optimizer OPTIMIZER]
+                                    [--preset EDIT_PRESET] [--seed SEED]
                                     [--elite ELITE]
                                     [--max-evaluations MAX_EVALUATIONS]
                                     [--holdout HOLDOUT]
                                     [--parsimony PARSIMONY]
-                                    [--attempts ATTEMPTS] [--verbose]
-                                    [--runs-root RUNS_ROOT] [--intent INTENT]
-                                    [--project PROJECT] [--knob NAME=VALUE]
-                                    [--model MODEL] [--provider PROVIDER]
+                                    [--max-steps MAX_STEPS]
+                                    [--attempts ATTEMPTS] [--intent INTENT]
+                                    [--history-limit HISTORY_LIMIT]
+                                    [--prior-runs PRIOR_RUNS]
+                                    [--evaluator EVALUATOR]
+                                    [--dsh-timeout-s DSH_TIMEOUT_S]
+                                    [--strategy STRATEGY] [--repeats REPEATS]
+                                    [--worker-backend WORKER_BACKEND]
+                                    [--provider PROVIDER] [--model MODEL]
+                                    [--effort EFFORT]
+                                    [--permission-mode PERMISSION_MODE]
+                                    [--max-elapsed-s MAX_ELAPSED_S]
+                                    [--max-tokens MAX_TOKENS]
+                                    [--validation-reserve-s VALIDATION_RESERVE_S]
+                                    [--validation-reserve-tokens VALIDATION_RESERVE_TOKENS]
+                                    [--knob NAME=VALUE] [--frozen KNOB]
+                                    [--allowed-ops OP]
+                                    [--role-routes ROLE_ROUTES]
+                                    [--node-routes NODE_ROUTES]
+                                    [--profile PROFILE]
+                                    [--profile-version PROFILE_VERSION]
+                                    [--runs-root RUNS_ROOT]
+                                    [--project PROJECT] [--verbose] [--resume]
+                                    [--resolved-config RESOLVED_CONFIG]
                                     mode
 
 Run the optimizer loop on a mode.
@@ -358,42 +396,44 @@ options:
   -h, --help            show this help message and exit
   --epochs EPOCHS
   --batch-size BATCH_SIZE
-  --optimizer {archive,autoresearch,evolutionary,hill_climb,islands,map_elites,random}
-  --strategy {adaptive_meta,autoscientists,best_of_n,default,reflective,reflective_sampler,research_then_optimize,staged_curriculum,staged_v1,tree_search}
-                        which outer loop drives the search; the default is the
-                        harness&#x27;s own
-  --evaluator {walker,dsh}
-                        which runtime runs a candidate: walker (fast, for
-                        search) or dsh (the runtime that ships)
-  --preset PRESET       which edits the optimizer may use
+  --optimizer OPTIMIZER
+  --preset EDIT_PRESET
   --seed SEED
-  --elite ELITE         how many parents to propose against
+  --elite ELITE
   --max-evaluations MAX_EVALUATIONS
-  --holdout HOLDOUT     the fraction of the Task&#x27;s items held out of the
-                        search and used to audit the winner; one item cannot
-                        be split, which the audit records
+  --holdout HOLDOUT
   --parsimony PARSIMONY
-                        what each node of a candidate&#x27;s graph costs its score;
-                        the search compares raw_score - parsimony * nodes
-  --attempts ATTEMPTS   retries per batch after a refusal
-  --verbose             print every event, and each candidate&#x27;s own run
-                        output, not only the meaningful ones
+  --max-steps MAX_STEPS
+  --attempts ATTEMPTS
+  --intent INTENT
+  --history-limit HISTORY_LIMIT
+  --prior-runs PRIOR_RUNS
+  --evaluator EVALUATOR
+  --dsh-timeout-s DSH_TIMEOUT_S
+  --strategy STRATEGY
+  --repeats REPEATS
+  --worker-backend WORKER_BACKEND
+  --provider PROVIDER
+  --model MODEL
+  --effort EFFORT
+  --permission-mode PERMISSION_MODE
+  --max-elapsed-s MAX_ELAPSED_S
+  --max-tokens MAX_TOKENS
+  --validation-reserve-s VALIDATION_RESERVE_S
+  --validation-reserve-tokens VALIDATION_RESERVE_TOKENS
+  --knob NAME=VALUE
+  --frozen KNOB
+  --allowed-ops OP
+  --role-routes ROLE_ROUTES
+  --node-routes NODE_ROUTES
+  --profile PROFILE
+  --profile-version PROFILE_VERSION
   --runs-root RUNS_ROOT
-                        the run directory to write, read back with `console
-                        --run &lt;this path&gt;`; the console&#x27;s --runs-root is a
-                        parent of runs, not this
-  --intent INTENT       what this run is for, in the asker&#x27;s words; seeds the
-                        run&#x27;s intent ledger, which every agent node of an
-                        interactive run reads
   --project PROJECT
-  --knob NAME=VALUE     a knob value the search starts from (repeatable);
-                        required for a mode whose inputs are frozen knobs,
-                        which the search itself may not move
-  --model MODEL         model name for this run&#x27;s completions: the reasoning
-                        optimizer&#x27;s proposals, and the agent nodes of the mode
-                        being evaluated
-  --provider PROVIDER   provider route that model is on (default: the settings
-                        default)
+  --verbose
+  --resume
+  --resolved-config RESOLVED_CONFIG
+                        exact resolved snapshot prepared by the console
 </code></pre></details>
       <details><summary>What the config defaults to</summary><table><thead><tr><th>LoopConfig field</th><th>default</th></tr></thead><tbody><tr><td><code>epochs</code></td><td>default 2</td></tr><tr><td><code>batch_size</code></td><td>default 4</td></tr><tr><td><code>optimizer</code></td><td>default &#x27;autoresearch&#x27;</td></tr><tr><td><code>edit_preset</code></td><td>default &#x27;broad&#x27;</td></tr><tr><td><code>seed</code></td><td>default 0</td></tr><tr><td><code>elite</code></td><td>default 3</td></tr><tr><td><code>max_evaluations</code></td><td>default 64</td></tr><tr><td><code>attempts</code></td><td>default 3</td></tr><tr><td><code>evaluator</code></td><td>default &#x27;walker&#x27;</td></tr><tr><td><code>dsh_timeout_s</code></td><td>default 900</td></tr></tbody></table></details>
 
@@ -484,12 +524,16 @@ options:
 
       <h3>The panel, if you would rather click</h3>
       <p>Start the GUI from this checkout (<code>uv run refactory ui</code>), open the printed token URL, pick the
-      workspace, send one message so a session exists, then <strong>Open the sidebar → Modes</strong>. The mode,
-      the three level-two names and the packages are described choices read from the same console; press
-      <strong>Start</strong> and the RUN STATUS section reads the run it names. The Modes tab belongs to
-      <code>ui-refactory</code>, which the pinned harness's own web profile does not compose, so a GUI started
-      this way shows the conversation and not the panel; every choice it offers is reachable from
-      <code>uv run refactory</code>.</p>
+      workspace, create a session, then <strong>Open the sidebar → Modes</strong>. A blank session can open
+      the panel without an introductory model call. Choose <strong>Start</strong> to optimize a scored mode
+      or <strong>Run once</strong> to execute an enabled mode, including authoring modes. Supply its required
+      knobs first. The installed profile composes the Modes panel and the console it reads.</p>
+      <p>Attach an exact run directory to stream durable graph/worker activity, see pending questions and
+      use boundary controls. Reading a saved run does not execute it; recovery requires explicit resume.
+      See <a href="interfaces.md">Terminal and GUI</a> for controls and
+      <a href="release-validation-20260926.md">release validation</a> for the remaining fast-mode acceptance
+      gap. New workers default to <a href="models.md#model-provider-versus-coding-agent">full native permission
+      bypass</a>; saved policies are retained.</p>
 
       <div class="callout warn">
         <strong>A person's gate is still a person's.</strong> If a mode has a <code>user</code> gate (create's
