@@ -75,7 +75,7 @@ export function ProfileControls({ api, mode, settings, knobs, knobDefaults = [],
     }
     setResolved(null)
   }
-  return <details data-refactory-profiles>
+  return <details className={css.disclosure} data-refactory-profiles>
     <summary className={css.heading}>Optimization profiles and full search controls</summary>
     <label className={css.label} htmlFor="refactory-profile-select">Saved profile version</label>
     <select id="refactory-profile-select" className={css.control} value={`${settings.profile || ''}:${settings.profile_version || ''}`}
@@ -102,7 +102,6 @@ export function ProfileControls({ api, mode, settings, knobs, knobDefaults = [],
       <input className={css.input} id={`refactory-profile-${key}`} value={Array.isArray(additional[key]) ? additional[key].join(', ') : ''}
         onChange={event => { change(key, event.target.value.split(',').map(s => s.trim()).filter(Boolean)) }} />
     </div>)}
-    <RuntimeControls configuration={settings.configuration || '{}'} onChange={value => { onField('configuration', value); setResolved(null) }} />
     <p className={css.note}>Task definitions, scoring and invariants stay fixed. Ranking uses mean validated score minus size penalty. Cost and latency are reported; missing measurements confer no advantage. Repeated trials report observed variability, not proof of improvement.</p>
     <label className={css.label} htmlFor="refactory-profile-name">Profile name</label>
     <input className={css.input} id="refactory-profile-name" value={name} onChange={event => { setName(event.target.value) }} />
@@ -166,7 +165,7 @@ export function RuntimeControls({ configuration, onChange }: { readonly configur
   const [routeError, setRouteError] = useState('')
   const change = (key: string, next: unknown): void => { onChange(JSON.stringify({ ...value, [key]: next })) }
   const permissions = backend === 'codex' ? ['skip', 'default', 'never', 'approve-for-me', 'dangerously-bypass-approvals-and-sandbox'] : backend === 'claude_code' ? ['skip', 'default', 'dontAsk', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'] : ['skip', 'default']
-  return <details data-refactory-runtime-controls open>
+  return <details className={css.disclosure} data-refactory-runtime-controls>
     <summary className={css.heading}>Worker routing and shared resources</summary>
     <label className={css.label} htmlFor="refactory-worker-backend">Coding worker backend</label>
     <select className={css.control} id="refactory-worker-backend" value={backend} onChange={event => { onChange(JSON.stringify({ ...value, worker_backend: event.target.value, provider: '', model: '', effort: '', permission_mode: value.permission_mode === 'default' ? 'default' : 'skip', max_tokens: null, validation_reserve_tokens: 0 })) }}>

@@ -66,6 +66,55 @@ def events(root: Path, after: int = 0) -> tuple[list[dict[str, Any]], int]:
     return records[after:], len(records)
 
 
+def graph_snapshot(root: Path) -> dict[str, Any] | None:
+    """Read topology from this run's checkpoint, without exposing commands/prompts.
+
+    Checkpoints may be absent or from an older runtime. Never infer connections
+    from event order or import/execute a mode to reconstruct missing topology.
+    """
+    checkpoint = read(root / '.refactory/spine-checkpoint.json')
+    graph = checkpoint.get('graph')
+    if not isinstance(graph, dict) or not isinstance(graph.get('nodes'), dict):
+        return None
+    nodes = [{'id': key, 'kind': str(node.get('_type', 'Node'))}
+             for key, node in graph['nodes'].items() if isinstance(node, dict)]
+    ids = {node['id'] for node in nodes}
+    edges = []
+    for edge in graph.get('edges', []) if isinstance(graph.get('edges'), list) else []:
+        if not isinstance(edge, dict):
+            continue
+        source, target = edge.get('source'), edge.get('target')
+        if not isinstance(source, str) or not isinstance(target, str) or source not in ids or target not in ids:
+            continue
+        edges.append({'source': source, 'target': target,
+                      'label': str(edge.get('condition') or '')})
+    # The spine declares these connections on nodes, rather than in `edges`.
+    def connect(source: Any, target: Any, label: str) -> None:
+        if isinstance(source, str) and isinstance(target, str) and source in ids and target in ids:
+            if not any(edge['source'] == source and edge['target'] == target for edge in edges):
+                edges.append({'source': source, 'target': target, 'label': label})
+    for key, node in graph['nodes'].items():
+        if not isinstance(node, dict):
+            continue
+        if node.get('_type') == 'ForkNode' and isinstance(node.get('targets'), list):
+            for target in node['targets']:
+                connect(key, target, 'branch')
+        if node.get('_type') == 'JoinNode' and isinstance(node.get('sources'), list):
+            for source in node['sources']:
+                connect(source, key, 'join')
+        if node.get('_type') == 'DataNode':
+            connect(key, node.get('subgraph_entry'), 'each item')
+            connect(node.get('subgraph_exit'), key, 'next item')
+    successors = checkpoint.get('successors')
+    if isinstance(successors, dict):
+        for source, target in successors.items():
+            connect(source, target, '')
+    skipped = checkpoint.get('skipped', [])
+    return {'nodes': nodes, 'edges': edges,
+            'skipped': [node for node in skipped if isinstance(node, str) and node in ids]
+            if isinstance(skipped, list) else []} if nodes else None
+
+
 def snapshot(root: Path, *, after: int = 0) -> dict[str, Any]:
     root = Path(root).resolve()
     spine = read(root / '.refactory/spine-status.json')
@@ -91,6 +140,7 @@ def snapshot(root: Path, *, after: int = 0) -> dict[str, Any]:
     return {'schema_version': 1, 'run_id': str(root), 'invocation': invocation.get('id'),
             'events': history, 'cursor': cursor, 'last_event_at': all_events[-1].get('at') if all_events else None,
             'started_at': invocation.get('started'), 'nodes': nodes, 'completed': completed,
+            'graph': graph_snapshot(root),
             'wait_reason': wait, 'workers': workers, 'deliveries': supplied,
             'resources': read(root / '.refactory/resource-usage.json') or None,
             'control': read(root / '.refactory/graph-control-receipt.json') or None,

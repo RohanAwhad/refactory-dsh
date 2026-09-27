@@ -153,6 +153,7 @@ export interface RefactoryInjected {
    * @param tabId - the tab being drawn.
    * @param id - the chosen catalogue id, or `null`.
    */
+  readonly choosePackage: (tabId: TabId, name: string | null) => void
   readonly choose: (tabId: TabId, id: string | null) => void
   /**
    * Change one of the chosen mode's declared knobs for this run.
@@ -310,6 +311,7 @@ export function refactoryFace(
     const packageGenerations = new Map<TabId, number>()
     const stopGenerations = new Map<TabId, number>()
     const watchGenerations = new Map<TabId, number>()
+    const starting = new Set<TabId>()
     const running = new Set<TabId>()
     const watchers = new Map<TabId, AbortController>()
     /**
@@ -384,7 +386,6 @@ export function refactoryFace(
     const watchRun = (tabId: TabId, run: string, signal: AbortSignal): void => {
       if (signal.aborted || run.trim() === '') return
       nextGeneration(watchGenerations, tabId)
-      nextGeneration(startGenerations, tabId)
       nextGeneration(candidateGenerations, tabId)
       nextGeneration(stopGenerations, tabId)
       watchers.get(tabId)?.abort()
@@ -469,6 +470,7 @@ export function refactoryFace(
             catalogueGenerations, statusGenerations, startGenerations, runGenerations,
             packageGenerations, stopGenerations, steeringGenerations, candidateGenerations, watchGenerations,
           ]) generations.delete(tabId)
+          starting.delete(tabId)
           running.delete(tabId)
           watchers.get(tabId)?.abort()
           watchers.delete(tabId)
@@ -481,6 +483,7 @@ export function refactoryFace(
         actions.loading(tabId)
         read(tabId, signal)
       },
+      choosePackage(tabId, name) { actions.chosePackage(tabId, name) },
       choose(tabId, id) {
         actions.chose(tabId, id)
       },
@@ -491,7 +494,7 @@ export function refactoryFace(
         actions.setting(tabId, name, value)
       },
       start(tabId, mode, knobs, settings, signal) {
-        if (signal.aborted) return
+        if (signal.aborted || starting.has(tabId)) return
         const budget = searchBudget(settings)
         if (budget === null) {
           actions.noticed(tabId, { code: 'refactory/invalid-search-budget', message: 'Search limits must be positive whole numbers.' })
@@ -506,13 +509,16 @@ export function refactoryFace(
         if (settings.configuration) chosen.settings_json = settings.configuration
         if (settings.profile) chosen.profile = settings.profile
         if (settings.profile_version) chosen.profile_version = Number(settings.profile_version)
+        starting.add(tabId)
+        actions.starting(tabId, true)
         const generation = nextGeneration(startGenerations, tabId)
+        const watchGeneration = watchGenerations.get(tabId)
         settle(startGenerations, tabId, generation, console.start(
           { mode, settings: chosen, knobs: knobArguments(knobs) },
           signal,
         ), (receipt) => {
-          watchRun(tabId, receipt.root, signal)
-        })
+          if (watchGenerations.get(tabId) === watchGeneration) watchRun(tabId, receipt.root, signal)
+        }, () => { starting.delete(tabId); actions.starting(tabId, false) })
       },
       run(tabId, mode, knobs, signal, settings) {
         if (signal.aborted || running.has(tabId)) return

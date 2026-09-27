@@ -182,6 +182,13 @@ export interface RefactoryRunStatus {
   readonly item_results?: RefactoryItemResults | null
 }
 
+/** Read-only topology from the watched run's persisted spine checkpoint. */
+export interface RefactoryRunGraph {
+  readonly skipped?: readonly string[]
+  readonly nodes: readonly { readonly id: string; readonly kind: string }[]
+  readonly edges: readonly { readonly source: string; readonly target: string; readonly label: string }[]
+}
+
 export interface RefactoryActivity {
   readonly schema_version: number
   readonly run_id: string
@@ -191,6 +198,8 @@ export interface RefactoryActivity {
   readonly started_at: string | null
   readonly nodes: readonly string[]
   readonly completed: readonly string[]
+  /** Absent on older hosts and optimizer roots without a graph checkpoint. */
+  readonly graph?: RefactoryRunGraph | null
   readonly wait_reason: string | null
   readonly workers: readonly Readonly<Record<string, unknown>>[]
   readonly deliveries: readonly Readonly<Record<string, unknown>>[]

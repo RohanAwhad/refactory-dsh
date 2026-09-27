@@ -97,3 +97,40 @@ def test_exhausted_or_exited_graph_never_claims_running(tmp_path):
     assert result['state'] == 'failed'
     assert not result['running']
     assert result['activity']['wait_reason'] == 'token budget exhausted'
+
+
+def test_graph_snapshot_reads_saved_topology_without_commands_or_mutations(tmp_path):
+    checkpoint = tmp_path / '.refactory/spine-checkpoint.json'
+    checkpoint.parent.mkdir()
+    graph = {'nodes': {
+        'fork': {'_type': 'ForkNode', 'targets': ['work', 'qa']},
+        'work': {'_type': 'AgentNode', 'command': 'DO NOT EXECUTE', 'prompt_template': 'private'},
+        'qa': {'_type': 'FnNode'},
+        'join': {'_type': 'JoinNode', 'sources': ['work', 'qa']},
+        'review': {'_type': 'GateNode'},
+    }, 'edges': [{'source': 'join', 'target': 'review'},
+                  {'source': 'review', 'target': 'fork', 'condition': 'reloop'},
+                  {'source': 'missing', 'target': 'review'}]}
+    checkpoint.write_text(json.dumps({'graph': graph, 'skipped': ['qa', 'missing']}))
+    before = checkpoint.read_bytes()
+    result = live.snapshot(tmp_path)['graph']
+    assert result['nodes'][1] == {'id': 'work', 'kind': 'AgentNode'}
+    assert result['skipped'] == ['qa']
+    assert {(edge['source'], edge['target']) for edge in result['edges']} == {
+        ('fork', 'work'), ('fork', 'qa'), ('work', 'join'), ('qa', 'join'),
+        ('join', 'review'), ('review', 'fork'),
+    }
+    assert result['edges'][1]['label'] == 'reloop'
+    assert 'private' not in json.dumps(result)
+    assert 'DO NOT EXECUTE' not in json.dumps(result)
+    assert checkpoint.read_bytes() == before
+    assert not (tmp_path / live.EVENTS).exists()
+
+
+def test_graph_snapshot_tolerates_old_and_partial_checkpoints(tmp_path):
+    assert live.snapshot(tmp_path)['graph'] is None
+    checkpoint = tmp_path / '.refactory/spine-checkpoint.json'
+    checkpoint.parent.mkdir()
+    for content in ['{', '{}', '{"graph": {"nodes": []}}']:
+        checkpoint.write_text(content)
+        assert live.snapshot(tmp_path)['graph'] is None

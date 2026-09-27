@@ -8,6 +8,9 @@ Refactory turns agentic work into reusable **modes**: explicit graphs of coding 
 
 [Get started](refactory/docs/getting-started.md) · [Terminal & GUI](refactory/docs/interfaces.md) · [Command reference](refactory/docs/cli.md) · [Write a mode](refactory/docs/tutorials/01-write-a-mode.md)
 
+The browser keeps Refactory’s original two-gear identity and blue theme. The Modes panel starts with Package → Mode selection and shows a live workflow map, configuration and required questions, with advanced settings available through expandable sections. [Panel guide](refactory/docs/tutorials/07-pick-and-watch-from-the-panel.md) · [Upstream compatibility](refactory/docs/upstream-compatibility.md)
+
+
 **Release status · 26 September 2026:** Profiles, live controls/recovery and DSH/Codex/Claude Code workers have completed bounded CLI and native GUI acceptance. Fast authoring is implemented, but successful completion through QA and bounded repair remains unverified. [Readiness and evidence ↓](#release-capabilities-and-validation)
 
 ## What you can build

@@ -62,3 +62,10 @@ Pause/resume/stop controls apply at the owning graph or optimizer boundary; an i
 For a stopped graph owner, attach its saved run and press **resume**, or use `refactory graph-control resume --run RUN_DIR`. Both public paths have passed bounded acceptance: completed work, run identity and resource consumption are retained. Recovery is explicit and limited to a verified saved boundary. An unknown worker outcome, changed inputs/outputs or changed prepared configuration prevents automatic continuation. Reopening a mode can create a new invocation and archive outputs; it is not generic recovery. Native worker sessions are not resumed by this bridge. [Recovery details](live-control.md#recover-a-known-boundary) · [Work-directory lifecycle](tutorials/06-run-it-with-a-person.md#reusing-a-work-directory).
 
 Created/adopted packages live in `.factory/packages/`, Design artifacts in `.factory/artifacts/`, and execution receipts in the selected run directory. A report's exact paths are authoritative. Task item results, aggregate score, execution completion and artifact quality are separate facts. Fast authoring, profiles, live control/recovery and worker routing have completed bounded CLI/GUI acceptance; see [validation status](../../README.md#release-capabilities-and-validation).
+
+
+## Panel presentation
+
+The Modes panel uses Refactory’s original two-gear identity and blue theme in both color schemes. **Configure a run**, **Activity & results**, **Graph controls** and **Steering** separate setup, observation and actions. Advanced settings and package management expand without discarding inputs. A pending-question banner links to the available answers. Narrow and split panels stack the same controls; expanded panels place configuration beside activity.
+
+The [panel guide](tutorials/07-pick-and-watch-from-the-panel.md#find-the-controls) describes navigation. [Presentation acceptance](panel-validation-20260927.md) records native screenshots and bounded checks. [Upstream compatibility](upstream-compatibility.md) documents the published DSH dependency and pre-existing patch boundary.
