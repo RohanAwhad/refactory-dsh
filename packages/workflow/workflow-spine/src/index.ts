@@ -862,7 +862,8 @@ export function apply(ctx: Context, config: Config): void {
       for (const node of next.nodes) {
         if (node._type !== 'AgentNode' && node._type !== 'LLMNode') continue
         const receipt = runtimeBridge(agentCommand, workdir, commandEnv, {
-          action: 'begin', node: node.id, prompt: node.prompt_template ?? '', writes: node.writes ?? [],
+          action: 'begin', node: node.id, prompt: node.prompt_template ?? '',
+          reads: node.reads ?? [], writes: node.writes ?? [],
         })
         if (typeof receipt.prompt !== 'string') throw new Error('agent delivery bridge returned no prompt')
         node.prompt_template = receipt.prompt

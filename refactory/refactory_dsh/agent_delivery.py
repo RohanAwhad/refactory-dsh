@@ -15,6 +15,43 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path('.refactory/agent-delivery')
+CONTRACT_START = '<!-- refactory worker execution -->'
+CONTRACT_END = '<!-- end refactory worker execution -->'
+
+
+def _execution_contract(workdir: Path, node: str, prompt: str, reads: list[str],
+                        writes: list[str], model_context: dict[str, Any] | None) -> tuple[str, dict[str, Any]]:
+    """Orient one node without making its worker discover the delivery protocol."""
+    context = model_context or {}
+    python = str(Path(context['python_bin']) / 'python') if context.get('python_bin') else sys.executable
+    execution = {
+        'node': node, 'workdir': str(workdir),
+        'inputs': [str((workdir / name).resolve()) for name in reads],
+        'outputs': [str(_path(workdir, name)) for name in writes],
+        'python': python, 'refactory_source': str(Path(__file__).resolve().parent),
+    }
+    if context.get('runtime_root'):
+        execution['runtime_root'] = str(context['runtime_root'])
+    # A repeated view may already contain our block. Replace only that block;
+    # the task and the current steering ledger remain intact.
+    start = prompt.find(CONTRACT_START)
+    end = prompt.find(CONTRACT_END, start)
+    if start >= 0 and end >= start:
+        suffix = prompt[end + len(CONTRACT_END):]
+        if start == 0 and suffix.startswith('\n\n'):
+            suffix = suffix[2:]
+        prompt = prompt[:start] + suffix
+    instructions = (
+        'Execute this workflow node only. The paths below are exact; relative task paths use workdir. '
+        'Use the supplied task, API and reference source first; inspect additional code when needed for this task. '
+        'The runtime owns delivery receipts and advancing the graph. Its graphs, worker specs, delivery history '
+        'and adjacent run reports are not completion instructions; inspect them only if this task explicitly needs them. '
+        'Perform the checks required by the current task. After delivering the required outputs, return immediately '
+        'with a brief completion response; do not execute later workflow stages or wait for a receipt. '
+        'Do not duplicate a file artifact in the final response. If no output file is declared, return the requested result.'
+    )
+    block = f'{CONTRACT_START}\n{instructions}\n{json.dumps(execution, indent=2)}\n{CONTRACT_END}'
+    return f'{block}\n\n{prompt}', execution
 
 
 def _now() -> str:
@@ -53,7 +90,8 @@ def _pending(workdir: Path, node: str) -> Path:
     return workdir / ROOT / 'pending' / (hashlib.sha256(node.encode()).hexdigest() + '.json')
 
 
-def begin(workdir: Path, node: str, prompt: str, writes: list[str], *, reuse: bool = False) -> dict[str, Any]:
+def begin(workdir: Path, node: str, prompt: str, writes: list[str], *, reuse: bool = False,
+          reads: list[str] | None = None, model_context: dict[str, Any] | None = None) -> dict[str, Any]:
     """Snapshot outputs and supply the current ledger before dispatching one agent.
 
     DSH can report the same due node repeatedly; reuse keeps its original output
@@ -74,6 +112,7 @@ def begin(workdir: Path, node: str, prompt: str, writes: list[str], *, reuse: bo
     ledger_text = ledger.path.read_text() if ledger.exists() else ""
     entries = parse_entries(ledger_text)
     annotated = prompt_with_ledger(prompt, ledger, entries=entries)
+    annotated, execution = _execution_contract(workdir, node, annotated, reads or [], writes, model_context)
     if previous is not None and previous['prompt'] == annotated:
         return previous
     before = previous['before'] if previous is not None else {name: _fingerprint(workdir, name) for name in writes}
@@ -81,7 +120,7 @@ def begin(workdir: Path, node: str, prompt: str, writes: list[str], *, reuse: bo
     directory = workdir / ROOT / identifier
     directory.mkdir(parents=True, exist_ok=True)
     contexts = list(previous.get('contexts', [])) if previous is not None else []
-    context = {'at': _now(), 'entries': entries,
+    context = {'at': _now(), 'entries': entries, 'execution': execution,
                'prompt': str(ROOT / identifier / f'context-{len(contexts)}.prompt.txt'),
                'ledger': str(ROOT / identifier / f'context-{len(contexts)}.ledger.md')}
     (workdir / context['prompt']).write_text(annotated)
@@ -93,6 +132,7 @@ def begin(workdir: Path, node: str, prompt: str, writes: list[str], *, reuse: bo
     record = {'id': identifier, 'node': node,
               'started': previous['started'] if previous is not None else context['at'], 'writes': writes,
               'before': before, 'prompt': annotated, 'entries': entries, 'contexts': contexts,
+              'execution': execution,
               'receipt': str(ROOT / identifier / 'receipt.json')}
     (directory / 'receipt.json').write_text(json.dumps({
         **{key: value for key, value in record.items() if key != 'prompt'},
@@ -191,7 +231,8 @@ def main() -> int:
         request = json.load(sys.stdin)
         workdir = Path.cwd()
         if request['action'] == 'begin':
-            result = begin(workdir, request['node'], request['prompt'], request['writes'], reuse=True)
+            result = begin(workdir, request['node'], request['prompt'], request['writes'], reuse=True,
+                           reads=request.get('reads'))
         elif request['action'] == 'finish':
             result = finish(workdir, request['node'])
         elif request['action'] == 'invalidate':

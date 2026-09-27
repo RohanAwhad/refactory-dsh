@@ -647,11 +647,13 @@ class Executor:
             raise ExecutionError(f"agent node {node.id!r} needs a model client")
         from refactory_dsh.agent_delivery import begin, finish
 
-        delivery = begin(self.ctx.workdir, node.id, render(node.prompt_template, self.ctx), list(node.writes))
-        self.model_calls += 1
         client = self.ctx.model
         if callable(getattr(client, "for_node", None)):
             client = client.for_node(node.id, role=node.role)
+        delivery = begin(self.ctx.workdir, node.id, render(node.prompt_template, self.ctx), list(node.writes),
+                         reads=list(node.reads),
+                         model_context=client.context() if callable(getattr(client, "context", None)) else None)
+        self.model_calls += 1
         if self.ctx.budget is not None and not callable(getattr(client, "with_budget", None)):
             self.ctx.budget.require_usage_capability(False)
         output = _ask_model(

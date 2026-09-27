@@ -119,7 +119,8 @@ def test_an_agent_node_renders_its_prompt_and_writes_its_answer(tmp_path):
     model = FakeModel("the answer")
     result = nn.execute(graph, tmp_path, knobs={"step": 9}, facts={"value": 3}, model=model)
     assert result.exit_ok, result.error
-    assert model.prompts == [("", "knob is 9, fact is 3")]
+    assert len(model.prompts) == 1 and model.prompts[0][0] == ""
+    assert model.prompts[0][1].endswith("knob is 9, fact is 3")
     assert (tmp_path / "answer.txt").read_text() == "the answer"
     assert result.facts["answer"] == "the answer"
 
@@ -139,7 +140,7 @@ def test_a_prompt_with_stray_braces_is_left_alone(tmp_path):
                       writes=("answer.txt",), knobs=("step",)))
     model = FakeModel()
     nn.execute(graph, tmp_path, knobs={"step": 1}, model=model)
-    assert model.prompts[0][1] == 'json: {"a": 1}, knob 1'
+    assert model.prompts[0][1].endswith('json: {"a": 1}, knob 1')
 
 
 def test_a_path_outside_the_work_directory_is_refused(tmp_path):
