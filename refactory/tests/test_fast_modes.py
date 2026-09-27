@@ -109,3 +109,44 @@ def test_qa_cannot_silently_repair_or_invalidate_checked_source(tmp_path, monkey
     assert json.loads((tmp_path / "run/focused-check.json").read_text())["status"] == "pass"
     assert json.loads((tmp_path / "run/fast-report.json").read_text())["status"] == "unresolved"
     assert not (tmp_path / "run/design.json").exists()
+
+
+@pytest.mark.parametrize("needs_repair,qa_tokens", [(True, 25), (False, 25), (False, 40)])
+def test_design_validation_reserve_cannot_fund_repair(tmp_path, monkeypatch, needs_repair, qa_tokens):
+    from refactory_dsh.budgets import RunBudget
+
+    monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
+    good = "===FILE: answer.py===\nassert True\n"
+    initial = "===FILE: answer.py===\nassert False\n" if needs_repair else good
+
+    class MeteredModel(FakeModel):
+        def with_budget(self, budget):
+            self.budget = budget
+            return self
+
+        def complete(self, prompt, *, system="", workdir=None):
+            index = len(self.prompts)
+            self.budget.record_usage(f"request-{index}", [60, qa_tokens, 0, 0][index])
+            return super().complete(prompt, system=system, workdir=workdir)
+
+    client = MeteredModel([initial, QA_PASS, good, QA_PASS])
+    workdir = tmp_path / "run"
+    result = DesignFastMode().run(
+        workdir, model=client,
+        task={"name": "reserved", "brief": "assert true", "check": f"{sys.executable} answer.py"},
+        resource_limits={"max_tokens": 100, "validation_reserve_tokens": 20},
+    )
+    assert len(client.prompts) == 2, "implementation must not restart using validation reserve"
+    state = RunBudget.open(workdir).snapshot()
+    assert state["known_tokens"] == 60 + qa_tokens
+    if needs_repair:
+        assert not result.exit_ok and "reserve retained" in result.error
+        assert state["phase"] == "work"
+        assert not (workdir / "design.json").exists()
+    elif qa_tokens == 40:
+        assert not result.exit_ok and "token budget exhausted" in result.error
+        assert not (workdir / "design.json").exists()
+    else:
+        assert result.exit_ok, result.error
+        assert json.loads((workdir / "fast-report.json").read_text())["status"] == "completed"
+        assert state["phase"] == "final_validation"

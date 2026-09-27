@@ -610,7 +610,7 @@ class Executor:
 
         self._outcome = "pending"
         if self.ctx.budget is not None:
-            self.ctx.budget.checkpoint_node("final_validation" if node.role == "validation" else None)
+            self.ctx.budget.checkpoint_node(node.resource_phase)
         self._outcome = "running"
         if self._reserve_step is None:
             self._record(node.id, outcome="running")
