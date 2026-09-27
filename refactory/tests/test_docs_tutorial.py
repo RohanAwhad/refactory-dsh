@@ -100,12 +100,9 @@ def test_a_mode_the_registry_lists_is_not_claimed_to_call_a_model():
     assert "deterministic" in page
 
 
-def test_the_tutorials_index_quotes_the_shipped_listing():
-    """The index's transcript is the shipped packages, not this machine's."""
-    index = (Path(__file__).resolve().parent.parent / "docs" / "tutorials" / "index.md").read_text()
-    listing = gen_tutorial.committed_listing().rstrip("\n")
-    assert f"```\n{listing}\n```" in index, (
-        "the index's `registry list` transcript is not what a fresh clone prints; "
-        "regenerate it with `python -m refactory_dsh.tools.gen_tutorial` (the listing is "
-        "`gen_tutorial.committed_listing()`)"
-    )
+def test_the_tutorials_index_links_the_generated_catalogue():
+    """The index delegates the changing mode catalogue to its generated source."""
+    docs = Path(__file__).resolve().parent.parent / "docs"
+    index = (docs / "tutorials" / "index.md").read_text()
+    assert "](../tutorial.html)" in index
+    assert (docs / "tutorial.html").is_file()

@@ -65,7 +65,7 @@ including a completed run another session still has open for inspection.
 | **Search budget** | epochs, candidates per epoch and maximum candidate evaluations; invalid values disable Start. These are search settings, separate from mode knobs. Final holdout checks are additional; these are not token/time limits | `console start <mode> --epochs … --batch-size … --max-evaluations …` |
 | **Start** | starts the chosen mode in its own process and names the run it began | `console start <mode> --strategy … --optimizer … --evaluator … --knob …` |
 | **Run once** | shows a unique run directory during launch, then reports the run's own status, due nodes and facts; **Watch and steer this run** attaches its live status and ledger | `console run <mode> --workdir <unique-directory> --knob NAME=VALUE` |
-| **Run status** | one frame of the run being read — state, best score, evaluations; **Refresh status** reads the next frame, **Stop the run** asks it to stop | `console status --run <id>`, `console stop --run <id>` |
+| **Run status** | streams the attached run’s durable activity, node/worker state, checks and available usage; **Refresh status** requests a snapshot | `console status --run <id>`, `console stop --run <id>` |
 | **Existing run directory → Read this run** | attach the exact directory reported by CEO chat or the terminal; read its status and steer its ledger | `console status --run <directory>`, `console steer --run <directory> --gates` |
 | **Packages of modes** | per package: **Enable**, **Disable**, **Remove**, and **Import a package** from a directory or git URL | `registry list`, `enable`, `disable`, `remove`, `import` |
 
@@ -77,19 +77,21 @@ Behaviours to know before you press something:
   choice, not broken.
 
 - **Disabled packages offer Enable.** Their run buttons are disabled, and enabling
-  the package refreshes its modes. An authoring mode instead names its own action;
-  Start is disabled and Run once is absent for it.
-- **A run stopped at a gate is reported as stopped.** When a run reaches a gate a
-  person owns, **Run once** says so, names the nodes still due, and stops: the panel
-  does not choose a verdict. Attach the run directory to record a verdict in
-  Steering, then ask the CEO to continue. Graph runs show notes and gates, while
-  optimizer candidate and control buttons remain specific to optimizer searches.
+  the package refreshes its modes. Authoring modes use **Run once** after their required knobs are supplied;
+  **Start** remains the optimization action for scored modes.
+- **A user gate remains the user's decision.** Attach the run to see its pending
+  question and permitted answers, then submit the verdict through the native
+  controls or owning chat. The panel does not invent an answer. A live owner
+  consumes it at its boundary; if the owner has stopped, use explicit **resume**
+  only when the saved boundary passes recovery checks. Graph and optimizer
+  controls retain their separate timing and ownership rules.
 - **Task grades are separate from a mode score.** A completed run shows recorded
   per-item pass/fail counts when present. If no aggregate mode score was produced,
   the panel says so; it does not invent an average or keep promising a future score.
 - **A one-shot has its own identity while it works.** Its path appears while preparing; **Watch and steer this run** becomes available once the fresh graph is durable. That button selects the run for the status and Steering sections. Launching it does not redirect a different run you deliberately attached. The same owned console call returns its final result or refusal; ending its stream requests cancellation through the runtime's subprocess owner. Preparation alone does not certify model authentication or success.
-- **Status is read on demand.** There is no poll timer, so a long run does not
-  animate; press **Refresh status** when you want the next frame.
+- **Attached activity updates live.** Persisted events update the selected run's
+  nodes, workers, waits and outputs. Reconnect reads the same saved run; it does
+  not relaunch it. No completion percentage is inferred from elapsed time.
 
 ## The run the panel started is an ordinary run
 
@@ -180,7 +182,8 @@ uv run refactory modes | head -14
 - **The conversation** — [Drive it from the GUI](05-drive-it-from-the-gui.md) — the
   same acts asked for in words, which the CEO performs with the `refactory` tool.
 - **Authoring** — [Author with a model](03-author-with-a-model.md) — `create`, `edit`
-  and `design`, which the panel deliberately does not start.
+  and `design`, available through **Run once** or stepwise chat. Fast variants
+  have [incomplete release acceptance](../budgets-fast-modes.md#acceptance-status).
 - **A person at a gate** — [Run it with a person](06-run-it-with-a-person.md).
 - **Datasets** — [Datasets and Tasks](../datasets.md) — a mode that iterates items,
   and the Task that supplies and judges them.

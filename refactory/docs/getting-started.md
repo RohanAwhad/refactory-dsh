@@ -57,6 +57,8 @@ uv run refactory runtime
 
 Doctor checks local configuration, not authentication or quota. Runtime shows the nested defaults. Select a configured model in chat or use the CLI's `--provider` and `--model` options.
 
+New coding workers default to **Skip permission checks**, including full native sandbox bypass for DSH/Codex. Their tools can access what your OS account can access. To retain backend checks, choose **Native permission policy** in the Modes panel or pass `--permission-mode default` in the CLI. Existing saved profiles and runs preserve their policy. [Worker permissions](models.md#model-provider-versus-coding-agent)
+
 ## 4. Choose the output you want
 
 | Your goal | Use | Result |
@@ -90,8 +92,8 @@ To author a reusable mode, follow [Create and Edit](tutorials/03-author-with-a-m
 
 ## 5. Stay involved
 
-In GUI chat, ask: “Open counting_pack/fixed_step with target=20 and step=2. Walk it one node at a time.” Ask to pause before a node, correct an instruction, or answer a gate. In the Modes panel, choose an existing mode, set its knobs, and use **Run once** or **Start** for optimization. Create/Edit/Design authoring is driven through chat.
+In GUI chat, ask: “Open counting_pack/fixed_step with target=20 and step=2. Walk it one node at a time.” Ask to pause before a node, correct an instruction, or answer a gate. In the Modes panel, choose a mode and set its knobs: **Run once** executes it, including full and fast authoring modes; **Start** optimizes a scored mode. Chat supports stepwise authoring and user gates. Fast authoring remains available with [incomplete release acceptance](budgets-fast-modes.md#acceptance-status).
 
-Attach the run's exact directory with **Existing run directory → Read this run** to inspect its status and Steering section. Some panel status and ledger views require **Refresh** today. [Interface guide](interfaces.md) explains what is interactive, what updates automatically, and when controls take effect.
+Attach the run's exact directory with **Existing run directory → Read this run** to follow persisted live activity, worker receipts and pending questions. Reading a run does not execute it. Use **resume** explicitly for a supported saved boundary after its owner stops; completed work and consumed resources are retained. [Interface guide](interfaces.md) explains what is interactive, what updates automatically, and when controls take effect.
 
 Next: [command reference](cli.md) · [optimization tutorial](tutorials/02-optimize-it.md) · [write your own mode](tutorials/01-write-a-mode.md).
