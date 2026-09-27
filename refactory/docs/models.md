@@ -80,6 +80,15 @@ python -m refactory_dsh.interactive counting_pack/fixed_step --worker-backend co
 
 Refactory dispatches only the agent node's self-contained task, retains its declared outputs and runs graph-owned checks. The worker never owns graph order, user gates or scoring.
 
+Each node worker receives its node identity, exact working directory, absolute
+input/output paths and selected Python interpreter alongside the task and current
+instructions. It uses the supplied API/reference context, performs that node's
+required checks, writes its outputs and returns a brief completion response.
+Delivery receipts and downstream graph operations remain runtime-owned; workers
+are instructed not to rediscover that protocol from adjacent run histories or
+repeat later stages. This orientation is active in both the Python executor and
+native workflow path; it is guidance, not proof that a worker followed it.
+
 New workers default to `--permission-mode skip` in the CLI, API and **Worker permission mode** control. This grants workers the access available to the OS account: DSH uses `danger-full-access` with approval policy `never`; Codex uses `dangerously-bypass-approvals-and-sandbox`; Claude Code uses `bypassPermissions`. The setting applies to each launched runtime and does not change personal product settings. Use this mode only for tasks and inputs you trust.
 
 Choose `--permission-mode default` (**Native permission policy** in the GUI) to retain the backend's native policy, which may deny file creation. Existing saved runs and profiles preserve their permission settings; historical snapshots without a recorded policy keep the native default. A backend switch resets an inherited backend-specific policy to `skip`. Codex also accepts `never`, `approve-for-me` and its full bypass name. Claude Code also accepts `dontAsk`, `acceptEdits`, `auto`, `plan` and `bypassPermissions`. Unsupported route combinations and permissions fail before launch. External per-call provider and reasoning-effort overrides are unsupported; select those through the product's native configuration. `--effort` is supported for DSH nodes.

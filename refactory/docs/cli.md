@@ -44,6 +44,14 @@ its legacy `task_ref` field is populated when there is exactly one distinct Task
 | `--model <id>` | the model this run uses, e.g. `deepseek-v4-pro`. |
 | `--approve <gate>=<value>` | answer a gate up front, e.g. `gate_strategy=proceed`, for a run with nobody at it. A gate a person would be asked at is theirs: run without this and answer it, or drive the mode node by node with the `wf_open` tool. `modes` marks a person's gate `(user)`. |
 | `--headless` | run without a conversation: one task, one report, then exit, for scripts and CI. Without it the run is live — each turn prints as it happens and a line you type between turns reaches the CEO. |
+| `--timeout <seconds>` | bound the interactive graph process, including authoring; 0 supplies no separate wait limit. An explicit shared elapsed allocation can impose a shorter deadline. |
+
+Fast Create and Design use one strategist, coder and QA agent sequentially. Fast
+Edit starts with the coder and retains source-contract and regression checks.
+The CLI passes `--check` through the same declared `check` knob exposed in the
+native form; use `--knob check_timeout_s=45` to bound that command separately.
+These small graphs omit research and reviewer fan-out; [acceptance status](budgets-fast-modes.md#acceptance-status)
+remains separate from selecting and launching them.
 
 The full create and design QA gate uses current `BLOCKING: <finding>` statements from
 all three review reports. `BLOCKING: none` and scoped empty verdicts such as

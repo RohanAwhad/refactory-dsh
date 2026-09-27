@@ -1,32 +1,38 @@
 # Fast authoring and shared run budgets
 
 `default_pack/create_fast`, `default_pack/edit_fast` and `default_pack/design_fast`
-are ordinary, inspectable modes. Their graphs implement directly from the brief,
-run one focused QA stage, and allow one repair by default. They do not invoke the
-full research or multiple-reviewer graphs. The existing `create`, `edit` and
-`design` modes remain available.
+are ordinary, inspectable modes for small, purposeful tasks. They omit research
+and reviewer fan-out and allow one repair by default. The existing `create`,
+`edit` and `design` modes remain available with their full graphs.
 
-Create and Edit produce reusable mode packages. They retain structural package
-admission and canonical runtime smoke; Edit retains regression comparison.
-Design produces an artifact, including a small change in a copied existing
-project. It is not an optimization target.
+| Mode | Sequential work and required validation |
+|---|---|
+| Create fast | One strategist plans the minimum reusable graph, knobs, score and artifact invariants; one coder emits the package; one QA agent reviews it. Structural admission and canonical runtime smoke remain required. |
+| Edit fast | One coder makes the small revision directly, then one QA agent checks it. Task bindings, inputs and artifact contracts are preserved; structural admission, canonical smoke and regression comparison remain required. |
+| Design fast | One strategist, one coder and one QA agent produce a tiny checked artifact, such as a one-file helper or a small change in a copied project. The required command runs against the materialized output. |
+
+The strategy is a concise plan, not a separate research or approval workflow.
+Create and Edit produce reusable packages. Design produces the artifact itself
+and is not an optimization target.
 
 ## Acceptance status
 
-Fast modes are implemented and selectable from the CLI and native GUI, but their
-complete authoring paths have not yet passed release acceptance. All six bounded
-Create/Edit/Design checks exhausted their token allocations before graph completion.
-The CLI Design run reached a focused check and QA artifact; that partial result is
-not a completed fast run. [Issue #234](https://github.com/akashgit/refactory-dsh/issues/234)
-remains open for successful completion through focused QA and bounded repair in both
-interfaces. See the [recorded outcomes](release-validation-20260926.md#fast-mode-outcomes).
+Fast modes are implemented and selectable from the CLI and native GUI. After the
+original six token-exhausted checks, revised CLI Design completed its three
+sequential workers, required check, focused QA and report at 135,727 tokens in
+31.77 seconds, with no repair. Revised CLI Create emitted files but exhausted its
+150,000-token allocation at 156,775 observed tokens before handback or QA.
+[Issue #234](https://github.com/akashgit/refactory-dsh/issues/234) remains open:
+the remaining successful CLI/native paths are pending. See the
+[recorded outcomes](release-validation-20260926.md#fast-mode-outcomes).
 
 ## Choose the graph
 
 In the terminal, choose `--mode create_fast`, `--mode edit_fast` or
 `--mode design_fast` with `refactory ceo`. In the native GUI, select the same mode
-from the mode catalogue and configure its knobs. The direct authoring commands
-also accept `--fast`:
+from the mode catalogue and configure its knobs, then use **Run once**. The public
+CLI forwards `--check` to the declared `check` knob for all fast variants and
+honors `--timeout` for authoring. The direct authoring commands also accept `--fast`:
 
 ```bash
 uv run python -m refactory_dsh.design --fast \
@@ -46,8 +52,11 @@ from zero to three. It counts repairs after the first implementation, so one
 permits at most two implementations. The required Design `check` runs as a bounded
 command against the materialized artifact. Create/Edit can also name an explicit
 `check`; an empty check is reported as not requested, not passed. Focused QA asks
-the worker to inspect requested behavior and relevant regressions, with evidence
-for each check and an explicit list of checks not run.
+the worker to inspect the emitted or changed files, requested behavior and relevant
+regressions, using the actual command result already supplied. It records evidence
+for each check and an explicit list of checks not run. It does not edit the
+implementation or repeat downstream runtime stages. A required check not run
+cannot count as a pass.
 
 Read `focused-check.json`, `focused-qa.json` and `fast-report.json` in the run
 directory. They separate command results, model-authored review, structural
