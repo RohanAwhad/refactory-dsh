@@ -80,12 +80,14 @@ describe('the picker before it has read anything', () => {
 })
 
 describe('the picker with the described choices', () => {
-  it('offers every described mode, none chosen, and no run being read', () => {
+  it('offers packages first, with no mode chosen or run being read', () => {
     const { view } = mountBody({ choices: { kind: 'ready', value: CHOICES } })
     expect(at(view, 'data-refactory-state').getAttribute('data-refactory-state')).toBe('ready')
     const select = at(view, 'data-refactory-mode') as HTMLSelectElement
     expect(select.value).toBe('')
-    expect([...select.options].map(option => option.value)).toEqual(['', 'p/adaptive', 'default_pack/create', 'off/adaptive'])
+    expect(select.disabled).toBe(true)
+    expect([...select.options].map(option => option.value)).toEqual([''])
+    expect([...(at(view, 'data-refactory-package') as HTMLSelectElement).options].map(option => option.value)).toEqual(['', 'default_pack', 'off', 'p'])
     expect(missing(view, 'data-refactory-start')).toBe(true)
     expect(view.getByText(zh['status.none'])).toBeDefined()
     expect(at(view, 'data-refactory-enabled', 'true').textContent).toContain('p')
@@ -94,6 +96,7 @@ describe('the picker with the described choices', () => {
 
   it('chooses a mode, shows what it is, and offers to start it', () => {
     const { view, instance } = mountBody({ choices: { kind: 'ready', value: CHOICES } })
+    fireEvent.change(at(view, 'data-refactory-package'), { target: { value: 'p' } })
     fireEvent.change(at(view, 'data-refactory-mode'), { target: { value: MODE.id } })
     expect(instance.getSnapshot().byTab[TAB]?.chosen).toBe(MODE.id)
     expect(at(view, 'data-refactory-mode-note').textContent).toBe(MODE.description)
@@ -283,6 +286,7 @@ describe('the steering the picker offers for the run it reads', () => {
     const { view, console } = mountBody({
       choices: { kind: 'ready', value: CHOICES },
       watching: '/runs/live',
+      frame: { kind: 'ready', value: FRAME },
       steering: { kind: 'ready', value: STEERING },
     })
     console.steer.mockImplementation(async () => ok(STEERED) as never)
@@ -308,6 +312,7 @@ describe('the steering the picker offers for the run it reads', () => {
     const waiting = mountBody({
       choices: { kind: 'ready', value: CHOICES },
       watching: '/runs/live',
+      frame: { kind: 'ready', value: FRAME },
       steering: { kind: 'ready', value: GATED_STEERING },
     })
     expect(at(waiting.view, 'data-refactory-gate', 'approve').textContent).toContain('the person approves the draft')
@@ -316,6 +321,7 @@ describe('the steering the picker offers for the run it reads', () => {
     const quiet = mountBody({
       choices: { kind: 'ready', value: CHOICES },
       watching: '/runs/live',
+      frame: { kind: 'ready', value: FRAME },
       steering: { kind: 'ready', value: STEERING },
     })
     expect(missing(quiet.view, 'data-refactory-gate')).toBe(true)
@@ -326,6 +332,7 @@ describe('the steering the picker offers for the run it reads', () => {
     const { view, console } = mountBody({
       choices: { kind: 'ready', value: CHOICES },
       watching: '/runs/live',
+      frame: { kind: 'ready', value: FRAME },
       steering: { kind: 'ready', value: GATED_STEERING },
     })
     console.steer.mockImplementation(async () => ok(GATED_STEERING) as never)
@@ -616,7 +623,7 @@ describe('using the chosen mode once', () => {
       error: { code: 'refactory/authoring-mode', message: 'raw host text' },
     }) as never)
     fireEvent.click(at(view, 'data-refactory-run-once'))
-    await waitFor(() => { expect(at(view, 'data-refactory-notice').textContent).toBe(zh['error.authoringMode']) })
+    await waitFor(() => { expect(at(view, 'data-refactory-notice').textContent).toContain('raw host text') })
     expect(missing(view, 'data-refactory-single')).toBe(true)
     expect((at(view, 'data-refactory-run-once') as HTMLButtonElement).disabled).toBe(false)
   })
@@ -682,4 +689,44 @@ describe('the packages the picker manages', () => {
     expect(english.view.getAllByText(en['setting.default'])).toHaveLength(6)
     expect(english.view.queryByText(zh['setting.default'])).toBeNull()
   })
+})
+
+
+describe('panel disclosure and launch affordances', () => {
+  it('retains the same input and edited value when mode inputs are folded', () => {
+    const { view, instance } = mountBody({ choices: { kind: 'ready', value: CHOICES }, chosen: MODE.id })
+    const input = at(view, 'data-refactory-knob-input', 'rounds') as HTMLInputElement
+    fireEvent.change(input, { target: { value: '7' } })
+    const details = input.closest('details')!
+    expect(details.open).toBe(true)
+    fireEvent.click(details.querySelector('summary')!)
+    expect(details.open).toBe(false)
+    fireEvent.click(details.querySelector('summary')!)
+    expect(at(view, 'data-refactory-knob-input', 'rounds')).toBe(input)
+    expect(input.value).toBe('7')
+    expect(instance.getSnapshot().byTab[TAB]?.knobs.rounds).toBe('7')
+  })
+
+  it('puts a direct question link above the configuration without hiding verdicts', () => {
+    const { view } = mountBody({ choices: { kind: 'ready', value: CHOICES }, watching: '/runs/live',
+      frame: { kind: 'ready', value: FRAME }, steering: { kind: 'ready', value: GATED_STEERING } })
+    const link = view.getByRole('link', { name: zh['panel.answer'] })
+    const target = view.container.querySelector(link.getAttribute('href')!)!
+    expect(target.querySelector('[data-refactory-verdict="proceed"]')).not.toBeNull()
+    expect(link.compareDocumentPosition(at(view, 'data-refactory-mode')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+})
+
+
+it('filters modes by package and keeps the watched run when the selection changes', () => {
+  const { view, instance } = mountBody({ choices: { kind: 'ready', value: CHOICES }, chosen: MODE.id,
+    knobs: { rounds: '7' }, watching: '/runs/live', frame: { kind: 'ready', value: FRAME } })
+  fireEvent.change(at(view, 'data-refactory-package'), { target: { value: 'default_pack' } })
+  expect([...(at(view, 'data-refactory-mode') as HTMLSelectElement).options].map(option => option.value)).toEqual(['', AUTHORING.id])
+  expect(instance.getSnapshot().byTab[TAB]?.chosen).toBeNull()
+  expect(instance.getSnapshot().byTab[TAB]?.knobs).toEqual({})
+  expect(instance.getSnapshot().byTab[TAB]?.watching).toBe('/runs/live')
+  fireEvent.change(at(view, 'data-refactory-mode'), { target: { value: AUTHORING.id } })
+  expect(instance.getSnapshot().byTab[TAB]?.chosen).toBe(AUTHORING.id)
+  expect((at(view, 'data-refactory-start') as HTMLButtonElement).disabled).toBe(true)
 })

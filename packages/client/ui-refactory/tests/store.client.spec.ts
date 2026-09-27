@@ -24,6 +24,7 @@ describe('createRefactoryStore', () => {
     expect(instance.getSnapshot().byTab[TAB]).toEqual({
       choices: { kind: 'loading' },
       chosen: null,
+      selectedPackage: null,
       knobs: {},
       settings: { ...NO_SETTINGS },
       watching: null,
@@ -33,6 +34,7 @@ describe('createRefactoryStore', () => {
       single: null,
       notice: null,
       busy: false,
+      starting: false,
     })
   })
 

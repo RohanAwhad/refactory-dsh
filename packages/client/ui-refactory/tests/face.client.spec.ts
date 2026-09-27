@@ -158,6 +158,41 @@ describe('refactoryFace — reading the described choices', () => {
 })
 
 describe('refactoryFace — starting a run', () => {
+  it('releases a pending launch after Watch changes without taking over the selected run', async () => {
+    const { instance, scripted, face, signal } = harness()
+    const receipt = deferred<RemoteResult<typeof RECEIPT>>()
+    scripted.start.mockImplementation(async () => receipt.promise)
+    scripted.status.mockImplementation(async (run: string) => ok({ ...FRAME, root: run }))
+    face.start(TAB, MODE.id, [], NO_SETTINGS, signal)
+    face.watch(TAB, '/runs/other', signal)
+    await settle()
+    face.start(TAB, MODE.id, [], NO_SETTINGS, signal)
+    expect(scripted.start).toHaveBeenCalledTimes(1)
+    receipt.resolve(ok(RECEIPT))
+    await settle()
+    expect(tab(instance)?.watching).toBe('/runs/other')
+    expect(tab(instance)?.starting).toBe(false)
+    face.start(TAB, MODE.id, [], NO_SETTINGS, signal)
+    expect(scripted.start).toHaveBeenCalledTimes(2)
+    await settle()
+  })
+
+  it('accepts one launch until the receipt settles, then permits retry', async () => {
+    const { instance, scripted, face, signal } = harness()
+    const receipt = deferred<RemoteResult<typeof RECEIPT>>()
+    scripted.start.mockImplementation(async () => receipt.promise)
+    face.start(TAB, MODE.id, [], NO_SETTINGS, signal)
+    face.start(TAB, MODE.id, [], NO_SETTINGS, signal)
+    expect(scripted.start).toHaveBeenCalledTimes(1)
+    expect(tab(instance)?.starting).toBe(true)
+    receipt.resolve(failure('refactory/console-failed', 'try again'))
+    await settle()
+    expect(tab(instance)?.starting).toBe(false)
+    face.start(TAB, MODE.id, [], NO_SETTINGS, signal)
+    expect(scripted.start).toHaveBeenCalledTimes(2)
+    await settle()
+  })
+
   it('starts the chosen mode with only the settings that were chosen, its knobs, then reads the run', async () => {
     const { instance, scripted, face, signal } = harness()
     answer(scripted.start, ok(RECEIPT))
@@ -279,7 +314,7 @@ describe('refactoryFace — using one mode once', () => {
     face.run(TAB, AUTHORING.id, [], signal)
     await settle()
     expect(tab(instance)?.notice).toEqual({
-      code: 'refactory/authoring-mode',
+      code: 'refactory/console-failed',
       message: '"p/create" is an authoring mode',
     })
     expect(tab(instance)?.single).toBeNull()
@@ -536,6 +571,9 @@ describe('refactoryFace — changing a package', () => {
     const first = deferred<RemoteResult<readonly RefactoryPackageChoice[]>>()
     scripted.removePackage.mockImplementation(async () => first.promise as never)
     answer(scripted.importPackage, ok([PACKAGE]))
+    answer(scripted.modes, ok(CHOICES.modes))
+    answer(scripted.strategies, ok(CHOICES.strategies))
+    answer(scripted.packages, ok([PACKAGE]))
     face.remove(TAB, 'p', signal)
     face.importPackage(TAB, '/src/pack', '', signal)
     await settle()

@@ -48,6 +48,8 @@ A session owns one open workflow. Use another session with a distinct run direct
 
 ## Follow a run in the panel
 
+The original two-gear Refactory lockup identifies empty chat. Open **Modes** for the blue configuration and activity cards. Advanced routing, profiles, search controls and packages expand independently; required questions remain prominent above the controls. See the [panel guide](07-pick-and-watch-from-the-panel.md#find-the-controls).
+
 Copy the exact run directory reported by chat into **Existing run directory → Read this run**. The attached status and Steering sections refer to that directory. The attached view streams persisted graph/worker activity, wait reasons, completed nodes and pending questions. Reading or reconnecting does not execute the run; [supported recovery](../live-control.md#recover-a-known-boundary) requires explicit resume.
 
 For optimization, choose a scored mode in Modes, select its starting knobs, outer loop, optimizer, evaluator and search budgets, then **Start**. Inspect candidates and use the optimizer-specific steering/adoption controls. Use **Run once** for an authoring mode after supplying its required knobs, or chat for stepwise control and approval gates.

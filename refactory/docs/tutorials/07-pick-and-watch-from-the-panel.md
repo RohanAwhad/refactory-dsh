@@ -36,7 +36,7 @@ is `.venv/bin/python -m refactory_dsh.console`.
 
 ## Open the panel
 
-![The Modes tab: a mode and an outer loop chosen by description, the package list, and the running run the Start button began](../assets/refactory-picker.gif)
+![Refactory’s blue Modes panel in a narrow dark layout](../assets/panel-20260927/after-configured-dark-narrow.png)
 
 1. **Pick the workspace.** The app remembers one; a fresh profile starts with the
    workspace list empty and asks you to add a directory. Choose this repository.
@@ -55,17 +55,27 @@ opening another. Use distinct run directories across sessions (omitting `workdir
 derives one from the session); overlapping directories are refused before lowering,
 including a completed run another session still has open for inspection.
 
+## Find the controls
+
+**Configure a run** starts with **Package**, then a **Mode** dropdown containing only that package’s modes, and **Mode inputs**. Expand **Worker routing and shared resources** for backend, provider, model, effort, permission policy, optional budgets and role/node overrides. Expand **Optimization profiles and full search controls** for saved versions, objectives and search details; **Search strategy and limits** contains the outer loop, optimizer, evaluator and evaluation budget. Folding a section keeps its values mounted. No resource cap is introduced by the layout.
+
+**Run once** executes the selected mode once; **Start** searches variations of a scored mode. Each button explains its purpose. Start is disabled while its launch receipt is pending, and Run once retains its independent in-flight guard.
+
+**Activity & results** follows the explicitly selected run. Its workflow map reads actual nodes and connections from that run’s saved checkpoint, including forks, joins and retry paths. An active node pulses; waiting, paused, failed and completed nodes retain explicit labels. **Follow active** keeps the current node in view; turn it off to inspect another area. Select a node or focus it and press Enter for its full name/state. Reduced-motion settings stop the pulse. Older runs without topology retain the recorded-node list. Neither view invents a completion percentage or claims that execution completion means validation passed. Pending questions appear in a banner with a direct **Review questions** link, above configuration, and their answers are at the top of **Steering**. Detailed receipts, outputs and history expand separately. Graph correction still requires **Correct completed work → Preview affected results → Confirm correction and rerun**.
+
+**Packages of modes** is an expandable section below the run controls. A wider panel places configuration beside activity; a narrow or split panel uses one column. Both themes retain visible keyboard focus, wrapping paths and the same controls.
+
 ## What each control does
 
 | control | what it does | the console call behind it |
 |---|---|---|
-| **Mode** | every mode the console lists, each with the verb that runs it | `console modes` |
+| **Package → Mode** | choose a package, then one of its described modes; dispatch still uses the full package/mode identifier | `console modes` |
 | **Outer loop**, **Optimizer**, **Evaluator** | the three level-two registries; each entry carries the console's own description, and `Use the default` leaves the console's default in place | `console strategies` |
 | **The mode's knobs** | one field per knob the chosen mode declares, shaped by the kind it declares: a knob with declared values is a choice, a `bool` is a choice over `true`/`false`, a number is bounded by its declared range, an open `str` is text. What the fields show is what the run sends, including a knob left at its declared default | `console start <mode> --knob NAME=VALUE` |
 | **Search budget** | epochs, candidates per epoch and maximum candidate evaluations; invalid values disable Start. These are search settings, separate from mode knobs. Final holdout checks are additional; these are not token/time limits | `console start <mode> --epochs … --batch-size … --max-evaluations …` |
 | **Start** | starts the chosen mode in its own process and names the run it began | `console start <mode> --strategy … --optimizer … --evaluator … --knob …` |
 | **Run once** | shows a unique run directory during launch, then reports the run's own status, due nodes and facts; **Watch and steer this run** attaches its live status and ledger | `console run <mode> --workdir <unique-directory> --knob NAME=VALUE` |
-| **Run status** | streams the attached run’s durable activity, node/worker state, checks and available usage; **Refresh status** requests a snapshot | `console status --run <id>`, `console stop --run <id>` |
+| **Activity & results** | streams the attached run’s durable activity, node/worker state, checks and available usage; **Refresh status** requests a snapshot | `console status --run <id>`, `console stop --run <id>` |
 | **Existing run directory → Read this run** | attach the exact directory reported by CEO chat or the terminal; read its status and steer its ledger | `console status --run <directory>`, `console steer --run <directory> --gates` |
 | **Packages of modes** | per package: **Enable**, **Disable**, **Remove**, and **Import a package** from a directory or git URL | `registry list`, `enable`, `disable`, `remove`, `import` |
 

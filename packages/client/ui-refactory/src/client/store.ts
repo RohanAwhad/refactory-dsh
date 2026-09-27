@@ -114,6 +114,8 @@ export interface RefactoryTabState {
   choices: Loadable<RefactoryChoices>
   /** The chosen mode's catalogue id, or `null` before anything is chosen. */
   chosen: string | null
+  /** Package filter; selection never changes the watched run. */
+  selectedPackage: string | null
   /**
    * The knob values a person changed for the chosen mode, by knob name. A knob
    * that is absent keeps the value its own declaration gives it.
@@ -135,6 +137,8 @@ export interface RefactoryTabState {
   notice: RefactoryNotice | null
   /** Whether a package change is in flight. */
   busy: boolean
+  /** Whether an optimization launch is awaiting its receipt. */
+  starting: boolean
 }
 
 /** Every tab's picker, keyed by tab id. */
@@ -164,6 +168,7 @@ type RefactoryActions = {
   loading: (draft: RefactoryState, tabId: TabId) => void
   loaded: (draft: RefactoryState, tabId: TabId, choices: RefactoryChoices) => void
   failed: (draft: RefactoryState, tabId: TabId, message: string) => void
+  chosePackage: (draft: RefactoryState, tabId: TabId, name: string | null) => void
   chose: (draft: RefactoryState, tabId: TabId, id: string | null) => void
   knob: (draft: RefactoryState, tabId: TabId, name: string, value: string) => void
   setting: (draft: RefactoryState, tabId: TabId, name: RefactorySettingName, value: string) => void
@@ -184,6 +189,7 @@ type RefactoryActions = {
   packages: (draft: RefactoryState, tabId: TabId, packages: readonly RefactoryPackageChoice[]) => void
   noticed: (draft: RefactoryState, tabId: TabId, notice: RefactoryNotice | null) => void
   busy: (draft: RefactoryState, tabId: TabId, busy: boolean) => void
+  starting: (draft: RefactoryState, tabId: TabId, starting: boolean) => void
   forget: (draft: RefactoryState, tabId: TabId) => void
 }
 
@@ -247,6 +253,7 @@ export function createRefactoryStore(): EngineStoreHandle<RefactoryState, Refact
         d.byTab[tabId] = {
           choices: { kind: 'loading' },
           chosen: null,
+          selectedPackage: null,
           knobs: {},
           settings: { ...NO_SETTINGS },
           watching: null,
@@ -256,6 +263,7 @@ export function createRefactoryStore(): EngineStoreHandle<RefactoryState, Refact
           single: null,
           notice: null,
           busy: false,
+          starting: false,
         }
       },
       /**
@@ -295,9 +303,17 @@ export function createRefactoryStore(): EngineStoreHandle<RefactoryState, Refact
        * @param tabId - the tab being drawn.
        * @param id - the chosen mode's catalogue id, or `null`.
        */
+      chosePackage: (d, tabId: TabId, name: string | null) => {
+        const tab = bucket(d, tabId)
+        if (tab.selectedPackage === name) return
+        tab.selectedPackage = name
+        tab.chosen = null
+        tab.knobs = {}
+      },
       chose: (d, tabId: TabId, id: string | null) => {
         const tab = bucket(d, tabId)
         tab.chosen = id
+        if (id && tab.choices.kind === 'ready') tab.selectedPackage = tab.choices.value.modes.find(mode => mode.id === id)?.package ?? null
         // Knobs belong to the selection. A one-shot belongs to its own request
         // and keeps its result even when the person selects another mode.
         tab.knobs = {}
@@ -483,6 +499,7 @@ export function createRefactoryStore(): EngineStoreHandle<RefactoryState, Refact
        * @param tabId - the tab being drawn.
        * @param busy - whether the change is still running.
        */
+      starting: (d, tabId: TabId, starting: boolean) => { bucket(d, tabId).starting = starting },
       busy: (d, tabId: TabId, busy: boolean) => {
         bucket(d, tabId).busy = busy
       },

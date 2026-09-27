@@ -1,13 +1,13 @@
 {
   "name": "@deepseek-ai/dsh-client-ui-brand-refactory",
-  "description": "re:factory brand occupants for the Web client's sidebar and hero slots",
+  "description": "Refactory product identity for the upstream DSH web composition",
   "version": "0.1.5-rc.3",
   "publishConfig": {
     "access": "public"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+    "url": "git+https://github.com/akashgit/refactory-dsh.git",
     "directory": "packages/client/ui-brand-refactory"
   },
   "type": "module",
@@ -30,7 +30,8 @@
       "inject": [
         "@deepseek-ai/dsh-client-ui-renderer",
         "@deepseek-ai/dsh-client-ui-sidebar",
-        "@deepseek-ai/dsh-client-ui-conversation"
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-settings-models"
       ],
       "platform": "web"
     }
@@ -51,7 +52,11 @@
     "@testing-library/react": "^16.1.0",
     "@types/react": "~18.3.1",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "react-dom": "^18.2.0",
+    "@deepseek-ai/dsh-host-webserver": "0.1.5-rc.3",
+    "@deepseek-ai/dsh-client-locale": "0.1.5-rc.3",
+    "@deepseek-ai/dsh-client-ui-settings": "0.1.5-rc.3",
+    "@deepseek-ai/dsh-client-ui-settings-models": "0.1.5-rc.3"
   },
   "files": [
     "lib/index.js",

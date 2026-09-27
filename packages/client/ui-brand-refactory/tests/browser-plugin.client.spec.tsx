@@ -4,10 +4,14 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
 import { apply, inject } from '../src/client/index.ts'
 import { RefactoryBrandMark, RefactoryBrandName, RefactoryHeroMark } from '../src/client/Brand.tsx'
-import { apply as hostApply } from '../src/index.ts'
+import { brandIndex, apply as hostApply } from '../src/index.ts'
+import { HERO_STYLE, installTitle, installWelcome, productTitle } from '../src/client/presentation.ts'
+import { FAVICON } from '../src/identity.ts'
 
-afterEach(() => {
+const contexts: Context[] = []
+afterEach(async () => {
   cleanup()
+  await Promise.all(contexts.splice(0).map(ctx => ctx.fiber.dispose()))
 })
 
 const HOLES = [
@@ -119,7 +123,9 @@ class DeclaringSlotRegistry extends Service {
 
 async function bench(declare = true) {
   const ctx = new Context()
+  contexts.push(ctx)
   await ctx.plugin(DeclaringSlotRegistry).await()
+  ctx.provide('locale', { getLocale: () => ({ active: 'en' }) } as never)
   const slots = ctx.get('slots') as DeclaringSlotRegistry
   const declareHoles = () => slots.register({
     name: 'root',
@@ -130,12 +136,30 @@ async function bench(declare = true) {
 }
 
 describe('re:factory browser-brand plugin', () => {
-  it('keeps the host Loader entry inert', () => {
-    expect(hostApply).not.toThrow()
+  it('brands the initial HTML and public assets without touching upstream bytes', () => {
+    const html = '<head><title>DeepSeek Harness</title><link rel="icon" href="./favicon.svg"><link rel="manifest" href="./manifest.webmanifest"></head><script src="upstream.js"></script>'
+    const branded = brandIndex(html)
+    expect(branded).toContain('<title>Refactory</title>')
+    expect(branded).toContain('/refactory-brand.svg')
+    expect(branded).toContain('/refactory.webmanifest')
+    expect(branded).toContain('<script src="upstream.js"></script>')
+    expect(html).toContain('<title>DeepSeek Harness</title>')
+    const routes: Array<{ path: string }> = []
+    let taps = 0, disposed = 0
+    const effects: Array<() => void> = []
+    hostApply({ effect: (fn: () => () => void) => { effects.push(fn()) }, webServer: {
+      tapIndex: () => { taps++; return () => { disposed++ } },
+      register: (route: { path: string }) => { routes.push(route); return () => { disposed++ } },
+    } } as never)
+    expect(taps).toBe(1)
+    expect(routes.map(route => route.path)).toEqual(['/refactory-brand.svg', '/refactory.webmanifest'])
+    effects.forEach(dispose => dispose())
+    expect(disposed).toBe(3)
+    expect(FAVICON).toContain('prefers-color-scheme:dark')
   })
 
   it('declares only the slot service it uses', () => {
-    expect(inject).toEqual(['slots'])
+    expect(inject).toEqual(['slots', 'locale'])
   })
 
   it('tints the primary accent when a theme service is mounted, and disposes it', async () => {
@@ -151,9 +175,9 @@ describe('re:factory browser-brand plugin', () => {
 
     const fiber = before.ctx.plugin({ inject: [...inject], apply })
     await fiber.await()
-    expect(calls).toEqual([['refactory-brand', {
-      '--dsw-alias-brand-primary': { light: '#e11d48', dark: '#fb7185' },
-    }]])
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.[0]).toBe('refactory-brand')
+    expect(calls[0]?.[1]).toMatchObject({ '--dsw-alias-brand-primary': { light: '#176bcc', dark: '#76b6ff' } })
     await fiber.dispose()
     expect(disposed).toBe(1)
   })
@@ -187,81 +211,70 @@ describe('re:factory browser-brand plugin', () => {
     for (const hole of HOLES) expect(after.slots.entries(hole)).toHaveLength(1)
   })
 
-  /**
-   * Superseded: this used to assert a text name beside the lockup. The asset is
-   * the upstream lockup, which already reads "refactory", and the hero renders
-   * its mark in a 34px column beside a headline that is the wordmark — so a name
-   * beside either one is the same word twice, colliding. The components now
-   * render the name once; see the "brand renders a name once" suite below.
-   */
-  it('renders the lockup as the sidebar mark and nothing in the hero', () => {
-    const mark = render(<RefactoryBrandMark size={34} />)
-    expect(mark.container.querySelector('img')?.getAttribute('src')).toContain('data:image/png')
-    expect(mark.container.querySelector('img')?.getAttribute('height')).toBe('34')
-    mark.unmount()
+})
 
-    // The hero reserves a 34px column and its next column is the wordmark, so
-    // any visible mark here is the collision. It claims the slot and draws
-    // nothing; see the hero test below.
-    const hero = render(<RefactoryHeroMark />)
-    expect(hero.container.querySelector('img')).toBeNull()
-    expect(hero.container.textContent).toBe('')
-    hero.unmount()
+describe('transparent Refactory identity', () => {
+  it('renders one readable wordmark beside an independently bounded glyph', () => {
+    const { container } = render(<><RefactoryBrandMark size={24} /><RefactoryBrandName /></>)
+    expect(container.querySelector('[aria-label="Refactory"]')).not.toBeNull()
+    const mark = container.querySelector('svg')!
+    expect(mark.getAttribute('width')).toBe('24')
+    expect(mark.getAttribute('height')).toBe('24')
+    expect(mark.getAttribute('aria-hidden')).toBe('true')
+    expect(container.querySelector('img')).toBeNull()
+  })
 
-    expect(render(<RefactoryBrandName />).container.textContent).toBe('')
+  it('claims the hero with a transparent mark and exactly one product name', () => {
+    const { container } = render(<RefactoryHeroMark />)
+    expect(container.querySelector('[aria-label="Refactory"]')).not.toBeNull()
+    expect(container.querySelector('[data-refactory-hero]')).not.toBeNull()
+    expect(container.querySelector('svg')?.getAttribute('width')).toBe('280')
+  })
+
+  it('keeps session titles and provider names intact while following title changes', async () => {
+    expect(productTitle('DeepSeek model — DeepSeek Harness')).toBe('DeepSeek model — Refactory')
+    expect(productTitle('DeepSeek provider')).toBe('DeepSeek provider')
+    document.title = 'DeepSeek Harness'
+    const dispose = installTitle(document)
+    expect(document.title).toBe('Refactory')
+    document.title = 'My session — DeepSeek Harness'
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(document.title).toBe('My session — Refactory')
+    dispose()
+    document.title = 'DeepSeek Harness'
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(document.title).toBe('DeepSeek Harness')
   })
 })
 
-describe('the brand renders a name once', () => {
-  /**
-   * The asset is the upstream lockup: glyph and wordmark on one 400x76 canvas,
-   * so it already reads "refactory". The sidebar renders the mark and the name
-   * side by side, and the hero renders the mark in a 34px column beside a
-   * headline that is the wordmark itself. Both slots therefore collide with the
-   * name when either component repeats it.
-   */
-  it('renders the sidebar lockup with no second copy of the name', () => {
-    const { container } = render(
-      <>
-        <RefactoryBrandMark size={24} />
-        <RefactoryBrandName />
-      </>,
-    )
-    const img = container.querySelector('img')
-    // Decorative, like the harness logo it replaces: the lockup's own wordmark is
-    // not an accessible name, and a literal alt would be copy this package has no
-    // locale seat to own (`verify-client-ui-i18n`).
-    expect(img?.getAttribute('alt')).toBe('')
-    // The name slot holds the slot without adding visible text beside the lockup.
-    expect(container.textContent).toBe('')
+
+describe('upstream presentation bridges', () => {
+  it('hides the full stock headline through the public slot wrapper', () => {
+    const { container } = render(<><style>{HERO_STYLE}</style><div><span><div data-slot="conversation.hero.brand.mark"><RefactoryHeroMark /></div></span><span data-stock-headline>Into the Unknown <span>Preview</span></span></div></>)
+    expect(getComputedStyle(container.querySelector('[data-stock-headline]')!).display).toBe('none')
+    expect(getComputedStyle(container.querySelector('[data-refactory-hero]')!).display).not.toBe('none')
   })
 
-  it('bounds the sidebar lockup so it cannot overrun its row', () => {
-    const { container } = render(<RefactoryBrandMark size={24} />)
-    const img = container.querySelector('img') as HTMLImageElement
-    expect(img.style.maxWidth).toBe('100%')
-    expect(img.getAttribute('height')).toBe('24')
-  })
-
-  it('draws nothing in the hero, so nothing can collide with the headline', () => {
-    // The hero's grid column is 34px and its next column is `hero.headline`,
-    // which is "re:factory". A 5.26:1 lockup at height 34 is ~179px wide, and a
-    // square crop of it is a fragment of the wordmark.
-    const { container } = render(<RefactoryHeroMark />)
-    expect(container.querySelector('img')).toBeNull()
-    expect(container.querySelector('svg')).toBeNull()
-    expect(container.textContent).toBe('')
-    // Still an element, so the slot is claimed and the harness's own whale does
-    // not reappear beside the re:factory headline.
-    expect(container.firstElementChild).not.toBeNull()
-    expect(container.firstElementChild?.getAttribute('aria-hidden')).toBe('true')
-  })
-
-  it('keeps the hero slot claimed by the plugin', async () => {
-    const before = await bench()
-    const fiber = before.ctx.plugin({ inject: [...inject], apply })
-    await fiber.await()
-    // Claiming the mark slot is what suppresses the fallback whale.
-    expect(before.slots.entries('conversation.hero.brand.mark')).toHaveLength(1)
+  it('changes welcome copy in both locales while retaining the original controller props', () => {
+    let locale = 'en', disposed = 0
+    const acknowledge = () => undefined
+    const original = { options: { id: 'welcome-notice', order: 2 }, component: () => null,
+      inject: () => ({ acknowledge, accepted: false, t: (key: string) => 'upstream:' + key }) }
+    let occupant: { inject: () => { acknowledge: unknown; accepted: boolean; t: (key: string) => string } } | undefined
+    let teardown: (() => void) | undefined
+    installWelcome({ locale: { getLocale: () => ({ active: locale }) }, slots: {
+      inject: (_: string, factory: () => () => void) => { teardown = factory() },
+      entries: () => [original], subscribe: () => () => { disposed++ },
+      register: (options: typeof occupant, component: unknown) => { expect(component).toBe(original.component); occupant = options; return () => { disposed++ } },
+    } } as never)
+    const props = occupant!.inject()
+    expect(props.acknowledge).toBe(acknowledge)
+    expect(props.accepted).toBe(false)
+    expect(props.t('welcomeTitle')).toBe('Welcome to Refactory')
+    expect(props.t('saveError')).toBe('upstream:saveError')
+    locale = 'zh'
+    expect(props.t('welcomeTitle')).toBe('欢迎使用 Refactory')
+    teardown!()
+    expect(disposed).toBe(2)
   })
 })
