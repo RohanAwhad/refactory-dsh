@@ -107,6 +107,8 @@ Design produces the artifact itself. It does not need to produce a scored mode o
 
 Choose an outer-loop strategy, a candidate proposer, an evaluator and permitted edits. Save a named [optimization profile](refactory/docs/optimization-profiles.md), preview its objective and validation contract, and launch the same settings from CLI or GUI. Each run retains its exact resolved snapshot. Candidate comparison includes lineage, changes, raw/adjusted scores, failures, trial variability, duration and available cost/usage.
 
+GUI chat can also launch a saved optimization profile, inspect its winner, adopt it and replay the adopted mode through Refactory tools. This path has [separate native chat acceptance](refactory/docs/release-validation-20260926.md#gui-chat-optimization-follow-up) alongside the CLI and panel checks.
+
 During a search you can add instructions, keep or reject candidate branches, pause/resume/stop at generation boundaries, and request adoption. A failed or unaudited candidate cannot be treated as a verified winner. A run may finish without finding an improvement.
 
 **Candidate limits, elapsed limits and token limits are separate controls.** Run-wide token/elapsed caps are optional and unset by default; fast work is bounded by its graph, repair policy and operation timeouts. [Choose a budget](refactory/docs/budget-strategy.md) using progress and measured usage rather than treating one token quota as a completion guarantee. Opt-in repeated trials and final holdout validation consume the shared run allocation; validation can have a reserved portion. Missing usage stays unavailable. Different models can change quality, cost and latency. [Optimization tutorial →](refactory/docs/tutorials/02-optimize-it.md)
