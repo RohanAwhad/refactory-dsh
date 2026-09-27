@@ -323,13 +323,13 @@ records which asks each one covers, `synthesize_strategy` compiles them into one
 intent-faithful plan, and design-v2 adds `design_doc` — the design document the
 code is written from. A **person answers `gate_strategy`** at that point, because a
 run that can approve its own plan is not reviewed at all, so a headless run refuses
-that gate unless the caller supplies the verdict. The build then runs, and three
+that gate unless the caller supplies the verdict. The build then passes structural admission and canonical runtime validation inside the bounded repair cycle. Registration supplies execution visibility, not completion. Then three
 reviews (a health check, a code review and an adversarial QA pass) run **in
 parallel**, merge into one synthesis whose blocking findings the QA gate reads, and
-are audited by an overwatch pass whose stated verdict the last gate reads. A QA or
+are audited by Overwatch against the brief, accepted criteria/design, latest intent ledger and actual final validation receipts. Its verdict and requirement evidence map are checked at the last gate. A QA or
 overwatch reloop goes back to the emit step, not to the plan a person approved.
 
-Design review uses the original brief, approved design and explicit user steering
+All authoring review uses the original brief, approved design and explicit user steering
 as its acceptance baseline. User-approved non-goals remain valid; an author or
 reviewer cannot waive a requested behavior by documenting a new limitation.
 Observed noncompliance stays blocking unless the user explicitly changes that
@@ -337,6 +337,8 @@ requirement. Coordinators pass the returned node prompt in full, and the three
 reviews receive both the brief and design. These are prompt and context safeguards,
 not automatic semantic enforcement: fresh modeled acceptance is needed to assess
 whether reviewers follow them, and existing artifacts/reviews are not repaired.
+
+The [authoring validation contract](authoring-validation.md) defines execution ownership, current-source/intent bindings, requirement maps, unavailable dependencies and the Edit comparison branch.
 
 The parallel reviews are a **fork/join** pair, and a mode may also declare a
 **`data`** node that runs a subgraph once per item; both are node kinds in the mode

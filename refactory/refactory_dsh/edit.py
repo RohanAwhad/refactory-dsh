@@ -45,7 +45,7 @@ class EditConfig(CreateConfig):
     """A revision: what to change, and what to do about a regression."""
 
     mode: str = ""
-    #: Refuse a revision whose smoke score is worse than the mode it came from.
+    #: Skip original execution/comparison; still validate the revised mode.
     allow_regression: bool = False
 
 
@@ -154,7 +154,8 @@ def main(argv: list[str] | None = None) -> int:
     from refactory_dsh.budgets import add_arguments, arguments
 
     add_arguments(parser)
-    parser.add_argument("--allow-regression", action="store_true")
+    parser.add_argument("--allow-regression", action="store_true",
+                        help="skip original-mode execution and score comparison; still validate the revision")
     # Per package name, for the same reason a creation is: one fixed directory
     # means runs overwrite each other's state.
     parser.add_argument("--workdir", default="")

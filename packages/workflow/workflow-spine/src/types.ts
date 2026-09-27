@@ -50,7 +50,7 @@ export interface WorkflowNode {
   content?: string
   /** `FnNode` / `Study`: the shell command the spine runs for the node. */
   command?: string
-  /** `FnNode`: resolved envelope for an operation with its own bounded passes. */
+  /** `FnNode` / function gate: resolved envelope for an operation with bounded passes. */
   command_timeout_s?: number
   /** `GateNode`: who answers it — its evaluator, a person, or the driving agent. */
   evaluator_type?: 'fn' | 'user' | 'agent'

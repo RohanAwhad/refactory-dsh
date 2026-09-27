@@ -20,9 +20,9 @@ uv run refactory ceo \
 
 `--single` deliberately chooses a single-run harness. For a class of work, use `--task module:TaskClass` instead. The importable [Task](../datasets.md) lists inputs, prepares each item and verifies the result; Create binds the generated mode to it. The final `create.json` records the actual binding.
 
-The current graph surveys existing packages, researches the problem, develops a strategy, asks you to approve it, emits files, validates them, runs parallel reviews and an audit, then registers the package and performs the canonical smoke. Repair loops are bounded by the declared controls. Full model/Task validation belongs to that final smoke; review stages use bounded checks for their findings.
+The current graph surveys existing packages, researches the problem, develops a strategy, asks you to approve it, emits files, validates them structurally, stages/registers the package, executes canonical smoke, then runs parallel reviews and an audit. Repair loops are bounded by the declared controls. Canonical smoke belongs to the runtime and returns repairable failures to the coder before sign-off. Reviews consume its receipts and use targeted checks for uncovered requirements.
 
-A sample run does not establish quality on every future input. A failed inner execution is a failure, not a measured zero. A specifically unavailable model may leave an explicit unmeasured score/reason; it is not proof of working authentication or a passed model run. Inspect `smoke.json` and the final report.
+A sample run does not establish quality on every future input. A failed inner execution is a failure, not a measured zero. Unavailable credentials/tools leave a blocked, unmeasured validation with an unblock reason; they do not trigger repeated coding or final success. Inspect `smoke.json`, `authoring-evidence.json`, `intent-audit.json` and the final report. See [the validation and audit contract](../authoring-validation.md).
 
 When the mode needs a named input, declare it in the brief and through `--knob requires_input=<name>` on CEO. The Python Create entry point also supports `--input` and repeatable `--sample NAME=VALUE`; samples exercise supplied inputs rather than only defaults. Read that entry point's help for its own flags.
 
@@ -44,7 +44,7 @@ uv run refactory ceo "Improve the search strategy while preserving its input and
 
 Edit uses the Create graph with the source and revision intent. It writes a new package; the source remains available. The Python driver preserves the graph's canonical report rather than independently repeating keyless before/after passes.
 
-Comparable deterministic executions use the same accepted sample inputs. A measured regression is refused by default; `--knob allow_regression=1` on CEO explicitly allows that tradeoff. Model-dependent or incompatible-input comparisons are marked unavailable with a reason, not reported as non-regressions. Inspect `revision.json`, `before_score`, `after_score`, `regressed` and `revision_note`.
+Comparable deterministic executions use the same accepted sample inputs. A measured regression is refused by default; `--knob allow_regression=1` on CEO skips original execution and numerical comparison entirely, while still validating the revised mode. The default remains false. Model-dependent or incompatible-input comparisons are marked unavailable with a reason, not reported as non-regressions. Inspect `revision.json`, `before_score`, `after_score`, `regressed` and `revision_note`.
 
 The Python entry point supports `--sample NAME=VALUE`, `--allow-regression` and `--resume RUN_DIR`. These are entry-point-specific flags, not all aliases on CEO. A supported resume keeps completed stages; rerunning an ordinary CEO launch is a fresh invocation, not generic continuation.
 

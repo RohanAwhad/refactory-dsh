@@ -8,7 +8,7 @@ and reviewer fan-out and allow one repair by default. The existing `create`,
 | Mode | Sequential work and required validation |
 |---|---|
 | Create fast | One strategist plans the minimum reusable graph, knobs, score and artifact invariants; one coder emits the package; one QA agent reviews it. Structural admission and canonical runtime smoke remain required. |
-| Edit fast | One coder makes the small revision directly, then one QA agent checks it. Task bindings, inputs and artifact contracts are preserved; structural admission, canonical smoke and regression comparison remain required. |
+| Edit fast | One coder makes the small revision directly, then one QA agent checks it. Task bindings, inputs and artifact contracts are preserved; structural admission and canonical smoke remain required; comparison defaults on but `allow_regression=true` skips the original execution/comparison branch. |
 | Design fast | One strategist, one coder and one QA agent produce a tiny checked artifact, such as a one-file helper or a small change in a copied project. The required command runs against the materialized output. |
 
 The strategy is a concise plan, not a separate research or approval workflow.
@@ -51,7 +51,7 @@ not replace the source project. Dependency directories, Git metadata, previous
 run output and `.env*` files are excluded; source symlinks are refused. File
 deletion is not part of this small-change emission contract.
 
-`repair_attempts` is one shared bound across structural admission and focused QA,
+`repair_attempts` is one shared bound across structural admission, canonical runtime validation and focused QA,
 from zero to three. It counts repairs after the first implementation, so one
 permits at most two implementations. The required Design `check` runs as a bounded
 command against the materialized artifact. Create/Edit can also name an explicit
@@ -62,7 +62,9 @@ for each check and an explicit list of checks not run. It does not edit the
 implementation or repeat downstream runtime stages. A required check not run
 cannot count as a pass.
 
-Read `focused-check.json`, `focused-qa.json` and `fast-report.json` in the run
+Canonical smoke runs before focused QA. Its real receipts join the requested check result in the QA context. The worker must map every brief/criteria/ledger obligation to current evidence in `intent-audit.json`; it cannot waive a requirement or silently repair source. Missing dependencies stop with an unblock explanation. Changed source or intent invalidates the earlier receipt/sign-off. See [authoring validation](authoring-validation.md).
+
+Read `authoring-evidence.json`, `intent-audit.json`, `focused-check.json`, `focused-qa.json` and `fast-report.json` in the run
 directory. They separate command results, model-authored review, structural
 admission and runtime smoke. Exhausted repair produces an unresolved report and
 no success report. A model's favorable review is not proof of artifact quality.
@@ -99,8 +101,7 @@ outer loop reserves validation resources before admitting another candidate;
 required final validation can use the reserve. Fast package smoke and fast
 Design's check are explicit validation stages. Fast graph nodes declare their resource
 phase independently of the worker role. Design uses final-validation resources for
-its check, QA, gate and report; Create/Edit retain that reserve for canonical smoke
-and reporting. A repair returns to the work allocation. Mode authors can set
+its check, QA, gate and report; Create/Edit use final-validation resources for canonical smoke and subsequent checks, QA and reporting. A repair returns to the work allocation. Mode authors can set
 `nn.Node.resource_role` to `work` or `final_validation`; omission retains the prior
 role-based/inherited behavior.
 

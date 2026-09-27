@@ -120,14 +120,12 @@ def test_the_revision_records_what_it_came_from():
 
 
 def test_a_regression_is_refused_by_default(monkeypatch):
-    scores = iter([5.0, 1.0])
-    monkeypatch.setattr(edit_module, "_smoke", lambda identifier, project: {
-        "exit_ok": True, "error": None, "score": next(scores),
-    })
-    with pytest.raises(CreateError, match="pass --allow-regression"):
+    monkeypatch.setattr(sandbox, "smoke", lambda identifier, *args, **kwargs: sandbox.SandboxResult(
+        ok=True, payload={"exit_ok": True, "score": 5.0 if identifier == "circle_packing/adaptive" else 1.0}))
+    with pytest.raises(CreateError, match="scores 1.0 where circle_packing/adaptive scores 5.0"):
         edit_module.edit(
             _edit_config(
-                name=NAME, brief="count", mode="circle_packing/adaptive",
+                name=NAME, brief="count", mode="circle_packing/adaptive", attempts=1,
                 workdir=Path(".factory/edit-run"),
             ),
             client=FakeModel(_answers()),
@@ -135,10 +133,8 @@ def test_a_regression_is_refused_by_default(monkeypatch):
 
 
 def test_a_regression_can_be_intended(monkeypatch):
-    scores = iter([5.0, 1.0])
-    monkeypatch.setattr(edit_module, "_smoke", lambda identifier, project: {
-        "exit_ok": True, "error": None, "score": next(scores),
-    })
+    monkeypatch.setattr(sandbox, "smoke", lambda identifier, *args, **kwargs: sandbox.SandboxResult(
+        ok=True, payload={"exit_ok": True, "score": 5.0 if identifier == "circle_packing/adaptive" else 1.0}))
     result = edit_module.edit(
         _edit_config(
             name=NAME, brief="count", mode="circle_packing/adaptive",
@@ -146,16 +142,17 @@ def test_a_regression_can_be_intended(monkeypatch):
         ),
         client=FakeModel(_answers()),
     )
-    assert result["regressed"] is True
+    assert result["regressed"] is None
+    assert result["before_score"] is None
+    assert "intentionally skipped" in result["revision_note"]
 
 
 def test_a_revision_of_a_mode_that_does_not_run_is_refused(monkeypatch):
-    monkeypatch.setattr(edit_module, "_smoke", lambda identifier, project: {
-        "exit_ok": False, "error": "it never ran", "score": None,
-    })
-    with pytest.raises(CreateError, match="its own smoke run failed"):
+    monkeypatch.setattr(sandbox, "smoke", lambda *args, **kwargs: sandbox.SandboxResult(
+        ok=True, payload={"exit_ok": False, "error": "it never ran", "score": None}))
+    with pytest.raises(CreateError, match="it never ran"):
         edit_module.edit(
-            _edit_config(name=NAME, brief="count", mode="circle_packing/adaptive"),
+            _edit_config(name=NAME, brief="count", mode="circle_packing/adaptive", attempts=1),
             client=FakeModel(_answers()),
         )
 
@@ -212,28 +209,28 @@ def test_the_artifact_lands_beside_the_workspace_not_in_it():
     ctx.facts["name"] = ARTIFACT
     ctx.write_text("emit.txt", render({"tool.py": "print('hi')\n"}))
     facts = design_ops.materialise_artifact(ctx)
-    assert Path(facts["artifact"]).is_relative_to(ARTIFACTS)
+    assert Path(facts["artifact"]).is_relative_to(ARTIFACTS.resolve())
     assert not Path(facts["artifact"]).is_relative_to(registry.workspace_root(Path(".")))
 
 
 def test_the_check_gate_passes_an_artifact_that_runs():
-    workdir = Path(".factory/design-check")
+    workdir = (ARTIFACTS / ARTIFACT).resolve()
     shutil.rmtree(workdir, ignore_errors=True)
     workdir.mkdir(parents=True, exist_ok=True)
     ctx = nn.RunContext(Path(".factory/design-check-ctx"))
-    ctx.facts.update({"artifact": str(workdir), "check": "python -c \"print(1)\""})
+    ctx.facts.update({"name": ARTIFACT, "brief": "a checked artifact", "artifact": str(workdir), "check": "python -c \"print(1)\""})
     import refactory_dsh.design_ops as ops
 
     assert ops.check_artifact(ctx) == "proceed"
-    assert "ok" in ctx.read_text("check.txt")
+    assert ctx.read_json("authoring-evidence.json")["validation"]["stdout"].strip() == "1"
 
 
 def test_the_check_gate_refuses_an_artifact_that_does_not_run():
-    workdir = Path(".factory/design-check")
+    workdir = (ARTIFACTS / ARTIFACT).resolve()
     shutil.rmtree(workdir, ignore_errors=True)
     workdir.mkdir(parents=True, exist_ok=True)
     ctx = nn.RunContext(Path(".factory/design-check-ctx2"))
-    ctx.facts.update({"artifact": str(workdir), "check": "python -c \"raise SystemExit(3)\""})
+    ctx.facts.update({"name": ARTIFACT, "brief": "a checked artifact", "artifact": str(workdir), "check": "python -c \"raise SystemExit(3)\""})
     import refactory_dsh.design_ops as ops
 
     assert ops.check_artifact(ctx) == "reloop"
@@ -286,7 +283,7 @@ def test_a_design_that_never_passes_its_check_fails_loudly():
         verdicts={"gate_strategy": "proceed"},
     )
     assert result.exit_ok is False
-    assert "does not pass its check" in (result.error or "")
+    assert "authoring unresolved after 2 attempt(s)" in (result.error or "")
 
 
 def test_a_revision_records_the_state_it_came_from(tmp_path):
@@ -404,11 +401,12 @@ def test_the_smoke_node_accepts_the_same_revision_when_the_trade_is_intended(
         scores={"circle_packing/adaptive": 0.4, "counting_pack/fixed_step": 0.9},
     )
     produced = run_node("refactory_dsh.create_ops:smoke", workdir=workdir, node_id="smoke")
-    assert produced["regressed"] is True
-    assert (produced["before_score"], produced["after_score"]) == (0.9, 0.4)
+    assert produced["regressed"] is None
+    assert (produced["before_score"], produced["after_score"]) == (None, 0.4)
+    assert "intentionally skipped" in produced["revision_note"]
     recorded = json.loads((package / ".origin.json").read_text())
     assert recorded["revision_of"] == "counting_pack/fixed_step"
-    assert recorded["before_score"] == 0.9 and recorded["after_score"] == 0.4
+    assert recorded["before_score"] is None and recorded["after_score"] == 0.4
     assert recorded["revision_of_digest"], "the provenance names no state"
 
 

@@ -324,4 +324,17 @@ class FakeModel:
     def complete(self, prompt: str, *, system: str = "", workdir: object = None) -> str:
         self.prompts.append(prompt)
         self.workdirs.append(workdir)
-        return self.answers.pop(0) if self.answers else ""
+        answer = self.answers.pop(0) if self.answers else ""
+        # Scripted review fixtures explicitly deliver the new evidence-map artifact.
+        # Adversarial coverage/waiver tests supply their own maps instead.
+        if answer and "Write intent-audit.json as" in prompt and workdir is not None:
+            from pathlib import Path
+
+            root = Path(workdir)
+            baseline = json.loads((root / "authoring-evidence.json").read_text())
+            (root / "intent-audit.json").write_text(json.dumps({"requirements": [
+                {"id": item["id"], "requirement": item["text"], "status": "pass",
+                 "evidence": [{"path": "authoring-evidence.json", "detail": "scripted fixture inspected the executed result"}]}
+                for item in baseline["requirements"]
+            ]}))
+        return answer

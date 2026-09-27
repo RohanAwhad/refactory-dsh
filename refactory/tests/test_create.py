@@ -306,7 +306,7 @@ def test_the_strategy_prompt_carries_the_survey_and_the_schema():
     assert "What already exists" in strategy_prompt
     assert "circle_packing/adaptive" in strategy_prompt
     assert '"considered"' in strategy_prompt, "the schema must be in the prompt"
-    assert "gate only" in strategy_prompt, "a gate declares an evaluator, not a call"
+    assert "evaluator" in strategy_prompt, "a gate declares an evaluator, not a call"
 
 
 def test_the_design_prompt_carries_the_chosen_approach():
@@ -1092,6 +1092,9 @@ def test_a_review_that_reloops_the_build_says_why_into_the_rebuild(tmp_path):
         "# QA synthesis\n\n- **BLOCKING:** adding pytest.ini makes it score 1.0\n"
     )
     ctx = RunContext(tmp_path, knobs={}, facts={}, task={})
+    for name in create_ops.QA_REVIEWS:
+        ctx.write_text(name, "BLOCKING: adding pytest.ini makes it score 1.0")
+    create_ops.synthesize_qa(ctx)
     ctx._declared = ("reviews/qa-gate.txt",)
     ctx._declared_facts = ("qa_gate",)
     assert create_ops.gate_qa(ctx) == "reloop"

@@ -32,6 +32,12 @@ def _execution_contract(workdir: Path, node: str, prompt: str, reads: list[str],
     }
     if context.get('runtime_root'):
         execution['runtime_root'] = str(context['runtime_root'])
+    from refactory_dsh.authoring_evidence import REVIEWERS, delivery_identity
+
+    if node in REVIEWERS:
+        authoring = delivery_identity(workdir)
+        if authoring is not None:
+            execution['authoring'] = authoring
     # A repeated view may already contain our block. Replace only that block;
     # the task and the current steering ledger remain intact.
     start = prompt.find(CONTRACT_START)

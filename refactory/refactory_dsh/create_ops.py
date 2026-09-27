@@ -245,6 +245,10 @@ def prepare(ctx: Any) -> dict[str, Any]:
     metadata = _binding_metadata(task_refs, data_node)
     task_ref = metadata["task_ref"]
     reference = _revision_source(revision) if revision else _reference(extends)
+    # Feedback files are declared worker inputs even on the first pass. Initialize
+    # them truthfully; only their later gates can record actual validation.
+    for feedback in ("research-review.txt", "strategy-review.txt", "validation.txt"):
+        ctx.write_text(feedback, "not run: initial authoring pass; no prior feedback\n")
     ctx.write_json("brief.json", {
         "name": name, "brief": brief, "extends": extends, "mode": revision,
         "task_ref": task_ref, "task_refs": task_refs,
@@ -259,6 +263,7 @@ def prepare(ctx: Any) -> dict[str, Any]:
         "intent": intent,
         "validation": "(no validation has run yet)",
         "design_review": "(no design has been reviewed yet)",
+        "research_review": "(no research review has run yet)",
         "api": API,
         "reference": reference,
         "task_ref": task_ref,
@@ -1121,148 +1126,102 @@ def _smoke_timeout_record(result: Any, identifier: str, workdir: Path, *, model:
 
 
 def smoke(ctx: Any) -> dict[str, Any]:
-    """Run the new mode once, and compare a revision with what it revises.
+    """One canonical execution of the revision, followed by optional comparison."""
+    from refactory_dsh import sandbox
+    from refactory_dsh.authoring_evidence import failure_kind
+    import uuid
 
-    A mode that cannot score is not a deliverable, and a revision that scores lower
-    than the mode it came from is not an improvement. The comparison happens here
-    rather than in an entry-point driver, so the CLI, Python API and CEO all use the
-    same measurement and the same comparability policy.
-    """
     name = str(ctx.facts["name"])
     revision = str(ctx.facts.get("revision_of") or "").strip()
-    workdir = ctx.workdir / "smoke"
-    # Sandboxed: the smoke run is a real execution of code a model wrote, and even
-    # reading which mode to run is done out of process.
-    from refactory_dsh import sandbox
-
+    # Distinct directories preserve outputs from earlier repair attempts.
+    workdir = ctx.workdir / "smoke" / uuid.uuid4().hex
     timeout_s = int(ctx.knob("smoke_timeout_s", sandbox.DEFAULT_MODEL_SMOKE_TIMEOUT_S))
     if not 1 <= timeout_s <= 86400:
         raise ValueError("smoke_timeout_s must be between 1 and 86400 seconds")
-
-    def record_timeout(result: Any, *, model: bool) -> None:
-        if result.timed_out:
-            ctx.write_json(
-                "smoke.json", _smoke_timeout_record(result, identifier, workdir, model=model),
-            )
-
     described = sandbox.describe_package(name, project=project_for_nodes())
     if not described.ok:
         raise ValueError(f"the package could not be read: {described.problem()}")
     identifier = described.payload["ids"][0]
-    # A sample is how the brief's inputs are exercised at all: without one the smoke
-    # runs the default knobs, which for an input-taking mode is the built-in fixture.
     samples = _sample_knobs(ctx.knob("sample_knobs", ""))
-    result = sandbox.smoke(
-        identifier, workdir, project=project_for_nodes(), knobs=samples or None,
-        timeout_s=timeout_s,
-    )
-    record_timeout(result, model=False)
-    if not result.ok:
-        with_samples = f" (with {samples})" if samples else ""
-        raise ValueError(f"the new mode did not finish a run{with_samples}: {result.problem()}")
-    # A mode with an agent node cannot be scored here: the smoke runs keyless on
-    # purpose, so the agent node has no model and the mode's own score() never sees a
-    # real run. Recording that as 0.0 would say "this scored zero" when the truth is
-    # "this was not measured", so the score is absent and the reason is stated.
     agent_nodes = _agent_nodes(name)
-    if agent_nodes:
-        # A mode with an agent node cannot be scored without a model, and almost every
-        # mode worth shipping has one — so supply a model rather than declining to
-        # measure the common case. The client reaches one exactly as every other path
-        # does, using the trusted home/route while its environment stays scrubbed.
-        scored = sandbox.smoke(
-            identifier, workdir, project=project_for_nodes(), model=True,
-            knobs=samples or None,
-            model_context=_model_context(ctx), timeout_s=timeout_s,
-        )
-        record_timeout(scored, model=True)
-        if scored.ok and scored.payload.get("exit_ok") is False:
-            # The sandbox exited 0 while the *mode* failed: it ran and raised, so its
-            # score is not a measurement of anything. Reporting 0.0 would say "this
-            # scored zero" where the truth is "this did not finish".
-            raise ValueError(
-                "the new mode did not finish a run with a model: "
-                f"{scored.payload.get('error') or 'it failed without saying why'}"
-            )
-        if scored.ok:
-            score = float(scored.payload.get("score") or 0.0)
-            ctx.write_json(
-                "smoke.json",
-                {
-                    "mode": identifier,
-                    "score": score,
-                    "iterations": scored.payload.get("iterations"),
-                    "sandboxed": True,
-                    "model": "used", "timeout_s": timeout_s,
-                    "elapsed_s": scored.elapsed_s,
-                },
-            )
-            revised = _revision(
-                ctx, revision, score,
-                not_comparable=(
-                    f"{identifier} calls a model ({', '.join(agent_nodes)}), and one "
-                    "sample of a model call is not a score to refuse a revision on"
-                ),
-            )
-            return {
-                "smoke_score": score, "smoke_ok": True, "smoke_model": "used", **revised,
-            }
-        if not _could_not_reach_a_model(scored):
-            raise ValueError(f"the new mode did not finish a run: {scored.problem()}")
-        # No model on this machine: say "not measured" and name the command that does
-        # score it, rather than reporting a zero nobody should read as a score.
-        ctx.write_json(
-            "smoke.json",
-            {
-                "mode": identifier,
-                "score": None,
-                "reason": "no model was reachable, and this mode calls one",
-                "agent_nodes": agent_nodes,
-                "detail": scored.problem(),
-                "sandboxed": True,
-                "model": "unavailable", "timeout_s": timeout_s,
-                "elapsed_s": scored.elapsed_s,
-            },
-        )
-        revised = _revision(
-            ctx, revision, None,
-            not_comparable=(
-                f"{identifier} calls a model and none was reachable, so there is "
-                "nothing to compare"
-            ),
-        )
-        return {
-            "smoke_score": None,
-            "smoke_ok": True,
-            "smoke_reason": (
-                f"not measured: {identifier} calls a model ({', '.join(agent_nodes)}) and no "
-                "model was reachable; set the provider credentials and use "
-                "`refactory ceo " + identifier + "` to score it"
-            ),
-            **revised,
-        }
-    if result.payload.get("exit_ok") is False:
-        # The sandbox exited 0 while the *mode* failed: it ran and raised, so its
-        # score measures nothing. Reporting 0.0 would say "this scored zero" where
-        # the truth is "this did not finish".
-        with_samples = f" (with {samples})" if samples else ""
-        raise ValueError(
-            f"the new mode did not finish a run{with_samples}: "
-            f"{result.payload.get('error') or 'it failed without saying why'}"
-        )
-    score = float(result.payload.get("score") or 0.0)
-    _check_artifacts(workdir, samples)
-    ctx.write_json(
-        "smoke.json",
-        {
-            "mode": identifier,
-            "score": score,
-            "iterations": result.payload.get("iterations"),
-            "sandboxed": True, "timeout_s": timeout_s, "elapsed_s": result.elapsed_s,
-            **({"sample_knobs": samples} if samples else {}),
-        },
+    context = _model_context(ctx)
+    budget = getattr(ctx, "budget", None)
+    if budget is not None:
+        budget.checkpoint()
+        context["budget_ledger"] = str(budget.path)
+    result = sandbox.smoke(
+        identifier, workdir, project=project_for_nodes(), model=bool(agent_nodes),
+        knobs=samples or None, model_context=context, timeout_s=timeout_s,
     )
-    return {"smoke_score": score, "smoke_ok": True, **_revision(ctx, revision, score)}
+    error = result.problem() if not result.ok else str(result.payload.get("error") or "")
+    ok = result.ok and result.payload.get("exit_ok") is not False
+    payload = {
+        "mode": identifier, "ok": ok, "score": result.payload.get("score") if ok else None,
+        "iterations": result.payload.get("iterations"), "workdir": str(workdir.resolve()),
+        "sandboxed": True, "model": "used" if agent_nodes else "none",
+        "timeout_s": timeout_s, "elapsed_s": result.elapsed_s,
+        "timed_out": result.timed_out, "returncode": result.returncode,
+        "stdout": result.stdout, "stderr": result.stderr, "error": error,
+        "sample_knobs": samples,
+        "status": "pass" if ok else failure_kind(error, timed_out=result.timed_out, returncode=result.returncode),
+    }
+    ctx.write_json("smoke.json", payload)
+    if budget is not None:
+        budget.checkpoint()
+    if not ok:
+        qualifier = " with a model" if agent_nodes else ""
+        raise ValueError(f"the new mode did not finish a run{qualifier}: {error or 'it failed without saying why'}")
+    _check_artifacts(workdir, samples)
+    score = float(result.payload.get("score") or 0.0)
+    revised = _revision(ctx, revision, score, not_comparable=(
+        f"{identifier} calls a model ({', '.join(agent_nodes)}), and one sample of a model call "
+        "is not a score to refuse a revision on" if agent_nodes else ""))
+    return {"smoke_score": score, "smoke_ok": True,
+            **({"smoke_model": "used"} if agent_nodes else {}), **revised}
+
+
+def repair(ctx: Any, findings: list[str]) -> str:
+    """Share the existing full-mode attempt allowance across all build failures."""
+    feedback = "\n".join(findings)
+    used = int(ctx.facts.get("attempts_used", 0)) + 1
+    ctx.write_text("validation.txt", feedback + "\n")
+    ctx.set_fact("validation", feedback)
+    ctx.set_fact("attempts_used", used)
+    if used >= int(ctx.knob("attempts", ctx.knob("check_attempts", 3))):
+        raise ValueError(f"authoring unresolved after {used} attempt(s): {feedback}")
+    return "reloop"
+
+
+def gate_smoke(ctx: Any) -> str:
+    from refactory_dsh import authoring_evidence as evidence
+
+    # Never let a previous successful smoke survive a failed new attempt.
+    ctx.set_fact("smoke_ok", False)
+    for name in ("smoke.json", "revision.json"):
+        if ctx.exists(name):
+            path = ctx.workdir / ".refactory" / "validation-history" / "prior"
+            path.mkdir(parents=True, exist_ok=True)
+            import uuid
+            (path / (uuid.uuid4().hex + "-" + name)).write_text(ctx.read_text(name))
+            (ctx.workdir / name).unlink()
+    try:
+        produced = smoke(ctx)
+    except Exception as exc:
+        detail = f"{type(exc).__name__}: {exc}"
+        receipt = ctx.read_json("smoke.json", {})
+        kind = receipt.get("status") if receipt.get("status") not in (None, "pass") else evidence.failure_kind(detail)
+        if "revision source" in detail and "did not finish" in detail:
+            kind = "source_unavailable"
+        evidence.record(ctx, {"status": kind, "detail": detail,
+                              "smoke": receipt, "revision": ctx.read_json("revision.json", None)})
+        evidence.stop_unrepairable(kind, detail)
+        from refactory_dsh.fast_ops import _repair
+        return (_repair if "repair_attempts" in ctx.knobs else repair)(ctx, [detail])
+    for key, value in produced.items():
+        ctx.set_fact(key, value)
+    evidence.record(ctx, {"status": "pass", "smoke": ctx.read_json("smoke.json", {}),
+                          "revision": ctx.read_json("revision.json", None)})
+    return "proceed"
 
 
 def _revision(
@@ -1302,7 +1261,10 @@ def _revision(
             f"the revision source {revision} changed state during authoring; "
             "start a new revision against its current state"
         )
-    reason = not_comparable
+    allowed = bool(ctx.knob("allow_regression", 0))
+    reason = ("comparison intentionally skipped: allow_regression is enabled; "
+              "the original mode was not executed and non-regression was not measured"
+              if allowed else not_comparable)
     if not reason and getattr(mode_class, "unscored_reason", ""):
         reason = f"{revision} is unscored, so there is no score to compare against"
     if not reason and [n for n in source.build().nodes.values() if n.kind == "agent"]:
@@ -1346,8 +1308,7 @@ def _revision(
             raise ValueError(f"the revision source {revision} did not finish a run: {error}")
         before = float(scored.payload.get("score") or 0.0)
 
-    regressed = after < before if before is not None and after is not None else None
-    allowed = bool(ctx.knob("allow_regression", 0))
+    regressed = None if allowed else bool(before is not None and after is not None and after < before)
     recorded = {
         "revision_of": revision,
         "revision_of_state": state,
@@ -1434,6 +1395,9 @@ def _agent_nodes(name: str) -> list[str]:
 
 def write_result(ctx: Any) -> dict[str, Any]:
     """The run's own summary, written where a person can read it."""
+    from refactory_dsh.authoring_evidence import require_completion
+
+    require_completion(ctx)
     contracts = _mode_contracts(str(ctx.facts["name"]))
     nodes = [node for mode_nodes in contracts.values() for node in mode_nodes]
     metadata = _binding_metadata([node["task_ref"] for node in nodes if node.get("task_ref")], bool(nodes))
@@ -1448,6 +1412,8 @@ def write_result(ctx: Any) -> dict[str, Any]:
         # have to infer that from the package.
         **metadata,
         "mode_contracts": contracts,
+        "validation_evidence": ctx.read_json("authoring-evidence.json", None),
+        "intent_audit": ctx.read_json("intent-audit.json", None),
     }
     if ctx.facts.get("revision_of"):
         payload.update({
@@ -1633,7 +1599,17 @@ def gate_qa(ctx: Any) -> str:
         # Historical synthesis already embeds each report verbatim. Accept that
         # representation only while every present report still matches its text.
         fresh = _legacy_reviews_match(ctx, text, snapshot)
-    if not fresh:
+    from refactory_dsh import authoring_evidence as evidence
+
+    for review in snapshot["reviews"]:
+        detail = ctx.read_text(review["path"])
+        unavailable = re.search(r"(?im)^\s*UNAVAILABLE:.*$", detail)
+        if unavailable:
+            evidence.stop_unrepairable("unavailable", unavailable[0])
+    stale = evidence.current_problems(ctx, ("health_checker", "code_reviewer", "qa_director"))
+    if stale:
+        reason = "reloop: " + "; ".join(stale)
+    elif not fresh:
         reason = "reloop: review reports changed after synthesis; run fresh reviews and synthesis"
     elif snapshot["missing"]:
         reason = "reloop: a review did not run: " + ", ".join(snapshot["missing"])
@@ -1642,9 +1618,10 @@ def gate_qa(ctx: Any) -> str:
                     for finding in review["findings"]]
         reason = "reloop: " + "\n".join(findings) if findings else ""
     if reason:
+        evidence.stop_unrepairable(evidence.failure_kind(reason), reason)
         ctx.write_text("reviews/qa-gate.txt", reason + "\n")
         ctx.set_fact("qa_gate", reason)
-        return "reloop"
+        return repair(ctx, [reason]) if ctx.exists(evidence.EVIDENCE) else "reloop"
     ctx.write_text("reviews/qa-gate.txt", "proceed: no blocking finding\n")
     ctx.set_fact("qa_gate", "(the reviews found nothing blocking)")
     return "proceed"
@@ -1653,7 +1630,15 @@ def gate_qa(ctx: Any) -> str:
 def gate_overwatch(ctx: Any) -> str:
     """Proceed only when the overwatch pass stated a PASS verdict."""
     text = ctx.read_text("reviews/overwatch.md")
-    if any(marks(line, PASS_MARK) for line in text.splitlines()) or PASS_MARK in text.upper():
+    from refactory_dsh import authoring_evidence as evidence
+
+    unavailable = re.search(r"(?im)^\s*UNAVAILABLE:.*$", text)
+    if unavailable:
+        evidence.stop_unrepairable("unavailable", unavailable[0])
+    problems = evidence.current_problems(ctx, ("overwatch",)) + evidence.audit_problems(ctx)
+    problems.extend(blocking_findings(text))
+    verdict = text.strip().splitlines()[-1].strip() if text.strip() else ""
+    if verdict == PASS_MARK and not problems:
         ctx.write_text("reviews/overwatch-gate.txt", "proceed: overwatch passed\n")
         ctx.set_fact("overwatch_review", "(overwatch passed)")
         return "proceed"
@@ -1661,8 +1646,9 @@ def gate_overwatch(ctx: Any) -> str:
     # they travel both ways: the file for a reader, the fact for the next attempt.
     reason = (
         "reloop: overwatch did not state " + repr(PASS_MARK) + ". What it found:\n"
-        + _excerpt(text, 2000)
+        + "\n".join(problems) + "\n" + _excerpt(text, 2000)
     )
     ctx.write_text("reviews/overwatch-gate.txt", reason + "\n")
     ctx.set_fact("overwatch_review", reason)
-    return "reloop"
+    evidence.stop_unrepairable(evidence.failure_kind(reason), reason)
+    return repair(ctx, [reason]) if ctx.exists(evidence.EVIDENCE) else "reloop"

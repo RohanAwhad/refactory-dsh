@@ -213,6 +213,17 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
                 gate["gate_prompt"] = node.notes
             if node.gate_kind == "fn":
                 gate["evaluator_command"] = f"{RUNNER} {node.evaluator}"
+                if node.evaluator == "refactory_dsh.create_ops:gate_smoke":
+                    from refactory_dsh.sandbox import DEFAULT_MODEL_SMOKE_TIMEOUT_S
+
+                    budget = int((state.get("knobs") or {}).get("smoke_timeout_s", {}).get(
+                        "value", DEFAULT_MODEL_SMOKE_TIMEOUT_S,
+                    ))
+                    if not 1 <= budget <= 86400:
+                        raise LoweringError("smoke_timeout_s must be between 1 and 86400 seconds")
+                    # Revised execution, optional original comparison, and discovery.
+                    # Moving smoke into a gate must retain its bounded shell envelope.
+                    gate["command_timeout_s"] = 2 * budget + 600
             nodes[node_id] = GateNode(**common, **gate)
         elif node.kind == "fork":
             # The branches are reached through `targets`, not edges: one out-edge
