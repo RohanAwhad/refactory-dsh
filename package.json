@@ -27,6 +27,7 @@
     "build": "pnpm run docs:check && pnpm run typecheck && tsdown --env.DSH_BUILD_FACE host && tsdown --env.DSH_BUILD_FACE client",
     "typecheck": "tsc -b tsconfig.host.json && tsc -b tsconfig.client.json",
     "test": "vitest run",
+    "test:acceptance": "node packages/bundle/refactory-presets/tests/verify-ceo-root.mjs",
     "test:coverage": "vitest run --coverage",
     "test:gui": "vitest run packages/client",
     "lint": "oxlint packages"

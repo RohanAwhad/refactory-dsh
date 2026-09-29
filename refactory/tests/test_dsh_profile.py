@@ -70,6 +70,53 @@ def test_a_blank_dsh_home_falls_back_to_the_default(monkeypatch):
     assert dsh_profile.dsh_home() == Path.home() / ".dsh"
 
 
+def test_the_web_profile_names_the_preset_bundle_not_a_directory_called_web():
+    """The bundle directory is derived from the bundle NAME, not the profile name.
+
+    `graph` and its bundle happened to line up, so the old code derived the path
+    from the profile name and got away with it. The web profile's bundle is
+    `refactory-presets`; deriving `packages/bundle/web` would point at nothing.
+    """
+    command = dsh_profile.add_command(dsh_profile.WEB_PROFILE)
+    assert command.startswith("dsh plugin --profile web add ")
+    assert command.endswith(str(REPO_ROOT / "packages" / "bundle" / "refactory-presets"))
+
+
+def test_the_web_profile_without_the_preset_bundle_is_reported(tmp_path, monkeypatch):
+    """A `web` profile that exists but lacks the preset bundle is a gap, not ready.
+
+    This is the state a GUI lands in when the bundle is never installed: the
+    composition still names `ceo` as the roster default and the profile has no
+    `ceo` preset, so every session created without naming one stops.
+    """
+    home = tmp_path / "home"
+    _profile(home, "web", ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"])
+    monkeypatch.setenv("DSH_HOME", str(home))
+    problem = dsh_profile.requirement(dsh_profile.WEB_PROFILE, dsh_profile.WEB_BUNDLE)
+    assert problem is not None
+    assert dsh_profile.WEB_BUNDLE in problem
+    assert not dsh_profile.is_ready(dsh_profile.WEB_PROFILE, dsh_profile.WEB_BUNDLE)
+
+
+def test_missing_bundles_reports_each_profile_that_is_short(tmp_path, monkeypatch):
+    """Both profiles are owned here, and the answer says which one is unready."""
+    home = tmp_path / "home"
+    _profile(home, "graph", ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
+    monkeypatch.setenv("DSH_HOME", str(home))
+    gaps = dsh_profile.missing_bundles()
+    assert [profile for profile, _bundle, _why in gaps] == ["web"], gaps
+    assert gaps[0][1] == dsh_profile.WEB_BUNDLE, "the gap names the bundle it needs"
+
+
+def test_missing_bundles_is_empty_when_both_profiles_are_ready(tmp_path, monkeypatch):
+    """Ready means no work: `install.sh` and the launcher both branch on this."""
+    home = tmp_path / "home"
+    _profile(home, "graph", ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
+    _profile(home, "web", ["@deepseek-ai/dsh-base", dsh_profile.WEB_BUNDLE])
+    monkeypatch.setenv("DSH_HOME", str(home))
+    assert dsh_profile.missing_bundles() == []
+
+
 def test_run_on_dsh_hands_the_runner_an_absolute_workdir(tmp_path, monkeypatch):
     """DSH refuses a relative session cwd, so the adapter must not pass one on.
 

@@ -3,7 +3,7 @@
 The harness copy carried a bilingual pairing gate: `scripts/translation-pairing.manifest.json`
 listed documents with a `.zh.md` counterpart and failed when the two sides drifted.
 Deleting the copied harness deleted that gate, and with it the only thing that kept a
-translation honest. The six packages and `refactory/` no longer publish translations,
+translation honest. The seven packages and `refactory/` no longer publish translations,
 so the rule is now the simpler one this test enforces: no `.zh.md` side and no
 `README.i18n.yaml` alignment record. A stale translation is worse than none, because a
 reader cannot tell it has fallen behind.
@@ -15,11 +15,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
-#: The trees whose documents are English-only: the glue and the six packages we ship.
+#: The trees whose documents are English-only: the glue and the seven packages we ship.
 ENGLISH_ONLY = (
     ROOT / "refactory",
     ROOT / "packages" / "workflow" / "workflow-spine",
     ROOT / "packages" / "bundle" / "graph",
+    ROOT / "packages" / "bundle" / "refactory-presets",
     ROOT / "packages" / "refactory" / "refactory-console",
     ROOT / "packages" / "refactory" / "tool-refactory",
     ROOT / "packages" / "client" / "ui-refactory",

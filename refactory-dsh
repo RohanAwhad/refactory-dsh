@@ -5,9 +5,16 @@
 # glue lives at `refactory/`; the harness is the published `@deepseek-ai/dsh`
 # install under `node_modules`, so this script only resolves that launcher.
 #
-# The graph profile the Python glue runs modes on is machine state, created by
-# `./install.sh` (or by `pnpm exec dsh plugin --profile graph add
-# packages/bundle/graph`). The web profile is the pinned harness's own.
+# The two bundles this checkout owns are **machine state**: a DSH profile is
+# created by `dsh plugin --profile <name> add <package>`, never derived from the
+# bundle's name. `./install.sh` creates both, and this script heals a missing one
+# rather than booting into the failure it causes: a web profile without
+# `packages/bundle/refactory-presets` has no `ceo` preset, and the composition
+# names `ceo` as the roster default, so every session created without naming one
+# would stop with `agent-preset/not-found`.
+#
+# The graph profile is what the Python glue runs modes on. The web profile is the
+# pinned harness's own template plus that bundle.
 #
 # The meta-modes are Python entry points, not presets:
 #   python -m refactory_dsh.create   create a mode
@@ -28,6 +35,38 @@ if [ ! -x "$DSH" ]; then
   echo "refactory-dsh: no dsh launcher at $DSH" >&2
   echo "               run ./install.sh (or: pnpm install) first." >&2
   exit 1
+fi
+
+# One `dsh plugin add` per owned profile that does not carry its bundle yet.
+# The decision is `dsh_profile`'s, so this script cannot drift from the check
+# `refactory doctor` and the runner make; the loop only runs when there is a gap,
+# so a provisioned machine boots without invoking pnpm at all.
+#
+# A missing interpreter is NOT treated as "nothing missing": failing open here
+# would boot the GUI into the `agent-preset/not-found` failure this block exists
+# to prevent, so it is a hard error naming the fix instead.
+PYTHON="$DSH_ROOT/.venv/bin/python"
+if [ ! -x "$PYTHON" ]; then
+  echo "refactory-dsh: no interpreter at $PYTHON, so the DSH profiles cannot be checked." >&2
+  echo "               run ./install.sh first (it creates .venv and both profiles)." >&2
+  exit 1
+fi
+
+gaps() {
+  "$PYTHON" -c '
+from refactory_dsh import dsh_profile
+for profile, bundle, _ in dsh_profile.missing_bundles():
+    print(profile, bundle.rsplit("/", 1)[-1].replace("dsh-", "", 1))
+'
+}
+
+missing="$(gaps)"
+if [ -n "$missing" ]; then
+  echo "refactory-dsh: a DSH profile is missing its checkout bundle; adding it (machine state, once per machine)" >&2
+  while read -r profile bundle_dir; do
+    [ -n "$profile" ] || continue
+    "$DSH" plugin --profile "$profile" add "$DSH_ROOT/packages/bundle/$bundle_dir"
+  done <<<"$missing"
 fi
 
 cd "$DSH_ROOT"

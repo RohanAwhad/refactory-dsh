@@ -11,7 +11,7 @@ diff --git a/cordis.patch.yml b/cordis.patch.yml
  # The dsh-web-app bundle patch: the browser surface over the dsh-base layer.
  # Applied after dsh-base's insert; rows here override base rows by id, with
  # the profile's own cordis.patch.yml and any --patch overlays still to come.
-@@ -105,6 +111,20 @@
+@@ -105,6 +111,21 @@
      - id: session-controller
        name: '@deepseek-ai/dsh-api-session-controller'
  
@@ -27,7 +27,8 @@ diff --git a/cordis.patch.yml b/cordis.patch.yml
 +    # The interactive workflow spine is NOT mounted here. It lives in the `ceo`
 +    # preset's `agent.cordis.yml` so the CEO it guards is in the mount's scope:
 +    # a host row has no scope, and the spine's deny-guard needs one to restrict
-+    # the CEO's own tools. See the patch on `@deepseek-ai/dsh-agent-presets`.
++    # the CEO's own tools. That preset ships from
++    # `packages/bundle/refactory-presets`, which is applied after this layer.
 +
      # Workspace file service: bounded read, directory listing, and the
      # agent-write change feed inside the session workspace root.

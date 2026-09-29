@@ -61,3 +61,12 @@ jobs:
       # this job exists; a red suite here is the gate working.
       - name: TypeScript suite
         run: pnpm test
+
+      # The `ceo` preset acceptance run: it installs the preset bundle into a
+      # throwaway DSH_HOME, boots a real web profile and asks its live services.
+      # It belongs in CI because it is the only thing that proves the preset
+      # reaches the roster through configured roots instead of a patched
+      # agent-presets tree — a unit test cannot see the layer order that decides
+      # whether the patch finds its row at all.
+      - name: CEO preset acceptance
+        run: pnpm run test:acceptance

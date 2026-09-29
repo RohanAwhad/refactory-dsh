@@ -462,7 +462,7 @@ def render_drift_gates() -> str:
     """Which gate proves what, so a reader knows what "tested" means here."""
     rows = (
         ("uv run python -m pytest refactory/tests -q", "the glue: the language, the modes, the loop, the console"),
-        ("pnpm run test", "the six packages: the spine, the graph bundle, the console and the client tab"),
+        ("pnpm run test", "the seven packages: the spine, the two bundles, the console and the client tab"),
         ("uv run python -m pytest refactory/tests -q --run-integration", "one mode on both runtimes, compared fact by fact"),
         ("uv run python -m refactory_dsh.tools.check_recipes", "every command this page shows, executed"),
         ("uv run python -m refactory_dsh.tools.gen_tutorial --check", "this page matches the code it describes"),
@@ -1045,6 +1045,7 @@ uv run refactory steer --run &lt;id&gt; --verdict gate_strategy=proceed</code></
           <tr><td>the outer loop</td><td><code>refactory/refactory_dsh/loop.py</code>, <code>optim/</code>, <code>strategies.py</code></td></tr>
           <tr><td>the console (one JSON for everybody)</td><td><code>refactory/refactory_dsh/console.py</code></td></tr>
           <tr><td>the runtime that ships</td><td><code>packages/workflow/workflow-spine/</code> (the cursor) and <code>packages/bundle/graph/</code></td></tr>
+          <tr><td>the CEO preset the GUI mounts</td><td><code>packages/bundle/refactory-presets/</code> — the <code>ceo</code> composition, shipped through the roster's configured roots</td></tr>
           <tr><td>the conversion between them</td><td><code>refactory/refactory_dsh/lowering.py</code> → <code>Workflow.to_dict()</code></td></tr>
           <tr><td>the CEO's tool</td><td><code>packages/refactory/tool-refactory/</code></td></tr>
           <tr><td>the GUI panel</td><td><code>packages/client/ui-refactory/</code> + <code>packages/refactory/refactory-console/</code></td></tr>

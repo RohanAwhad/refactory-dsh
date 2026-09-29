@@ -250,10 +250,20 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     try:
         from refactory_dsh import dsh_profile
 
-        problem = dsh_profile.requirement()
-        checks.append(("DSH profile 'graph'", problem is None, problem or dsh_profile.profile_dir().__str__()))
+        # One row per profile this checkout owns a bundle for. Both matter for a
+        # different reason: `graph` is what a mode runs on, `web` is what the GUI
+        # boots, and without the preset bundle the GUI's sessions stop at
+        # `agent-preset/not-found`. A per-profile row says which one is short.
+        gaps = {profile: reason for profile, _bundle, reason in dsh_profile.missing_bundles()}
+        for profile, _bundle in dsh_profile.PROFILE_BUNDLES:
+            problem = gaps.get(profile)
+            checks.append((
+                f"DSH profile {profile!r}",
+                problem is None,
+                problem or str(dsh_profile.profile_dir(profile)),
+            ))
     except Exception as exc:
-        checks.append(("DSH profile 'graph'", False, str(exc)))
+        checks.append(("DSH profiles", False, str(exc)))
     try:
         from refactory_dsh import registry
 
