@@ -41,9 +41,6 @@
     enableRunInBackground: false
 
 - insert:
-    - id: code-runtime
-      name: '@deepseek-ai/dsh-code-runtime-worker-thread'
-
     - id: graph-startup
       name: '@deepseek-ai/dsh-graph/startup'
 
