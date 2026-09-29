@@ -35,25 +35,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      # The installer supports Node ^22.19 or >=24; 24 is the even release it is
-      # tested on.
-      - uses: actions/setup-node@v4
+      # `pnpm/setup` is the action for pnpm 11+ (this repo pins pnpm@11.7.0). It
+      # installs the pinned pnpm — read from package.json's `packageManager`, so it
+      # cannot drift — and the Node runtime in one step, replacing setup-node.
+      # `install: false` leaves the dependency install to `install.sh`, the path
+      # under test.
+      - uses: pnpm/setup@v3
         with:
-          node-version: '24'
-
-      # The pnpm pin lives in package.json's `packageManager`, so the action
-      # reads it from there rather than restating it here (which would drift).
-      # `run_install: false` leaves the install to `install.sh`, the path under
-      # test.
-      - uses: pnpm/action-setup@v4
-        with:
-          run_install: false
+          runtime: node@24
+          install: false
 
       # uv owns `.venv` and reads `uv.lock`; the ordering fix depends on it
       # existing before the Node build runs `docs:check`.
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - uses: astral-sh/setup-uv@v10
 
       # The path a new checkout takes. On a fresh runner this is the real test of
       # the ordering, and it also creates the DSH profile the bundle needs.
