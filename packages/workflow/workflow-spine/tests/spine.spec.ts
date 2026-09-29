@@ -40,7 +40,9 @@ describe('linear + gate', () => {
     spine.verdict('gate', 'reloop', 'try harder')
     expect(ids(spine)).toEqual(['a'])
     expect(spine.state().feedback).toEqual({ a: 'try harder' })
-    for (let index = 0; index < 4; index += 1) {
+    // The cap is three reloops: the first verdict above is one, these three take
+    // it past the cap, and the run halts rather than looping forever.
+    for (let index = 0; index < 3; index += 1) {
       spine.complete('a')
       spine.verdict('gate', 'reloop', 'nope')
     }
@@ -134,7 +136,11 @@ describe('skip mutation', () => {
     const spine = new Spine(graph)
     spine.skip('fork')
     expect(ids(spine)).toEqual(['join'])
-    expect(spine.state().skipped).toContain('c1')
+    // Only the explicitly skipped node is recorded; its subtree is bypassed
+    // rather than completed, so it is no longer due.
+    expect(spine.state().skipped).toEqual(['fork'])
+    expect(() => spine.complete('c1')).toThrow(/node c1 is not due/)
+    expect(spine.state().completed).not.toContain('c1')
   })
 
   it('skipping the last parallel entry releases the barrier behind it', () => {
@@ -421,6 +427,10 @@ describe('rewinding across a fork', () => {
     }
     const bare = new Spine(bareFork)
     bare.complete('a')
+    // Its only branch is its unconditional continuation, the gate: completing
+    // the boundary advances to it rather than leaving the cursor on the fork.
+    bare.complete('fork')
+    expect(ids(bare)).toEqual(['gate'])
     bare.verdict('gate', 'reloop')
     expect(ids(bare)).toEqual(['a'])
 
@@ -477,6 +487,11 @@ describe('rewinding across a fork', () => {
     spine.complete('a')
     spine.complete('fork')
     spine.complete('b')
+    // Both branches name `shared`; it is scheduled once, not twice.
+    expect(ids(spine)).toEqual(['c', 'shared'])
+    spine.complete('c')
+    expect(ids(spine)).toEqual(['shared'])
+    spine.complete('shared')
     // Both branches name `shared`; the rewind has to reach it once and stop at the gate.
     spine.verdict('gate', 'reloop')
     expect(ids(spine)).toEqual(['a'])
@@ -520,7 +535,9 @@ describe('refusing what the cursor cannot do', () => {
       edges: [],
     })
     spine.skip('a')
-    expect(spine.complete('a').status).toBe('done')
+    // A skipped node leaves the cursor, so completing it is refused rather than
+    // recorded; either way it is never marked complete.
+    expect(() => spine.complete('a')).toThrow(/node a is not due/)
     expect(spine.state().completed).toEqual([])
   })
 

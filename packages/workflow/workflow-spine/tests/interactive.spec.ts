@@ -112,7 +112,11 @@ describe('interactive design-v2 loop', () => {
     await run(ctx, 'wf_edit', { node: 'fork_qa', action: 'skip' })
     expect(ids(await run(ctx, 'wf_next', {}))).toEqual(['join_qa'])
     const final = await run(ctx, 'wf_state', {})
-    expect((final as { skipped: string[] }).skipped).toEqual(['fork_qa', 'qa1', 'qa2'])
+    // The fork is the explicitly skipped node; its QA body is bypassed rather
+    // than recorded, and never completed.
+    expect((final as { skipped: string[] }).skipped).toEqual(['fork_qa'])
+    expect((final as { completed: string[] }).completed).not.toContain('qa1')
+    expect((final as { completed: string[] }).completed).not.toContain('qa2')
 
     await run(ctx, 'wf_done', { node: 'join_qa' })
     await run(ctx, 'wf_done', { node: 'done' })

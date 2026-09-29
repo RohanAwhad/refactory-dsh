@@ -184,7 +184,7 @@ describe('the refactory tool against the real loop', () => {
     const ctx = await setup()
     const result = await call(ctx, { action: 'status', run: join(ROOT, 'no-such-run') })
     expect(result.isError).toBe(true)
-    expect(text(result)).toContain('is not a run directory')
+    expect(text(result)).toContain('does not exist (checked')
   }, 60_000)
 
   it('summarizes a real status call without dumping the payload', async () => {

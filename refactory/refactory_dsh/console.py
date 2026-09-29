@@ -382,6 +382,16 @@ SPINE_STATES = {
     "halted": "halted", "paused": "paused", "executing": "running", "waiting_user": "waiting_user",
 }
 
+#: How long one `stop` waits for the signalled process to exit before it reports that
+#: termination is still unconfirmed. A loop shuts down between boundaries, so this is
+#: usually a moment; the record below keeps the answer true when it is longer.
+STOP_CONFIRM_SECONDS = 2.0
+
+#: The record a `stop` leaves once it has signalled a live run. The pid alone cannot
+#: answer a later poll -- "gone because we stopped it" and "gone because it finished"
+#: look identical -- so the request is what a subsequent poll reads.
+STOP_REQUESTED = Path(".refactory") / "stop-requested.json"
+
 
 def _spine(run_root: Path) -> dict[str, Any]:
     """What the graph spine last recorded, or ``{}`` when this is not an authoring run."""
@@ -609,17 +619,40 @@ def _alive(pid: int) -> bool:
 
 
 def stop(run_root: Path) -> dict[str, Any]:
-    """Ask the run to stop, and say whether it did."""
-    console = _console(Path(run_root))
+    """Ask the run to stop, and say whether it did.
+
+    Signalling is not instantaneous: a loop shuts down between boundaries, so the
+    process is normally still alive right after ``SIGINT``. Reporting that as "not
+    stopped" and then reading the next poll as "not running, nothing to stop" told a
+    person nothing was stopped about the very run their stop had just ended. The
+    request is recorded before the wait, and that record -- not the pid -- answers a
+    later poll.
+    """
+    run_root = Path(run_root)
+    console = _console(run_root)
     pid = console.get("pid")
-    if not pid or not _alive(int(pid)):
+    if not pid:
+        return {"stopped": False, "reason": "the run is not running"}
+    pid = int(pid)
+    marker = run_root / STOP_REQUESTED
+    if not _alive(pid):
+        if marker.exists():
+            return {"stopped": True, "requested": True, "pid": pid,
+                    "reason": "the run stopped"}
         return {"stopped": False, "reason": "the run is not running"}
     try:
-        os.kill(int(pid), signal.SIGINT)
+        os.kill(pid, signal.SIGINT)
     except OSError as error:
         return {"stopped": False, "reason": str(error)}
-    return {"stopped": not _alive(int(pid)), "requested": True, "pid": int(pid),
-            "reason": "cancellation requested; worker termination is not yet confirmed"}
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps({"pid": pid, "at": round(time.time(), 3)}))
+    deadline = time.monotonic() + STOP_CONFIRM_SECONDS
+    while time.monotonic() < deadline and _alive(pid):
+        time.sleep(0.05)
+    if _alive(pid):
+        return {"stopped": False, "requested": True, "pid": pid,
+                "reason": "cancellation requested; worker termination is not yet confirmed"}
+    return {"stopped": True, "requested": True, "pid": pid, "reason": "the run stopped"}
 
 
 # ── reading one ────────────────────────────────────────────────────────────

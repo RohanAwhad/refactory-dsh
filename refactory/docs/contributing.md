@@ -53,6 +53,16 @@ No per-PR job installs Lean or mathlib (mathlib is a 7.4 GB checkout, and this s
 
 **A DSH profile is machine state, not a checkout artifact.** It is created with `dsh plugin --profile <name> add <package>`; `install.sh` does it idempotently and `REFACTORY_SKIP_DSH_PROFILE=1` skips it. `refactory_dsh/dsh_profile.py` is the one place that answers "is the profile there, and what fixes it" — the installer, the DSH runner and the tests all use it. Without the profile, anything that runs a mode on DSH stops at the first call.
 
+**`install.sh` provisions the default install, not the optional parts.** It creates
+`.venv` from `uv.lock`'s default (`dev`) group and installs the pinned pnpm workspace
+with the six packages' `lib/` built, then creates the DSH profile above. It does
+**not** install the non-default `reference` group — the parity oracle, added with
+`uv sync --group reference`, whose tests skip with a reason without it — and it does
+not create `refactory/vendor/srf/graphs`, the legacy graph directory for the
+low-level `dsh --profile graph run` path; the public `uv run refactory ceo
+<package>/<mode>` route supplies its own graph directory. `.github/workflows/ci.yml`
+runs `install.sh` and asserts this default install, so the opt-ins stay opt-in.
+
 **Use managed credentials for nested model execution.** Save the provider key through **Settings → Models → Edit → API key → Apply** in the DSH home used by the run. Exported keys and repository `.env` can serve the launching process, but nested smoke deliberately scrubs credential environment variables and changes `HOME`; the product carries the nonsecret DSH-home location so DSH can resolve its managed store. See [Models](models.md#credentials-for-nested-execution) for precedence and setup, and use `refactory doctor --provider deepseek-official --model deepseek-flash` to check downstream configuration before authoring. This check does not authenticate the key; unsupported custom runtimes report an explicit unverified warning. Deterministic modes, searches with `--optimizer random`, and offline tests do not need model credentials.
 
 ## The invariants

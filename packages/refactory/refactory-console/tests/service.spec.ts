@@ -270,8 +270,10 @@ describe('refactoryConsole — the described choices', () => {
         modes: [{ name: 'z', description: 'the last one', trust: 'generated' }],
       },
     ])
+    // Forwarded registry flags are one `--args=<value>` token, so a value that
+    // begins with `--` cannot be read as a console flag of its own.
     expect(subprocess.lastArgv).toEqual([
-      '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'registry', '--args', '', 'list', '',
+      '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'registry', '--args=', 'list', '',
     ])
   })
 })
@@ -400,10 +402,11 @@ describe('refactoryConsole — using one mode once', () => {
     ])
   })
 
-  it('reports a run that stopped at a gate a person owns as the run it is, not as a console failure', async () => {
+  it('reports a nonzero exit with work still due as a console failure, naming the run', async () => {
     const { service, subprocess } = await setup()
-    // The spine stopped with work due, so the forwarded entry point exits nonzero
-    // and the console reports the same failure — with the run's own status beside it.
+    // The spine stopped with work due and the forwarded entry point exits nonzero.
+    // `ready` is not one of the spine's named terminal stops, so this is the
+    // console's failure, not the run it left behind.
     subprocess.script = [
       { stdout: JSON.stringify([ADAPTIVE]) },
       {
@@ -420,11 +423,13 @@ describe('refactoryConsole — using one mode once', () => {
         exitCode: 2,
       },
     ]
-    await expect(service.run({ mode: 'p/adaptive' }, signal())).resolves.toMatchObject({
-      state: 'running',
-      finished: false,
-      best_score: null,
-      authoring: { spine: 'ready', nodes_due: ['approve', 'overwatch'], error: '' },
+    const failure = await failureOf(service.run({ mode: 'p/adaptive' }, signal()))
+    expect(failure.code).toBe('refactory/console-failed')
+    expect(failure.message).toBe('the graph did not finish: approve, overwatch still due')
+    // The run directory it did leave travels back, so the failure is locatable.
+    expect(failure.details).toEqual({
+      argv: ['/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'run', 'p/adaptive'],
+      run: '/repo/.factory/interactive/p-adaptive',
     })
   })
 
@@ -441,7 +446,9 @@ describe('refactoryConsole — using one mode once', () => {
       },
     ]
     await expect(service.run({ mode: 'p/adaptive' }, signal())).resolves.toMatchObject({
-      authoring: { spine: 'refused', error: 'gate approve is answered by a person and nobody could be asked' },
+      // A refused spine is a named stop, so this is the run and not a console
+      // failure; the console's own failure message is what the caller reads.
+      authoring: { spine: 'refused', error: 'the graph did not finish: gate approve' },
     })
   })
 
@@ -607,6 +614,10 @@ describe('refactoryConsole — steering a run', () => {
       verdicts: { approve: 'proceed' },
       gates: [{ id: 'approve', prompt: 'approve the draft', verdicts: ['proceed', 'halt'] }],
       problems: ['no intent ledger at /runs/gone/intent-ledger.md'],
+      // A read of the ledger also reports whether the run is over, and the
+      // control receipt the console kept; a run nobody controlled carries none.
+      finished: false,
+      control: null,
     })
     expect(subprocess.lastArgv).toEqual([
       '/repo/.venv/bin/python', '-m', 'refactory_dsh.console', 'steer', '--run', '/runs/live', '--gates',
@@ -741,7 +752,7 @@ describe('refactoryConsole — packages', () => {
       { name: 'p', enabled: true, where: '/p', modes: [{ name: 'adaptive', description: 'd', trust: 'trusted' }] },
     ])
     expect(subprocess.spawns[0]?.argv.slice(3)).toEqual([
-      'registry', '--args', '', 'enable', 'p',
+      'registry', '--args=', 'enable', 'p',
     ])
   })
 
@@ -749,9 +760,9 @@ describe('refactoryConsole — packages', () => {
     const { service, subprocess } = await setup()
     subprocess.answer({ verb: 'registry', exit_code: 0, ok: true, result: {} })
     await service.setPackageEnabled('p', false, signal())
-    expect(subprocess.spawns[0]?.argv.slice(3)).toEqual(['registry', '--args', '', 'disable', 'p'])
+    expect(subprocess.spawns[0]?.argv.slice(3)).toEqual(['registry', '--args=', 'disable', 'p'])
     await service.removePackage('p', signal())
-    expect(subprocess.spawns[2]?.argv.slice(3)).toEqual(['registry', '--args', '--force', 'remove', 'p'])
+    expect(subprocess.spawns[2]?.argv.slice(3)).toEqual(['registry', '--args=--force', 'remove', 'p'])
   })
 
   it('imports from a directory or git URL, naming the import when one is given', async () => {
@@ -759,10 +770,10 @@ describe('refactoryConsole — packages', () => {
     subprocess.answer({ verb: 'registry', exit_code: 0, ok: true, result: {} })
     await service.importPackage('/src/pack', 'renamed', signal())
     expect(subprocess.spawns[0]?.argv.slice(3)).toEqual([
-      'registry', '--args', '--as "renamed"', 'import', '/src/pack',
+      'registry', '--args=--as "renamed"', 'import', '/src/pack',
     ])
     await service.importPackage('/src/pack', '', signal())
-    expect(subprocess.spawns[2]?.argv.slice(3)).toEqual(['registry', '--args', '', 'import', '/src/pack'])
+    expect(subprocess.spawns[2]?.argv.slice(3)).toEqual(['registry', '--args=', 'import', '/src/pack'])
   })
 
   it('refuses an empty source and an empty package name', async () => {
