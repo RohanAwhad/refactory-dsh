@@ -404,9 +404,12 @@ describe('refactoryConsole — using one mode once', () => {
 
   it('reports a nonzero exit with work still due as a console failure, naming the run', async () => {
     const { service, subprocess } = await setup()
-    // The spine stopped with work due and the forwarded entry point exits nonzero.
-    // `ready` is not one of the spine's named terminal stops, so this is the
-    // console's failure, not the run it left behind.
+    // The spine stopped with work still due and the forwarded entry point exits
+    // nonzero. `ready` is not one of the spine's named terminal stops, so this is a
+    // graph that never finished, not a run reporting a stop. The asymmetry with the
+    // sibling `refused` test is the point: `console run` is headless, so a person's
+    // gate is either pre-answered with a verdict or recorded `refused` (a terminal
+    // stop, reported); work left due is the console's failure.
     subprocess.script = [
       { stdout: JSON.stringify([ADAPTIVE]) },
       {

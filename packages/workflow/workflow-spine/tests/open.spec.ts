@@ -11,7 +11,7 @@
  */
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
@@ -600,8 +600,11 @@ describe('the status of an opened run', () => {
     const written = join(run, '.refactory', 'spine-status.json')
     expect(existsSync(written)).toBe(true)
     // The status gained run metadata (`schema_version`, `at`, `run_id`,
-    // `wait_reason`); the cursor fields the test is about are still exact.
-    expect(JSON.parse(readFileSync(written, 'utf8'))).toMatchObject({ status: 'ready', nodes: ['a'], completed: [] })
+    // `wait_reason`); the cursor fields the test is about stay exact, and the two
+    // fields with a fixed value are asserted rather than skipped over.
+    const record = JSON.parse(readFileSync(written, 'utf8'))
+    expect(record).toMatchObject({ schema_version: 1, run_id: resolve(run), status: 'ready', nodes: ['a'], completed: [] })
+    expect(Date.parse(record.at)).not.toBeNaN()
     expect(existsSync(join(configured, '.refactory', 'spine-status.json'))).toBe(false)
   })
 })

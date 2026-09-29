@@ -56,8 +56,10 @@ describe('redo', () => {
     expect(next.status).toBe('ready')
     expect(ids(spine)).toEqual(['a'])
     expect(spine.state().completed).not.toContain('a')
-    // The log records the redo as a line, not as an exact bare string.
-    expect(spine.state().log).toEqual(expect.arrayContaining([expect.stringContaining('redid a')]))
+    // The log records the redo as a line naming where it went and what it invalidated.
+    expect(spine.state().log).toEqual(expect.arrayContaining([
+      expect.stringMatching(/^redid a at \S+; invalidated \S/),
+    ]))
   })
 
   it('clears a skip as well as the completion', () => {

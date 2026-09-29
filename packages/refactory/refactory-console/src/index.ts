@@ -461,8 +461,12 @@ export class RefactoryConsole extends TypertRemoteService {
    * authoring modes that do not emit a score and cannot be searched.
    *
    * The run is synchronous: the console drives it to quiescence before answering.
-   * A run that stopped at a gate a person owns is still a result — the answer
-   * carries the spine's own word for it — so it is reported rather than raised.
+   * A run that reached one of the spine's named terminal stops — `failed`,
+   * `refused` or `halted` — is a result: the answer carries that word, so it is
+   * reported rather than raised. A `user` gate is one of those and not an exception:
+   * this call is always headless, so a gate a person owns that nobody answered is
+   * recorded `refused`, never left open. A run that stopped with work still due is
+   * not a terminal stop — the graph did not finish — and is raised.
    * @param request - the mode and the knob values it uses.
    * @param signal - caller cancellation.
    * @returns where the run got to, and what it recorded.
