@@ -11,7 +11,7 @@
  */
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
@@ -333,13 +333,15 @@ describe('opening a graph at run time', () => {
       .rejects.toThrow('a run is already open in this session')
   })
 
-  it('refuses a second open from another session, distinctly', async () => {
+  it("refuses a workdir another session's run already owns", async () => {
     const run = scratch()
     const graph = lower(run)
     const ctx = await mount({ openCommand: openStub(run, graph) })
     await call(ctx, 'wf_open', { mode: 'pkg/t' }, as('session-1'))
-    await expect(call(ctx, 'wf_open', { mode: 'pkg/t' }, as('session-2')))
-      .rejects.toThrow('a run is already open in another session')
+    // Runs are owned per session, so a second session may open its own — but it
+    // cannot claim the directory the first session owns.
+    await expect(call(ctx, 'wf_open', { mode: 'pkg/t', workdir: run }, as('session-2')))
+      .rejects.toThrow('the run directory overlaps a run owned by another session; choose a different workdir')
   })
 
   it('refuses another session\'s tools on the opened run', async () => {
@@ -349,8 +351,11 @@ describe('opening a graph at run time', () => {
     await call(ctx, 'wf_open', { mode: 'pkg/t' }, as('session-1'))
     for (const name of ['wf_next', 'wf_done', 'wf_state']) {
       await expect(call(ctx, name, { node: 'a' }, as('session-2')))
-        .rejects.toThrow('a run is already open in another session')
+        .rejects.toThrow('no mode is open in this session; call wf_open with a mode first')
     }
+    // The refusal is isolation, not a state change: the owner's run is untouched.
+    expect(await call(ctx, 'wf_next', {}, as('session-1')))
+      .toMatchObject({ status: 'ready', nodes: [{ id: 'a' }] })
   })
 
   it('requires an owning agent session to open anything', async () => {
@@ -594,7 +599,12 @@ describe('the status of an opened run', () => {
 
     const written = join(run, '.refactory', 'spine-status.json')
     expect(existsSync(written)).toBe(true)
-    expect(JSON.parse(readFileSync(written, 'utf8'))).toEqual({ status: 'ready', nodes: ['a'], completed: [] })
+    // The status gained run metadata (`schema_version`, `at`, `run_id`,
+    // `wait_reason`); the cursor fields the test is about stay exact, and the two
+    // fields with a fixed value are asserted rather than skipped over.
+    const record = JSON.parse(readFileSync(written, 'utf8'))
+    expect(record).toMatchObject({ schema_version: 1, run_id: resolve(run), status: 'ready', nodes: ['a'], completed: [] })
+    expect(Date.parse(record.at)).not.toBeNaN()
     expect(existsSync(join(configured, '.refactory', 'spine-status.json'))).toBe(false)
   })
 })

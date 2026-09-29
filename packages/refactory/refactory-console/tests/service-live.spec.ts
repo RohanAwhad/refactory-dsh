@@ -123,7 +123,9 @@ describe('the picker service against the real loop', () => {
     const { service } = await setup()
     const failure = await failureOf(service.status(join(REPO, '.factory', 'loop', 'no-such-run'), 0, signal()))
     expect(failure.code).toBe('refactory/console-failed')
-    expect(failure.message).toContain('is not a run directory')
+    // The console resolves an absent address itself and names the places it
+    // looked, rather than reporting it as a directory that is not a run.
+    expect(failure.message).toContain('does not exist (checked')
   }, 120_000)
 
   it('steers a real run: a note is read back, and a `user` gate reports its verdicts', async () => {

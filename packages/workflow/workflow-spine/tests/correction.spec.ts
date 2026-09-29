@@ -56,17 +56,22 @@ describe('redo', () => {
     expect(next.status).toBe('ready')
     expect(ids(spine)).toEqual(['a'])
     expect(spine.state().completed).not.toContain('a')
-    expect(spine.state().log).toContain('redid a')
+    // The log records the redo as a line naming where it went and what it invalidated.
+    expect(spine.state().log).toEqual(expect.arrayContaining([
+      expect.stringMatching(/^redid a at \S+; invalidated \S/),
+    ]))
   })
 
   it('clears a skip as well as the completion', () => {
     const spine = new Spine(redoGraph())
     spine.complete('a')
-    spine.skip('a')
-    expect(spine.state().skipped).toContain('a')
+    // A completed node cannot be skipped now, so the skipped work is a due
+    // descendant; reopening `a` must clear both histories it invalidates.
+    spine.skip('b')
+    expect(spine.state().skipped).toContain('b')
     spine.redo('a')
     expect(ids(spine)).toEqual(['a'])
-    expect(spine.state().skipped).not.toContain('a')
+    expect(spine.state().skipped).not.toContain('b')
     expect(spine.state().completed).not.toContain('a')
   })
 
@@ -81,12 +86,12 @@ describe('redo', () => {
 
   it('refuses a gate, naming the verdict route instead', () => {
     expect(() => new Spine(redoGraph()).redo('gate'))
-      .toThrow(/node gate is a gate; re-route it with a verdict instead/)
+      .toThrow(/node gate is a gate; redo a completed upstream agent, then run the gate when due/)
   })
 
   it('refuses a data node, whose passes are the runner\'s', () => {
     expect(() => new Spine(redoGraph()).redo('data'))
-      .toThrow(/node data iterates its items and its passes are the runner's/)
+      .toThrow(/node data iterates its items; redo a completed node in its body or upstream/)
   })
 })
 

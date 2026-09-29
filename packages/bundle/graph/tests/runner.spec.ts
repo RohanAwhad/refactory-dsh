@@ -33,6 +33,20 @@ function workdir(files: Record<string, string> = {}): string {
   return dir
 }
 
+/** The cursor status the spine records after one turn, as the runner reads it. */
+interface TurnStatus {
+  status: string
+  nodes?: string[]
+  completed?: string[]
+  error?: string
+}
+
+/** Write the cursor status a turn's workflow calls leave where the runner reads it. */
+function writeStatus(dir: string, status: TurnStatus): void {
+  mkdirSync(join(dir, '.refactory'), { recursive: true })
+  writeFileSync(join(dir, '.refactory', 'spine-status.json'), JSON.stringify(status))
+}
+
 interface Harness {
   exits: number[]
   out: () => string
@@ -61,6 +75,11 @@ async function bench(options: {
   chat?: boolean
   /** The assistant text of each turn, in order (turn 1 is the driving task). */
   chatTurns?: string[]
+  /**
+   * The cursor status the fake CEO's workflow calls leave behind after each turn,
+   * in order (turn 1 first); the last repeats. Defaults to a graph that finished.
+   */
+  statuses?: TurnStatus[]
   stdin?: NodeJS.ReadableStream
 } = {}): Promise<Harness> {
   let out = ''
@@ -70,32 +89,49 @@ async function bench(options: {
 
   const exits: number[] = []
   const state = { seq: 0 }
-  // The turn's own assistant event is written as the turn is sent, which is what
-  // `finalText` reads back: one scripted text per follow-up.
+  // The session log. `events` seeds what the driving turn already wrote (an
+  // assistant message, say); each turn's own events and its `turn/end` are
+  // recorded as the run proceeds, the way the real agent's session does.
   const events = [...(options.events ?? [])]
   let turn = 0
   const followups: string[] = []
+  /** Append one event at the log's next sequence. */
+  const record = (event: unknown): void => {
+    events[state.seq] = event
+    state.seq += 1
+  }
   const session = {
     id: 'session-probe',
     get seq() { return state.seq },
     eventAt: (seq: number) => events[seq],
   }
+  const runDir = options.workdir ?? workdir()
   let idleCalls = 0
   const agent = {
     session,
     whenIdle: async () => {
       idleCalls += 1
-      // The turn is the second quiescence; the first is the agent coming up.
+      // The first quiescence is the agent coming up; every later one ends a turn.
+      if (idleCalls === 1) return
       if (idleCalls === 2 && options.followupThrows !== undefined) throw options.followupThrows
+      // A real CEO's workflow calls write the cursor status during its turn. The
+      // runner renames any stale file first, so only this fresh write counts.
+      const statuses = options.statuses ?? [{ status: 'done' }]
+      const status = statuses[Math.min(idleCalls - 2, statuses.length - 1)]
+      if (status !== undefined) writeStatus(runDir, status)
+      // A clean turn end is what `turnError` reads to tell a finished turn from a
+      // terminal model failure; without one every run looks like it never completed.
+      record({ type: 'turn/end', data: { reason: { kind: 'completed' } } })
     },
     followup: (message: unknown) => {
       followups.push(textOf(message))
       const scripted = options.chatTurns?.[turn]
       turn += 1
       if (scripted !== undefined) {
-        events[state.seq] = { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: scripted }] } } }
+        record({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: scripted }] } } })
       }
-      state.seq = Math.max(state.seq + 1, events.length)
+      // Seeded events are part of this turn's log; keep the cursor past them.
+      state.seq = Math.max(state.seq, events.length)
     },
   }
   const createOptions: Harness['createOptions'] = []
@@ -120,7 +156,7 @@ async function bench(options: {
   if (options.omit !== 'graphStartup') {
     ctx.provide(GRAPH_STARTUP_SERVICE, {
       mode: options.mode ?? 'probe', taskName: 'circle_packing', budget: 7,
-      workdir: options.workdir ?? workdir(), graph: {}, commandEnv: {},
+      workdir: runDir, graph: {}, commandEnv: {},
       task: 'drive it', provider: options.provider, model: options.model, pythonBin: '/venv/bin',
       chat: options.chat ?? false,
     } as GraphStartupValues)
@@ -142,13 +178,16 @@ describe('graph runner', () => {
   it('refuses to call an unfinished graph finished', async () => {
     // The CEO can reach quiescence with nodes still due — it backgrounded a subagent
     // and ended its turn, or a gate could not be answered. Reporting a score for that
-    // is the failure this guards: the run must fail, and name what never ran.
+    // is the failure this guards: the run must fail, and name what never ran. The
+    // directory's stale done marker is no certification either: the turn's own
+    // workflow calls left it unfinished, and that fresh status is what counts.
     const harness = await bench({
       workdir: workdir({
-        '.refactory/spine-status.json': JSON.stringify({
-          status: 'ready', nodes: ['join_qa', 'overwatch'], completed: ['prepare', 'survey'],
-        }),
+        '.refactory/spine-status.json': JSON.stringify({ status: 'done' }),
       }),
+      statuses: [{
+        status: 'ready', nodes: ['join_qa', 'overwatch'], completed: ['prepare', 'survey'],
+      }],
       events: [{ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'done' }] } } }],
     })
     expect(harness.exits).toEqual([1])
@@ -158,11 +197,9 @@ describe('graph runner', () => {
 
   it('reports a graph the spine marked refused, with its reason', async () => {
     const harness = await bench({
-      workdir: workdir({
-        '.refactory/spine-status.json': JSON.stringify({
-          status: 'refused', error: 'gate gate_strategy is answered by a person and nobody could be asked',
-        }),
-      }),
+      statuses: [{
+        status: 'refused', error: 'gate gate_strategy is answered by a person and nobody could be asked',
+      }],
     })
     expect(harness.exits).toEqual([1])
     expect(harness.err()).toContain('nobody could be asked')
@@ -189,6 +226,9 @@ describe('graph runner', () => {
     const harness = await bench({
       chat: true,
       chatTurns: ['the first node is done', 'redoing that step'],
+      // The first turn leaves the graph running, so the typed line is still read;
+      // the follow-up's turn finishes it.
+      statuses: [{ status: 'ready', nodes: ['publish'] }, { status: 'done' }],
       stdin: Readable.from(['make it count from two and redo that step\n/quit\n']),
     })
     expect(harness.out()).toContain('the first node is done')
@@ -240,7 +280,12 @@ describe('graph runner', () => {
   it('reports an agent turn that failed, and still reports the run', async () => {
     const harness = await bench({ followupThrows: new Error('the preset is broken') })
     expect(harness.err()).toContain('the preset is broken')
-    expect(harness.exits).toEqual([0])
+    // The report is still written, marked not ok: a failed turn is a failed run,
+    // and the launcher has to be able to tell that from the JSON as well as exit 1.
+    expect(JSON.parse(harness.out())).toMatchObject({
+      ok: false, status: 'not-started', error: 'the preset is broken', session_id: 'session-probe',
+    })
+    expect(harness.exits).toEqual([1])
   })
 
   it('reports a non-Error turn failure as its own text', async () => {

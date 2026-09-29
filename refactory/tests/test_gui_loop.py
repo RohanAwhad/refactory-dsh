@@ -232,6 +232,24 @@ def test_stop_reports_that_there_was_nothing_to_stop(tmp_path):
     assert console.stop(run)["stopped"] is False
 
 
+def test_a_requested_stop_stays_confirmed_after_the_process_is_gone(tmp_path):
+    """A graceful shutdown is not instant, so the receipt has to outlive the pid.
+
+    ``stop`` signals a live run and must then say whether it stopped. The process is
+    normally still alive at that instant and gone by the next poll -- where the pid
+    alone reads "not running", indistinguishable from a run that finished on its own.
+    Without the record of the request, a person who stopped a run was told nothing was
+    stopped.
+    """
+    run = tmp_path / "loop" / "stop-me"
+    (run / ".refactory").mkdir(parents=True)
+    (run / console.CONSOLE_FILE).write_text(
+        json.dumps({"run_id": "stop-me", "mode": MODE, "pid": 999_999_999})
+    )
+    (run / console.STOP_REQUESTED).write_text("{}")
+    assert console.stop(run)["stopped"] is True
+
+
 def test_every_run_under_the_root_is_listed_newest_first(tmp_path):
     root = tmp_path / "loop"
     for run_id in ("one", "two"):
