@@ -12,12 +12,14 @@
   "include": [
     "packages/workflow/workflow-spine/tests/**/*.ts",
     "packages/bundle/graph/tests/**/*.ts",
+    "packages/bundle/refactory-presets/tests/**/*.ts",
     "packages/refactory/refactory-console/tests/**/*.ts",
     "packages/refactory/tool-refactory/tests/**/*.ts"
   ],
   "references": [
     { "path": "./packages/workflow/workflow-spine" },
     { "path": "./packages/bundle/graph" },
+    { "path": "./packages/bundle/refactory-presets" },
     { "path": "./packages/refactory/refactory-console" },
     { "path": "./packages/refactory/tool-refactory" }
   ]

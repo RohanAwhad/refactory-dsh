@@ -19,7 +19,7 @@
   ],
   "overrides": [
     {
-      // The narrowed repository profile: the six packages this fork owns, with
+      // The narrowed repository profile: the seven packages this fork owns, with
       // syntax rules only. Type-aware and jsPlugin rule sets moved out with the
       // harness copy they were calibrated against.
       "files": [
