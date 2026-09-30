@@ -174,7 +174,7 @@ else
   MISSING="$("$VENV/bin/python" -c '
 from refactory_dsh import dsh_profile
 for profile, bundle, _ in dsh_profile.missing_bundles():
-    print(profile, bundle.rsplit("/", 1)[-1].replace("dsh-", "", 1))
+    print(profile, dsh_profile.bundle_directory(bundle))
 ')"
   if [ -z "$MISSING" ]; then
     echo "  DSH profiles 'graph'/'web': already present"

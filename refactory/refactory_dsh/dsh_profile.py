@@ -86,16 +86,26 @@ def is_ready(name: str = GRAPH_PROFILE, bundle: str = GRAPH_BUNDLE) -> bool:
     return bundle in declared_bundles(name)
 
 
+def bundle_directory(bundle: str) -> str:
+    """The checkout directory holding a bundle package, from the bundle's NAME.
+
+    Derived rather than looked up per profile, so adding a third owned profile is a
+    one-line change to :data:`PROFILE_BUNDLES` and cannot name the wrong directory:
+    the old code took the directory from the *profile* name, which only ever worked
+    because `graph` and its bundle happened to agree.
+    """
+    return bundle.rsplit("/", 1)[-1].replace("dsh-", "", 1)
+
+
 def add_command(name: str = GRAPH_PROFILE, *, checkout: Path | None = None) -> str:
     """The command that creates the profile, copy-pasteable, with the real path.
 
-    The directory is the bundle's **package** directory, which is derived from the
-    bundle name rather than from the profile name: `graph` and `ceo` used to line up
-    by accident, and the web profile's bundle has never been named after it.
+    Raises :class:`KeyError` for a profile this checkout does not own rather than
+    falling back to one of them: a command naming the wrong bundle directory reads
+    as a plausible fix and is worse than no command at all.
     """
     root = Path(checkout) if checkout is not None else REPO_ROOT
-    bundle = dict(PROFILE_BUNDLES).get(name)
-    directory = "graph" if bundle is None else bundle.rsplit("/", 1)[-1].replace("dsh-", "", 1)
+    directory = bundle_directory(dict(PROFILE_BUNDLES)[name])
     return f"dsh plugin --profile {name} add {root / 'packages' / 'bundle' / directory}"
 
 
@@ -154,6 +164,7 @@ __all__ = [
     "WEB_BUNDLE",
     "WEB_PROFILE",
     "add_command",
+    "bundle_directory",
     "dsh_home",
     "declared_bundles",
     "is_ready",

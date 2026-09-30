@@ -47,6 +47,8 @@ A patch row is evaluated as `new Function('ctx', 'expr', ...)`, so a `!!js` expr
 
 `agent-presets` replaces a row's whole `config` object rather than merging it, so the patch restates `default` (the schema requires it) and supplies `roots`; `includeShippedRoot` and `includeUserRoot` keep their `true` defaults, so the shipped and user presets stay mounted exactly as before.
 
+That replacement rule makes this row's `config` **single-owner**. A layer applied *after* this bundle that patches the same `id` without repeating `roots` silently drops this bundle's root — the `ceo` preset then vanishes, and the only symptom is an `agent-preset/not-found` at session create. Which layer is last follows `dsh.profile.bundles` order, so a second patcher of `agent-presets` is a conflict rather than a merge. The `dsh-web-app` layer owns the row's other keys and, now that this bundle supplies `roots`, must not state `agent-presets` at all.
+
 ### Source map
 
 | File | Role |

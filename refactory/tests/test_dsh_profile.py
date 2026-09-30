@@ -82,6 +82,19 @@ def test_the_web_profile_names_the_preset_bundle_not_a_directory_called_web():
     assert command.endswith(str(REPO_ROOT / "packages" / "bundle" / "refactory-presets"))
 
 
+def test_an_unowned_profile_is_an_error_not_a_guess():
+    """A profile this checkout does not own must not borrow another one's command.
+
+    Falling back to `graph` would print a copy-pasteable command naming the wrong
+    bundle directory: it reads as a fix, and running it creates a profile that
+    silently does not carry the bundle the caller asked for.
+    """
+    with pytest.raises(KeyError):
+        dsh_profile.add_command("integration")
+    assert dsh_profile.bundle_directory(dsh_profile.WEB_BUNDLE) == "refactory-presets"
+    assert dsh_profile.bundle_directory(dsh_profile.GRAPH_BUNDLE) == "graph"
+
+
 def test_the_web_profile_without_the_preset_bundle_is_reported(tmp_path, monkeypatch):
     """A `web` profile that exists but lacks the preset bundle is a gap, not ready.
 

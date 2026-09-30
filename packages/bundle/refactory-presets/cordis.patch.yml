@@ -8,6 +8,14 @@
 # defaults, so the shipped presets and the harness-home user presets stay
 # mounted exactly as before.
 #
+# That replacement rule makes this row's `config` SINGLE-OWNER: a layer applied
+# after this one that patches the same `id` without repeating `roots` drops this
+# bundle's root entirely, and the `ceo` preset disappears with no error beyond
+# the resulting `agent-preset/not-found`. Which layer is last follows
+# `dsh.profile.bundles` order, so any second patcher of `agent-presets` is a
+# conflict, not a merge. The `dsh-web-app` layer owns the row's other keys and
+# must not state `agent-presets` at all once this bundle supplies it.
+#
 # The `!!js` expression names the startup service below rather than computing a
 # path: a patch is evaluated as `new Function('ctx', 'expr', ...)`, so it has no
 # `import.meta` and cannot find its own package directory. The startup plugin

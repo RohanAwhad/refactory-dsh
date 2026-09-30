@@ -24,7 +24,8 @@
     "lib/startup.js",
     "cordis.patch.yml",
     "presets/**/*",
-    "lib/types/**/*.d.ts"
+    "lib/types/**/*.d.ts",
+    "lib/types/**/*.js"
   ],
   "license": "MIT",
   "dsh": {
