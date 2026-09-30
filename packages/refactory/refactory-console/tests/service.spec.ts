@@ -6,6 +6,7 @@
  * The console is not run here: `service-live.spec.ts` runs it against the real
  * checkout, and this covers the boundary the service is called across.
  */
+import type { Duplex } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
@@ -15,6 +16,7 @@ import type {
   SubprocessOutcome,
   SubprocessOutputRead,
   SubprocessSpawnSpec,
+  SubprocessTerminalEnvironment,
 } from '@deepseek-ai/dsh-subprocess'
 import { remoteErrorOf } from '@deepseek-ai/dsh-typert-protocol'
 import { RefactoryConsole } from '../src/index.ts'
@@ -50,6 +52,7 @@ class FakeHandle implements SubprocessHandle {
   readonly stdin = undefined
   readonly stdout = undefined
   readonly stderr = undefined
+  readonly control: Duplex | undefined = undefined
   readonly collected: SubprocessCollectedOutputs
   readonly done: Promise<SubprocessOutcome>
   terminated = false
@@ -71,6 +74,9 @@ class FakeSubprocess extends SubprocessRuntime {
   /** One answer per call, in order; the last one repeats. */
   script: Scripted[] = [{ stdout: '{}' }]
   override resolveExecutable(command: string): Promise<string> { return Promise.resolve(command) }
+  override terminalEnvironment(): Promise<SubprocessTerminalEnvironment> {
+    return Promise.resolve({ platform: process.platform === 'win32' ? 'windows' : 'posix' })
+  }
   override spawnTerminal(): Promise<never> { throw new Error('the console service spawns collectors, never terminals') }
   override spawn(spec: SubprocessSpawnSpec): SubprocessHandle {
     this.spawns.push(spec)

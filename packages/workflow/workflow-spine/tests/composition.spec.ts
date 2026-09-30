@@ -468,7 +468,7 @@ describe('the CEO deny guard', () => {
     restrict.mockImplementation(() => () => { disposed.push(1) })
     const agent = agentWith(agentCtxIn(root, compositionKey))
 
-    composition.emit('agent/created', { agent })
+    composition.emit('agent/created', { agent, source: 'startup' })
     expect(restrict).toHaveBeenCalledWith({ deny: ['wf_next'] })
 
     composition.emit('agent/disposed', { agent })
@@ -478,14 +478,14 @@ describe('the CEO deny guard', () => {
   it('leaves a subagent alone', async () => {
     const { root, composition, compositionKey, restrict } = await composed(['wf_next'])
     const agentCtx = createScope(root, {}, { parent: compositionKey }).ctx
-    composition.emit('agent/created', { agent: agentWith(agentCtx, 'subagent') })
+    composition.emit('agent/created', { agent: agentWith(agentCtx, 'subagent'), source: 'startup' })
     expect(restrict).not.toHaveBeenCalled()
   })
 
   it('leaves an agent outside the composition alone', async () => {
     const { root, composition, restrict } = await composed(['wf_next'])
     const elsewhere = createScope(root, {}).ctx
-    composition.emit('agent/created', { agent: agentWith(elsewhere) })
+    composition.emit('agent/created', { agent: agentWith(elsewhere), source: 'startup' })
     expect(restrict).not.toHaveBeenCalled()
   })
 
@@ -495,20 +495,20 @@ describe('the CEO deny guard', () => {
     await root.plugin(ToolRuntime)
     await root.plugin(spinePlugin, config({ ceoDeny: ['wf_next'] }))
     const restrict = vi.spyOn(root.tools, 'restrict')
-    root.emit('agent/created', { agent: agentWith(root) })
+    root.emit('agent/created', { agent: agentWith(root), source: 'startup' })
     expect(restrict).not.toHaveBeenCalled()
   })
 
   it('leaves an unscoped agent alone', async () => {
     const { root, composition, restrict } = await composed(['wf_next'])
-    composition.emit('agent/created', { agent: agentWith(root) })
+    composition.emit('agent/created', { agent: agentWith(root), source: 'startup' })
     expect(restrict).not.toHaveBeenCalled()
   })
 
   it('denies nothing when the list names tools the CEO cannot reach', async () => {
     const { root, composition, compositionKey, restrict } = await composed(['not-a-tool', 'pwsh'])
     const agentCtx = createScope(root, {}, { parent: compositionKey }).ctx
-    composition.emit('agent/created', { agent: agentWith(agentCtx) })
+    composition.emit('agent/created', { agent: agentWith(agentCtx), source: 'startup' })
     expect(restrict).not.toHaveBeenCalled()
   })
 

@@ -29,6 +29,7 @@ export function refactoryDefinition(t: TranslateNS<'sidebarRefactory'>): Sidebar
     priority: 'builtin',
     title: () => t('type.label'),
     guide: [{
+      id: 'refactory',
       order: 10,
       title: () => t('guide.title'),
       description: () => t('guide.description'),

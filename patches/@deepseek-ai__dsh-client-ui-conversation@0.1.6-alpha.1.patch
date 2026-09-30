@@ -1,8 +1,8 @@
 diff --git a/lib/client.js b/lib/client.js
-index 1b7f1344e65adac4f08f13a35eb94fa3b89bd9f1..5e6ec8e9538606f4dbb744cf564bac18d0f3664d 100644
+index 009718f..05f1bb2 100644
 --- a/lib/client.js
 +++ b/lib/client.js
-@@ -15017,7 +15017,7 @@ window.__ModuleLoader__.load({
+@@ -15262,7 +15262,7 @@ window.__ModuleLoader__.load({
  		/**
  		* Renders Session header chrome above the resident conversation scrollport.
  		* @param props - Strict Session store, view ledger, navigation, render, and locale shares.
@@ -11,7 +11,7 @@ index 1b7f1344e65adac4f08f13a35eb94fa3b89bd9f1..5e6ec8e9538606f4dbb744cf564bac18
  		*/
  		function ConversationSessionHeader({ sessionId, useSession, useSessions, useConversation, useConversationViews, useStore, renderSlot, open, selectView, t }) {
  			const tabs = useConversationViews((value) => value);
-@@ -15027,9 +15027,18 @@ window.__ModuleLoader__.load({
+@@ -15272,9 +15272,18 @@ window.__ModuleLoader__.load({
  			const conversation = useConversation((s) => s);
  			const hideChrome = session.blank && conversationPhase(session, conversation) === "blank";
  			return (0, react_jsx_runtime.jsx)("header", {
@@ -34,7 +34,7 @@ index 1b7f1344e65adac4f08f13a35eb94fa3b89bd9f1..5e6ec8e9538606f4dbb744cf564bac18
  					children: [
  						(0, react_jsx_runtime.jsxs)("div", {
 diff --git a/lib/types/client/skeleton/ConversationSession.d.ts b/lib/types/client/skeleton/ConversationSession.d.ts
-index c6e824ccbdbbedf1833c00a214d33afac5c86b11..0cda19547cf524900138f631be182107fbd04c43 100644
+index 5b6c252..5af3c54 100644
 --- a/lib/types/client/skeleton/ConversationSession.d.ts
 +++ b/lib/types/client/skeleton/ConversationSession.d.ts
 @@ -7,7 +7,7 @@ export type ConversationSessionHeaderProps = ConversationSessionHeaderSlotProps;

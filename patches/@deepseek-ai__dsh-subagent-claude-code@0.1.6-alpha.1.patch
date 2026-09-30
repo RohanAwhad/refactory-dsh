@@ -1,6 +1,8 @@
+diff --git a/lib/index.js b/lib/index.js
+index 9efd305..57ba531 100644
 --- a/lib/index.js
 +++ b/lib/index.js
-@@ -231,15 +231,30 @@
+@@ -231,15 +231,30 @@ function successfulResult(message) {
  * @param onResult - records that the SDK supplied a terminal result message.
  * @returns the completed shared result.
  */
@@ -32,7 +34,7 @@
  		answer = successfulResult(message);
  	}
  	if (answer === void 0) throw new ClaudeCodeFailure({
-@@ -434,7 +449,7 @@
+@@ -434,7 +449,7 @@ async function startClaudeCodeRun(request, spec) {
  					capturePermissionDiagnostic(unattendedDiagnostic(spec.permissionMode, "tool permission", "denied", "Claude Code denied the request before an interactive prompt"));
  				}, () => {
  					receivedResult = true;
@@ -41,7 +43,7 @@
  			} catch (error) {
  				const processOutcome = managedProcess?.outcome;
  				let facts;
-@@ -529,6 +544,9 @@
+@@ -529,6 +544,9 @@ var ClaudeCodeProvider = class {
  			env: this.config.env,
  			disposeGraceMs: this.config.disposeGraceMs,
  			spawn: (spawnSpec) => this.ctx.subprocess.spawn(spawnSpec),

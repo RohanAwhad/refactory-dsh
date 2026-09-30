@@ -1,5 +1,5 @@
 diff --git a/lib/client.js b/lib/client.js
-index 556b9a0cfd..b5dd15b5e6 100644
+index 556b9a0..b5dd15b 100644
 --- a/lib/client.js
 +++ b/lib/client.js
 @@ -5,62 +5,101 @@ window.__ModuleLoader__.load({
@@ -144,35 +144,8 @@ index 556b9a0cfd..b5dd15b5e6 100644
  			ctx.slots.inject("conversation.hero.workspace.directoryFlow", () => ctx.slots.inject("sidebar.workspaces.directoryFlow", function* () {
  				yield ctx.slots.register({
  					name: "conversation.hero.workspace.directoryFlow",
-diff --git a/lib/types/client/index.d.ts b/lib/types/client/index.d.ts
-index 6899939b1a..c2313815fa 100644
---- a/lib/types/client/index.d.ts
-+++ b/lib/types/client/index.d.ts
-@@ -1,17 +1,17 @@
- /**
-  * Browser half of the native directory-picker backend: fills ui-workspace's
-- * two directory-flow holes with a renderless occupant that answers each
-- * `open` by driving `directoryPicker/pick` (the node half's OS chooser) and
-- * reporting the one outcome — picked path, cancellation, or failure — back
-+ * two directory-flow holes with a native chooser and exact-path fallback. Each
-+ * `open` drives `directoryPicker/pick` (the node half's OS chooser) and
-+ * reports the one outcome — picked path, cancellation, or failure — back
-  * through the owner conversation. Mounting this package therefore composes
-  * both sides of the native interaction with one cordis.yml row; no client
-  * code branches on a capability kind.
-  */
- import type { Context as ClientContext } from '@deepseek-ai/cordis';
--/** Required services (cordis fiber inject): the slot registry and workspace UI service. */
-+/** Required services: slots, remote, remote.directoryPicker, and locale. */
- export declare const inject: string[];
- /**
-- * Client plugin body: register the renderless native flow into both
-+ * Client plugin body: register the native picker and exact-path flow into both
-  * directory-flow holes through `slots.inject()` because the ui-workspace
-  * entries may activate later or replace their declarations.
-  * @param ctx - client root context.
 diff --git a/lib/types/client/flow.d.ts b/lib/types/client/flow.d.ts
-index f21646b184..02c821909e 100644
+index f21646b..02c8219 100644
 --- a/lib/types/client/flow.d.ts
 +++ b/lib/types/client/flow.d.ts
 @@ -3,15 +3,16 @@ import type { DirectoryFlowOwnerProps } from '@deepseek-ai/dsh-client-ui-workspa
@@ -199,8 +172,35 @@ index f21646b184..02c821909e 100644
  export declare function NativeDirectoryFlow(props: DirectoryFlowOwnerProps & NativeFlowInjected): ReactElement | null;
  //# sourceMappingURL=flow.d.ts.map
 \ No newline at end of file
+diff --git a/lib/types/client/index.d.ts b/lib/types/client/index.d.ts
+index 6899939..c231381 100644
+--- a/lib/types/client/index.d.ts
++++ b/lib/types/client/index.d.ts
+@@ -1,17 +1,17 @@
+ /**
+  * Browser half of the native directory-picker backend: fills ui-workspace's
+- * two directory-flow holes with a renderless occupant that answers each
+- * `open` by driving `directoryPicker/pick` (the node half's OS chooser) and
+- * reporting the one outcome — picked path, cancellation, or failure — back
++ * two directory-flow holes with a native chooser and exact-path fallback. Each
++ * `open` drives `directoryPicker/pick` (the node half's OS chooser) and
++ * reports the one outcome — picked path, cancellation, or failure — back
+  * through the owner conversation. Mounting this package therefore composes
+  * both sides of the native interaction with one cordis.yml row; no client
+  * code branches on a capability kind.
+  */
+ import type { Context as ClientContext } from '@deepseek-ai/cordis';
+-/** Required services (cordis fiber inject): the slot registry and workspace UI service. */
++/** Required services: slots, remote, remote.directoryPicker, and locale. */
+ export declare const inject: string[];
+ /**
+- * Client plugin body: register the renderless native flow into both
++ * Client plugin body: register the native picker and exact-path flow into both
+  * directory-flow holes through `slots.inject()` because the ui-workspace
+  * entries may activate later or replace their declarations.
+  * @param ctx - client root context.
 diff --git a/package.json b/package.json
-index d6977579d5..6ff00d02d2 100644
+index 758b9ef..bb6a216 100644
 --- a/package.json
 +++ b/package.json
 @@ -1,6 +1,6 @@
@@ -208,7 +208,7 @@ index d6977579d5..6ff00d02d2 100644
    "name": "@deepseek-ai/dsh-client-ui-directory-picker-native",
 -  "description": "Native directory-picker surface: the renderless workspace directory-flow occupant driving the host's OS chooser",
 +  "description": "Native workspace directory picker with an exact-path fallback",
-   "version": "0.1.5-rc.3",
+   "version": "0.1.6-alpha.1",
    "publishConfig": {
      "access": "public"
 @@ -29,7 +29,11 @@
@@ -226,14 +226,14 @@ index d6977579d5..6ff00d02d2 100644
      }
 @@ -45,7 +49,11 @@
      "react-dom": "^18.2.0",
-     "@deepseek-ai/dsh-client-ui-workspace": "^0.1.5-rc.3",
-     "@deepseek-ai/dsh-client-ui-renderer": "^0.1.5-rc.3",
--    "@deepseek-ai/cordis": "4.0.2"
-+    "@deepseek-ai/cordis": "4.0.2",
-+    "@deepseek-ai/dsh-api-remotes": "^0.1.5-rc.3",
-+    "@deepseek-ai/dsh-client-connection": "^0.1.5-rc.3",
-+    "@deepseek-ai/dsh-client-ui-primitives": "^0.1.5-rc.3",
-+    "@deepseek-ai/dsh-client-locale": "^0.1.5-rc.3"
+     "@deepseek-ai/dsh-client-ui-renderer": "^0.1.6-alpha.1",
+     "@deepseek-ai/cordis": "^4.0.2",
+-    "@deepseek-ai/dsh-client-ui-workspace": "^0.1.6-alpha.1"
++    "@deepseek-ai/dsh-client-ui-workspace": "^0.1.6-alpha.1",
++    "@deepseek-ai/dsh-api-remotes": "^0.1.6-alpha.1",
++    "@deepseek-ai/dsh-client-connection": "^0.1.6-alpha.1",
++    "@deepseek-ai/dsh-client-ui-primitives": "^0.1.6-alpha.1",
++    "@deepseek-ai/dsh-client-locale": "^0.1.6-alpha.1"
    },
    "files": [
      "lib/index.js",
