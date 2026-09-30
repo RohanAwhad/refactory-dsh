@@ -173,19 +173,25 @@ else
   # `doctor` and the runner make. The bundle directory is derived from the bundle
   # NAME, not from the profile name: `web` is a shipped harness template, and its
   # bundles are `refactory-presets` and `refactory-web`. A profile may be short
-  # more than one bundle, so this loops over every row.
+  # more than one bundle, so the rows are grouped into one line per profile and
+  # its bundles are installed under a single announcement.
   MISSING="$("$VENV/bin/python" -c '
 from refactory_dsh import dsh_profile
+short = {}
 for profile, bundle, _ in dsh_profile.missing_bundles():
-    print(profile, dsh_profile.bundle_directory(bundle))
+    short.setdefault(profile, []).append(dsh_profile.bundle_directory(bundle))
+for profile, directories in short.items():
+    print(profile, *directories)
 ')"
   if [ -z "$MISSING" ]; then
     echo "  DSH profiles 'graph'/'web': already present"
   else
-    while read -r profile directory; do
+    while read -r profile directories; do
       [ -n "$profile" ] || continue
       echo "  DSH profile '$profile': creating (machine state, once per machine)"
-      "$DSH" plugin --profile "$profile" add "$HERE/packages/bundle/$directory"
+      for directory in $directories; do
+        "$DSH" plugin --profile "$profile" add "$HERE/packages/bundle/$directory"
+      done
     done <<<"$MISSING"
   fi
 fi

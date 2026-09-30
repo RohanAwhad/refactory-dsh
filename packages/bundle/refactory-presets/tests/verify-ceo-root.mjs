@@ -207,6 +207,12 @@ try {
   const port = 3099 + Math.floor(Math.random() * 400)
   web = spawn(dsh, ['--profile', 'web', '--port', String(port), '--no-open', '--host', '127.0.0.1'], {
     env: { ...process.env, DSH_HOME: home },
+    // Run the server from somewhere that is not the checkout. `refactory-web`
+    // resolves `repoRoot` from its own module location, and when the child
+    // inherits this script's cwd (the repository root) `process.cwd()` would
+    // satisfy the assertion below by accident, so the check could not fail for
+    // the defect it names.
+    cwd: tmpdir(),
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let log = ''
