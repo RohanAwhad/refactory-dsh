@@ -1,17 +1,19 @@
 /**
- * The acceptance check for shipping `ceo` through a configured preset root.
+ * The acceptance check for the web profile's refactory layers.
  *
  * It is a script, not a spec, because what it proves is a whole-profile fact:
- * with the pinned `dsh` binary, this bundle installed into a profile, and the
- * `@deepseek-ai/dsh-agent-presets` patch gone, the roster still shows `CEO` from
- * this package's tree, a session created without a preset records `ceo`, and the
- * agent that session composes sees the workflow tools and none of the denied
- * ones.
+ * with the pinned `dsh` binary and both checkout bundles installed into a
+ * profile, the roster still shows `CEO` from `refactory-presets`' own tree, a
+ * session created without a preset records `ceo`, the agent that session
+ * composes sees the workflow tools and none of the denied ones, and
+ * `refactory-web` mounts the console, picker and brand rows with a `repoRoot`
+ * resolved from the checkout rather than the caller's working directory.
  *
  * It drives the *real* services rather than re-reading files: the same
- * `agentPresets.list()` the picker calls, and the same `agents.create()` path
- * `session/create` takes through `SessionController`. Nothing here is a stub, so
- * a passing run is the evidence the issue asks for.
+ * `agentPresets.list()` the picker calls, the same `agents.create()` path
+ * `session/create` takes through `SessionController`, and the same
+ * `refactoryConsole/project` the panel reads. Nothing here is a stub, so a
+ * passing run is the evidence the issue asks for.
  *
  * The composition is the real `ceo` preset, which requires the whole host
  * composition it is normally mounted inside. The script therefore composes a
@@ -22,11 +24,11 @@
  *
  *   node packages/bundle/refactory-presets/tests/verify-ceo-root.mjs
  *
- * It boots a web profile on a spare port, checks the four facts, and exits
- * nonzero on the first one that does not hold.
+ * It boots a web profile on a spare port, checks the facts, and exits nonzero on
+ * the first one that does not hold.
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -34,6 +36,9 @@ import { fileURLToPath } from 'node:url'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO = resolve(HERE, '..', '..', '..', '..')
 const BUNDLE = resolve(HERE, '..')
+
+/** The sibling web-surface bundle: the console, the picker and the brand rows. */
+const WEB_BUNDLE = resolve(REPO, 'packages', 'bundle', 'refactory-web')
 
 /** Every fact the issue's acceptance criteria name, in the order it states them. */
 const failures = []
@@ -149,20 +154,31 @@ check(
   `installed shipped root holds: ${shippedPresets.join(', ') || '(unresolved)'}`,
 )
 
-// 2. A clean profile installs this bundle and composes the roots row.
+// 2. A clean profile installs both bundles and composes their rows.
 const home = mkdtempSync(join(tmpdir(), 'dsh-refactory-presets-'))
 let web
 try {
   const added = run(dsh, ['plugin', '--profile', 'web', 'add', BUNDLE], {
     env: { ...process.env, DSH_HOME: home },
   })
-  check(added.code === 0, 'a clean profile installs the bundle', added.out.trim())
+  check(added.code === 0, 'a clean profile installs the preset bundle', added.out.trim())
+
+  const addedWeb = run(dsh, ['plugin', '--profile', 'web', 'add', WEB_BUNDLE], {
+    env: { ...process.env, DSH_HOME: home },
+  })
+  check(addedWeb.code === 0, 'a clean profile installs the web-surface bundle', addedWeb.out.trim())
 
   const profile = JSON.parse(readFileSync(join(home, 'profiles', 'web', 'package.json'), 'utf8'))
   const bundles = profile.dsh?.profile?.bundles ?? []
+  const webApp = bundles.indexOf('@deepseek-ai/dsh-web-app')
   check(
-    bundles.indexOf('@deepseek-ai/dsh-refactory-presets') > bundles.indexOf('@deepseek-ai/dsh-web-app'),
-    'the bundle is applied after dsh-web-app, which inserts the agent-presets row',
+    bundles.indexOf('@deepseek-ai/dsh-refactory-presets') > webApp,
+    'the preset bundle is applied after dsh-web-app, which inserts the agent-presets row',
+    `bundles: ${bundles.join(', ')}`,
+  )
+  check(
+    bundles.indexOf('@deepseek-ai/dsh-refactory-web') > webApp,
+    'the web-surface bundle is applied after dsh-web-app, whose rows it overrides',
     `bundles: ${bundles.join(', ')}`,
   )
 
@@ -175,6 +191,17 @@ try {
     'the agent-presets row reads the published preset root',
   )
   check(dump.out.includes('default: ceo'), 'the agent-presets row restates default: ceo')
+  check(
+    dump.out.includes('ctx.refactoryWebStartup.repoRoot'),
+    'the refactory-console row reads the published checkout root',
+  )
+  check(
+    /id: ui-brand-official[\s\S]{0,120}?disabled: true/.test(dump.out),
+    'the web-surface bundle disables the official brand row',
+  )
+  for (const row of ['refactory-console', 'ui-refactory', 'ui-brand-refactory']) {
+    check(dump.out.includes(row), `the composed profile mounts ${row}`)
+  }
 
   // 3. Boot the profile and ask its live services.
   const port = 3099 + Math.floor(Math.random() * 400)
@@ -200,6 +227,31 @@ try {
   check(
     value?.presets?.every(preset => preset.broken === undefined),
     'no row on the roster is broken',
+  )
+
+  // The page's own module manifest is where a browser plugin that never mounted
+  // would be missing; that is the shape of the `Failed to load plugins` failure.
+  const page = await (await fetch(`${base}/`, { headers: { cookie } })).text()
+  check(page.includes('@deepseek-ai/dsh-client-ui-refactory'), 'the boot manifest lists ui-refactory')
+  check(
+    page.includes('@deepseek-ai/dsh-client-ui-brand-refactory'),
+    'the boot manifest lists ui-brand-refactory',
+  )
+
+  // The console's `repoRoot` is the checkout, resolved by the web bundle's startup
+  // provider rather than from the launcher's working directory.
+  const project = await rpc(base, cookie, 'refactoryConsole/project', {})
+  check(
+    project?.result?.value === realpathSync(REPO),
+    'refactoryConsole/project resolves the checkout root',
+    String(project?.result?.value),
+  )
+  const modes = await rpc(base, cookie, 'refactoryConsole/modes', {})
+  const catalogue = modes?.result?.value
+  check(
+    Array.isArray(catalogue) && catalogue.length > 0,
+    'refactoryConsole/modes returns the real catalogue',
+    `${Array.isArray(catalogue) ? catalogue.length : 'non-array'} rows`,
   )
 
   const created = await rpc(base, cookie, 'session/create', { request: {} })

@@ -4,7 +4,7 @@ import { standardDecoratorPlugin, vitestExecArgv } from './vitest.shared.ts'
 
 // Resolution facade shared by every plugin instance below: tsconfig.base.json
 // has no include, which vite-tsconfig-paths treats as match-all, so its paths map
-// applies to every test file. The map covers the seven packages this fork owns;
+// applies to every test file. The map covers the eight packages this fork owns;
 // every harness specifier resolves through node_modules to the published pin.
 const pathsPlugin = (): ReturnType<typeof tsconfigPaths> => tsconfigPaths({ projects: ['./tsconfig.base.json'] })
 

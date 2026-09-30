@@ -5,16 +5,18 @@
 # glue lives at `refactory/`; the harness is the published `@deepseek-ai/dsh`
 # install under `node_modules`, so this script only resolves that launcher.
 #
-# The two bundles this checkout owns are **machine state**: a DSH profile is
-# created by `dsh plugin --profile <name> add <package>`, never derived from the
-# bundle's name. `./install.sh` creates both, and this script heals a missing one
-# rather than booting into the failure it causes: a web profile without
-# `packages/bundle/refactory-presets` has no `ceo` preset, and the composition
-# names `ceo` as the roster default, so every session created without naming one
-# would stop with `agent-preset/not-found`.
+# The checkout-owned bundles are **machine state**: a DSH profile is created by
+# `dsh plugin --profile <name> add <package>`, never derived from the bundle's
+# name. `./install.sh` creates them, and this script heals a missing one rather
+# than booting into the failure it causes. The `web` profile owns two: without
+# `packages/bundle/refactory-presets` it has no `ceo` preset while the composition
+# still names `ceo` as the roster default, so every session created without naming
+# one stops with `agent-preset/not-found`; without
+# `packages/bundle/refactory-web` the console and picker rows never mount, so the
+# GUI boots without the refactory panel.
 #
 # The graph profile is what the Python glue runs modes on. The web profile is the
-# pinned harness's own template plus that bundle.
+# pinned harness's own template plus its two refactory bundles.
 #
 # The meta-modes are Python entry points, not presets:
 #   python -m refactory_dsh.create   create a mode
@@ -37,14 +39,14 @@ if [ ! -x "$DSH" ]; then
   exit 1
 fi
 
-# One `dsh plugin add` per owned profile that does not carry its bundle yet.
-# The decision is `dsh_profile`'s, so this script cannot drift from the check
+# One `dsh plugin add` per owned profile bundle that is not installed yet. The
+# decision is `dsh_profile`'s, so this script cannot drift from the check
 # `refactory doctor` and the runner make; the loop only runs when there is a gap,
 # so a provisioned machine boots without invoking pnpm at all.
 #
 # A missing interpreter is NOT treated as "nothing missing": failing open here
-# would boot the GUI into the `agent-preset/not-found` failure this block exists
-# to prevent, so it is a hard error naming the fix instead.
+# would boot the GUI into the failures this block exists to prevent, so it is a
+# hard error naming the fix instead.
 PYTHON="$DSH_ROOT/.venv/bin/python"
 if [ ! -x "$PYTHON" ]; then
   echo "refactory-dsh: no interpreter at $PYTHON, so the DSH profiles cannot be checked." >&2

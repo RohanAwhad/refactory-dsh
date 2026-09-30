@@ -26,7 +26,7 @@ The DSH side, when you touch `packages/`:
 
 ```bash
 pnpm run build                 # typecheck, then the host and client bundle passes
-pnpm run test                  # the seven packages' vitest suites
+pnpm run test                  # the eight packages' vitest suites
 pnpm run lint                  # oxlint
 pnpm run typecheck
 ```
@@ -51,11 +51,11 @@ uv run python -m pytest refactory/tests -q --toolchain-gate
 
 No per-PR job installs Lean or mathlib (mathlib is a 7.4 GB checkout, and this suite is not in the DSH CI matrix), so those paths are verified on developer machines by that gate. A machine without the tools is expected to fail it and to say what it did not verify.
 
-**A DSH profile is machine state, not a checkout artifact.** It is created with `dsh plugin --profile <name> add <package>`. This checkout owns two: `graph`, which the Python glue runs modes on, and `web`, which the GUI boots and which needs the `ceo` preset bundle or every session it creates without naming a preset stops. `install.sh` creates both idempotently, `./refactory-dsh` heals a missing one before booting, and `REFACTORY_SKIP_DSH_PROFILE=1` skips both. `refactory_dsh/dsh_profile.py` is the one place that answers "is the profile there, and what fixes it" — the installer, the launcher, `refactory doctor` and the tests all use it. Without the profile, anything that runs a mode on DSH stops at the first call.
+**A DSH profile is machine state, not a checkout artifact.** It is created with `dsh plugin --profile <name> add <package>`. This checkout owns two: `graph`, which the Python glue runs modes on, and `web`, which the GUI boots and which needs both the `ceo` preset bundle and the web-surface bundle — without the preset every session it creates without naming one stops, and without the surface the console and picker rows never mount. `install.sh` creates both idempotently, `./refactory-dsh` heals a missing one before booting, and `REFACTORY_SKIP_DSH_PROFILE=1` skips both. `refactory_dsh/dsh_profile.py` is the one place that answers "is the profile there, and what fixes it" — the installer, the launcher, `refactory doctor` and the tests all use it. Without the profile, anything that runs a mode on DSH stops at the first call.
 
 **`install.sh` provisions the default install, not the optional parts.** It creates
 `.venv` from `uv.lock`'s default (`dev`) group and installs the pinned pnpm workspace
-with the seven packages' `lib/` built, then creates the DSH profiles above. It does
+with the eight packages' `lib/` built, then creates the DSH profiles above. It does
 **not** install the non-default `reference` group — the parity oracle, added with
 `uv sync --group reference`, whose tests skip with a reason without it — and it does
 not create `refactory/vendor/srf/graphs`, the legacy graph directory for the

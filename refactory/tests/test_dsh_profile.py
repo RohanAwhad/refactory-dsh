@@ -91,8 +91,23 @@ def test_an_unowned_profile_is_an_error_not_a_guess():
     """
     with pytest.raises(KeyError):
         dsh_profile.add_command("integration")
+    with pytest.raises(KeyError):
+        # A bundle the profile does not own is refused too, not turned into a path.
+        dsh_profile.add_command(dsh_profile.WEB_PROFILE, dsh_profile.GRAPH_BUNDLE)
     assert dsh_profile.bundle_directory(dsh_profile.WEB_BUNDLE) == "refactory-presets"
+    assert dsh_profile.bundle_directory(dsh_profile.WEB_SURFACE_BUNDLE) == "refactory-web"
     assert dsh_profile.bundle_directory(dsh_profile.GRAPH_BUNDLE) == "graph"
+
+
+def test_the_web_profile_owns_both_of_its_bundles():
+    """The preset and the surface are separate layers, and both are installed."""
+    graph = dsh_profile.add_command(dsh_profile.WEB_PROFILE, dsh_profile.WEB_BUNDLE)
+    surface = dsh_profile.add_command(dsh_profile.WEB_PROFILE, dsh_profile.WEB_SURFACE_BUNDLE)
+    assert graph.endswith(str(REPO_ROOT / "packages" / "bundle" / "refactory-presets"))
+    assert surface.endswith(str(REPO_ROOT / "packages" / "bundle" / "refactory-web"))
+    assert dsh_profile.add_command(dsh_profile.WEB_PROFILE) == graph, (
+        "omitting the bundle keeps the long-standing command for the first owned bundle"
+    )
 
 
 def test_the_web_profile_without_the_preset_bundle_is_reported(tmp_path, monkeypatch):
@@ -112,22 +127,56 @@ def test_the_web_profile_without_the_preset_bundle_is_reported(tmp_path, monkeyp
 
 
 def test_missing_bundles_reports_each_profile_that_is_short(tmp_path, monkeypatch):
-    """Both profiles are owned here, and the answer says which one is unready."""
+    """Both profiles are owned here, and the answer says which one is unready.
+
+    The web profile owns two bundles — the preset and the web surface — so an
+    absent profile yields one gap per bundle it will need, in declaration order.
+    """
     home = tmp_path / "home"
     _profile(home, "graph", ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
     monkeypatch.setenv("DSH_HOME", str(home))
     gaps = dsh_profile.missing_bundles()
-    assert [profile for profile, _bundle, _why in gaps] == ["web"], gaps
-    assert gaps[0][1] == dsh_profile.WEB_BUNDLE, "the gap names the bundle it needs"
+    assert [profile for profile, _bundle, _why in gaps] == ["web", "web"], gaps
+    assert [bundle for _profile, bundle, _why in gaps] == [
+        dsh_profile.WEB_BUNDLE,
+        dsh_profile.WEB_SURFACE_BUNDLE,
+    ], "each gap names the bundle it needs"
 
 
 def test_missing_bundles_is_empty_when_both_profiles_are_ready(tmp_path, monkeypatch):
     """Ready means no work: `install.sh` and the launcher both branch on this."""
     home = tmp_path / "home"
     _profile(home, "graph", ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
-    _profile(home, "web", ["@deepseek-ai/dsh-base", dsh_profile.WEB_BUNDLE])
+    _profile(
+        home,
+        "web",
+        ["@deepseek-ai/dsh-base", dsh_profile.WEB_BUNDLE, dsh_profile.WEB_SURFACE_BUNDLE],
+    )
     monkeypatch.setenv("DSH_HOME", str(home))
     assert dsh_profile.missing_bundles() == []
+
+
+def test_the_web_profile_without_the_surface_bundle_is_reported(tmp_path, monkeypatch):
+    """The preset alone is not a ready web profile.
+
+    Without the surface bundle the console and picker rows never mount, so the GUI
+    boots with no refactory panel even though the `ceo` preset resolves. The gap
+    must name that bundle and the command that installs exactly it.
+    """
+    home = tmp_path / "home"
+    _profile(home, "graph", ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
+    _profile(home, "web", ["@deepseek-ai/dsh-base", dsh_profile.WEB_BUNDLE])
+    monkeypatch.setenv("DSH_HOME", str(home))
+    gaps = dsh_profile.missing_bundles()
+    assert [(profile, bundle) for profile, bundle, _why in gaps] == [
+        ("web", dsh_profile.WEB_SURFACE_BUNDLE)
+    ], gaps
+    assert dsh_profile.add_command(
+        dsh_profile.WEB_PROFILE, dsh_profile.WEB_SURFACE_BUNDLE
+    ) in gaps[0][2]
+    assert dsh_profile.add_command(
+        dsh_profile.WEB_PROFILE, dsh_profile.WEB_SURFACE_BUNDLE
+    ).endswith(str(REPO_ROOT / "packages" / "bundle" / "refactory-web"))
 
 
 def test_run_on_dsh_hands_the_runner_an_absolute_workdir(tmp_path, monkeypatch):

@@ -252,15 +252,18 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
         # One row per profile this checkout owns a bundle for. Both matter for a
         # different reason: `graph` is what a mode runs on, `web` is what the GUI
-        # boots, and without the preset bundle the GUI's sessions stop at
-        # `agent-preset/not-found`. A per-profile row says which one is short.
-        gaps = {profile: reason for profile, _bundle, reason in dsh_profile.missing_bundles()}
-        for profile, _bundle in dsh_profile.PROFILE_BUNDLES:
-            problem = gaps.get(profile)
+        # boots — without the preset bundle its sessions stop at
+        # `agent-preset/not-found`, and without the web bundle the console and
+        # picker rows never mount. A profile may own more than one bundle, so the
+        # row aggregates every gap it still has. A per-profile row says which one
+        # is short.
+        gaps = dsh_profile.missing_bundles()
+        for profile in dict.fromkeys(profile for profile, _bundle in dsh_profile.PROFILE_BUNDLES):
+            problems = [reason for name, _bundle, reason in gaps if name == profile]
             checks.append((
                 f"DSH profile {profile!r}",
-                problem is None,
-                problem or str(dsh_profile.profile_dir(profile)),
+                not problems,
+                " | ".join(problems) or str(dsh_profile.profile_dir(profile)),
             ))
     except Exception as exc:
         checks.append(("DSH profiles", False, str(exc)))

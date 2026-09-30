@@ -2,7 +2,7 @@
 
 Refactory composes the published `@deepseek-ai/dsh` dependency with local plugins and Python tools. It does not vendor or maintain a fork of the DSH source tree. Keep that boundary: panel graphics, layout, theme and product identity belong in Refactory's local browser/host plugins, through published slots, theme tokens, routes and index hooks.
 
-The current install is **not completely patch-free**. `pnpm-workspace.yaml` already declares eight compatibility patches for the pinned `0.1.5-rc.3` packages: directory picker, agent presets, headless, web app, goal-round driver, conversation, Codex subagent and Claude Code subagent. They cover composition and existing execution/interface compatibility. The September panel refresh changes neither these patches nor the DSH version. Normal installation applies them reproducibly; do not edit `node_modules` by hand.
+The current install is **not completely patch-free**. `pnpm-workspace.yaml` declares six compatibility patches for the pinned `0.1.5-rc.3` packages: directory picker, headless, goal-round driver, conversation, Codex subagent and Claude Code subagent. They cover existing execution and interface compatibility. The web surface and the `ceo` preset are **not** patches: `packages/bundle/refactory-web` and `packages/bundle/refactory-presets` contribute those rows as ordinary bundle layers over the pinned app, so the loader picks them up without rewriting an upstream package. Normal installation applies the patches reproducibly; do not edit `node_modules` by hand.
 
 ## Upgrade discipline
 

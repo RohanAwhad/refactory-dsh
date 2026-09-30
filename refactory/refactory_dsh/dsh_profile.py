@@ -38,8 +38,20 @@ WEB_PROFILE = "web"
 #: ``agent-preset/not-found`` rather than falling back to a shipped preset.
 WEB_BUNDLE = "@deepseek-ai/dsh-refactory-presets"
 
-#: ``(profile, bundle)`` for every profile this checkout owns a bundle for.
-PROFILE_BUNDLES = ((GRAPH_PROFILE, GRAPH_BUNDLE), (WEB_PROFILE, WEB_BUNDLE))
+#: The web profile's second owned bundle: the console, the right-sidebar picker
+#: and the re:factory brand rows. It is a separate layer from the preset bundle
+#: because the two own different rows; the browser surface is not complete without
+#: both, so the profile is only ready when it carries both.
+WEB_SURFACE_BUNDLE = "@deepseek-ai/dsh-refactory-web"
+
+#: ``(profile, bundle)`` for every profile/bundle pair this checkout owns. A
+#: profile may appear more than once: `web` carries both the preset and the surface
+#: bundle, and both are installed with their own ``dsh plugin add``.
+PROFILE_BUNDLES = (
+    (GRAPH_PROFILE, GRAPH_BUNDLE),
+    (WEB_PROFILE, WEB_BUNDLE),
+    (WEB_PROFILE, WEB_SURFACE_BUNDLE),
+)
 
 
 class ProfileError(RuntimeError):
@@ -89,23 +101,38 @@ def is_ready(name: str = GRAPH_PROFILE, bundle: str = GRAPH_BUNDLE) -> bool:
 def bundle_directory(bundle: str) -> str:
     """The checkout directory holding a bundle package, from the bundle's NAME.
 
-    Derived rather than looked up per profile, so adding a third owned profile is a
-    one-line change to :data:`PROFILE_BUNDLES` and cannot name the wrong directory:
-    the old code took the directory from the *profile* name, which only ever worked
-    because `graph` and its bundle happened to agree.
+    Derived rather than looked up per profile, so adding another owned profile or
+    bundle is a one-line change to :data:`PROFILE_BUNDLES` and cannot name the wrong
+    directory: the old code took the directory from the *profile* name, which only
+    ever worked because `graph` and its bundle happened to agree.
     """
     return bundle.rsplit("/", 1)[-1].replace("dsh-", "", 1)
 
 
-def add_command(name: str = GRAPH_PROFILE, *, checkout: Path | None = None) -> str:
+def add_command(
+    name: str = GRAPH_PROFILE,
+    bundle: str | None = None,
+    *,
+    checkout: Path | None = None,
+) -> str:
     """The command that creates the profile, copy-pasteable, with the real path.
 
-    Raises :class:`KeyError` for a profile this checkout does not own rather than
-    falling back to one of them: a command naming the wrong bundle directory reads
-    as a plausible fix and is worse than no command at all.
+    ``bundle`` selects which of the profile's owned bundles the command installs;
+    when it is omitted the profile's first owned bundle is used. Raises
+    :class:`KeyError` for a profile this checkout does not own — or for a
+    ``(profile, bundle)`` pair it does not own — rather than falling back to one of
+    them: a command naming the wrong bundle directory reads as a plausible fix and
+    is worse than no command at all.
     """
     root = Path(checkout) if checkout is not None else REPO_ROOT
-    directory = bundle_directory(dict(PROFILE_BUNDLES)[name])
+    if bundle is None:
+        try:
+            bundle = next(entry for profile, entry in PROFILE_BUNDLES if profile == name)
+        except StopIteration:
+            raise KeyError(name) from None
+    elif (name, bundle) not in PROFILE_BUNDLES:
+        raise KeyError(bundle)
+    directory = bundle_directory(bundle)
     return f"dsh plugin --profile {name} add {root / 'packages' / 'bundle' / directory}"
 
 
@@ -144,7 +171,7 @@ def requirement(name: str = GRAPH_PROFILE, bundle: str = GRAPH_BUNDLE) -> str | 
     if bundle not in declared_bundles(name):
         return (
             f"the DSH profile {name!r} exists but does not carry {bundle}, so it is "
-            f"not this checkout's {name!r} profile. Add it with `{add_command(name)}`"
+            f"not this checkout's {name!r} profile. Add it with `{add_command(name, bundle)}`"
         )
     return None
 
@@ -163,6 +190,7 @@ __all__ = [
     "ProfileError",
     "WEB_BUNDLE",
     "WEB_PROFILE",
+    "WEB_SURFACE_BUNDLE",
     "add_command",
     "bundle_directory",
     "dsh_home",

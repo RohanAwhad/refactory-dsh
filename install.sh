@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # refactory-dsh — one-command install for this repository.
 #
-# The repository owns seven TypeScript packages and depends on the published
+# The repository owns eight TypeScript packages and depends on the published
 # `@deepseek-ai/dsh` pin for the harness; the Python glue lives at `refactory/`.
 # This script sets up the Node side (pnpm) and the Python side (one `uv sync`
 # over the root project), so after it:
@@ -17,12 +17,13 @@
 #
 # It provisions the default install and nothing optional:
 #
-#   * the pinned pnpm workspace and the seven packages' built `lib/`;
+#   * the pinned pnpm workspace and the eight packages' built `lib/`;
 #   * `.venv` from the root `pyproject.toml` — the default (`dev`) dependency
 #     group only;
 #   * the two DSH profiles this checkout owns — `graph`, which the Python glue
-#     runs modes on, and `web`, which the GUI boots and which needs the `ceo`
-#     preset bundle — idempotently (`REFACTORY_SKIP_DSH_PROFILE=1` skips both).
+#     runs modes on, and `web`, which the GUI boots and which needs both the `ceo`
+#     preset bundle and the web-surface bundle — idempotently
+#     (`REFACTORY_SKIP_DSH_PROFILE=1` skips both).
 #
 # It deliberately leaves out the two opt-in, non-shipping pieces, and the CI gate in
 # `.github/workflows/ci.yml` asserts this default install rather than them:
@@ -145,7 +146,7 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 (cd "$HERE" && uv sync)
 
-# 2. Node side: install the pnpm workspace (the pinned harness plus the seven
+# 2. Node side: install the pnpm workspace (the pinned harness plus the eight
 #    packages this repo owns), then build those packages' lib/ output. It depends
 #    on step 1 only through `docs:check`, which is why the Python side is first.
 (cd "$HERE" && pnpm install --frozen-lockfile && pnpm run build)
@@ -156,21 +157,23 @@ fi
 #    walker and still fail the first time anything reaches DSH. The launcher is
 #    the pinned harness the root manifest installed, not a copy in this repo.
 #    Two profiles are owned here: `graph`, which the Python glue runs modes on,
-#    and `web`, which the GUI boots and which needs the `ceo` preset bundle or
-#    every session it creates without naming a preset stops with
-#    `agent-preset/not-found`. Idempotent: a profile that already carries its
-#    bundle is left alone, so a user's own profile is never overwritten.
-#    `REFACTORY_SKIP_DSH_PROFILE=1` skips both for someone who only wants the
-#    Python side and does not want ~/.dsh touched.
+#    and `web`, which the GUI boots and which needs both the `ceo` preset bundle
+#    and the web-surface bundle — without the preset every session it creates
+#    without naming one stops with `agent-preset/not-found`, and without the
+#    surface the console and picker rows never mount. Idempotent: a profile that
+#    already carries a bundle is left alone, so a user's own profile is never
+#    overwritten. `REFACTORY_SKIP_DSH_PROFILE=1` skips both for someone who only
+#    wants the Python side and does not want ~/.dsh touched.
 DSH="$HERE/node_modules/.bin/dsh"
 if [ "${REFACTORY_SKIP_DSH_PROFILE:-}" = "1" ]; then
   echo "  DSH profiles 'graph'/'web': skipped (REFACTORY_SKIP_DSH_PROFILE=1)"
 else
-  # Which profiles are short, and which bundle directory supplies each, both come
-  # from `dsh_profile` so this script cannot drift from the check `doctor` and the
-  # runner make. The bundle directory is derived from the bundle NAME, not from the
-  # profile name: `web` is a shipped harness template, and its bundle is
-  # `refactory-presets`.
+  # Which profile bundles are short, and which bundle directory supplies each,
+  # both come from `dsh_profile` so this script cannot drift from the check
+  # `doctor` and the runner make. The bundle directory is derived from the bundle
+  # NAME, not from the profile name: `web` is a shipped harness template, and its
+  # bundles are `refactory-presets` and `refactory-web`. A profile may be short
+  # more than one bundle, so this loops over every row.
   MISSING="$("$VENV/bin/python" -c '
 from refactory_dsh import dsh_profile
 for profile, bundle, _ in dsh_profile.missing_bundles():

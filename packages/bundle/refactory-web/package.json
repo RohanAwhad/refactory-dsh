@@ -1,0 +1,49 @@
+{
+  "name": "@deepseek-ai/dsh-refactory-web",
+  "description": "The refactory web bundle: the console, the picker and the re:factory brand occupants over the dsh-web-app layer",
+  "version": "0.1.5-rc.3",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+    "directory": "packages/bundle/refactory-web"
+  },
+  "type": "module",
+  "exports": {
+    "./startup": {
+      "types": "./lib/types/startup.d.ts",
+      "default": "./lib/startup.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/startup.js",
+    "cordis.patch.yml",
+    "lib/types/**/*.d.ts",
+    "lib/types/**/*.js"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-refactory-console": "0.1.5-rc.3",
+    "@deepseek-ai/dsh-client-ui-refactory": "0.1.5-rc.3",
+    "@deepseek-ai/dsh-client-ui-brand-refactory": "0.1.5-rc.3",
+    "@deepseek-ai/dsh-workflow-spine": "0.1.5-rc.3"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/cordis-plugin-loader": "1.0.3"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/cordis-plugin-loader": "1.0.3"
+  }
+}
