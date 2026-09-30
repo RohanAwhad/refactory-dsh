@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-refactory-presets",
   "description": "The refactory agent-preset bundle: ships the `ceo` preset from this package's own `presets/` tree through the roster's configured roots",
-  "version": "0.1.5-rc.3",
+  "version": "0.1.6-alpha.1",
   "publishConfig": {
     "access": "public"
   },

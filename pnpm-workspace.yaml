@@ -46,11 +46,10 @@ allowBuilds:
   '@google/genai': false
   protobufjs: false
   msgpackr-extract: false
-
 patchedDependencies:
-  '@deepseek-ai/dsh-client-ui-directory-picker-native@0.1.5-rc.3': patches/@deepseek-ai__dsh-client-ui-directory-picker-native@0.1.5-rc.3.patch
-  '@deepseek-ai/dsh-headless@0.1.5-rc.3': patches/@deepseek-ai__dsh-headless@0.1.5-rc.3.patch
-  '@deepseek-ai/dsh-goal-round-driver@0.1.5-rc.3': patches/@deepseek-ai__dsh-goal-round-driver@0.1.5-rc.3.patch
-  '@deepseek-ai/dsh-client-ui-conversation@0.1.5-rc.3': patches/@deepseek-ai__dsh-client-ui-conversation@0.1.5-rc.3.patch
-  '@deepseek-ai/dsh-subagent-codex@0.1.5-rc.3': patches/@deepseek-ai__dsh-subagent-codex@0.1.5-rc.3.patch
-  '@deepseek-ai/dsh-subagent-claude-code@0.1.5-rc.3': patches/@deepseek-ai__dsh-subagent-claude-code@0.1.5-rc.3.patch
+  '@deepseek-ai/dsh-client-ui-directory-picker-native@0.1.6-alpha.1': patches/@deepseek-ai__dsh-client-ui-directory-picker-native@0.1.6-alpha.1.patch
+  '@deepseek-ai/dsh-headless@0.1.6-alpha.1': patches/@deepseek-ai__dsh-headless@0.1.6-alpha.1.patch
+  '@deepseek-ai/dsh-goal-round-driver@0.1.6-alpha.1': patches/@deepseek-ai__dsh-goal-round-driver@0.1.6-alpha.1.patch
+  '@deepseek-ai/dsh-client-ui-conversation@0.1.6-alpha.1': patches/@deepseek-ai__dsh-client-ui-conversation@0.1.6-alpha.1.patch
+  '@deepseek-ai/dsh-subagent-codex@0.1.6-alpha.1': patches/@deepseek-ai__dsh-subagent-codex@0.1.6-alpha.1.patch
+  '@deepseek-ai/dsh-subagent-claude-code@0.1.6-alpha.1': patches/@deepseek-ai__dsh-subagent-claude-code@0.1.6-alpha.1.patch

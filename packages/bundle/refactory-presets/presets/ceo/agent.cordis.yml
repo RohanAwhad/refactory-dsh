@@ -219,8 +219,11 @@
         backgroundMode: one-shot
         maxDepth: provider-managed
 
-    - id: workflow-worker-thread
-      name: '@deepseek-ai/dsh-workflow-worker-thread'
+    # `dsh-workflow-worker-thread` was dropped after 0.1.5-rc.3; `workflow-ptc`
+    # is the engine the harness's own `standard` preset mounts at this pin and
+    # it takes the same `provider: spawn` subagent route this row named.
+    - id: workflow-ptc
+      name: '@deepseek-ai/dsh-workflow-ptc'
       config:
         provider: spawn
 

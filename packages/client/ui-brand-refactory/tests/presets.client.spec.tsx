@@ -43,7 +43,7 @@ it('keeps one native preset nav button across rerenders and restores presentatio
 })
 
 function seat(current = 'standard') {
-  const store = createSnapshotStore<AgentPresetSeatState>({ options, current, error: null, busy: false, introduce: false })
+  const store = createSnapshotStore<AgentPresetSeatState>({ showPicker: true, options, current, error: null, busy: false, introduce: false })
   const face: AgentPresetSeatInjected = {
     hooks: { agentPresetSeat: store }, load: vi.fn(async () => {}), introduced: vi.fn(),
     select: vi.fn(async id => { store.update(state => { state.current = id }); return undefined }),
@@ -107,6 +107,7 @@ it('uses Minimal if CEO is unavailable and does not invent an available preset',
 it('limits settings to two rows, disables extra-preset authoring, and retains native actions and health', () => {
   const state: AgentPresetSectionState = {
     status: 'ready', error: null, authorable: true, hasDocument: true,
+    showPicker: true, policySaving: false,
     rows: options.map(row => ({ ...row, isDefault: row.id === 'ceo', ...(row.id === 'ceo' ? { broken: 'Missing plugin' } : {}) })),
     copy: null, view: null, pendingDelete: null, deleting: false, revealedPaths: {},
   }

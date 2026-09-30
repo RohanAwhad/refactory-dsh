@@ -1,6 +1,8 @@
+diff --git a/lib/index.js b/lib/index.js
+index d91a1b6..83dcac0 100644
 --- a/lib/index.js
 +++ b/lib/index.js
-@@ -62,6 +62,7 @@
+@@ -62,6 +62,7 @@ function apply(ctx) {
  			agent,
  			attempt: void 0,
  			competingQueued: false,
@@ -8,7 +10,7 @@
  			needsCheckpoint: false,
  			requested: false,
  			run: void 0,
-@@ -75,9 +76,18 @@
+@@ -75,9 +76,18 @@ function apply(ctx) {
  		if (ctx.agents.get(state.agent.id) !== state.agent) return void 0;
  		return ctx.goals.get(state.agent);
  	}
@@ -28,7 +30,7 @@
  	}
  	/** Recheck every condition that an awaited checkpoint may have changed. */
  	function readyAfterCheckpoint(state) {
-@@ -206,6 +216,24 @@
+@@ -203,6 +213,24 @@ function apply(ctx) {
  		});
  		ctx.on("agent/disposed", ({ agent }) => {
  			states.delete(agent);
@@ -51,9 +53,9 @@
 +				if (state.pendingSubagents.delete(info.runId)) requestDrive(state);
 +			}
  		});
- 		ctx.on("agent/session-start", ({ agent }) => {
+ 		ctx.on("agent/created", ({ agent }) => {
  			const state = stateFor(agent);
-@@ -277,7 +305,7 @@
+@@ -274,7 +302,7 @@ function apply(ctx) {
  		function validReservation(state, content, source) {
  			const attempt = state.attempt;
  			const goal = currentGoal(state);

@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-graph",
   "description": "The dsh graph bundle: drives one CEO Agent over a refactory mode graph, for the outer loop and for a person using a mode",
-  "version": "0.1.5-rc.3",
+  "version": "0.1.6-alpha.1",
   "publishConfig": {
     "access": "public"
   },
@@ -44,30 +44,32 @@
     }
   },
   "dependencies": {
-    "@deepseek-ai/dsh-brand": "0.1.5-rc.3",
-    "@deepseek-ai/dsh-cmdline": "0.1.5-rc.3",
-    "@deepseek-ai/dsh-workflow-spine": "0.1.5-rc.3",
+    "@deepseek-ai/dsh-workflow-spine": "0.1.6-alpha.1",
     "commander": "^15.0.0"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "4.0.2",
     "@deepseek-ai/cordis-plugin-loader": "1.0.3",
-    "@deepseek-ai/dsh-agent": "0.1.5-rc.3",
-    "@deepseek-ai/dsh-agent-default-model": "0.1.5-rc.3",
-    "@deepseek-ai/dsh-llm": "0.1.5-rc.3",
-    "@deepseek-ai/dsh-session": "0.1.5-rc.3",
-    "@deepseek-ai/dsh-user-questions": "0.1.5-rc.3"
+    "@deepseek-ai/dsh-agent": "^0.1.6-alpha.1",
+    "@deepseek-ai/dsh-agent-default-model": "^0.1.6-alpha.1",
+    "@deepseek-ai/dsh-brand": "^0.1.6-alpha.1",
+    "@deepseek-ai/dsh-cmdline": "^0.1.6-alpha.1",
+    "@deepseek-ai/dsh-llm": "^0.1.6-alpha.1",
+    "@deepseek-ai/dsh-session": "^0.1.6-alpha.1",
+    "@deepseek-ai/dsh-user-questions": "^0.1.6-alpha.1"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.2",
     "@deepseek-ai/cordis-plugin-loader": "1.0.3",
-    "@deepseek-ai/dsh-agent": "0.1.5-rc.3",
-    "@deepseek-ai/dsh-agent-default-model": "0.1.5-rc.3",
-    "@deepseek-ai/dsh-agent-loop": "0.1.5-rc.3",
-    "@deepseek-ai/dsh-agent-loop-testkit": "0.1.5-rc.3",
-    "@deepseek-ai/dsh-llm": "0.1.5-rc.3",
-    "@deepseek-ai/dsh-session": "0.1.5-rc.3",
-    "@deepseek-ai/dsh-user-questions": "0.1.5-rc.3",
-    "@deepseek-ai/dsh-workflow-spine": "0.1.5-rc.3"
+    "@deepseek-ai/dsh-agent": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-agent-default-model": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-agent-loop": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-agent-loop-testkit": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-brand": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-cmdline": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-llm": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-session": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-user-questions": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-workflow-spine": "0.1.6-alpha.1"
   }
 }

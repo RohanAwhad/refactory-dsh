@@ -1,3 +1,4 @@
+import type { Duplex } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
@@ -10,6 +11,7 @@ import type {
   SubprocessOutcome,
   SubprocessOutputRead,
   SubprocessSpawnSpec,
+  SubprocessTerminalEnvironment,
 } from '@deepseek-ai/dsh-subprocess'
 
 import * as tool from '../src/index.ts'
@@ -45,6 +47,7 @@ class FakeHandle implements SubprocessHandle {
   readonly stdin = undefined
   readonly stdout = undefined
   readonly stderr = undefined
+  readonly control: Duplex | undefined = undefined
   readonly collected: SubprocessCollectedOutputs
   readonly done: Promise<SubprocessOutcome>
   constructor(spec: SubprocessSpawnSpec, scripted: Scripted, dropReaders = false) {
@@ -65,6 +68,9 @@ class FakeSubprocess extends SubprocessRuntime {
   handler: () => Scripted = () => runResult('{}')
   dropReaders = false
   override resolveExecutable(command: string): Promise<string> { return Promise.resolve(command) }
+  override terminalEnvironment(): Promise<SubprocessTerminalEnvironment> {
+    return Promise.resolve({ platform: process.platform === 'win32' ? 'windows' : 'posix' })
+  }
   override spawnTerminal(): Promise<never> { throw new Error('the refactory tool spawns collectors, never terminals') }
   override spawn(spec: SubprocessSpawnSpec): SubprocessHandle {
     this.spawns.push(spec)

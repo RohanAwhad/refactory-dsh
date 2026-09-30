@@ -1,6 +1,8 @@
+diff --git a/lib/index.js b/lib/index.js
+index eee87f9..638e0f5 100644
 --- a/lib/index.js
 +++ b/lib/index.js
-@@ -137,6 +137,8 @@
+@@ -137,6 +137,8 @@ var CodexAppServerWire = class {
  	input;
  	permissionMode;
  	model;
@@ -9,7 +11,7 @@
  	transport;
  	fatal = Promise.withResolvers();
  	threadId;
-@@ -154,7 +156,8 @@
+@@ -154,7 +156,8 @@ var CodexAppServerWire = class {
  	inputEnded = false;
  	terminalObserved = false;
  	closed = false;
@@ -19,7 +21,7 @@
  		this.input = input;
  		this.permissionMode = permissionMode;
  		this.model = model;
-@@ -208,15 +211,20 @@
+@@ -208,15 +211,20 @@ var CodexAppServerWire = class {
  	* @param signal - unpublished-start cancellation.
  	*/
  	async startThread(cwd, signal) {
@@ -42,7 +44,7 @@
  	}
  	/**
  	* Submit the one text-only task and wait for this thread/turn's authoritative
-@@ -456,6 +464,18 @@
+@@ -456,6 +464,18 @@ var CodexAppServerWire = class {
  		}
  	}
  	handleNotification(method, params, order) {
@@ -61,7 +63,7 @@
  		if (method === "turn/started") {
  			if (string(params.threadId, "turn/started thread id") !== this.threadId) return;
  			const turn = object(params.turn, "turn/started turn");
-@@ -656,7 +676,7 @@
+@@ -656,7 +676,7 @@ async function startCodexRun(request, spec) {
  			category: "unknown"
  		}, thrown(error));
  	}
@@ -70,7 +72,7 @@
  	const onStderr = (chunk) => {
  		const bytes = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
  		try {
-@@ -844,6 +864,9 @@
+@@ -844,6 +864,9 @@ var CodexProvider = class {
  			env: this.config.env,
  			disposeGraceMs: this.config.disposeGraceMs,
  			spawn: (spawnSpec) => this.ctx.subprocess.spawn(spawnSpec),

@@ -139,11 +139,11 @@ if (!existsSync(dsh)) {
 //    by path instead would silently pass on a layout this repo does not use.
 const workspace = readFileSync(join(REPO, 'pnpm-workspace.yaml'), 'utf8')
 check(
-  !workspace.includes('dsh-agent-presets@0.1.5-rc.3'),
+  !workspace.includes('dsh-agent-presets@0.1.6-alpha.1'),
   'no agent-presets entry under patchedDependencies',
 )
 check(
-  !existsSync(join(REPO, 'patches', '@deepseek-ai__dsh-agent-presets@0.1.5-rc.3.patch')),
+  !existsSync(join(REPO, 'patches', '@deepseek-ai__dsh-agent-presets@0.1.6-alpha.1.patch')),
   'the agent-presets patch file is deleted',
 )
 const installed = resolveInstalledAgentPresets()
