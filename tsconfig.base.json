@@ -1,5 +1,5 @@
 {
-  // Shared compiler settings for the seven packages this fork owns. There is no
+  // Shared compiler settings for the eight packages this fork owns. There is no
   // `paths` map: every package name resolves through node_modules, where the
   // published @deepseek-ai/dsh pin and its dependencies live. NEVER add
   // include/files to this file: it would leak into every extending package
@@ -26,7 +26,7 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "types": ["node"],
-    // Source-level resolution for the seven packages this fork owns, so a test
+    // Source-level resolution for the eight packages this fork owns, so a test
     // run and a typecheck read source rather than a previously built lib/. Every
     // other specifier — the whole published harness — falls through to
     // node_modules. This file also doubles as the resolution facade for
@@ -35,6 +35,7 @@
       "@deepseek-ai/dsh-workflow-spine": ["./packages/workflow/workflow-spine/src/index.ts"],
       "@deepseek-ai/dsh-graph": ["./packages/bundle/graph/src/index.ts"],
       "@deepseek-ai/dsh-refactory-presets/startup": ["./packages/bundle/refactory-presets/src/startup.ts"],
+      "@deepseek-ai/dsh-refactory-web/startup": ["./packages/bundle/refactory-web/src/startup.ts"],
       "@deepseek-ai/dsh-refactory-console": ["./packages/refactory/refactory-console/src/index.ts"],
       "@deepseek-ai/dsh-tool-refactory": ["./packages/refactory/tool-refactory/src/index.ts"],
       "@deepseek-ai/dsh-tool-refactory/console": ["./packages/refactory/tool-refactory/src/console.ts"],

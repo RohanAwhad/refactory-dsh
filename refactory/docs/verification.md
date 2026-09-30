@@ -3,7 +3,7 @@
 The repository stopped copying the DeepSeek Harness, and the gates that came with the
 copy — `pnpm run test:docs` and its fifteen checks, the snapshot suite, the bilingual
 pairing gate, `benchmarks/`, `website/` and `.agents/` — went with it. This document
-decides what verifies the seven packages and the glue instead, and what a contributor runs
+decides what verifies the eight packages and the glue instead, and what a contributor runs
 before pushing. It is the answer to issue #84, written before the deletion.
 
 ## The commands
@@ -20,9 +20,9 @@ uv run python -m refactory_dsh.tools.check_recipes             # every documente
 ```
 
 ```bash
-pnpm run typecheck             # tsc over the seven packages, host face then client face
+pnpm run typecheck             # tsc over the eight packages, host face then client face
 pnpm run build                 # typecheck, then the host and client bundle passes
-pnpm run test                  # the seven packages' vitest suites
+pnpm run test                  # the eight packages' vitest suites
 pnpm run test:gui              # the client packages' suites under jsdom
 pnpm run lint                  # oxlint
 ```
@@ -32,24 +32,30 @@ pnpm run lint                  # oxlint
 | the deleted gate | its replacement | what the replacement proves |
 |---|---|---|
 | `pnpm run test:docs`, fifteen harness documentation checks | `refactory/tests/test_ship_ready.py`, `test_docs_api.py`, `test_docs_tutorial.py`, the two generator `--check` commands, and `check_recipes` | every command a shipped document shows runs as written, every path it names exists, and the generated API reference and tutorial are current |
-| the bilingual pairing gate | `refactory/tests/test_docs_english_only.py` | no document under `refactory/` or the seven packages has a `.zh.md` side or a `README.i18n.yaml` that nothing keeps aligned |
-| `pnpm run test:gui` over the harness client suites | `pnpm run test` and `pnpm run test:gui` | the seven packages' own vitest suites pass, including the two client packages under jsdom |
+| the bilingual pairing gate | `refactory/tests/test_docs_english_only.py` | no document under `refactory/` or the eight packages has a `.zh.md` side or a `README.i18n.yaml` that nothing keeps aligned |
+| `pnpm run test:gui` over the harness client suites | `pnpm run test` and `pnpm run test:gui` | the eight packages' own vitest suites pass, including the two client packages under jsdom |
 | the recorded-session snapshot suite | the real-DSH runs: `pytest --run-integration` and `check_recipes` | a mode runs end to end on the pinned harness and leaves facts on disk |
 | `benchmarks/`, `website/`, `.agents/` | none | removed with the harness; this repository publishes no benchmark gate, no documentation site, and no agent-note corpus |
 
 The harness's per-file 100% coverage gate is also gone. `pnpm run test:coverage` runs the
-seven packages' suites with coverage, and no threshold is enforced, so coverage is a number
+eight packages' suites with coverage, and no threshold is enforced, so coverage is a number
 a contributor reads rather than a gate that fails.
 
 ## The web surface and the pins it needs
 
-`refactory ui` runs the pinned harness's `web` profile. Two pnpm patches in `patches/`
-add what the fork used to add by copying upstream packages, and `pnpm-workspace.yaml`
-declares them under `patchedDependencies`:
+`refactory ui` runs the pinned harness's `web` profile. The web surface is a
+refactory-owned bundle, and one pnpm patch in `patches/` supplies a model-route
+change, declared under `patchedDependencies` in `pnpm-workspace.yaml`:
 
-- `@deepseek-ai/dsh-web-app` gains rows for `refactory-console`, `ui-refactory` and
-  `ui-brand-refactory`, and disables `ui-brand-official`. Its manifest also declares our
-  three packages, so the loader resolves them.
+- `@deepseek-ai/dsh-refactory-web` is the browser surface layer. It mounts the
+  `refactory-console` Host service, the `ui-refactory` right-sidebar picker and the
+  `ui-brand-refactory` brand occupants, disables `ui-brand-official`, and keeps the
+  `wf_next` exclusion on the repeat-tool-reminder row. The client-module system
+  discovers a browser plugin by scanning already-mounted Loader entries, so a
+  package that declares `dsh.client` and is an active entry is picked up without
+  editing the upstream `@deepseek-ai/dsh-web-app` manifest. Its manifest declares
+  our occupant packages — and `@deepseek-ai/dsh-workflow-spine`, which the `ceo`
+  preset mounts — so the loader resolves them the way the deleted pnpm patch did.
 - `@deepseek-ai/dsh-headless` accepts `--provider` and `--model` and makes a named
   selection the model-selection middleware's current one, so
   `refactory_dsh/model.py`'s completion client uses the model a caller named.
@@ -63,21 +69,31 @@ spine is mounted with `interactiveOpen`, so the chat's CEO can open a mode with 
 and drive it with `wf_next`; it runs one deterministic node per call, refuses a caller
 that is not the session that opened the run, and answers a `user` gate through
 `userQuestions`. Mounting it inside the preset is what makes the spine's own guard
-deny the CEO's coding tools, so the CEO cannot implement a node by hand. The bundle is
-applied after `@deepseek-ai/dsh-web-app`, because that layer inserts the `agent-presets`
-row its patch overrides; `dsh plugin add` appends bundles in dependency order, so a
-profile install gets that for free.
+deny the CEO's coding tools, so the CEO cannot implement a node by hand. The preset
+bundle is applied after `@deepseek-ai/dsh-web-app`, because that layer inserts the
+`agent-presets` row its patch overrides; `dsh plugin add` appends bundles in dependency
+order, so a profile install gets that for free.
+
+The console resolves `repoRoot` the same way: its row reads
+`ctx.refactoryWebStartup.repoRoot`, which the `refactory-web` bundle's startup plugin
+resolves from its own location. `process.cwd()` would name whoever launched the GUI,
+not this checkout.
 
 Two DSH profiles are machine state this checkout owns, and both are created by
 `./install.sh` (or healed on boot by `./refactory-dsh`): `graph`, which the Python glue
-runs modes on, and `web`, the pinned harness's own template plus this preset bundle.
-`refactory doctor` reports one row per profile and names the exact `dsh plugin add`
-command for whichever one is short — the web profile without the bundle has no `ceo`
-preset while the composition still names `ceo` as the roster default, so every session
-the GUI creates without naming one would stop with `agent-preset/not-found`.
-`pnpm run test:acceptance` boots a throwaway web profile and checks that the preset
-reaches the roster through configured roots, including that the installed
-`@deepseek-ai/dsh-agent-presets` tree ships no `ceo` of its own.
+runs modes on, and `web`, the pinned harness's own template plus its two refactory
+bundles. `refactory doctor` reports one row per profile and names the exact
+`dsh plugin add` command for whichever bundle is short — the web profile without the
+preset bundle has no `ceo` preset while the composition still names `ceo` as the roster
+default, so every session the GUI creates without naming one would stop with
+`agent-preset/not-found`; without the web bundle the console and picker rows never
+mount, so the GUI boots with no refactory panel.
+`pnpm run test:acceptance` boots a throwaway web profile with both checkout bundles
+and checks that the preset reaches the roster through configured roots, including that
+the installed `@deepseek-ai/dsh-agent-presets` tree ships no `ceo` of its own, and that
+the web bundle mounts the console, picker and brand rows with a `repoRoot` resolved to
+the checkout (`refactoryConsole/project`) and a live mode catalogue
+(`refactoryConsole/modes`).
 
 The gateway discovers the console at runtime from the `@Remote` markers on the mounted
 service and binds arguments by the method parameter names, so the console answers without
@@ -129,7 +145,7 @@ Change the glue or a document: `uv run python -m pytest refactory/tests -q`, the
 generator `--check` commands and `check_recipes` when a document, a CLI verb, or the API
 reference changed.
 
-Change one of the seven packages: `pnpm run build`, `pnpm run test`, and `pnpm run lint`.
+Change one of the eight packages: `pnpm run build`, `pnpm run test`, and `pnpm run lint`.
 `pnpm run build` is what puts `lib/` on disk, and the graph profile loads `lib/`, so a
 change that is only typechecked has not reached a run.
 
@@ -157,8 +173,9 @@ running server: the boot manifest lists the client rows, the page reports no
 one shipped), `refactoryConsole/modes` over `/api` returns the catalogue, `session/create`
 with no preset returns `agentPreset: ceo`, and expanding the right sidebar and pressing
 **Modes** renders the picker. `ui-refactory/tests/remote.client.spec.ts` covers the call
-mapping, so a wrong endpoint or argument name fails a test; a future change to the patches
-or to the harness's client assembly can still break the page without a red test.
+mapping, so a wrong endpoint or argument name fails a test; a future change to the
+refactory bundles or to the harness's client assembly can still break the page without a
+red test.
 
 The in-session drive is covered by `workflow-spine/tests/open.spec.ts` (open claims the
 run, one node per `wf_next`, the refusals, the post-drain open view, a data pass crossing

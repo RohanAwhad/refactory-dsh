@@ -1,0 +1,63 @@
+# The refactory web bundle patch: the browser surface's refactory occupants over
+# the `dsh-web-app` layer.
+#
+# This layer replaces the pnpm patch that used to edit `@deepseek-ai/dsh-web-app`
+# itself. The client-module system discovers a browser plugin by scanning the
+# already-mounted Loader entries for packages declaring `dsh.client`, so a plugin
+# only has to be an active entry with a `./client` bundle — the upstream manifest
+# does not have to list it. An ordinary bundle patch can therefore contribute the
+# same rows without rewriting an upstream package.
+#
+# Layer order is a precondition: a patch only reaches a row an earlier layer
+# created, and the `insert` below appends rows this layer owns. `dsh plugin add`
+# appends bundles in dependency order after the profile's template bundles, so an
+# ordinary profile install applies this after `@deepseek-ai/dsh-web-app`; a
+# hand-edited bundle list must keep it after.
+#
+# `agent-presets` is deliberately NOT stated here. That row's `config` is replaced
+# wholesale rather than merged, and `@deepseek-ai/dsh-refactory-presets` is its
+# single owner — it sets `default: ceo` and the configured `roots` entry. A second
+# `config` from this layer would silently drop whichever list lost.
+
+# Advancing a stateful workflow uses identical arguments by design. Keep the
+# reminder for other tools; argument repetition is not workflow progress evidence.
+- id: repeat-tool-reminder
+  config:
+    exclude: [wf_next]
+
+# The re:factory brand replaces the official DeepSeek whale.
+- id: ui-brand-official
+  disabled: true
+
+- insert:
+    # Publishes the checkout root the `refactory-console` row reads. A patch
+    # cannot compute its own package directory: `!!js` is evaluated as
+    # `new Function('ctx', 'expr', ...)`, so it has no `import.meta`. This plugin
+    # has one, so it resolves the checkout from its own location and hands the
+    # path over. `process.cwd()` would name the *user's* working directory.
+    - id: refactory-web-startup
+      name: '@deepseek-ai/dsh-refactory-web/startup'
+
+    # The refactory console over Typert Remote: the same process boundary the
+    # model-facing tool uses, so the Web picker and the model read one JSON.
+    # `inject` orders the startup provider before this reader.
+    - id: refactory-console
+      name: '@deepseek-ai/dsh-refactory-console'
+      inject: [refactoryWebStartup]
+      config:
+        repoRoot: !!js ctx.refactoryWebStartup.repoRoot
+
+    # The interactive workflow spine is NOT mounted here. It lives in the `ceo`
+    # preset's `agent.cordis.yml` so the CEO it guards is in the mount's scope:
+    # a host row has no scope, and the spine's deny-guard needs one to restrict
+    # the CEO's own tools. That preset ships from
+    # `packages/bundle/refactory-presets`, which is applied after this layer.
+
+    # The right Sidebar's refactory picker: the console's described choices,
+    # started and read through the refactoryConsole endpoint.
+    - id: ui-refactory
+      name: '@deepseek-ai/dsh-client-ui-refactory'
+
+    # re:factory occupants for the generic brand slots.
+    - id: ui-brand-refactory
+      name: '@deepseek-ai/dsh-client-ui-brand-refactory'

@@ -20,7 +20,6 @@ patchedDependencies:
   '@deepseek-ai/dsh-headless@0.1.5-rc.3': 25adf271d7d0044d09bfe16d2730d15a35bfdc216cca52d8cf41c5b13afe667a
   '@deepseek-ai/dsh-subagent-claude-code@0.1.5-rc.3': cdb3c9276402b42416f809809b2d577dd22114e5959124583b20b92f3910c0b9
   '@deepseek-ai/dsh-subagent-codex@0.1.5-rc.3': d68314541780e9b95b509b4fc012d10e9f6e6459decc26fff66a9cbe98c97360
-  '@deepseek-ai/dsh-web-app@0.1.5-rc.3': fc257a208edb5ba6380413fa6c825e1f36f260994b19745ba1affb40479dbb34
 
 importers:
 
@@ -185,6 +184,28 @@ importers:
       '@deepseek-ai/cordis':
         specifier: 4.0.2
         version: 4.0.2(@deepseek-ai/cordis-plugin-include@1.0.7)(@deepseek-ai/cordis-plugin-loader@1.0.3)
+
+  packages/bundle/refactory-web:
+    dependencies:
+      '@deepseek-ai/dsh-client-ui-brand-refactory':
+        specifier: 0.1.5-rc.3
+        version: link:../../client/ui-brand-refactory
+      '@deepseek-ai/dsh-client-ui-refactory':
+        specifier: 0.1.5-rc.3
+        version: link:../../client/ui-refactory
+      '@deepseek-ai/dsh-refactory-console':
+        specifier: 0.1.5-rc.3
+        version: link:../../refactory/refactory-console
+      '@deepseek-ai/dsh-workflow-spine':
+        specifier: 0.1.5-rc.3
+        version: link:../../workflow/workflow-spine
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: 4.0.2
+        version: 4.0.2(@deepseek-ai/cordis-plugin-include@1.0.7)(@deepseek-ai/cordis-plugin-loader@1.0.3)
+      '@deepseek-ai/cordis-plugin-loader':
+        specifier: 1.0.3
+        version: 1.0.3(@deepseek-ai/cordis@4.0.2)(node-addon-require-builtin@0.1.6)
 
   packages/client/ui-brand-refactory:
     devDependencies:
@@ -8064,7 +8085,7 @@ snapshots:
     dependencies:
       '@deepseek-ai/cordis': 4.0.2(@deepseek-ai/cordis-plugin-include@1.0.7)(@deepseek-ai/cordis-plugin-loader@1.0.3)
 
-  '@deepseek-ai/dsh-web-app@0.1.5-rc.3(patch_hash=fc257a208edb5ba6380413fa6c825e1f36f260994b19745ba1affb40479dbb34)(f4ae5e0515ab4009e8122901c32c7eb5)':
+  '@deepseek-ai/dsh-web-app@0.1.5-rc.3(f4ae5e0515ab4009e8122901c32c7eb5)':
     dependencies:
       '@deepseek-ai/cordis': 4.0.2(@deepseek-ai/cordis-plugin-include@1.0.7)(@deepseek-ai/cordis-plugin-loader@1.0.3)
       '@deepseek-ai/cordis-plugin-loader': 1.0.3(@deepseek-ai/cordis@4.0.2)(node-addon-require-builtin@0.1.6)
@@ -8356,7 +8377,7 @@ snapshots:
       '@deepseek-ai/dsh-tool-todo': 0.1.5-rc.3(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-agent@0.1.5-rc.3(e6766538ccdc5c528e656f345ee2793e))(@deepseek-ai/dsh-invariants@0.1.5-rc.3(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-session-projection@0.1.5-rc.3(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-session@0.1.5-rc.3(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.3(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.5-rc.3(@deepseek-ai/cordis@4.0.2)))))(@deepseek-ai/dsh-session@0.1.5-rc.3(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.3(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.5-rc.3(@deepseek-ai/cordis@4.0.2))))(@deepseek-ai/dsh-tools@0.1.5-rc.3(ac70a5c0afcec020ae14ac994e8049ec))
       '@deepseek-ai/dsh-tool-web': 0.1.5-rc.3(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-llm@0.1.5-rc.3(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-system-prompt@0.1.5-rc.3(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.5-rc.3(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-llm@0.1.5-rc.3(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-scope@0.1.5-rc.3(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.5-rc.3(@deepseek-ai/cordis@4.0.2))))(@deepseek-ai/dsh-tools@0.1.5-rc.3(ac70a5c0afcec020ae14ac994e8049ec))(@deepseek-ai/dsh-web@0.1.5-rc.3(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-llm@0.1.5-rc.3(@deepseek-ai/cordis@4.0.2)))
       '@deepseek-ai/dsh-tool-workflow': 0.1.5-rc.3(3ce211d5e831abd0b994468d40f0429e)
-      '@deepseek-ai/dsh-web-app': 0.1.5-rc.3(patch_hash=fc257a208edb5ba6380413fa6c825e1f36f260994b19745ba1affb40479dbb34)(f4ae5e0515ab4009e8122901c32c7eb5)
+      '@deepseek-ai/dsh-web-app': 0.1.5-rc.3(f4ae5e0515ab4009e8122901c32c7eb5)
       '@deepseek-ai/dsh-webhook': 0.1.5-rc.3(8a62f2602ae5153002e8aa1d494de584)
       '@deepseek-ai/dsh-webhook-github': 0.1.5-rc.3(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-credentials@0.1.5-rc.3(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.5-rc.3(@deepseek-ai/cordis@4.0.2)))(@deepseek-ai/dsh-host-webserver@0.1.5-rc.3(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-session@0.1.5-rc.3(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.5-rc.3(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.5-rc.3(@deepseek-ai/cordis@4.0.2))))(@deepseek-ai/dsh-webhook@0.1.5-rc.3(8a62f2602ae5153002e8aa1d494de584))
       '@deepseek-ai/dsh-workflow-worker-thread': 0.1.5-rc.3(94791d9321dea99ef5be99d3efd5deb0)

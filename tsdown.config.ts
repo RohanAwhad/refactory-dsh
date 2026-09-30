@@ -1,11 +1,12 @@
 import { defineConfig } from 'tsdown'
 import { typertPlugin } from '@deepseek-ai/dsh-typert-generator/tsdown'
 
-/** The seven packages this fork owns; the published pin supplies everything else. */
+/** The eight packages this fork owns; the published pin supplies everything else. */
 const WORKSPACE = [
   'packages/workflow/workflow-spine',
   'packages/bundle/graph',
   'packages/bundle/refactory-presets',
+  'packages/bundle/refactory-web',
   'packages/refactory/refactory-console',
   'packages/refactory/tool-refactory',
   'packages/client/ui-refactory',
