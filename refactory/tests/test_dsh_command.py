@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from refactory_dsh import paths
 from refactory_dsh.paths import SOURCE_CLI_ENTRY, dsh_command, node_bin
 
 #: The production modules that spawn DSH. Each must ask the resolver.
@@ -29,12 +30,13 @@ def _source_checkout(root: Path) -> Path:
     return entry
 
 
-def test_a_source_checkout_launches_its_own_cli_through_tsx(tmp_path, monkeypatch):
+def test_a_source_checkout_launches_its_own_cli_through_the_bootstrap(tmp_path, monkeypatch):
     """The branch every checkout used before the pin: the source entry is there."""
     monkeypatch.delenv("DSH_CLI", raising=False)
     monkeypatch.setenv("DSH_ROOT", str(tmp_path))
     entry = _source_checkout(tmp_path)
-    assert dsh_command() == [node_bin(), "--import", "tsx/esm", str(entry)]
+    bootstrap = Path(paths.__file__).with_name("source_bootstrap.mjs").as_uri()
+    assert dsh_command() == [node_bin(), "--import", bootstrap, str(entry.resolve())]
 
 
 def test_an_install_launches_its_own_binary_when_no_source_checkout_is_there(
@@ -66,6 +68,6 @@ def test_every_module_that_spawns_dsh_asks_the_resolver():
     root = Path(__file__).resolve().parents[2]
     for relative in LAUNCHERS:
         text = (root / relative).read_text()
-        assert "dsh_command()" in text, f"{relative} does not ask dsh_command()"
+        assert "dsh_command(" in text, f"{relative} does not ask dsh_command(...)"
         assert "tsx/esm" not in text, f"{relative} still hardcodes the tsx launch"
         assert "apps/cli/src/bin.ts" not in text, f"{relative} still hardcodes the entry"

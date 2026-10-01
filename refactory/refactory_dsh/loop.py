@@ -1332,8 +1332,18 @@ class Loop(OuterLoop):
             for proposal in proposals:
                 if len(accepted) >= wanted:
                     break
-                allowed = self.config.allowed_ops or [op["op"] for op in nn_edits.catalogue(self.config.edit_preset)]
-                if proposal.edit.get("op") not in allowed:
+                op_name = proposal.edit.get("op")
+                # An op that is not in the catalogue at all is a different fact from
+                # one that exists but is outside this run's permitted edits. Calling
+                # both E-policy hides which fix the refusal is asking for.
+                refused = nn_edits.unknown(op_name)
+                if refused is not None:
+                    self.rejections.append(Rejection(rounds, proposal.edit, [refused]))
+                    continue
+                allowed = self.config.allowed_ops or [
+                    entry["op"] for entry in nn_edits.catalogue(self.config.edit_preset)
+                ]
+                if op_name not in allowed:
                     self.rejections.append(Rejection(rounds, proposal.edit, ["E-policy: operation is outside this run's permitted edits"]))
                     continue
                 parent = next((p for p in parents if p.id == proposal.parent), parents[0])

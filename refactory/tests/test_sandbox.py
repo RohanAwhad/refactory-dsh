@@ -250,13 +250,15 @@ def test_smoke_can_supply_a_model_client(tmp_path, monkeypatch):
     monkeypatch.setattr(sandbox, "run_sandboxed", fake_run_sandboxed)
     sandbox.smoke("circle_packing/adaptive", tmp_path / "w", project=Path("."), model=True)
     assert "DshModelClient" in seen["code"]
-    assert "model=DshModelClient()" in seen["code"]
+    # The generated client is handed the trusted parent's routing context, so the
+    # sandboxed package never reads a credential out of its own environment.
+    assert "model=DshModelClient(**" in seen["code"]
 
     sandbox.smoke("circle_packing/adaptive", tmp_path / "w2", project=Path("."))
     assert "DshModelClient" not in seen["code"]
 
 
-def test_a_nodes_model_call_cannot_background_its_own_work():
+def test_a_nodes_model_call_cannot_background_its_own_work(monkeypatch):
     """The one-shot completion a node makes is foreground-only (#63).
 
     The base profile's spawn subagent tool defaults to background-and-continuable. A
@@ -265,6 +267,8 @@ def test_a_nodes_model_call_cannot_background_its_own_work():
     the node's work nowhere: the research stage did exactly that, twice, leaving
     `research/` empty. The graph profile patches the same row for the CEO.
     """
+    import subprocess
+
     import yaml
 
     from refactory_dsh.model import NODE_PATCH, DshModelClient
@@ -276,24 +280,16 @@ def test_a_nodes_model_call_cannot_background_its_own_work():
     assert row["config"]["backgroundMode"] == "one-shot"
 
     seen: dict[str, object] = {}
-    import subprocess
 
-    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+    def fake_completion(self, cmd, run_dir):  # type: ignore[no-untyped-def]
         seen["cmd"] = cmd
-        class Done:
-            returncode = 0
-            stdout = "answer"
-            stderr = ""
-        return Done()
+        return subprocess.CompletedProcess(cmd, 0, "answer", "")
 
-    import refactory_dsh.model as model_module
-
-    original = subprocess.run
-    subprocess.run = fake_run  # type: ignore[assignment]
-    try:
-        DshModelClient().complete("say something")
-    finally:
-        subprocess.run = original  # type: ignore[assignment]
+    # A node's completion now streams through ``_run_completion`` (Popen, so a
+    # timeout can dispose managed tool processes); patching ``subprocess.run``
+    # would let the real dsh CLI run.
+    monkeypatch.setattr(DshModelClient, "_run_completion", fake_completion)
+    DshModelClient().complete("say something")
     cmd = seen["cmd"]
     assert "--patch" in cmd  # type: ignore[operator]
     assert str(NODE_PATCH) in cmd  # type: ignore[operator]

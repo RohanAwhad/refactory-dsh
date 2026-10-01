@@ -18,6 +18,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -199,9 +200,14 @@ def test_a_run_that_died_is_reported_as_died_not_as_running(tmp_path):
     """A reader has to be able to tell "still working" from "gone"."""
     run = _start(tmp_path)
     _wait(run)
-    recorded = json.loads((run / console.CONSOLE_FILE).read_text())
+    # A clean run left a finished owner record; a process that died mid-search
+    # leaves the same record saying it is running with a pid that is gone. That is
+    # the state the reader has to tell apart, so it is what this simulates.
+    owner = run / ".refactory" / "optimizer-status.json"
+    recorded = json.loads(owner.read_text())
+    recorded["status"] = "running"
     recorded["pid"] = 999999
-    (run / console.CONSOLE_FILE).write_text(json.dumps(recorded))
+    owner.write_text(json.dumps(recorded))
     (run / "report.json").unlink()
     assert console.status(run)["state"] == "died"
     assert console.status(run)["running"] is False
@@ -377,7 +383,8 @@ def test_the_cli_reports_a_missing_run_as_json_not_a_traceback(tmp_path):
         text=True,
     )
     assert result.returncode == 2
-    assert "is not a run directory" in json.loads(result.stdout)["error"]
+    error = json.loads(result.stdout)["error"]
+    assert "does not exist" in error and "gone" in error
     assert "Traceback" not in result.stderr
 
 
@@ -675,29 +682,21 @@ def test_a_single_run_needs_the_mode_to_run():
         console.main(["run"])
 
 
-def test_the_console_forwards_a_seeded_knob_as_the_loop_flag(monkeypatch):
-    """`--knob NAME=VALUE` reaches `refactory_dsh.loop --knob …` (#see 69).
+def test_the_console_forwards_a_seeded_knob_into_the_resolved_config(monkeypatch, tmp_path):
+    """`--knob NAME=VALUE` reaches the loop, never as a bare `--knobs` (#see 69).
 
     The console forwards each config key as `--<key>`, so passing the list under
     `knobs` produced `--knobs`, which the loop does not have: the run died at argv
-    parsing with "unrecognized arguments", before evaluating anything.
+    parsing with "unrecognized arguments", before evaluating anything. The values
+    now ride the resolved profile snapshot the loop is pointed at, so the assertion
+    is that the override is in that snapshot and named on the spawned argv.
     """
     from refactory_dsh import console
 
-    captured: dict[str, list[str]] = {}
+    captured: dict[str, dict[str, Any]] = {}
 
     def fake_spawn(mode, root, config, *, project):
-        argv = ["python", "-m", "refactory_dsh.loop", mode, "--runs-root", str(root)]
-        for key, value in sorted(config.items()):
-            if value is None or value is False:
-                continue
-            flag = "--" + key.replace("_", "-")
-            if isinstance(value, (list, tuple)):
-                for element in value:
-                    argv += [flag, str(element)]
-            else:
-                argv += [flag] if value is True else [flag, str(value)]
-        captured["argv"] = argv
+        captured["config"] = config
 
         class Process:
             pid = 4321
@@ -705,19 +704,15 @@ def test_the_console_forwards_a_seeded_knob_as_the_loop_flag(monkeypatch):
         return Process()
 
     monkeypatch.setattr(console, "_spawn", fake_spawn)
-    project = tmp_path = None
-    import tempfile
-    from pathlib import Path as _Path
-
-    project = _Path(tempfile.mkdtemp())
     payload = console.start(
-        "cve_patch_pack/patch", project=project,
-        knob=["source_root=/tmp/demo_pkg", "test_command=pytest -q"],
+        "circle_packing/adaptive", project=tmp_path,
+        knob=["grid=6", "selector=best"],
     )
-    argv = captured["argv"]
-    assert "--knob" in argv
-    assert argv.count("--knob") == 2, argv
-    assert "source_root=/tmp/demo_pkg" in argv
+    config = captured["config"]
+    assert "resolved_config" in config
+    snapshot = json.loads(Path(config["resolved_config"]).read_text())
+    assert snapshot["settings"]["knobs"] == {"grid": "6", "selector": "best"}
+    assert "knobs" not in config, "the bare `--knobs` flag was reintroduced"
     assert payload["run_id"]
 
 

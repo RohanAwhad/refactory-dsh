@@ -123,7 +123,7 @@ def test_worker_configuration_and_unavailable_mutations_are_truthful(tmp_path):
     assert 'chat' not in recovery
     assert 'Unavailable' in recovery['interfaces']['chat']
     mode = discovery.help_contract(tmp_path, 'default_pack/design_fast')['mode']
-    assert mode['action'] == 'run'
+    assert mode['action'] == 'design_fast'
     assert mode['scored'] is False
     assert any(node['id'] == 'emit' and node['role'] for node in mode['nodes'])
     assert not mode['coverage_warnings']

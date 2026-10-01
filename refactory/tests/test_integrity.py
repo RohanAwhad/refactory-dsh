@@ -169,12 +169,15 @@ def test_summarise_reasons_keeps_the_first_examples():
     assert summary == ["V6 [a]: first", "V6 [b]: second"]
 
 
-def test_the_prompt_refusals_include_the_invariant():
+def test_the_prompt_refusals_include_the_invariant(tmp_path):
     """End to end: what the optimizer is shown carries the intent rule."""
     loop = Loop(
         "circle_packing/adaptive",
         LoopConfig(epochs=1, batch_size=2, optimizer="random", seed=1,
-                   runs_root=Path("/tmp/never-written")),
+                   # A private directory, not `/tmp` itself: looking for prior runs
+                   # scans the runs root, and a shared `/tmp` can hold entries this
+                   # process may not stat (a systemd-private directory, for one).
+                   runs_root=tmp_path / "never-written"),
         project=Path("."),
     )
     loop.init()

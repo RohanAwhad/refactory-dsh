@@ -108,18 +108,24 @@ def test_add_refuses_something_that_is_not_a_package(tmp_path):
         registry.add(tmp_path, empty)
 
 
-def test_a_refused_name_leaves_no_residue(tmp_path):
-    """A refused add must leave the workspace as it was.
+def test_a_refused_add_leaves_no_residue(tmp_path):
+    """A refusal after the copy must undo it, or the next add is a false clash.
 
-    The copy happens before the declared name is checked, and the check raises, so
-    a cleanup that only runs on the failed comparison's return value never runs.
-    The residue then makes the next attempt fail with a false clash that tells the
-    caller to pass ``--as`` -- which is what they already did.
+    ``add`` is allowed to rename on the way in, so a name disagreement is no longer
+    the refusal; a package that copies but cannot be loaded still is. The copy
+    happens before ``load`` checks the package, so the failure has to evict it --
+    the residue would make the next attempt fail with a false name clash that tells
+    the caller to pass ``--as``, which is what they already did.
     """
-    source = _make_package(tmp_path / "elsewhere" / "whatever", "declared_name")
-    destination = registry.workspace_root(tmp_path) / "destination_name"
-    with pytest.raises(PackageError, match="must agree"):
-        registry.add(tmp_path, source, as_name="destination_name")
+    source = _make_package(tmp_path / "elsewhere" / "broken_pkg", "broken_pkg")
+    (source / "__init__.py").write_text(
+        "from refactory_dsh.nn import Package\n"
+        "PACKAGE = Package(name='broken_pkg', description='a test package')\n"
+        "raise RuntimeError('this package cannot load')\n"
+    )
+    destination = registry.workspace_root(tmp_path) / "broken_pkg"
+    with pytest.raises(RuntimeError, match="cannot load"):
+        registry.add(tmp_path, source)
     assert not destination.exists(), (
         "a refused add left the copied package behind, so the next attempt is a "
         "false name clash"

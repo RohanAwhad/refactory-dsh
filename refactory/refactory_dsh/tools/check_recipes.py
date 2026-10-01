@@ -51,7 +51,7 @@ def run(recipe: Recipe, *, timeout: int) -> Result:
     )
     output = completed.stdout + completed.stderr
     result = recipes_module.check(recipe, output, _cwd(recipe))
-    if completed.returncode != 0:
+    if completed.returncode not in recipe.exit_ok:
         result.ok = False
         result.problems.append(f"exit code {completed.returncode}")
     return result

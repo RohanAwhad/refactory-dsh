@@ -260,13 +260,24 @@ def test_a_destination_that_is_not_a_package_name_is_refused(tmp_path):
 
 
 def test_a_one_shot_act_is_not_repeated_at_the_next_boundary(tmp_path):
-    """A boundary that adopted the same winner every epoch is a bug, not enthusiasm."""
+    """A boundary that adopted the same winner every epoch is a bug, not enthusiasm.
+
+    A finished search refuses to queue a population act it can no longer reach, so
+    the file a live boundary would read is written directly here; what this pins is
+    that the boundary consumes it once rather than honoring it again.
+    """
     loop = Loop(MODE, _config(tmp_path), project=Path("."))
     loop.run()
     victim = loop.leaderboard()[-1].id
     control = Control(tmp_path)
-    control.request("reject", target=victim)
 
+    with pytest.raises(ControlError, match="search is finished"):
+        control.request("reject", target=victim)
+
+    (tmp_path / "control.json").write_text(
+        json.dumps({"action": "reject", "target": victim, "at": 0.0})
+    )
+    assert control.read() == "reject"
     assert loop._apply_control() is None
     assert loop.rejected == [victim]
     assert control.read() is None, "the act stayed in the file to be honored again"

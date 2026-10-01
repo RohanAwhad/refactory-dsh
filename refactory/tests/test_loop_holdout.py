@@ -196,7 +196,10 @@ def test_one_instance_cannot_be_split_and_the_run_records_that(tmp_path):
     assert audit["instances"] == {"train": 1, "holdout": 0}
     assert audit["holdout"] is None
     assert audit["gap"] is None
-    assert audit["overfit"] is False
+    # ``overfit`` is a tri-state: True when the gap is above the threshold, False
+    # when it was measured and is not, and None when there was no holdout to
+    # measure. A single-item Task is the third case, not a claim about the winner.
+    assert audit["overfit"] is None
     assert audit["threshold"] == 0.15
     assert "cannot be split" in audit.get("note", "")
 

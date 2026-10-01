@@ -595,7 +595,7 @@ def _expand_loop(edit: dict, state: State) -> list[dict]:
         steps.append({"op": "remove_edge", "source": successor.source,
                       "target": successor.target, "condition": successor.condition})
     steps.append({"op": "add_edge", "source": target, "target": gate["id"], "condition": None})
-    steps.append({"op": "add_edge", "source": gate["id"], "target": target, "condition": "retry"})
+    steps.append({"op": "add_edge", "source": gate["id"], "target": target, "condition": "reloop"})
     if successor is not None:
         steps.append({"op": "add_edge", "source": gate["id"], "target": successor.target,
                       "condition": "proceed"})
@@ -644,6 +644,19 @@ def _specs() -> dict[str, EditSpec]:
 
 def names() -> list[str]:
     return sorted(_specs())
+
+
+def unknown(op: object) -> str | None:
+    """The refusal for an op the catalogue does not have, or None when it does.
+
+    One home for the rule: an op that does not exist is a different fact from one
+    that exists and is outside this run's permitted edits. The callers differ only
+    in what they do with the answer -- reject and continue, or reject and return --
+    so neither spells the predicate or the message a second time.
+    """
+    if op in _specs():
+        return None
+    return f"E-op: unknown edit {op!r}; known: {names()}"
 
 
 def enabled(preset: str = "broad") -> list[str]:

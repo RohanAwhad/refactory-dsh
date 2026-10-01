@@ -247,7 +247,7 @@ def test_a_run_nobody_steered_writes_no_ledger(tmp_path):
 
 def test_a_resumed_run_keeps_what_it_was_told(tmp_path):
     """Re-seeding on resume would put a second origin in the ledger."""
-    from refactory_dsh.loop import Loop, LoopConfig
+    from refactory_dsh.loop import Loop, LoopConfig, LoopError
 
     root = tmp_path / "run"
     config = LoopConfig(epochs=1, batch_size=2, optimizer="random", seed=5, runs_root=root,
@@ -256,7 +256,7 @@ def test_a_resumed_run_keeps_what_it_was_told(tmp_path):
     Ledger(root).note("constraint", "no new dependencies")
 
     resumed = LoopConfig(epochs=1, batch_size=2, optimizer="random", seed=5, runs_root=root,
-                         intent="a different request entirely", resume=True)
+                         intent="the first request", resume=True)
     Loop("circle_packing/adaptive", resumed, project=ROOT).init()
 
     assert Ledger(root).entries()[0]["text"] == "the first request", (
@@ -265,6 +265,13 @@ def test_a_resumed_run_keeps_what_it_was_told(tmp_path):
     assert Ledger(root).constraints() == ["no new dependencies"], (
         "resuming dropped a constraint that was given while the run was going"
     )
+
+    # A different request is a different evaluation context, so the resume is
+    # refused rather than reusing cached scores for a program it no longer describes.
+    changed = LoopConfig(epochs=1, batch_size=2, optimizer="random", seed=5, runs_root=root,
+                         intent="a different request entirely", resume=True)
+    with pytest.raises(LoopError, match="evaluation context changed"):
+        Loop("circle_packing/adaptive", changed, project=ROOT).init()
 
 
 def test_the_console_can_add_a_note_mid_run(tmp_path):
@@ -385,8 +392,8 @@ def test_a_gate_cannot_have_two_answerers():
 def test_a_verdict_is_recorded_and_read_back(tmp_path):
     ledger = Ledger.seed(tmp_path, "build a mode for circle packing")
     assert ledger.verdicts() == {}
-    ledger.verdict("ask", "proceed")
-    ledger.verdict("confirm", "halt")
+    ledger.verdict("ask", "proceed", approval=True)
+    ledger.verdict("confirm", "halt", approval=True)
     assert ledger.verdicts() == {"ask": "proceed", "confirm": "halt"}
     body = ledger.path.read_text()
     assert "gate: ask" in body and "verdict: proceed" in body
@@ -395,16 +402,16 @@ def test_a_verdict_is_recorded_and_read_back(tmp_path):
 def test_the_last_verdict_for_a_gate_wins(tmp_path):
     """A person may change their mind while the run is paused."""
     ledger = Ledger.seed(tmp_path, "build a mode")
-    ledger.verdict("ask", "proceed")
-    ledger.verdict("ask", "halt")
+    ledger.verdict("ask", "proceed", approval=True)
+    ledger.verdict("ask", "halt", approval=True)
     assert ledger.verdicts() == {"ask": "halt"}
 
 
 def test_a_verdict_needs_a_gate_and_a_value(tmp_path):
     ledger = Ledger.seed(tmp_path, "build a mode")
-    with pytest.raises(SteeringError, match="needs the gate"):
+    with pytest.raises(SteeringError, match="single-line gate"):
         ledger.verdict("", "proceed")
-    with pytest.raises(SteeringError, match="empty verdict"):
+    with pytest.raises(SteeringError, match="nonempty value"):
         ledger.verdict("ask", "   ")
 
 
@@ -412,7 +419,11 @@ def test_the_console_records_a_verdict_so_the_runtime_can_write_it(tmp_path):
     """The graph profile's answerer records a person's choice through this verb."""
     from refactory_dsh import console
 
-    payload = console._steer(tmp_path, seed="build a mode", verdicts=("ask=proceed",))
+    # A public steer answer is scoped to the reviewed visit, so the run has to have
+    # reached the gate: the visit is what records the declaration the answer cites.
+    Ledger.seed(tmp_path, "build a mode")
+    Ledger(tmp_path).visit("ask", ["draft.md"])
+    payload = console._steer(tmp_path, verdicts=("ask=proceed",))
     assert payload["verdicts"] == {"ask": "proceed"}
     assert "verdict: proceed" in (tmp_path / "intent-ledger.md").read_text()
 
@@ -443,7 +454,7 @@ def test_an_explicit_verdict_still_wins_over_the_ledger(tmp_path):
 
     work = tmp_path / "run"
     Ledger.seed(work, "build a mode")
-    Ledger(work).verdict("ask", "proceed")
+    Ledger(work).verdict("ask", "proceed", approval=True)
     result = execute(_gated_mode()().build(), work, verdicts={"ask": "nonsense"})
     assert result.exit_ok is False
     assert "nonsense" in (result.error or ""), result.error
@@ -452,12 +463,20 @@ def test_an_explicit_verdict_still_wins_over_the_ledger(tmp_path):
 # ── the chain: a node that ignored the ledger is caught (#43) ──────────────
 
 
-def test_the_ledger_instruction_asks_for_a_citation(tmp_path):
+def test_the_ledger_instruction_forbids_appending_citations(tmp_path):
+    """The node is told to read the ledger, not to litter its artifact with proofs.
+
+    A citation appended to a code or JSON artifact is not evidence the constraint was
+    followed, and the runtime keeps supplied context and artifact hashes in its own
+    receipt instead.
+    """
     ledger = Ledger.seed(tmp_path, "build a mode for circle packing")
     workflow = steering.interactive(_state(), tmp_path)[0]
     prompts = " ".join(_agent_prompts(workflow))
-    assert steering.CITATION in prompts, "agent nodes were not told to cite the ledger"
-    assert ledger.entries()[0]["at"] in prompts, "the entries to cite were not listed"
+    assert "Do not append steering citations" in prompts, (
+        "agent nodes were not told to keep citations out of their artifacts"
+    )
+    assert ledger.entries()[0]["at"] in prompts, "the entries to read were not listed"
 
 
 def test_the_instruction_names_the_ledger_path_so_a_mid_run_note_is_read(tmp_path):
@@ -471,7 +490,7 @@ def test_the_instruction_names_the_ledger_path_so_a_mid_run_note_is_read(tmp_pat
     workflow = steering.interactive(_state(), tmp_path)[0]
     prompts = " ".join(_agent_prompts(workflow))
     assert str(ledger.path) in prompts, "the prompt did not name the live ledger"
-    assert "appended to while the run goes" in prompts
+    assert "Read the live ledger" in prompts
 
 
 def test_a_note_added_mid_run_is_live_for_a_later_node(tmp_path):

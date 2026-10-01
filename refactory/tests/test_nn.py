@@ -40,7 +40,7 @@ class Fixture(nn.Mode):
                           knobs=("seed",)))
         graph.connect("start", "mid")
         graph.connect("mid", "gate")
-        graph.connect("gate", "mid", condition="retry")
+        graph.connect("gate", "mid", condition="reloop")
         graph.connect("gate", "stop", condition="proceed")
         return graph
 
@@ -335,7 +335,10 @@ def test_loop_macro_adds_a_bounded_retry():
     moved = nn.edits.apply({"op": "loop", "target": "mid", "gate": gate}, state)
     graph = nn.Graph.from_state(moved["graph"])
     verdicts = {e.condition: e.target for e in graph.out_edges("again")}
-    assert verdicts == {"retry": "mid", "proceed": "gate"}
+    assert verdicts == {"reloop": "mid", "proceed": "gate"}, (
+        "the retry edge has to be the explicit 'reloop' the validator and the TS "
+        "spine recognise; an unlabelled edge leaves V10 to infer the cycle's budget"
+    )
     assert _validate(moved) == []
 
 

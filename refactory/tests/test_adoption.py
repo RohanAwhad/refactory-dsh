@@ -141,7 +141,9 @@ def test_best_breaks_a_tie_the_way_the_run_reports_it(tmp_path):
     state = {"version": 1, "graph": {"start": "a", "nodes": {}, "edges": []}, "knobs": {}}
     entries = [
         {"event": "candidate", "id": "ffff", "parent": None, "edits": [], "state": state},
-        {"event": "score", "id": "ffff", "score": 0.5},
+        # ``exit_ok`` is what a score entry carries when the candidate actually ran;
+        # without it the adopter treats the candidate as ineligible, not as tied.
+        {"event": "score", "id": "ffff", "score": 0.5, "exit_ok": True},
         {
             "event": "candidate",
             "id": "0000",
@@ -149,7 +151,7 @@ def test_best_breaks_a_tie_the_way_the_run_reports_it(tmp_path):
             "edits": [{"op": "set_knob", "name": "x", "value": 1}],
             "state": state,
         },
-        {"event": "score", "id": "0000", "score": 0.5},
+        {"event": "score", "id": "0000", "score": 0.5, "exit_ok": True},
     ]
     (run / "journal.jsonl").write_text(
         "".join(json.dumps(entry) + "\n" for entry in entries)

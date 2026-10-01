@@ -61,7 +61,7 @@ def test_the_persons_answer_completes_the_run_and_publishes(tmp_path):
     """The same run, resumed on the answer the ledger recorded."""
     work = tmp_path / "run"
     steering.Ledger.seed(work, "draft a note and let me approve it")
-    steering.Ledger(work).verdict("approve", "proceed")
+    steering.Ledger(work).verdict("approve", "proceed", approval=True)
 
     result = _mode().evaluate(work)
     assert result.exit_ok, result.error
@@ -73,7 +73,7 @@ def test_the_persons_answer_completes_the_run_and_publishes(tmp_path):
 def test_a_halt_publishes_nothing_and_scores_zero(tmp_path):
     work = tmp_path / "run"
     steering.Ledger.seed(work, "draft a note and let me approve it")
-    steering.Ledger(work).verdict("approve", "halt")
+    steering.Ledger(work).verdict("approve", "halt", approval=True)
 
     result = _mode().evaluate(work)
     assert result.exit_ok, result.error
@@ -94,7 +94,7 @@ def test_the_fn_gate_refuses_a_thin_draft(tmp_path):
     state["knobs"]["rounds"]["value"] = 1
     mode = type(mode)(state=state)
     steering.Ledger.seed(work, "draft a note about circle packing")
-    steering.Ledger(work).verdict("approve", "proceed")
+    steering.Ledger(work).verdict("approve", "proceed", approval=True)
 
     result = mode.evaluate(work, task={"topic": "x"})
     assert result.exit_ok is False
