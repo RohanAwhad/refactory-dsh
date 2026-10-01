@@ -595,7 +595,7 @@ def _expand_loop(edit: dict, state: State) -> list[dict]:
         steps.append({"op": "remove_edge", "source": successor.source,
                       "target": successor.target, "condition": successor.condition})
     steps.append({"op": "add_edge", "source": target, "target": gate["id"], "condition": None})
-    steps.append({"op": "add_edge", "source": gate["id"], "target": target, "condition": "retry"})
+    steps.append({"op": "add_edge", "source": gate["id"], "target": target, "condition": "reloop"})
     if successor is not None:
         steps.append({"op": "add_edge", "source": gate["id"], "target": successor.target,
                       "condition": "proceed"})

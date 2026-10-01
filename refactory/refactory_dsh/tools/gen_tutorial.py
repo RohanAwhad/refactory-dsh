@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import html
+import json
 import re
 import subprocess
 import sys
@@ -40,8 +41,10 @@ OUT = Path(__file__).resolve().parents[2] / "docs" / "tutorial.html"
 #: not what this checkout happens to have made.
 COMMITTED = Path(__file__).resolve().parents[2] / "refactory_packages"
 
-#: The tool whose verb table the "ask the CEO" section documents.
-TOOL_SOURCE = REPO_ROOT / "packages" / "refactory" / "tool-refactory" / "src" / "index.ts"
+#: The tool's generated contract table, which the "ask the CEO" section documents.
+#: `2b14f72eff` (#258) replaced the hand-written `VERBS` table in `index.ts` with
+#: this file, so the page reads the table the tool actually ships.
+TOOL_SOURCE = REPO_ROOT / "packages" / "refactory" / "tool-refactory" / "src" / "generated-help.ts"
 
 #: Which node kinds a reader has to understand, in the order the legend shows them.
 KINDS: tuple[tuple[str, str], ...] = (
@@ -221,11 +224,27 @@ def command_help(module: str) -> str:
     return result.stdout + result.stderr
 
 
+def _generated_object(text: str, marker: str) -> dict[str, Any]:
+    """The JSON object literal `text` assigns to `marker`, read as JSON.
+
+    `gen_discovery` emits `generated-help.ts` with `json.dumps`, so the literal is
+    valid JSON and can be decoded directly rather than pattern-matched as TypeScript.
+    """
+    start = text.index("{", text.index(marker) + len(marker))
+    value, _end = json.JSONDecoder().raw_decode(text, start)
+    if not isinstance(value, dict):
+        raise ValueError(f"{marker!r} is not an object literal")
+    return value
+
+
 def tool_verbs() -> list[tuple[str, str]]:
-    """The `refactory` tool's verbs and help, read from its own verb table."""
-    text = TOOL_SOURCE.read_text()
-    block = text[text.index("const VERBS = {"):text.index("} as const", text.index("const VERBS = {"))]
-    return re.findall(r"(?m)^\s+(\w+): '((?:[^'\\]|\\.)*)'", block)
+    """The `refactory` tool's verbs and purposes, read from its generated table.
+
+    The table lives in `generated-help.ts` (`CHAT`), not in `index.ts`;
+    reading it keeps this page tied to the contract the tool ships.
+    """
+    chats = _generated_object(TOOL_SOURCE.read_text(), "export const CHAT = ")
+    return [(str(entry["verb"]), str(entry["purpose"])) for entry in chats.values()]
 
 
 # ── rendering ──────────────────────────────────────────────────────────────
@@ -513,6 +532,7 @@ def render(project: Path | None = None) -> str:
         ledger_kinds=render_ledger_kinds(),
         drift_gates=render_drift_gates(),
         ceo_verbs=render_ceo_verbs(),
+        ceo_actions=len(tool_verbs()),
         loop_help=esc(loop_help),
         create_help=esc(create_help),
         loop_defaults=render_named(
@@ -657,7 +677,7 @@ TEMPLATE = """<!DOCTYPE html>
       <span>{mode_count} modes</span>
       <span>{agent_modes} call a model</span>
       <span>2 runtimes: walker &amp; DSH</span>
-      <span>16 CEO actions</span>
+      <span>{ceo_actions} CEO actions</span>
     </div>
   </header>
 

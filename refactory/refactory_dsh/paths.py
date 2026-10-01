@@ -88,10 +88,10 @@ def dsh_command(*, root: Path | None = None, cli: str | None = None) -> list[str
 
     Three answers, in order. ``DSH_CLI`` names an executable outright, which is how a
     caller drives a pinned install the checkout does not resolve on its own. A source
-    checkout — one that still holds ``apps/cli/src/bin.ts`` — runs its own CLI through
-    tsx, which is what every checkout did before the harness was pinned. Anything else
-    uses the installed `dsh`, which is the only launcher left once the source copy is
-    gone.
+    checkout — one that still holds ``apps/cli/src/bin.ts`` — runs its own CLI by
+    preloading ``source_bootstrap.mjs``, which installs tsx and the source
+    configuration before the entry runs. Anything else uses the installed `dsh`,
+    which is the only launcher left once the source copy is gone.
 
     The source preload resolves tsx and its source configuration from the selected
     checkout. The child's working directory remains the caller's, so an agent can

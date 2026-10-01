@@ -66,6 +66,12 @@ class Run:
     def attempt(self, proposal: Proposal, parent: Candidate) -> Candidate | list[str]:
         """Apply a typed edit and validate it. Spends no budget."""
         from refactory_dsh.nn import edits
+        op = proposal.edit.get("op")
+        # Unknown and unpermitted are two facts with two fixes; see Loop._refinement.
+        if op not in edits.names():
+            reason = [f"E-op: unknown edit {op!r}; known: {edits.names()}"]
+            self.loop.rejections.append(Rejection(1, proposal.edit, reason, rationale=proposal.rationale))
+            return reason
         allowed = self.loop.config.allowed_ops or edits.enabled(self.loop.config.edit_preset)
         if proposal.edit.get("op") not in allowed:
             reason = ["E-policy: operation is outside this run's permitted edits"]

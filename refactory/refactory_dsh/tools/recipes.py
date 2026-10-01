@@ -60,6 +60,10 @@ class Recipe:
     script: str = ""
     #: Where the script runs: the repository root, or the refactory package.
     cwd: str = "root"
+    #: Exit codes the recipe may return and still have done what the page says. A
+    #: diagnostic reports a verdict as data: on a machine with local problems it
+    #: exits nonzero without the documented command having failed at its job.
+    exit_ok: tuple[int, ...] = (0,)
 
     def runnable(self, tier: str) -> bool:
         """Whether `check_recipes` may run this at the given tier."""
@@ -84,7 +88,12 @@ RECIPES: tuple[Recipe, ...] = (
         title="Is this machine ready?",
         command="uv run refactory doctor",
         expect="python, uv, node, the vendored language, and the DSH profile the modes run on",
-        contains=("refactory doctor: local configuration ready (authentication not tested)",),
+        # A verdict depends on the machine: a developer's DSH home can hold a stale
+        # attached profile or a different serving `dsh`, which doctor reports rather
+        # than swallows. The recipe checks the rows and that a verdict is stated,
+        # and lets the verdict itself be 1 ("problems") instead of failing the page.
+        contains=("python", "uv", "node", "DSH profile 'graph'", "refactory doctor: "),
+        exit_ok=(0, 1),
     ),
     Recipe(
         id="install-packages",
@@ -206,9 +215,13 @@ RECIPES: tuple[Recipe, ...] = (
         id="steer-verdict",
         group="steer",
         title="Answer a gate a person owns, so a resume replays it",
-        command=f"uv run refactory steer --run {SCRATCH}/run --verdict gate_strategy=proceed",
-        expect="the verdict is recorded under its gate and reused rather than asked again",
-        contains=("gate_strategy", "proceed"),
+        command=(
+            "uv run python -m refactory_dsh.console open review_pack/review \\\n"
+            f"  --workdir {SCRATCH}/verdict-run\n"
+            f"uv run refactory steer --run {SCRATCH}/verdict-run --verdict approve=proceed"
+        ),
+        expect="the verdict is scoped to the reviewed draft and recorded under the gate that owns it",
+        contains=("gate: approve", "verdict: proceed", "scope:"),
     ),
     Recipe(
         id="dataset-walker",

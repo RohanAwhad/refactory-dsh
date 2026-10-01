@@ -84,6 +84,8 @@ def catalogue(*, project: Path | None = None) -> list[dict[str, Any]]:
     missing from the list" is otherwise indistinguishable from a typo.
     """
     project = Path(project or project_root())
+    from refactory_dsh.cli import AUTHORING
+
     grouped = registry.catalogue(project)
     found: list[dict[str, Any]] = []
     for package_name, modes in grouped.items():
@@ -119,10 +121,12 @@ def catalogue(*, project: Path | None = None) -> list[dict[str, Any]]:
                 "scored": mode.is_scored(),
                 # Which verb runs this mode. An unscored mode is an authoring mode:
                 # `start` refuses it, and a caller that has to fail to find that out
-                # is a caller that picked the wrong tool from the catalogue.
+                # is a caller that picked the wrong tool from the catalogue. The
+                # authoring verbs are `cli.AUTHORING`'s keys, including the fast
+                # variants; anything else unscored falls back to `run`.
                 "action": (
                     "start" if mode.is_scored()
-                    else entry["name"] if entry["name"] in ("create", "edit", "design")
+                    else entry["name"] if entry["name"] in AUTHORING
                     else "run"
                 ),
                 "guidance": described["guidance"],

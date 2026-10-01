@@ -140,6 +140,10 @@ installed copy.
 | `--max-elapsed-s <n>` / `--max-tokens <n>` | shared limits for proposals, trials, nested work and final validation | unlimited |
 | `--validation-reserve-s <n>` / `--validation-reserve-tokens <n>` | part of the shared allocation reserved for validation | 0 |
 | `--resume` | continue a compatible saved search and retain consumed resources | off |
+| `--max-steps <n>` | step ceiling for one inner run, enforced by the executor | 2000 |
+| `--history-limit <n>` | how many evaluated candidates the optimizer is shown; bounded so a prompt cannot grow without limit | 200 |
+| `--prior-runs <n>` | how many previous runs are summarised as a prior for this one | 3 |
+| `--dsh-timeout-s <n>` | wall-clock ceiling for one inner run when the evaluator is DSH | 900 |
 | `--verbose` | print every event, and each candidate's own run output, not only the meaningful ones | off |
 
 **For Task-bound modes, candidates use the training items and the winner is audited on held-out items.** Modes without a data split report holdout as not applicable. The part travels in the run directory (`subset.json` beside each candidate), not in a knob, so a search cannot choose its own exam; the audit lands in `<run root>/holdout.json` and in the report as `{"train", "holdout", "gap", "overfit", "threshold", "instances"}`, with `overfit` true when `train − holdout` exceeds 0.15. The score the search compares has the size cost taken off it, and the unpenalised number is recorded beside it as `raw_score`. `refactory best` reports the audit, and `refactory adopt` refuses an overfit winner unless you pass `--allow-overfit`.
@@ -178,6 +182,12 @@ The read verbs pass through the console's own `--project`, `--runs-root`, `--aft
 | command | what it does |
 |---|---|
 | `refactory doctor` | check local configuration and missing setup; this does not test authentication or quota. |
+| `refactory help [--topic <topic>]` | the operating guide, and the current mode and operation schemas. |
+| `refactory docs [--page <page>]` | search and read the documentation shipped with this checkout. |
+| `refactory workers` | the coding-agent worker configuration and the capabilities each backend reports. |
+| `refactory runtime` | the resolved runtime and model route a run would use. |
+| `refactory profile-save --name <name> --spec <JSON>` | save an immutable configuration version. |
+| `refactory graph-control [--node <id>]` | control a graph run through the spine: pause, resume or stop it. |
 | `refactory ui --port <n> --no-open` | start the [browser GUI](interfaces.md) without opening a browser. |
 
 
