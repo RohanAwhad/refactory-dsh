@@ -13,17 +13,17 @@ packages:
 # A workspace package keeps its name against the registry copy of the same name.
 linkWorkspacePackages: true
 
-# Every cordis/schemastery name the pinned harness depends on, at the exact
-# version its own installed tree carries. pnpm 11 reads settings from this file;
-# the root manifest repeats the same table for readers.
+# Every cordis/schemastery name the pinned harness resolves through, at the exact
+# version its own installed tree carries. The pin declares `~4.0.4`-style ranges
+# for these, so the override is what holds one physical copy per name across the
+# tree instead of letting each dependent float to its own patch release (#263).
 overrides:
-  '@deepseek-ai/cordis': '4.0.2'
-  '@deepseek-ai/cordis-plugin-loader': '1.0.3'
-  '@deepseek-ai/cordis-plugin-include': '1.0.7'
-  '@deepseek-ai/cordis-plugin-hmr': '1.0.17'
-  '@deepseek-ai/cordis-plugin-timer': '1.1.4'
-  '@deepseek-ai/cordis-plugin-group': '1.0.2'
-  '@deepseek-ai/schemastery': '3.18.2'
+  '@deepseek-ai/cordis': '4.0.4'
+  '@deepseek-ai/cordis-plugin-loader': '1.0.5'
+  '@deepseek-ai/cordis-plugin-include': '1.0.9'
+  '@deepseek-ai/cordis-plugin-timer': '1.1.6'
+  '@deepseek-ai/cordis-plugin-group': '1.0.4'
+  '@deepseek-ai/schemastery': '3.18.4'
 
 peerDependencyRules:
   allowedVersions:
@@ -47,9 +47,8 @@ allowBuilds:
   protobufjs: false
   msgpackr-extract: false
 patchedDependencies:
-  '@deepseek-ai/dsh-client-ui-directory-picker-native@0.1.6-alpha.1': patches/@deepseek-ai__dsh-client-ui-directory-picker-native@0.1.6-alpha.1.patch
-  '@deepseek-ai/dsh-headless@0.1.6-alpha.1': patches/@deepseek-ai__dsh-headless@0.1.6-alpha.1.patch
-  '@deepseek-ai/dsh-goal-round-driver@0.1.6-alpha.1': patches/@deepseek-ai__dsh-goal-round-driver@0.1.6-alpha.1.patch
-  '@deepseek-ai/dsh-client-ui-conversation@0.1.6-alpha.1': patches/@deepseek-ai__dsh-client-ui-conversation@0.1.6-alpha.1.patch
-  '@deepseek-ai/dsh-subagent-codex@0.1.6-alpha.1': patches/@deepseek-ai__dsh-subagent-codex@0.1.6-alpha.1.patch
-  '@deepseek-ai/dsh-subagent-claude-code@0.1.6-alpha.1': patches/@deepseek-ai__dsh-subagent-claude-code@0.1.6-alpha.1.patch
+  '@deepseek-ai/dsh-client-ui-directory-picker-native@0.2.0-rc.2': patches/@deepseek-ai__dsh-client-ui-directory-picker-native@0.2.0-rc.2.patch
+  '@deepseek-ai/dsh-headless@0.2.0-rc.2': patches/@deepseek-ai__dsh-headless@0.2.0-rc.2.patch
+  '@deepseek-ai/dsh-goal-round-driver@0.2.0-rc.2': patches/@deepseek-ai__dsh-goal-round-driver@0.2.0-rc.2.patch
+  '@deepseek-ai/dsh-subagent-codex@0.2.0-rc.2': patches/@deepseek-ai__dsh-subagent-codex@0.2.0-rc.2.patch
+  '@deepseek-ai/dsh-subagent-claude-code@0.2.0-rc.2': patches/@deepseek-ai__dsh-subagent-claude-code@0.2.0-rc.2.patch

@@ -27,7 +27,7 @@ import type {
 } from '@deepseek-ai/dsh-refactory-console/types'
 import type { PropsLocale, PropsRuntime, PropsStore, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import {
-  IconPlayOutline16, IconRefreshOutline16, IconStopFill16,
+  IconPlayOutlineRegular, IconRefreshOutlineRegular, IconStopFillRegular,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {} from './locales.ts'
 import type { RefactoryInjected } from './face.ts'
@@ -321,7 +321,7 @@ function Status({
           data-refactory-refresh
           onClick={() => { refresh(tabId, run, status.cursor, signal) }}
         >
-          <IconRefreshOutline16 />
+          <IconRefreshOutlineRegular />
           {t('status.refresh')}
         </button>
         {!status.finished && status.kind === 'optimizer' && (
@@ -331,7 +331,7 @@ function Status({
             data-refactory-stop
             onClick={() => { stop(tabId, run, signal) }}
           >
-            <IconStopFill16 />
+            <IconStopFillRegular />
             {t('status.stop')}
           </button>
         )}
@@ -374,7 +374,7 @@ function Candidates({
           data-refactory-candidates-read
           onClick={() => { readCandidates(tabId, run, signal) }}
         >
-          <IconRefreshOutline16 />
+          <IconRefreshOutlineRegular />
           {t('candidates.read')}
         </button>
         <div className={css.field}>
@@ -540,7 +540,7 @@ function Steering({
           data-refactory-steering-refresh
           onClick={() => { readSteering(tabId, run, signal) }}
         >
-          <IconRefreshOutline16 />
+          <IconRefreshOutlineRegular />
           {t('steering.refresh')}
         </button>
         {optimizer && <button
@@ -702,7 +702,7 @@ export function RefactoryBody({
           data-refactory-reload
           onClick={() => { reload(tab.id, signal) }}
         >
-          <IconRefreshOutline16 />
+          <IconRefreshOutlineRegular />
         </button>
       </div>
       <details className={css.project} data-refactory-project>
@@ -868,7 +868,7 @@ export function RefactoryBody({
           <button type="button" className={`${css.action} ${css.primary}`}
             disabled={state.starting || state.busy || !selected.enabled || !selected.scored || selected.action !== 'start' || !validBudget}
             data-refactory-start onClick={() => { start(tab.id, selected.id, knobs, state.settings, signal) }}>
-            <IconPlayOutline16 />{t(state.starting ? 'setup.starting' : 'setup.start')}
+            <IconPlayOutlineRegular />{t(state.starting ? 'setup.starting' : 'setup.start')}
           </button>
           <p className={css.note}>{t('budget.scope')}</p>
         </div>}
@@ -879,7 +879,7 @@ export function RefactoryBody({
             <p className={css.launchSummary}>{t('setup.runSummary', { mode: selected.id })}</p>
             <button type="button" className={`${css.action} ${css.primary}`} disabled={state.single?.kind === 'running'}
               data-refactory-run-once onClick={() => { runOnce(tab.id, selected.id, knobs, signal, state.settings) }}>
-              <IconPlayOutline16 />{t('runOnce')}
+              <IconPlayOutlineRegular />{t('runOnce')}
             </button>
           </div>}
         </div>

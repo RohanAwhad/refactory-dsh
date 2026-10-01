@@ -9,7 +9,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import type { ShellExecRequest, ShellExecutor } from '@deepseek-ai/dsh-shell'
+import type { ShellExecRequest, ShellExecSpec, ShellExecutor, ShellRunResult } from '@deepseek-ai/dsh-shell'
 import type { NodeView } from './spine.ts'
 
 /**
@@ -144,6 +144,23 @@ function quoted(value: string): string {
 }
 
 /**
+ * Run one resolved spec to its foreground result.
+ *
+ * The shell seam splits preparation from execution: `execute` returns the live
+ * process handle and `result()` is the foreground projection that settles with
+ * the split streams and the first-cause timeout/abort classification. A graph
+ * node only ever wants that projection, so every deterministic node runs
+ * through this one adapter.
+ * @param shell - the shell executor that runs node commands.
+ * @param spec - a fully resolved spec from `shell.resolve`.
+ * @returns the settled foreground result for the command.
+ */
+async function runSpec(shell: ShellExecutor, spec: ShellExecSpec): Promise<ShellRunResult> {
+  const execution = await shell.execute(spec)
+  return execution.result()
+}
+
+/**
  * The item command a data node runs: one verb of its loader, naming the node.
  *
  * The loader is deployment state (`dataCommand`), not graph structure: the graph
@@ -191,7 +208,7 @@ export async function runDataCommand(
   const allowance = resourceCheck(node, config)
   const resolved = shell.resolve(requestFor(node, command, config))
   const spec = allowance === undefined ? resolved : { ...resolved, timeoutMs: Math.min(resolved.timeoutMs, allowance) }
-  const result = await shell.run(spec)
+  const result = await runSpec(shell, spec)
   resourceCheck(node, config)
   const stdout = result.stdout.text.trim()
   const stderr = result.stderr.text.trim()
@@ -251,7 +268,7 @@ export async function runDeterministic(
   // retain every resolved environment/sandbox setting while honoring that budget.
   const timeoutMs = node.command_timeout_s === undefined ? resolved.timeoutMs : node.command_timeout_s * 1000
   const spec = { ...resolved, timeoutMs: allowance === undefined ? timeoutMs : Math.min(timeoutMs, allowance) }
-  const result = await shell.run(spec)
+  const result = await runSpec(shell, spec)
   resourceCheck(node, config)
   const stdout = result.stdout.text.trim()
   const stderr = result.stderr.text.trim()

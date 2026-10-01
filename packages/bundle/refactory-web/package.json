@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-refactory-web",
   "description": "The refactory web bundle: the console, the picker and the re:factory brand occupants over the dsh-web-app layer",
-  "version": "0.1.6-alpha.1",
+  "version": "0.2.0-rc.2",
   "publishConfig": {
     "access": "public"
   },
@@ -33,17 +33,17 @@
     }
   },
   "dependencies": {
-    "@deepseek-ai/dsh-refactory-console": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-client-ui-refactory": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-client-ui-brand-refactory": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-workflow-spine": "0.1.6-alpha.1"
+    "@deepseek-ai/dsh-refactory-console": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-refactory": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-brand-refactory": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-workflow-spine": "0.2.0-rc.2"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "4.0.2",
-    "@deepseek-ai/cordis-plugin-loader": "1.0.3"
+    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/cordis-plugin-loader": "1.0.5"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.2",
-    "@deepseek-ai/cordis-plugin-loader": "1.0.3"
+    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/cordis-plugin-loader": "1.0.5"
   }
 }

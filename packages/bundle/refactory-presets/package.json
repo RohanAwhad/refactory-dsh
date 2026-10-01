@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-refactory-presets",
-  "description": "The refactory agent-preset bundle: ships the `ceo` preset from this package's own `presets/` tree through the roster's configured roots",
-  "version": "0.1.6-alpha.1",
+  "description": "The refactory agent-preset bundle: declares the `ceo` preset inline and makes it the profile's default",
+  "version": "0.2.0-rc.2",
   "publishConfig": {
     "access": "public"
   },
@@ -12,31 +12,27 @@
   },
   "type": "module",
   "exports": {
-    "./startup": {
-      "types": "./lib/types/startup.d.ts",
-      "default": "./lib/startup.js"
-    },
     "./cordis.patch.yml": "./cordis.patch.yml",
-    "./src/*": "./src/*",
+    "./presets/*.patch.yml": "./presets/*.patch.yml",
     "./package.json": "./package.json"
   },
   "files": [
-    "lib/startup.js",
     "cordis.patch.yml",
-    "presets/**/*",
-    "lib/types/**/*.d.ts",
-    "lib/types/**/*.js"
+    "presets/ceo.patch.yml"
   ],
   "license": "MIT",
   "dsh": {
     "bundle": {
-      "patch": "./cordis.patch.yml"
+      "patch": [
+        "./cordis.patch.yml",
+        "./presets/ceo.patch.yml"
+      ]
     }
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "4.0.2"
+    "@deepseek-ai/cordis": "4.0.4"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.2"
+    "@deepseek-ai/cordis": "4.0.4"
   }
 }

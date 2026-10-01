@@ -9,7 +9,7 @@
 import type { SidebarRightTabDefinition } from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-locale/client'
 import type {} from './locales.ts'
-import { IconDatabaseOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconDatabaseOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 
 /** The tab kind this package owns. */
 export const REFACTORY_KIND = 'refactory'
@@ -33,7 +33,7 @@ export function refactoryDefinition(t: TranslateNS<'sidebarRefactory'>): Sidebar
       order: 10,
       title: () => t('guide.title'),
       description: () => t('guide.description'),
-      icon: IconDatabaseOutline16,
+      icon: IconDatabaseOutlineRegular,
     }],
   }
 }

@@ -176,17 +176,20 @@ function captureShell(seen: Array<Record<string, string> | undefined>): object {
       command: request.command,
       workdir: request.workdir ?? process.cwd(),
       timeoutMs: 10_000,
+      onExpiry: 'kill',
       stdoutMaxBytes: 1_000_000,
       env: request.env,
     }),
-    run: async (spec: { env?: Record<string, string> }) => {
-      seen.push(spec.env)
-      return {
-        exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 10_000,
-        stdout: { text: '', truncated: false },
-        stderr: { text: '', truncated: false },
-      }
-    },
+    execute: async (spec: { env?: Record<string, string> }) => ({
+      result: async () => {
+        seen.push(spec.env)
+        return {
+          exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 10_000,
+          stdout: { text: '', truncated: false },
+          stderr: { text: '', truncated: false },
+        }
+      },
+    }),
   }
 }
 
@@ -204,40 +207,43 @@ function stepShell(workdir: string, log: string[], items: Array<Record<string, u
       command: request.command,
       workdir: request.workdir ?? workdir,
       timeoutMs: 10_000,
+      onExpiry: 'kill',
       stdoutMaxBytes: 1_000_000,
       env: request.env,
     }),
-    run: async (spec: { command: string; workdir?: string; env?: Record<string, string> }) => {
-      log.push(spec.command)
-      const dir = spec.workdir ?? workdir
-      const loader = spec.command.startsWith('python -m refactory_dsh.items')
-      const verb = loader ? (spec.command.split(' ')[3] ?? '') : ''
-      const index = Number(spec.command.match(/--index (\d+)/)?.[1] ?? 0)
-      let stdout = ''
-      if (verb === 'list') stdout = JSON.stringify({ count: items.length, ids: items.map(item => item.id) })
-      else if (verb === 'begin') stdout = JSON.stringify(items[index] ?? {})
-      else if (verb === 'end') stdout = JSON.stringify({ id: items[index]?.id, passed: true, score: 1 })
-      else if (!loader) {
-        // A node command: write the files it declared and fold a fact in, the way
-        // `refactory_dsh.run` does.
-        const manifest = JSON.parse(spec.env?.['DSH_WORKFLOW_NODE'] ?? '{}') as { id?: string; writes?: string[] }
-        for (const rel of manifest.writes ?? []) writeFileSync(join(dir, rel), String(spec.command))
-        const factsPath = join(dir, 'facts.json')
-        let facts: Record<string, unknown> = {}
-        try {
-          facts = JSON.parse(readFileSync(factsPath, 'utf8')) as Record<string, unknown>
-        } catch {
-          facts = {}
+    execute: async (spec: { command: string; workdir?: string; env?: Record<string, string> }) => ({
+      result: async () => {
+        log.push(spec.command)
+        const dir = spec.workdir ?? workdir
+        const loader = spec.command.startsWith('python -m refactory_dsh.items')
+        const verb = loader ? (spec.command.split(' ')[3] ?? '') : ''
+        const index = Number(spec.command.match(/--index (\d+)/)?.[1] ?? 0)
+        let stdout = ''
+        if (verb === 'list') stdout = JSON.stringify({ count: items.length, ids: items.map(item => item.id) })
+        else if (verb === 'begin') stdout = JSON.stringify(items[index] ?? {})
+        else if (verb === 'end') stdout = JSON.stringify({ id: items[index]?.id, passed: true, score: 1 })
+        else if (!loader) {
+          // A node command: write the files it declared and fold a fact in, the way
+          // `refactory_dsh.run` does.
+          const manifest = JSON.parse(spec.env?.['DSH_WORKFLOW_NODE'] ?? '{}') as { id?: string; writes?: string[] }
+          for (const rel of manifest.writes ?? []) writeFileSync(join(dir, rel), String(spec.command))
+          const factsPath = join(dir, 'facts.json')
+          let facts: Record<string, unknown> = {}
+          try {
+            facts = JSON.parse(readFileSync(factsPath, 'utf8')) as Record<string, unknown>
+          } catch {
+            facts = {}
+          }
+          facts[manifest.id ?? spec.command] = true
+          writeFileSync(factsPath, JSON.stringify(facts))
         }
-        facts[manifest.id ?? spec.command] = true
-        writeFileSync(factsPath, JSON.stringify(facts))
-      }
-      return {
-        exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 10_000,
-        stdout: { text: stdout, truncated: false },
-        stderr: { text: '', truncated: false },
-      }
-    },
+        return {
+          exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 10_000,
+          stdout: { text: stdout, truncated: false },
+          stderr: { text: '', truncated: false },
+        }
+      },
+    }),
   }
 }
 

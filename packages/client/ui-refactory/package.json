@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-client-ui-refactory",
   "description": "Refactory picker tab for the right Sidebar: choose a described mode and its strategies, manage the packages of modes, start a run, and read where it got to",
-  "version": "0.1.6-alpha.1",
+  "version": "0.2.0-rc.2",
   "publishConfig": {
     "access": "public"
   },
@@ -46,25 +46,25 @@
     "react-dom": "^18.2.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "4.0.2"
+    "@deepseek-ai/cordis": "4.0.4"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.2",
-    "@deepseek-ai/dsh-api-gateway": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-api-remotes": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-api-session-controller": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-client-connection": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-client-locale": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-client-store": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-client-ui-dockkit": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-client-ui-primitives": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-client-ui-renderer": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-client-ui-session": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-client-ui-sidebar-right": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-client-ui-slots": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-refactory-console": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-session": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-typert-protocol": "0.1.6-alpha.1",
+    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/dsh-api-gateway": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-api-remotes": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-api-session-controller": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-connection": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-locale": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-store": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-dockkit": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-primitives": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-renderer": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-session": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-sidebar-right": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-refactory-console": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-session": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-typert-protocol": "0.2.0-rc.2",
     "@testing-library/react": "^16.1.0",
     "@types/react": "~18.3.1",
     "@types/react-dom": "~18.3.0"

@@ -10,12 +10,10 @@ const copy = {
   en: {
     description: 'Create, run, and improve Refactory workflows. CEO coordinates agents, follows the workflow graph, and brings questions and results back to you.',
     sectionIntro: 'Choose CEO for guided Refactory workflows, or Minimal for a lightweight agent with a persistent shell. Your choice applies to new conversations.',
-    duplicateUnavailable: 'Refactory offers the CEO and Minimal presets.',
   },
   zh: {
     description: '创建、运行和改进 Refactory 工作流。CEO 协调智能体，按工作流图推进，并向你呈现问题和结果。',
     sectionIntro: '选择 CEO 引导 Refactory 工作流，或选择仅使用持久 Shell 的极简智能体。预设选择适用于新会话。',
-    duplicateUnavailable: 'Refactory 提供 CEO 和极简预设。',
   },
 }
 type Locale = keyof typeof copy
@@ -62,7 +60,7 @@ export function presetSeat(face: AgentPresetSeatInjected, locale: () => Locale):
 export function presetSection(face: AgentPresetSectionInjected, locale: () => Locale): AgentPresetSectionInjected {
   return { ...face,
     hooks: { ...face.hooks, agentPresetSection: projectStore(face.hooks.agentPresetSection, locale,
-      (state, lang) => ({ ...state, rows: presetRows(state.rows, lang, true), authorable: false })) },
+      (state, lang) => ({ ...state, rows: presetRows(state.rows, lang, true) })) },
   }
 }
 
@@ -89,7 +87,7 @@ export function installPresets(ctx: Context): void {
             if (slot !== 'settings.section') return createElement(Native, props)
             const t = props.t as (key: string, ...args: unknown[]) => string
             return createElement(Native, { ...props, t: (key: string, ...args: unknown[]) =>
-              key === 'sectionIntro' || key === 'duplicateUnavailable' ? copy[locale()][key] : t(key, ...args) })
+              key === 'sectionIntro' ? copy[locale()].sectionIntro : t(key, ...args) })
           }
           own.add(Surface)
           dispose = ctx.slots.register({ ...original.options, name: slot, locale: original.locale,

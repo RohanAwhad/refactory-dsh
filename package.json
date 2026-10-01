@@ -1,6 +1,6 @@
 {
   "name": "refactory-dsh",
-  "version": "0.1.6-alpha.1",
+  "version": "0.2.0-rc.2",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.7.0",
@@ -8,18 +8,7 @@
     "node": "^22.19.0 || >=24.0.0"
   },
   "dependencies": {
-    "@deepseek-ai/dsh": "0.1.6-alpha.1"
-  },
-  "pnpm": {
-    "overrides": {
-      "@deepseek-ai/cordis": "4.0.2",
-      "cordis-plugin-loader": "1.0.3",
-      "cordis-plugin-include": "1.0.7",
-      "cordis-plugin-hmr": "1.0.17",
-      "cordis-plugin-timer": "1.1.4",
-      "cordis-plugin-group": "1.0.2",
-      "@deepseek-ai/schemastery": "3.18.2"
-    }
+    "@deepseek-ai/dsh": "0.2.0-rc.2"
   },
   "scripts": {
     "docs:generate": ".venv/bin/python -m refactory_dsh.tools.gen_api_reference && .venv/bin/python -m refactory_dsh.tools.gen_discovery",
@@ -33,7 +22,7 @@
     "lint": "oxlint packages"
   },
   "devDependencies": {
-    "@deepseek-ai/dsh-typert-generator": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-typert-generator": "0.2.0-rc.2",
     "@shikijs/langs": "^4.3.1",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",
@@ -60,6 +49,7 @@
     "micromark-util-symbol": "^2.0.1",
     "oxlint": "1.76.0",
     "shiki": "^4.3.1",
+    "simple-icons": "16.31.0",
     "tsdown": "^0.22.2",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
@@ -68,7 +58,7 @@
     "zustand": "~4.4.7"
   },
   "optionalDependencies": {
-    "@deepseek-ai/dsh-subagent-codex": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-subagent-claude-code": "0.1.6-alpha.1"
+    "@deepseek-ai/dsh-subagent-codex": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-subagent-claude-code": "0.2.0-rc.2"
   }
 }

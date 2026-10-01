@@ -1,41 +1,31 @@
-# The refactory agent-preset bundle patch: ships the `ceo` preset from this
-# package's own `presets/` tree through the `agent-presets` roster's configured
-# roots, instead of patching `@deepseek-ai/dsh-agent-presets` to carry it.
+# The refactory agent-preset bundle patch: makes the `ceo` preset declared in
+# `presets/ceo.patch.yml` the deployment default for a profile that carries this
+# bundle.
 #
-# `agent-presets` REPLACES a row's whole `config` object rather than merging it,
-# so this patch restates `default` — the schema requires it, and omitting it
-# fails the mount. `includeShippedRoot` and `includeUserRoot` keep their `true`
-# defaults, so the shipped presets and the harness-home user presets stay
-# mounted exactly as before.
+# `agent-preset-registry` REPLACES a row's whole `config` object rather than
+# merging it, so this patch restates `default` — the schema requires it, and
+# omitting it fails the mount. `selectedDefault` is deliberately not stated: it
+# is the volatile field a person's Settings write owns, and a patch must not pin
+# it. The registry takes no configured `roots` at this pin: each preset is its
+# own `@deepseek-ai/dsh-agent-preset` declaration, so `ceo` arrives the way the
+# harness's own `standard` does rather than through a discovered preset tree.
 #
 # That replacement rule makes this row's `config` SINGLE-OWNER: a layer applied
-# after this one that patches the same `id` without repeating `roots` drops this
-# bundle's root entirely, and the `ceo` preset disappears with no error beyond
-# the resulting `agent-preset/not-found`. Which layer is last follows
-# `dsh.profile.bundles` order, so any second patcher of `agent-presets` is a
-# conflict, not a merge. The `dsh-web-app` layer owns the row's other keys and
-# must not state `agent-presets` at all once this bundle supplies it.
+# after this one that patches the same `id` without repeating `default` drops
+# this bundle's default entirely, and the only symptom is the harness's own
+# default winning with no diagnostic. Which layer is last follows
+# `dsh.profile.bundles` order, so any second patcher of `agent-preset-registry`
+# is a conflict, not a merge. The `dsh-web-app` layer owns the row's other keys
+# and must not state `agent-preset-registry` at all once this bundle supplies it.
 #
-# The `!!js` expression names the startup service below rather than computing a
-# path: a patch is evaluated as `new Function('ctx', 'expr', ...)`, so it has no
-# `import.meta` and cannot find its own package directory. The startup plugin
-# can, so it publishes the resolved root for this row to read.
-#
-# The `agent-presets` row is inserted by the `dsh-web-app` layer, and a patch only
-# reaches a row an earlier layer created — one that matches nothing warns and is
-# skipped. So this bundle must be applied AFTER `@deepseek-ai/dsh-web-app` in
-# `dsh.profile.bundles`. `dsh plugin add` reconciles the list in dependency order,
-# so a profile install satisfies that automatically; a profile whose bundle list
-# was hand-edited must keep `@deepseek-ai/dsh-refactory-presets` after it.
+# The `agent-preset-registry` row is inserted by the `dsh-web-app` layer, and a
+# patch only reaches a row an earlier layer created — one that matches nothing
+# warns and is skipped. So this bundle must be applied AFTER
+# `@deepseek-ai/dsh-web-app` in `dsh.profile.bundles`. `dsh plugin add`
+# reconciles the list in dependency order, so a profile install satisfies that
+# automatically; a profile whose bundle list was hand-edited must keep
+# `@deepseek-ai/dsh-refactory-presets` after it.
 
-- insert:
-    - id: refactory-presets-startup
-      name: '@deepseek-ai/dsh-refactory-presets/startup'
-
-- id: agent-presets
-  inject: [refactoryPresetsStartup]
+- id: agent-preset-registry
   config:
     default: ceo
-    roots:
-      - path: !!js ctx.refactoryPresetsStartup.presetRoot
-        trust: system

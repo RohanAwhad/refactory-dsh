@@ -3,20 +3,21 @@
  *
  * A descriptor mounts into whichever harness serves the profile, and the strict
  * `TypertCodec` changed from `schema` (through `0.1.6-alpha.1`) to a `create()`
- * factory (`e459e32637`, released in `0.1.6-alpha.2`). The pinned harness does
- * not require `create`, so a seventh site written as a raw object literal still
- * typechecks against the pin and only fails at boot on the other harness. This
- * spec is the guard that every site goes through `strictCodec`.
+ * factory (`e459e32637`, released in `0.1.6-alpha.2`). The pinned harness is
+ * `0.2.0-rc.2` and declares only `create`, so a seventh site written as a raw
+ * object literal that carried only `schema` would no longer typecheck against
+ * the pin. This spec is the guard that every site goes through `strictCodec`.
  *
- * The `schema` assertion is the bridge half: when the pinned harness and the
- * serving harness are both `0.1.6-alpha.2` or later, the helper drops `schema`
- * and this expectation is removed with it.
+ * The `schema` assertion is the bridge half, kept for a serving harness older
+ * than `0.1.6-alpha.2`: the helper drops `schema`, and this expectation is
+ * removed with it, only once no supported serving harness is that old.
  */
 import { describe, expect, it } from 'vitest'
 import { runStreamContribution, watchStreamContribution } from '../src/client/run-stream.ts'
 
-/** The two faces of one hand-written codec, as either harness version declares
- * them; the pinned types carry only `schema`, so both are optional here. */
+/** The two faces of one hand-written codec, as either harness generation
+ * declares them; the pinned types carry only `create`, so both are optional
+ * here. */
 interface BothCodecFaces {
   schema?: { parse?: unknown }
   create?: () => { parse?: unknown }

@@ -5,7 +5,6 @@ import { typertPlugin } from '@deepseek-ai/dsh-typert-generator/tsdown'
 const WORKSPACE = [
   'packages/workflow/workflow-spine',
   'packages/bundle/graph',
-  'packages/bundle/refactory-presets',
   'packages/bundle/refactory-web',
   'packages/refactory/refactory-console',
   'packages/refactory/tool-refactory',

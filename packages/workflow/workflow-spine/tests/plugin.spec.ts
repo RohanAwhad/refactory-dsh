@@ -125,22 +125,25 @@ function realShell(): object {
       command: request.command,
       workdir: request.workdir ?? process.cwd(),
       timeoutMs: request.timeoutMs ?? 10_000,
+      onExpiry: 'kill',
       stdoutMaxBytes: 100_000,
       env: request.env,
       sandboxPolicy: undefined,
     }),
-    run: async (spec: { command: string; workdir: string; timeoutMs: number; env?: Record<string, string> }) => {
-      const started = spawnSync('/bin/sh', ['-c', spec.command], {
-        cwd: spec.workdir, encoding: 'utf8', timeout: spec.timeoutMs,
-        env: { ...process.env, ...spec.env },
-      })
-      return {
-        exitCode: started.status, signal: started.signal, timedOut: false, aborted: false,
-        timeoutMs: spec.timeoutMs,
-        stdout: { text: started.stdout ?? '', truncated: false },
-        stderr: { text: started.stderr ?? '', truncated: false },
-      }
-    },
+    execute: async (spec: { command: string; workdir: string; timeoutMs: number; env?: Record<string, string> }) => ({
+      result: async () => {
+        const started = spawnSync('/bin/sh', ['-c', spec.command], {
+          cwd: spec.workdir, encoding: 'utf8', timeout: spec.timeoutMs,
+          env: { ...process.env, ...spec.env },
+        })
+        return {
+          exitCode: started.status, signal: started.signal, timedOut: false, aborted: false,
+          timeoutMs: spec.timeoutMs,
+          stdout: { text: started.stdout ?? '', truncated: false },
+          stderr: { text: started.stderr ?? '', truncated: false },
+        }
+      },
+    }),
   }
 }
 
@@ -218,7 +221,7 @@ describe('recovery checkpoint ownership', () => {
       await ctx.plugin(SystemPrompt)
       await ctx.plugin(ToolRuntime)
       let calls = 0
-      ctx.provide('shell', { ...realShell(), run: () => { calls++; throw new Error('must not dispatch') } } as never)
+      ctx.provide('shell', { ...realShell(), execute: () => { calls++; throw new Error('must not dispatch') } } as never)
       await ctx.plugin(workflowSpine, { graph: commandGraph, executeCommands: true, workdir: root })
       await expect(run(ctx, 'wf_next', {})).rejects.toThrow(/recovery checkpoint/)
       expect(calls).toBe(0)

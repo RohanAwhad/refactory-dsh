@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-tool-refactory",
   "description": "Model-facing refactory tool: run and read a Python outer-loop run from the Web GUI",
-  "version": "0.1.6-alpha.1",
+  "version": "0.2.0-rc.2",
   "publishConfig": {
     "access": "public"
   },
@@ -32,22 +32,22 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@deepseek-ai/schemastery": "3.18.2"
+    "@deepseek-ai/schemastery": "3.18.4"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-subprocess": "^0.1.6-alpha.1",
-    "@deepseek-ai/dsh-system-prompt": "^0.1.6-alpha.1",
-    "@deepseek-ai/dsh-tools": "^0.1.6-alpha.1",
-    "@deepseek-ai/dsh-util-values": "^0.1.6-alpha.1",
-    "@deepseek-ai/cordis": "4.0.2"
+    "@deepseek-ai/dsh-subprocess": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-util-values": "0.2.0-rc.2",
+    "@deepseek-ai/cordis": "4.0.4"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.2",
-    "@deepseek-ai/dsh-llm": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-subprocess": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-subprocess-local": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-system-prompt": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-tools": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-util-values": "0.1.6-alpha.1"
+    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-subprocess": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-subprocess-local": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-util-values": "0.2.0-rc.2"
   }
 }

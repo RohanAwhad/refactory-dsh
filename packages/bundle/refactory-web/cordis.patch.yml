@@ -14,10 +14,10 @@
 # ordinary profile install applies this after `@deepseek-ai/dsh-web-app`; a
 # hand-edited bundle list must keep it after.
 #
-# `agent-presets` is deliberately NOT stated here. That row's `config` is replaced
-# wholesale rather than merged, and `@deepseek-ai/dsh-refactory-presets` is its
-# single owner — it sets `default: ceo` and the configured `roots` entry. A second
-# `config` from this layer would silently drop whichever list lost.
+# `agent-preset-registry` is deliberately NOT stated here. That row's `config` is
+# replaced wholesale rather than merged, and `@deepseek-ai/dsh-refactory-presets`
+# is its single owner — it sets `default: ceo`. A second `config` from this layer
+# would silently drop that default and let the harness's own win.
 
 # Advancing a stateful workflow uses identical arguments by design. Keep the
 # reminder for other tools; argument repetition is not workflow progress evidence.
