@@ -8,11 +8,15 @@
 # the fresh machine the installer claims to support: no `.venv`, no
 # `node_modules`, no DSH profile.
 #
-# Scope: the TypeScript suite (`pnpm test`) is the suite #270 measured and fixed.
-# The Python suite under `refactory/tests/` is red for unrelated, pre-existing
-# reasons (40 failures) and is not gated here yet; running `install.sh` still
-# exercises the Python install, because `pnpm run build` begins with `docs:check`
-# against `.venv/bin/python`.
+# Scope: the TypeScript suite (`pnpm test`), the whole-profile acceptance run and
+# the Python suite under `refactory/tests/` all run here. The Python suite was red
+# for pre-existing reasons (issue #272) and is now gated: a failing test fails the
+# job. A test that needs an external tool or a model credential is marked
+# (`toolchain` plus a `needs_*` skip) and the terminal summary names every one that
+# did not run, so a green suite cannot hide a path it never exercised. The stricter
+# `--toolchain-gate` (every marked test must have run against its real tool) is a
+# separate local check: this runner has no Lean, mathlib or model credential, so
+# running it here would fail on the very absences the summary already reports.
 name: CI
 
 on:
@@ -31,7 +35,7 @@ permissions:
 
 jobs:
   install-and-test:
-    name: install.sh + TypeScript suite
+    name: install.sh + TypeScript + Python suites
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -73,6 +77,14 @@ jobs:
       # decides whether a patch finds its row at all.
       - name: Web profile acceptance
         run: pnpm run test:acceptance
+
+      # The Python suite (issue #272). It runs the tests the install just built and
+      # fails the job on any failure. Tests that need an external tool or a model
+      # credential are marked and skipped with a reason; the toolchain summary at
+      # the end of this step names every skipped unit, so a green run here states
+      # what it did not verify rather than implying it verified everything.
+      - name: Python suite
+        run: uv run python -m pytest refactory/tests -q
 
       # The harness this repository pins and the `dsh` that boots the profile
       # must agree on the version and on the strict TypertCodec contract. CI has
