@@ -241,10 +241,15 @@ def test_worker_shell_keeps_selected_python_through_actual_dsh_scrub(monkeypatch
     if not modules:
         pytest.skip('pinned DSH subprocess package not installed')
     node = shutil.which('node')
-    monkeypatch.setenv('PATH', '/usr/bin:/bin')
+    bindir = str(Path(sys.executable).parent)
+    # A narrow PATH still has to reach the shell the worker spawns and the selected
+    # interpreter. `/usr/bin:/bin` is a distro assumption NixOS does not satisfy, so
+    # pin the two directories the test actually needs instead.
+    import os
+    bash_dir = os.path.dirname(shutil.which('bash') or '')
+    monkeypatch.setenv('PATH', os.pathsep.join(part for part in (bindir, bash_dir) if part))
     monkeypatch.delenv('PYTHONPATH', raising=False)
     monkeypatch.setenv('REFACTORY_TEST_SECRET', 'not-a-real-secret')
-    bindir = str(Path(sys.executable).parent)
     client = DshModelClient(python_bin=bindir)
     from refactory_dsh.sandbox import scrub
     recreated = DshModelClient(**client.context())

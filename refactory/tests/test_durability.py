@@ -140,7 +140,7 @@ def test_resume_does_not_re_evaluate_a_candidate_already_scored(tmp_path):
 def test_resume_is_refused_when_there_is_nothing_to_resume_from(tmp_path):
     from refactory_dsh.loop import LoopError
 
-    with pytest.raises(LoopError, match="nothing to carry on from"):
+    with pytest.raises(LoopError, match="nothing to resume"):
         _loop(tmp_path / "empty", resume=True).init()
 
 

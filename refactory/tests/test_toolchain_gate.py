@@ -16,7 +16,7 @@ import conftest as gate
 TESTS = Path(__file__).resolve().parent
 
 #: The decorators that gate a test on a real external tool.
-NEEDS = {"needs_lean", "needs_mathlib", "needs_sympy", "needs_factory"}
+NEEDS = {"needs_lean", "needs_mathlib", "needs_sympy", "needs_factory", "needs_model_credential"}
 
 
 def _decorated_functions(path: Path):
@@ -75,7 +75,7 @@ def _marked_tools() -> set[str]:
 def test_every_declared_tool_is_represented_in_the_gated_set():
     """A gate that covers two of the three tools passes for the wrong reason."""
     tools = _marked_tools()
-    assert {"lean", "mathlib", "sympy"} <= tools, (
+    assert {"lean", "mathlib", "sympy", "model-credential"} <= tools, (
         f"the gate has no test for some tool it is supposed to cover: {sorted(tools)}"
     )
 

@@ -102,10 +102,17 @@ def _stub_lean(tmp_path: Path, *, accepts: str) -> Path:
     lean = bindir / "lean"
     lean.write_text(
         "#!/bin/sh\n"
+        # Shell built-ins only: the test pins PATH to `/usr/bin:/bin` so the
+        # toolchain under test is the stub, and a distro that keeps `grep`
+        # elsewhere (NixOS) would otherwise make the stub itself unrunnable.
+        "found=0\n"
         'for arg in "$@"; do\n'
         '  case "$arg" in\n'
         "    Solution.lean)\n"
-        f"      if grep -q {accepts!r} \"$arg\"; then echo 'stub: accepted'; exit 0; fi\n"
+        "      while IFS= read -r line; do\n"
+        f"        case \"$line\" in *{accepts}*) found=1 ;; esac\n"
+        "      done < \"$arg\"\n"
+        "      if [ \"$found\" = 1 ]; then echo 'stub: accepted'; exit 0; fi\n"
         "      echo 'stub: tactic failed'; exit 1 ;;\n"
         "  esac\n"
         "done\n"

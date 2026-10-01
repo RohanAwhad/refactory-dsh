@@ -17,6 +17,7 @@ from refactory_dsh import design as design_module
 from refactory_dsh import edit as edit_module
 from refactory_dsh import nn, registry, sandbox
 from refactory_dsh.create import CreateConfig, CreateError
+from model_credential import needs_model_credential
 from refactory_dsh.design import DesignMode
 from refactory_dsh.design_ops import ARTIFACTS
 from refactory_dsh.edit import EditConfig, EditMode
@@ -67,6 +68,8 @@ def test_the_edit_mode_is_the_create_graph_with_a_different_intent():
     assert "smallest edit" in EditMode.intent
 
 
+@pytest.mark.toolchain("model-credential")
+@needs_model_credential
 def test_prepare_hands_the_model_the_source_it_is_revising():
     workdir = Path(__file__).parent / "_edit_prepare"
     shutil.rmtree(workdir, ignore_errors=True)
@@ -200,6 +203,8 @@ def test_designing_needs_a_check():
     assert "needs a check" in (result.error or "")
 
 
+@pytest.mark.toolchain("model-credential")
+@needs_model_credential
 def test_the_artifact_lands_beside_the_workspace_not_in_it():
     ctx = nn.RunContext(Path(".factory/design-prep"))
     ctx.task = {"name": ARTIFACT, "brief": "a tool", "check": "python -c 'pass'"}

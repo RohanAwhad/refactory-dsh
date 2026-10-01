@@ -322,6 +322,25 @@ def test_stale_mutations_finds_a_harness_profile_an_old_install_mutated(tmp_path
     assert dsh_profile.stale_mutations() == [], "a pristine template is not a mutation"
 
 
+class _FakeProcess:
+    """The slice of ``Popen`` the adapter uses: streamed lines and ``wait``.
+
+    ``run_on_dsh`` streams the child through ``Popen`` so a timeout can shut down
+    its owned tool processes; a fake built for ``subprocess.run`` no longer stands
+    in for the spawn.
+    """
+
+    def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
+        self._returncode = returncode
+        self.stdout = iter(stdout.splitlines(keepends=True))
+        self.stderr = iter(stderr.splitlines(keepends=True))
+        self.returncode: int | None = None
+
+    def wait(self, timeout: float | None = None) -> int:
+        self.returncode = self._returncode
+        return self._returncode
+
+
 def test_run_on_dsh_hands_the_runner_an_absolute_workdir(tmp_path, monkeypatch):
     """DSH refuses a relative session cwd, so the adapter must not pass one on.
 
@@ -336,16 +355,11 @@ def test_run_on_dsh_hands_the_runner_an_absolute_workdir(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     seen: dict[str, list[str]] = {}
 
-    class _Result:
-        returncode = 1
-        stdout = ""
-        stderr = "dsh: session header cwd must be an absolute path"
-
     def _capture(command, **kwargs):  # noqa: ANN001, ANN003 - the runner's own call
         seen["command"] = command
-        return _Result()
+        return _FakeProcess(1, stderr="dsh: session header cwd must be an absolute path")
 
-    monkeypatch.setattr("refactory_dsh.dsh_runtime.subprocess.run", _capture)
+    monkeypatch.setattr("refactory_dsh.dsh_runtime.subprocess.Popen", _capture)
     run_on_dsh(state, Path("relative/run"), name="probe")
     argv = seen["command"]
     workdir = argv[argv.index("--workdir") + 1]
@@ -364,16 +378,11 @@ def test_run_on_dsh_hands_the_runner_the_knob_values_once(tmp_path, monkeypatch)
     monkeypatch.setenv("DSH_HOME", str(home))
     seen: dict[str, list[str]] = {}
 
-    class _Result:
-        returncode = 1
-        stdout = ""
-        stderr = "probe"
-
     def _capture(command, **kwargs):  # noqa: ANN001, ANN003 - the runner's own call
         seen["command"] = command
-        return _Result()
+        return _FakeProcess(1, stderr="probe")
 
-    monkeypatch.setattr("refactory_dsh.dsh_runtime.subprocess.run", _capture)
+    monkeypatch.setattr("refactory_dsh.dsh_runtime.subprocess.Popen", _capture)
     run_on_dsh(state, tmp_path / "run", name="probe")
     argv = seen["command"]
     knobs = json.loads(argv[argv.index("--knobs") + 1])
@@ -399,7 +408,8 @@ def test_run_on_dsh_hands_each_output_line_on_while_keeping_the_parse(tmp_path, 
         "print(json.dumps({'best_score': 0.75}))\n"
     )
     monkeypatch.setattr(
-        "refactory_dsh.dsh_runtime.dsh_command", lambda: [sys.executable, str(script)],
+        "refactory_dsh.dsh_runtime.dsh_command",
+        lambda **_: [sys.executable, str(script)],
     )
     state = registry.resolve(REPO_ROOT, "circle_packing/adaptive")[1]().state_dict()
     seen: list[str] = []
@@ -419,7 +429,7 @@ def test_run_on_dsh_refuses_before_spawning_when_the_profile_is_absent(
     def _no_spawn(*args, **kwargs):  # pragma: no cover - the assertion is that it never runs
         raise AssertionError("a subprocess was spawned without a usable profile")
 
-    monkeypatch.setattr("refactory_dsh.dsh_runtime.subprocess.run", _no_spawn)
+    monkeypatch.setattr("refactory_dsh.dsh_runtime.subprocess.Popen", _no_spawn)
     run = run_on_dsh({}, tmp_path / "run")
     assert run.returncode == 2
     assert dsh_profile.add_command() in run.stderr
