@@ -1,79 +1,74 @@
 diff --git a/lib/client.js b/lib/client.js
-index 556b9a0..b5dd15b 100644
+index ef9c6c6..eb756a9 100644
 --- a/lib/client.js
 +++ b/lib/client.js
-@@ -5,62 +5,101 @@ window.__ModuleLoader__.load({
+@@ -5,6 +5,7 @@ window.__ModuleLoader__.load({
  		var exports = module.exports;
  		Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
  		let react = require("react");
 +		let primitives = require("@deepseek-ai/dsh-client-ui-primitives");
  		//#region lib/types/client/flow.js
--		/**
--		* The native picking occupant (package-internal; the `./client` surface
--		* exposes only the Loader exports). Same-package tests exercise it directly
--		* through this module.
--		*/
--		/**
+ 		/**
+ 		* The native picking occupant (package-internal; the `./client` surface
+@@ -12,12 +13,15 @@ window.__ModuleLoader__.load({
+ 		* through this module.
+ 		*/
+ 		/**
 -		* Renderless flow occupant: each rising `open` edge runs exactly one pick and
 -		* reports exactly one outcome; the ref arms once per open so re-renders (and
 -		* an adoption keeping `open` true while `busy`) never launch a second
 -		* chooser. The owner withdrawing `open` re-arms the next request.
 -		* @param props - owner conversation plus the injected pick call.
 -		* @returns nothing — the native chooser renders on the host display.
--		*/
-+		/** Native chooser with a user-entered path fallback through the same owner. */
++		* Native chooser with a user-entered exact-path fallback: each rising `open`
++		* edge runs exactly one pick and reports exactly one outcome; the ref arms
++		* once per open so re-renders (and an adoption keeping `open` true while
++		* `busy`) never launch a second chooser. A rejected pick is not terminal —
++		* it keeps the interaction open by showing its message beside the path field
++		* so the operator can recover by typing the exact path. The owner
++		* withdrawing `open` re-arms the next request.
++		* @param props - owner conversation plus the injected pick call and copy.
++		* @returns the exact-path fallback; the native chooser renders on the host display.
+ 		*/
  		function NativeDirectoryFlow(props) {
--			const { open, pick } = props;
--			const armed = (0, react.useRef)(false);
+ 			const { open, pick } = props;
+@@ -25,6 +29,9 @@ window.__ModuleLoader__.load({
  			const outcome = (0, react.useRef)(props);
  			outcome.current = props;
--			const alive = (0, react.useRef)(true);
-+			const controller = (0, react.useRef)(null);
+ 			const alive = (0, react.useRef)(true);
 +			const claimed = (0, react.useRef)(false);
 +			const [path, setPath] = (0, react.useState)("");
 +			const [nativeError, setNativeError] = (0, react.useState)("");
  			(0, react.useEffect)(() => {
--				alive.current = true;
--				return () => {
--					alive.current = false;
--				};
--			}, []);
--			(0, react.useEffect)(() => {
--				if (!open) {
--					armed.current = false;
--					return;
--				}
--				if (armed.current) return;
--				armed.current = true;
+ 				alive.current = true;
+ 				return () => {
+@@ -38,31 +45,79 @@ window.__ModuleLoader__.load({
+ 				}
+ 				if (armed.current) return;
+ 				armed.current = true;
 -				pick().then((path) => {
 -					if (!alive.current) return;
 -					if (path === null) outcome.current.onCancel();
 -					else outcome.current.onPicked(path);
-+				if (!props.open) return;
++				claimed.current = false;
 +				setPath("");
 +				setNativeError("");
-+				claimed.current = false;
-+				const attempt = new AbortController();
-+				controller.current = attempt;
-+				outcome.current.pick(attempt.signal).then((selected) => {
-+					if (attempt.signal.aborted || claimed.current) return;
++				pick().then((selected) => {
++					if (!alive.current || claimed.current) return;
 +					claimed.current = true;
 +					if (selected === null) outcome.current.onCancel();
 +					else outcome.current.onPicked(selected);
  				}, (reason) => {
 -					if (!alive.current) return;
 -					outcome.current.onError(reason instanceof Error ? reason.message : String(reason));
-+					if (attempt.signal.aborted || claimed.current) return;
++					if (!alive.current || claimed.current) return;
 +					setNativeError(reason instanceof Error ? reason.message : String(reason));
  				});
--			}, [open, pick]);
+ 			}, [open, pick]);
 -			return null;
-+				return () => { attempt.abort(); };
-+			}, [props.open]);
 +			const cancel = () => {
 +				if (props.busy || claimed.current) return;
 +				claimed.current = true;
-+				controller.current?.abort();
 +				props.onCancel();
 +			};
 +			const submit = (event) => {
@@ -81,7 +76,6 @@ index 556b9a0..b5dd15b 100644
 +				const selected = path.trim();
 +				if (props.busy || claimed.current || selected === "") return;
 +				claimed.current = true;
-+				controller.current?.abort();
 +				props.onPicked(selected);
 +			};
 +			const t = props.t;
@@ -105,8 +99,8 @@ index 556b9a0..b5dd15b 100644
  		//#region lib/types/client/index.js
 -		/** Required services (cordis fiber inject): the slot registry and workspace UI service. */
 -		const inject = ["slots", "uiWorkspace"];
-+		/** Required services: slots, remote, remote.directoryPicker, and locale. */
-+		const inject = ["slots", "remote", "remote.directoryPicker", "locale"];
++		/** Required services (cordis fiber inject): the slot registry, the workspace UI service, and locale. */
++		const inject = ["slots", "uiWorkspace", "locale"];
  		/**
 -		* Client plugin body: register the renderless native flow into both
 +		* Client plugin body: register the native picker and exact-path flow into both
@@ -115,7 +109,6 @@ index 556b9a0..b5dd15b 100644
  		* @param ctx - client root context.
  		*/
  		function apply(ctx) {
--			const injected = () => ({ pick: () => ctx.uiWorkspace.pickDirectory() });
 +			const namespace = "native-directory-path";
 +			ctx.effect(() => {
 +				const disposers = [];
@@ -133,27 +126,24 @@ index 556b9a0..b5dd15b 100644
 +				}
 +				return () => { for (const dispose of disposers) dispose(); };
 +			}, "native-directory-picker: path fallback copy");
-+			const injected = () => ({
-+				pick: async (signal) => {
-+					const result = await ctx.remote.directoryPicker.pick(signal);
-+					if (!result.ok) throw new Error(`directory picker failed: ${result.error.message}`);
-+					return result.value;
-+				},
-+				t: ctx.locale.bind(namespace)
-+			});
+ 			const desktop = globalThis.__DSH_DIRECTORY_PICKER__;
+ 			const pick = desktop === void 0 ? () => ctx.uiWorkspace.pickDirectory() : () => desktop.pick();
+-			const injected = () => ({ pick });
++			const injected = () => ({ pick, t: ctx.locale.bind(namespace) });
  			ctx.slots.inject("conversation.hero.workspace.directoryFlow", () => ctx.slots.inject("sidebar.workspaces.directoryFlow", function* () {
  				yield ctx.slots.register({
  					name: "conversation.hero.workspace.directoryFlow",
 diff --git a/lib/types/client/flow.d.ts b/lib/types/client/flow.d.ts
-index f21646b..02c8219 100644
+index 605fea7..0a9ce4b 100644
 --- a/lib/types/client/flow.d.ts
 +++ b/lib/types/client/flow.d.ts
-@@ -3,15 +3,16 @@ import type { DirectoryFlowOwnerProps } from '@deepseek-ai/dsh-client-ui-workspa
- /** Injected face: the wire call the flow drives (bound in apply's closure). */
+@@ -2,16 +2,21 @@ import type { ReactElement } from 'react';
+ import type { DirectoryFlowOwnerProps } from '@deepseek-ai/dsh-client-ui-workspace/client';
+ /** Injected face: the native chooser call the flow drives (bound in apply's closure). */
  export interface NativeFlowInjected {
-     /** Ask the local Host to open its native single-directory chooser. */
--    pick: () => Promise<string | null>;
-+    pick: (signal: AbortSignal) => Promise<string | null>;
+-    /** Open the local desktop or Host single-directory chooser. */
++    /** Open the local desktop bridge or the Host single-directory chooser. */
+     pick: () => Promise<string | null>;
 +    /** Localized exact-path fallback copy. */
 +    t: (key: string) => string;
  }
@@ -162,36 +152,38 @@ index f21646b..02c8219 100644
 - * reports exactly one outcome; the ref arms once per open so re-renders (and
 - * an adoption keeping `open` true while `busy`) never launch a second
 - * chooser. The owner withdrawing `open` re-arms the next request.
-+ * Native flow with an exact-path fallback: each rising `open` edge runs exactly one pick and
-+ * reports exactly one outcome. Re-renders keep the same pending chooser; typed
-+ * submission, cancellation, or unmount aborts its Remote call.
-  * @param props - owner conversation plus the injected pick call.
+- * @param props - owner conversation plus the injected pick call.
 - * @returns nothing — the native chooser renders on the host display.
++ * Native chooser with a user-entered exact-path fallback: each rising `open`
++ * edge runs exactly one pick and reports exactly one outcome; the ref arms
++ * once per open so re-renders (and an adoption keeping `open` true while
++ * `busy`) never launch a second chooser. A rejected pick is not terminal — it
++ * keeps the interaction open by showing its message beside the path field so
++ * the operator can recover by typing the exact path. The owner withdrawing
++ * `open` re-arms the next request.
++ * @param props - owner conversation plus the injected pick call and copy.
 + * @returns the exact-path fallback; the native chooser renders on the host display.
   */
  export declare function NativeDirectoryFlow(props: DirectoryFlowOwnerProps & NativeFlowInjected): ReactElement | null;
  //# sourceMappingURL=flow.d.ts.map
 \ No newline at end of file
 diff --git a/lib/types/client/index.d.ts b/lib/types/client/index.d.ts
-index 6899939..c231381 100644
+index 8017431..71f3211 100644
 --- a/lib/types/client/index.d.ts
 +++ b/lib/types/client/index.d.ts
-@@ -1,17 +1,17 @@
- /**
-  * Browser half of the native directory-picker backend: fills ui-workspace's
-- * two directory-flow holes with a renderless occupant that answers each
-- * `open` by driving `directoryPicker/pick` (the node half's OS chooser) and
-- * reporting the one outcome — picked path, cancellation, or failure — back
-+ * two directory-flow holes with a native chooser and exact-path fallback. Each
-+ * `open` drives `directoryPicker/pick` (the node half's OS chooser) and
-+ * reports the one outcome — picked path, cancellation, or failure — back
-  * through the owner conversation. Mounting this package therefore composes
-  * both sides of the native interaction with one cordis.yml row; no client
-  * code branches on a capability kind.
-  */
+@@ -1,9 +1,16 @@
+-/** Native directory flow using the local desktop bridge or the Host's OS chooser. */
++/**
++ * Browser half of the native directory-picker backend: fills ui-workspace's
++ * two directory-flow holes with a native chooser and an exact-path fallback.
++ * Each `open` drives the local desktop bridge's chooser when the shell injects
++ * one and the Host's OS chooser otherwise, and reports the one outcome —
++ * picked path, cancellation, or a recoverable failure shown beside the path
++ * field — back through the owner conversation.
++ */
  import type { Context as ClientContext } from '@deepseek-ai/cordis';
 -/** Required services (cordis fiber inject): the slot registry and workspace UI service. */
-+/** Required services: slots, remote, remote.directoryPicker, and locale. */
++/** Required services (cordis fiber inject): the slot registry, the workspace UI service, and locale. */
  export declare const inject: string[];
  /**
 - * Client plugin body: register the renderless native flow into both
@@ -200,47 +192,34 @@ index 6899939..c231381 100644
   * entries may activate later or replace their declarations.
   * @param ctx - client root context.
 diff --git a/package.json b/package.json
-index 758b9ef..bb6a216 100644
+index 9ad11b6..8d52358 100644
 --- a/package.json
 +++ b/package.json
 @@ -1,6 +1,6 @@
  {
    "name": "@deepseek-ai/dsh-client-ui-directory-picker-native",
--  "description": "Native directory-picker surface: the renderless workspace directory-flow occupant driving the host's OS chooser",
+-  "description": "Native directory-picker surface: the renderless workspace directory-flow occupant driving the local Desktop or Host OS chooser",
 +  "description": "Native workspace directory picker with an exact-path fallback",
-   "version": "0.1.6-alpha.1",
+   "version": "0.2.0-rc.2",
    "publishConfig": {
      "access": "public"
-@@ -29,7 +29,11 @@
+@@ -29,7 +29,9 @@
      "client": {
        "inject": [
          "@deepseek-ai/dsh-client-ui-renderer",
 -        "@deepseek-ai/dsh-client-ui-workspace"
 +        "@deepseek-ai/dsh-client-ui-workspace",
-+        "@deepseek-ai/dsh-api-remotes",
-+        "@deepseek-ai/dsh-client-connection",
 +        "@deepseek-ai/dsh-client-ui-primitives",
 +        "@deepseek-ai/dsh-client-locale"
        ],
        "platform": "web"
      }
-@@ -45,7 +49,11 @@
-     "react-dom": "^18.2.0",
-     "@deepseek-ai/dsh-client-ui-renderer": "^0.1.6-alpha.1",
-     "@deepseek-ai/cordis": "^4.0.2",
--    "@deepseek-ai/dsh-client-ui-workspace": "^0.1.6-alpha.1"
-+    "@deepseek-ai/dsh-client-ui-workspace": "^0.1.6-alpha.1",
-+    "@deepseek-ai/dsh-api-remotes": "^0.1.6-alpha.1",
-+    "@deepseek-ai/dsh-client-connection": "^0.1.6-alpha.1",
-+    "@deepseek-ai/dsh-client-ui-primitives": "^0.1.6-alpha.1",
-+    "@deepseek-ai/dsh-client-locale": "^0.1.6-alpha.1"
+@@ -46,6 +48,8 @@
+     "@deepseek-ai/dsh-client-test-runtime": "0.2.0-rc.2",
+     "@deepseek-ai/dsh-client-ui-workspace": "0.2.0-rc.2",
+     "@deepseek-ai/dsh-client-ui-renderer": "0.2.0-rc.2",
++    "@deepseek-ai/dsh-client-ui-primitives": "0.2.0-rc.2",
++    "@deepseek-ai/dsh-client-locale": "0.2.0-rc.2",
+     "@deepseek-ai/cordis": "~4.0.4"
    },
    "files": [
-     "lib/index.js",
-@@ -56,4 +64,4 @@
-     "bundle": "tsdown",
-     "watch": "tsdown --watch"
-   }
--}
-\ No newline at end of file
-+}
