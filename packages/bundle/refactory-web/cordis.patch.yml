@@ -10,12 +10,16 @@
 #
 # Layer order is a precondition: a patch only reaches a row an earlier layer
 # created, and the `insert` below appends rows this layer owns. `dsh plugin add`
-# appends bundles in dependency order after the profile's template bundles, so an
+# appends a newly installed bundle after the profile's template bundles, so an
 # ordinary profile install applies this after `@deepseek-ai/dsh-web-app`; a
-# hand-edited bundle list must keep it after.
+# hand-edited bundle list must keep it after. The append follows the order the
+# adds run in, not a dependency order: `pnpm add` writes the profile manifest's
+# `dependencies` keys alphabetically and the harness reconciles bundles by
+# iterating those keys, so declaring a dependency on `@deepseek-ai/dsh-web-app`
+# would land this layer before the layer it patches.
 #
 # `agent-preset-registry` is deliberately NOT stated here. That row's `config` is
-# replaced wholesale rather than merged, and `@deepseek-ai/dsh-refactory-presets`
+# replaced wholesale rather than merged, and `@deepseek-ai/dsh-refactory`
 # is its single owner — it sets `default: ceo`. A second `config` from this layer
 # would silently drop that default and let the harness's own win.
 
@@ -51,7 +55,7 @@
     # preset's `agent.cordis.yml` so the CEO it guards is in the mount's scope:
     # a host row has no scope, and the spine's deny-guard needs one to restrict
     # the CEO's own tools. That preset ships from
-    # `packages/bundle/refactory-presets`, which is applied after this layer.
+    # `packages/bundle/refactory`, which is applied after this layer.
 
     # The right Sidebar's refactory picker: the console's described choices,
     # started and read through the refactoryConsole endpoint.

@@ -8,9 +8,9 @@
 # The checkout-owned bundles are **machine state**: a DSH profile is created by
 # `dsh plugin --profile <name> add <package>`, never derived from the bundle's
 # name. `./install.sh` creates them, and this script heals a missing one rather
-# than booting into the failure it causes. The GUI profile is `refactory-web`, a
+# than booting into the failure it causes. The GUI profile is `refactory`, a
 # re:factory-owned profile over the harness's `web` template; the harness's own
-# `web` profile is never written to. Without `refactory-presets` the profile has
+# `web` profile is never written to. Without `refactory` the profile has
 # no `ceo` preset while the composition still names `ceo` as the roster default,
 # so every session created without naming one stops with `agent-preset/not-found`;
 # without `refactory-web` the console and picker rows never mount.
@@ -60,14 +60,18 @@ print(dsh_profile.render_plan(), end="")
 ')"
 if [ -n "$PLAN" ]; then
   echo "refactory-dsh: a DSH profile is missing a layer; adding it (machine state, once per machine)" >&2
+  # `value` is the template for `init`, a directory under `packages/bundle/` for
+  # `add`, and a package name for `remove` -- which is why the two branches below
+  # prepend that root and the removal branch does not.
   while IFS=$'\t' read -r kind profile value; do
     [ -n "$kind" ] || continue
     case "$kind" in
-      init) "$DSH" --profile "$profile" --from-default-profile "$value" --dump-config >/dev/null ;;
-      add)  "$DSH" plugin --profile "$profile" add "$DSH_ROOT/packages/bundle/$value" ;;
+      init)   "$DSH" --profile "$profile" --from-default-profile "$value" --dump-config >/dev/null ;;
+      add)    "$DSH" plugin --profile "$profile" add "$DSH_ROOT/packages/bundle/$value" ;;
+      remove) "$DSH" plugin --profile "$profile" remove "$value" ;;
     esac
   done <<<"$PLAN"
 fi
 
 cd "$DSH_ROOT"
-exec "$DSH" --profile refactory-web "$@"
+exec "$DSH" --profile refactory "$@"

@@ -82,7 +82,7 @@ describe('refactory-web layer', () => {
 
   it('leaves the single-owner agent-preset-registry row alone', () => {
     // `config` is replaced wholesale, so a second statement here would drop
-    // `default: ceo` from refactory-presets. The comment above may name the row;
+    // `default: ceo` from refactory. The comment above may name the row;
     // no entry may target it.
     expect(PATCH).not.toContain('id: agent-preset-registry')
   })

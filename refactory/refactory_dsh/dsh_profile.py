@@ -45,12 +45,12 @@ WEB_TEMPLATE = "web"
 #: The re:factory-owned profile the browser GUI boots. It is deliberately not the
 #: harness's `web`: that profile belongs to the harness, and appending to it made
 #: re:factory's rows appear in every unrelated `dsh --profile web` session.
-GUI_PROFILE = "refactory-web"
+GUI_PROFILE = "refactory"
 
 #: The surface-independent layer: the `ceo` preset and the roster composition.
 #: It is wanted under every surface, so both the GUI and the attached Martty
 #: target carry it.
-PRESETS_BUNDLE = "@deepseek-ai/dsh-refactory-presets"
+PRESETS_BUNDLE = "@deepseek-ai/dsh-refactory"
 
 #: The browser layer: the console, the right-sidebar picker and the brand rows.
 #: It has no meaning under a TUI surface, so only the GUI target carries it.
@@ -58,6 +58,24 @@ WEB_SURFACE_BUNDLE = "@deepseek-ai/dsh-refactory-web"
 
 #: The operator-owned TUI profile re:factory attaches the presets layer to.
 MARTTY_PROFILE = "martty"
+
+#: Bundles this checkout used to declare, mapped to the bundle that replaced
+#: each. A profile manifest is machine state written by `dsh plugin add`, so an
+#: installation that predates a rename keeps the retired name in its
+#: `dependencies` and in its `dsh.profile.bundles`, and the bundle directory that
+#: entry links to is gone. The plan removes it rather than leaving it dangling.
+RETIRED_BUNDLES: dict[str, str] = {
+    "@deepseek-ai/dsh-refactory-presets": PRESETS_BUNDLE,
+}
+
+#: Profile names this checkout used to compose, mapped to the profile that
+#: replaced each. A DSH profile cannot be moved: its `node_modules` holds
+#: absolute symlinks under `.dsh-module-fallback`, so renaming the directory
+#: would leave every one of them pointing at the old path. The plan instead
+#: retires re:factory's layers from the old directory, which leaves it an inert
+#: copy of the shipped template it was initialized from rather than a profile
+#: whose bundle entries dangle.
+RETIRED_PROFILES: dict[str, str] = {"refactory-web": GUI_PROFILE}
 
 #: The harness's shipped profile templates, read for the stale-mutation check.
 #: Kept local rather than imported from the harness so `doctor` works from a
@@ -96,13 +114,25 @@ class Target(NamedTuple):
 
 
 class ProvisionStep(NamedTuple):
-    """One ordered step that makes an owned target ready."""
+    """One ordered step that makes an owned target ready.
 
-    #: ``init`` initializes from a shipped template; ``add`` installs one layer.
+    ``value`` means one thing per :attr:`kind`, and both consumers of
+    :func:`render_plan` depend on that: ``init`` names a shipped template,
+    ``add`` names a directory under ``packages/bundle/`` that the caller
+    prefixes with that root, and ``remove`` names a package to remove as it is
+    written in the profile manifest -- never a directory. A ``remove`` is only
+    ever emitted for a bundle the manifest declares: `dsh plugin remove`
+    initializes a profile that does not exist and then fails, and fails again on
+    a package the profile does not declare.
+    """
+
+    #: ``init`` initializes from a shipped template; ``add`` installs one layer;
+    #: ``remove`` retires a bundle an older install left in the profile.
     kind: str
     #: The target profile.
     profile: str
-    #: The template name for ``init``; the checkout bundle directory for ``add``.
+    #: The template name for ``init``; the checkout bundle directory for
+    #: ``add``; the package name for ``remove``.
     value: str
 
 
@@ -175,7 +205,12 @@ def declared_bundles(name: str = GRAPH_PROFILE) -> list[str]:
     is absent and one that is present but does not carry the bundle are different
     failures, and telling them apart is what lets the error say which happened.
     """
-    manifest = profile_dir(name) / "package.json"
+    return declared_bundles_in(profile_dir(name))
+
+
+def declared_bundles_in(directory: Path) -> list[str]:
+    """The bundles a profile directory's manifest declares, or ``[]``."""
+    manifest = directory / "package.json"
     if not manifest.exists():
         return []
     try:
@@ -190,6 +225,22 @@ def declared_bundles(name: str = GRAPH_PROFILE) -> list[str]:
     if not isinstance(bundles, list):
         return []
     return [str(entry) for entry in bundles]
+
+
+def retired_bundles(name: str) -> list[str]:
+    """The retired bundle names this profile still declares, in manifest order.
+
+    Empty once the profile is clean, which is what keeps the plan idempotent:
+    ``dsh plugin remove`` fails on a package the profile does not declare, so a
+    second removal must never be emitted.
+    """
+    return [bundle for bundle in declared_bundles(name) if bundle in RETIRED_BUNDLES]
+
+
+def refactory_layers(name: str) -> list[str]:
+    """Every re:factory bundle this profile declares, current or retired."""
+    ours = {entry.bundle for entry in LAYERS.values()} | set(RETIRED_BUNDLES)
+    return [bundle for bundle in declared_bundles(name) if bundle in ours]
 
 
 def is_ready(name: str = GRAPH_PROFILE, bundle: str = GRAPH_BUNDLE) -> bool:
@@ -257,6 +308,12 @@ def provision_plan() -> list[ProvisionStep]:
     their own copy of the profile list, so the composition has one owner.
     Attached targets are never part of the plan: re:factory does not create or
     mutate a profile it does not own.
+
+    A target's ``remove`` rows precede its ``add`` rows, so a rename retires the
+    old entry before the replacement is appended. ``RETIRED_PROFILES`` is the
+    second source of ``remove`` rows: those profiles are not targets any more,
+    and the target loop above only creates the profile that replaced them, so
+    nothing else would clear re:factory's layers out of the old directory.
     """
     steps: list[ProvisionStep] = []
     for entry in TARGETS:
@@ -266,10 +323,16 @@ def provision_plan() -> list[ProvisionStep]:
         if not present and entry.base_template is not None:
             steps.append(ProvisionStep("init", entry.profile, entry.base_template))
         declared = declared_bundles(entry.profile)
+        for bundle in declared:
+            if bundle in RETIRED_BUNDLES:
+                steps.append(ProvisionStep("remove", entry.profile, bundle))
         for key in entry.layers:
             bundle = LAYERS[key].bundle
             if bundle not in declared:
                 steps.append(ProvisionStep("add", entry.profile, bundle_directory(bundle)))
+    for retired in RETIRED_PROFILES:
+        for bundle in refactory_layers(retired):
+            steps.append(ProvisionStep("remove", retired, bundle))
     return steps
 
 
@@ -299,16 +362,37 @@ def missing_bundles() -> list[tuple[str, str, str]]:
     return gaps
 
 
+def retired_reason(name: str, bundle: str) -> str:
+    """Why a retired bundle entry has to go, and the command that removes it.
+
+    The plan retires this from the profiles re:factory owns; for an attached
+    profile the removal is the operator's, so the reason carries the command the
+    same way :func:`requirement` does.
+    """
+    replacement = RETIRED_BUNDLES[bundle]
+    return (
+        f"the DSH profile {name!r} still carries {bundle}, which this checkout "
+        f"renamed to {replacement}, and the directory it links to is gone. Retire "
+        f"it with `{migration_command(name, [bundle])}`"
+    )
+
+
 def readiness_gaps() -> list[tuple[str, str, str]]:
     """Every gap ``doctor`` should show.
 
     Owned targets always; an attached target only when the operator already has
     that profile, because a profile that does not exist is not a chosen
-    re:factory path and must not read as a broken install.
+    re:factory path and must not read as a broken install. A retired bundle the
+    profile still declares is a gap as well: the plan retires it from an owned
+    profile, and an attached profile only ever gets the command.
     """
     gaps = missing_bundles()
     for entry in TARGETS:
-        if entry.owned or not (profile_dir(entry.profile) / "package.json").exists():
+        if not entry.owned and not (profile_dir(entry.profile) / "package.json").exists():
+            continue
+        for bundle in retired_bundles(entry.profile):
+            gaps.append((entry.profile, bundle, retired_reason(entry.profile, bundle)))
+        if entry.owned:
             continue
         for key in entry.layers:
             bundle = LAYERS[key].bundle
@@ -337,7 +421,11 @@ def stale_mutations() -> list[tuple[str, list[str]]]:
 
 
 def migration_command(name: str, bundles: list[str]) -> str:
-    """The command that removes stale re:factory layers from a harness profile."""
+    """The command that removes re:factory layers an older install left behind.
+
+    Serves both a harness-owned profile an old install polluted and a bundle a
+    rename retired from a profile this checkout no longer composes.
+    """
     return f"dsh plugin --profile {name} remove " + " ".join(bundles)
 
 
@@ -396,6 +484,8 @@ __all__ = [
     "PRESETS_BUNDLE",
     "ProfileError",
     "ProvisionStep",
+    "RETIRED_BUNDLES",
+    "RETIRED_PROFILES",
     "SHIPPED_TEMPLATES",
     "TARGETS",
     "WEB_SURFACE_BUNDLE",
@@ -405,6 +495,7 @@ __all__ = [
     "add_command",
     "bundle_directory",
     "declared_bundles",
+    "declared_bundles_in",
     "dsh_home",
     "init_command",
     "is_ready",
@@ -414,9 +505,12 @@ __all__ = [
     "profile_dir",
     "provision_plan",
     "readiness_gaps",
+    "refactory_layers",
     "render_plan",
     "require",
     "requirement",
+    "retired_bundles",
+    "retired_reason",
     "stale_mutations",
     "target",
 ]

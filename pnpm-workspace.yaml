@@ -3,7 +3,7 @@
 packages:
   - packages/workflow/workflow-spine
   - packages/bundle/graph
-  - packages/bundle/refactory-presets
+  - packages/bundle/refactory
   - packages/bundle/refactory-web
   - packages/refactory/refactory-console
   - packages/refactory/tool-refactory

@@ -2,7 +2,7 @@
  * The acceptance check for the re:factory GUI profile's layers.
  *
  * It is a script, not a spec, because what it proves is a whole-profile fact: an
- * owned `refactory-web` profile, provisioned from the harness's `web` template
+ * owned `refactory` profile, provisioned from the harness's `web` template
  * by `dsh_profile.provision_plan()` and carrying both checkout bundles, declares
  * `CEO`, records `ceo` for a session created without a preset, gives that
  * session's agent the workflow tools and none of the denied ones, and mounts
@@ -20,12 +20,12 @@
  * The composition is the real `ceo` preset, which requires the whole host
  * composition it is normally mounted inside. The script therefore composes a
  * bootstrap `cordis.yml` from the profile's own layers over the installed
- * harness anchor and boots the profile's real `dsh --profile refactory-web`
+ * harness anchor and boots the profile's real `dsh --profile refactory`
  * against it.
  *
  * Usage (from the repository root, after `pnpm run build`):
  *
- *   node packages/bundle/refactory-presets/tests/verify-ceo-root.mjs
+ *   node packages/bundle/refactory/tests/verify-ceo-root.mjs
  *
  * It boots the owned GUI profile on a spare port, checks the facts, and exits
  * nonzero on the first one that does not hold.
@@ -41,7 +41,7 @@ const REPO = resolve(HERE, '..', '..', '..', '..')
 const BUNDLE = resolve(HERE, '..')
 
 /** The re:factory-owned GUI profile the provisioning plan composes. */
-const PROFILE = 'refactory-web'
+const PROFILE = 'refactory'
 
 /** The harness's own template the owned profile is initialized from. */
 const WEB_TEMPLATE = 'web'
@@ -207,7 +207,7 @@ check(
 //    `web` profile. These checks drive `dsh_profile.provision_plan()` — the same
 //    table `install.sh`, `./refactory-dsh` and `refactory doctor` use — so the
 //    composition that ships is what is checked, not a copy of it made here.
-const home = mkdtempSync(join(tmpdir(), 'dsh-refactory-presets-'))
+const home = mkdtempSync(join(tmpdir(), 'dsh-refactory-'))
 let web
 try {
   // The harness's own `web` profile, created by the harness from its template
@@ -232,14 +232,20 @@ try {
   check(plan.code === 0, 'the provisioning plan renders', plan.out.trim())
   const steps = plan.out.split('\n').filter(Boolean).map(line => line.split('\t'))
   check(steps.length > 0, 'a fresh home needs provisioning', plan.out.trim())
+  // `value` is a template for `init`, a directory under `packages/bundle/` for
+  // `add`, and a package name for `remove` — so only `add` is joined to that root.
   for (const [kind, profile, value] of steps) {
     const step = kind === 'init'
       ? run(dsh, ['--profile', profile, '--from-default-profile', value, '--dump-config'], {
         env: { ...process.env, DSH_HOME: home },
       })
-      : run(dsh, ['plugin', '--profile', profile, 'add', join(REPO, 'packages', 'bundle', value)], {
-        env: { ...process.env, DSH_HOME: home },
-      })
+      : kind === 'remove'
+        ? run(dsh, ['plugin', '--profile', profile, 'remove', value], {
+          env: { ...process.env, DSH_HOME: home },
+        })
+        : run(dsh, ['plugin', '--profile', profile, 'add', join(REPO, 'packages', 'bundle', value)], {
+          env: { ...process.env, DSH_HOME: home },
+        })
     check(step.code === 0, `the plan ${kind}s ${value} into ${profile}`, step.out.slice(0, 400))
   }
 
@@ -257,7 +263,7 @@ try {
     `bundles: ${bundles.join(', ')}`,
   )
   check(
-    bundles.indexOf('@deepseek-ai/dsh-refactory-presets') > webApp,
+    bundles.indexOf('@deepseek-ai/dsh-refactory') > webApp,
     'the preset layer is applied after dsh-web-app, which inserts the agent-preset-registry row',
     `bundles: ${bundles.join(', ')}`,
   )

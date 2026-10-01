@@ -17,10 +17,10 @@ client-module system discovers a browser plugin by scanning already-mounted Load
 entries, so a package that declares `dsh.client` and is an active entry is picked
 up without the upstream manifest listing it.
 
-Install it into the re:factory-owned `refactory-web` profile, which is initialized
+Install it into the re:factory-owned `refactory` profile, which is initialized
 from the harness's `web` template, so the GUI shows the refactory console and
 picker. It is a **browser** surface and is not mounted under a TUI profile such as
-Martty; `@deepseek-ai/dsh-refactory-presets`, the sibling bundle, ships the `ceo`
+Martty; `@deepseek-ai/dsh-refactory`, the sibling bundle, ships the `ceo`
 preset and is the surface-independent layer. The two are independent layers and a
 full web install carries both.
 
@@ -29,8 +29,8 @@ full web install carries both.
 ### Install into a profile
 
 ```text
-dsh plugin --profile refactory-web add <checkout>/packages/bundle/refactory-web
-dsh plugin --profile refactory-web remove @deepseek-ai/dsh-refactory-web
+dsh plugin --profile refactory add <checkout>/packages/bundle/refactory-web
+dsh plugin --profile refactory remove @deepseek-ai/dsh-refactory-web
 ```
 
 `@deepseek-ai/dsh-refactory-web` is not published to the npm registry, so `add`
@@ -43,9 +43,12 @@ to `dsh.profile.bundles` and the layer activates on the next boot.
 The rows this patch disables or appends sit in the `@deepseek-ai/dsh-web-app`
 layer, and a patch only reaches a row an earlier layer created. **This bundle must
 therefore be applied after `@deepseek-ai/dsh-web-app` in `dsh.profile.bundles`.**
-`dsh plugin add` appends bundles in dependency order after the profile's template
-bundles, so an ordinary profile install satisfies that automatically; only a
-hand-edited bundle list needs to keep the order.
+`dsh plugin add` appends a newly installed bundle after the profile's template
+bundles, so an ordinary profile install satisfies that automatically. It is not
+satisfied by declaring a dependency on `@deepseek-ai/dsh-web-app`: `pnpm add`
+writes a profile manifest's `dependencies` keys in alphabetical order, the harness
+reconciles bundles by iterating those keys, and `dsh-refactory-web` sorts before
+`dsh-web-app`. Only a hand-edited bundle list needs to keep the order by hand.
 
 ### What you get
 
@@ -60,8 +63,8 @@ hand-edited bundle list needs to keep the order.
 
 ```bash
 pnpm test packages/bundle/refactory-web        # the startup provider and the layer
-dsh plugin --profile refactory-web add <checkout>/packages/bundle/refactory-web
-dsh plugin --profile refactory-web --dump-config   # the rows above are present, no skipped patch
+dsh plugin --profile refactory add <checkout>/packages/bundle/refactory-web
+dsh plugin --profile refactory --dump-config   # the rows above are present, no skipped patch
 ```
 
 `tests/startup.spec.ts` checks that the provider publishes the checkout holding
@@ -92,10 +95,10 @@ plugin that resolves the checkout above its own module and publishes it as the
 for a profile-installed bundle names the user's working directory, not this
 checkout.
 
-The `agent-presets` row is deliberately absent. Its `config` is replaced wholesale,
-and `@deepseek-ai/dsh-refactory-presets` owns it, supplying both `default: ceo` and
-the configured `roots`. A second `config` here would drop whichever list lost,
-decided by bundle order.
+The `agent-preset-registry` row is deliberately absent. Its `config` is replaced
+wholesale, and `@deepseek-ai/dsh-refactory` is its single owner: that bundle states
+`default: ceo`. A second `config` here would drop the default, decided by bundle
+order.
 
 The dependencies on the three occupant packages keep the harness install able to
 resolve them the way the deleted pnpm patch did when it added them to the upstream
@@ -134,6 +137,6 @@ This package replaces `patches/@deepseek-ai__dsh-web-app@0.1.5-rc.3.patch`, whic
 edited the upstream package's own `cordis.patch.yml` and `package.json`. The patch
 forced the repository onto one patched `0.1.5-rc.3` release and could not be
 installed into any other DSH version. Its `agent-presets` hunk moved to
-`packages/bundle/refactory-presets` in #262; everything else is here.
+`packages/bundle/refactory` in #262; everything else is here.
 
 </details>

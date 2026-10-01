@@ -21,10 +21,15 @@
 # The `agent-preset-registry` row is inserted by the `dsh-web-app` layer, and a
 # patch only reaches a row an earlier layer created — one that matches nothing
 # warns and is skipped. So this bundle must be applied AFTER
-# `@deepseek-ai/dsh-web-app` in `dsh.profile.bundles`. `dsh plugin add`
-# reconciles the list in dependency order, so a profile install satisfies that
-# automatically; a profile whose bundle list was hand-edited must keep
-# `@deepseek-ai/dsh-refactory-presets` after it.
+# `@deepseek-ai/dsh-web-app` in `dsh.profile.bundles`. `dsh plugin add` appends a
+# newly installed bundle after the bundles already listed, and the template's are
+# already there, so an ordinary install satisfies that as long as the adds run in
+# layer order; `dsh_profile`'s plan does. Declaring `@deepseek-ai/dsh-web-app` as
+# a dependency of this bundle does NOT: `pnpm add` writes a profile manifest's
+# `dependencies` keys in alphabetical order, the harness appends new bundles by
+# iterating those keys, and `dsh-refactory` sorts before `dsh-web-app` — so this
+# patch would match no row. A hand-edited bundle list must keep
+# `@deepseek-ai/dsh-refactory` after `@deepseek-ai/dsh-web-app`.
 
 - id: agent-preset-registry
   config:
