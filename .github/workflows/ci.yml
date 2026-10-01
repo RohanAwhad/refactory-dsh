@@ -40,6 +40,12 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
+        with:
+          # `refactory/tests/test_work_complete.py` reads the commit each tracked
+          # item records and asks git to resolve it. A depth-1 clone holds one
+          # commit, so every recorded hash would be unresolvable and the gate would
+          # fail for a reason that is about the checkout rather than the work.
+          fetch-depth: 0
 
       # `pnpm/setup` is the action for pnpm 11+ (this repo pins pnpm@11.7.0). It
       # installs the pinned pnpm — read from package.json's `packageManager`, so it
