@@ -19,6 +19,26 @@ function request(value: unknown): RefactorySingleRunRequest {
   }
   return entry as unknown as RefactorySingleRunRequest
 }
+
+/**
+ * One strict codec for this hand-written contribution. It carries both the
+ * `schema.parse` face of the pinned harness and the `create()` factory that
+ * `e459e32637` introduced, so the same descriptor mounts under either harness.
+ *
+ * Exit condition: drop the `schema` face only once **both** the harness this
+ * repository pins and the harness serving the profile are `0.1.6-alpha.2` or
+ * later — `e459e32637` shipped in `0.1.6-alpha.2`, so "when it is released" is
+ * already past. #276 (the pin bump) plus `boston-harness-group/dsh-tauri#25`
+ * (the serving harness) are what reach that state; until both land, the bridge
+ * is load-bearing.
+ * @param typeSymbol - generated type symbol used for diagnostics.
+ * @param parse - boundary validator for the wire value.
+ * @returns the strict codec accepted by both the pinned and current harness.
+ */
+function strictCodec(typeSymbol: string, parse: (value: unknown) => unknown) {
+  return { mode: 'strict' as const, typeSymbol, schema: { parse }, create: () => ({ parse }) }
+}
+
 /** Validate every delivered frame, including the complete ordinary result. */
 export function singleEvent(value: unknown): RefactorySingleEvent {
   const entry = record(value)
@@ -55,11 +75,9 @@ export const runStreamContribution: TypertRemoteContribution = {
     id: '@deepseek-ai/dsh-refactory-console#refactoryConsole/runStream',
     service: 'refactoryConsole', namespace: 'refactoryConsole', method: 'runStream', mode: 'stream',
     invocation: { kind: 'direct' },
-    parameters: [{ name: 'request', wire: 'request', source: 'json', codec: {
-      mode: 'strict', typeSymbol: 'RefactorySingleRunRequest', schema: { parse: request },
-    } }],
+    parameters: [{ name: 'request', wire: 'request', source: 'json', codec: strictCodec('RefactorySingleRunRequest', request) }],
     cancellation: { parameter: 'signal' },
-    result: { mode: 'strict', typeSymbol: 'RefactorySingleEvent', schema: { parse: singleEvent } },
+    result: strictCodec('RefactorySingleEvent', singleEvent),
   }],
 }
 
@@ -79,16 +97,16 @@ export const watchStreamContribution: TypertRemoteContribution = {
     service: 'refactoryConsole', namespace: 'refactoryConsole', method: 'watchStream', mode: 'stream',
     invocation: { kind: 'direct' },
     parameters: [
-      { name: 'run', wire: 'run', source: 'json', codec: { mode: 'strict', typeSymbol: 'string', schema: { parse(value: unknown) {
+      { name: 'run', wire: 'run', source: 'json', codec: strictCodec('string', (value: unknown) => {
         if (typeof value !== 'string' || value.trim() === '') throw new Error('A run is required')
         return value
-      } } } },
-      { name: 'after', wire: 'after', source: 'json', codec: { mode: 'strict', typeSymbol: 'number', schema: { parse(value: unknown) {
+      }) },
+      { name: 'after', wire: 'after', source: 'json', codec: strictCodec('number', (value: unknown) => {
         if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw new Error('Invalid cursor')
         return value
-      } } } },
+      }) },
     ],
     cancellation: { parameter: 'signal' },
-    result: { mode: 'strict', typeSymbol: 'RefactoryWatchFrame', schema: { parse: watchFrame } },
+    result: strictCodec('RefactoryWatchFrame', watchFrame),
   }],
 }
