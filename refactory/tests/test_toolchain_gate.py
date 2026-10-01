@@ -98,3 +98,55 @@ def test_a_marked_test_with_no_report_is_unverified(monkeypatch):
     monkeypatch.setattr(gate, "_TOOLCHAIN", {"t.py::a": "lean"})
     monkeypatch.setattr(gate, "_TOOLCHAIN_RESULT", {})
     assert gate._unverified(), "a marked test with no report counted as verified"
+
+
+def test_the_gate_sets_a_failing_exit_status(monkeypatch):
+    """The counting above is the substance; this holds the path that acts on it.
+
+    `_unverified()` reporting a problem and `--toolchain-gate` actually exiting
+    nonzero are two facts, and only the first was covered: #44 proved the session
+    status by hand with a temporary probe, so nothing kept the gate itself honest.
+    A gate that quietly stops failing is the exact regression it exists to prevent.
+    """
+    monkeypatch.setattr(gate, "_TOOLCHAIN", {"t.py::a": "mathlib"})
+    monkeypatch.setattr(
+        gate, "_TOOLCHAIN_RESULT", {"t.py::a": ("skipped", "mathlib is not installed")}
+    )
+
+    class Session:
+        class config:  # noqa: N801 - mirrors pytest's own attribute shape
+            @staticmethod
+            def getoption(name: str, default: object = None) -> object:
+                return name == "--toolchain-gate"
+
+        exitstatus = 0
+
+    session = Session()
+    gate.pytest_sessionfinish(session, 0)  # type: ignore[arg-type]
+    assert session.exitstatus == 1, "a skipped marked test left the session green"
+
+    # And a verified run keeps the status it earned.
+    monkeypatch.setattr(gate, "_TOOLCHAIN_RESULT", {"t.py::a": ("passed", "")})
+    passed = Session()
+    gate.pytest_sessionfinish(passed, 0)  # type: ignore[arg-type]
+    assert passed.exitstatus == 0, "a run that verified every tool was failed anyway"
+
+
+def test_the_gate_is_inert_without_the_flag(monkeypatch):
+    """`--toolchain-gate` is the opt-in; a plain run must not fail on a skip."""
+    monkeypatch.setattr(gate, "_TOOLCHAIN", {"t.py::a": "mathlib"})
+    monkeypatch.setattr(
+        gate, "_TOOLCHAIN_RESULT", {"t.py::a": ("skipped", "mathlib is not installed")}
+    )
+
+    class Session:
+        class config:  # noqa: N801 - mirrors pytest's own attribute shape
+            @staticmethod
+            def getoption(name: str, default: object = None) -> object:
+                return False
+
+        exitstatus = 0
+
+    session = Session()
+    gate.pytest_sessionfinish(session, 0)  # type: ignore[arg-type]
+    assert session.exitstatus == 0, "a plain run failed on a skip the flag never asked about"

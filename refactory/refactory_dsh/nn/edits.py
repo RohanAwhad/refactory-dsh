@@ -646,6 +646,19 @@ def names() -> list[str]:
     return sorted(_specs())
 
 
+def unknown(op: object) -> str | None:
+    """The refusal for an op the catalogue does not have, or None when it does.
+
+    One home for the rule: an op that does not exist is a different fact from one
+    that exists and is outside this run's permitted edits. The callers differ only
+    in what they do with the answer -- reject and continue, or reject and return --
+    so neither spells the predicate or the message a second time.
+    """
+    if op in _specs():
+        return None
+    return f"E-op: unknown edit {op!r}; known: {names()}"
+
+
 def enabled(preset: str = "broad") -> list[str]:
     """The operations a preset allows. An unknown preset is an error."""
     if preset not in PRESETS:

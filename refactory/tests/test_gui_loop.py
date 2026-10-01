@@ -18,6 +18,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -692,7 +693,7 @@ def test_the_console_forwards_a_seeded_knob_into_the_resolved_config(monkeypatch
     """
     from refactory_dsh import console
 
-    captured: dict[str, object] = {}
+    captured: dict[str, dict[str, Any]] = {}
 
     def fake_spawn(mode, root, config, *, project):
         captured["config"] = config
@@ -708,8 +709,8 @@ def test_the_console_forwards_a_seeded_knob_into_the_resolved_config(monkeypatch
         knob=["grid=6", "selector=best"],
     )
     config = captured["config"]
-    assert "resolved_config" in config  # type: ignore[operator]
-    snapshot = json.loads(Path(config["resolved_config"]).read_text())  # type: ignore[index]
+    assert "resolved_config" in config
+    snapshot = json.loads(Path(config["resolved_config"]).read_text())
     assert snapshot["settings"]["knobs"] == {"grid": "6", "selector": "best"}
     assert "knobs" not in config, "the bare `--knobs` flag was reintroduced"
     assert payload["run_id"]

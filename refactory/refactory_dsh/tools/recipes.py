@@ -21,6 +21,7 @@ then checks the claim.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -54,6 +55,11 @@ class Recipe:
     contains: tuple[str, ...] = ()
     #: `dotted.path` → expected JSON value, read from the output.
     json_fields: tuple[tuple[str, object], ...] = ()
+    #: Regular expressions the output must match, searched line by line. `contains`
+    #: is a substring test, so a prefix every verdict satisfies (`refactory doctor: `)
+    #: cannot tell a healthy machine from a broken one; a recipe that means to check
+    #: a *shape* rather than a phrase states it here.
+    matches: tuple[str, ...] = ()
     #: Files that must exist after the run, relative to the repository root.
     files: tuple[str, ...] = ()
     #: Run this instead, when the shown command is a fragment or needs a shell.
@@ -63,6 +69,13 @@ class Recipe:
     #: Exit codes the recipe may return and still have done what the page says. A
     #: diagnostic reports a verdict as data: on a machine with local problems it
     #: exits nonzero without the documented command having failed at its job.
+    #:
+    #: Legitimate only for a command whose *subject* is the machine's own state
+    #: (`doctor`, a capability probe). It is not a way to accept a nonzero exit from
+    #: a command the page claims works: that is the failure the recipe exists to
+    #: catch, and widening a tuple to hide it makes the page a lie the checker
+    #: repeats. Pair it with `matches` so the output still has to say which verdict
+    #: it reached.
     exit_ok: tuple[int, ...] = (0,)
 
     def runnable(self, tier: str) -> bool:
@@ -90,9 +103,11 @@ RECIPES: tuple[Recipe, ...] = (
         expect="python, uv, node, the vendored language, and the DSH profile the modes run on",
         # A verdict depends on the machine: a developer's DSH home can hold a stale
         # attached profile or a different serving `dsh`, which doctor reports rather
-        # than swallows. The recipe checks the rows and that a verdict is stated,
-        # and lets the verdict itself be 1 ("problems") instead of failing the page.
-        contains=("python", "uv", "node", "DSH profile 'graph'", "refactory doctor: "),
+        # than swallows. The recipe checks the rows, and checks the *shape* of the
+        # verdict rather than a phrase every verdict shares: a row prefix is what a
+        # broken machine prints too. The verdict itself may be 1 ("problems").
+        contains=("python", "uv", "node", "DSH profile 'graph'"),
+        matches=(r"^refactory doctor: (\d+ problem\(s\)|.*ready)",),
         exit_ok=(0, 1),
     ),
     Recipe(
@@ -438,6 +453,9 @@ def check(recipe: Recipe, output: str, root: Path) -> Result:
     for needle in recipe.contains:
         if needle not in output:
             problems.append(f"output does not contain {needle!r}")
+    for pattern in recipe.matches:
+        if not any(re.search(pattern, line) for line in output.splitlines()):
+            problems.append(f"no line matches {pattern!r}")
     for path, expected in recipe.json_fields:
         try:
             found = json_field(output, path)

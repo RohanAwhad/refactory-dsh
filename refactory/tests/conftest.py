@@ -12,6 +12,13 @@ import pytest
 # have to be importable by name rather than only by path.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+# The credential probe and the hook that skips the marked tests live together in
+# `model_credential`, and a module imported by a test is not a plugin: its hooks are
+# never called unless it is registered. Registering it here is what makes the skip
+# fire, and it is also why the probe can stay deferred -- pytest calls the hook only
+# at collection, and only this conftest pulls the module in.
+pytest_plugins = ("model_credential",)
+
 # PROMPT_MUTATE and expandable-KNOB_MUTATE shell out to `claude` by default.
 # For the fast, deterministic harness we point that at /bin/true (empty output),
 # which makes `default_prompt_rewriter` fall back to its deterministic prompt
@@ -46,6 +53,12 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "toolchain(name): needs a real external tool (lean, mathlib, sympy); "
         "checked by --toolchain-gate",
+    )
+    config.addinivalue_line(
+        "markers",
+        "needs_model_credential: needs a model credential the authoring sandbox "
+        "accepts; the tests/model_credential.py hook skips it with a stated reason "
+        "when this machine has none",
     )
 
 
