@@ -18,7 +18,7 @@ import { transform } from 'lightningcss'
 /**
  * The browser shell's frozen module table: specifiers the page shares into every
  * plugin bundle. It is the browser side's contract with the harness web app the
- * re:factory `refactory-web` profile mounts, so the list is stated here rather
+ * re:factory `refactory` profile mounts, so the list is stated here rather
  * than imported from a harness package the fork no longer owns.
  */
 const PLATFORM_MODULES = [
