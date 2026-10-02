@@ -59,16 +59,28 @@ from refactory_dsh import dsh_profile
 print(dsh_profile.render_plan(), end="")
 ')"
 if [ -n "$PLAN" ]; then
-  echo "refactory-dsh: a DSH profile is missing a layer; adding it (machine state, once per machine)" >&2
+  echo "refactory-dsh: provisioning owned DSH profiles" >&2
   # `value` is the template for `init`, a directory under `packages/bundle/` for
-  # `add`, and a package name for `remove` -- which is why the two branches below
-  # prepend that root and the removal branch does not.
+  # `add`, and one or more space-separated package names for `remove` and `clean`
+  # -- only the add branch prefixes the checkout bundle root.
+  # The names are split rather than passed as one argument: `pnpm remove`
+  # takes them as a list and removes nothing at all when one of them is not a
+  # declared dependency, so one profile's retirements travel in a single call.
   while IFS=$'\t' read -r kind profile value; do
     [ -n "$kind" ] || continue
     case "$kind" in
       init)   "$DSH" --profile "$profile" --from-default-profile "$value" --dump-config >/dev/null ;;
       add)    "$DSH" plugin --profile "$profile" add "$DSH_ROOT/packages/bundle/$value" ;;
-      remove) "$DSH" plugin --profile "$profile" remove "$value" ;;
+      remove)
+        read -r -a retired <<<"$value"
+        "$DSH" plugin --profile "$profile" remove "${retired[@]}"
+        ;;
+      clean)
+        # Runs before the plugin rows for its profile, and takes the
+        # profile's own writer lock: the plugin rows acquire that same lock, so
+        # holding it across them would deadlock.
+        "$PYTHON" -c 'import sys; from refactory_dsh import dsh_profile; dsh_profile.clean_manifest(sys.argv[1])' "$profile"
+        ;;
     esac
   done <<<"$PLAN"
 fi

@@ -91,7 +91,7 @@ sees none of re:factory's preset, console or brand rows.
 
 `dsh_profile.py` owns a layer table (`graph`, the surface-independent `presets`, the
 browser `web`) and a target table over it (`graph`, `refactory`, and the attached
-`martty`), emits the ordered `init`/`add`/`remove` plan that `install.sh` and
+`martty`), emits the ordered `init`/`add`/`remove`/`clean` plan that `install.sh` and
 `./refactory-dsh` both execute, and detects a harness profile an older install
 mutated. `refactory doctor` reports one row per target and names the exact command for
 whichever layer is short — `refactory` without the preset layer has no `ceo` preset
@@ -102,18 +102,47 @@ panel. A harness profile an older install polluted is reported with its migratio
 `dsh plugin --profile web remove @deepseek-ai/dsh-refactory
 @deepseek-ai/dsh-refactory-web`; doctor states it rather than rewriting machine state.
 
+A profile manifest carries two independent lists, and the plan reads both. `remove`
+names only packages the manifest also declares as dependencies, because `pnpm remove`
+removes nothing at all when one of its names is missing from that list — the whole
+call fails, and under the shell scripts' `set -e` every later row is skipped, which
+is how an unsafe manifest order used to leave the launcher unable to boot. A selection
+that is no longer a dependency is reachable by neither `pnpm remove` nor the harness's
+own `reconcile()`, which keeps a name absent from `dependencies` rather than dropping
+it; the `clean` row is the manifest rewrite that clears it, and it runs before the
+profile's plugin rows so a stale entry cannot make their reconcile throw. The rewrite
+holds the same writer lock `dsh plugin` takes around every profile mutation, and
+writes the pre-image before replacing the file, so it cannot overwrite a concurrent
+plugin operation. It resolves the lock helpers through the selected pinned harness
+and its plugin manager. Backups remain beside the manifest as
+`package.json.refactory-backup-<uuid>`, with mode `0600`; provisioning reports their
+paths. Cleanup preserves unrelated fields and the order of all retained selections.
+Desired layers missing a dependency entry receive an `add` row even when already
+selected. Obsolete dependencies are removed on retry even if an interrupted run
+already cleared their selections.
+
+`refactory/tests/test_dsh_profile_migration.py` executes the real launcher in
+isolated homes for all four retired-profile states, selected-layer dependency
+repair, interrupted retirement and fresh provisioning. It checks ordered final
+bundle lists, retained unrelated state and backups, two successful runs, and an
+empty final plan. Its lock test uses a readiness handshake with the pinned writer
+lock: both cleanup and the pinned plugin operation must respect the held lock, and
+cleanup must preserve changes committed by that writer. These tests run in the
+default Python suite when Node, pnpm and the pinned install are present, including
+CI after `install.sh`.
+
 An installation that predates the `refactory-web` → `refactory` profile rename and the
 `@deepseek-ai/dsh-refactory-presets` → `@deepseek-ai/dsh-refactory` bundle rename is
-migrated by that same plan, `remove` rows included: re:factory's layers are cleared out
-of the directory the profile rename left behind, and the retired name is retired from
-each profile an older install left it in. `doctor` reports a harness-owned profile an
-older install polluted with the full set it carries, retired name included, so the
-command it prints names everything the operator has to clear rather than only the
-surviving layer. The old directory is left on disk — a DSH profile cannot be moved,
-because its `node_modules` holds absolute symlinks under `.dsh-module-fallback` — and
-what remains there is an inert copy of the shipped `web` template that nothing boots.
-re:factory never mutates an attached profile, so under Martty the removal is only
-reported, as a `doctor` row naming `dsh plugin --profile martty remove
+migrated by that same plan: re:factory's layers are cleared out of the directory the
+profile rename left behind, and the retired name stops being selected in each profile
+an older install left it in. `doctor` reports a harness-owned profile an older install
+polluted with the full set it carries, retired name included, so the command it prints
+names everything the operator has to clear rather than only the surviving layer. The
+old directory is left on disk — a DSH profile cannot be moved, because its
+`node_modules` holds absolute symlinks under `.dsh-module-fallback` — and what remains
+there is an inert copy of the shipped `web` template that nothing boots. re:factory
+never mutates an attached profile, so under Martty the removal is only reported, as a
+`doctor` row naming `dsh plugin --profile martty remove
 @deepseek-ai/dsh-refactory-presets`.
 
 The second surface is **attached**, not owned. re:factory cannot recreate Martty's stack

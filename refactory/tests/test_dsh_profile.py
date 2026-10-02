@@ -38,20 +38,48 @@ def _profile(home: Path, name: str, bundles: list[str]) -> Path:
     directory = home / "profiles" / name
     directory.mkdir(parents=True)
     (directory / "package.json").write_text(
-        json.dumps({"name": f"dsh-profile-{name}", "dsh": {"profile": {"bundles": bundles}}})
+        json.dumps({
+            "name": f"dsh-profile-{name}",
+            "dependencies": {
+                bundle: "link:/checkout"
+                for bundle in bundles
+                if bundle in {entry.bundle for entry in dsh_profile.LAYERS.values()}
+            },
+            "dsh": {"profile": {"bundles": bundles}},
+        })
     )
     return directory
 
 
-def _apply_plan(home: Path, steps: list[dsh_profile.ProvisionStep]) -> None:
-    """Apply the plan to the manifests the way `dsh plugin` does.
+def _declare(directory: Path, packages: list[str]) -> None:
+    """Write ``dependencies`` entries for ``packages``, as `dsh plugin add` would.
 
-    ``dsh plugin remove`` drops the package from ``dependencies`` and from
-    ``dsh.profile.bundles``; ``add`` writes the dependency and appends the bundle;
-    ``init`` copies the shipped template's bundle list. No DSH process runs: what
-    these tests need is the manifest the plan converges on, and
-    ``test_dsh_profile``'s migration cases are the ones CI cannot reach because
-    its home starts empty.
+    The two lists in a profile manifest are independent, and the plan has to read
+    both: `pnpm remove` speaks ``dependencies``, and the harness composes from
+    ``dsh.profile.bundles``.
+    """
+    manifest_path = directory / "package.json"
+    manifest = json.loads(manifest_path.read_text())
+    dependencies = manifest.setdefault("dependencies", {})
+    for package in packages:
+        dependencies[package] = "link:/checkout"
+    manifest_path.write_text(json.dumps(manifest))
+
+
+def _apply_plan(home: Path, steps: list[dsh_profile.ProvisionStep]) -> None:
+    """Model plan rows for unit tests, not harness reconciliation.
+
+    * ``dsh plugin remove`` forwards to ``pnpm remove``, which edits only
+      ``dependencies`` and never ``dsh.profile.bundles``. It also removes nothing
+      at all when any named package is not declared there, so a row naming an
+      undeclared package fails -- which is what ``set -e`` turns into an aborted
+      plan.
+    * ``add`` writes the dependency and the harness appends the bundle.
+    * ``init`` copies the shipped template's bundle list.
+    * ``clean`` is the manifest rewrite: it drops the named selections from
+      ``dsh.profile.bundles`` and touches nothing else.
+
+    Real launcher and lock behavior are covered by test_dsh_profile_migration.py.
     """
     for step in steps:
         if step.kind == "init":
@@ -59,16 +87,20 @@ def _apply_plan(home: Path, steps: list[dsh_profile.ProvisionStep]) -> None:
             continue
         manifest_path = home / "profiles" / step.profile / "package.json"
         manifest = json.loads(manifest_path.read_text())
-        # `remove` carries the package name; `add` carries the bundle directory.
-        package = step.value if step.kind == "remove" else f"@deepseek-ai/dsh-{step.value}"
+        names = step.value.split()
         dependencies = manifest.setdefault("dependencies", {})
         bundle_list = manifest["dsh"]["profile"]["bundles"]
         if step.kind == "remove":
-            dependencies.pop(package, None)
+            undeclared = [name for name in names if name not in dependencies]
+            assert not undeclared, f"pnpm remove would remove nothing, failing on {undeclared}"
+            for name in names:
+                del dependencies[name]
+        elif step.kind == "clean":
             manifest["dsh"]["profile"]["bundles"] = [
-                bundle for bundle in bundle_list if bundle != package
+                bundle for bundle in bundle_list if bundle not in names
             ]
         else:
+            package = f"@deepseek-ai/dsh-{step.value}"
             dependencies[package] = "link:/checkout"
             if package not in bundle_list:
                 bundle_list.append(package)
@@ -306,10 +338,11 @@ def test_the_plan_retires_the_renamed_bundle_before_it_adds_the_replacement(
 ):
     """A profile carrying the pre-rename name is migrated, not left dangling.
 
-    The removal precedes the adds, and there is exactly one: `dsh plugin remove`
-    fails on a profile that does not exist and on a package the profile does not
-    declare, so a repeated or speculative removal would abort the launcher's
-    `set -e` script rather than heal anything.
+    The removal precedes the adds, and it names only a package the manifest
+    declares as a dependency: `pnpm remove` removes nothing at all when one of its
+    names is missing from that list, which aborted the launcher's `set -e` script
+    rather than healing anything. The retired name is a dependency here, so it is
+    removed; the initial `clean` row clears obsolete selections before pnpm runs.
     """
     home = tmp_path / "home"
     _profile(home, dsh_profile.GRAPH_PROFILE, ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
@@ -318,9 +351,11 @@ def test_the_plan_retires_the_renamed_bundle_before_it_adds_the_replacement(
         dsh_profile.GUI_PROFILE,
         ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", _RETIRED_PRESETS],
     )
+    _declare(legacy, [_RETIRED_PRESETS])
     monkeypatch.setenv("DSH_HOME", str(home))
     steps = dsh_profile.provision_plan()
     assert [tuple(step) for step in steps] == [
+        ("clean", dsh_profile.GUI_PROFILE, _RETIRED_PRESETS),
         ("remove", dsh_profile.GUI_PROFILE, _RETIRED_PRESETS),
         ("add", dsh_profile.GUI_PROFILE, "refactory"),
         ("add", dsh_profile.GUI_PROFILE, "refactory-web"),
@@ -337,6 +372,98 @@ def test_the_plan_retires_the_renamed_bundle_before_it_adds_the_replacement(
     assert dsh_profile.provision_plan() == [], "the migration is not idempotent"
 
 
+def test_the_plan_clears_a_retired_name_that_is_no_longer_a_dependency(
+    tmp_path, monkeypatch
+):
+    """The entry no command can reach is cleared by the manifest rewrite.
+
+    This is the state that never converged: the retired name is still selected but
+    is no longer a dependency, so `pnpm remove` cannot name it and the harness's
+    `reconcile()` keeps rather than drops it. No `remove` row is emitted -- one
+    would remove nothing and abort the plan -- and the `clean` row is what clears
+    it.
+    """
+    home = tmp_path / "home"
+    _profile(home, dsh_profile.GRAPH_PROFILE, ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
+    legacy = _profile(
+        home,
+        dsh_profile.GUI_PROFILE,
+        ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", _RETIRED_PRESETS],
+    )
+    monkeypatch.setenv("DSH_HOME", str(home))
+    steps = dsh_profile.provision_plan()
+    assert [step.kind for step in steps] == ["clean", "add", "add"], steps
+    _apply_plan(home, steps)
+    assert dsh_profile.declared_bundles(dsh_profile.GUI_PROFILE) == [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        dsh_profile.PRESETS_BUNDLE,
+        dsh_profile.WEB_SURFACE_BUNDLE,
+    ]
+    assert dsh_profile.provision_plan() == [], "the cleanup is not idempotent"
+
+
+def test_the_plan_repairs_a_wanted_layer_that_lost_its_dependency(
+    tmp_path, monkeypatch
+):
+    """A wanted layer missing from `dependencies` is a missing install, not junk.
+
+    Provisioning must restore the dependency of an already-selected layer.
+    """
+    home = tmp_path / "home"
+    _profile(home, dsh_profile.GRAPH_PROFILE, ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
+    gui = _profile(
+        home,
+        dsh_profile.GUI_PROFILE,
+        [
+            "@deepseek-ai/dsh-base",
+            "@deepseek-ai/dsh-web-app",
+            dsh_profile.PRESETS_BUNDLE,
+            dsh_profile.WEB_SURFACE_BUNDLE,
+        ],
+    )
+    manifest_path = gui / "package.json"
+    manifest = json.loads(manifest_path.read_text())
+    del manifest["dependencies"][dsh_profile.PRESETS_BUNDLE]
+    manifest_path.write_text(json.dumps(manifest))
+    monkeypatch.setenv("DSH_HOME", str(home))
+    assert dsh_profile.obsolete_selections(dsh_profile.GUI_PROFILE) == [], (
+        "a wanted layer must never be treated as an obsolete selection"
+    )
+    steps = dsh_profile.provision_plan()
+    assert [tuple(step) for step in steps] == [
+        ("add", dsh_profile.GUI_PROFILE, "refactory"),
+    ], steps
+    _apply_plan(home, steps)
+    manifest = json.loads((gui / "package.json").read_text())
+    assert dsh_profile.PRESETS_BUNDLE in manifest["dependencies"], manifest
+    assert dsh_profile.declared_bundles(dsh_profile.GUI_PROFILE) == [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        dsh_profile.PRESETS_BUNDLE,
+        dsh_profile.WEB_SURFACE_BUNDLE,
+    ]
+    assert dsh_profile.provision_plan() == []
+
+
+def test_retirement_resumes_after_cleanup_before_dependency_removal(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    _ready(home)
+    stranded = _profile(home, _RETIRED_PROFILE, ["@deepseek-ai/dsh-base"])
+    _declare(stranded, [_RETIRED_PRESETS])
+    monkeypatch.setenv("DSH_HOME", str(home))
+    assert [tuple(step) for step in dsh_profile.provision_plan()] == [
+        ("remove", _RETIRED_PROFILE, _RETIRED_PRESETS),
+    ]
+
+
+@pytest.mark.parametrize("name", ["web", "martty", "operator", "../web"])
+def test_cleanup_refuses_unowned_profiles(tmp_path, monkeypatch, name):
+    monkeypatch.setenv("DSH_HOME", str(tmp_path / "home"))
+    with pytest.raises(dsh_profile.ProfileError, match="does not own"):
+        dsh_profile.clean_manifest(name)
+
+
 def test_the_plan_retires_the_layers_from_a_profile_the_rename_stranded(
     tmp_path, monkeypatch
 ):
@@ -347,10 +474,14 @@ def test_the_plan_retires_the_layers_from_a_profile_the_rename_stranded(
     clears re:factory's layers out of the old one. What is left is an inert copy
     of the `web` template, which is what stops the pre-rename bundle entry from
     dangling on a directory this checkout no longer has.
+
+    A stranded profile gets no `add` rows, so no plugin operation ever runs there
+    to trigger the harness's own reconcile: the `clean` row is the only mechanism
+    that can reach these entries.
     """
     home = tmp_path / "home"
     _profile(home, dsh_profile.GRAPH_PROFILE, ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
-    _profile(
+    stranded = _profile(
         home,
         _RETIRED_PROFILE,
         [
@@ -360,20 +491,23 @@ def test_the_plan_retires_the_layers_from_a_profile_the_rename_stranded(
             dsh_profile.WEB_SURFACE_BUNDLE,
         ],
     )
+    _declare(stranded, [_RETIRED_PRESETS, dsh_profile.WEB_SURFACE_BUNDLE])
     monkeypatch.setenv("DSH_HOME", str(home))
     steps = dsh_profile.provision_plan()
     assert [tuple(step) for step in steps] == [
         ("init", dsh_profile.GUI_PROFILE, "web"),
         ("add", dsh_profile.GUI_PROFILE, "refactory"),
         ("add", dsh_profile.GUI_PROFILE, "refactory-web"),
-        ("remove", _RETIRED_PROFILE, _RETIRED_PRESETS),
-        ("remove", _RETIRED_PROFILE, dsh_profile.WEB_SURFACE_BUNDLE),
+        ("clean", _RETIRED_PROFILE, f"{_RETIRED_PRESETS} {dsh_profile.WEB_SURFACE_BUNDLE}"),
+        ("remove", _RETIRED_PROFILE, f"{_RETIRED_PRESETS} {dsh_profile.WEB_SURFACE_BUNDLE}"),
     ], steps
     _apply_plan(home, steps)
     assert dsh_profile.declared_bundles(_RETIRED_PROFILE) == [
         "@deepseek-ai/dsh-base",
         "@deepseek-ai/dsh-web-app",
     ]
+    manifest = json.loads((stranded / "package.json").read_text())
+    assert manifest["dependencies"] == {}, manifest
     assert dsh_profile.provision_plan() == [], "the retirement is not idempotent"
 
 
