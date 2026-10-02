@@ -172,17 +172,20 @@ if [ "${REFACTORY_SKIP_DSH_PROFILE:-}" = "1" ]; then
   echo "  DSH profiles: skipped (REFACTORY_SKIP_DSH_PROFILE=1)"
 else
   # The plan is `dsh_profile.provision_plan()`: `init` copies a shipped template's
-  # bundle list, `add` installs one bundle from the checkout, and `remove` retires
-  # a bundle name an older install still carries. Executing its rows rather than
-  # iterating a second copy of the profile list in shell is what keeps the
-  # composition in one place.
+  # bundle list, `add` installs one bundle from the checkout, `remove` retires a
+  # bundle name an older install still declares as a dependency, and `clean`
+  # rewrites the profile's selection list to drop what `pnpm remove` cannot reach.
+  # Executing its rows rather than iterating a second copy of the profile list in
+  # shell is what keeps the composition in one place.
   PLAN="$("$VENV/bin/python" -c 'from refactory_dsh import dsh_profile; print(dsh_profile.render_plan(), end="")')"
   if [ -z "$PLAN" ]; then
     echo "  DSH profiles: already present"
   else
     # `value` is the template for `init`, a directory under `packages/bundle/` for
-    # `add`, and a package name for `remove` -- so only the `add` branch prefixes
-    # that root.
+    # `add`, and one or more space-separated package names for `remove` and
+    # `clean` -- so only the `add` branch prefixes that root. The names are split
+    # rather than passed as one argument: `pnpm remove` takes a list and removes
+    # nothing at all when one name is not a declared dependency.
     while IFS=$'\t' read -r kind profile value; do
       [ -n "$kind" ] || continue
       case "$kind" in
@@ -195,8 +198,15 @@ else
           "$DSH" plugin --profile "$profile" add "$HERE/packages/bundle/$value"
           ;;
         remove)
-          echo "  DSH profile '$profile': retiring the '$value' layer an older install left behind"
-          "$DSH" plugin --profile "$profile" remove "$value"
+          read -r -a retired <<<"$value"
+          echo "  DSH profile '$profile': retiring '${retired[*]}' an older install left behind"
+          "$DSH" plugin --profile "$profile" remove "${retired[@]}"
+          ;;
+        clean)
+          # Runs before the plugin rows for its profile, and takes the
+          # profile's own writer lock: those rows acquire the same lock, so
+          # holding it across them would deadlock.
+          "$VENV/bin/python" -c 'import sys; from refactory_dsh import dsh_profile; dsh_profile.clean_manifest(sys.argv[1])' "$profile"
           ;;
       esac
     done <<<"$PLAN"

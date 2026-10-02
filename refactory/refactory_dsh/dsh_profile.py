@@ -25,10 +25,14 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 from typing import NamedTuple
 
-from refactory_dsh.paths import REPO_ROOT
+from refactory_dsh.paths import REPO_ROOT, dsh_root
 
 #: The profile the DSH evaluator, the equivalence tests and a manual mode run use.
 GRAPH_PROFILE = "graph"
@@ -116,23 +120,25 @@ class Target(NamedTuple):
 class ProvisionStep(NamedTuple):
     """One ordered step that makes an owned target ready.
 
-    ``value`` means one thing per :attr:`kind`, and both consumers of
-    :func:`render_plan` depend on that: ``init`` names a shipped template,
-    ``add`` names a directory under ``packages/bundle/`` that the caller
-    prefixes with that root, and ``remove`` names a package to remove as it is
-    written in the profile manifest -- never a directory. A ``remove`` is only
-    ever emitted for a bundle the manifest declares: `dsh plugin remove`
-    initializes a profile that does not exist and then fails, and fails again on
-    a package the profile does not declare.
+    ``value`` means one thing per :attr:`kind`, and the shells that execute
+    :func:`render_plan` depend on that: ``init`` names a shipped template, ``add``
+    names a directory under ``packages/bundle/`` that the caller prefixes with that
+    root, ``remove`` names one or more packages to remove, space-separated, exactly
+    as the manifest declares them, and ``clean`` names the obsolete selections a
+    manifest rewrite has to drop. A ``remove`` is only ever emitted for a bundle
+    the manifest also declares as a dependency: `dsh plugin remove` forwards to
+    `pnpm remove`, which removes nothing at all when one of its names is not in
+    that list.
     """
 
     #: ``init`` initializes from a shipped template; ``add`` installs one layer;
-    #: ``remove`` retires a bundle an older install left in the profile.
+    #: ``remove`` retires declared dependencies; ``clean`` rewrites the selection
+    #: list to drop what `pnpm remove` cannot reach.
     kind: str
     #: The target profile.
     profile: str
-    #: The template name for ``init``; the checkout bundle directory for
-    #: ``add``; the package name for ``remove``.
+    #: The template name for ``init``; the checkout bundle directory for ``add``;
+    #: the space-separated package names for ``remove`` and ``clean``.
     value: str
 
 
@@ -227,6 +233,35 @@ def declared_bundles_in(directory: Path) -> list[str]:
     return [str(entry) for entry in bundles]
 
 
+def declared_dependencies(name: str = GRAPH_PROFILE) -> list[str]:
+    """The package names the profile manifest declares as dependencies.
+
+    The profile manifest carries two lists with different meanings: ``dependencies``
+    is the specifier list `pnpm` reads and writes, and ``dsh.profile.bundles`` is
+    the selection list the harness composes. `pnpm remove` speaks the first, so a
+    name the caller passes to it has to come from here, not from the selection
+    list.
+    """
+    return declared_dependencies_in(profile_dir(name))
+
+
+def declared_dependencies_in(directory: Path) -> list[str]:
+    """The dependency names a profile directory's manifest declares, or ``[]``."""
+    manifest = directory / "package.json"
+    if not manifest.exists():
+        return []
+    try:
+        loaded = json.loads(manifest.read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(loaded, dict):
+        return []
+    dependencies = loaded.get("dependencies")
+    if not isinstance(dependencies, dict):
+        return []
+    return [str(entry) for entry in dependencies]
+
+
 def retired_bundles(name: str) -> list[str]:
     """The retired bundle names this profile still declares, in manifest order.
 
@@ -241,6 +276,42 @@ def refactory_layers(name: str) -> list[str]:
     """Every re:factory bundle this profile declares, current or retired."""
     ours = {entry.bundle for entry in LAYERS.values()} | set(RETIRED_BUNDLES)
     return [bundle for bundle in declared_bundles(name) if bundle in ours]
+
+
+def wanted_layers(name: str) -> set[str]:
+    """The re:factory bundles this profile is supposed to carry.
+
+    A retired profile is supposed to carry none: it is a directory the profile
+    rename left behind, and the plan retires re:factory's layers out of it rather
+    than leaving it a profile whose bundle entries dangle.
+    """
+    if name in RETIRED_PROFILES:
+        return set()
+    entry = target(name)
+    return {LAYERS[key].bundle for key in entry.layers}
+
+
+def obsolete_selections(name: str) -> list[str]:
+    """re:factory names this profile declares but is not supposed to carry.
+
+    The one rule the plan's ``remove`` rows and the manifest cleanup both apply,
+    so the two cannot disagree about what "obsolete" means. A name qualifies only
+    when it is re:factory's own *and* is not a layer this profile wants: a current
+    layer that is merely absent from ``dependencies`` is a missing install, not an
+    obsolete selection, and deleting it would take away a layer the profile needs.
+    """
+    return _obsolete_names(name, declared_bundles(name))
+
+
+def _obsolete_names(name: str, names: list[str]) -> list[str]:
+    """The same retirement rule for selections and installed dependencies."""
+    wanted = wanted_layers(name)
+    ours = {entry.bundle for entry in LAYERS.values()} | set(RETIRED_BUNDLES)
+    return [
+        bundle
+        for bundle in names
+        if bundle in ours and bundle not in wanted
+    ]
 
 
 def is_ready(name: str = GRAPH_PROFILE, bundle: str = GRAPH_BUNDLE) -> bool:
@@ -311,9 +382,19 @@ def provision_plan() -> list[ProvisionStep]:
 
     A target's ``remove`` rows precede its ``add`` rows, so a rename retires the
     old entry before the replacement is appended. ``RETIRED_PROFILES`` is the
-    second source of ``remove`` rows: those profiles are not targets any more,
-    and the target loop above only creates the profile that replaced them, so
-    nothing else would clear re:factory's layers out of the old directory.
+    second source: those profiles are not targets any more, and the target loop
+    above only creates the profile that replaced them, so nothing else would clear
+    re:factory's layers out of the old directory.
+
+    A ``remove`` row names only explicitly obsolete declared dependencies,
+    because `pnpm remove` fails as a whole when one name is missing
+    from that list and removes nothing -- which aborted every row after it under
+    the shell scripts' ``set -e``. What that leaves behind is a selection that is
+    no longer a dependency at all: no `pnpm remove` can name it, and the harness's
+    ``reconcile()`` keeps rather than drops it. A ``clean`` row runs first under
+    the profile's writer lock, before an unresolved selection can break a plugin
+    operation's reconcile. Obsolete dependencies are removed even if a previous
+    run already cleared their selections and stopped before removing them.
     """
     steps: list[ProvisionStep] = []
     for entry in TARGETS:
@@ -322,17 +403,42 @@ def provision_plan() -> list[ProvisionStep]:
         present = (profile_dir(entry.profile) / "package.json").exists()
         if not present and entry.base_template is not None:
             steps.append(ProvisionStep("init", entry.profile, entry.base_template))
-        declared = declared_bundles(entry.profile)
-        for bundle in declared:
-            if bundle in RETIRED_BUNDLES:
-                steps.append(ProvisionStep("remove", entry.profile, bundle))
-        for key in entry.layers:
-            bundle = LAYERS[key].bundle
-            if bundle not in declared:
-                steps.append(ProvisionStep("add", entry.profile, bundle_directory(bundle)))
+        steps.extend(_retirement_steps(entry.profile, entry.layers))
     for retired in RETIRED_PROFILES:
-        for bundle in refactory_layers(retired):
-            steps.append(ProvisionStep("remove", retired, bundle))
+        steps.extend(_retirement_steps(retired, ()))
+    return steps
+
+
+def _retirement_steps(profile: str, layers: tuple[str, ...]) -> list[ProvisionStep]:
+    """The rows that retire what a profile carries but should not.
+
+    The ``clean`` row comes first, before every ``dsh plugin`` row for this
+    profile. A stale selection that is not resolvable makes the harness's
+    ``reconcile()`` throw, and `reconcile()` runs after any plugin operation that
+    exits 0 -- so a plugin row that runs while the stale entry is still selected
+    fails on it before the cleanup has had a chance to clear it. Clearing the
+    selection list first removes the failure mode rather than racing it.
+
+    ``clean`` therefore must NOT hold the profile's writer lock across the plugin
+    rows: those acquire the same lock themselves, so holding it would deadlock.
+    It takes the lock for its own rewrite and releases it immediately.
+    """
+    obsolete = obsolete_selections(profile)
+    declared = declared_dependencies(profile)
+    removable = [
+        bundle for bundle in _obsolete_names(profile, list(dict.fromkeys(obsolete + declared)))
+        if bundle in declared
+    ]
+    steps: list[ProvisionStep] = []
+    if obsolete:
+        steps.append(ProvisionStep("clean", profile, " ".join(obsolete)))
+    if removable:
+        steps.append(ProvisionStep("remove", profile, " ".join(removable)))
+    current = declared_bundles(profile)
+    for key in layers:
+        bundle = LAYERS[key].bundle
+        if bundle not in current or bundle not in declared:
+            steps.append(ProvisionStep("add", profile, bundle_directory(bundle)))
     return steps
 
 
@@ -340,6 +446,79 @@ def render_plan(steps: list[ProvisionStep] | None = None) -> str:
     """The provisioning plan as tab-separated rows for the shell scripts."""
     chosen = provision_plan() if steps is None else steps
     return "".join(f"{step.kind}\t{step.profile}\t{step.value}\n" for step in chosen)
+
+
+#: The Node helper that rewrites a profile manifest, beside this module.
+_MANIFEST_HELPER = Path(__file__).resolve().parent / "profile_manifest.mjs"
+
+
+def clean_manifest(profile: str) -> dict[str, object]:
+    """Drop this profile's obsolete selections from its manifest, under its lock.
+
+    A selection that is no longer a declared dependency is unreachable by every
+    command the plan can emit: `pnpm remove` will not name it, and the harness's
+    ``reconcile()`` keeps a name that is absent from ``dependencies`` rather than
+    dropping it. Cleanup runs before plugin rows, for current and formerly owned
+    profiles only. A persistent sibling backup retains the exact pre-image.
+
+    The rewrite happens inside the harness's own writer lock -- the Node helper
+    calls the pinned package's ``withFileLock``/``writeFileAtomic``, the same pair
+    ``dsh plugin`` takes around every profile mutation -- so it cannot overwrite a
+    plugin operation running at the same time. The pre-image is written before the
+    replace and its retained path is reported on stderr. Returns the helper's
+    report, or ``{}`` when there was nothing to do.
+    """
+    if profile in SHIPPED_TEMPLATES or any(
+        entry.profile == profile and not entry.owned for entry in TARGETS
+    ) or not (
+        profile in RETIRED_PROFILES
+        or any(entry.profile == profile and entry.owned for entry in TARGETS)
+    ):
+        raise ProfileError(f"refusing to rewrite profile {profile!r}: re:factory does not own it")
+    progress = profile_dir(profile) / "package.json"
+    if not progress.exists():
+        return {}
+    obsolete = obsolete_selections(profile)
+    if not obsolete:
+        return {}
+    node = shutil.which("node")
+    if node is None:
+        raise ProfileError(
+            f"node is not on the PATH, so the manifest of profile '{profile}' "
+            "cannot be cleaned; install Node and re-run"
+        )
+    with tempfile.TemporaryDirectory(prefix="refactory-clean-") as scratch:
+        request = Path(scratch) / "request.json"
+        request.write_text(
+            json.dumps(
+                {
+                    "profileDir": str(profile_dir(profile).resolve()),
+                    "anchor": str(dsh_root().resolve()),
+                    "obsolete": _obsolete_names(
+                        profile, [entry.bundle for entry in LAYERS.values()] + list(RETIRED_BUNDLES)
+                    ),
+                }
+            )
+        )
+        finished = subprocess.run(
+            [node, str(_MANIFEST_HELPER), str(request)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if finished.returncode != 0:
+            raise ProfileError(
+                f"the manifest of profile '{profile}' could not be cleaned: "
+                f"{(finished.stderr or finished.stdout).strip()}"
+            )
+        report = json.loads(finished.stdout or "{}")
+        if report.get("status") == "rewritten":
+            print(
+                f"re:factory: profile {profile!r}: cleared {', '.join(report['removed'])}; "
+                f"backup: {report['backupPath']}",
+                file=sys.stderr,
+            )
+        return report
 
 
 def missing_bundles() -> list[tuple[str, str, str]]:

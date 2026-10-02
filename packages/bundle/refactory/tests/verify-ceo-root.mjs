@@ -233,14 +233,18 @@ try {
   const steps = plan.out.split('\n').filter(Boolean).map(line => line.split('\t'))
   check(steps.length > 0, 'a fresh home needs provisioning', plan.out.trim())
   // `value` is a template for `init`, a directory under `packages/bundle/` for
-  // `add`, and a package name for `remove` — so only `add` is joined to that root.
+  // `add`, and package names for `remove`/`clean` — only add prefixes that root.
   for (const [kind, profile, value] of steps) {
     const step = kind === 'init'
       ? run(dsh, ['--profile', profile, '--from-default-profile', value, '--dump-config'], {
         env: { ...process.env, DSH_HOME: home },
       })
+      : kind === 'clean'
+        ? run(PYTHON, ['-c', 'import sys; from refactory_dsh import dsh_profile; dsh_profile.clean_manifest(sys.argv[1])', profile], {
+          env: { ...process.env, DSH_HOME: home },
+        })
       : kind === 'remove'
-        ? run(dsh, ['plugin', '--profile', profile, 'remove', value], {
+        ? run(dsh, ['plugin', '--profile', profile, 'remove', ...value.split(' ')], {
           env: { ...process.env, DSH_HOME: home },
         })
         : run(dsh, ['plugin', '--profile', profile, 'add', join(REPO, 'packages', 'bundle', value)], {
