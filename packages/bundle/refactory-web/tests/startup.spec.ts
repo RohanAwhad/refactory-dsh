@@ -80,10 +80,10 @@ describe('refactory-web layer', () => {
     expect(PATCH).toContain('repoRoot: !!js ctx.refactoryWebStartup.repoRoot')
   })
 
-  it('leaves the single-owner agent-presets row alone', () => {
+  it('leaves the single-owner agent-preset-registry row alone', () => {
     // `config` is replaced wholesale, so a second statement here would drop
-    // either `default: ceo` or the configured `roots` from refactory-presets. The
-    // comment above may name the row; no entry may target it.
-    expect(PATCH).not.toContain('id: agent-presets')
+    // `default: ceo` from refactory. The comment above may name the row;
+    // no entry may target it.
+    expect(PATCH).not.toContain('id: agent-preset-registry')
   })
 })

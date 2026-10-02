@@ -21,7 +21,7 @@
 #   * `.venv` from the root `pyproject.toml` — the default (`dev`) dependency
 #     group only;
 #   * the two DSH profiles this checkout owns — `graph`, which the Python glue
-#     runs modes on, and `refactory-web`, which the GUI boots over the harness's
+#     runs modes on, and `refactory`, which the GUI boots over the harness's
 #     own `web` template (the harness's `web` is never written to) — idempotently
 #     (`REFACTORY_SKIP_DSH_PROFILE=1` skips both).
 #
@@ -157,26 +157,32 @@ fi
 #    walker and still fail the first time anything reaches DSH. The launcher is
 #    the pinned harness the root manifest installed, not a copy in this repo.
 #    This checkout owns two profiles: `graph`, which the Python glue runs modes
-#    on, and `refactory-web`, which the GUI boots over the harness's own `web`
+#    on, and `refactory`, which the GUI boots over the harness's own `web`
 #    template. The harness's `web` profile is never written to. Without the
 #    preset layer every session the GUI creates without naming one stops with
 #    `agent-preset/not-found`, and without the surface layer the console and
 #    picker rows never mount. The plan comes from `dsh_profile`, so this script
 #    cannot drift from the check `doctor` makes. Idempotent: a profile that
-#    already carries a layer is left alone. `REFACTORY_SKIP_DSH_PROFILE=1` skips
-#    it for someone who only wants the Python side and does not want ~/.dsh touched.
+#    already carries a layer is left alone, and a bundle an older install left
+#    behind is retired before the layer that replaced it is added.
+#    `REFACTORY_SKIP_DSH_PROFILE=1` skips it for someone who only wants the
+#    Python side and does not want ~/.dsh touched.
 DSH="$HERE/node_modules/.bin/dsh"
 if [ "${REFACTORY_SKIP_DSH_PROFILE:-}" = "1" ]; then
   echo "  DSH profiles: skipped (REFACTORY_SKIP_DSH_PROFILE=1)"
 else
   # The plan is `dsh_profile.provision_plan()`: `init` copies a shipped template's
-  # bundle list, `add` installs one bundle from the checkout. Executing its rows
-  # rather than iterating a second copy of the profile list in shell is what keeps
-  # the composition in one place.
+  # bundle list, `add` installs one bundle from the checkout, and `remove` retires
+  # a bundle name an older install still carries. Executing its rows rather than
+  # iterating a second copy of the profile list in shell is what keeps the
+  # composition in one place.
   PLAN="$("$VENV/bin/python" -c 'from refactory_dsh import dsh_profile; print(dsh_profile.render_plan(), end="")')"
   if [ -z "$PLAN" ]; then
     echo "  DSH profiles: already present"
   else
+    # `value` is the template for `init`, a directory under `packages/bundle/` for
+    # `add`, and a package name for `remove` -- so only the `add` branch prefixes
+    # that root.
     while IFS=$'\t' read -r kind profile value; do
       [ -n "$kind" ] || continue
       case "$kind" in
@@ -187,6 +193,10 @@ else
         add)
           echo "  DSH profile '$profile': adding the '$value' layer"
           "$DSH" plugin --profile "$profile" add "$HERE/packages/bundle/$value"
+          ;;
+        remove)
+          echo "  DSH profile '$profile': retiring the '$value' layer an older install left behind"
+          "$DSH" plugin --profile "$profile" remove "$value"
           ;;
       esac
     done <<<"$PLAN"

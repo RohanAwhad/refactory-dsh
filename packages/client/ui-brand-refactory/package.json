@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-client-ui-brand-refactory",
   "description": "Refactory product identity for the upstream DSH web composition",
-  "version": "0.1.6-alpha.1",
+  "version": "0.2.0-rc.2",
   "publishConfig": {
     "access": "public"
   },
@@ -43,23 +43,23 @@
   },
   "license": "MIT",
   "peerDependencies": {
-    "@deepseek-ai/cordis": "4.0.2"
+    "@deepseek-ai/cordis": "4.0.4"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.2",
-    "@deepseek-ai/dsh-client-ui-conversation": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-client-ui-renderer": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-client-ui-sidebar": "0.1.6-alpha.1",
+    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/dsh-client-ui-conversation": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-renderer": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-sidebar": "0.2.0-rc.2",
     "@testing-library/react": "^16.1.0",
     "@types/react": "~18.3.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "@deepseek-ai/dsh-host-webserver": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-client-locale": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-client-ui-settings": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-client-ui-settings-models": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-client-ui-agent-preset": "0.1.6-alpha.1",
-    "@deepseek-ai/dsh-client-store": "0.1.6-alpha.1"
+    "@deepseek-ai/dsh-host-webserver": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-locale": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-settings": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-settings-models": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-agent-preset": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-store": "0.2.0-rc.2"
   },
   "files": [
     "lib/index.js",

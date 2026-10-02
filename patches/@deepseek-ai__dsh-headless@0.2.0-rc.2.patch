@@ -1,15 +1,18 @@
 diff --git a/cordis.patch.yml b/cordis.patch.yml
-index c69eeb9..faa17c9 100644
+index bb5eb2a..d931e78 100644
 --- a/cordis.patch.yml
 +++ b/cordis.patch.yml
-@@ -29,3 +29,5 @@
+@@ -29,6 +29,8 @@
          task: !!js ctx.headlessStartup.task
          sessionId: !!js ctx.headlessStartup.sessionId
          json: !!js ctx.headlessStartup.json
 +        provider: !!js ctx.headlessStartup.provider
 +        model: !!js ctx.headlessStartup.model
+ 
+ - id: hmr
+   disabled: true
 diff --git a/lib/index.js b/lib/index.js
-index a05809d..7796557 100644
+index 0b3c309..55ad65f 100644
 --- a/lib/index.js
 +++ b/lib/index.js
 @@ -106,7 +106,9 @@ const inject = [
@@ -53,7 +56,7 @@ index a05809d..7796557 100644
  		});
  	};
 diff --git a/lib/startup.js b/lib/startup.js
-index cb4cc2d..5d68adb 100644
+index c2ce95c..c653080 100644
 --- a/lib/startup.js
 +++ b/lib/startup.js
 @@ -16,7 +16,8 @@ const internals = {

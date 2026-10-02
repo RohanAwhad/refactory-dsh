@@ -85,18 +85,21 @@ function shell(behaviour: (command: string) => { exitCode?: number; stdout?: str
       command: request.command,
       workdir: request.workdir ?? process.cwd(),
       timeoutMs: request.timeoutMs ?? 10_000,
+      onExpiry: 'kill',
       stdoutMaxBytes: 1_000_000,
       env: request.env,
       sandboxPolicy: request.sandboxPolicy,
     }),
-    run: async (spec: { command: string }) => {
-      const result = behaviour(spec.command)
-      return {
-        exitCode: result.exitCode ?? 0, signal: null, timedOut: false, aborted: false, timeoutMs: 10_000,
-        stdout: { text: result.stdout ?? '', truncated: false },
-        stderr: { text: result.stderr ?? '', truncated: false },
-      }
-    },
+    execute: async (spec: { command: string }) => ({
+      result: async () => {
+        const result = behaviour(spec.command)
+        return {
+          exitCode: result.exitCode ?? 0, signal: null, timedOut: false, aborted: false, timeoutMs: 10_000,
+          stdout: { text: result.stdout ?? '', truncated: false },
+          stderr: { text: result.stderr ?? '', truncated: false },
+        }
+      },
+    }),
   }
 }
 

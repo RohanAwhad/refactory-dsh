@@ -170,27 +170,30 @@ function loaderShell(items: Array<Record<string, unknown>>, log: string[]) {
       command: request.command,
       workdir: request.workdir ?? process.cwd(),
       timeoutMs: 10_000,
+      onExpiry: 'kill',
       stdoutMaxBytes: 1_000_000,
       env: request.env,
     }),
-    run: async (spec: { command: string }) => {
-      log.push(spec.command)
-      // `python -m refactory_dsh.items <verb> --node '<id>'`
-      const verb = spec.command.split(' ')[3] ?? ''
-      const index = Number(spec.command.match(/--index (\d+)/)?.[1] ?? 0)
-      const answers: Record<string, unknown> = {
-        list: { count: items.length, ids: items.map(item => item.id) },
-        begin: items[index] ?? {},
-        end: { id: items[index]?.id, passed: true, score: 1 },
-      }
-      // A deterministic node of the subgraph is not a loader command.
-      const text = verb in answers ? JSON.stringify(answers[verb]) : ''
-      return {
-        exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 10_000,
-        stdout: { text, truncated: false },
-        stderr: { text: '', truncated: false },
-      }
-    },
+    execute: async (spec: { command: string }) => ({
+      result: async () => {
+        log.push(spec.command)
+        // `python -m refactory_dsh.items <verb> --node '<id>'`
+        const verb = spec.command.split(' ')[3] ?? ''
+        const index = Number(spec.command.match(/--index (\d+)/)?.[1] ?? 0)
+        const answers: Record<string, unknown> = {
+          list: { count: items.length, ids: items.map(item => item.id) },
+          begin: items[index] ?? {},
+          end: { id: items[index]?.id, passed: true, score: 1 },
+        }
+        // A deterministic node of the subgraph is not a loader command.
+        const text = verb in answers ? JSON.stringify(answers[verb]) : ''
+        return {
+          exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 10_000,
+          stdout: { text, truncated: false },
+          stderr: { text: '', truncated: false },
+        }
+      },
+    }),
   }
 }
 
@@ -236,8 +239,8 @@ describe('driving the loader commands around each pass', () => {
     const workdir = scratch()
     const log: string[] = []
     const shell = loaderShell([{ id: 'a' }], log)
-    const run = shell.run
-    shell.run = async (spec) => {
+    const run = shell.execute
+    shell.execute = async (spec) => {
       const saved = JSON.parse(readFileSync(join(workdir, '.refactory/spine-checkpoint.json'), 'utf8'))
       expect(saved.status).toBe('executing')
       return run(spec)
@@ -275,17 +278,17 @@ describe('driving the loader commands around each pass', () => {
     graph.edges = [{ source: 'data', target: 'after' }]
     const commands: string[] = []
     const shell = loaderShell([{ id: 'a' }], commands)
-    const original = shell.run
+    const original = shell.execute
     let paused = false
     const queue = (action: string): void => {
       const directory = join(workdir, '.refactory/graph-controls')
       mkdirSync(directory, { recursive: true })
       writeFileSync(join(directory, '1.json'), JSON.stringify({ action, run_id: workdir, invocation: null }))
     }
-    shell.run = async (spec) => {
-      const result = await original(spec)
+    shell.execute = async (spec) => {
+      const execution = await original(spec)
       if (spec.command === 'true' && !paused) { paused = true; queue('pause') }
-      return result
+      return execution
     }
     const root = await mount(shell, { workdir, graph })
     expect(await call(root, 'wf_next')).toMatchObject({ status: 'paused' })
@@ -341,12 +344,14 @@ describe('driving the loader commands around each pass', () => {
     const failing = {
       resolve: (request: { command: string }) => ({
         command: request.command, workdir: process.cwd(), timeoutMs: 1,
-        stdoutMaxBytes: 10, env: {},
+        onExpiry: 'kill', stdoutMaxBytes: 10, env: {},
       }),
-      run: async () => ({
-        exitCode: 1, signal: null, timedOut: false, aborted: false, timeoutMs: 1,
-        stdout: { text: '', truncated: false },
-        stderr: { text: 'TaskError: no Task named probe', truncated: false },
+      execute: async () => ({
+        result: async () => ({
+          exitCode: 1, signal: null, timedOut: false, aborted: false, timeoutMs: 1,
+          stdout: { text: '', truncated: false },
+          stderr: { text: 'TaskError: no Task named probe', truncated: false },
+        }),
       }),
     }
     const root = await mount(failing)

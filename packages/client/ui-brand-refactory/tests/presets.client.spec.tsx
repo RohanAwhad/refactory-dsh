@@ -43,9 +43,10 @@ it('keeps one native preset nav button across rerenders and restores presentatio
 })
 
 function seat(current = 'standard') {
-  const store = createSnapshotStore<AgentPresetSeatState>({ showPicker: true, options, current, error: null, busy: false, introduce: false })
+  const store = createSnapshotStore<AgentPresetSeatState>({ options, current, error: null, busy: false, introduce: false })
   const face: AgentPresetSeatInjected = {
-    hooks: { agentPresetSeat: store }, load: vi.fn(async () => {}), introduced: vi.fn(),
+    hooks: { developerTools: createSnapshotStore(false), agentPresetSeat: store },
+    load: vi.fn(async () => {}), introduced: vi.fn(),
     select: vi.fn(async id => { store.update(state => { state.current = id }); return undefined }),
   }
   return { store, face }
@@ -104,12 +105,11 @@ it('uses Minimal if CEO is unavailable and does not invent an available preset',
   expect(face.select).not.toHaveBeenCalled()
 })
 
-it('limits settings to two rows, disables extra-preset authoring, and retains native actions and health', () => {
+it('limits settings to two rows and retains native actions and health', () => {
   const state: AgentPresetSectionState = {
-    status: 'ready', error: null, authorable: true, hasDocument: true,
-    showPicker: true, policySaving: false,
+    status: 'ready', error: null, saving: false,
     rows: options.map(row => ({ ...row, isDefault: row.id === 'ceo', ...(row.id === 'ceo' ? { broken: 'Missing plugin' } : {}) })),
-    copy: null, view: null, pendingDelete: null, deleting: false, revealedPaths: {},
+    view: null,
   }
   const store = createSnapshotStore(state)
   const view = vi.fn(), makeDefault = vi.fn()
@@ -117,8 +117,6 @@ it('limits settings to two rows, disables extra-preset authoring, and retains na
   const adapted = presetSection(face, () => 'en')
   expect(adapted.hooks.agentPresetSection.getSnapshot().rows.map(row => row.id)).toEqual(['ceo', 'minimal'])
   expect(adapted.hooks.agentPresetSection.getSnapshot().rows[0]?.broken).toBe('Missing plugin')
-  expect(adapted.hooks.agentPresetSection.getSnapshot().authorable).toBe(false)
-  expect(store.getSnapshot().authorable).toBe(true)
   expect(adapted.view).toBe(view)
   expect(adapted.makeDefault).toBe(makeDefault)
 })
@@ -157,7 +155,7 @@ it('uses public slots, follows source replacement, and removes its contributions
 
   // Reuse the real settings component's translation contract, without replacing its UI or controls.
   register('settings.section', { options: { id: 'agent-presets' }, inject: () => ({ hooks: {
-    agentPresetSection: createSnapshotStore({ rows: options, authorable: true }),
+    agentPresetSection: createSnapshotStore({ status: 'ready', error: null, saving: false, rows: options.map(row => ({ ...row, isDefault: false })), view: null }),
   } }), component: props => <p>{(props.t as (key: string) => string)('sectionIntro')}</p> })
   const Surface = entries.get('settings.section')!.find(entry => entry.options.priority === -10)!.component as (props: Record<string, unknown>) => React.ReactNode
   const view = render(<Surface t={() => 'Upstream creator copy'} />)

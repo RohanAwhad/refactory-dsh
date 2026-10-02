@@ -2,14 +2,14 @@
  * The acceptance check for the re:factory GUI profile's layers.
  *
  * It is a script, not a spec, because what it proves is a whole-profile fact: an
- * owned `refactory-web` profile, provisioned from the harness's `web` template
- * by `dsh_profile.provision_plan()` and carrying both checkout bundles, shows
- * `CEO` from `refactory-presets`' own tree, records `ceo` for a session created
- * without a preset, gives that session's agent the workflow tools and none of
- * the denied ones, and mounts `refactory-web`'s console, picker and brand rows
- * with a `repoRoot` resolved from the checkout rather than the caller's working
- * directory. The harness's own `web` profile is checked alongside it: it must
- * keep exactly the template's bundle list and mount none of re:factory's rows.
+ * owned `refactory` profile, provisioned from the harness's `web` template
+ * by `dsh_profile.provision_plan()` and carrying both checkout bundles, declares
+ * `CEO`, records `ceo` for a session created without a preset, gives that
+ * session's agent the workflow tools and none of the denied ones, and mounts
+ * `refactory-web`'s console, picker and brand rows with a `repoRoot` resolved
+ * from the checkout rather than the caller's working directory. The harness's
+ * own `web` profile is checked alongside it: it must keep exactly the template's
+ * bundle list and mount none of re:factory's rows.
  *
  * It drives the *real* services rather than re-reading files: the same
  * `agentPresets.list()` the picker calls, the same `agents.create()` path
@@ -20,18 +20,18 @@
  * The composition is the real `ceo` preset, which requires the whole host
  * composition it is normally mounted inside. The script therefore composes a
  * bootstrap `cordis.yml` from the profile's own layers over the installed
- * harness anchor and boots the profile's real `dsh --profile refactory-web`
+ * harness anchor and boots the profile's real `dsh --profile refactory`
  * against it.
  *
  * Usage (from the repository root, after `pnpm run build`):
  *
- *   node packages/bundle/refactory-presets/tests/verify-ceo-root.mjs
+ *   node packages/bundle/refactory/tests/verify-ceo-root.mjs
  *
  * It boots the owned GUI profile on a spare port, checks the facts, and exits
  * nonzero on the first one that does not hold.
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -41,7 +41,7 @@ const REPO = resolve(HERE, '..', '..', '..', '..')
 const BUNDLE = resolve(HERE, '..')
 
 /** The re:factory-owned GUI profile the provisioning plan composes. */
-const PROFILE = 'refactory-web'
+const PROFILE = 'refactory'
 
 /** The harness's own template the owned profile is initialized from. */
 const WEB_TEMPLATE = 'web'
@@ -74,7 +74,7 @@ function run(command, args, options = {}) {
  * the extraction throws instead, and the run reports it as a failure.
  */
 const DENIED = (() => {
-  const composition = readFileSync(join(BUNDLE, 'presets', 'ceo', 'agent.cordis.yml'), 'utf8')
+  const composition = readFileSync(join(BUNDLE, 'presets', 'ceo.patch.yml'), 'utf8')
   const at = composition.indexOf('ceoDeny:')
   if (at < 0) throw new Error("the composition declares no `ceoDeny:` block to check against")
   const block = composition.slice(at)
@@ -82,18 +82,6 @@ const DENIED = (() => {
   if (names.length === 0) throw new Error('the composition\'s `ceoDeny:` block lists no tools')
   return names
 })()
-
-/** One directory level of `root`, sorted — used on a preset tree. */
-function listedPresets(root) {
-  try {
-    return readdirSync(root, { withFileTypes: true })
-      .filter(entry => entry.isDirectory())
-      .map(entry => entry.name)
-      .sort()
-  } catch {
-    return []
-  }
-}
 
 /** The bundle list a profile's manifest declares, or [] when it is absent. */
 function bundlesOf(home, name) {
@@ -106,19 +94,56 @@ function bundlesOf(home, name) {
 }
 
 /**
- * The installed `@deepseek-ai/dsh-agent-presets` directory, found the way the
- * harness finds a bundle: `packageDirFromAnchor` probes Node's resolution paths
- * outward from the dsh install anchor, then from a profile directory. Returns
+ * Whether an installed harness layer declares a preset whose id is `ceo`.
+ *
+ * A preset is one `@deepseek-ai/dsh-agent-preset` row inside a patch file the
+ * layer lists in `dsh.bundle.patch`, so the declaration is read from those files
+ * rather than from a preset directory: at this pin the harness ships no preset
+ * tree to walk.
+ * @param name - the harness package whose declared patch files are read.
+ * @returns true when the layer declares `ceo`, false when it does not, and
+ * undefined when the package or its manifest cannot be resolved — which the
+ * caller reports as a failure rather than letting an absent read pass for
+ * "declares no ceo preset".
+ */
+function installedHarnessDeclaresCeo(name) {
+  const dir = resolveInstalledPackage(name)
+  if (dir === undefined) return undefined
+  let manifest
+  try {
+    manifest = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
+  } catch {
+    return undefined
+  }
+  const declared = manifest.dsh?.bundle?.patch
+  for (const file of Array.isArray(declared) ? declared : [declared]) {
+    if (typeof file !== 'string') continue
+    try {
+      if (readFileSync(join(dir, file), 'utf8').includes('id: ceo')) return true
+    } catch {
+      // A patch file the manifest names but does not ship is the harness's own
+      // packaging problem, not a `ceo` declaration; keep scanning the rest.
+    }
+  }
+  return false
+}
+
+/**
+ * The installed directory of one harness package, found the way the harness
+ * finds a bundle: `packageDirFromAnchor` probes Node's resolution paths outward
+ * from the dsh install anchor, then from a profile directory. Returns
  * `undefined` when neither resolves it, which the caller reports as a failure
  * rather than letting it read as "no ceo preset".
+ * @param name - the package to resolve.
+ * @returns its directory, or undefined.
  */
-function resolveInstalledAgentPresets() {
+function resolveInstalledPackage(name) {
   const probe = run('node', ['-e', `
     const { createRequire } = require('node:module')
     const { existsSync } = require('node:fs')
     const { join } = require('node:path')
-    const name = '@deepseek-ai/dsh-agent-presets'
-    for (const anchor of process.argv.slice(1)) {
+    const name = process.argv[1]
+    for (const anchor of process.argv.slice(2)) {
       if (!existsSync(anchor)) continue
       for (const base of createRequire(anchor).resolve.paths(name) ?? []) {
         const candidate = join(base, name)
@@ -130,11 +155,14 @@ function resolveInstalledAgentPresets() {
     }
     process.exit(1)
   `,
+  name,
   join(REPO, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'),
   // The pnpm isolated layout's hoisted root is a directory, not a package, so
   // the anchor is any manifest inside it — resolution then walks outward from
-  // the hoisted `node_modules`, which is where the shared copy lives.
-  join(REPO, 'node_modules', '.pnpm', 'node_modules', '@deepseek-ai', 'dsh-agent-presets', 'package.json'),
+  // the hoisted `node_modules`, which is where the shared copy lives. The
+  // filesystem spells a scoped name as two directories, so the anchor is built
+  // from the split name rather than from a literal that only fits one package.
+  join(REPO, 'node_modules', '.pnpm', 'node_modules', ...name.split('/'), 'package.json'),
   ])
   return probe.code === 0 ? probe.out.trim() : undefined
 }
@@ -145,32 +173,33 @@ if (!existsSync(dsh)) {
   process.exit(2)
 }
 
-// 1. The patch is gone from the lockfile settings, from the tree, and — the part
-//    that actually decides the acceptance — from the INSTALLED agent-presets the
-//    roster scans first. `discoverPresets` walks the shipped root before any
-//    configured root and keeps the first row per id, so a stale installed copy of
-//    the patched package would satisfy every live check below with `roots` empty.
-//    The installed tree is what proves criterion 7, not the source patch.
+// 1. The `ceo` preset must come from this bundle and nowhere else: the roster
+//    keeps the first declaration per id, so a harness layer that declared `ceo`
+//    of its own would let every live check below pass while this bundle's
+//    declaration did nothing. The old mechanism — a patched
+//    `@deepseek-ai/dsh-agent-presets` shipping the preset tree — is checked gone
+//    first, then the installed harness layers are read for a `ceo` declaration.
 //
-//    The tree is found the way the harness finds it: `resolveBundleDir` probes
-//    Node's `require.resolve.paths` outward from an install anchor, which for a
-//    pnpm checkout lands in the hoisted `node_modules/.pnpm/node_modules`. Probing
-//    by path instead would silently pass on a layout this repo does not use.
+//    Each layer is found the way the harness finds a bundle: `resolveBundleDir`
+//    probes Node's `require.resolve.paths` outward from an install anchor, which
+//    for a pnpm checkout lands in the hoisted `node_modules/.pnpm/node_modules`.
+//    Probing by path instead would silently pass on a layout this repo does not
+//    use.
 const workspace = readFileSync(join(REPO, 'pnpm-workspace.yaml'), 'utf8')
 check(
-  !workspace.includes('dsh-agent-presets@0.1.6-alpha.1'),
+  !workspace.includes('dsh-agent-presets@0.2.0-rc.2'),
   'no agent-presets entry under patchedDependencies',
 )
 check(
-  !existsSync(join(REPO, 'patches', '@deepseek-ai__dsh-agent-presets@0.1.6-alpha.1.patch')),
+  !existsSync(join(REPO, 'patches', '@deepseek-ai__dsh-agent-presets@0.2.0-rc.2.patch')),
   'the agent-presets patch file is deleted',
 )
-const installed = resolveInstalledAgentPresets()
-const shippedPresets = installed === undefined ? [] : listedPresets(join(installed, 'presets'))
+const harnessCeo = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']
+  .map(name => [name, installedHarnessDeclaresCeo(name)])
 check(
-  shippedPresets.length > 0 && !shippedPresets.includes('ceo'),
-  'the INSTALLED agent-presets tree ships no ceo preset',
-  `installed shipped root holds: ${shippedPresets.join(', ') || '(unresolved)'}`,
+  harnessCeo.every(([, declares]) => declares === false),
+  'the INSTALLED harness declares no ceo preset of its own',
+  harnessCeo.map(([name, declares]) => `${name}: ${String(declares)}`).join(', '),
 )
 
 // 2. The install path composes a re:factory-OWNED profile from the harness's
@@ -178,7 +207,7 @@ check(
 //    `web` profile. These checks drive `dsh_profile.provision_plan()` — the same
 //    table `install.sh`, `./refactory-dsh` and `refactory doctor` use — so the
 //    composition that ships is what is checked, not a copy of it made here.
-const home = mkdtempSync(join(tmpdir(), 'dsh-refactory-presets-'))
+const home = mkdtempSync(join(tmpdir(), 'dsh-refactory-'))
 let web
 try {
   // The harness's own `web` profile, created by the harness from its template
@@ -203,14 +232,20 @@ try {
   check(plan.code === 0, 'the provisioning plan renders', plan.out.trim())
   const steps = plan.out.split('\n').filter(Boolean).map(line => line.split('\t'))
   check(steps.length > 0, 'a fresh home needs provisioning', plan.out.trim())
+  // `value` is a template for `init`, a directory under `packages/bundle/` for
+  // `add`, and a package name for `remove` — so only `add` is joined to that root.
   for (const [kind, profile, value] of steps) {
     const step = kind === 'init'
       ? run(dsh, ['--profile', profile, '--from-default-profile', value, '--dump-config'], {
         env: { ...process.env, DSH_HOME: home },
       })
-      : run(dsh, ['plugin', '--profile', profile, 'add', join(REPO, 'packages', 'bundle', value)], {
-        env: { ...process.env, DSH_HOME: home },
-      })
+      : kind === 'remove'
+        ? run(dsh, ['plugin', '--profile', profile, 'remove', value], {
+          env: { ...process.env, DSH_HOME: home },
+        })
+        : run(dsh, ['plugin', '--profile', profile, 'add', join(REPO, 'packages', 'bundle', value)], {
+          env: { ...process.env, DSH_HOME: home },
+        })
     check(step.code === 0, `the plan ${kind}s ${value} into ${profile}`, step.out.slice(0, 400))
   }
 
@@ -228,8 +263,8 @@ try {
     `bundles: ${bundles.join(', ')}`,
   )
   check(
-    bundles.indexOf('@deepseek-ai/dsh-refactory-presets') > webApp,
-    'the preset layer is applied after dsh-web-app, which inserts the agent-presets row',
+    bundles.indexOf('@deepseek-ai/dsh-refactory') > webApp,
+    'the preset layer is applied after dsh-web-app, which inserts the agent-preset-registry row',
     `bundles: ${bundles.join(', ')}`,
   )
   check(
@@ -241,12 +276,23 @@ try {
   const dump = run(dsh, ['--profile', PROFILE, '--dump-config'], {
     env: { ...process.env, DSH_HOME: home },
   })
-  check(dump.code === 0, 'the composed profile dumps without a skipped-patch warning', dump.out.slice(0, 400))
+  // The launcher reports a patch whose `id` matches no row as
+  // `dsh: [<layer>] patch: entry "<id>" not found` on stderr and still exits 0,
+  // so the exit code alone would pass on a composition whose layer order left a
+  // patch unreachable. The skipped lines are the whole symptom of that — an
+  // out-of-order list keeps `default: standard` and leaves `ui-brand-official`
+  // enabled — so they are matched explicitly.
+  const skipped = dump.out.match(/^dsh: \[.*?\] patch: entry ".*?" not found$/gmu) ?? []
   check(
-    dump.out.includes('ctx.refactoryPresetsStartup.presetRoot'),
-    'the agent-presets row reads the published preset root',
+    dump.code === 0 && skipped.length === 0,
+    'the composed profile dumps with every layer patch applied',
+    skipped.length > 0 ? skipped.join('\n     ') : dump.out.slice(0, 400),
   )
-  check(dump.out.includes('default: ceo'), 'the agent-presets row restates default: ceo')
+  check(
+    /- id: preset-ceo\b/.test(dump.out),
+    'the preset layer inserts the ceo preset declaration',
+  )
+  check(dump.out.includes('default: ceo'), 'the agent-preset-registry row restates default: ceo')
   check(
     dump.out.includes('ctx.refactoryWebStartup.repoRoot'),
     'the refactory-console row reads the published checkout root',
@@ -265,7 +311,7 @@ try {
     env: { ...process.env, DSH_HOME: home },
   })
   for (const row of [
-    'refactoryPresetsStartup',
+    'preset-ceo',
     'refactoryWebStartup',
     'refactory-console',
     'ui-refactory',
@@ -300,8 +346,7 @@ try {
   const roster = await rpc(base, cookie, 'agentPresets/list', {})
   const value = roster?.result?.value
   const ceo = value?.presets?.find(preset => preset.id === 'ceo')
-  check(ceo !== undefined, 'the roster carries a ceo row discovered from a configured root')
-  check(ceo?.trust === 'system', 'the ceo row carries trust: system', `trust: ${String(ceo?.trust)}`)
+  check(ceo !== undefined, 'the roster carries the ceo row declared by the preset layer')
   check(ceo?.name === 'CEO', 'the ceo row shows the display name CEO, not the id', `name: ${String(ceo?.name)}`)
   check(ceo?.broken === undefined, 'the ceo row is not broken', String(ceo?.broken ?? ''))
   check(ceo?.isDefault === true, 'the ceo row is the roster default')

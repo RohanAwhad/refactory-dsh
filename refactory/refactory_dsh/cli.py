@@ -250,7 +250,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     try:
         from refactory_dsh import dsh_profile
 
-        # One row per target. `graph` is what a mode runs on; `refactory-web` is
+        # One row per target. `graph` is what a mode runs on; `refactory` is
         # what the GUI boots over the harness's own `web` template, whose rows are
         # never written into the harness profile. A target may carry more than one
         # layer, so the row aggregates every gap it still has. The attached Martty

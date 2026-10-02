@@ -18,7 +18,7 @@ import { transform } from 'lightningcss'
 /**
  * The browser shell's frozen module table: specifiers the page shares into every
  * plugin bundle. It is the browser side's contract with the harness web app the
- * re:factory `refactory-web` profile mounts, so the list is stated here rather
+ * re:factory `refactory` profile mounts, so the list is stated here rather
  * than imported from a harness package the fork no longer owns.
  */
 const PLATFORM_MODULES = [
@@ -37,7 +37,7 @@ const PRELOADED_CLIENT_EXTERNALS: readonly string[] = []
  * with no runtime identity to share. Everything else under @deepseek-ai/* is
  * either a module-table row (external) or a leak the purity gate rejects.
  */
-const INLINE_SAFE = /^(?:@deepseek-ai\/dsh-(?:file-reference|session|llm|tools|brand|deque|output-retention|typert-protocol|util-crypto|util-values|util-workspace-path)(?:\/|$)|@deepseek-ai\/dsh-token-meter\/client$|@deepseek-ai\/dsh-host-open-in-app\/shared$|@deepseek-ai\/dsh-agent-presets\/display$|@deepseek-ai\/dsh-spill-policy\/notice$)/
+const INLINE_SAFE = /^(?:@deepseek-ai\/dsh-(?:file-reference|session|llm|tools|brand|deque|output-retention|typert-protocol|util-crypto|util-values|util-workspace-path)(?:\/|$)|@deepseek-ai\/dsh-token-meter\/client$|@deepseek-ai\/dsh-host-open-in-app\/shared$|@deepseek-ai\/dsh-agent-preset-registry\/display$|@deepseek-ai\/dsh-spill-policy\/notice$)/
 
 /** Vendored framework libraries: ordinary libraries a browser bundle inlines. */
 const VENDORED_LIBRARY = /^@deepseek-ai\/(cosmokit|schemastery)(\/|$)/

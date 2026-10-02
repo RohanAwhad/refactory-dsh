@@ -22,18 +22,16 @@ function request(value: unknown): RefactorySingleRunRequest {
 
 /**
  * One strict codec for this hand-written contribution. It carries both the
- * `schema.parse` face of the pinned harness and the `create()` factory that
- * `e459e32637` introduced, so the same descriptor mounts under either harness.
+ * `schema.parse` face of a harness older than `e459e32637` and the `create()`
+ * factory that commit introduced, so the same descriptor mounts under either.
  *
- * Exit condition: drop the `schema` face only once **both** the harness this
- * repository pins and the harness serving the profile are `0.1.6-alpha.2` or
- * later — `e459e32637` shipped in `0.1.6-alpha.2`, so "when it is released" is
- * already past. #276 (the pin bump) plus `boston-harness-group/dsh-tauri#25`
- * (the serving harness) are what reach that state; until both land, the bridge
- * is load-bearing.
+ * Exit condition: drop the `schema` face only once no supported harness is
+ * older than `0.1.6-alpha.2`. #276 moved the pin to `0.2.0-rc.2`, which declares
+ * only `create`; the face remains for a serving harness on `PATH` that is still
+ * the published `0.1.6-alpha.1`.
  * @param typeSymbol - generated type symbol used for diagnostics.
  * @param parse - boundary validator for the wire value.
- * @returns the strict codec accepted by both the pinned and current harness.
+ * @returns the strict codec accepted by both harness generations.
  */
 function strictCodec(typeSymbol: string, parse: (value: unknown) => unknown) {
   return { mode: 'strict' as const, typeSymbol, schema: { parse }, create: () => ({ parse }) }

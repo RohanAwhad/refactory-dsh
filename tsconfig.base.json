@@ -34,7 +34,6 @@
     "paths": {
       "@deepseek-ai/dsh-workflow-spine": ["./packages/workflow/workflow-spine/src/index.ts"],
       "@deepseek-ai/dsh-graph": ["./packages/bundle/graph/src/index.ts"],
-      "@deepseek-ai/dsh-refactory-presets/startup": ["./packages/bundle/refactory-presets/src/startup.ts"],
       "@deepseek-ai/dsh-refactory-web/startup": ["./packages/bundle/refactory-web/src/startup.ts"],
       "@deepseek-ai/dsh-refactory-console": ["./packages/refactory/refactory-console/src/index.ts"],
       "@deepseek-ai/dsh-tool-refactory": ["./packages/refactory/tool-refactory/src/index.ts"],

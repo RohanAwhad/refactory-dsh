@@ -20,7 +20,7 @@ ENGLISH_ONLY = (
     ROOT / "refactory",
     ROOT / "packages" / "workflow" / "workflow-spine",
     ROOT / "packages" / "bundle" / "graph",
-    ROOT / "packages" / "bundle" / "refactory-presets",
+    ROOT / "packages" / "bundle" / "refactory",
     ROOT / "packages" / "bundle" / "refactory-web",
     ROOT / "packages" / "refactory" / "refactory-console",
     ROOT / "packages" / "refactory" / "tool-refactory",

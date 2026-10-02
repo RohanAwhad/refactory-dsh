@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
-import type { ShellExecRequest, ShellExecSpec, ShellExecutor, ShellRunResult } from '@deepseek-ai/dsh-shell'
+import type { ShellExecution, ShellExecRequest, ShellExecSpec, ShellExecutor, ShellRunResult } from '@deepseek-ai/dsh-shell'
 import { commandOf, isDeterministic, NODE_ENV_KEY, runDeterministic, verdictOf } from '../src/execute.ts'
 import type { CommandFailure, CommandOutcome, CommandRunnerConfig, NodeManifest } from '../src/execute.ts'
 import type { NodeView } from '../src/spine.ts'
@@ -18,19 +18,20 @@ const localShell = {
       command: request.command,
       workdir: request.workdir ?? process.cwd(),
       timeoutMs: request.timeoutMs ?? 10_000,
+      onExpiry: request.onExpiry ?? 'kill',
       stdoutMaxBytes: 1_000_000,
       env: request.env,
       sandboxPolicy: undefined,
     }
   },
-  async run(spec: ShellExecSpec): Promise<ShellRunResult> {
+  async execute(spec: ShellExecSpec): Promise<ShellExecution> {
     const started = spawnSync('/bin/sh', ['-c', spec.command], {
       cwd: spec.workdir,
       encoding: 'utf8',
       timeout: spec.timeoutMs,
       env: { ...process.env, ...spec.env },
     })
-    return {
+    const result: ShellRunResult = {
       exitCode: started.status,
       signal: started.signal,
       timedOut: started.error !== undefined && 'code' in started.error && started.error.code === 'ETIMEDOUT',
@@ -39,6 +40,7 @@ const localShell = {
       stdout: { text: started.stdout ?? '', truncated: false },
       stderr: { text: started.stderr ?? '', truncated: false },
     }
+    return { result: async () => result } as unknown as ShellExecution
   },
 } as unknown as ShellExecutor
 
@@ -117,14 +119,17 @@ describe('running a deterministic node', () => {
         command: request.command,
         workdir: request.workdir ?? process.cwd(),
         timeoutMs: request.timeoutMs ?? 10_000,
+        onExpiry: request.onExpiry ?? 'kill',
         stdoutMaxBytes: 1_000,
         env: request.env,
         sandboxPolicy: undefined,
       }),
-      run: async () => ({
-        exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 250,
-        stdout: { text: '', truncated: false }, stderr: { text: '', truncated: false },
-        ...result,
+      execute: async () => ({
+        result: async () => ({
+          exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 250,
+          stdout: { text: '', truncated: false }, stderr: { text: '', truncated: false },
+          ...result,
+        }),
       }),
     } as unknown as ShellExecutor)
 
@@ -180,15 +185,18 @@ describe('running a deterministic node', () => {
           command: request.command,
           workdir: request.workdir ?? process.cwd(),
           timeoutMs: request.timeoutMs ?? 10_000,
+          onExpiry: request.onExpiry ?? 'kill',
           stdoutMaxBytes: 1_000,
           env: request.env,
           sandboxPolicy: request.sandboxPolicy,
         }
         return seen
       },
-      run: async () => ({
-        exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 10_000,
-        stdout: { text: 'ok', truncated: false }, stderr: { text: '', truncated: false },
+      execute: async () => ({
+        result: async () => ({
+          exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 10_000,
+          stdout: { text: 'ok', truncated: false }, stderr: { text: '', truncated: false },
+        }),
       }),
     } as unknown as ShellExecutor
     const policy = { mode: 'workspace-write' as const, workspaceRoot: '/w' }
