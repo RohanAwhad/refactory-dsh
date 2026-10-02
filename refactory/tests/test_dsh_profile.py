@@ -462,6 +462,40 @@ def test_stale_mutations_finds_a_harness_profile_an_old_install_mutated(tmp_path
     assert dsh_profile.stale_mutations() == [], "a pristine template is not a mutation"
 
 
+def test_stale_mutations_names_the_retired_bundle_the_migration_command_must_clear(
+    tmp_path, monkeypatch
+):
+    """`doctor` names every re:factory name a polluted template carries.
+
+    The retired name is the one that matters: it is the bundle whose directory no
+    longer exists, so a command naming only the current one leaves that dangling
+    entry declared and the report's own fix cannot clear what the report is about.
+    """
+    home = tmp_path / "home"
+    _profile(
+        home,
+        dsh_profile.WEB_TEMPLATE,
+        [
+            "@deepseek-ai/dsh-base",
+            "@deepseek-ai/dsh-web-app",
+            _RETIRED_PRESETS,
+            dsh_profile.WEB_SURFACE_BUNDLE,
+        ],
+    )
+    monkeypatch.setenv("DSH_HOME", str(home))
+    assert dsh_profile.stale_mutations() == [
+        (dsh_profile.WEB_TEMPLATE, [_RETIRED_PRESETS, dsh_profile.WEB_SURFACE_BUNDLE])
+    ]
+    # The command has to name both: the retired name is missing from `LAYERS`, so
+    # a set built from that table alone drops exactly the entry that dangles.
+    assert dsh_profile.migration_command(
+        dsh_profile.WEB_TEMPLATE, dsh_profile.stale_mutations()[0][1]
+    ) == (
+        f"dsh plugin --profile web remove {_RETIRED_PRESETS} "
+        f"{dsh_profile.WEB_SURFACE_BUNDLE}"
+    )
+
+
 class _FakeProcess:
     """The slice of ``Popen`` the adapter uses: streamed lines and ``wait``.
 

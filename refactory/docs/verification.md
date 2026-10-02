@@ -104,14 +104,17 @@ panel. A harness profile an older install polluted is reported with its migratio
 
 An installation that predates the `refactory-web` → `refactory` profile rename and the
 `@deepseek-ai/dsh-refactory-presets` → `@deepseek-ai/dsh-refactory` bundle rename is
-migrated by that same plan, `remove` rows included: the retired bundle name is removed
-from any profile that still declares it, and re:factory's layers are cleared out of
-the directory the profile rename stranded. The old directory is left on disk — a DSH
-profile cannot be moved, because its `node_modules` holds absolute symlinks under
-`.dsh-module-fallback` — and what remains there is an inert copy of the shipped `web`
-template that nothing boots. re:factory never mutates an attached profile, so under
-Martty the removal is only reported, as a `doctor` row naming `dsh plugin --profile
-martty remove @deepseek-ai/dsh-refactory-presets`.
+migrated by that same plan, `remove` rows included: re:factory's layers are cleared out
+of the directory the profile rename left behind, and the retired name is retired from
+each profile an older install left it in. `doctor` reports a harness-owned profile an
+older install polluted with the full set it carries, retired name included, so the
+command it prints names everything the operator has to clear rather than only the
+surviving layer. The old directory is left on disk — a DSH profile cannot be moved,
+because its `node_modules` holds absolute symlinks under `.dsh-module-fallback` — and
+what remains there is an inert copy of the shipped `web` template that nothing boots.
+re:factory never mutates an attached profile, so under Martty the removal is only
+reported, as a `doctor` row naming `dsh plugin --profile martty remove
+@deepseek-ai/dsh-refactory-presets`.
 
 The second surface is **attached**, not owned. re:factory cannot recreate Martty's stack
 (`dsh-base` + `martty` + `martty-balance`, the last a machine-local link), so it never

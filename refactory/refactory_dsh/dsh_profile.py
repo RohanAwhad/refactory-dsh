@@ -411,7 +411,7 @@ def stale_mutations() -> list[tuple[str, list[str]]]:
     the rows instead of clearing them is deliberate — the operator's machine state
     is not rewritten silently.
     """
-    ours = [entry.bundle for entry in LAYERS.values()]
+    ours = {entry.bundle for entry in LAYERS.values()} | set(RETIRED_BUNDLES)
     found: list[tuple[str, list[str]]] = []
     for name in SHIPPED_TEMPLATES:
         carried = [bundle for bundle in declared_bundles(name) if bundle in ours]
