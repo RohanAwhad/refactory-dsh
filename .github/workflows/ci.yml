@@ -91,7 +91,9 @@ jobs:
       # the end of this step names every skipped unit, so a green run here states
       # what it did not verify rather than implying it verified everything.
       - name: Python suite
-        run: uv run python -m pytest refactory/tests -q
+        env:
+          REFACTORY_REQUIRE_MIGRATION_TESTS: "1"
+        run: uv run python -m pytest refactory/tests -q -rs
 
       # The harness this repository pins and the `dsh` that boots the profile
       # must agree on the version and on the strict TypertCodec contract. CI has

@@ -742,3 +742,134 @@ def test_run_on_dsh_refuses_before_spawning_when_the_profile_is_absent(
     assert run.returncode == 2
     assert dsh_profile.add_command() in run.stderr
     assert "machine state" in run.stderr
+
+
+@pytest.mark.parametrize("session,worker,explicit,expected", [
+    ("session", "worker", None, "worker"),
+    ("session", None, None, "session"),
+    (None, "worker", None, "worker"),
+    (None, None, None, "user/.dsh"),
+    ("   ", " \t ", None, "user/.dsh"),
+    ("session", " \t ", None, "session"),
+    ("session", "worker", "explicit", "explicit"),
+    ("session", "worker", "   ", "worker"),
+    ("session", "~/worker", None, "user/worker"),
+    ("session", "worker", "relative", "relative"),
+])
+def test_model_home_preflight_and_child_agree(tmp_path, monkeypatch, session, worker, explicit, expected):
+    from refactory_dsh.model import DshModelClient
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path / "user"))
+    for key, value in [("DSH_HOME", session), ("REFACTORY_MODEL_DSH_HOME", worker)]:
+        if value is None:
+            monkeypatch.delenv(key, raising=False)
+        else:
+            monkeypatch.setenv(key, value if value.isspace() or value.startswith("~") else str(tmp_path / value))
+    chosen = tmp_path / expected
+    # The session home is empty: only the chosen home has a ready graph profile.
+    _profile(chosen, "graph", [dsh_profile.GRAPH_BUNDLE])
+    client = DshModelClient(dsh_home=explicit if explicit in ("relative", "   ") else tmp_path / explicit if explicit else None)
+    assert Path(client.context()["dsh_home"]) == chosen
+    assert client._environment()["DSH_HOME"] == str(chosen)
+    assert client._environment()["REFACTORY_MODEL_DSH_HOME"] == str(chosen)
+    seen = {}
+
+    def capture(command, **kwargs):
+        seen.update(kwargs["env"])
+        return _FakeProcess(0)
+
+    monkeypatch.setattr("refactory_dsh.dsh_runtime.subprocess.Popen", capture)
+    # Containment rewrites HOME after the client resolved its original home.
+    monkeypatch.setenv("HOME", str(tmp_path / "contained"))
+    state = registry.resolve(REPO_ROOT, "circle_packing/adaptive")[1]().state_dict()
+    result = run_on_dsh(state, tmp_path / "run", model=client)
+    assert result.returncode == 0, result.stderr
+    assert seen["DSH_HOME"] == seen["REFACTORY_MODEL_DSH_HOME"] == str(chosen)
+
+
+def test_runtime_refuses_unready_model_home_even_when_session_is_ready(tmp_path, monkeypatch):
+    from refactory_dsh.model import DshModelClient
+
+    session = tmp_path / "session"
+    worker = tmp_path / "worker home"
+    _profile(session, "graph", [dsh_profile.GRAPH_BUNDLE])
+    monkeypatch.setenv("DSH_HOME", str(session))
+    client = DshModelClient(dsh_home=worker)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("must inspect the unready model home before spawning")
+
+    monkeypatch.setattr("refactory_dsh.dsh_runtime.subprocess.Popen", forbidden)
+    result = run_on_dsh({}, tmp_path / "run", model=client)
+    assert result.returncode == 2
+    assert str(worker / "profiles/graph") in result.stderr
+    assert f"DSH_HOME='{worker}'" in result.stderr
+    assert dsh_profile.requirement() is None
+
+
+def test_runtime_without_client_uses_model_home(tmp_path, monkeypatch):
+    worker = tmp_path / "worker"
+    monkeypatch.setenv("DSH_HOME", str(tmp_path / "session"))
+    monkeypatch.setenv("REFACTORY_MODEL_DSH_HOME", str(worker))
+    _profile(worker, "graph", [dsh_profile.GRAPH_BUNDLE])
+    seen = {}
+
+    def capture(command, **kwargs):
+        seen.update(kwargs["env"])
+        return _FakeProcess(0)
+
+    monkeypatch.setattr("refactory_dsh.dsh_runtime.subprocess.Popen", capture)
+    state = registry.resolve(REPO_ROOT, "circle_packing/adaptive")[1]().state_dict()
+    assert run_on_dsh(state, tmp_path / "run").returncode == 0
+    assert seen["DSH_HOME"] == seen["REFACTORY_MODEL_DSH_HOME"] == str(worker)
+    assert dsh_profile.profile_dir() == tmp_path / "session/profiles/graph"
+    assert any(step.profile == "graph" and step.kind == "add" for step in dsh_profile.provision_plan())
+
+
+def test_doctor_reports_both_homes_and_checks_model_profile(tmp_path, monkeypatch, capsys):
+    from argparse import Namespace
+    from refactory_dsh.cli import cmd_doctor
+
+    session, worker = tmp_path / "session", tmp_path / "worker"
+    for entry in dsh_profile.TARGETS:
+        if entry.owned:
+            _profile(session, entry.profile, [dsh_profile.LAYERS[key].bundle for key in entry.layers])
+    monkeypatch.setenv("DSH_HOME", str(session))
+    monkeypatch.setenv("REFACTORY_MODEL_DSH_HOME", str(worker))
+    monkeypatch.setattr("refactory_dsh.sandbox.model_readiness", lambda *a, **kw: {
+        "provider": "test", "model": "test", "status": "configured",
+    })
+    cmd_doctor(Namespace(provider="", model=""))
+    output = capsys.readouterr().out
+    assert "DSH installation/session home" in output and str(session) in output
+    assert "DSH model home" in output and str(worker) in output
+    assert "MISS" in next(line for line in output.splitlines() if "DSH model profile 'graph'" in line)
+    assert str(worker / "profiles/graph") in output
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_runtime_real_child_receives_preflight_home(tmp_path, monkeypatch, explicit):
+    """A harmless launcher records the actual child environment; no model call."""
+    from refactory_dsh.model import DshModelClient
+
+    selected = tmp_path / "selected"
+    _profile(selected, "graph", [dsh_profile.GRAPH_BUNDLE])
+    monkeypatch.setenv("DSH_HOME", str(tmp_path / "empty-session"))
+    monkeypatch.setenv("REFACTORY_MODEL_DSH_HOME", str(tmp_path / "empty-worker" if explicit else selected))
+    record = tmp_path / "received.json"
+    launcher = tmp_path / "record_home.py"
+    launcher.write_text(
+        f"#!{sys.executable}\nimport json, os\nfrom pathlib import Path\n"
+        f"Path({str(record)!r}).write_text(json.dumps({{key: os.environ[key] for key in "
+        "['HOME', 'DSH_HOME', 'REFACTORY_MODEL_DSH_HOME']}))\n"
+    )
+    launcher.chmod(0o700)
+    client = DshModelClient(dsh_home=selected if explicit else None, dsh_cli=str(launcher))
+    monkeypatch.setenv("HOME", str(tmp_path / "contained"))
+    state = registry.resolve(REPO_ROOT, "circle_packing/adaptive")[1]().state_dict()
+    result = run_on_dsh(state, tmp_path / "run", model=client)
+    assert result.returncode == 0, result.stderr
+    received = json.loads(record.read_text())
+    assert received["HOME"] == str(tmp_path / "contained")
+    assert received["DSH_HOME"] == received["REFACTORY_MODEL_DSH_HOME"] == str(selected)

@@ -6,6 +6,7 @@ live home is used; every profile and dependency fixture is under tmp_path.
 from __future__ import annotations
 
 import json
+import os
 import selectors
 import shutil
 import subprocess
@@ -26,8 +27,14 @@ RETIRED = "refactory-web"
 
 @pytest.fixture
 def isolated_install(tmp_path, monkeypatch):
-    if not shutil.which("node") or not shutil.which("pnpm") or not (REPO_ROOT / "node_modules/.bin/dsh").exists():
-        pytest.skip("requires the pinned harness, Node and pnpm; run ./install.sh first")
+    missing = [name for name in ("node", "pnpm") if not shutil.which(name)]
+    if not (REPO_ROOT / "node_modules/.bin/dsh").exists():
+        missing.append("node_modules/.bin/dsh (pinned harness)")
+    if missing:
+        reason = "migration coverage unavailable: missing " + ", ".join(missing) + "; run ./install.sh first"
+        if os.environ.get("REFACTORY_REQUIRE_MIGRATION_TESTS") == "1":
+            pytest.fail(reason)
+        pytest.skip(reason)
     home = tmp_path / "dsh-home"
     user_home = tmp_path / "user-home"
     user_home.mkdir()
