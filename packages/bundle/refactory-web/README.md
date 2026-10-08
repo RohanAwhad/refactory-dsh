@@ -38,6 +38,35 @@ takes a path into a checkout, and the profile links it. The manifest declares
 `dsh.bundle.patch`, so the reconcile step appends `@deepseek-ai/dsh-refactory-web`
 to `dsh.profile.bundles` and the layer activates on the next boot.
 
+### Additive launch over an existing web profile
+
+```bash
+./refactory-dsh --additive
+./refactory-dsh --additive --profile my-web --port 3081
+```
+
+The launcher creates an owned `refactory-web` profile derived from `web` by
+default, or from the existing web-based profile selected with `--profile`.
+It copies the source configuration, then adds the CEO declaration and
+`additive.patch.yml` to the new profile's saved patches. The complete preset
+picker, chosen default, and branding are preserved. The Modes panel exposes the
+full Refactory mode catalogue. Later launches reuse `refactory-web`, preserving
+edits to that profile; selecting a different source then produces an error rather
+than replacing the existing profile.
+
+Checkout plugins resolve through file URLs. Configuration files and installed
+dependency links are copied into the new profile's own directory. The source
+manifest and patches retain their original bytes. The owned `graph`
+runtime profile is also provisioned; this path does not provision the standalone
+`refactory` GUI. Existing Refactory rows are reused. If the source carries the
+standalone Refactory brand, that brand is disabled in the derived profile so its
+preset filter cannot hide the other choices.
+
+`DSH_HOME` selects the home, just as for standalone launch. An existing profile
+named `refactory-web` that was not created by this launcher is left untouched and
+reported as a conflict. Upstream boot-time settings migration still applies; see
+the [home-isolation guide](../../../refactory/docs/rc2-home-isolation.md).
+
 ### Layer-ordering precondition
 
 The rows this patch disables or appends sit in the `@deepseek-ai/dsh-web-app`

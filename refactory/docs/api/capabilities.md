@@ -5151,7 +5151,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 
 ## cli:ui
 
-Launch the native Refactory web interface for conversations and the run/optimization panel.
+Launch the standalone Refactory GUI, or create and launch refactory-web derived from an existing web profile with all presets, its default and branding, plus CEO and the Modes panel.
 
 Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 
@@ -5165,14 +5165,33 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
         "no_open": true
       },
       "explanation": "Launch the native Refactory web interface for conversations and the run/optimization panel."
+    },
+    {
+      "arguments": {
+        "additive": true,
+        "no_open": true,
+        "profile": "my-web"
+      },
+      "explanation": "Create refactory-web from my-web on the first additive launch; later launches reuse it and preserve edits there. The source profile is unchanged."
     }
   ],
   "interfaces": {
     "chat": "Unavailable as a direct chat mutation; use the documented CLI/panel route.",
-    "cli": "refactory ui",
+    "cli": "refactory ui [--additive] [--profile NAME]",
     "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
   },
   "parameters": {
+    "additive": {
+      "default": false,
+      "description": "create and launch refactory-web derived from web, retaining all presets",
+      "flags": [
+        "--additive"
+      ],
+      "nargs": 0,
+      "positional": false,
+      "required": false,
+      "type": "boolean"
+    },
     "no_open": {
       "default": false,
       "description": "do not open a browser",
@@ -5194,10 +5213,21 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "positional": false,
       "required": false,
       "type": "integer"
+    },
+    "profile": {
+      "default": null,
+      "description": "additive source profile (default: web); standalone launch profile (default: refactory)",
+      "flags": [
+        "--profile"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "string"
     }
   },
-  "purpose": "Launch the native Refactory web interface for conversations and the run/optimization panel.",
-  "reviewed_schema": "c26f686b485231f8b89ffd7106b8cb61b150517f2b924c0739f6592d62f4f33a"
+  "purpose": "Launch the standalone Refactory GUI, or create and launch refactory-web derived from an existing web profile with all presets, its default and branding, plus CEO and the Modes panel.",
+  "reviewed_schema": "7c5a094a27a45243cc5bfcaa5f76f36c79adffec9b77105c72c135c741065124"
 }
 ```
 

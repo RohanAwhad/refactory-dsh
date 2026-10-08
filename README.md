@@ -74,6 +74,26 @@ The original package remains available. [Continue the walkthrough →](refactory
 uv run refactory ui --port 3081
 ```
 
+That launches the standalone Refactory profile with CEO and Minimal. To add
+Refactory in a new `refactory-web` profile derived from your existing web profile,
+while retaining its full preset picker,
+chosen default, and branding:
+
+```bash
+./refactory-dsh --additive --port 3081
+# Or select another existing web-based profile:
+./refactory-dsh --additive --profile my-web --port 3081
+# Equivalent Python CLI entry:
+uv run refactory ui --additive --profile my-web --port 3081
+```
+
+Additive mode creates and launches `refactory-web` with CEO and the Modes panel.
+It copies the source profile's configuration without changing it. Later launches
+reuse `refactory-web`, preserving edits there; `--profile` selects the source on
+first creation. It uses the current
+`DSH_HOME` and the checkout's selected harness, so choose the home containing
+your existing profile. [Home isolation between harness generations →](refactory/docs/rc2-home-isolation.md)
+
 Open the exact URL printed by the server, select the checkout as your workspace, then create a session. Open the right sidebar's **Modes** tab; no introductory chat message is required.
 
 Before model-backed work, save a provider key in **Settings → Models**. Nested workers and validation use the managed credential store; a checkout `.env` or exported key alone is insufficient for those scrubbed processes. `uv run refactory doctor` checks configuration, not authentication or quota. [Model setup →](refactory/docs/models.md)

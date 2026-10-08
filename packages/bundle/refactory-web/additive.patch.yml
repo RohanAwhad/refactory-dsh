@@ -1,0 +1,12 @@
+# Additive browser additions. Keep the original brand, preset registry,
+# complete picker, and existing default intact.
+- insert:
+    - id: refactory-web-startup
+      name: '@deepseek-ai/dsh-refactory-web/startup'
+    - id: refactory-console
+      name: '@deepseek-ai/dsh-refactory-console'
+      inject: [refactoryWebStartup]
+      config:
+        repoRoot: !!js ctx.refactoryWebStartup.repoRoot
+    - id: ui-refactory
+      name: '@deepseek-ai/dsh-client-ui-refactory'

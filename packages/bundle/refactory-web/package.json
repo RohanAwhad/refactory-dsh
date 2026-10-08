@@ -18,13 +18,15 @@
     },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./src/*": "./src/*",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./additive.patch.yml": "./additive.patch.yml"
   },
   "files": [
     "lib/startup.js",
     "cordis.patch.yml",
     "lib/types/**/*.d.ts",
-    "lib/types/**/*.js"
+    "lib/types/**/*.js",
+    "additive.patch.yml"
   ],
   "license": "MIT",
   "dsh": {

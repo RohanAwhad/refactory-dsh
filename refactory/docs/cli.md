@@ -188,7 +188,8 @@ The read verbs pass through the console's own `--project`, `--runs-root`, `--aft
 | `refactory runtime` | the resolved runtime and model route a run would use. |
 | `refactory profile-save --name <name> --spec <JSON>` | save an immutable configuration version. |
 | `refactory graph-control [--node <id>]` | control a graph run through the spine: pause, resume or stop it. |
-| `refactory ui --port <n> --no-open` | start the [browser GUI](interfaces.md) without opening a browser. |
+| `refactory ui --port <n> --no-open` | start the standalone [browser GUI](interfaces.md) without opening a browser. |
+| `refactory ui --additive [--profile <name>]` | create and launch `refactory-web` derived from an existing web-based source (default: `web`), preserving all presets, the default, and branding; add CEO and the Modes panel. |
 
 
 ## Model selection and runtime limits

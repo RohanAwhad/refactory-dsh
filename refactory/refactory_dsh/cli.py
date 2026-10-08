@@ -226,6 +226,10 @@ def cmd_ui(args: argparse.Namespace) -> int:
         print(f"refactory: no launcher at {launcher}", file=sys.stderr)
         return 2
     forwarded = [str(launcher)]
+    if getattr(args, "additive", False):
+        forwarded.append("--additive")
+    if getattr(args, "profile", None):
+        forwarded += ["--profile", args.profile]
     if args.port:
         forwarded += ["--port", str(args.port)]
     if args.no_open:
@@ -507,6 +511,8 @@ def build_parser() -> argparse.ArgumentParser:
     ui = sub.add_parser("ui", help="the Web GUI (the tool, the panel, the conversation)")
     ui.add_argument("--port", type=int, default=0, help="default: the launcher's own")
     ui.add_argument("--no-open", action="store_true", help="do not open a browser")
+    ui.add_argument("--additive", action="store_true", help="create and launch refactory-web derived from web, retaining all presets")
+    ui.add_argument("--profile", help="additive source profile (default: web); standalone launch profile (default: refactory)")
 
     doctor = sub.add_parser("doctor", help="check local prerequisites and sandbox credential configuration (no model request)")
     doctor.add_argument("--provider", default="", help="provider route to check (default: DSH settings)")
