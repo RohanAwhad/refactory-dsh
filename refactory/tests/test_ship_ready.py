@@ -134,6 +134,18 @@ def test_the_tour_produces_the_numbers_it_documents(tmp_path, seed, expected):
     The compared score is the raw one minus the loop's size cost, so the seed's
     number moves with the cost the same way every candidate's does.
     """
+    # The loop boots DSH even for this deterministic tour. Never let upstream's
+    # global-settings migration rename the developer's real settings.yaml.
+    # Keep epochs=2, batch-size=4, seed=5 below: epochs=1/batch-size=2 skips
+    # the DSH boot, so the settings-preservation assertions would pass vacuously.
+    user_home = tmp_path / "user-home"
+    settings = user_home / ".dsh" / "settings.yaml"
+    settings.parent.mkdir(parents=True)
+    original = b"agent-default-model:\n  provider: developer-sentinel\n  model: untouched\n"
+    settings.write_bytes(original)
+    harness_home = tmp_path / "dsh-home"
+    env = {**os.environ, "HOME": str(user_home), "DSH_HOME": str(harness_home),
+           "REFACTORY_MODEL_DSH_HOME": str(harness_home)}
     out = tmp_path / "run"
     result = subprocess.run(
         [
@@ -141,8 +153,10 @@ def test_the_tour_produces_the_numbers_it_documents(tmp_path, seed, expected):
             "--epochs", "2", "--batch-size", "4", "--optimizer", "random",
             "--seed", seed, "--runs-root", str(out),
         ],
-        capture_output=True, text=True, cwd=str(ROOT),
+        capture_output=True, text=True, cwd=str(ROOT), env=env,
     )
+    assert settings.read_bytes() == original
+    assert not settings.with_name("settings.yaml.imported").exists()
     assert result.returncode == 0, result.stderr[-2000:]
     report = json.loads(result.stdout[result.stdout.index("{"):])
     assert str(report["seed_score"]) == "0.795", report["seed_score"]

@@ -80,7 +80,11 @@ def run_on_dsh(
     # boundary that hands the path to DSH.
     workdir = Path(workdir).resolve()
     workdir.mkdir(parents=True, exist_ok=True)
-    problem = dsh_profile.requirement()
+    context = model.context() if callable(getattr(model, "context", None)) else None
+    selected_home = dsh_profile.model_home(context.get("dsh_home") if context else None)
+    if context:
+        context = {**context, "dsh_home": str(selected_home)}
+    problem = dsh_profile.requirement(home=selected_home)
     if problem is not None:
         # Checked here rather than left to the child: DSH's own error is about a
         # missing profile, which reads as a packaging bug. The profile is machine
@@ -92,7 +96,6 @@ def run_on_dsh(
     # ledger in its work directory; folding it in here is what makes the CEO's agent
     # nodes carry what was said, and what a resumed run replays.
     from refactory_dsh import steering, workers
-    context = model.context() if callable(getattr(model, "context", None)) else None
     budget = getattr(model, "_budget", None)
     if budget is not None:
         budget.checkpoint()
@@ -121,14 +124,14 @@ def run_on_dsh(
         # and every node falls back to its op's default.
         "--knobs", lowering.knob_environment(state)[lowering.KNOBS_ENV],
     ]
-    env = dict(os.environ)
+    env = {**os.environ, "DSH_HOME": str(selected_home),
+           "REFACTORY_MODEL_DSH_HOME": str(selected_home)}
     env.update(workers.environment(context))
     telemetry = workers.GraphTelemetry(workdir, context, budget) if context else None
     if telemetry is not None:
         command = telemetry.command(command)
         env.update(telemetry.environment())
     if context:
-        env["DSH_HOME"] = str(context["dsh_home"])
         if context.get("budget_ledger"):
             env["REFACTORY_BUDGET_LEDGER"] = str(context["budget_ledger"])
         if context.get("worker_backend", "dsh") == "dsh":

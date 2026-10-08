@@ -596,6 +596,7 @@ def test_the_dsh_runtime_loads_the_ledger_into_its_agent_nodes(tmp_path, monkeyp
         json.dumps({"dsh": {"profile": {"bundles": [dsh_profile.GRAPH_BUNDLE]}}})
     )
     monkeypatch.setenv("DSH_HOME", str(home))
+    monkeypatch.delenv("REFACTORY_MODEL_DSH_HOME", raising=False)
 
     work = tmp_path / "run"
     Ledger.seed(work, "build a mode for circle packing")

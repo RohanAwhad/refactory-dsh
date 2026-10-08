@@ -31,7 +31,7 @@
  * nonzero on the first one that does not hold.
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -223,6 +223,26 @@ try {
     `bundles: ${templateBundles.join(', ')}`,
   )
 
+  // Exercise cleanup with stranded selections before any plugin operation.
+  const dirty = new Map()
+  for (const profile of ['graph', 'refactory-web']) {
+    const directory = join(home, 'profiles', profile)
+    mkdirSync(directory, { recursive: true })
+    const manifest = JSON.stringify({
+      name: `acceptance-${profile}`, dependencies: {}, operatorMetadata: { keep: true },
+      dsh: { profile: { bundles: ['@deepseek-ai/dsh-refactory-presets'], keep: 'profile data' } },
+    }, null, 2)
+    writeFileSync(join(directory, 'package.json'), manifest)
+    dirty.set(profile, manifest)
+  }
+  const operatorDirectory = join(home, 'profiles', 'operator')
+  mkdirSync(operatorDirectory, { recursive: true })
+  const operatorManifest = JSON.stringify({
+    dsh: { profile: { bundles: ['@deepseek-ai/dsh-refactory-presets'] } },
+  })
+  writeFileSync(join(operatorDirectory, 'package.json'), operatorManifest)
+  const templateManifest = readFileSync(join(home, 'profiles', WEB_TEMPLATE, 'package.json'), 'utf8')
+
   const plan = run(PYTHON, [
     '-c',
     'from refactory_dsh import dsh_profile; print(dsh_profile.render_plan(), end="")',
@@ -231,7 +251,12 @@ try {
   })
   check(plan.code === 0, 'the provisioning plan renders', plan.out.trim())
   const steps = plan.out.split('\n').filter(Boolean).map(line => line.split('\t'))
-  check(steps.length > 0, 'a fresh home needs provisioning', plan.out.trim())
+  check(steps.length > 0, 'the dirty home needs provisioning', plan.out.trim())
+  for (const profile of dirty.keys()) {
+    const clean = steps.findIndex(([kind, name]) => kind === 'clean' && name === profile)
+    const plugin = steps.findIndex(([kind, name]) => ['add', 'remove'].includes(kind) && name === profile)
+    check(clean >= 0 && (plugin < 0 || clean < plugin), `cleanup precedes plugin operations for ${profile}`)
+  }
   // `value` is a template for `init`, a directory under `packages/bundle/` for
   // `add`, and package names for `remove`/`clean` — only add prefixes that root.
   for (const [kind, profile, value] of steps) {
@@ -258,6 +283,23 @@ try {
     'the plan leaves the harness web template exactly as the template defines it',
     `after: ${bundlesOf(home, WEB_TEMPLATE).join(', ')}`,
   )
+
+  for (const [profile, before] of dirty) {
+    const directory = join(home, 'profiles', profile)
+    const manifest = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8'))
+    check(!manifest.dsh.profile.bundles.includes('@deepseek-ai/dsh-refactory-presets'),
+      `cleanup drops the stranded selection in ${profile}`)
+    check(manifest.operatorMetadata.keep === true && manifest.dsh.profile.keep === 'profile data',
+      `cleanup preserves unrelated manifest data in ${profile}`)
+    const backups = readdirSync(directory).filter(name => name.startsWith('package.json') && name.includes('backup'))
+    check(backups.some(name => readFileSync(join(directory, name), 'utf8') === before
+      && (statSync(join(directory, name)).mode & 0o777) === 0o600),
+    `cleanup retains an exact mode-0600 backup for ${profile}`)
+  }
+  check(readFileSync(join(operatorDirectory, 'package.json'), 'utf8') === operatorManifest,
+    'cleanup leaves the operator-owned manifest untouched')
+  check(readFileSync(join(home, 'profiles', WEB_TEMPLATE, 'package.json'), 'utf8') === templateManifest,
+    'cleanup leaves the harness-owned manifest untouched')
 
   const bundles = bundlesOf(home, PROFILE)
   const webApp = bundles.indexOf('@deepseek-ai/dsh-web-app')

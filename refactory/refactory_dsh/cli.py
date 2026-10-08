@@ -257,6 +257,14 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         # target is shown only once the operator has that profile: a profile that
         # does not exist has not chosen a re:factory path and must not read as a
         # broken install.
+        session_home = dsh_profile.dsh_home()
+        worker_home = dsh_profile.model_home()
+        checks.append(("DSH installation/session home", True, str(session_home)))
+        checks.append(("DSH model home", True, str(worker_home)))
+        if worker_home != session_home:
+            problem = dsh_profile.requirement(home=worker_home)
+            checks.append(("DSH model profile 'graph'", problem is None,
+                           problem or str(dsh_profile.profile_dir(home=worker_home))))
         gaps = dsh_profile.readiness_gaps()
         for entry in dsh_profile.TARGETS:
             if not entry.owned and not (

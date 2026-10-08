@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -179,15 +180,26 @@ class ProfileError(RuntimeError):
     """A DSH profile a run needs is absent. Names the fix and the reason."""
 
 
-def dsh_home() -> Path:
-    """The harness home that holds ``profiles/``; ``$DSH_HOME``, else ``~/.dsh``."""
-    override = (os.environ.get("DSH_HOME") or "").strip()
-    return Path(override) if override else Path.home() / ".dsh"
+def dsh_home(home: str | Path | None = None) -> Path:
+    """Installation/session home: explicit path, nonblank DSH_HOME, then ~/.dsh."""
+    override = str(home).strip() if home is not None else ""
+    override = override or (os.environ.get("DSH_HOME") or "").strip()
+    return Path(override or Path.home() / ".dsh").expanduser().resolve()
 
 
-def profile_dir(name: str = GRAPH_PROFILE) -> Path:
+def model_home(home: str | Path | None = None) -> Path:
+    """Model home, resolved before containment changes HOME.
+
+    An explicit path wins over nonblank REFACTORY_MODEL_DSH_HOME, then the
+    installation/session home. Provisioning continues to use dsh_home().
+    """
+    override = str(home).strip() if home is not None else ""
+    return dsh_home(override or (os.environ.get("REFACTORY_MODEL_DSH_HOME") or "").strip())
+
+
+def profile_dir(name: str = GRAPH_PROFILE, *, home: str | Path | None = None) -> Path:
     """Where the profile lives, whether or not it exists."""
-    return dsh_home() / "profiles" / name
+    return dsh_home(home) / "profiles" / name
 
 
 def target(name: str = GRAPH_PROFILE) -> Target:
@@ -204,14 +216,14 @@ def layer_bundle(bundle: str) -> str:
     return entry.bundle if entry is not None else bundle
 
 
-def declared_bundles(name: str = GRAPH_PROFILE) -> list[str]:
+def declared_bundles(name: str = GRAPH_PROFILE, *, home: str | Path | None = None) -> list[str]:
     """The bundles the profile's manifest declares, in order.
 
     Read from ``package.json`` rather than by importing anything: a profile that
     is absent and one that is present but does not carry the bundle are different
     failures, and telling them apart is what lets the error say which happened.
     """
-    return declared_bundles_in(profile_dir(name))
+    return declared_bundles_in(profile_dir(name, home=home))
 
 
 def declared_bundles_in(directory: Path) -> list[str]:
@@ -314,9 +326,9 @@ def _obsolete_names(name: str, names: list[str]) -> list[str]:
     ]
 
 
-def is_ready(name: str = GRAPH_PROFILE, bundle: str = GRAPH_BUNDLE) -> bool:
+def is_ready(name: str = GRAPH_PROFILE, bundle: str = GRAPH_BUNDLE, *, home: str | Path | None = None) -> bool:
     """Whether a mode can be run on DSH through this profile right now."""
-    return bundle in declared_bundles(name)
+    return bundle in declared_bundles(name, home=home)
 
 
 def bundle_directory(bundle: str) -> str:
@@ -608,7 +620,7 @@ def migration_command(name: str, bundles: list[str]) -> str:
     return f"dsh plugin --profile {name} remove " + " ".join(bundles)
 
 
-def requirement(name: str = GRAPH_PROFILE, bundle: str = GRAPH_BUNDLE) -> str | None:
+def requirement(name: str = GRAPH_PROFILE, bundle: str = GRAPH_BUNDLE, *, home: str | Path | None = None) -> str | None:
     """Why DSH cannot start this target's work, and the commands that fix it.
 
     ``None`` when the profile carries the bundle. The reason is stated because the
@@ -618,38 +630,39 @@ def requirement(name: str = GRAPH_PROFILE, bundle: str = GRAPH_BUNDLE) -> str | 
     command.
     """
     entry = target(name)
-    directory = profile_dir(name)
+    directory = profile_dir(name, home=home)
+    prefix = f"DSH_HOME={shlex.quote(str(dsh_home(home)))} " if home is not None else ""
     if not (directory / "package.json").exists():
         if entry.owned and entry.base_template is not None:
             return (
                 f"the DSH profile {name!r} does not exist at {directory}. It is a "
                 f"re:factory-owned profile over the harness's {entry.base_template!r} "
                 "template: create it once per machine with "
-                f"`{init_command(name)}`, then add this layer with "
-                f"`{add_command(name, bundle)}`"
+                f"`{prefix}{init_command(name)}`, then add this layer with "
+                f"`{prefix}{add_command(name, bundle)}`"
             )
         if entry.owned:
             return (
                 f"the DSH profile {name!r} does not exist at {directory}. A DSH "
                 "profile is machine state, not something the bundle creates: create "
-                f"it once per machine with `{add_command(name, bundle)}`"
+                f"it once per machine with `{prefix}{add_command(name, bundle)}`"
             )
         return (
             f"the DSH profile {name!r} does not exist at {directory}. re:factory does "
             f"not create a profile it does not own: install the {name!r} stack first, "
-            f"then add the layer with `{add_command(name, bundle)}`"
+            f"then add the layer with `{prefix}{add_command(name, bundle)}`"
         )
-    if bundle not in declared_bundles(name):
+    if bundle not in declared_bundles(name, home=home):
         return (
             f"the DSH profile {name!r} exists but does not carry {bundle}, so it is "
-            f"not this checkout's {name!r} profile. Add it with `{add_command(name, bundle)}`"
+            f"not this checkout's {name!r} profile. Add it with `{prefix}{add_command(name, bundle)}`"
         )
     return None
 
 
-def require(name: str = GRAPH_PROFILE, bundle: str = GRAPH_BUNDLE) -> None:
+def require(name: str = GRAPH_PROFILE, bundle: str = GRAPH_BUNDLE, *, home: str | Path | None = None) -> None:
     """Raise :class:`ProfileError` naming the fix and the reason, or return."""
-    problem = requirement(name, bundle)
+    problem = requirement(name, bundle, home=home)
     if problem is not None:
         raise ProfileError(problem)
 
@@ -676,6 +689,7 @@ __all__ = [
     "declared_bundles",
     "declared_bundles_in",
     "dsh_home",
+    "model_home",
     "init_command",
     "is_ready",
     "layer_bundle",

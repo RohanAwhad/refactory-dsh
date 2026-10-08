@@ -107,13 +107,19 @@ DSH_HOME="$HOME/.dsh-rc2" uv run refactory ui --port 3081 --no-open
 
 ### (d) the Python glue's model calls
 
-The glue resolves its home once and carries it across the subprocess boundary:
+The glue resolves its model home once, before containment rewrites `HOME`:
 
-```python
-selected_home = dsh_home or os.environ.get("REFACTORY_MODEL_DSH_HOME") or os.environ.get("DSH_HOME", "").strip()
-```
+1. An explicit `DshModelClient(dsh_home=...)` path.
+2. Nonblank `REFACTORY_MODEL_DSH_HOME`.
+3. Nonblank `DSH_HOME`.
+4. The original user home's `.dsh` directory.
 
-at `refactory_dsh/model.py:204`, falling back to `Path.home() / ".dsh"`. `_environment()` then sets **both** `DSH_HOME` and `REFACTORY_MODEL_DSH_HOME` on the child to that one resolved path (`model.py:272-273`), and `dsh_runtime.py:131` and `workers.py:265` re-assert `DSH_HOME` on the launched runtime. Setting either variable alone is therefore sufficient; `REFACTORY_MODEL_DSH_HOME` wins when both are set.
+Paths are trimmed, expanded and resolved to absolute paths. Whitespace-only
+values are treated as unset. The model subprocess and graph runtime receive
+both `DSH_HOME` and `REFACTORY_MODEL_DSH_HOME` set to that resolved path. Runtime
+preflight inspects the graph profile in the same home, including an explicit
+client override. A missing profile's repair command includes `DSH_HOME` so it
+provisions the home the run will actually use.
 
 ```bash
 cd /path/to/refactory-dsh
@@ -124,16 +130,52 @@ Verified by probe: with `DSH_HOME=/tmp/probe-dsh` and `REFACTORY_MODEL_DSH_HOME=
 
 `model.py:184`, `:201` and `:202` read `REFACTORY_MODEL_EFFORT`, `REFACTORY_MODEL_ID` and `REFACTORY_MODEL_PROVIDER` — the route, not the home. They apply only when the worker backend is `dsh` and no routes were resolved, and they do not affect which home is used.
 
-### The one command that can still reach the fork's home
+### Installation/session and model diagnostics
 
-`refactory_dsh/dsh_profile.py`'s `dsh_home()` reads `$DSH_HOME` and **not** `REFACTORY_MODEL_DSH_HOME`. `doctor` and the profile plan report a path under the fork's home unless `DSH_HOME` is set. Run diagnostics with `DSH_HOME`, or set both:
+Installation and GUI provisioning use `DSH_HOME`, falling back to `~/.dsh`.
+`REFACTORY_MODEL_DSH_HOME` selects model workers independently; it does not
+redirect `install.sh` or `./refactory-dsh`. With `DSH_HOME=A` and
+`REFACTORY_MODEL_DSH_HOME=B`, installation and the GUI target A, while model
+workers and graph runtime preflight target B. The console tool explicitly forwards
+its session `DSH_HOME`; the harness subprocess provider preserves the ordinary
+`REFACTORY_MODEL_DSH_HOME` variable, so console model workers follow the same
+precedence as the Python CLI. Contained workers carry the resolved client home
+in their serialized context before `HOME` is rewritten.
+
+`refactory doctor` reports both resolved homes. It checks the installation's
+owned profiles and any attached Martty profile, and additionally checks the
+model home's graph profile when the homes differ. It only reads and reports.
+To provision a separate model home, run installation explicitly against it:
 
 ```bash
-cd /path/to/refactory-dsh
-DSH_HOME="$HOME/.dsh-rc2" REFACTORY_MODEL_DSH_HOME="$HOME/.dsh-rc2" uv run refactory doctor
+DSH_HOME="$HOME/.dsh-model" ./install.sh
+DSH_HOME="$HOME/.dsh-rc2" REFACTORY_MODEL_DSH_HOME="$HOME/.dsh-model" uv run refactory doctor
 ```
 
-`doctor` only reads and reports; it does not write profiles. But it prints paths, and a reader who acts on those paths without a `DSH_HOME` acts on `~/.dsh`.
+### Stranded bundle selections: upstream follow-up (#286)
+
+At the pinned `0.2.0-rc.2`, plugin-manager already has a deselect primitive:
+`selectBundle(name, false)` removes a selected name without requiring a
+corresponding dependency. The remote method `setBundleEnabled(name, false)`
+wraps it. However, `dsh plugin --profile NAME remove PACKAGE` forwards to pnpm;
+a name absent from `dependencies` makes removal fail, and `reconcile()` preserves
+that selection. The upstream request is to expose deselection through the CLI,
+or tolerate dangling selections in CLI removal.
+
+The offline installer cannot simply call `./remote`: an import probe finds only
+`TYPERT_REMOTE` and `default` protocol metadata, with no executable manager.
+Constructing `PluginManager` without a host context fails while reading
+`ctx.reflect`. The implementation also uses `ctx.profileContext`, a profile
+writer lock, the owning context and loader/HMR services. A host RPC invocation
+requires a running profile, whose startup can already fail on the stranded
+selection. Calling an internal prototype with a fabricated host would introduce
+another unsupported adapter. Keep the owned-manifest cleanup using the pinned
+writer lock and atomic writer until a supported offline operation exists.
+
+Registry and tarball checks on 2026-10-06 found `latest` and `next` still at
+`0.2.0-rc.2`, with `alpha` at `0.2.1-alpha.1`. The alpha plugin-manager's
+`lib/types/operations.js` is byte-identical to the pinned file; upgrading to that
+alpha does not fix CLI reconciliation.
 
 ## Safe first run
 

@@ -201,8 +201,8 @@ class DshModelClient:
         self._model = model or (os.environ.get("REFACTORY_MODEL_ID", "") if self._worker_backend == "dsh" and not routes_resolved else "")
         self._provider = provider or (os.environ.get("REFACTORY_MODEL_PROVIDER", "") if self._worker_backend == "dsh" and not routes_resolved else "")
         # Resolve before containment rewrites HOME. This is a location, never a key.
-        selected_home = dsh_home or os.environ.get("REFACTORY_MODEL_DSH_HOME") or os.environ.get("DSH_HOME", "").strip()
-        self._dsh_home = Path(selected_home or Path.home() / ".dsh").expanduser().resolve()
+        from refactory_dsh.dsh_profile import model_home
+        self._dsh_home = model_home(dsh_home)
         self._attempts = max(1, int(attempts)) if self._worker_backend == "dsh" else 1
         self._backoff_s = max(0.0, float(backoff_s))
         self._cancellations: tuple[threading.Event, ...] = ()
