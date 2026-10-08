@@ -136,6 +136,8 @@ def test_the_tour_produces_the_numbers_it_documents(tmp_path, seed, expected):
     """
     # The loop boots DSH even for this deterministic tour. Never let upstream's
     # global-settings migration rename the developer's real settings.yaml.
+    # Keep epochs=2, batch-size=4, seed=5 below: epochs=1/batch-size=2 skips
+    # the DSH boot, so the settings-preservation assertions would pass vacuously.
     user_home = tmp_path / "user-home"
     settings = user_home / ".dsh" / "settings.yaml"
     settings.parent.mkdir(parents=True)
