@@ -74,22 +74,15 @@ The original package remains available. [Continue the walkthrough →](refactory
 uv run refactory ui --port 3081
 ```
 
-That launches the standalone Refactory profile with CEO and Minimal. For the
-complete native web interface with Refactory added:
+For all native web presets plus CEO and the Refactory Modes panel:
 
 ```bash
 ./refactory-dsh --additive --port 3081
-# Equivalent Python CLI entry:
-uv run refactory ui --additive --port 3081
 ```
 
-Additive mode creates and launches `refactory-web`. Its profile manifest declares
-the normal web bundles plus the Refactory preset and browser bundles. It exposes
-all native presets plus CEO and the full Modes panel, with CEO as the default.
-It does not copy or change the existing `web` profile. Later launches reuse
-`refactory-web` and preserve edits there. In this pinned harness the declaration
-lives at `$DSH_HOME/profiles/refactory-web/package.json`, rather than in the global
-`settings.yaml`. [Home isolation between harness generations →](refactory/docs/rc2-home-isolation.md)
+This creates and reuses `refactory-web`, declaring the web and Refactory bundles
+in `$DSH_HOME/profiles/refactory-web/package.json`. CEO is the default, and the
+existing `web` profile stays unchanged.
 
 Open the exact URL printed by the server, select the checkout as your workspace, then create a session. Open the right sidebar's **Modes** tab; no introductory chat message is required.
 

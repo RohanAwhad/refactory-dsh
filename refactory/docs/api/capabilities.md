@@ -5151,7 +5151,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 
 ## cli:ui
 
-Launch the standalone Refactory GUI, or create and launch the additive refactory-web profile declaring the web and Refactory bundles, with all native presets plus CEO and the full Modes panel.
+Launch the native Refactory web interface for conversations and the run/optimization panel.
 
 Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 
@@ -5165,32 +5165,14 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
         "no_open": true
       },
       "explanation": "Launch the native Refactory web interface for conversations and the run/optimization panel."
-    },
-    {
-      "arguments": {
-        "additive": true,
-        "no_open": true
-      },
-      "explanation": "Create and launch refactory-web using the normal web and Refactory bundles; later launches reuse it. No existing profile is copied or modified."
     }
   ],
   "interfaces": {
     "chat": "Unavailable as a direct chat mutation; use the documented CLI/panel route.",
-    "cli": "refactory ui [--additive]",
+    "cli": "refactory ui",
     "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
   },
   "parameters": {
-    "additive": {
-      "default": false,
-      "description": "create and launch refactory-web with the web and Refactory bundles, retaining all presets",
-      "flags": [
-        "--additive"
-      ],
-      "nargs": 0,
-      "positional": false,
-      "required": false,
-      "type": "boolean"
-    },
     "no_open": {
       "default": false,
       "description": "do not open a browser",
@@ -5214,8 +5196,8 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "type": "integer"
     }
   },
-  "purpose": "Launch the standalone Refactory GUI, or create and launch the additive refactory-web profile declaring the web and Refactory bundles, with all native presets plus CEO and the full Modes panel.",
-  "reviewed_schema": "c679c5748806522be6ee9378ac2628ee009a404f2309492084a64c28b3dec003"
+  "purpose": "Launch the native Refactory web interface for conversations and the run/optimization panel.",
+  "reviewed_schema": "c26f686b485231f8b89ffd7106b8cb61b150517f2b924c0739f6592d62f4f33a"
 }
 ```
 

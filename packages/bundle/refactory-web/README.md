@@ -38,33 +38,6 @@ takes a path into a checkout, and the profile links it. The manifest declares
 `dsh.bundle.patch`, so the reconcile step appends `@deepseek-ai/dsh-refactory-web`
 to `dsh.profile.bundles` and the layer activates on the next boot.
 
-### Additive web profile
-
-```bash
-./refactory-dsh --additive
-uv run refactory ui --additive --port 3081
-```
-
-The launcher initializes the normal `web` template under the profile name
-`refactory-web`, then installs the existing `@deepseek-ai/dsh-refactory` and
-`@deepseek-ai/dsh-refactory-web` bundles through `dsh plugin add`. Its manifest's
-`dsh.profile.bundles` lists base, web, Refactory presets and Refactory browser
-bundles in that order. No profile directory is cloned and no plugin paths are
-rewritten. The existing `web` profile remains unchanged.
-
-A small saved profile patch disables the standalone Refactory brand and enables
-the native brand, exposing the complete native preset picker plus CEO. The Modes
-panel exposes the full Refactory mode catalogue; the Refactory preset bundle
-sets CEO as the default. Later launches reuse the profile and preserve edits.
-The `dsh.profile.refactoryAdditive` flag distinguishes this profile from the old
-standalone profile with the same name, so ordinary launch and installation do
-not retire it. The graph runtime profile is also provisioned.
-
-This pinned harness stores profile declarations under
-`$DSH_HOME/profiles/<name>/package.json`, not in the global `settings.yaml`.
-Upstream boot-time settings migration still applies; see the
-[home-isolation guide](../../../refactory/docs/rc2-home-isolation.md).
-
 ### Layer-ordering precondition
 
 The rows this patch disables or appends sit in the `@deepseek-ai/dsh-web-app`
