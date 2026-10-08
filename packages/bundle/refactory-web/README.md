@@ -38,34 +38,32 @@ takes a path into a checkout, and the profile links it. The manifest declares
 `dsh.bundle.patch`, so the reconcile step appends `@deepseek-ai/dsh-refactory-web`
 to `dsh.profile.bundles` and the layer activates on the next boot.
 
-### Additive launch over an existing web profile
+### Additive web profile
 
 ```bash
 ./refactory-dsh --additive
-./refactory-dsh --additive --profile my-web --port 3081
+uv run refactory ui --additive --port 3081
 ```
 
-The launcher creates an owned `refactory-web` profile derived from `web` by
-default, or from the existing web-based profile selected with `--profile`.
-It copies the source configuration, then adds the CEO declaration and
-`additive.patch.yml` to the new profile's saved patches. The complete preset
-picker, chosen default, and branding are preserved. The Modes panel exposes the
-full Refactory mode catalogue. Later launches reuse `refactory-web`, preserving
-edits to that profile; selecting a different source then produces an error rather
-than replacing the existing profile.
+The launcher initializes the normal `web` template under the profile name
+`refactory-web`, then installs the existing `@deepseek-ai/dsh-refactory` and
+`@deepseek-ai/dsh-refactory-web` bundles through `dsh plugin add`. Its manifest's
+`dsh.profile.bundles` lists base, web, Refactory presets and Refactory browser
+bundles in that order. No profile directory is cloned and no plugin paths are
+rewritten. The existing `web` profile remains unchanged.
 
-Checkout plugins resolve through file URLs. Configuration files and installed
-dependency links are copied into the new profile's own directory. The source
-manifest and patches retain their original bytes. The owned `graph`
-runtime profile is also provisioned; this path does not provision the standalone
-`refactory` GUI. Existing Refactory rows are reused. If the source carries the
-standalone Refactory brand, that brand is disabled in the derived profile so its
-preset filter cannot hide the other choices.
+A small saved profile patch disables the standalone Refactory brand and enables
+the native brand, exposing the complete native preset picker plus CEO. The Modes
+panel exposes the full Refactory mode catalogue; the Refactory preset bundle
+sets CEO as the default. Later launches reuse the profile and preserve edits.
+The `dsh.profile.refactoryAdditive` flag distinguishes this profile from the old
+standalone profile with the same name, so ordinary launch and installation do
+not retire it. The graph runtime profile is also provisioned.
 
-`DSH_HOME` selects the home, just as for standalone launch. An existing profile
-named `refactory-web` that was not created by this launcher is left untouched and
-reported as a conflict. Upstream boot-time settings migration still applies; see
-the [home-isolation guide](../../../refactory/docs/rc2-home-isolation.md).
+This pinned harness stores profile declarations under
+`$DSH_HOME/profiles/<name>/package.json`, not in the global `settings.yaml`.
+Upstream boot-time settings migration still applies; see the
+[home-isolation guide](../../../refactory/docs/rc2-home-isolation.md).
 
 ### Layer-ordering precondition
 

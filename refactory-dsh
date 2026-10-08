@@ -15,9 +15,8 @@
 # so every session created without naming one stops with `agent-preset/not-found`;
 # without `refactory-web` the console and picker rows never mount.
 #
-# --additive creates and launches refactory-web, derived from the existing web
-# profile (or --profile NAME). It keeps every preset, default and branding,
-# adds CEO and the Modes panel, and reuses the derived profile on later launches.
+# --additive creates and launches refactory-web: the normal web template plus
+# the two Refactory bundles, with the full native preset picker and Modes panel.
 #
 # The graph profile is what the Python glue runs modes on.
 #
@@ -31,44 +30,26 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DSH_ROOT="${DSH_ROOT:-$HERE}"
 
 ADDITIVE=0
-PROFILE=""
+PROFILE="refactory"
 FORWARDED=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --additive) ADDITIVE=1; shift ;;
+    --additive) ADDITIVE=1; PROFILE="refactory-web"; shift ;;
     --help|-h)
       cat <<'HELP'
-Usage: ./refactory-dsh [--additive] [--profile NAME] [DSH options]
+Usage: ./refactory-dsh [--additive] [DSH options]
 
 Default: launch the standalone Refactory GUI with CEO and Minimal.
---additive: create and launch refactory-web, derived from web, with all presets
-            plus CEO and the Modes panel. Later launches reuse refactory-web.
---profile NAME: source profile for additive mode (default: web); otherwise the
-                standalone profile to launch (default: refactory).
+--additive: create and launch refactory-web, composing the web template with
+            Refactory, including all native presets and the Modes panel.
 
 Other DSH options, such as --port and --no-open, pass through unchanged.
 HELP
       exit 0 ;;
-    --profile)
-      if [ "$#" -lt 2 ] || [ -z "$2" ] || [[ "$2" == --* ]]; then
-        echo "refactory-dsh: --profile requires a profile name" >&2
-        exit 2
-      fi
-      PROFILE="$2"; shift 2 ;;
-    --profile=*)
-      PROFILE="${1#--profile=}"
-      if [ -z "$PROFILE" ]; then
-        echo "refactory-dsh: --profile requires a profile name" >&2
-        exit 2
-      fi
-      shift ;;
     --) FORWARDED+=("$@"); break ;;
     *) FORWARDED+=("$1"); shift ;;
   esac
 done
-if [ "$ADDITIVE" -eq 0 ]; then
-  PROFILE="${PROFILE:-refactory}"
-fi
 
 # Node 22 is required; prefer the nvm version when present, else trust PATH.
 if [ -x "$HOME/.nvm/versions/node/v22.23.2/bin/node" ]; then
@@ -98,12 +79,14 @@ if [ ! -x "$PYTHON" ]; then
   exit 1
 fi
 
+if [ "$ADDITIVE" -eq 1 ]; then
+  node "$HERE/refactory/refactory_dsh/additive.mjs" "$DSH_ROOT"
+fi
+
 PLAN="$(REFACTORY_ADDITIVE="$ADDITIVE" "$PYTHON" -c '
 from refactory_dsh import dsh_profile
 import os
-steps = dsh_profile.provision_plan()
-if os.environ.get("REFACTORY_ADDITIVE") == "1":
-    steps = [step for step in steps if step.profile == dsh_profile.GRAPH_PROFILE]
+steps = dsh_profile.provision_plan(additive=os.environ.get("REFACTORY_ADDITIVE") == "1")
 print(dsh_profile.render_plan(steps), end="")
 ')"
 if [ -n "$PLAN" ]; then
@@ -134,8 +117,4 @@ if [ -n "$PLAN" ]; then
 fi
 
 cd "$DSH_ROOT"
-if [ "$ADDITIVE" -eq 1 ]; then
-  PROFILE="$(node "$HERE/refactory/refactory_dsh/additive.mjs" "$DSH_ROOT" "$PROFILE")"
-  exec "$DSH" --profile "$PROFILE" "${FORWARDED[@]}"
-fi
 exec "$DSH" --profile "$PROFILE" "${FORWARDED[@]}"

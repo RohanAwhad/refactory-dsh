@@ -50,13 +50,11 @@ while you read the conversation.
 
 In the standalone Refactory profile, the new-chat preset picker offers **CEO** for guided Refactory workflows and **Minimal** for a lightweight agent with a persistent shell. **Settings → Agent presets** offers the same two choices and lets you choose the default for new conversations. CEO coordinates agents, follows the workflow graph, and brings questions and results back to you.
 
-To keep all presets from your existing web profile, use
-`./refactory-dsh --additive` (source profile: `web`), or
-`uv run refactory ui --additive --profile my-web`. This launch adds CEO and the
-Modes panel in a new `refactory-web` profile while preserving the source's default
-and full native preset UI. The source is unchanged; subsequent launches reuse
-`refactory-web`. Select CEO explicitly when you
-want guided Refactory workflows.
+For the complete native web preset picker, use `./refactory-dsh --additive` or
+`uv run refactory ui --additive`. This creates and launches the `refactory-web`
+profile with the normal web and Refactory bundles: all native presets plus CEO,
+and the full Modes panel. CEO is the default. The existing `web` profile is
+unchanged; later additive launches reuse `refactory-web`.
 
 Each CEO chat owns its own `wf_open` run. You can leave one chat paused at a
 review gate and drive another mode in a different chat; state, edits and steering

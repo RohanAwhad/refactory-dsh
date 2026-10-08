@@ -104,10 +104,10 @@ DSH_HOME="$HOME/.dsh-rc2" uv run refactory ui --port 3081 --no-open
 ```
 
 `refactory ui` accepts `--port <int>` (default: the launcher's own), `--no-open`,
-`--additive`, and `--profile <name>`. Additive launch creates and reuses
-`refactory-web`, derived from the existing `web` profile in the selected
-`DSH_HOME`, preserving its default, complete preset picker, and branding while
-adding CEO and the Modes panel. `--profile` selects a different source. Other harness flags go through
+and `--additive`. Additive launch creates and reuses `refactory-web` in the
+selected `DSH_HOME`, declaring the web and Refactory bundles without copying or
+changing the existing `web` profile. All native presets and the full Modes panel
+are available, with CEO as the default. Other harness flags go through
 `./refactory-dsh` directly.
 
 ### (d) the Python glue's model calls

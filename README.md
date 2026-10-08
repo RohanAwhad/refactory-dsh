@@ -74,25 +74,22 @@ The original package remains available. [Continue the walkthrough →](refactory
 uv run refactory ui --port 3081
 ```
 
-That launches the standalone Refactory profile with CEO and Minimal. To add
-Refactory in a new `refactory-web` profile derived from your existing web profile,
-while retaining its full preset picker,
-chosen default, and branding:
+That launches the standalone Refactory profile with CEO and Minimal. For the
+complete native web interface with Refactory added:
 
 ```bash
 ./refactory-dsh --additive --port 3081
-# Or select another existing web-based profile:
-./refactory-dsh --additive --profile my-web --port 3081
 # Equivalent Python CLI entry:
-uv run refactory ui --additive --profile my-web --port 3081
+uv run refactory ui --additive --port 3081
 ```
 
-Additive mode creates and launches `refactory-web` with CEO and the Modes panel.
-It copies the source profile's configuration without changing it. Later launches
-reuse `refactory-web`, preserving edits there; `--profile` selects the source on
-first creation. It uses the current
-`DSH_HOME` and the checkout's selected harness, so choose the home containing
-your existing profile. [Home isolation between harness generations →](refactory/docs/rc2-home-isolation.md)
+Additive mode creates and launches `refactory-web`. Its profile manifest declares
+the normal web bundles plus the Refactory preset and browser bundles. It exposes
+all native presets plus CEO and the full Modes panel, with CEO as the default.
+It does not copy or change the existing `web` profile. Later launches reuse
+`refactory-web` and preserve edits there. In this pinned harness the declaration
+lives at `$DSH_HOME/profiles/refactory-web/package.json`, rather than in the global
+`settings.yaml`. [Home isolation between harness generations →](refactory/docs/rc2-home-isolation.md)
 
 Open the exact URL printed by the server, select the checkout as your workspace, then create a session. Open the right sidebar's **Modes** tab; no introductory chat message is required.
 

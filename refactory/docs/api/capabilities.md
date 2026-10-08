@@ -5151,7 +5151,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 
 ## cli:ui
 
-Launch the standalone Refactory GUI, or create and launch refactory-web derived from an existing web profile with all presets, its default and branding, plus CEO and the Modes panel.
+Launch the standalone Refactory GUI, or create and launch the additive refactory-web profile declaring the web and Refactory bundles, with all native presets plus CEO and the full Modes panel.
 
 Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 
@@ -5169,21 +5169,20 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     {
       "arguments": {
         "additive": true,
-        "no_open": true,
-        "profile": "my-web"
+        "no_open": true
       },
-      "explanation": "Create refactory-web from my-web on the first additive launch; later launches reuse it and preserve edits there. The source profile is unchanged."
+      "explanation": "Create and launch refactory-web using the normal web and Refactory bundles; later launches reuse it. No existing profile is copied or modified."
     }
   ],
   "interfaces": {
     "chat": "Unavailable as a direct chat mutation; use the documented CLI/panel route.",
-    "cli": "refactory ui [--additive] [--profile NAME]",
+    "cli": "refactory ui [--additive]",
     "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
   },
   "parameters": {
     "additive": {
       "default": false,
-      "description": "create and launch refactory-web derived from web, retaining all presets",
+      "description": "create and launch refactory-web with the web and Refactory bundles, retaining all presets",
       "flags": [
         "--additive"
       ],
@@ -5213,21 +5212,10 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "positional": false,
       "required": false,
       "type": "integer"
-    },
-    "profile": {
-      "default": null,
-      "description": "additive source profile (default: web); standalone launch profile (default: refactory)",
-      "flags": [
-        "--profile"
-      ],
-      "nargs": null,
-      "positional": false,
-      "required": false,
-      "type": "string"
     }
   },
-  "purpose": "Launch the standalone Refactory GUI, or create and launch refactory-web derived from an existing web profile with all presets, its default and branding, plus CEO and the Modes panel.",
-  "reviewed_schema": "7c5a094a27a45243cc5bfcaa5f76f36c79adffec9b77105c72c135c741065124"
+  "purpose": "Launch the standalone Refactory GUI, or create and launch the additive refactory-web profile declaring the web and Refactory bundles, with all native presets plus CEO and the full Modes panel.",
+  "reviewed_schema": "c679c5748806522be6ee9378ac2628ee009a404f2309492084a64c28b3dec003"
 }
 ```
 

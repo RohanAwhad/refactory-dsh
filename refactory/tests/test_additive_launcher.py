@@ -51,16 +51,10 @@ def rpc(opener, base, method, args):
     return result["value"]
 
 
-@pytest.mark.parametrize("profile,flags", [
-    ("web", []),
-    ("operator-web", ["--profile", "operator-web"]),
-    ("operator-web", ["--profile=operator-web"]),
-])
-def test_additive_preserves_operator_profile_and_exposes_ceo(additive_home, profile, flags):
+def test_additive_composes_web_and_refactory_without_copying_web(additive_home):
     home, user_home = additive_home
+    profile = "web"
     initialize = [str(REPO_ROOT / "node_modules/.bin/dsh"), "--profile", profile]
-    if profile != "web":
-        initialize += ["--from-default-profile", "web"]
     subprocess.run([*initialize, "--dump-config"],
                    check=True, capture_output=True, text=True)
     directory = home / "profiles" / profile
@@ -84,7 +78,7 @@ def test_additive_preserves_operator_profile_and_exposes_ceo(additive_home, prof
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
-    command = [str(REPO_ROOT / "refactory-dsh"), "--additive", *flags,
+    command = [str(REPO_ROOT / "refactory-dsh"), "--additive",
                "--port", str(port), "--host", "127.0.0.1", "--no-open"]
     process = subprocess.Popen(command, cwd=REPO_ROOT, stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT, text=True, start_new_session=True)
@@ -108,8 +102,8 @@ def test_additive_preserves_operator_profile_and_exposes_ceo(additive_home, prof
         opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
         page = opener.open(base + "/?token=" + token, timeout=20).read().decode()
         presets = rpc(opener, base, "agentPresets/list", {})["presets"]
-        assert {"standard", "ptc", "minimal", "cordis", "operator", "ceo"} <= {row["id"] for row in presets}
-        assert [row["id"] for row in presets if row.get("isDefault")] == ["operator"]
+        assert {"standard", "ptc", "minimal", "cordis", "ceo"} <= {row["id"] for row in presets}
+        assert [row["id"] for row in presets if row.get("isDefault")] == ["ceo"]
         assert all(not row.get("broken") for row in presets)
         assert "@deepseek-ai/dsh-client-ui-refactory" in page
         assert "@deepseek-ai/dsh-client-ui-brand-refactory" not in page
@@ -119,23 +113,29 @@ def test_additive_preserves_operator_profile_and_exposes_ceo(additive_home, prof
         modes = rpc(opener, base, "refactoryConsole/modes", {})
         assert {row["id"] for row in modes} == {row["id"] for row in catalogue(project=REPO_ROOT)}
         created = rpc(opener, base, "session/create", {"request": {"cwd": str(user_home)}})
-        assert created["agentPreset"] == "operator"
+        assert created["agentPreset"] == "ceo"
         ceo = rpc(opener, base, "session/create", {"request": {"cwd": str(user_home), "agentPreset": "ceo"}})
         assert ceo["agentPreset"] == "ceo"
         assert (home / "profiles/graph/package.json").exists(), "runtime profile must be provisioned"
         assert not (home / "profiles/refactory").exists(), "additive launch should not create the standalone GUI"
-        derived = home / "profiles/refactory-web"
-        assert json.loads((derived / "package.json").read_text())["refactoryAdditive"] == {"source": profile}
-        assert not (derived / "node_modules").is_symlink()
-        assert "refactory-console" in (derived / "cordis.patch.yml").read_text()
-        derived_before = (derived / "cordis.patch.yml").read_bytes()
-        # Repeated provisioning keeps operator changes in the derived profile.
-        (derived / "operator-note.txt").write_text("keep me")
+        additive = home / "profiles/refactory-web"
+        composition = json.loads((additive / "package.json").read_text())
+        assert composition["dsh"]["profile"]["bundles"] == [
+            "@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app",
+            "@deepseek-ai/dsh-refactory", "@deepseek-ai/dsh-refactory-web",
+        ]
+        assert composition["dsh"]["profile"]["refactoryAdditive"] is True
+        assert "operatorMetadata" not in composition
+        assert "operator" not in {row["id"] for row in presets}, "the web profile must not be cloned"
+        assert "file://" not in (additive / "cordis.patch.yml").read_text()
+        additive_before = (additive / "cordis.patch.yml").read_bytes()
+        # Repeated provisioning keeps operator changes in the additive profile.
+        (additive / "operator-note.txt").write_text("keep me")
         again = subprocess.run(["node", str(REPO_ROOT / "refactory/refactory_dsh/additive.mjs"),
-                                str(REPO_ROOT), ""], check=True, capture_output=True, text=True)
-        assert again.stdout == "refactory-web"
-        assert (derived / "cordis.patch.yml").read_bytes() == derived_before
-        assert (derived / "operator-note.txt").read_text() == "keep me"
+                                str(REPO_ROOT)], check=True, capture_output=True, text=True)
+        assert again.stdout == ""
+        assert (additive / "cordis.patch.yml").read_bytes() == additive_before
+        assert (additive / "operator-note.txt").read_text() == "keep me"
         assert manifest.read_bytes() == before[0]
         assert patch.read_bytes() == before[1]
         assert (user_home / ".dsh/settings.yaml").read_text() == "agent-default-model: {}\n"
@@ -143,27 +143,15 @@ def test_additive_preserves_operator_profile_and_exposes_ceo(additive_home, prof
         shutdown(process)
 
 
-def test_additive_rejects_an_incomplete_profile_flag(additive_home):
-    result = subprocess.run([str(REPO_ROOT / "refactory-dsh"), "--additive", "--profile"],
-                            capture_output=True, text=True)
-    assert result.returncode == 2
-    assert "--profile requires a profile name" in result.stderr
-
-
-@pytest.mark.parametrize("metadata,message", [
-    ({}, "not an additive profile"),
-    ({"refactoryAdditive": {"source": "another-web"}}, "was derived from another-web"),
-])
-def test_additive_does_not_replace_a_conflicting_profile(additive_home, metadata, message):
+def test_additive_refuses_a_non_web_profile(additive_home):
     home, _ = additive_home
     target = home / "profiles/refactory-web"
     target.mkdir(parents=True)
     manifest = target / "package.json"
-    manifest.write_text(json.dumps(metadata))
+    manifest.write_text(json.dumps({"dsh": {"profile": {"bundles": ["@deepseek-ai/dsh-base"]}}}))
     before = manifest.read_bytes()
     result = subprocess.run(["node", str(REPO_ROOT / "refactory/refactory_dsh/additive.mjs"),
-                             str(REPO_ROOT), "web"], capture_output=True, text=True)
+                             str(REPO_ROOT)], capture_output=True, text=True)
     assert result.returncode == 1
-    assert message in result.stderr
+    assert "must be a web-based profile" in result.stderr
     assert manifest.read_bytes() == before
-    assert not (home / "profiles/web").exists()
