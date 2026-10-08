@@ -660,6 +660,7 @@ def test_run_on_dsh_hands_the_runner_an_absolute_workdir(tmp_path, monkeypatch):
     home = tmp_path / "home"
     _profile(home, "graph", ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
     monkeypatch.setenv("DSH_HOME", str(home))
+    monkeypatch.delenv("REFACTORY_MODEL_DSH_HOME", raising=False)
     monkeypatch.chdir(tmp_path)
     seen: dict[str, list[str]] = {}
 
@@ -684,6 +685,7 @@ def test_run_on_dsh_hands_the_runner_the_knob_values_once(tmp_path, monkeypatch)
     home = tmp_path / "home"
     _profile(home, "graph", ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
     monkeypatch.setenv("DSH_HOME", str(home))
+    monkeypatch.delenv("REFACTORY_MODEL_DSH_HOME", raising=False)
     seen: dict[str, list[str]] = {}
 
     def _capture(command, **kwargs):  # noqa: ANN001, ANN003 - the runner's own call
@@ -708,6 +710,7 @@ def test_run_on_dsh_hands_each_output_line_on_while_keeping_the_parse(tmp_path, 
     home = tmp_path / "home"
     _profile(home, "graph", ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
     monkeypatch.setenv("DSH_HOME", str(home))
+    monkeypatch.delenv("REFACTORY_MODEL_DSH_HOME", raising=False)
     script = tmp_path / "stub_dsh.py"
     script.write_text(
         "import json\n"
@@ -733,6 +736,7 @@ def test_run_on_dsh_refuses_before_spawning_when_the_profile_is_absent(
 ):
     """The runner checks first, so the error is the actionable one, not the child's."""
     monkeypatch.setenv("DSH_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("REFACTORY_MODEL_DSH_HOME", raising=False)
 
     def _no_spawn(*args, **kwargs):  # pragma: no cover - the assertion is that it never runs
         raise AssertionError("a subprocess was spawned without a usable profile")
