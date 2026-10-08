@@ -40,3 +40,7 @@ refactory/**/*.pyc
 /.pytest_cache/
 # The root project owns the lock. A stray one appears when uv runs inside refactory/.
 /refactory/uv.lock
+
+# Runtime documentation is generated before build/test/package, then shipped.
+/refactory/refactory_dsh/data/documentation.json
+/packages/refactory/tool-refactory/src/generated-help.ts

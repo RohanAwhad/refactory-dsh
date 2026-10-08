@@ -194,6 +194,6 @@ Each of these happened, and the shape of the code is the response.
 
 See [discovery](discovery.md) for the shared parser/mode contract, semantic review
 metadata, offline generation and extension checklist. Run `pnpm run docs:generate`
-after reviewed changes and `pnpm run docs:check` before building. New public
+to inspect reviewed changes; builds generate runtime docs before checking them. New public
 operations, mode schemas and worker capabilities require current explanations,
 examples and explicit CLI/chat/panel routes.

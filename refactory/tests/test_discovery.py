@@ -135,3 +135,47 @@ def test_broken_document_links_have_a_build_diagnostic(tmp_path, monkeypatch):
     monkeypatch.setattr(gen_discovery, 'REPO_ROOT', tmp_path)
     _, errors = gen_discovery.read_pages('')
     assert any('README.md: broken documentation link' in error and 'CEO cannot follow' in error for error in errors)
+
+
+def test_python_distributions_ship_generated_documentation(tmp_path):
+    """The ignored snapshot must survive both source and wheel packaging."""
+    import os
+    import shutil
+    import tarfile
+    import tomllib
+    import zipfile
+
+    if not shutil.which("pnpm") or not shutil.which("uv"):
+        pytest.skip("Python distribution coverage requires pnpm and uv")
+    from refactory_dsh.paths import REPO_ROOT
+    result = subprocess.run(["pnpm", "run", "package:python"], cwd=REPO_ROOT,
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    expected = discovery.bundle()
+    archives = REPO_ROOT / ".artifacts/python"
+    version = tomllib.loads((REPO_ROOT / "refactory/pyproject.toml").read_text())["project"]["version"]
+    wheels = list(archives.glob(f"refactory_dsh-{version}-*.whl"))
+    sources = list(archives.glob(f"refactory_dsh-{version}.tar.gz"))
+    assert len(wheels) == len(sources) == 1
+    with zipfile.ZipFile(wheels[0]) as wheel:
+        snapshot = json.loads(wheel.read("refactory_dsh/data/documentation.json"))
+        assert snapshot == expected
+        wheel.extractall(tmp_path / "installed")
+    with tarfile.open(sources[0]) as source:
+        member = next(item for item in source.getmembers()
+                      if item.name.endswith("/refactory_dsh/data/documentation.json"))
+        assert json.load(source.extractfile(member)) == expected
+    # Load the extracted wheel outside the checkout: docs must be installation
+    # data, rather than a fallback that reads repository Markdown files.
+    script = """import json, sys
+from refactory_dsh import discovery
+expected = json.load(sys.stdin)
+assert discovery.bundle()['documentation_id'] == expected['documentation_id']
+assert discovery.docs(page='README.md', limit=12000)['text'] == expected['readme'][:12000]
+"""
+    environment = dict(os.environ, PYTHONPATH=str(tmp_path / "installed"))
+    result = subprocess.run([sys.executable, "-c", script], cwd=tmp_path,
+                            input=json.dumps({"documentation_id": expected["documentation_id"],
+                                              "readme": (REPO_ROOT / "README.md").read_text()}),
+                            env=environment, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

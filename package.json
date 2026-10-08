@@ -13,13 +13,14 @@
   "scripts": {
     "docs:generate": ".venv/bin/python -m refactory_dsh.tools.gen_api_reference && .venv/bin/python -m refactory_dsh.tools.gen_discovery",
     "docs:check": ".venv/bin/python -m refactory_dsh.tools.gen_api_reference --check && .venv/bin/python -m refactory_dsh.tools.gen_discovery --check",
-    "build": "pnpm run docs:check && pnpm run typecheck && tsdown --env.DSH_BUILD_FACE host && tsdown --env.DSH_BUILD_FACE client",
-    "typecheck": "tsc -b tsconfig.host.json && tsc -b tsconfig.client.json",
-    "test": "vitest run",
+    "build": "pnpm run typecheck && pnpm run docs:check && tsdown --env.DSH_BUILD_FACE host && tsdown --env.DSH_BUILD_FACE client",
+    "typecheck": "pnpm run docs:generate && tsc -b tsconfig.host.json && tsc -b tsconfig.client.json",
+    "test": "pnpm run docs:generate && vitest run",
     "test:acceptance": "node packages/bundle/refactory/tests/verify-ceo-root.mjs",
-    "test:coverage": "vitest run --coverage",
-    "test:gui": "vitest run packages/client",
-    "lint": "oxlint packages"
+    "test:coverage": "pnpm run docs:generate && vitest run --coverage",
+    "test:gui": "pnpm run docs:generate && vitest run packages/client",
+    "lint": "oxlint packages",
+    "package:python": "pnpm run docs:generate && uv build refactory --out-dir .artifacts/python"
   },
   "devDependencies": {
     "@deepseek-ai/dsh-typert-generator": "0.2.0-rc.2",

@@ -133,8 +133,8 @@ echo "  pnpm:  $(pnpm --version)"
 #    script on `.venv/bin` — which is why every documented command is
 #    `uv run refactory …` rather than an interpreter path.
 #
-#    This must precede the Node build: `pnpm run build` starts with `docs:check`,
-#    which runs `.venv/bin/python`, so on a checkout with no `.venv` the build
+#    This must precede the Node build: `pnpm run build` generates documentation
+#    before typechecking, using `.venv/bin/python`, so on a checkout with no `.venv` the build
 #    failed before `uv sync` ever ran and `set -euo pipefail` stopped the install.
 #    Ordering is the fix; the build genuinely needs the interpreter the docs
 #    generator runs on.
@@ -148,7 +148,7 @@ fi
 
 # 2. Node side: install the pnpm workspace (the pinned harness plus the eight
 #    packages this repo owns), then build those packages' lib/ output. It depends
-#    on step 1 only through `docs:check`, which is why the Python side is first.
+#    on step 1 through documentation generation, so the Python side is first.
 (cd "$HERE" && pnpm install --frozen-lockfile && pnpm run build)
 
 # 3. the DSH profiles this checkout runs on. A profile is **machine state** — it

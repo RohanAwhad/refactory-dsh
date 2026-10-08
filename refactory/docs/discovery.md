@@ -45,14 +45,22 @@ hashes automatically. Signatures are facts, not proof that an explanation works.
 pnpm run docs:generate
 pnpm run docs:check
 pnpm run build
+pnpm run package:python
 ```
 
 Generation is deterministic and offline: no model, credentials, network service
 or vector database. It reuses the API reference generator and writes the full
 installation docs bundle, [capability reference](api/capabilities.md), and the
 TypeScript tool contract. Check mode fails stale artifacts and invalid links.
-The build runs check mode first, so it cannot silently repair stale committed
-artifacts. Build identity hashes version, schemas, reviewed metadata and docs;
+The runtime JSON bundle and TypeScript tool contract are ignored build artifacts,
+not tracked snapshots. Build, typecheck and TypeScript test commands generate them
+before use; the Python test session does the same. `package:python` generates them before writing wheel and source
+archives under `.artifacts/python/`. The Python package includes the JSON bundle,
+so installed documentation retrieval does not need a source checkout. GitHub
+Actions runs the same build and packaging tests without committing outputs back.
+The readable API/capability Markdown references and reviewed coverage metadata
+remain tracked. Generation still refuses missing or stale semantic review hashes;
+`docs:check` verifies generated outputs after generation. Build identity hashes version, schemas, reviewed metadata and docs;
 documentation identity hashes indexed pages. Live mode schemas may differ after
 installing a package; the help response shows coverage warnings in that case.
 

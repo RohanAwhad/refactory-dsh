@@ -27,6 +27,14 @@ pytest_plugins = ("model_credential",)
 os.environ.setdefault("FACTORY_CLAUDE_BIN", "/bin/true")
 
 
+@pytest.fixture(scope="session", autouse=True)
+def generated_runtime_documentation():
+    """Python tests also work after uv sync, before the first Node build."""
+    from refactory_dsh.tools import gen_discovery
+    if gen_discovery.main([]) != 0:
+        pytest.fail("runtime documentation generation failed", pytrace=False)
+
+
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
         "--run-integration",

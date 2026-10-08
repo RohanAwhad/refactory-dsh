@@ -58,7 +58,7 @@ jobs:
           install: false
 
       # uv owns `.venv` and reads `uv.lock`; the ordering fix depends on it
-      # existing before the Node build runs `docs:check`. Pinned by commit: this
+      # existing before the Node build generates documentation. Pinned by commit: this
       # action publishes version tags, not a moving major one.
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
