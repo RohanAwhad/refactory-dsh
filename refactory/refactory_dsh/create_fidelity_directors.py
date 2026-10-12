@@ -192,6 +192,8 @@ def _run_agent(ctx: RunContext, node: str, role: str, prompt: str, output: str,
         remaining = deadline - time.monotonic()
         _require(remaining > 0, f"{identity['stage_id']} composite stage deadline expired")
         timeout_s = min(timeout_s, max(1, math.ceil(remaining)))
+        if callable(getattr(selected, "with_deadline_observation", None)):
+            selected = selected.with_deadline_observation("composite_stage", deadline)
     if callable(getattr(selected, "with_node_timeout", None)):
         selected = selected.with_node_timeout(timeout_s)
     requested = selected.route()

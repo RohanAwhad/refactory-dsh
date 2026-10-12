@@ -227,6 +227,7 @@ class DshModelClient:
         self._attempts = max(1, int(attempts)) if self._worker_backend == "dsh" else 1
         self._backoff_s = max(0.0, float(backoff_s))
         self._cancellations: tuple[threading.Event, ...] = ()
+        self._deadline_observations: tuple[tuple[str, float], ...] = ()
         validate_route(self.route())
 
     def route(self) -> dict[str, str]:
@@ -281,6 +282,22 @@ class DshModelClient:
             if type(timeout_s) is not int or timeout_s <= 0:
                 raise ValueError("node timeout must be a positive integer")
             client._node_timeout_s = timeout_s
+        return client
+
+    def with_deadline_observation(self, scope: str, stop_at: float) -> DshModelClient:
+        """Carry an already enforced caller timer into dispatch telemetry only.
+
+        This never installs, extends or resets a clock. The caller must retain
+        its existing cancellation timer; monotonic timestamps stay process-local
+        and are intentionally absent from the serialized worker context.
+        """
+        import math
+        if (not isinstance(scope, str) or not scope or scope in ("stage", "run_budget")
+                or type(stop_at) not in (int, float) or not math.isfinite(stop_at)):
+            raise ValueError("deadline observation needs a named scope and finite monotonic timestamp")
+        client = copy.copy(self)
+        client._deadline_observations = tuple((name, value) for name, value in self._deadline_observations
+                                             if name != scope) + ((scope, stop_at),)
         return client
 
     def effective_deadlines(self) -> dict[str, Any]:
@@ -489,6 +506,11 @@ class DshModelClient:
             self._raise_if_cancelled()
             self._checkpoint()
             try:
+                if self._worker_receipt is not None:
+                    from refactory_dsh.workers import dispatch_deadlines
+                    dispatch_deadlines(self._worker_receipt, budget=self._budget,
+                                       stage_stop_at=stop_at, stage_timeout_s=budget_s,
+                                       attempt=attempt, enclosing_deadlines=self._deadline_observations)
                 proc = self._run_completion(cmd, run_dir, stop_at, budget_s)
             except subprocess.TimeoutExpired as exc:
                 # A tool-using completion may already have changed its workdir.

@@ -9,8 +9,11 @@ try {
   const directory = join(root, '.refactory', 'workers')
   mkdirSync(directory, { recursive: true })
   const path = join(directory, 'one.json')
+  const deadlines = { dispatches: [{ attempt: 1, sampled_at: '2026-10-12T12:00:00+00:00',
+    stage_remaining_s: 60, run_remaining_s: 40, effective_remaining_s: 40,
+    idle_timer: { status: 'inactive', timeout_s: null } }] }
   writeFileSync(path, JSON.stringify({ requested_route: { worker_backend: 'dsh', effort: 'high' }, worker_id: 'one', run_id: root,
-    usage: { status: 'unavailable', tokens: null } }))
+    usage: { status: 'unavailable', tokens: null }, effective_deadlines: deadlines }))
   process.env.REFACTORY_WORKER_RECEIPT = path
   const events = new Map()
   let providers = ['spawn', 'fork']
@@ -39,6 +42,7 @@ try {
   stream({ agent, frame: { type: 'chunk', chunk: { type: 'usage', usage: { totalTokens: 13 } } } })
   stream({ agent, frame: { type: 'end' } })
   const receipt = JSON.parse(readFileSync(path))
+  assert.deepEqual(receipt.effective_deadlines, deadlines, 'runtime observations must retain owner deadline samples')
   assert.equal(receipt.actual_route.model, 'dsh-model')
   assert.equal(receipt.actual_route.effort, 'high')
   assert.equal(receipt.sessions['dsh-child'].effort, 'low')

@@ -58,6 +58,12 @@ The requested package name is {{name}}. The complete original request is in
   --knob input_name=value`; this calls the real native executor through a
   contained subprocess. Standalone CLI and every requested input/output
   contract must also be tested independently. Propagate failed execution.
+* For authoring smoke tests and verification, allocate fresh, separate run
+  directories and output paths under <artifact_project> or an actually supplied
+  private TMPDIR that permits both writing and reading the results. Respect
+  the invocation's filesystem boundary; do not assume global /tmp is accessible.
+  This governs test outputs, not user-supplied external runtime input paths.
+  Reuse the same unchanged package with each invocation's declared inputs.
 * Source factory study/discover/init/precheck map to the candidate's native
   bootstrap, AST graph study, and final validation/discovery/evidence checks.
   Source eval and PR diff mean the actual local tests and local artifact diff.

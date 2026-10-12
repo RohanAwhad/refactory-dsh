@@ -46,11 +46,25 @@
       "regression": "refactory/tests/test_create_fidelity_score_visits.py"
     },
     {
-      "requirements": ["F.deadlines", "F.expiry"],
+      "requirements": ["F.deadlines", "F.deadlines.expiry"],
       "owner": "runtime lifecycle",
       "fix": "Honor declared stage allowances, cancel owned children and keep unknown cleanup distinct from confirmed completion.",
       "source": "refactory/refactory_dsh/nn/executor.py",
       "regression": "refactory/tests/test_create_fidelity_runtime.py"
+    },
+    {
+      "requirements": ["F.deadlines.remaining"],
+      "owner": "dispatch telemetry",
+      "fix": "Observe actual pre-dispatch worker, run-budget and enclosing composite clocks without changing timers; leave old receipts unavailable.",
+      "source": "refactory/refactory_dsh/workers.py",
+      "regression": "refactory/tests/test_worker_deadline_telemetry.py"
+    },
+    {
+      "requirements": ["F.obligations.semantic", "F.approval.identity", "B10"],
+      "owner": "independent operator review",
+      "fix": "Bind scoped source-duty reviews, actual user decisions and authored README executions to current raw bytes outside every lane-writable project.",
+      "source": "refactory/benchmarks/create_fidelity/operator_evidence.py",
+      "regression": "refactory/tests/test_create_fidelity_operator_evidence.py"
     },
     {
       "requirements": ["B08", "B09", "B10", "F.stage.final_precheck"],

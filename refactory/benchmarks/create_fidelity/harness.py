@@ -16,6 +16,7 @@ import time
 from .contract import FIXTURES, digest, reference
 from .evidence import authoring_score, capability_score, hash_tree, normalize, route_score, write_report
 from .isolation import probe, profile, runtime_probe
+from .operator_evidence import OperatorEvidenceContext, evaluator_provenance
 from . import approval
 
 LANES = ("remote-reference", "dsh-baseline", "dsh-candidate")
@@ -321,9 +322,28 @@ def run_pair(root: Path, lanes: list[str]) -> list[dict]:
 
 def collect(root: Path) -> dict:
     lanes = []
+    configs = {lane: read(root / lane / "config.json") for lane in LANES}
+    lane_roots = tuple(Path(config["project"]) for config in configs.values())
+    operator_root = (root / "operator").resolve()
+    if not operator_root.is_relative_to(root.resolve()) or any(
+            operator_root.is_relative_to(path.resolve()) or path.resolve().is_relative_to(operator_root)
+            for path in lane_roots):
+        raise ValueError("Operator review context must be outside every lane-writable project")
+    context_path = root / "operator/review-context.json"
+    if context_path.is_symlink() or not context_path.resolve().is_relative_to((root / "operator").resolve()):
+        raise ValueError("Operator review context must not be a link to lane-authored evidence")
+    review_context = read(context_path)
+    evaluation = {**evaluator_provenance(),
+                  "evaluated_unix": time.time(),
+                  "context_sha256": digest(context_path) if review_context is not None else None,
+                  "boundary": "Post-run operator evaluation is versioned separately from frozen authoring source and adapter identities"}
     for lane in LANES:
-        config = read(root / lane / "config.json")
+        config = configs[lane]
         project = Path(config["project"])
+        operator_evidence = None if review_context is None else OperatorEvidenceContext(
+            root=root / "operator/reviews", trial_id=root.name, lane_id=lane,
+            reviewer_id=review_context["reviewer_id"], lane_roots=lane_roots,
+            trusted_user_references=review_context.get("trusted_user_references", {}).get(lane, {}))
         raw_file = project / ".refactory/events.jsonl"
         raw = [json.loads(line) for line in raw_file.read_text().splitlines() if line.strip()] if raw_file.is_file() else read(project / "raw/remote-events.json", {}).get("events", [])
         normalized = normalize(raw, trial_id=root.name, source=str(raw_file if raw_file.is_file() else project / "raw/remote-events.json"))
@@ -337,7 +357,7 @@ def collect(root: Path) -> dict:
         static = read(root / "operator/graphs" / f"{lane}.json", {})
         runtime_integrity = read(project / "raw/author/runtime-integrity.json", {})
         fidelity = authoring_score(normalized, outcome, director_manifests=directors, workers=workers, lane=lane, evidence_root=project,
-                                   expected_model=config["model_context"]["model"])
+                                   expected_model=config["model_context"]["model"], operator_evidence=operator_evidence)
         if lane.startswith("dsh"):
             fidelity.append({"requirement_id": "F.runtime", "status": runtime_integrity.get("status", "unavailable"),
                              "reason": "Separate frozen worker runtime/dependency identity, checked before and after authoring",
@@ -345,10 +365,15 @@ def collect(root: Path) -> dict:
         lanes.append({"lane": lane, "identity": config["identity"], "graph": launch.get("graph", static.get("graph", {})),
             "graph_origin": "native-launch" if launch else "static-source-inspection",
             "evidence_root": str(project), "preflight": read(root / "operator/preflight.json", {}),
+            "evaluation": evaluation,
             "source_graph_path": str(root / "operator/graphs" / f"{lane}.json"),
-            "capability": capability_score(checker, native),
+            "capability": capability_score(checker, native, evidence_root=project, operator_evidence=operator_evidence),
             "fidelity": fidelity})
-    return write_report(root / "operator/report", lanes)
+    report = write_report(root / "operator/report", lanes)
+    report["evaluation"] = evaluation
+    write(root / "operator/report/report.json", report)
+    write(root / "operator/report/evaluator.json", evaluation)
+    return report
 
 
 def check_artifact(root: Path, lane: str) -> dict:

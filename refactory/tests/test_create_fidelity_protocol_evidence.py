@@ -126,7 +126,7 @@ def test_repair_requires_raw_branch_real_feedback_and_actual_model_decision(tria
             prompt_path.write_text(prompt_original)
 
 
-@pytest.mark.parametrize("problem", ["missing-layers", "short-builder", "inflight", "unconfirmed-cleanup", "overlong"])
+@pytest.mark.parametrize("problem", ["missing-layers", "short-builder", "inflight", "active-no-finished", "unconfirmed-cleanup", "overlong"])
 def test_deadline_configuration_and_terminal_settlement_require_raw_records(trial, problem):
     root, _, _ = trial
     worker = next(path for path in (root / ".refactory/workers").glob("*.json") if json.loads(path.read_text()).get("node_id") == "builder")
@@ -140,10 +140,13 @@ def test_deadline_configuration_and_terminal_settlement_require_raw_records(tria
             record["effective_deadlines"]["stage_timeout_s"] = 900
         elif problem == "overlong":
             record["finished"] = "2099-01-01T00:00:00+00:00"
+        elif problem == "active-no-finished":
+            record["state"] = "starting"
+            record.pop("finished")
         else:
             record["state"] = "running" if problem == "inflight" else "unknown"
         worker.write_text(json.dumps(record))
         status = scores(trial)["F.deadlines"]["status"]
-        assert status == ("unavailable" if problem == "missing-layers" else "failed")
+        assert status == ("unavailable" if problem in ("missing-layers", "active-no-finished") else "failed")
     finally:
         worker.write_text(original)

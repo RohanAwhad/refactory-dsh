@@ -80,6 +80,26 @@ traces, semantic reviews, receipts or invocations cannot become passing evidence
 The unchanged 56-case checker is independently scored from native package reuse.
 Do not compare speed or cost causally from one diagnostic pair.
 
+Independent semantic, human-decision and README reviews belong under
+`operator/reviews/LANE/`, outside every authoring project. The optional
+`operator/review-context.json` identifies the operator reviewer and allowlists
+actual user decisions in `trusted_user_references`, grouped by lane. It must
+come from the real review conversation, never from a worker's output or a
+claimed approver name. Without that evidence the relevant rows stay unavailable.
+The operator review validator binds source obligations, current raw file hashes,
+actual command receipts and the exact consumed approval. An unfilled review
+template is not a passing review. See the [operator evidence schema](operator_evidence.md)
+for the required fields and unfilled templates.
+
+Report generation records the evaluator version, source hashes and review-context
+hash in `operator/report/evaluator.json` and the JSON/HTML comparison. This
+separates later independent evaluation from the frozen code that authored the
+artifact; re-scoring cannot rewrite a trial's source or runtime identity. Reviews
+must follow native/CLI verification, because any later change to the raw evidence
+invalidates their hash binding. Observed deadline snapshots are available only
+for runs whose worker runtime actually recorded them; older trials cannot gain
+missing timing telemetry through re-scoring.
+
 OS isolation currently requires macOS Seatbelt. It proves peer/evidence content
 denial in child processes and private runtime writes. It is not a claim of a
 general adversarial security boundary. Keep all historical evidence roots in

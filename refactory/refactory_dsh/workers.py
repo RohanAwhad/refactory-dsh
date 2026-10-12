@@ -6,6 +6,7 @@ Refactory. Capabilities describe this adapter, not everything a product can do.
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -107,6 +108,77 @@ def begin(workdir: Path, route: dict[str, Any], *, node: str = '', role: str = '
     _write_receipt(path, record)
     event(workdir, record, 'starting', f"Starting {route['worker_backend']} worker")
     return path
+
+
+def dispatch_deadlines(path: Path, *, budget: Any = None, stage_stop_at: float | None,
+                       stage_timeout_s: float, attempt: int,
+                       enclosing_deadlines: tuple[tuple[str, float], ...] = ()) -> dict[str, Any]:
+    """Observe the existing clocks immediately before one transport dispatch.
+
+    The minimum is telemetry, not a replacement deadline. The model owner keeps
+    its absolute stage wall and polls the shared run ledger independently. A
+    plain completion starts a fresh wall inside the transport, so its sampled
+    allowance is explicitly marked as a window that has not started yet.
+    """
+    resources = budget.snapshot() if budget is not None else None
+    sampled_at = now()
+    sampled_monotonic = time.monotonic()
+    stage_remaining = (max(0.0, stage_stop_at - sampled_monotonic)
+                       if stage_stop_at is not None else float(stage_timeout_s))
+    run_remaining = None
+    run_snapshot = None
+    if resources is not None:
+        limits = resources['limits']
+        phase = resources['phase']
+        maximum = limits.get('max_elapsed_s')
+        reserve = limits.get('validation_reserve_s', 0)
+        retained = reserve if phase != 'final_validation' else 0
+        if maximum is not None:
+            run_remaining = max(0.0, maximum - retained - resources['elapsed_s'])
+        run_snapshot = {
+            'path': str(budget.path), 'phase': phase, 'elapsed_s': resources['elapsed_s'],
+            'max_elapsed_s': maximum, 'validation_reserve_s': reserve,
+            'retained_validation_reserve_s': retained, 'remaining_s': run_remaining,
+            'elapsed_limit_status': 'active' if maximum is not None else 'inactive',
+            'max_tokens': limits.get('max_tokens'), 'known_tokens': resources['known_tokens'],
+            'token_status': resources['token_status'],
+            'validation_reserve_tokens': limits.get('validation_reserve_tokens', 0),
+            'validation_owner': resources.get('validation_owner', 'graph'),
+            'validation_holds': resources.get('validation_holds', 0),
+            'enforcement': resources['enforcement'],
+        }
+    clocks = {'stage': stage_remaining}
+    if run_remaining is not None:
+        clocks['run_budget'] = run_remaining
+    enclosing = [{'scope': scope, 'remaining_s': max(0.0, stop_at - sampled_monotonic),
+                  'enforcement': 'Existing caller-owned timer signals cooperative cancellation.'}
+                 for scope, stop_at in enclosing_deadlines]
+    clocks.update({item['scope']: item['remaining_s'] for item in enclosing})
+    effective = min(clocks.values())
+    sample = {
+        'attempt': attempt, 'sampled_at': sampled_at, 'sample_phase': 'pre_transport_dispatch',
+        'stage_remaining_s': stage_remaining,
+        'stage_clock': {'scope': 'absolute_stage' if stage_stop_at is not None else 'per_completion',
+                        'status': 'active' if stage_stop_at is not None else 'window_not_started'},
+        'run_remaining_s': run_remaining, 'run_budget_snapshot': run_snapshot,
+        'enclosing_deadlines': enclosing,
+        'effective_remaining_s': effective,
+        'effective_limiters': [clock for clock, remaining in clocks.items() if remaining == effective],
+        'idle_timer': {'status': 'inactive', 'timeout_s': None,
+                       'scope': 'refactory_dispatch_owner',
+                       'policy': 'No inactivity timer; stage wall and shared run-budget polling remain active.'},
+        'enforcement': 'Observed minimum only; existing independent stage wall and run-budget checkpoints are unchanged.',
+        'enforcement_layers': {
+            'stage': 'Absolute transport session wall; plain completion window starts inside the transport.',
+            'run_budget': 'Shared ledger checked at node boundaries and while the owned process is polled.',
+            'enclosing_deadlines': 'Existing caller-owned cancellation timers; no timer is created by this observation.',
+        },
+    }
+    record = json.loads(path.read_text())
+    deadlines = record.setdefault('effective_deadlines', {})
+    deadlines.setdefault('dispatches', []).append(sample)
+    _write_receipt(path, record)
+    return sample
 
 
 def finish(path: Path, state: str, *, error: str | None = None) -> dict[str, Any]:

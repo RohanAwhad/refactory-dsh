@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from .contract import FIXTURES, reference
+from .deadline_evidence import dispatch_deadline_row
+from .operator_evidence import OperatorEvidenceContext, supplemental_row
 
 STATUSES = {"passed", "failed", "unavailable", "not_exercised"}
 
@@ -300,7 +302,8 @@ def _verified_gate(root: Path, pair: tuple[str, dict]) -> tuple[str, list[str]]:
     return prompt, [path, prompt_path, response_path]
 
 
-def _protocol_rows(root: Path | None, events: list[dict], manifests: dict) -> list[dict]:
+def _protocol_rows(root: Path | None, events: list[dict], manifests: dict,
+                   operator_evidence: OperatorEvidenceContext | None = None) -> list[dict]:
     identifiers = ("F.obligations", "F.consumption", "F.approval", "F.repair", "F.deadlines")
     if root is None:
         return [row(identifier, "not_exercised" if identifier == "F.repair" and not any(e.get("verdict") == "reloop" for e in events) else "unavailable",
@@ -499,6 +502,8 @@ def _protocol_rows(root: Path | None, events: list[dict], manifests: dict) -> li
                 raise ValueError(f"worker {node} did not retain the frozen source stage allowance")
             if expected and ":" in node and (not limits["declared_stage_timeout_s"] or limits["stage_timeout_s"] > expected):
                 raise ValueError("director dispatch wall exceeds or omits its declared enclosing allowance")
+            if worker.get("state") in ("starting", "running") and not worker.get("finished"):
+                raise FileNotFoundError("worker is still active; terminal settlement evidence is not yet available")
             if worker.get("state") not in ("completed", "failed", "cancelled", "timed_out", "budget_exhausted") or not worker.get("finished"):
                 raise ValueError("worker remained in flight or its shutdown/cleanup is unconfirmed")
             elapsed = (datetime.fromisoformat(worker["finished"]) - datetime.fromisoformat(worker["started"])).total_seconds()
@@ -515,10 +520,13 @@ def _protocol_rows(root: Path | None, events: list[dict], manifests: dict) -> li
         rows.append(row("F.repair", "unavailable", f"Repair evidence is incomplete: {error}"))
     except (ValueError, TypeError, KeyError, AttributeError) as error:
         rows.append(row("F.repair", "failed", f"Repair protocol evidence is invalid: {error}"))
+    statuses = {item["requirement_id"]: item["status"] for item in rows}
     rows.extend([inspect("F.deadlines", deadlines),
-                 row("F.obligations.semantic", "unavailable", "Supplying inherited instructions and model PASS claims do not independently prove semantic role-output adequacy"),
-                 row("F.approval.identity", "unavailable", "Current ledger protocol records human answer source, but does not authenticate an authorized approver identity"),
-                 row("F.deadlines.remaining", "unavailable", "Worker receipts do not record observed idle deadlines and remaining run allowance at each dispatch"),
+                 supplemental_row("F.obligations.semantic", "semantic", root, operator_evidence,
+                                  prerequisites={key: statuses[key] for key in ("F.obligations", "F.consumption")}),
+                 supplemental_row("F.approval.identity", "identity", root, operator_evidence,
+                                  prerequisites={"F.approval": statuses["F.approval"]}),
+                 dispatch_deadline_row(workers),
                  row("F.deadlines.expiry", "not_exercised" if workers and all(worker.get("state") == "completed" for _, worker in workers) else "unavailable",
                      "Successful settled workers do not prove shutdown on expiry; failed/expired states need independent owned-process cleanup evidence")])
     return rows
@@ -526,7 +534,7 @@ def _protocol_rows(root: Path | None, events: list[dict], manifests: dict) -> li
 
 def authoring_score(events: list[dict], outcome: dict, *, director_manifests: dict | None = None,
                     workers: list[dict] | None = None, lane: str = "dsh", evidence_root: Path | None = None,
-                    expected_model: str = "gpt-6.1-sol") -> list[dict]:
+                    expected_model: str = "gpt-6.1-sol", operator_evidence: OperatorEvidenceContext | None = None) -> list[dict]:
     latest = {}
     lifecycle = {"node_started", "NodeStarted", "node_completed", "NodeCompleted", "node_failed", "NodeFailed"}
     for event in events:
@@ -559,7 +567,7 @@ def authoring_score(events: list[dict], outcome: dict, *, director_manifests: di
             barrier.append({"health_checker", "code_reviewer", "qa_director", "join_qa"} <= joined)
     rows.append(row("F.qa_barrier", "passed" if barrier and all(barrier) else "failed" if barrier else "not_exercised",
                     "All three QA branches and join must complete before synthesis"))
-    rows.extend(_protocol_rows(evidence_root, events, director_manifests or {}))
+    rows.extend(_protocol_rows(evidence_root, events, director_manifests or {}, operator_evidence))
     rows.append(route_score(workers or [], model=expected_model) if lane.startswith("dsh") else
                 row("F.route", "unavailable", "Remote route receipt must be observed; role aliases are not served models"))
     status = "passed" if outcome.get("exit_ok") is True or outcome.get("success") is True else (
@@ -568,7 +576,8 @@ def authoring_score(events: list[dict], outcome: dict, *, director_manifests: di
     return rows
 
 
-def capability_score(checker: dict | None, native: dict | None) -> list[dict]:
+def capability_score(checker: dict | None, native: dict | None, *, evidence_root: Path | None = None,
+                     operator_evidence: OperatorEvidenceContext | None = None) -> list[dict]:
     checker, native = checker or {}, native or {}
     cli_status = "unavailable"
     if checker.get("total") == 56 and len(checker.get("cases", [])) == 56:
@@ -595,7 +604,7 @@ def capability_score(checker: dict | None, native: dict | None) -> list[dict]:
         good = valid["overlap"].get("run_directory") != valid["touching"].get("run_directory")
     rows.append(row("B09", "passed" if good else "failed" if invocations else "unavailable", "Two distinct native invocations of an unchanged package"))
     # README evidence requires authored instructions actually exercised by native adapter.
-    rows.append(row("B10", "passed" if native.get("readme_verified") is True else "unavailable", "README native and standalone invocation verification"))
+    rows.append(supplemental_row("B10", "readme", evidence_root, operator_evidence, native=native))
     return rows
 
 

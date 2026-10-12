@@ -75,7 +75,7 @@ def annotated_html(path: Path, report: dict, oracle: dict) -> str:
         g = lane.get("graph", {})
         graphs.append('<section><h2>' + html.escape(lane["lane"]) + '</h2><p>' + html.escape(lane.get("graph_origin", "not supplied")) +
                       f' · {len(nodes(g))} nodes / {len(g.get("edges", []))} edges</p><details><summary>Source identity and preflight</summary><pre>' +
-                      html.escape(json.dumps({"identity": lane.get("identity", {}), "preflight": lane.get("preflight", {})}, indent=2)) + '</pre></details>' + diagram(g, lane["lane"]) + '</section>')
+                      html.escape(json.dumps({"identity": lane.get("identity", {}), "preflight": lane.get("preflight", {}), "evaluation": lane.get("evaluation", {})}, indent=2)) + '</pre></details>' + diagram(g, lane["lane"]) + '</section>')
     gaps = []
     source_url = f'https://github.com/boston-harness-group/remote-factory/blob/{oracle["source_commit"]}/factory/workflow/contributed/create_v2/workflow.py'
     for name, expected in oracle["graph"]["nodes"].items():
