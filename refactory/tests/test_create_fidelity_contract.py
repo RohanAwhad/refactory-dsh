@@ -1,5 +1,7 @@
 """Fidelity expectations come from pinned remote source, never DSH's own graph."""
 import json
+import hashlib
+from pathlib import Path
 
 from benchmarks.create_fidelity.contract import FIXTURES, departures, digest, reference
 
@@ -24,3 +26,12 @@ def test_public_baseline_is_not_mistaken_for_fidelity():
 def test_candidate_restores_pinned_contract():
     from refactory_dsh.create_fidelity import CreateFidelityMode
     assert departures(CreateFidelityMode().graph()) == []
+
+
+def test_public_modes_keep_graph_fingerprints_from_frozen_upstream():
+    from refactory_dsh import registry
+    frozen = json.loads((FIXTURES / "public-graph-fingerprints.json").read_text())
+    package = registry.load("default_pack", Path.cwd())
+    for name, expected in frozen["graphs"].items():
+        state = package.mode(name)().graph().to_state()
+        assert hashlib.sha256(json.dumps(state, sort_keys=True).encode()).hexdigest() == expected, name

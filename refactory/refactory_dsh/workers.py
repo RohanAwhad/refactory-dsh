@@ -74,6 +74,12 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _write_receipt(path: Path, record: dict[str, Any]) -> None:
+    pending = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
+    pending.write_text(json.dumps(record, indent=2) + '\n')
+    pending.replace(path)
+
+
 def event(workdir: Path, record: dict[str, Any], state: str, summary: str) -> None:
     directory = workdir / '.refactory'
     directory.mkdir(parents=True, exist_ok=True)
@@ -85,7 +91,8 @@ def event(workdir: Path, record: dict[str, Any], state: str, summary: str) -> No
         stream.write(json.dumps(payload, separators=(',', ':')) + '\n')
 
 
-def begin(workdir: Path, route: dict[str, Any], *, node: str = '', role: str = 'worker') -> Path:
+def begin(workdir: Path, route: dict[str, Any], *, node: str = '', role: str = 'worker',
+          effective_deadlines: dict[str, Any] | None = None) -> Path:
     identifier = 'worker-' + uuid.uuid4().hex
     path = workdir / '.refactory' / 'workers' / (identifier + '.json')
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -95,7 +102,9 @@ def begin(workdir: Path, route: dict[str, Any], *, node: str = '', role: str = '
               'capabilities': capabilities(route['worker_backend']),
               'usage': {'status': 'unavailable', 'tokens': None},
               'runtime': {'backend': route['worker_backend'], 'version': None}}
-    path.write_text(json.dumps(record, indent=2) + '\n')
+    if effective_deadlines is not None:
+        record['effective_deadlines'] = effective_deadlines
+    _write_receipt(path, record)
     event(workdir, record, 'starting', f"Starting {route['worker_backend']} worker")
     return path
 
@@ -105,7 +114,7 @@ def finish(path: Path, state: str, *, error: str | None = None) -> dict[str, Any
     record.update(state=state, finished=now())
     if error:
         record['error'] = error
-    path.write_text(json.dumps(record, indent=2) + '\n')
+    _write_receipt(path, record)
     event(path.parent.parent.parent, record, state, error or f'Worker {state}')
     return record
 
@@ -173,7 +182,7 @@ def lower_workflow(workflow: Any, workdir: Path, model_context: dict[str, Any] |
         return workflow
     import hashlib
     import shlex
-    from refactory_dsh.ir import AgentNode, FnNode
+    from refactory_dsh.ir import AgentNode, FnNode, GateNode
     from refactory_dsh.model import DshModelClient
 
     # Routing/serialization does not dispatch work. The fresh invocation installs
@@ -184,9 +193,17 @@ def lower_workflow(workflow: Any, workdir: Path, model_context: dict[str, Any] |
     result = workflow.model_copy(deep=True)
     directory = Path(workdir) / '.refactory' / 'worker-specs'
     for name, node in list(result.nodes.items()):
+        if isinstance(node, GateNode) and node.evaluator_command == 'python -m refactory_dsh.run refactory_dsh.create_fidelity_gates:evaluate_native':
+            from refactory_dsh.owned_process import SHUTDOWN_GRACE_S
+            selected = client.for_node(name, role='ceo').with_node_timeout(node.command_timeout_s)
+            wall = selected.effective_deadlines()['stage_timeout_s']
+            result.nodes[name] = node.model_copy(update={'command_timeout_s': wall + SHUTDOWN_GRACE_S + 2})
+            continue
         if not isinstance(node, AgentNode):
             continue
         selected = client.for_node(name, role=node.role.value)
+        if node.timeout is not None:
+            selected = selected.with_node_timeout(node.timeout)
         if node.tools:
             raise ValueError(f'worker node {name!r} declares tool restrictions this bridge cannot enforce')
         directory.mkdir(parents=True, exist_ok=True)
@@ -195,6 +212,7 @@ def lower_workflow(workflow: Any, workdir: Path, model_context: dict[str, Any] |
             selected_context['budget_ledger'] = budget_ledger
         selected_context.update(role_routes={}, node_routes={})
         payload = {'schema_version': 1, 'node_id': name,
+                                    'role': node.role.value,
                                     'prompt': node.prompt_template, 'reads': sorted(node.reads),
                                     'writes': sorted(node.writes),
                                     'produces': list((declarations or {}).get(name, {}).get('produces', [])),
@@ -213,6 +231,9 @@ def lower_workflow(workflow: Any, workdir: Path, model_context: dict[str, Any] |
         attempts = max(1, int(selected_context.get('attempts') or 1))
         per_completion = int(selected_context.get('timeout_s') or DEFAULT_TIMEOUT_S)
         command_timeout_s = node.timeout if node.timeout is not None else node_session_budget_s(attempts, per_completion)
+        if (declarations or {}).get(name, {}).get('create_fidelity'):
+            from refactory_dsh.owned_process import SHUTDOWN_GRACE_S
+            command_timeout_s += SHUTDOWN_GRACE_S + 2
         result.nodes[name] = FnNode(id=name, reads=node.reads, writes=node.writes, blocking=node.blocking,
                                     resource_role=node.resource_role,
                                     command='python -m refactory_dsh.worker_node ' + shlex.quote(str(spec)),
@@ -346,7 +367,11 @@ def run_graph_command(argv: list[str], *, workdir: Path, context: dict[str, Any]
                 except subprocess.TimeoutExpired:
                     continue
         except BaseException as error:
-            shutdown(process, label='graph runtime')
+            try:
+                shutdown(process, label='graph runtime')
+            except BaseException as cleanup_error:
+                telemetry.finish('unknown', str(error) + '; ' + str(cleanup_error))
+                raise
             state = 'timed_out' if isinstance(error, subprocess.TimeoutExpired) else (
                 'budget_exhausted' if type(error).__name__ == 'BudgetExhausted' else 'cancelled')
             telemetry.finish(state, str(error))

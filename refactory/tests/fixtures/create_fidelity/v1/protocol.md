@@ -2,6 +2,12 @@
 
 Protocol v1, October 12, 2026. Implementation instructions for issue #310. This document specifies a harness to build; it does not claim the harness or live comparison is complete.
 
+Route addendum, October 12: after the installed provider rejected `gpt-6.1-sol`,
+the user explicitly authorized Sol 6 at high effort as a fallback. This is a
+new frozen trial configuration, not retroactive Sol 6.1 acceptance. Actual
+`gpt-6-sol` root and child receipts remain mandatory for that trial. The shared
+brief, checker and artifact requirements are unchanged.
+
 ## Purpose and scope
 
 Use remote-factory create-v2 and refactory-dsh Create to author `booking_conflicts_bench` from the same requirements. Invoke each generated mode through its own native runtime and compare both delivered capability and authoring fidelity. Keep the application small, offline and deterministic so the experiment primarily exposes differences in Create. Full Create, no fast-mode substitution. No UI, deployment, service, dataset iteration or optimization harness.

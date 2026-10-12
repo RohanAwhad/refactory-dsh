@@ -8,6 +8,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { spawn } from 'node:child_process'
 import { Context } from '@deepseek-ai/cordis'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
@@ -108,6 +109,59 @@ async function call(ctx: Context, name: string, args: unknown = {}): Promise<unk
   if (definition === undefined) throw new Error(`tool ${name} not registered`)
   return definition.execute(args, {} as never)
 }
+
+/** Real asynchronous shell I/O for the advisory lifecycle regression. */
+function processShell(): object {
+  return {
+    resolve: (request: ShellRequest) => ({ ...request, workdir: request.workdir ?? process.cwd(), timeoutMs: 1_000 }),
+    execute: async (spec: ShellRequest) => {
+      const child = spawn('/bin/sh', ['-c', spec.command], { cwd: spec.workdir, env: { ...process.env, ...spec.env } })
+      let stdout = '', stderr = '', timedOut = false
+      child.stdout.on('data', bytes => { stdout += String(bytes) })
+      child.stderr.on('data', bytes => { stderr += String(bytes) })
+      const timer = setTimeout(() => { timedOut = true; child.kill('SIGTERM') }, spec.timeoutMs ?? 1_000)
+      const result = new Promise(resolve => child.on('close', (exitCode, signal) => {
+        clearTimeout(timer)
+        resolve({ exitCode, signal, timedOut, aborted: false, timeoutMs: spec.timeoutMs,
+          stdout: { text: stdout, truncated: false }, stderr: { text: stderr, truncated: false } })
+      }))
+      return { result: async () => result }
+    },
+  }
+}
+
+describe('owned advisory commands', () => {
+  it('starts the builder before archive settlement and records unfinished ownership', async () => {
+    const workdir = scratch()
+    const graph: WorkflowGraph = { name: 'advisory', start_node: 'archive', nodes: {
+      archive: { id: 'archive', _type: 'FnNode', blocking: false,
+        command: 'while [ ! -f builder-started ]; do sleep 0.02; done; printf archived > archive.txt' },
+      builder: { id: 'builder', _type: 'FnNode', command: 'cp .refactory/spine-checkpoint.json builder-checkpoint.json; touch builder-started' },
+    }, edges: [{ source: 'archive', target: 'builder' }] }
+    const { ctx } = await mount({ graph, executeCommands: true, workdir })
+    ctx.provide('shell', processShell() as never)
+    await expect(call(ctx, 'wf_next')).resolves.toMatchObject({ status: 'done' })
+    expect(readFileSync(join(workdir, 'archive.txt'), 'utf8')).toBe('archived')
+    expect(JSON.parse(readFileSync(join(workdir, 'builder-checkpoint.json'), 'utf8')).advisory_pending).toEqual(['archive'])
+    expect(JSON.parse(readFileSync(join(workdir, '.refactory/spine-status.json'), 'utf8')).advisory_pending).toEqual([])
+    await ctx.fiber.dispose()
+  })
+
+  it('reports archive failure even after the builder completes', async () => {
+    const workdir = scratch()
+    const graph: WorkflowGraph = { name: 'advisory', start_node: 'archive', nodes: {
+      archive: { id: 'archive', _type: 'FnNode', blocking: false, command: 'sleep 0.05; exit 7' },
+      builder: { id: 'builder', _type: 'FnNode', command: 'touch builder-completed' },
+    }, edges: [{ source: 'archive', target: 'builder' }] }
+    const { ctx } = await mount({ graph, executeCommands: true, workdir })
+    ctx.provide('shell', processShell() as never)
+    await expect(call(ctx, 'wf_next')).resolves.toMatchObject({ status: 'failed', exit_code: 7 })
+    expect(readFileSync(join(workdir, 'builder-completed'), 'utf8')).toBe('')
+    expect(JSON.parse(readFileSync(join(workdir, '.refactory/spine-status.json'), 'utf8')).status).toBe('failed')
+    expect(JSON.parse(readFileSync(join(workdir, '.refactory/spine-status.json'), 'utf8')).completed).not.toContain('archive')
+    await ctx.fiber.dispose()
+  })
+})
 
 describe('mounting a graph', () => {
   it('refuses an invalid graph at load, naming the problem', async () => {

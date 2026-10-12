@@ -148,6 +148,7 @@ class DshModelClient:
         worker_backend: str = "",
         effort: str = "",
         permission_mode: str = "",
+        node_timeout_s: int | None = None,
         role_routes: dict[str, Any] | None = None,
         node_routes: dict[str, Any] | None = None,
         provider_config: dict[str, Any] | None = None,
@@ -199,6 +200,7 @@ class DshModelClient:
         timeout_s = inherited.get("timeout_s", timeout_s) if timeout_s == DEFAULT_TIMEOUT_S else timeout_s
         attempts = inherited.get("attempts", attempts) if attempts == DEFAULT_ATTEMPTS else attempts
         self._timeout_s = timeout_s
+        self._node_timeout_s = node_timeout_s or inherited.get("node_timeout_s")
         self._worker_backend = worker_backend or os.environ.get("REFACTORY_WORKER_BACKEND", "dsh")
         self._effort = effort or (os.environ.get("REFACTORY_MODEL_EFFORT", "") if self._worker_backend == "dsh" and not routes_resolved else "")
         self._permission_mode = permission_mode
@@ -247,6 +249,12 @@ class DshModelClient:
         client._budget = budget
         return client
 
+    def with_identity(self, node: str, role: str = "worker") -> DshModelClient:
+        """Retain a resolved route while assigning one execution's receipt ID."""
+        client = copy.copy(self)
+        client._node_id, client._role = node, role
+        return client
+
     def _checkpoint(self, *, final: bool = False) -> None:
         if self._budget is None:
             return
@@ -266,6 +274,25 @@ class DshModelClient:
         client._cancellations = (*self._cancellations, event)
         return client
 
+    def with_node_timeout(self, timeout_s: int | None) -> DshModelClient:
+        """Bind the author's stage wall without multiplying it by retry count."""
+        client = copy.copy(self)
+        if timeout_s is not None:
+            if type(timeout_s) is not int or timeout_s <= 0:
+                raise ValueError("node timeout must be a positive integer")
+            client._node_timeout_s = timeout_s
+        return client
+
+    def effective_deadlines(self) -> dict[str, Any]:
+        wall = self._node_timeout_s
+        if wall is None:
+            wall = (node_session_budget_s(self._attempts, self._timeout_s)
+                    if self._worker_backend == "dsh" and self._node_id else self._timeout_s)
+        return {"completion_timeout_s": self._timeout_s, "stage_timeout_s": wall,
+                "declared_stage_timeout_s": self._node_timeout_s,
+                "shutdown_grace_s": SHUTDOWN_GRACE_S,
+                "run_budget": str(self._budget.path) if self._budget is not None else None}
+
     def _raise_if_cancelled(self) -> None:
         if any(event.is_set() for event in self._cancellations):
             raise CancelledError("model completion cancelled; not retried")
@@ -276,6 +303,7 @@ class DshModelClient:
             "routes_resolved": True, "routing_provenance": copy.deepcopy(self._routing_provenance),
             "dsh_home": str(self._dsh_home), "provider": self._provider, "model": self._model,
             "timeout_s": self._timeout_s, "attempts": self._attempts, "backoff_s": self._backoff_s,
+            **({"node_timeout_s": self._node_timeout_s} if self._node_timeout_s is not None else {}),
             "runtime_root": str(self._runtime_root), "dsh_cli": self._dsh_cli,
             "python_bin": str(self._python_bin),
             "worker_backend": self._worker_backend, "effort": self._effort,
@@ -364,13 +392,16 @@ class DshModelClient:
         client._checkpoint()
         if client._budget is not None:
             client._budget.require_usage_capability(self._worker_backend == "dsh")
-        client._worker_receipt = workers.begin(run_dir, self.route(), node=self._node_id, role=self._role)
+        client._worker_receipt = workers.begin(run_dir, self.route(), node=self._node_id, role=self._role,
+                                               effective_deadlines=client.effective_deadlines())
         try:
             result = client._complete(prompt, system=system, workdir=run_dir)
             client._checkpoint(final=True)
         except BaseException as error:
             state = "failed"
-            if isinstance(error, (CancelledError, KeyboardInterrupt, SystemExit)):
+            if "cleanup unconfirmed" in str(error):
+                state = "unknown"
+            elif isinstance(error, (CancelledError, KeyboardInterrupt, SystemExit)):
                 state = "cancelled"
             elif "timed out" in str(error):
                 state = "timed_out"
@@ -445,7 +476,10 @@ class DshModelClient:
         # `timeout_s` alone (#307). A CEO turn or a console call keeps the plain
         # completion deadline. The wall is absolute across attempts: a transport
         # retry spends whatever remains of the same envelope.
-        if self._worker_backend == "dsh" and self._node_id:
+        if self._node_timeout_s is not None:
+            budget_s = self._node_timeout_s
+            stop_at = time.monotonic() + budget_s
+        elif self._worker_backend == "dsh" and self._node_id:
             budget_s = node_session_budget_s(self._attempts, self._timeout_s)
             stop_at = time.monotonic() + budget_s
         else:

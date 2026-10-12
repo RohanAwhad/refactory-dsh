@@ -8,7 +8,7 @@ from typing import Any
 
 FIXTURES = Path(__file__).resolve().parents[2] / "tests/fixtures/create_fidelity/v1"
 DIRECTORS = {"research_director", "strategy_director", "qa_director"}
-KINDS = {"FnNode": "op", "AgentNode": "agent", "GateNode": "gate",
+KINDS = {"FnNode": "op", "Study": "op", "AgentNode": "agent", "GateNode": "gate",
          "ForkNode": "fork", "JoinNode": "join"}
 
 

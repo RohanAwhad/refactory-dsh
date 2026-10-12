@@ -57,3 +57,9 @@ plan_digest, input_digest, output_digest, requested_route, actual_route,
 status, causal_predecessors, effective_deadlines, raw_evidence. Missing evidence
 is unavailable or not_exercised, never passed. Human approvals are bound to the
 exact strategy digest; no unconditional proceed answers.
+
+Reviewed repair-path mapping: AI gate critique is written to
+`.factory/reviews/repair-feedback.md` and delivered in full to builder and QA.
+It does not rewrite human intent during builder-only repairs. Human strategy
+rejection still appends the person's feedback to original intent and returns
+through strategy planning and fresh approval.

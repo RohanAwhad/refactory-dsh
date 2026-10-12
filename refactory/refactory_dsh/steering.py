@@ -520,6 +520,10 @@ __all__ = [
 
 def main() -> int:
     """Private JSON bridge used by both terminal and GUI workflow user gates."""
+    from refactory_dsh.run import _read_facts
+    if _read_facts(Path.cwd()).get("create_fidelity"):
+        from refactory_dsh.create_fidelity_gates import human_main
+        return human_main()
     try:
         request = json.load(sys.stdin)
         ledger = Ledger(Path.cwd())
