@@ -596,9 +596,17 @@ class DshModelClient:
                                               'bytes': len(task_bytes),
                                               'sha256': hashlib.sha256(task_bytes).hexdigest()}
                 _write_receipt(self._worker_receipt, record)
+            environment = self._environment()
+            # File preparation, hashing, receipt writes and environment setup
+            # spend the existing absolute allowance. Recheck immediately at the
+            # spawn boundary so expired/cancelled work never starts a runtime.
+            self._checkpoint()
+            self._raise_if_cancelled()
+            if stop_at is not None and time.monotonic() >= stop_at:
+                raise subprocess.TimeoutExpired(launch, timeout_s)
             proc = subprocess.Popen(
                 launch, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                cwd=str(run_dir), env=self._environment(),
+                cwd=str(run_dir), env=environment,
                 # A terminal Ctrl-C reaches the Python caller only. Forward one
                 # shutdown request: DSH escalates a second signal to immediate exit.
                 start_new_session=os.name == "posix",

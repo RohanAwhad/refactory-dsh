@@ -171,3 +171,68 @@ def test_wall_expiry_during_large_stdin_read_stops_runtime_without_retry(tmp_pat
     worker = json.loads(records[0].read_text())
     assert worker["state"] == "timed_out" and worker["prompt_transport"]["kind"] == "stdin_file"
     assert len(worker["effective_deadlines"]["dispatches"]) == 1
+
+
+@pytest.mark.parametrize("limit", ["cancellation", "stage", "budget"])
+def test_limit_reached_during_stdin_preparation_refuses_spawn_and_closes_storage(tmp_path, monkeypatch, limit):
+    import tempfile
+    import subprocess
+    from refactory_dsh.budgets import BudgetExhausted, ResourceLimits, RunBudget
+
+    actual_file = tempfile.TemporaryFile
+    actual_popen = subprocess.Popen
+    files, launched = [], []
+    stopped = threading.Event()
+
+    class PreparationWindow:
+        def __init__(self, handle):
+            self.handle = handle
+
+        def __getattr__(self, name):
+            return getattr(self.handle, name)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.handle.close()
+
+        def write(self, body):
+            count = self.handle.write(body)
+            if limit == "cancellation":
+                stopped.set()
+            else:
+                time.sleep(1.05)
+            return count
+
+    def prepared_file(*args, **kwargs):
+        handle = actual_file(*args, **kwargs)
+        files.append(handle)
+        return PreparationWindow(handle)
+
+    def observe_launch(*args, **kwargs):
+        launched.append(args[0])
+        return actual_popen(*args, **kwargs)
+
+    monkeypatch.setattr(tempfile, "TemporaryFile", prepared_file)
+    monkeypatch.setattr(subprocess, "Popen", observe_launch)
+    client = DshModelClient(dsh_cli=str(runtime(tmp_path)), attempts=3).for_node("quality").with_node_timeout(1)
+    if limit == "cancellation":
+        client = client.with_cancellation(stopped)
+        error, message = CancelledError, "cancelled; not retried"
+    elif limit == "stage":
+        error, message = RuntimeError, "timed out.*not retried"
+    else:
+        client = client.with_node_timeout(10).with_budget(RunBudget.create(tmp_path, ResourceLimits(max_elapsed_s=1)))
+        error, message = BudgetExhausted, "elapsed-time budget exhausted"
+    with pytest.raises(error, match=message):
+        client.complete(above_argmax(), workdir=tmp_path)
+    assert not launched, "preparation exhausted an existing limit but a runtime was still launched"
+    assert len(files) == 1 and files[0].closed
+    assert not (tmp_path / "transport-ready").exists()
+    receipts = list((tmp_path / ".refactory/workers").glob("*.json"))
+    assert len(receipts) == 1
+    worker = json.loads(receipts[0].read_text())
+    assert worker["state"] == {"cancellation": "cancelled", "stage": "timed_out", "budget": "budget_exhausted"}[limit]
+    assert worker["actual_route"] is None
+    assert len(worker["effective_deadlines"]["dispatches"]) == 1
