@@ -75,6 +75,8 @@ ownership. An execution receipt has this unfilled shape:
   "kind": null, "documented_command": null, "substitutions": {},
   "argv": [], "cwd": null, "started": null, "finished": null,
   "returncode": null, "package_before": {}, "package_after": {},
+  "execution_status": null, "reason": null,
+  "diagnostic": {"stream": null, "quote": null},
   "input_file": null, "output_file": null, "run_directory": null,
   "input": {"path": null, "sha256": null},
   "output": {"path": null, "sha256": null}, "expected_output": null,
@@ -85,13 +87,24 @@ ownership. An execution receipt has this unfilled shape:
 
 The documented command must occur in README; actual argv must match that command
 after only explicit path/interpreter placeholders (`INPUT`, `<PROJECT>`, `$PYTHON`,
-`${RUN}`, or `/path/to/project`). Whole command names, flags and literal
+`${RUN}`, `/path/to/project`, or `/absolute/path/to/project`). Whole command names, flags and literal
 `booking_conflicts.py` filenames cannot be substituted. The resolved standalone
 script must be the actual inspected artifact's `booking_conflicts.py`. Native output is `conflicts.json`
 inside the recorded invocation directory. Use the frozen overlap or touching
 example inputs; observed preserved input/output bytes must match those cases.
 All pre/post package inventories must match native acceptance's inspected package.
 Preserved input/output snapshots must still match the actual invocation files.
+For an honestly failed or unavailable execution, record `execution_status`, a
+precise `reason` and an exact diagnostic excerpt in preserved stdout/stderr or
+output. Absent output is allowed only when the actual invocation file is absent
+and the execution/review is nonpassing. Command, argv, cwd, input, time, streams
+and unchanged-package bindings still apply. A nonzero status or missing output
+can never certify a passing review. The review verdict must match the aggregate
+execution statuses; unavailable runtime setup remains distinct from an observed
+computation failure.
+Ordinary shell backslash-newline continuation and an initial `cd DIR` followed
+by newline or `&&` are normalized only for argument/path binding. The preserved
+documented command and actual shell invocation bytes remain unchanged.
 The operator executes and records commands; the evaluator executes no code.
 
 `evaluator_provenance()` records evaluator version, validator/scorecard/reference

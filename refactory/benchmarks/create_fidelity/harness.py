@@ -26,6 +26,15 @@ ADAPTER_INSTRUCTIONS = {
 }
 
 
+def authoring_brief(flavor: str) -> str:
+    """Give every lane the same verification ownership, plus native spellings."""
+    return ((FIXTURES / "brief.md").read_text() + "\n" +
+            (FIXTURES / "authoring-boundary.md").read_text() +
+            "\n## Native adapter\n" + ADAPTER_INSTRUCTIONS[flavor] +
+            "\nArtifact-only trial: do not publish, open PRs, or modify framework source. "
+            "Follow the full native Create workflow and pause for real human strategy approval.\n")
+
+
 def read(path: Path, default=None):
     return json.loads(path.read_text()) if path.is_file() else default
 
@@ -119,8 +128,7 @@ def prepare(args) -> dict:
     dependency_cache = {}
     for lane, project in projects.items():
         flavor = "dsh" if lane.startswith("dsh") else "remote"
-        (project / "BRIEF.md").write_text((FIXTURES / "brief.md").read_text() + "\n## Native adapter\n" + ADAPTER_INSTRUCTIONS[flavor] +
-                                        "\nArtifact-only trial: do not publish, open PRs, or modify framework source. Follow the full native Create workflow and pause for real human strategy approval.\n")
+        (project / "BRIEF.md").write_text(authoring_brief(flavor))
         inp = project / "inputs"
         inp.mkdir()
         for name in ("overlap", "touching", "invalid-duplicate"):
@@ -180,6 +188,7 @@ def prepare(args) -> dict:
         policy.write_text(profile(project, peers, readonly, hidden, allowed_reads=allowed_reads))
         config = {"schema_version": 1, "lane": lane, "project": str(project), "source": str(sources[lane]),
                   "identity": identities[lane], "mode": mode_name,
+                  "authoring_context_version": 2, "authoring_brief_sha256": digest(project / "BRIEF.md"),
                   "runtime_identity": runtime_pin,
                   "python": str(args.dsh_python if flavor == "dsh" else args.remote_python),
                   "adapter_root": str(adapter_root), "adapter_sha256": hash_tree(adapter_root),
@@ -203,6 +212,8 @@ def prepare(args) -> dict:
         write(root / lane / "config.json", config)
     trial = {"schema_version": 1, "benchmark_version": 1, "trial_id": root.name,
              "shared_brief_sha256": digest(FIXTURES / "brief.md"),
+             "authoring_context_version": 2,
+             "authoring_boundary_sha256": digest(FIXTURES / "authoring-boundary.md"),
              "checker_sha256": digest(FIXTURES / "acceptance.py"),
              "reference_sha256": digest(FIXTURES / "reference.json"), "identities": identities,
              "model": args.model, "effort": "high", "route_authorization": args.route_authorization,

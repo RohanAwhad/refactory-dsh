@@ -9,9 +9,22 @@ from benchmarks.create_fidelity.contract import FIXTURES
 from benchmarks.create_fidelity.evidence import (
     aggregate, authoring_score, capability_score, normalize, route_score, write_report,
 )
-from benchmarks.create_fidelity.harness import run_pair
+from benchmarks.create_fidelity.harness import ADAPTER_INSTRUCTIONS, authoring_brief, run_pair
 from benchmarks.create_fidelity.isolation import profile
 from benchmarks.create_fidelity import approval
+
+
+def test_both_lanes_receive_identical_public_contract_and_external_check_ownership():
+    briefs = {flavor: authoring_brief(flavor) for flavor in ("dsh", "remote")}
+    public = (FIXTURES / "brief.md").read_text()
+    boundary = (FIXTURES / "authoring-boundary.md").read_text()
+    for flavor, brief in briefs.items():
+        assert brief.startswith(public + "\n" + boundary)
+        assert brief.count(boundary) == 1
+        assert ADAPTER_INSTRUCTIONS[flavor] in brief
+    assert briefs["dsh"].replace(ADAPTER_INSTRUCTIONS["dsh"], "<native>") == briefs["remote"].replace(ADAPTER_INSTRUCTIONS["remote"], "<native>")
+    # External ownership cannot turn completed authoring into checker evidence.
+    assert aggregate(capability_score(None, None)) != "passed"
 
 
 def test_checker_runs_all_56_cases_and_rejects_bad_program(tmp_path):

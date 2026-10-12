@@ -8,6 +8,17 @@ new frozen trial configuration, not retroactive Sol 6.1 acceptance. Actual
 `gpt-6-sol` root and child receipts remain mandatory for that trial. The shared
 brief, checker and artifact requirements are unchanged.
 
+Authoring-context addendum, October 12: context v2 explicitly supplies the
+external checker ownership already required below to every authoring lane.
+In trial v6, the generated configuration instead made the intentionally hidden
+checker an internal prerequisite, and health correctly reported that configured
+threshold unmet. `authoring-boundary.md` now distinguishes local Create checks
+from mandatory operator acceptance after delivery. Its own digest and each
+fully assembled authoring brief are frozen in new trials. The shared public
+booking requirements and independent checker bytes are unchanged; v6 retains
+its original context and results. This clarification cannot make a missing
+checker or incomplete authoring run pass either scorecard.
+
 ## Purpose and scope
 
 Use remote-factory create-v2 and refactory-dsh Create to author `booking_conflicts_bench` from the same requirements. Invoke each generated mode through its own native runtime and compare both delivered capability and authoring fidelity. Keep the application small, offline and deterministic so the experiment primarily exposes differences in Create. Full Create, no fast-mode substitution. No UI, deployment, service, dataset iteration or optimization harness.

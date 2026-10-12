@@ -16,7 +16,8 @@ from benchmarks.create_fidelity import approval
 from benchmarks.create_fidelity.contract import digest
 from benchmarks.create_fidelity.evidence import authoring_score, capability_score, hash_tree
 from benchmarks.create_fidelity.operator_evidence import (
-    FILES, OperatorEvidenceContext, _dispatch_evidence, review_template, source_obligations, supplemental_row,
+    FILES, OperatorEvidenceContext, _command_words, _dispatch_evidence, _expanded_command,
+    review_template, source_obligations, supplemental_row,
 )
 from test_create_fidelity_orchestration import begin_trial, approve_and_resume
 
@@ -162,23 +163,52 @@ def test_readme_bare_boolean_is_not_evidence():
     assert capability_score(None, {"readme_verified": True})[-1]["status"] == "unavailable"
 
 
+def test_documented_absolute_placeholders_and_shell_continuations_bind_actual_cli(tmp_path):
+    project = tmp_path / "project"
+    command = 'cd /tmp\npython /absolute/path/to/project/.factory/packages/booking_conflicts_bench/booking_conflicts.py \\\n  --input /absolute/path/to/bookings.json --output /absolute/path/to/result.json'
+    expanded = _expanded_command(command, {'/absolute/path/to/project': str(project),
+        '/absolute/path/to/bookings.json': str(tmp_path / 'input.json'), '/absolute/path/to/result.json': str(tmp_path / 'output.json')})
+    words, cwd = _command_words(expanded, str(tmp_path))
+    assert cwd == Path('/tmp')
+    assert words == ['python', str(project / '.factory/packages/booking_conflicts_bench/booking_conflicts.py'),
+                     '--input', str(tmp_path / 'input.json'), '--output', str(tmp_path / 'output.json')]
+    assert command.startswith('cd /tmp\n'), 'the source command remains unchanged'
+
+
+def test_documented_native_variables_do_not_add_a_newline_argument(tmp_path):
+    command = '"$PY" -m refactory_dsh.create_fidelity_ops run booking_conflicts_bench/run \\\n  --project "$PROJECT" --workdir "$RUN_DIR" --knob "bookings_path=$INPUT"'
+    expanded = _expanded_command(command, {'$PY': sys.executable, '$PROJECT': str(tmp_path),
+                                           '$RUN_DIR': str(tmp_path / 'run'), '$INPUT': str(tmp_path / 'input.json')})
+    words, _ = _command_words(expanded, str(tmp_path))
+    assert '\n' not in words
+    assert words[-1] == 'bookings_path=' + str(tmp_path / 'input.json')
+    with pytest.raises(ValueError, match='placeholders'):
+        _expanded_command(command, {'--project': str(tmp_path)})
+    with pytest.raises(ValueError, match='placeholders'):
+        _expanded_command('python /absolute/path/booking_conflicts.py', {'/absolute/path/booking_conflicts.py': str(tmp_path / 'other.py')})
+
+
 @pytest.fixture
-def readme_trial(tmp_path):
+def readme_trial(tmp_path, request):
+    native_failure = getattr(request, "param", None)
     project = tmp_path / "project"
     artifact = project / ".factory/packages/booking_conflicts_bench"
     artifact.mkdir(parents=True)
-    (artifact / "booking_conflicts.py").write_text('''import argparse,json
+    (artifact / "booking_conflicts.py").write_text('''import argparse,json,os
 from pathlib import Path
 def conflicts(data):
     return {"conflicts": sorted(sorted([a["id"],b["id"]]) for i,a in enumerate(data) for b in data[i+1:]
         if a["room"]==b["room"] and max(a["start"],b["start"])<min(a["end"],b["end"]))}
 def compute(ctx):
+    if os.environ.get("TEST_NATIVE_FAILURE")=="execution": raise RuntimeError("native computation failed")
     ctx.write_json("conflicts.json",conflicts(json.loads(Path(ctx.knobs["bookings_path"]).read_text())))
 if __name__=="__main__":
     p=argparse.ArgumentParser(); p.add_argument("--input"); p.add_argument("--output"); a=p.parse_args()
     Path(a.output).write_text(json.dumps(conflicts(json.loads(Path(a.input).read_text()))))
 ''')
-    (artifact / "native.py").write_text('''import argparse
+    (artifact / "native.py").write_text('''import argparse,os,sys
+if os.environ.get("TEST_NATIVE_FAILURE")=="setup":
+    print("configured graph profile unavailable",file=sys.stderr); raise SystemExit(1)
 from pathlib import Path
 from refactory_dsh.nn import Graph,Node,Mode,Knob
 class BookingMode(Mode):
@@ -188,7 +218,9 @@ class BookingMode(Mode):
         g=Graph(); g.add(Node("compute","op",call="booking_conflicts:compute",writes=("conflicts.json",))); return g
 p=argparse.ArgumentParser(); p.add_argument("--bookings-path"); p.add_argument("--run-directory"); a=p.parse_args()
 m=BookingMode(); state=m.state_dict(); state["knobs"]["bookings_path"]["value"]=a.bookings_path; m.load_state_dict(state)
-r=m.run(Path(a.run_directory)); print(r.exit_ok); raise SystemExit(0 if r.exit_ok else 1)
+r=m.run(Path(a.run_directory)); print(r.exit_ok)
+if r.error: print(r.error,file=sys.stderr)
+raise SystemExit(0 if r.exit_ok else 1)
 ''')
     commands = {"standalone": f"{sys.executable} SCRIPT/booking_conflicts.py --input INPUT --output OUTPUT",
                 "native": f"{sys.executable} SCRIPT/native.py --bookings-path INPUT --run-directory RUN"}
@@ -207,8 +239,9 @@ r=m.run(Path(a.run_directory)); print(r.exit_ok); raise SystemExit(0 if r.exit_o
         for token, value in substitutions.items(): expanded = expanded.replace(token, value)
         started = datetime.now(timezone.utc).isoformat()
         cp = subprocess.run(shlex.split(expanded), cwd=ctx.root, capture_output=True, text=True, timeout=10,
-                            env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])})
-        assert cp.returncode == 0, cp.stderr
+                            env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
+                                 "TEST_NATIVE_FAILURE": native_failure if kind == "native" and native_failure else ""})
+        assert cp.returncode == (1 if kind == "native" and native_failure else 0), cp.stderr
         streams = {}
         for stream in ("stdout", "stderr"):
             path = ctx.root / f"{kind}-{stream}.txt"
@@ -220,12 +253,19 @@ r=m.run(Path(a.run_directory)); print(r.exit_ok); raise SystemExit(0 if r.exit_o
                    "returncode": cp.returncode, "package_before": package, "package_after": hash_tree(artifact),
                    "input_file": str(input_file), "output_file": str(output), "run_directory": str(output.parent),
                    "input": {"path": input_file.name, "sha256": digest(input_file)},
-                   "output": {"path": str(output.relative_to(ctx.root)), "sha256": digest(output)},
+                   "output": {"path": str(output.relative_to(ctx.root)), "sha256": digest(output)} if output.exists() else None,
                    "expected_output": {"conflicts": [["a", "b"]]}, **streams}
+        if kind == "native" and native_failure:
+            receipt.update(execution_status="unavailable" if native_failure == "setup" else "failed",
+                           reason="Configured native graph profile is absent" if native_failure == "setup" else "Actual native operation failed",
+                           diagnostic={"stream": "stderr", "quote": "configured graph profile unavailable" if native_failure == "setup" else "native computation failed"})
         receipt_path = ctx.root / f"{kind}-command.json"
         receipt_path.write_text(json.dumps(receipt))
         executions.append({"kind": kind, "receipt_path": receipt_path.name, "sha256": digest(receipt_path)})
     record = filled_template(project, ctx, "readme")
+    if native_failure:
+        record["verdict"] = "unavailable" if native_failure == "setup" else "failed"
+        record["rationale"] = "Actual setup diagnostic prevented the documented native route" if native_failure == "setup" else "Documented native execution returned a real computation failure"
     record.update(artifact_path=str(artifact.relative_to(project)), readme_path=str((artifact / "README.md").relative_to(project)),
                   readme_sha256=digest(artifact / "README.md"), package_sha256=package, executions=executions)
     save(ctx, "readme", record)
@@ -238,6 +278,23 @@ def test_readme_check_requires_actual_documented_cli_and_native_mode_execution(r
     row = capability_score(None, native, evidence_root=project, operator_evidence=ctx)[-1]
     assert row["status"] == "passed", row
     assert row["evaluator"]["operator_document_sha256"]
+
+
+@pytest.mark.parametrize("readme_trial,expected", [("setup", "unavailable"), ("execution", "failed")], indirect=["readme_trial"])
+def test_nonpassing_readme_review_retains_real_setup_or_computation_failure_without_output(readme_trial, expected):
+    project, _, ctx, _, native = readme_trial
+    row = capability_score(None, native, evidence_root=project, operator_evidence=ctx)[-1]
+    assert row["status"] == expected, row
+    assert row["evaluator"]["operator_document_sha256"], "valid nonpassing evidence must be retained as a reviewed result"
+    assert "Operator evidence rejected" not in row["reason"]
+
+
+@pytest.mark.parametrize("readme_trial", ["setup", "execution"], indirect=True)
+def test_nonzero_missing_output_cannot_be_reclassified_as_passing_readme(readme_trial):
+    project, _, ctx, record, native = readme_trial
+    record["verdict"] = "passed"
+    save(ctx, "readme", record)
+    assert capability_score(None, native, evidence_root=project, operator_evidence=ctx)[-1]["status"] == "failed"
 
 
 @pytest.mark.parametrize("problem", ["output-mismatch", "changed-argv", "stale-readme", "changed-package", "failed-command",

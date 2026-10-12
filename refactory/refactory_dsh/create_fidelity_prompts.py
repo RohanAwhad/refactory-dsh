@@ -6,10 +6,34 @@ remain readable; the native mapping has precedence over framework spellings.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+
+FACTORY_TEMPLATE_PATH = ".factory/bootstrap/factory-config-template.md"
+FACTORY_TEMPLATE_SOURCE_PATH = ".factory/bootstrap/factory-config-template.source.json"
+FACTORY_TEMPLATE_COMMIT = "3ab6f8f7ca792c874f2654574d7f7fd6dd18b896"
+FACTORY_TEMPLATE_SOURCE = "templates/factory_config.md"
+FACTORY_TEMPLATE_SHA256 = "50d8a754f707e915a0b13bd8a235d201b1930939d3b6801958dde9242e8a672e"
+_FACTORY_TEMPLATE_RESOURCE = Path(__file__).with_name("data") / "create_fidelity" / "v1" / "factory-config-template.json"
+
+
+def factory_template() -> dict[str, Any]:
+    """Load the canonical production input and verify its pinned source bytes."""
+    record = json.loads(_FACTORY_TEMPLATE_RESOURCE.read_text())
+    if (not isinstance(record, dict)
+            or type(record.get("schema_version")) is not int
+            or record.get("schema_version") != 1
+            or record.get("source_commit") != FACTORY_TEMPLATE_COMMIT
+            or record.get("source_path") != FACTORY_TEMPLATE_SOURCE
+            or record.get("source_sha256") != FACTORY_TEMPLATE_SHA256
+            or not isinstance(record.get("text"), str)
+            or hashlib.sha256(record["text"].encode()).hexdigest() != FACTORY_TEMPLATE_SHA256):
+        raise ValueError("canonical factory configuration template does not match its pinned source")
+    return record
+
 
 NATIVE_INSTRUCTIONS = """\
 ## Reviewed native mapping (takes precedence over source framework spellings)
@@ -116,6 +140,37 @@ def load_prompt(role: str, node_id: str = "") -> str:
     if node_id:
         sections.append("## Source stage duties\n" + node_prompt(node_id))
     sections.append(NATIVE_INSTRUCTIONS)
+    if node_id == "create_factory_md":
+        sections.append(f"""## Native bootstrap template assignment (this stage only)
+Read `{FACTORY_TEMPLATE_PATH}` and `{FACTORY_TEMPLATE_SOURCE_PATH}` in full,
+then read the declared eval_profile.json and original user-intent.md inputs.
+The runtime supplied an unchanged copy of `{FACTORY_TEMPLATE_SOURCE}` at pinned
+source commit `{FACTORY_TEMPLATE_COMMIT}`; its exact SHA-256 is
+`{FACTORY_TEMPLATE_SHA256}`. Verify the recorded source and copy hash.
+Copy that supplied template to factory.md, then fill it for this actual request.
+Keep the required Goal, Scope, Guards, Eval/Command, Threshold and Smoke Test
+concrete; preserve applicable template sections and document native adaptations.
+The specific source-stage assignment and declared factory.md output take
+precedence over the inherited CEO's general prohibition on config/non-review
+writes ONLY for creating this configuration in this stage. This does not permit
+application-code edits, other config writes, specialist work or later stages.
+For this local artifact-only run, replace the remote Target Branch/publication
+defaults with an explicit not-applicable explanation; do not create a branch,
+commit or PR. Use the actual native validation and requested acceptance commands.
+If the requested mode is intentionally unscored, replace the live optimizer
+score command/0.8 default with honest acceptance checks and their pass/fail bar;
+do not fabricate a numeric score, eval/score.py or Task. If scoring is requested,
+preserve its actual requested contract instead of inventing a score or result.
+Only populate Eval Spec and research sections when the supplied source context
+actually activates them. eval_profile.json records any existing eval_spec.json
+and current.md Research Configuration, their source bytes and hashes; absent
+inputs may remain harmless commented examples or be marked not applicable.
+Do not convert unused example weights/research settings into active requirements.
+Smoke outputs must use freshly allocated paths within this invocation's project
+or a supplied readable/writable private TMPDIR, not assumed global /tmp paths.
+Leave the supplied canonical template and provenance unchanged. Deliver only
+factory.md; the normal delivery receipt binds its inputs and filled output.
+""")
     return "\n\n".join(sections)
 
 

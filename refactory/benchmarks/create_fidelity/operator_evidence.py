@@ -212,9 +212,9 @@ def _expanded_command(command: str, substitutions: dict) -> str:
     expanded = command
     for token, value in substitutions.items():
         placeholder = (isinstance(token, str) and re.fullmatch(
-            r"(?:[A-Z][A-Z0-9_]*|<[A-Za-z][A-Za-z0-9_]*>|\$\{[A-Za-z][A-Za-z0-9_]*\}|\$[A-Za-z][A-Za-z0-9_]*|/path/to/[A-Za-z0-9_/-]+)", token))
+            r"(?:[A-Z][A-Z0-9_]*|<[A-Za-z][A-Za-z0-9_]*>|\$\{[A-Za-z][A-Za-z0-9_]*\}|\$[A-Za-z][A-Za-z0-9_]*|/path/to/[A-Za-z0-9_/-]+|/absolute/[A-Za-z0-9_./-]+)", token))
         if (not placeholder or "booking_conflicts.py" in token or not isinstance(value, str)
-                or not Path(value).is_absolute() or re.search(r"[\n\r;`$|&]", value)):
+                or ".." in Path(token).parts or not Path(value).is_absolute() or re.search(r"[\n\r;`$|&]", value)):
             raise ValueError("README substitutions are limited to explicit path/interpreter placeholders")
         pattern = re.compile(r"(?<![\w-])" + re.escape(token) + r"(?!\w)")
         # Unused parameter values are harmless; they cannot replace command
@@ -224,10 +224,19 @@ def _expanded_command(command: str, substitutions: dict) -> str:
 
 
 def _command_words(expanded: str, cwd: str) -> tuple[list[str], Path]:
-    words = shlex.split(expanded)
+    # Shell continuations join source lines before lexical argument parsing.
+    # Preserve the original README/receipt command; normalize only for binding.
+    logical = expanded.replace("\\\r\n", "").replace("\\\n", "").strip()
     directory = Path(cwd)
     if not directory.is_absolute():
         raise ValueError("command cwd must identify the actual absolute invocation directory")
+    first, separator, remainder = logical.partition("\n")
+    prelude = shlex.split(first)
+    if separator and len(prelude) == 2 and prelude[0] == "cd":
+        selected = Path(prelude[1])
+        directory = selected if selected.is_absolute() else directory / selected
+        logical = remainder
+    words = shlex.split(logical)
     if len(words) >= 4 and words[0] == "cd" and words[2] == "&&":
         selected = Path(words[1])
         directory = selected if selected.is_absolute() else directory / selected
@@ -253,6 +262,7 @@ def _readme(project: Path, document: dict, context: OperatorEvidenceContext, nat
     if not isinstance(executions, list) or len(executions) != 2 or {r.get("kind") for r in executions} != {"standalone", "native"}:
         raise ValueError("README review needs actual standalone and native command execution receipts")
     refs = [document["readme_path"]]
+    observed_statuses = []
     for item in executions:
         execution = _read(context.root, item["receipt_path"])
         if digest(_path(context.root, item["receipt_path"])) != item.get("sha256"):
@@ -267,8 +277,8 @@ def _readme(project: Path, document: dict, context: OperatorEvidenceContext, nat
         argv = execution.get("argv")
         if argv not in (shlex.split(expanded), ["/bin/sh", "-c", expanded]):
             raise ValueError("actual argv does not execute the documented command with its recorded substitutions")
-        if not execution.get("cwd") or execution.get("returncode") != 0 or execution.get("package_before") != package or execution.get("package_after") != package:
-            raise ValueError("README command failed or modified the authored package")
+        if not execution.get("cwd") or execution.get("package_before") != package or execution.get("package_after") != package:
+            raise ValueError("README command omitted its invocation context or modified the authored package")
         words, cwd = _command_words(expanded, execution["cwd"])
         if item["kind"] == "standalone":
             scripts = [Path(word) if Path(word).is_absolute() else cwd / word for word in words if Path(word).name == "booking_conflicts.py"]
@@ -276,22 +286,56 @@ def _readme(project: Path, document: dict, context: OperatorEvidenceContext, nat
                 raise ValueError("README standalone command did not execute the actual authored booking_conflicts.py")
         if datetime.fromisoformat(execution["finished"]) < datetime.fromisoformat(execution["started"]):
             raise ValueError("command execution interval is invalid")
+        streams = {}
         for stream in ("stdout", "stderr"):
             details = execution[stream]
             if digest(_path(context.root, details["path"])) != details["sha256"]:
                 raise ValueError("actual command stdout/stderr evidence changed")
+            streams[stream] = _path(context.root, details["path"]).read_text(errors="replace")
         output = execution["output"]
-        out = _path(context.root, output["path"])
-        if digest(out) != output["sha256"] or json.loads(out.read_text()) != execution["expected_output"]:
-            raise ValueError("README execution output does not match its preserved actual result")
+        returncode = execution.get("returncode")
+        status = execution.get("execution_status", "passed" if type(returncode) is int and returncode == 0 else "failed")
+        if status not in {"passed", "failed", "unavailable"}:
+            raise ValueError("README execution status is invalid")
+        actual_output = Path(execution["output_file"])
+        if not actual_output.is_absolute():
+            raise ValueError("actual invocation output path must be absolute")
+        if output is None:
+            if status == "passed" or actual_output.exists():
+                raise ValueError("passing/existing README output cannot be omitted from preserved evidence")
+            observed_output = None
+        else:
+            out = _path(context.root, output["path"])
+            if digest(out) != output["sha256"] or digest(actual_output) != output["sha256"]:
+                raise ValueError("README execution output does not match its preserved actual result")
+            streams["output"] = out.read_text(errors="replace")
+            try:
+                observed_output = json.loads(streams["output"])
+            except ValueError:
+                if status == "passed":
+                    raise ValueError("passing README output is not valid JSON")
+                observed_output = None
+        if status == "passed":
+            if type(returncode) is not int or returncode != 0 or observed_output != execution["expected_output"]:
+                raise ValueError("a passing README execution needs actual zero status and the expected preserved output")
+        else:
+            reason, diagnostic = execution.get("reason"), execution.get("diagnostic", {})
+            quote = diagnostic.get("quote")
+            if (not isinstance(reason, str) or not reason.strip() or not isinstance(quote, str) or not quote.strip()
+                    or quote not in streams.get(diagnostic.get("stream"), "")):
+                raise ValueError("nonpassing README execution needs a precise reason and preserved diagnostic excerpt")
+            if type(returncode) is not int and not execution.get("timed_out"):
+                raise ValueError("nonpassing README execution omitted its actual process outcome")
+            if document["verdict"] == "passed":
+                raise ValueError("failed or unavailable execution cannot certify a passing README review")
+        observed_statuses.append(status)
         if execution["expected_output"] not in ({"conflicts": [["a", "b"]]}, {"conflicts": []}):
             raise ValueError("README execution must use a frozen independently specified booking example")
         input_record = execution["input"]
         data = _read_input(context.root, input_record)
-        actual_input, actual_output = Path(execution["input_file"]), Path(execution["output_file"])
-        if (not actual_input.is_absolute() or not actual_output.is_absolute()
-                or digest(actual_input) != input_record["sha256"] or digest(actual_output) != output["sha256"]):
-            raise ValueError("preserved README input/output does not match the actual invocation file bytes")
+        actual_input = Path(execution["input_file"])
+        if not actual_input.is_absolute() or digest(actual_input) != input_record["sha256"]:
+            raise ValueError("preserved README input does not match the actual invocation file bytes")
         required = [{"id": "a", "room": "A", "start": 0, "end": 10}, {"id": "b", "room": "A", "start": 5, "end": 15}]
         touching = [{"id": "c", "room": "A", "start": 0, "end": 10}, {"id": "d", "room": "A", "start": 10, "end": 20}]
         if (data, execution["expected_output"]) not in ((required, {"conflicts": [["a", "b"]]}), (touching, {"conflicts": []})):
@@ -305,6 +349,9 @@ def _readme(project: Path, document: dict, context: OperatorEvidenceContext, nat
         if item["kind"] == "standalone" and not all(token in expanded for token in ("booking_conflicts.py", "--input", "--output")):
             raise ValueError("standalone README example does not use the promised CLI")
         refs.append(str(_path(context.root, item["receipt_path"])))
+    expected = "failed" if "failed" in observed_statuses else "unavailable" if "unavailable" in observed_statuses else "passed"
+    if document["verdict"] != expected:
+        raise ValueError("README review contradicts its actual execution statuses")
     return refs
 
 

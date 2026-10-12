@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -12,9 +13,11 @@ import pytest
 from refactory_dsh.create_fidelity import CreateFidelityMode
 from refactory_dsh import create_fidelity_ops as ops
 from refactory_dsh.create_fidelity_prompts import reference, load_prompt
+from refactory_dsh import create_fidelity_prompts as prompts
 from refactory_dsh.nn import Graph, Executor, Node, RunContext, execute, validate_state
 
 FIXTURE = Path(__file__).parent / "fixtures/create_fidelity/v1/reference.json"
+PINNED_TEMPLATE_SHA256 = "50d8a754f707e915a0b13bd8a235d201b1930939d3b6801958dde9242e8a672e"
 
 
 def test_exact_source_topology_roles_gates_and_original_artifact_contracts():
@@ -71,6 +74,22 @@ def test_production_prompts_preserve_full_source_and_native_mapping():
         assert "runtime knobs" in prompt
 
 
+def test_canonical_bootstrap_template_matches_independent_source_pin_and_rejects_tampering(tmp_path, monkeypatch):
+    supplied = prompts.factory_template()
+    assert supplied["source_commit"] == "3ab6f8f7ca792c874f2654574d7f7fd6dd18b896"
+    assert supplied["source_path"] == "templates/factory_config.md"
+    assert hashlib.sha256(supplied["text"].encode()).hexdigest() == PINNED_TEMPLATE_SHA256
+    assert supplied["source_sha256"] == PINNED_TEMPLATE_SHA256
+    altered = dict(supplied, text=supplied["text"] + "\nChanged canonical input.\n")
+    # A resource cannot bless its own changed bytes by changing its recorded hash.
+    altered["source_sha256"] = hashlib.sha256(altered["text"].encode()).hexdigest()
+    resource = tmp_path / "altered-template.json"
+    resource.write_text(json.dumps(altered))
+    monkeypatch.setattr(prompts, "_FACTORY_TEMPLATE_RESOURCE", resource)
+    with pytest.raises(ValueError, match="pinned source"):
+        prompts.factory_template()
+
+
 def test_substantive_input_delivery_preserves_template_looking_data_bytes(tmp_path):
     ctx = RunContext(tmp_path, facts={"name": "authored_name"})
     raw = "# Complete child evidence\n\nCode example keeps literal {{name}} and {{native_api}} as input data.\n"
@@ -99,13 +118,31 @@ class BootstrapIO:
     """Only external model responses are scripted; real graph/ops/delivery run."""
     def __init__(self):
         self.calls = []
+        self.template_input = None
     def complete(self, prompt, *, system="", workdir=None):
         contract = json.loads(prompt.split("<!-- refactory worker execution -->", 1)[1].split("<!-- end refactory worker execution -->", 1)[0].split("\n", 2)[2])
         node = contract["node"]
         self.calls.append(node)
         output = Path(contract["outputs"][0])
         if node == "create_factory_md":
-            output.write_text("# Factory\n\n## Goal\nAuthor the reusable requested package.\n\n## Scope\nNative local artifacts.\n\n## Guards\nPreserve user intent.\n")
+            # Fake only the external author. Actual graph, input publication,
+            # file copy/fill, declaration checks and delivery receipts execute.
+            template = output.parent / prompts.FACTORY_TEMPLATE_PATH
+            provenance = json.loads((output.parent / prompts.FACTORY_TEMPLATE_SOURCE_PATH).read_text())
+            assert str(template) in contract["inputs"]
+            assert str(output.parent / prompts.FACTORY_TEMPLATE_SOURCE_PATH) in contract["inputs"]
+            assert hashlib.sha256(template.read_bytes()).hexdigest() == PINNED_TEMPLATE_SHA256
+            assert provenance["source_sha256"] == provenance["template_sha256"] == PINNED_TEMPLATE_SHA256
+            assert template.read_text() in prompt
+            self.template_input = template.read_bytes()
+            shutil.copyfile(template, output)
+            filled = output.read_text().replace("TODO: Describe the project goal here.", "Author the reusable requested package.")
+            filled = filled.replace("- src/**/*.py\n- tests/**/*.py", "- .factory/packages/portable_test/**")
+            filled = filled.replace("python eval/score.py", "python -m refactory_dsh.create_fidelity_ops validate portable_test --project .")
+            filled = filled.replace("\n0.8\n", "\nAll requested native artifact and CLI acceptance checks must pass; intentionally unscored, no optimizer score.\n")
+            filled = filled.replace("\nmain\n", "\nNot applicable: local artifact-only creation; no branch, commit or publication.\n")
+            filled = filled.replace("## Smoke Test\n", "## Smoke Test\n\n```bash\npython -m refactory_dsh.registry list --project . --json\n```\n\n")
+            output.write_text(filled)
         elif node == "graph_explorer":
             output.write_text("# Graph context\n\nThe project main.py module imports json and defines main. The module is a direct CLI entry point. This conclusion is grounded in graph.json and the inspected source.\n")
         else:
@@ -128,14 +165,81 @@ def test_bootstrap_crosses_real_branch_study_and_delivery_boundaries(tmp_path):
     assert result.exit_ok, result.error
     assert result.facts["create_fidelity"] is True
     assert model.calls == ["create_factory_md", "graph_explorer"]
+    assert hashlib.sha256(model.template_input).hexdigest() == PINNED_TEMPLATE_SHA256
     assert [(step.node, step.verdict) for step in executor.steps if step.kind == "gate"] == [("gate_has_factory", "halt"), ("gate_factory_md_exists", "halt")]
     knowledge = json.loads((run / "graph.json").read_text())
     assert any(n["id"] == "main:main" for n in knowledge["nodes"])
     assert any(e["source"] == "main" and e["target"] == "json" for e in knowledge["edges"])
     assert "direct CLI entry point" in (run / ".factory/strategy/study-combined.md").read_text()
     assert (run / ".refactory/agent-delivery").is_dir()
+    assert (run / prompts.FACTORY_TEMPLATE_PATH).read_bytes() == model.template_input
+    config = json.loads((run / ".factory/config.json").read_text())
+    assert config["bootstrap_template_input"]["source_sha256"] == PINNED_TEMPLATE_SHA256
+    assert config["source_sha256"] == hashlib.sha256((run / "factory.md").read_bytes()).hexdigest()
+    assert {"Goal", "Scope", "Guards", "Command", "Threshold", "Smoke Test"} <= set(config["sections"])
+    assert "intentionally unscored" in config["sections"]["Threshold"]
+    assert "Not applicable" in config["sections"]["Target Branch"]
+    assert "python eval/score.py" not in (run / "factory.md").read_text()
+    receipts = [json.loads(f.read_text()) for f in (run / ".refactory/agent-delivery").glob("*/receipt.json")]
+    receipt = next(r for r in receipts if r["node"] == "create_factory_md")
+    assert receipt["status"] == "delivered"
+    fingerprints = receipt["execution"]["input_fingerprints"]
+    assert fingerprints[prompts.FACTORY_TEMPLATE_PATH] == PINNED_TEMPLATE_SHA256
+    assert fingerprints[prompts.FACTORY_TEMPLATE_SOURCE_PATH] == hashlib.sha256((run / prompts.FACTORY_TEMPLATE_SOURCE_PATH).read_bytes()).hexdigest()
     assert not (source / "factory.md").exists()
     assert not (source / ".factory").exists()
+
+
+@pytest.mark.parametrize("changed", ["template", "line-endings", "provenance"])
+def test_bootstrap_refuses_changed_canonical_input_before_config_initialization(tmp_path, changed):
+    source = tmp_path / "source"
+    source.mkdir()
+    ctx = RunContext(tmp_path / "run", knobs={"name": "portable_test", "brief": "Produce an unscored reusable native artifact", "project_path": str(source)})
+    ctx.facts.update(ops.init_user_intent(ctx))
+    ctx.write_text("factory.md", "# Factory\n\n## Goal\nProduce the requested local artifact.\n")
+    if changed == "template":
+        ctx.write_text(prompts.FACTORY_TEMPLATE_PATH, ctx.read_text(prompts.FACTORY_TEMPLATE_PATH) + "\nChanged source template.\n")
+    elif changed == "line-endings":
+        path = ctx.path(prompts.FACTORY_TEMPLATE_PATH)
+        path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+    else:
+        record = ctx.read_json(prompts.FACTORY_TEMPLATE_SOURCE_PATH)
+        record["source_commit"] = "untrusted revision"
+        ctx.write_json(prompts.FACTORY_TEMPLATE_SOURCE_PATH, record)
+    with pytest.raises(ValueError, match="template input or provenance changed"):
+        ops.factory_init(ctx)
+    assert not ctx.exists(".factory/config.json")
+
+
+def test_factory_initialization_records_exact_filled_file_bytes(tmp_path):
+    ctx = RunContext(tmp_path)
+    content = b"# Factory\r\n\r\n## Goal\r\nProduce the requested local artifact.\r\n"
+    ctx.path("factory.md").write_bytes(content)
+    ops.factory_init(ctx)
+    assert ctx.read_json(".factory/config.json")["source_sha256"] == hashlib.sha256(content).hexdigest()
+
+
+@pytest.mark.parametrize("has_research_config", [False, True])
+def test_discovery_preserves_actual_conditional_bootstrap_inputs(tmp_path, has_research_config):
+    source = tmp_path / "source"
+    (source / ".factory/strategy").mkdir(parents=True)
+    eval_spec = '{"checks": ["Inspect the actual native artifact"]}\n'
+    (source / ".factory/eval_spec.json").write_text(eval_spec)
+    strategy = "# Existing strategy\n\n" + ("## Research Configuration\n\nMetric supplied by this project.\n" if has_research_config else "No research configuration.\n")
+    (source / ".factory/strategy/current.md").write_text(strategy)
+    ctx = RunContext(tmp_path / "run", facts={"project_path": str(source)})
+    ops.discover(ctx)
+    context = ctx.read_json(".factory/eval_profile.json")["bootstrap_context"]
+    assert context["eval_spec"]["applicable"] is True
+    assert context["eval_spec"]["content"] == eval_spec
+    assert context["eval_spec"]["source_sha256"] == hashlib.sha256(eval_spec.encode()).hexdigest()
+    assert context["research_configuration"]["exists"] is True
+    assert context["research_configuration"]["applicable"] is has_research_config
+    if has_research_config:
+        assert context["research_configuration"]["content"] == strategy
+        assert context["research_configuration"]["source_sha256"] == hashlib.sha256(strategy.encode()).hexdigest()
+    else:
+        assert "content" not in context["research_configuration"]
 
 
 def make_package(project: Path):

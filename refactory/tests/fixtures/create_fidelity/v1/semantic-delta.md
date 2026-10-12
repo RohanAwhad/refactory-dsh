@@ -22,6 +22,37 @@ Known reference executor defects (including malformed bootstrap shell quoting)
 are failures to record; they are not behavioral requirements to reproduce.
 JSON director plans and prose quality summaries are separate artifacts in DSH.
 
+Future-run native bootstrap template mapping supplies the exact canonical
+`templates/factory_config.md` from the same pinned source commit as a production
+resource, independent of this test oracle. Its SHA-256 is
+`50d8a754f707e915a0b13bd8a235d201b1930939d3b6801958dde9242e8a672e`.
+The existing `init_user_intent` node publishes an unchanged run-local template
+and source/copy provenance under `.factory/bootstrap/`. `create_factory_md`
+declares both as inputs, reads/copies/fills the template, and delivers the
+filled configuration through normal input/output-bound agent receipts. The
+input provenance proves which canonical bytes were supplied; it does not
+self-certify that a model copied/filled them or that acceptance passed.
+
+The specific source assignment to create `factory.md` and that stage's declared
+output takes precedence over the inherited CEO's general config/non-review
+write prohibition only for this configuration stage. It does not authorize
+application-code edits, arbitrary config changes or another specialist's work.
+The six source-required fields remain concrete. Canonical `Eval`/`Command` and
+`Threshold` adapt to actual native validation and requested acceptance commands
+for intentionally unscored artifact modes; no default `0.8` optimizer score,
+`eval/score.py` or Task is fabricated. Requested scored contracts are preserved.
+Remote Target Branch/publication defaults become explicitly not applicable in
+this local artifact-only run. Eval Spec/research sections activate only from
+actual source context; absent sections may keep harmless commented examples or
+be explicitly marked not applicable. Smoke outputs use fresh project/private
+TMPDIR paths that respect the invocation's readable/writable boundary.
+
+This adds only candidate artifact declarations to existing nodes, retaining
+29 nodes/33 edges and original source prompts. It changes future candidate graph
+identity; saved checkpoints and frozen v6 artifacts are not rewritten. The v6
+operator review's missing literal template-copy provenance remains historical
+unavailable evidence, not retroactively repaired by this mapping.
+
 No user patch is transplanted. The local patch inventory in `baseline.json`
 records digests and disposition. Public Create remains the rollback baseline.
 

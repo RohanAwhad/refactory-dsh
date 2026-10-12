@@ -6,7 +6,10 @@ and saved graph states are unaffected. Source topology is deliberately explicit.
 
 from __future__ import annotations
 
-from refactory_dsh.create_fidelity_prompts import load_prompt, node_prompt, NATIVE_INSTRUCTIONS
+from refactory_dsh.create_fidelity_prompts import (
+    FACTORY_TEMPLATE_PATH, FACTORY_TEMPLATE_SOURCE_PATH,
+    load_prompt, node_prompt, NATIVE_INSTRUCTIONS,
+)
 from refactory_dsh.nn import Graph, Knob, Mode, Node, Port, artifact_produced
 
 OPS = "refactory_dsh.create_fidelity_ops"
@@ -37,7 +40,8 @@ class CreateFidelityMode(Mode):
         g = Graph()
         g.add(Node("init_user_intent", "op", call=f"{OPS}:init_user_intent",
                    knobs=("name", "brief", "variant", "output_folder", "project_path", "requires_input"),
-                   writes=(S + "user-intent.md", ".factory/create-request.json", R + "repair-feedback.md", "factory.md", ".factory/config.json"),
+                   writes=(S + "user-intent.md", ".factory/create-request.json", R + "repair-feedback.md", "factory.md", ".factory/config.json",
+                           FACTORY_TEMPLATE_PATH, FACTORY_TEMPLATE_SOURCE_PATH),
                    produces=("create_fidelity", "name", "brief", "variant", "output_folder",
                              "project_path", "artifact_project", "requires_input", "native_api")))
         g.add(Node("gate_has_factory", "gate", evaluator=f"{OPS}:gate_has_factory"))
@@ -45,8 +49,10 @@ class CreateFidelityMode(Mode):
         g.add(Node("gate_factory_md_exists", "gate", evaluator=f"{OPS}:gate_factory_md_exists"))
         g.add(Node("create_factory_md", "agent", role="ceo",
                    prompt_template=load_prompt("ceo", "create_factory_md"),
-                   reads=(".factory/eval_profile.json",), writes=("factory.md",)))
-        g.add(Node("factory_init", "op", call=f"{OPS}:factory_init", reads=("factory.md",), writes=(".factory/config.json",)))
+                   reads=(".factory/eval_profile.json", S + "user-intent.md",
+                          FACTORY_TEMPLATE_PATH, FACTORY_TEMPLATE_SOURCE_PATH), writes=("factory.md",)))
+        g.add(Node("factory_init", "op", call=f"{OPS}:factory_init",
+                   reads=("factory.md", FACTORY_TEMPLATE_PATH, FACTORY_TEMPLATE_SOURCE_PATH), writes=(".factory/config.json",)))
         g.add(Node("graph_update", "op", call=f"{OPS}:graph_update", writes=("graph.json",)))
         g.add(Node("study", "op", call=f"{OPS}:study", reads=("graph.json",), writes=(S + "observations.md",)))
         g.add(Node("graph_explorer", "agent", role="researcher",

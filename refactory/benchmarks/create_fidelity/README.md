@@ -22,6 +22,13 @@ python -m benchmarks.create_fidelity.harness live /tmp/create-pair
 
 Preparation freezes source bytes, lockfiles, brief, checker, topology contract,
 runtime route, and timeout allowances. Changing any source requires a new trial.
+Authoring context v2 also supplies the same explicit external-check ownership
+to every lane, with a separate frozen digest. The public booking brief and
+56-case checker stay unchanged. The checker runs under the operator after
+authoring; internal gates must still evaluate actual local tests and defects,
+while final benchmark acceptance cannot pass without the external checker.
+Older trials retain their original context and cannot gain this clarification
+through re-scoring.
 Supply `--baseline-runtime-root` and `--candidate-runtime-root` to keep each
 worker launcher anchored to its frozen checkout. These override the common
 `--runtime-root`. Installed dependency bytes, symlink bindings and launcher

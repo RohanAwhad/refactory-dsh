@@ -49,6 +49,10 @@ DEFAULT_TIMEOUT_S = 1800
 #: session inside the dispatch runs under the same wall (#307).
 NODE_DISPATCH_OVERHEAD_S = 600
 
+# Stay below common per-argument limits as well as the process-wide ARG_MAX.
+# DSH headless explicitly supports '-' as a byte-preserving stdin task.
+PROMPT_ARGV_LIMIT_BYTES = 64 * 1024
+
 
 def node_session_budget_s(attempts: int, timeout_s: int) -> int:
     """The wall a node's dispatch reserves: attempts sessions plus overhead.
@@ -563,11 +567,37 @@ class DshModelClient:
         attempts; without one, the call is a plain completion bounded by
         ``timeout_s``.
         """
+        from contextlib import ExitStack
+        import hashlib
+        import tempfile
+
         timeout_s = budget_s if budget_s is not None else self._timeout_s
-        with _termination_as_exit():
+        with _termination_as_exit(), ExitStack() as transport:
             self._raise_if_cancelled()
+            launch = cmd
+            stdin = None
+            task_bytes = cmd[-1].encode('utf-8')
+            transport_kind = 'argv'
+            if self._worker_backend == 'dsh' and len(task_bytes) > PROMPT_ARGV_LIMIT_BYTES:
+                # Installed dsh-headless resolves '-' by reading all stdin as
+                # UTF-8, without trimming task content. File-backed stdin avoids
+                # both argv limits and a blocking parent write before polling.
+                # Anonymous/private storage remains inside this worker's cwd;
+                # ExitStack closes it on success, failed spawn, timeout or stop.
+                stdin = transport.enter_context(tempfile.TemporaryFile(dir=run_dir))
+                stdin.write(task_bytes)
+                stdin.seek(0)
+                launch = [*cmd[:-1], '-']
+                transport_kind = 'stdin_file'
+            if self._worker_receipt is not None:
+                from refactory_dsh.workers import _write_receipt
+                record = json.loads(self._worker_receipt.read_text())
+                record['prompt_transport'] = {'kind': transport_kind, 'encoding': 'utf-8',
+                                              'bytes': len(task_bytes),
+                                              'sha256': hashlib.sha256(task_bytes).hexdigest()}
+                _write_receipt(self._worker_receipt, record)
             proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                launch, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                 cwd=str(run_dir), env=self._environment(),
                 # A terminal Ctrl-C reaches the Python caller only. Forward one
                 # shutdown request: DSH escalates a second signal to immediate exit.
@@ -596,4 +626,4 @@ class DshModelClient:
                 # runtime-owned cleanup before propagating failure.
                 shutdown(proc)
                 raise
-            return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+            return subprocess.CompletedProcess(launch, proc.returncode, stdout, stderr)

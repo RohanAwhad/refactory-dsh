@@ -16,7 +16,10 @@ from pathlib import Path
 from typing import Any
 
 from refactory_dsh import registry, sandbox
-from refactory_dsh.create_fidelity_prompts import NATIVE_INSTRUCTIONS, load_prompt
+from refactory_dsh.create_fidelity_prompts import (
+    FACTORY_TEMPLATE_PATH, FACTORY_TEMPLATE_SOURCE_PATH,
+    NATIVE_INSTRUCTIONS, factory_template, load_prompt,
+)
 from refactory_dsh.paths import project_for_nodes
 
 S = ".factory/strategy/"
@@ -112,6 +115,31 @@ def _name(value: str) -> str:
     return value
 
 
+def _template_input() -> tuple[str, dict[str, Any]]:
+    canonical = factory_template()
+    text = canonical["text"]
+    provenance = {"schema_version": 1, "adapter": "native-bootstrap-template",
+                  "source_commit": canonical["source_commit"],
+                  "source_path": canonical["source_path"],
+                  "source_sha256": canonical["source_sha256"],
+                  "template_path": FACTORY_TEMPLATE_PATH,
+                  "template_sha256": _sha(text.encode()), "template_bytes": len(text.encode()),
+                  "note": "Canonical input supplied unchanged; the later agent delivery records the filled output, not a presumed copy or acceptance result."}
+    return text, provenance
+
+
+def _publish_template(ctx: Any) -> None:
+    text, provenance = _template_input()
+    if ctx.exists(FACTORY_TEMPLATE_PATH) and ctx.path(FACTORY_TEMPLATE_PATH).read_bytes() != text.encode():
+        raise ValueError("existing bootstrap template differs from the canonical source; use a fresh run directory")
+    if ctx.exists(FACTORY_TEMPLATE_SOURCE_PATH) and ctx.read_json(FACTORY_TEMPLATE_SOURCE_PATH) != provenance:
+        raise ValueError("existing bootstrap template provenance differs from the canonical source")
+    if not ctx.exists(FACTORY_TEMPLATE_PATH):
+        ctx.write_text(FACTORY_TEMPLATE_PATH, text)
+    if not ctx.exists(FACTORY_TEMPLATE_SOURCE_PATH):
+        ctx.write_json(FACTORY_TEMPLATE_SOURCE_PATH, provenance)
+
+
 def init_user_intent(ctx: Any) -> dict[str, Any]:
     """Publish the complete request before bootstrap or any paid model call."""
     task = dict(getattr(ctx, "task", {}) or {})
@@ -150,6 +178,7 @@ def init_user_intent(ctx: Any) -> dict[str, Any]:
     previous = ctx.read_json(".factory/create-request.json")
     if previous is not None and previous != request:
         raise ValueError("run directory belongs to a different Create request; use a fresh run directory")
+    _publish_template(ctx)
     ledger = S + "user-intent.md"
     if not ctx.exists(ledger):
         ctx.write_text(ledger, "# User intent\n\n## Original request (preserve every ask)\n\n" + brief + "\n\n## Authoring identity\n\n" + json.dumps(request, indent=2) + "\n")
@@ -199,13 +228,27 @@ def discover(ctx: Any) -> None:
         path = source / file
         if path.is_file():
             manifests[file] = {"sha256": _sha(path.read_bytes()), "content": path.read_text(errors="replace")}
+    bootstrap_context = {}
+    for label, relative in (("eval_spec", ".factory/eval_spec.json"),
+                            ("research_configuration", ".factory/strategy/current.md")):
+        path = source / relative
+        data = path.read_bytes() if path.is_file() else None
+        content = data.decode() if data is not None else None
+        applicable = content is not None and (label == "eval_spec" or
+                     re.search(r"^#{1,6}\s+Research Configuration\s*$", content, re.MULTILINE) is not None)
+        bootstrap_context[label] = {"source_path": relative, "exists": content is not None,
+                                    "applicable": applicable}
+        if applicable:
+            bootstrap_context[label].update({"source_sha256": _sha(data), "content": content})
     ctx.write_json(".factory/eval_profile.json", {"schema_version": 1, "adapter": "native-source-discovery",
                    "project_path": str(source), "files": files, "manifests": manifests,
+                   "bootstrap_context": bootstrap_context,
                    "eval_status": "not_exercised", "note": "Source inventory; evaluation commands require actual execution evidence."})
 
 
 def factory_init(ctx: Any) -> None:
-    text = ctx.read_text("factory.md")
+    data = ctx.path("factory.md").read_bytes()
+    text = data.decode()
     sections = {}
     current = "preamble"
     for line in text.splitlines():
@@ -216,9 +259,17 @@ def factory_init(ctx: Any) -> None:
             sections.setdefault(current, []).append(line)
     if not text.strip() or not any(k.lower().startswith("goal") for k in sections):
         raise ValueError("factory.md must contain a substantive Goal section")
-    ctx.write_json(".factory/config.json", {"schema_version": 1, "adapter": "native-factory-config",
-                   "source_sha256": _sha(text.encode()), "sections": {k: "\n".join(v).strip() for k, v in sections.items()},
-                   "request": ctx.read_json(".factory/create-request.json")})
+    config = {"schema_version": 1, "adapter": "native-factory-config",
+                   "source_sha256": _sha(data), "sections": {k: "\n".join(v).strip() for k, v in sections.items()},
+                   "request": ctx.read_json(".factory/create-request.json")}
+    if ctx.exists(FACTORY_TEMPLATE_PATH) or ctx.exists(FACTORY_TEMPLATE_SOURCE_PATH):
+        canonical, provenance = _template_input()
+        if (not ctx.path(FACTORY_TEMPLATE_PATH).is_file()
+                or ctx.path(FACTORY_TEMPLATE_PATH).read_bytes() != canonical.encode()
+                or ctx.read_json(FACTORY_TEMPLATE_SOURCE_PATH) != provenance):
+            raise ValueError("bootstrap template input or provenance changed before factory initialization")
+        config["bootstrap_template_input"] = provenance
+    ctx.write_json(".factory/config.json", config)
 
 
 def graph_update(ctx: Any) -> None:
