@@ -47,7 +47,10 @@ def test_post_operation_runtime_drift_cannot_report_completed(tmp_path, monkeypa
     monkeypatch.setattr(harness, "source_identity", lambda *args: identity)
     snapshots = iter([pin, {**pin, "version": 2}])
     monkeypatch.setattr(harness, "runtime_identity", lambda *args: next(snapshots))
-    monkeypatch.setattr(harness, "execute_command", lambda *args, **kwargs: {"status": "completed", "returncode": 0})
+    def controlled_command(*args, **kwargs):
+        assert kwargs["env"]["PYTHONPATH"].split(":")[0] == config["adapter_root"]
+        return {"status": "completed", "returncode": 0}
+    monkeypatch.setattr(harness, "execute_command", controlled_command)
     result = harness.run_lane(tmp_path, "dsh-candidate", "author")
     assert result["status"] == "failed"
     assert "runtime changed" in result["integrity_error"]

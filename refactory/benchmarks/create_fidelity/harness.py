@@ -132,7 +132,12 @@ def prepare(args) -> dict:
                         getattr(args, "candidate_runtime_root", None) if lane == "dsh-candidate" else None) or args.runtime_root
         runtime_root = runtime_root.resolve()
         runtime_pin = runtime_identity(runtime_root, dependency_cache) if flavor == "dsh" else None
-        hidden = [operator, FIXTURES, *getattr(args, "hidden", [])]
+        # An archived candidate contains another copy of the independent checker
+        # and controlled fixture solutions. Hide test/benchmark sources in every
+        # snapshot, not just the harness checkout's FIXTURES directory.
+        source_tests = [path for src in sources.values() for path in
+                        (src / "tests", src / "refactory/tests", src / "refactory/benchmarks")]
+        hidden = [operator, FIXTURES, *source_tests, *getattr(args, "hidden", [])]
         peers = [p for other, p in projects.items() if other != lane]
         runtime_home = project / "runtime/dsh"
         profile_dir = runtime_home / "profiles/headless"
@@ -190,7 +195,10 @@ def prepare(args) -> dict:
                   "runtime_state_isolation": {"status": "pending-probe", "dsh_home": str(runtime_home),
                       "claude_config_dir": str(project / "runtime/claude"),
                       "private_tmp": str(project / "tmp"), "shared_auth_reference": str(auth_source)},
-                  "forbidden_controls": [str(operator / "isolation-canary.txt"), *[str(p / "isolation-canary.txt") for p in peers]]}
+                  "forbidden_controls": [str(operator / "isolation-canary.txt"), *[str(p / "isolation-canary.txt") for p in peers],
+                      *[str(p) for src in sources.values() for p in
+                        (src / "refactory/tests/fixtures/create_fidelity/v1/acceptance.py",
+                         src / "refactory/tests/test_create_fidelity_native_lane.py") if p.is_file()]]}
         write(root / lane / "config.json", config)
     trial = {"schema_version": 1, "benchmark_version": 1, "trial_id": root.name,
              "shared_brief_sha256": digest(FIXTURES / "brief.md"),
@@ -267,7 +275,9 @@ def run_lane(root: Path, lane: str, operation: str) -> dict:
     if runtime_pin and runtime_identity(Path(runtime_pin["root"])) != runtime_pin:
         raise ValueError("Worker runtime or installed dependencies changed after preparation")
     env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join([str(source / "refactory" if lane.startswith("dsh") else source), config["adapter_root"]])
+    # Always execute the hashed adapter copy; a candidate repository may carry
+    # its own older benchmarks package, which must not shadow this controller.
+    env["PYTHONPATH"] = os.pathsep.join([config["adapter_root"], str(source / "refactory" if lane.startswith("dsh") else source)])
     env["PATH"] = str(Path(config["python"]).parent) + os.pathsep + env.get("PATH", "")
     env["REFACTORY_PROJECT"] = str(project)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
