@@ -88,7 +88,7 @@ def dsh_probe(config: dict, project: Path) -> dict:
 
 def remote_author(config: dict, project: Path) -> dict:
     from factory.workflow.registry import WorkflowRegistry
-    from factory.workflow.definitions import DEFAULT_AGENT_POOL
+    from factory.workflow.primitives import DEFAULT_AGENT_POOL
     from factory.workflow.executor import WorkflowExecutor
     from factory.agents.runner import invoke_agent
 

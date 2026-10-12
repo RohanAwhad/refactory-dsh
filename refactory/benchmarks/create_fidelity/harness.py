@@ -344,7 +344,10 @@ def main() -> int:
     elif args.command == "check": result = check_artifact(args.root.resolve(), args.lane)
     else: result = collect(args.root.resolve())
     print(json.dumps(result, indent=2))
-    return 0 if args.command in {"prepare", "approve"} or isinstance(result, dict) and result.get("status") == "passed" else 1
+    successful = (isinstance(result, dict) and result.get("status") in {"passed", "completed"}
+                  or isinstance(result, list) and bool(result)
+                  and all(item.get("status") in {"passed", "completed"} for item in result))
+    return 0 if args.command in {"prepare", "approve"} or successful else 1
 
 
 if __name__ == "__main__":
