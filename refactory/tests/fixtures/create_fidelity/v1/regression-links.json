@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "interpretation": "Source and regression links explain candidate fixes; only each trial's scorecards establish live status.",
+  "issue": "https://github.com/boston-harness-group/refactory-dsh/issues/310",
+  "rows": [
+    {
+      "requirements": ["F.stage.", "F.qa_barrier", "F.completion"],
+      "owner": "graph and orchestration",
+      "fix": "Restore source stage responsibilities, joins, repair routes and truthful completion.",
+      "source": "refactory/refactory_dsh/create_fidelity.py",
+      "regression": "refactory/tests/test_create_fidelity_orchestration.py"
+    },
+    {
+      "requirements": ["F.children.", "F.obligations", "F.consumption"],
+      "owner": "directors",
+      "fix": "Dispatch every planned child and consume complete typed, digest-bound reports; preserve original requirement IDs such as B01.",
+      "source": "refactory/refactory_dsh/create_fidelity_directors.py",
+      "regression": "refactory/tests/test_create_fidelity_directors.py"
+    },
+    {
+      "requirements": ["F.approval", "F.repair"],
+      "owner": "gates and runtime",
+      "fix": "Consume fresh human answers for exact strategy/intent inputs; retain AI gate ownership and repair feedback.",
+      "source": "refactory/refactory_dsh/create_fidelity_gates.py",
+      "regression": "refactory/tests/test_create_fidelity_runtime.py"
+    },
+    {
+      "requirements": ["F.approval", "F.stage.gate_strategy"],
+      "owner": "runtime recovery",
+      "fix": "Resume the certified gate checkpoint while allowing newly supplied ledger context and still rejecting changed source instructions.",
+      "source": "refactory/refactory_dsh/nn/mode.py",
+      "regression": "refactory/tests/test_create_fidelity_orchestration.py"
+    },
+    {
+      "requirements": ["F.approval", "F.stage.gate_strategy"],
+      "owner": "benchmark adapter",
+      "fix": "Use each framework's actual strategy/intent files and the pinned baseline's documented start/facts recovery API.",
+      "source": "refactory/benchmarks/create_fidelity/lane.py",
+      "regression": "refactory/tests/test_create_fidelity_approval_adapter.py"
+    },
+    {
+      "requirements": ["F.route", "F.stage."],
+      "owner": "independent evidence scorer",
+      "fix": "Require served routes to match explicit requests; normalize remote dotted event names and score the latest visit while preserving failed attempts.",
+      "source": "refactory/benchmarks/create_fidelity/evidence.py",
+      "regression": "refactory/tests/test_create_fidelity_score_visits.py"
+    },
+    {
+      "requirements": ["F.deadlines", "F.expiry"],
+      "owner": "runtime lifecycle",
+      "fix": "Honor declared stage allowances, cancel owned children and keep unknown cleanup distinct from confirmed completion.",
+      "source": "refactory/refactory_dsh/nn/executor.py",
+      "regression": "refactory/tests/test_create_fidelity_runtime.py"
+    },
+    {
+      "requirements": ["B08", "B09", "B10", "F.stage.final_precheck"],
+      "owner": "native artifact mapping",
+      "fix": "Validate and admit portable native packages without a Task or score requirement; bind authored bytes and expose native invocation.",
+      "source": "refactory/refactory_dsh/create_fidelity_ops.py",
+      "regression": "refactory/tests/test_create_fidelity_graph_ops.py"
+    },
+    {
+      "requirements": ["B01", "B02", "B03", "B04", "B05", "B06", "B07", "B08", "B09"],
+      "owner": "independent capability harness",
+      "fix": "Run the unchanged 56-case checker and native invocations under a kernel-verified model-free boundary; never count absent cases as success.",
+      "source": "refactory/benchmarks/create_fidelity/lane.py",
+      "regression": "refactory/tests/test_create_fidelity_native_lane.py"
+    }
+  ]
+}

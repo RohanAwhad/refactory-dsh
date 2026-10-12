@@ -356,6 +356,11 @@ class Executor:
     _next_after_completion: str | None = field(default=None, init=False, repr=False)
     _background: list[Any] = field(default_factory=list, init=False, repr=False)
 
+    def __post_init__(self) -> None:
+        # Fresh contexts used by resume still need the logical declarations of
+        # gates that completed before the saved boundary.
+        self.ctx._gate_nodes = {node.id: node for node in self.graph.nodes.values() if node.kind == "gate"}
+
     def _record(
         self, node: str, *, error: str | None = None,
         branches: dict[str, Any] | None = None,
@@ -392,6 +397,15 @@ class Executor:
 
     def run(self, *, start: str | None = None) -> RunResult:
         """Finish owned advisory work before publishing the terminal result."""
+        from refactory_dsh.owned_process import _termination_as_exit
+
+        # Branch model/director calls run in threads and cannot install signal
+        # handlers. The main owner must unwind through run_fork's cancellation
+        # and join before exiting on its default SIGTERM path.
+        with _termination_as_exit():
+            return self._run_owned(start=start)
+
+    def _run_owned(self, *, start: str | None = None) -> RunResult:
         prior_workers = set((self.ctx.workdir / ".refactory/workers").glob("*.json"))
         try:
             result = self._run(start=start)
@@ -400,8 +414,8 @@ class Executor:
             raise
         original_error = result.error
         background_error = self._settle_background(cancel=not result.exit_ok)
-        if background_error and result.error is None:
-            result.error = background_error
+        if background_error:
+            result.error = f"{result.error}; {background_error}" if result.error else background_error
         if self.ctx.facts.get("create_fidelity") and self.ctx.facts.get("create_fidelity_precheck_ok") is False and result.error is None:
             result.error = str(self.ctx.facts.get("create_fidelity_precheck_error") or "Create fidelity final precheck failed")
         result.facts = dict(self.ctx.facts)
@@ -411,7 +425,7 @@ class Executor:
             result.model_calls = max(result.model_calls, len(set((self.ctx.workdir / ".refactory/workers").glob("*.json")) - prior_workers))
             if result.exit_ok:
                 self._record("", outcome="completed")
-            elif original_error is None:
+            elif original_error is None or background_error is not None:
                 # A foreground refusal already recorded its resumable node.
                 # Only failures discovered while settling terminal work need a
                 # new marker; an empty node would destroy approval/resume state.
@@ -423,7 +437,7 @@ class Executor:
     def _settle_background(self, *, cancel: bool = False) -> str | None:
         from concurrent.futures import TimeoutError
 
-        error = None
+        errors = []
         for future, pool, child, stopped, deadline in self._background:
             if cancel:
                 stopped.set()
@@ -433,14 +447,14 @@ class Executor:
                     self.ctx.facts[name] = child.ctx.facts[name]
             except TimeoutError:
                 stopped.set()
-                error = error or "advisory worker did not settle within its stage allowance; child cleanup unconfirmed"
+                errors.append("advisory worker did not settle within its stage allowance; child cleanup unconfirmed")
             except Exception as exc:
-                error = error or f"advisory worker failed: {type(exc).__name__}: {exc}"
+                errors.append(f"advisory worker failed: {type(exc).__name__}: {exc}")
             finally:
                 self.model_calls += child.model_calls
                 pool.shutdown(wait=False, cancel_futures=True)
         self._background.clear()
-        return error
+        return "; ".join(errors) if errors else None
 
     def _run(self, *, start: str | None = None) -> RunResult:
         started = time.time()

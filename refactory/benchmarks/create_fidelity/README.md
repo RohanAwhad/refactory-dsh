@@ -22,6 +22,13 @@ python -m benchmarks.create_fidelity.harness live /tmp/create-pair
 
 Preparation freezes source bytes, lockfiles, brief, checker, topology contract,
 runtime route, and timeout allowances. Changing any source requires a new trial.
+Supply `--baseline-runtime-root` and `--candidate-runtime-root` to keep each
+worker launcher anchored to its frozen checkout. These override the common
+`--runtime-root`. Installed dependency bytes, symlink bindings and launcher
+bytes have a separate identity checked before and after execution. Shared
+published dependencies may be copied into a disposable snapshot; workspace
+bindings must point into the corresponding frozen checkout. Do not use the
+original dirty checkout as an unrecorded runtime dependency.
 The declared 12-hour full-mode ceiling is an initial cap, not a calibrated
 completion estimate. Director stages retain 3600 seconds; builder and Overwatch
 retain 1800. Timeout records distinguish the layer that stopped execution and
@@ -51,6 +58,12 @@ python -m benchmarks.create_fidelity.harness approve /tmp/create-pair dsh-candid
 
 `reloop` requires feedback. Decisions bind exact strategy and intent bytes and
 are consumed once. Never preapprove or fabricate the human's answer.
+The pending request names its exact `input_paths`: candidate/reference use
+`.factory/strategy/current.md` and `user-intent.md`; baseline uses `strategy.json`
+and `brief.json`. Baseline recovery uses its documented native
+`Mode.run(start=checkpoint.node, facts=checkpoint.facts)` API because the pinned
+`Mode.resume` rejects newly added human ledger context. This mapping is recorded
+in `raw/resume-*.json`; the native gate still consumes the fresh answer itself.
 
 After authoring, verify delivered code with native discovery and distinct
 invocation directories, then run the unchanged standalone checker:

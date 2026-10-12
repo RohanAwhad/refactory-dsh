@@ -92,6 +92,14 @@ def package_digest(root: Path) -> str:
             raise ValueError(f"generated package contains a symlink: {path}")
         if not path.is_file() or "__pycache__" in path.parts or path.suffix == ".pyc":
             continue
+        relative = path.relative_to(root)
+        if ".pytest_cache" in relative.parts:
+            # Ignore only pytest's known cache records, not arbitrary files or
+            # authored tests/data merely placed below a cache-named directory.
+            cache_index = relative.parts.index(".pytest_cache")
+            cache_name = "/".join(relative.parts[cache_index + 1:])
+            if cache_name in {"CACHEDIR.TAG", "README.md", ".gitignore", "v/cache/nodeids", "v/cache/lastfailed", "v/cache/stepwise"}:
+                continue
         if path.name in ("SKILL.md", ".native-admission.json", ".origin.json"):
             continue
         hashes[path.relative_to(root).as_posix()] = _sha(path.read_bytes())
@@ -381,11 +389,10 @@ def run_native_mode(project: Path, identifier: str, workdir: Path, knobs: dict[s
         return {"exit_ok": False, "error": "; ".join(admission["problems"]), "raw_evidence": admission["raw_evidence"]}
     project, workdir = Path(project).resolve(), Path(workdir).resolve()
     code = "\n".join([
-        "import json", "from pathlib import Path", "from refactory_dsh import registry", "from refactory_dsh.nn import execute",
+        "import json", "from pathlib import Path", "from refactory_dsh import registry", "from refactory_dsh.nn import execute", "from refactory_dsh.nn.edits import configure",
         f"_, mode_class = registry.resolve(Path({str(project)!r}), {identifier!r})", "mode = mode_class()",
         "state = mode.state_dict()", f"overrides = {knobs!r}",
-        "for key, raw in overrides.items():", "    if key not in state['knobs']: raise ValueError('unknown runtime input ' + key)",
-        "    spec = mode.declare()[key]", "    state['knobs'][key]['value'] = spec.coerce(raw)",
+        "for key, raw in overrides.items():", "    state = configure(state, key, raw)",
         "mode.load_state_dict(state)", f"result = execute(mode.graph(), Path({str(workdir)!r}), knobs={{key: entry['value'] for key, entry in mode.state_dict()['knobs'].items()}})",
         "print(json.dumps({'exit_ok': result.exit_ok, 'error': result.error, 'facts': result.facts, 'workdir': str(result.workdir)}))",
         "raise SystemExit(0 if result.exit_ok else 1)",
@@ -395,6 +402,15 @@ def run_native_mode(project: Path, identifier: str, workdir: Path, knobs: dict[s
             "error": result.payload.get("error") or (result.problem() if not result.ok else None),
             "raw_evidence": {"stdout": result.stdout, "stderr": result.stderr, "returncode": result.returncode,
                              "timed_out": result.timed_out, "timeout_s": result.timeout_s}}
+
+
+def _explicit_adverse_finding(line: str) -> bool:
+    """Recognize authored adverse classifications, not words in test evidence."""
+    return bool(re.match(
+        r"^(?:\[(?:FAIL|NOT_VERIFIED|BLOCKER)\]\s+"
+        r"|(?:status|result|verdict|adversarial verdict)\s*:\s*(?:FAIL(?:ED)?|NOT_VERIFIED)\b"
+        r"|severity\s*:\s*(?:CRITICAL|HIGH|MEDIUM|LOW|BLOCKER)\b"
+        r"|(?:failure|blocking finding)\s*:\s+)", line, re.IGNORECASE))
 
 
 def synthesize_qa(ctx: Any) -> None:
@@ -419,12 +435,21 @@ def synthesize_qa(ctx: Any) -> None:
         if not task_id or task_id in current_reports:
             raise ValueError("QA reports lack independent unique tester identities")
         current_reports[task_id] = report
+        fenced = False
         for line in content.splitlines():
             # Preserve all original reports below. Only exact substantive issue
-            # descriptions can be deterministically promoted across peers.
-            normalized = re.sub(r"\s+", " ", re.sub(r"^[\s#*\-\d.]+", "", line)).strip().casefold()
-            if len(normalized) >= 50 and re.search(r"\b(fail\w*|missing|incorrect|violat\w*|bug|wrong|blocking)\b|does not", normalized):
-                entry = issues.setdefault(normalized, {"finding": line.strip(), "testers": set()})
+            # descriptions explicitly classified adverse can be promoted across
+            # peers. A successful negative test often contains "failed" too.
+            if line.lstrip().startswith(("```", "~~~")):
+                fenced = not fenced
+                continue
+            if fenced:
+                continue
+            cleaned = re.sub(r"^[\s#*\-\d.]+", "", line.replace("**", "")).strip()
+            normalized = re.sub(r"\s+", " ", cleaned).casefold()
+            adverse = _explicit_adverse_finding(cleaned)
+            if len(normalized) >= 50 and (adverse or re.search(r"\b(fail\w*|missing|incorrect|violat\w*|bug|wrong|blocking)\b|does not", normalized)):
+                entry = issues.setdefault(normalized, {"finding": line.strip(), "testers": set(), "adverse": adverse})
                 entry["testers"].add(task_id)
     if not {"workflow-validate", "cli-integration"} <= set(current_reports):
         raise ValueError("QA synthesis is missing a mandatory native tester")
@@ -434,7 +459,11 @@ def synthesize_qa(ctx: Any) -> None:
     confidence = ["## Cross-tester finding confidence"]
     for entry in issues.values():
         testers = sorted(entry["testers"])
-        confidence.append(f"- {'HIGH' if len(testers) > 1 else 'SINGLE SOURCE'} ({', '.join(testers)}): {entry['finding']}")
+        if entry["adverse"]:
+            label = "HIGH" if len(testers) > 1 else "SINGLE SOURCE"
+        else:
+            label = "REPEATED EVIDENCE" if len(testers) > 1 else "UNCLASSIFIED EVIDENCE"
+        confidence.append(f"- {label} ({', '.join(testers)}): {entry['finding']}")
     if not issues:
         confidence.append("No exact substantive issue descriptions overlap; full reports remain below for CEO semantic review.")
     feedback = ctx.read_text(R + "repair-feedback.md") if ctx.exists(R + "repair-feedback.md") else "No repair feedback supplied."
@@ -442,7 +471,7 @@ def synthesize_qa(ctx: Any) -> None:
                 "\n".join(confidence), "## Health checker (complete report)", health,
                 "## Code reviewer (complete report)", code, "## Adversarial reports and provenance (complete director publication)", body,
                 "## Complete machine-readable director evidence", "```json", json.dumps(findings, indent=2), "```",
-                "## Confidence policy", "A matching substantive finding independently reported by two or more testers is HIGH confidence. Single-source findings remain visible and require evaluation against actual user intent. Passing structure alone does not establish acceptance."]
+                "## Confidence policy", "Only matching substantive findings explicitly marked adverse by two or more independent testers receive HIGH confidence. Ambiguous repeated statements remain repeated evidence, including successful invalid-input probes. Single-source and unclassified evidence remain visible for CEO semantic review against actual user intent. Passing structure alone does not establish acceptance."]
     ctx.write_text(R + "qa-synthesized.md", "\n\n".join(sections) + "\n")
 
 
@@ -451,15 +480,27 @@ def gate_precheck(ctx: Any) -> str:
     name = str(ctx.facts["name"])
     project = Path(ctx.facts["artifact_project"])
     inputs = tuple(p for p in str(ctx.facts.get("requires_input", "")).split(",") if p)
-    report = validate_native_package(project, name, requires_input=inputs)
+    evidence_errors = (ValueError, TypeError, KeyError, AttributeError, OSError)
+    try:
+        report = validate_native_package(project, name, requires_input=inputs)
+    except evidence_errors as exc:
+        report = {"schema_version": 1, "name": name, "ok": False,
+                  "problems": [f"native validation evidence unavailable: {type(exc).__name__}: {exc}"], "raw_evidence": {}}
     problems = list(report["problems"])
     from refactory_dsh.create_fidelity_gates import human_current_approval
 
-    if not human_current_approval(ctx):
+    try:
+        human_approved = human_current_approval(ctx)
+    except evidence_errors as exc:
+        human_approved = False
+        problems.append(f"human approval evidence unreadable: {type(exc).__name__}: {exc}")
+    if not human_approved:
         problems.append("human strategy approval is absent or stale; materially changed strategy or intent requires fresh human review")
     try:
         root = _native_root(project, name)
         receipt = ctx.read_json(R + "native-admission.json", {})
+        if not isinstance(receipt, dict):
+            raise ValueError("native admission receipt is not an object")
         if receipt.get("package_digest") != report.get("package_digest") or not receipt.get("ok"):
             problems.append("builder's native admission receipt is absent, failed, or stale")
         skill = root / "SKILL.md"
@@ -475,7 +516,12 @@ def gate_precheck(ctx: Any) -> str:
         else:
             from refactory_dsh.create_fidelity_gates import current_approval
 
-            if not current_approval(ctx, stage):
+            try:
+                approved = current_approval(ctx, stage)
+            except evidence_errors as exc:
+                approved = False
+                problems.append(stage + f" approval evidence unreadable: {type(exc).__name__}: {exc}")
+            if not approved:
                 problems.append(stage + " approval evidence is absent or stale")
     report["ok"] = not problems
     report["problems"] = problems

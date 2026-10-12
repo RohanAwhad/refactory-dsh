@@ -24,3 +24,11 @@ JSON director plans and prose quality summaries are separate artifacts in DSH.
 
 No user patch is transplanted. The local patch inventory in `baseline.json`
 records digests and disposition. Public Create remains the rollback baseline.
+
+An additional optional IR-compatibility run against this exact remote snapshot
+rejects DSH's existing `command_timeout_s` and `resource_role` serialization
+fields. The same failure reproduces on the frozen `ec99b4ec` DSH baseline for
+both counting modes. This is a pre-existing cross-library schema mismatch,
+separate from the independent Create behavior contract; the compatibility path
+is not claimed as verified. The installed-environment regression suite skips
+that optional library unless it is explicitly provided.

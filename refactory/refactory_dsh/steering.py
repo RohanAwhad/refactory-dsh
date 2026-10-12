@@ -312,6 +312,27 @@ STEERING_START = "<!-- refactory steering context -->"
 STEERING_END = "<!-- end refactory steering context -->"
 
 
+def authored_graph_state(state: dict[str, Any]) -> dict[str, Any]:
+    """Compare candidate source instructions separately from live ledger context.
+
+    Runtime steering is supplied again at dispatch. Its own appended block is
+    not an authored graph edit; every other node field remains authoritative.
+    """
+    import copy
+
+    result = copy.deepcopy(state)
+    for node in result.get("nodes", {}).values():
+        if node.get("kind") != "agent":
+            continue
+        prompt = str(node.get("prompt_template") or "")
+        start = prompt.find(STEERING_START)
+        end = prompt.find(STEERING_END, start)
+        if start >= 0 and end >= start:
+            prompt = prompt[:start] + prompt[end + len(STEERING_END):]
+        node["prompt_template"] = prompt.rstrip()
+    return result
+
+
 def _citation_block(ledger: Ledger) -> str:
     """Keep live steering instructions separate from the node's output format."""
     return (

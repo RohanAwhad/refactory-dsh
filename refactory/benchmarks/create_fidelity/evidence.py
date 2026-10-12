@@ -35,9 +35,12 @@ def route_score(receipts: list[dict], *, model: str = "gpt-6.1-sol", effort: str
     wrong = [r for r in receipts if r["actual_route"].get("worker_backend") != "dsh"
              or r["actual_route"].get("model") != model
              or r["actual_route"].get("effort") != effort
-             or r["actual_route"].get("source") != "runtime-request"]
+             or r["actual_route"].get("source") != "runtime-request"
+             or any((r.get("requested_route") or {}).get(key)
+                    and r["actual_route"].get(key) != r["requested_route"][key]
+                    for key in ("worker_backend", "provider", "model", "effort"))]
     return row("F.route", "failed" if wrong else "passed",
-               f"Observed configuration differs from DSH {model}/{effort}" if wrong else
+               f"Observed configuration differs from requested routing or DSH {model}/{effort}" if wrong else
                f"All supplied worker receipts observed DSH {model}/{effort}; stage coverage scored separately")
 
 
@@ -49,13 +52,16 @@ def normalize(raw: list[dict], *, trial_id: str, source: str) -> list[dict]:
         stage = event.get("node_id") or event.get("node") or event.get("stage_id")
         if not stage:
             continue
-        kind = event.get("kind") or event.get("event") or event.get("type") or "observation"
-        status = event.get("state") or event.get("status") or "unknown"
+        raw_kind = event.get("kind") or event.get("event") or event.get("type") or "observation"
+        kind = {"node.started": "node_started", "node.completed": "node_completed", "node.failed": "node_failed",
+                "NodeStarted": "node_started", "NodeCompleted": "node_completed", "NodeFailed": "node_failed"}.get(raw_kind, raw_kind)
+        status = event.get("state") or event.get("status") or {
+            "node_started": "running", "node_completed": "completed", "node_failed": "failed"}.get(kind, "unknown")
         if kind in {"node_started", "NodeStarted"}:
             visits[stage] = visits.get(stage, 0) + 1
         events.append({"schema_version": 1, "trial_id": trial_id, "stage_id": stage,
                        "visit": visits.get(stage, 1), "attempt": event.get("attempt"),
-                       "role": event.get("role"), "kind": kind, "status": status,
+                       "role": event.get("role"), "kind": kind, "raw_kind": raw_kind, "status": status,
                        "task_id": event.get("task_id"), "parent_task_id": event.get("parent_task_id"),
                        "plan_digest": event.get("plan_digest"), "input_digest": event.get("input_digest"),
                        "output_digest": event.get("output_digest"),
@@ -521,13 +527,21 @@ def _protocol_rows(root: Path | None, events: list[dict], manifests: dict) -> li
 def authoring_score(events: list[dict], outcome: dict, *, director_manifests: dict | None = None,
                     workers: list[dict] | None = None, lane: str = "dsh", evidence_root: Path | None = None,
                     expected_model: str = "gpt-6.1-sol") -> list[dict]:
-    completed = {e["stage_id"] for e in events if e["kind"] in {"node_completed", "NodeCompleted"}}
-    failed = {e["stage_id"] for e in events if e["kind"] in {"node_failed", "NodeFailed"}}
-    rows = [row(f"F.stage.{name}", "failed" if name in failed else
-                "passed" if name in completed else "not_exercised",
-                "Stage completion observed" if name in completed else "No successful stage receipt",
-                [e["raw_evidence"] for e in events if e["stage_id"] == name])
-            for name in reference()["graph"]["nodes"]]
+    latest = {}
+    lifecycle = {"node_started", "NodeStarted", "node_completed", "NodeCompleted", "node_failed", "NodeFailed"}
+    for event in events:
+        if event["kind"] in lifecycle:
+            latest[event["stage_id"]] = event
+    rows = []
+    for name in reference()["graph"]["nodes"]:
+        last = latest.get(name, {})
+        kind = last.get("kind")
+        status = "passed" if kind in {"node_completed", "NodeCompleted"} else "failed" if kind in {"node_failed", "NodeFailed"} else "unavailable" if last else "not_exercised"
+        reason = "Latest stage visit completed" if status == "passed" else "Latest stage visit failed" if status == "failed" else "Latest stage visit started but has no terminal receipt" if last else "No stage visit was observed"
+        evidence = [event["raw_evidence"] for event in events if event["stage_id"] == name]
+        if status == "passed" and any(event["kind"] in {"node_failed", "NodeFailed"} for event in events if event["stage_id"] == name):
+            reason += "; earlier failed visits are retained in raw evidence"
+        rows.append(row(f"F.stage.{name}", status, reason, evidence))
     for name, lower, upper, mandatory in [("research_director", 3, 7, []),
                                           ("strategy_director", 2, 5, []),
                                           ("qa_director", 2, 5, ["workflow-validate", "cli-integration"])]:
@@ -596,7 +610,9 @@ def aggregate(rows: list[dict]) -> str:
 
 def write_report(path: Path, lanes: list[dict]) -> dict:
     path.mkdir(parents=True, exist_ok=True)
+    regression_links = json.loads((FIXTURES / "regression-links.json").read_text())
     report = {"schema_version": 1, "benchmark_version": 1, "lanes": lanes,
+              "regression_links": regression_links,
               "status": aggregate([r for lane in lanes for key in ("capability", "fidelity") for r in lane[key]]),
               "interpretation": "Diagnostic pair only; no causal speed/quality ranking. Missing evidence is never a pass."}
     (path / "report.json").write_text(json.dumps(report, indent=2) + "\n")

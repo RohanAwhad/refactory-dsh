@@ -169,6 +169,38 @@ def test_unbudgeted_graph_shutdown_keeps_forced_cleanup_unknown(monkeypatch, tmp
     assert receipt['state'] == 'unknown' and 'cleanup unconfirmed' in receipt['error']
 
 
+def test_foreground_failure_retains_unknown_background_cleanup_and_refuses_mode_resume(monkeypatch, tmp_path):
+    import sys
+    from refactory_dsh import owned_process
+    from refactory_dsh.nn.mode import Mode
+
+    graph = Graph()
+    graph.add(Node('archivist_plan', 'agent', prompt_template='archive', blocking=False))
+    graph.add(Node('builder', 'agent', prompt_template='build'))
+    graph.connect('archivist_plan', 'builder')
+    runtime = tmp_path / 'runtime.py'
+    runtime.write_text('import signal,time\nsignal.signal(signal.SIGTERM,signal.SIG_IGN)\ntime.sleep(30)\n')
+    monkeypatch.setattr(owned_process, 'SHUTDOWN_GRACE_S', 0.05)
+    archive_started = threading.Event()
+    def answer(client, prompt, root, wall):
+        if client._node_id == 'archivist_plan':
+            archive_started.set()
+            workers.run_graph_command([sys.executable, str(runtime), '--profile', 'graph'], workdir=tmp_path,
+                                      context=DshModelClient().context(), cwd=tmp_path, timeout=0.1)
+        assert archive_started.wait(2)
+        raise RuntimeError('foreground builder failed')
+    fake_wire(monkeypatch, answer)
+    result = execute(graph, tmp_path, facts={'create_fidelity': True}, model=DshModelClient())
+    assert not result.exit_ok and 'foreground builder failed' in result.error
+    assert 'advisory worker failed' in result.error and 'cleanup unconfirmed' in result.error
+    progress = json.loads((tmp_path / '.refactory/progress.json').read_text())
+    assert progress['node'] == 'builder' and progress['outcome'] == 'unknown'
+    receipts = [json.loads(path.read_text()) for path in (tmp_path / '.refactory/workers').glob('*.json')]
+    assert any(receipt['state'] == 'unknown' for receipt in receipts)
+    with pytest.raises(ValueError, match='unknown side-effect outcome'):
+        Mode.resume(tmp_path)
+
+
 def test_native_gate_command_crosses_real_runner_model_and_receipt_boundaries(tmp_path):
     import os
     import sys
@@ -238,3 +270,56 @@ def test_native_human_bridge_publishes_digest_bound_receipt_and_expires_on_chang
     assert human_current_approval(ctx)
     (tmp_path / reads[0]).write_text('Materially different behavior.')
     assert not human_current_approval(ctx)
+
+
+def test_native_pending_revision_confirms_after_its_own_feedback_without_duplicate_append(tmp_path):
+    import os
+    import sys
+    reads = ('.factory/strategy/current.md', '.factory/strategy/user-intent.md')
+    for name in reads:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('Original human requirements.')
+    (tmp_path / 'facts.json').write_text(json.dumps({'create_fidelity': True}))
+    ledger = Ledger.seed(tmp_path, 'Original human requirements.')
+    env = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1])}
+    def bridge(request):
+        proc = subprocess.run([sys.executable, '-m', 'refactory_dsh.steering'], cwd=tmp_path, env=env,
+                              input=json.dumps(request), text=True, capture_output=True, timeout=10)
+        assert proc.returncode == 0, proc.stderr
+        return json.loads(proc.stdout)
+    base = {'gate': 'gate_strategy', 'reads': reads, 'labels': ['proceed', 'reloop']}
+    began = bridge({**base, 'action': 'begin'})
+    ledger.note('correction', 'Acceptance must include an invalid-input preservation check.')
+    ledger.verdict('gate_strategy', 'reloop', review=began['review'])
+    polled = bridge({**base, 'action': 'poll', 'review': began['review']})
+    assert polled['verdict'] == 'reloop' and polled['current_review'] != began['review']
+    confirmed = bridge({**base, 'action': 'confirm', 'review': polled['current_review'],
+                        'receipt_id': polled['receipt_id'], 'verdict': 'reloop'})
+    assert confirmed['confirmed']
+    assert (tmp_path / reads[1]).read_text().count('Acceptance must include') == 1
+    assert len(list((tmp_path / '.refactory/create-fidelity-gates').glob('*/verdict.json'))) == 1
+
+
+def test_native_interactive_revision_requires_and_records_current_human_feedback(tmp_path):
+    import os
+    import sys
+    reads = ('.factory/strategy/current.md', '.factory/strategy/user-intent.md')
+    for name in reads:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('Original human requirements.')
+    (tmp_path / 'facts.json').write_text(json.dumps({'create_fidelity': True}))
+    ledger = Ledger.seed(tmp_path, 'Original human requirements.')
+    request = {'action': 'answer', 'gate': 'gate_strategy', 'reads': reads, 'labels': ['proceed', 'reloop'],
+               'review': ledger.review('gate_strategy', reads), 'verdict': 'reloop'}
+    env = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1])}
+    def invoke(payload):
+        return subprocess.run([sys.executable, '-m', 'refactory_dsh.steering'], cwd=tmp_path, env=env,
+                              input=json.dumps(payload), text=True, capture_output=True, timeout=10)
+    rejected = invoke(request)
+    assert rejected.returncode == 1 and 'current feedback' in rejected.stderr
+    assert not ledger.verdicts()
+    accepted = invoke({**request, 'feedback': 'Keep every original requirement; test both invocations.'})
+    assert accepted.returncode == 0, accepted.stderr
+    assert 'Keep every original requirement' in (tmp_path / reads[1]).read_text()

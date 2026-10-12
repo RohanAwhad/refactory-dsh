@@ -33,9 +33,9 @@ def dsh_author(config: dict, project: Path) -> dict:
     identifier = config["mode"]
     mode = registry.load("default_pack", project).mode(identifier)()
     state = mode.state_dict()
-    knobs = {"name": NAME, "brief": (project / "BRIEF.md").read_text()}
+    knobs = {"name": NAME, "brief": (project / "BRIEF.md").read_text(), "requires_input": "bookings_path"}
     if identifier == "create":
-        knobs.update(single_shot=True, requires_input="bookings_path")
+        knobs.update(single_shot=True)
     for key, value in knobs.items():
         state["knobs"][key]["value"] = value
     mode.load_state_dict(state)
@@ -53,7 +53,8 @@ def dsh_author(config: dict, project: Path) -> dict:
         progress = json.loads(progress_path.read_text()) if progress_path.is_file() else {}
         if progress.get("node") != "gate_strategy" or "approval" not in str(result.error).lower() and "verdict" not in str(result.error).lower():
             break
-        pending = approval.request(project, "Review the strategy and original intent; explicitly approve or request revision.")
+        inputs = ("strategy.json", "brief.json") if identifier == "create" else approval.DEFAULT_INPUTS
+        pending = approval.request(project, "Review the strategy and original intent; explicitly approve or request revision.", inputs=inputs)
         answer = None
         while answer is None:
             time.sleep(0.25)
@@ -66,8 +67,24 @@ def dsh_author(config: dict, project: Path) -> dict:
             ledger.note("correction", answer["feedback"])
         reads = tuple(mode.graph().nodes["gate_strategy"].reads)
         ledger.verdict("gate_strategy", answer["verdict"], review=ledger.visit("gate_strategy", reads))
-        # Resume from the native certified gate checkpoint, never replay earlier work.
-        result = type(mode).resume(project, model=client)
+        if identifier == "create":
+            # The pinned baseline's Mode.resume compares newly annotated live
+            # ledger prompts against the pre-answer graph and refuses them. Its
+            # documented Mode.run(start=..., facts=...) recovery API preserves
+            # the native gate, fresh ledger consumption and cumulative budget.
+            # Record this adapter mapping; do not patch the frozen baseline.
+            save(project / "raw" / f"resume-{time.time_ns()}.json", {
+                "entrypoint": "Mode.run(start=checkpoint.node, facts=checkpoint.facts)",
+                "reason": "Pinned baseline Mode.resume rejects new human ledger context",
+                "node": progress["node"], "strategy_digest": answer["strategy_digest"],
+                "checkpoint_sha256": hashlib.sha256(progress_path.read_bytes()).hexdigest(),
+            })
+            result = mode.run(project, model=client, task=progress.get("task", knobs),
+                              start=progress["node"], facts=progress.get("facts", {}),
+                              resource_limits={"max_elapsed_s": config["total_timeout_s"]})
+        else:
+            # Candidate exercises the certified checkpoint recovery API itself.
+            result = type(mode).resume(project, model=client)
     return {"exit_ok": result.exit_ok, "error": result.error,
             "duration_s": result.duration_s, "facts": result.facts}
 

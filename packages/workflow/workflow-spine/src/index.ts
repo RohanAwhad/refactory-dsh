@@ -1058,6 +1058,7 @@ export function apply(ctx: Context, config: Config): void {
       throw new Error(message)
     }
     let answer
+    let appliedPending: { review: string; receipt_id: string; verdict: string } | undefined
     const questionLifetime = new AbortController()
     const questionSignal = exec.signal === undefined ? questionLifetime.signal : AbortSignal.any([exec.signal, questionLifetime.signal])
     try {
@@ -1081,6 +1082,9 @@ export function apply(ctx: Context, config: Config): void {
           if (gateCommand === '') continue
           const polled = runtimeBridge(gateCommand, workdir, commandEnv, { ...request, action: 'poll', review: prior?.review })
           if (typeof polled.verdict === 'string' && polled.verdict !== '') {
+            if (polled.protocol === 'create_fidelity_human_v1' && typeof polled.current_review === 'string' && typeof polled.receipt_id === 'string') {
+              appliedPending = { review: polled.current_review, receipt_id: polled.receipt_id, verdict: polled.verdict }
+            }
             return { answers: [{ id: gate, selected: [polled.verdict], custom: '' }] } as Awaited<typeof nativeAnswer>
           }
         }
@@ -1103,10 +1107,38 @@ export function apply(ctx: Context, config: Config): void {
       throw new Error(`gate ${gate} changed while awaiting the answer; ask again`)
     }
     if (labels.length > 0 && !labels.includes(verdict)) throw new Error(`gate ${gate} does not accept ${verdict}`)
+    let feedback: string | undefined
+    if (verdict === 'reloop' && prior?.protocol === 'create_fidelity_human_v1' && appliedPending === undefined) {
+      const lifetime = new AbortController()
+      const signal = exec.signal === undefined ? lifetime.signal : AbortSignal.any([exec.signal, lifetime.signal])
+      try {
+        const asked = userQuestions.ask({ questions: [{ id: `${gate}:feedback`, header: 'Revision',
+          question: 'Which user requirements need revision, and what should the strategy say? Give the feedback for this review.' }],
+          ...(exec.agent === undefined ? {} : { agent: exec.agent }), signal })
+        const interrupted = async (): Promise<undefined> => {
+          while (!signal.aborted) {
+            await wait(500, undefined, { signal })
+            applyControls(spine, workdir, commandEnv, dataCommand)
+            if (spine.isPaused() || spine.isHalted() || JSON.stringify(spine.state()) !== stateBefore) return undefined
+          }
+          throw new Error('revision feedback cancelled')
+        }
+        const response = await Promise.race([asked, interrupted()])
+        if (response === undefined) return undefined
+        const entry = response.answers.find(item => item.id === `${gate}:feedback`)
+        feedback = (entry?.custom || entry?.selected[0] || '').trim()
+        if (!feedback) throw new Error(`gate ${gate} revision needs the person's feedback`)
+      } finally { lifetime.abort() }
+    }
     if (gateCommand !== '' && workdir !== undefined) {
-      runtimeBridge(gateCommand, workdir, commandEnv, {
-        ...request, action: 'answer', review: prior?.review, verdict,
-      })
+      if (appliedPending !== undefined) {
+        runtimeBridge(gateCommand, workdir, commandEnv, { ...request, action: 'confirm',
+          review: appliedPending.review, receipt_id: appliedPending.receipt_id, verdict })
+      } else {
+        runtimeBridge(gateCommand, workdir, commandEnv, {
+          ...request, action: 'answer', review: prior?.review, verdict, ...(feedback === undefined ? {} : { feedback }),
+        })
+      }
     }
     return verdict
   }

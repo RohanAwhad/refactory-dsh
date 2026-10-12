@@ -224,6 +224,8 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
             # between labels with no statement of what they are choosing about.
             if node.notes:
                 gate["gate_prompt"] = node.notes
+            if candidate and node.gate_kind == "user":
+                gate["gate_prompt"] = node.prompt_template
             if node.timeout_s is not None:
                 gate["command_timeout_s"] = node.timeout_s
             if candidate and node.gate_kind == "agent":

@@ -47,6 +47,9 @@ QA = Stage("qa_director", "adversarial_tester", 2, 5,
             ".factory/strategy/user-intent.md", ".factory/reviews/repair-feedback.md"), 50)
 MANDATORY = ("workflow-validate", "cli-integration")
 SLUG = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
+# Coverage IDs are references to user requirements, not filenames or routing
+# identifiers. Preserve source IDs such as B01 and REQ:B02.integer exactly.
+ITEM_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 
 
 def _digest(value: Any) -> str:
@@ -73,7 +76,8 @@ def _items(value: Any, label: str) -> list[dict[str, Any]]:
         # Original intent_items strings retain their text; object metadata is
         # copied intact rather than silently erased by typed normalization.
         item = {"id": f"intent-{index + 1}", "text": raw} if isinstance(raw, str) else dict(raw) if isinstance(raw, dict) else {}
-        _require(isinstance(item.get("id"), str) and bool(SLUG.fullmatch(item["id"])), f"{label} has invalid item ID")
+        _require(isinstance(item.get("id"), str) and bool(ITEM_ID.fullmatch(item["id"])),
+                 f"{label} item ID must be 1..128 ASCII letters/digits with optional . _ : - separators")
         _require(isinstance(item.get("text"), str) and bool(item["text"].strip()), f"{label} has empty item text")
         items.append(item)
     _require(len({item["id"] for item in items}) == len(items), f"{label} has duplicate IDs")
@@ -291,7 +295,11 @@ def _plan_prompt(ctx: RunContext, stage: Stage, bodies: dict[str, str], required
         f"Write strict JSON to {stage.plan}. The object has schema_version:1, stage_id:{stage.id!r}, "
         "tasks, intent_items, coverage_items. Each task has id and slug (unique kebab-case), role, focus, "
         "a tailored prompt, output and coverage (list of coverage item IDs). Each coverage/intent item "
-        "has id and text; preserve additional metadata. Extract ALL original user asks as intent_items, "
+        "has id and text; preserve additional metadata. Task id and slug must be lower-case kebab-case. "
+        "Coverage/intent item IDs are case-sensitive requirement references: use 1..128 ASCII letters/digits "
+        "with optional dot, underscore, colon or dash; no spaces, slashes or control characters. "
+        "Preserve existing requirement IDs EXACTLY, including case and punctuation; do not lowercase or renumber them. "
+        "Task coverage must cite these exact IDs. Extract ALL original user asks as intent_items, "
         "include them unchanged in coverage_items, and assign each to at least one child. "
         "For QA extract ALL acceptance criteria, including prose and tables, as coverage_items. "
         f"Choose {stage.minimum}..{stage.maximum} custom tasks with role {stage.role!r}; outputs must be "
@@ -399,12 +407,18 @@ def _direct(ctx: RunContext, stage: Stage) -> None:
     timer = threading.Timer(allowance, stopped.set)
     timer.daemon = True
     timer.start()
-    try:
-        _direct_stage(ctx, stage)
-    finally:
-        timer.cancel()
-        ctx.model = original_model
-        del ctx._director_deadline
+    from refactory_dsh.owned_process import _termination_as_exit
+    # During fanout model calls run on worker threads, so their own shutdown
+    # scopes cannot install the owner's main-thread SIGTERM handler. Keep the
+    # whole composite inside that scope: an external stop unwinds the join,
+    # signals the existing cancellation events and awaits owned runtimes/tools.
+    with _termination_as_exit():
+        try:
+            _direct_stage(ctx, stage)
+        finally:
+            timer.cancel()
+            ctx.model = original_model
+            del ctx._director_deadline
 
 
 def _direct_stage(ctx: RunContext, stage: Stage) -> None:
@@ -429,7 +443,17 @@ def _direct_stage(ctx: RunContext, stage: Stage) -> None:
                           stage.plan, stage.reads, plan_identity, timeout_s=3600)
     ctx.write_json(f"{directory}/plan-receipt.json", proposal)
     _require(proposal["status"] == "completed", f"{stage.id} planning failed: {proposal['error']}")
-    plan = normalize_plan(_json(proposal["body"], "director plan"), stage, required)
+    validation = {**base, "kind": "director_plan_validation", "plan_path": stage.plan,
+                  "raw_plan_receipt": f"{directory}/plan-receipt.json", "required_coverage": required,
+                  "custom_child_count": {"minimum": stage.minimum, "maximum": stage.maximum},
+                  "item_id_pattern": ITEM_ID.pattern, "task_slug_pattern": SLUG.pattern}
+    try:
+        plan = normalize_plan(_json(proposal["body"], "director plan"), stage, required)
+    except ExecutionError as error:
+        ctx.write_json(f"{directory}/plan-validation.json", {**validation, "status": "failed", "error": str(error)})
+        raise
+    ctx.write_json(f"{directory}/plan-validation.json", {**validation, "status": "passed", "error": None,
+                  "custom_children": len(plan["tasks"])})
     if stage is QA:
         plan["tasks"].extend(_mandatory_tasks(ctx))
     ctx.write_json(stage.plan, plan)

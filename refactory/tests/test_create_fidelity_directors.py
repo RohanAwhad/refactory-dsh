@@ -332,3 +332,74 @@ def test_required_acceptance_cannot_be_removed_or_changed():
     plan["coverage_items"][0]["text"] = "Weaker acceptance claim"
     with pytest.raises(directors.ExecutionError, match="dropped or changed"):
         directors.normalize_plan(plan, directors.QA, required)
+
+
+def test_source_requirement_ids_preserve_case_and_metadata_through_typed_plan():
+    plan = plan_for(directors.RESEARCH, 3)
+    items = [{"id": "B01", "text": "An empty array is valid", "source": "user-intent.md:9"},
+             {"id": "REQ:B02.integer", "text": "Booleans are not integers", "source_line": 10}]
+    plan["intent_items"].extend(items)
+    plan["coverage_items"].extend(copy.deepcopy(items))
+    for task in plan["tasks"]:
+        task["coverage"].extend(item["id"] for item in items)
+    normalized = directors.normalize_plan(plan, directors.RESEARCH, [])
+    assert normalized["intent_items"][-2:] == items
+    assert normalized["coverage_items"][-2:] == items
+    assert all("B01" in task["coverage"] for task in normalized["tasks"])
+
+
+@pytest.mark.parametrize("identifier", ["", " B01", "B01 ", "B01/child", "../B01", "B01\nB02", "B" * 129])
+def test_requirement_id_schema_refuses_ambiguous_or_unsafe_references(identifier):
+    with pytest.raises(directors.ExecutionError, match="item ID"):
+        directors._items([{"id": identifier, "text": "Required behavior"}], "intent_items")
+
+
+def test_planning_prompt_explicitly_distinguishes_task_and_requirement_id_schemas(tmp_path):
+    ctx = RunContext(tmp_path)
+    prompt = directors._plan_prompt(ctx, directors.RESEARCH, {}, [])
+    assert "Task id and slug must be lower-case kebab-case" in prompt
+    assert "Preserve existing requirement IDs EXACTLY, including case and punctuation" in prompt
+    assert "Task coverage must cite these exact IDs" in prompt
+
+
+def test_requirement_ids_cross_actual_planning_dispatch_quality_and_publication(tmp_path, monkeypatch):
+    original = plan_for
+
+    def requirements_plan(stage, count):
+        plan = original(stage, count)
+        item = {"id": "B01", "text": "Input is a JSON array and an empty array is valid", "source": "user-intent.md:9"}
+        plan["intent_items"].append(item)
+        plan["coverage_items"].append(dict(item))
+        for task in plan["tasks"]:
+            task["coverage"].append("B01")
+        return plan
+
+    monkeypatch.setitem(plan_for.__globals__, "plan_for", requirements_plan)
+    result, manifest, responses = run_stage(tmp_path, monkeypatch)
+    assert result.exit_ok, result.error
+    assert manifest["intent_items"][-1] == requirements_plan(directors.RESEARCH, 3)["intent_items"][-1]
+    assert all(report["status"] == "completed" for report in manifest["reports"])
+    assert responses.full_quality_bodies
+
+
+def test_failed_plan_validation_retains_diagnostic_schema_and_raw_response(tmp_path, monkeypatch):
+    original = plan_for
+
+    def invalid_plan(stage, count):
+        plan = original(stage, count)
+        plan["intent_items"][0]["id"] = "invalid requirement ID with spaces"
+        return plan
+
+    monkeypatch.setitem(plan_for.__globals__, "plan_for", invalid_plan)
+    result, manifest, responses = run_stage(tmp_path, monkeypatch)
+    assert not result.exit_ok
+    assert manifest is None
+    validation = json.loads((tmp_path / ".factory/directors/research_director/v1/plan-validation.json").read_text())
+    assert validation["status"] == "failed"
+    assert "item ID" in validation["error"]
+    assert validation["item_id_pattern"] == directors.ITEM_ID.pattern
+    assert validation["required_coverage"]
+    raw = json.loads((tmp_path / validation["raw_plan_receipt"]).read_text())
+    assert "invalid requirement ID with spaces" in raw["body"]
+    assert raw["raw_evidence"]["worker_receipts"]
+    assert not [node for node, _ in responses.calls if ":child-" in node]

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -42,6 +44,16 @@ def test_exact_source_topology_roles_gates_and_original_artifact_contracts():
             assert node.timeout_s == 3600
     assert graph.nodes["fork_qa"].targets == graph.nodes["join_qa"].sources
     assert not validate_state(mode.state_dict(), invariants=mode.invariants())
+
+
+def test_native_human_question_preserves_source_review_criteria():
+    from refactory_dsh.lowering import to_workflow
+    mode = CreateFidelityMode()
+    gate = to_workflow(mode.state_dict()).nodes["gate_strategy"]
+    assert gate.evaluator_type == "user"
+    assert gate.gate_prompt == mode.graph().nodes["gate_strategy"].prompt_template
+    assert "INTENT FIDELITY CHECK" in gate.gate_prompt
+    assert "Graph Topology" in gate.gate_prompt
 
 
 def test_production_prompts_preserve_full_source_and_native_mapping():
@@ -186,6 +198,87 @@ def test_real_native_admission_export_and_two_distinct_invocations(tmp_path):
     assert not (failed_run / "result.json").exists()
 
 
+def test_pytest_cache_does_not_invalidate_admission_but_authored_files_do(tmp_path):
+    root = make_package(tmp_path)
+    (root / "test_smoke.py").write_text("def test_smoke():\n    assert True\n")
+    report = ops.admit_native_package(tmp_path, "portable_probe")
+    assert report["ok"], report
+    before = ops.package_digest(root)
+    result = subprocess.run([sys.executable, "-m", "pytest", "test_smoke.py", "-q"], cwd=root, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert (root / ".pytest_cache/v/cache/nodeids").is_file()
+    assert ops.package_digest(root) == before == report["package_digest"]
+    for file in ("README.md", "ops.py", "test_smoke.py", ".pytest_cache/authored_test.py", "test_cases.json"):
+        path = root / file
+        original = path.read_bytes() if path.exists() else None
+        path.write_bytes((original or b"") + b"\nReal authored change\n")
+        assert ops.package_digest(root) != before, file
+        if original is None:
+            path.unlink()
+        else:
+            path.write_bytes(original)
+
+
+def typed_package(project):
+    root = make_package(project)
+    (root / "mode.py").write_text("""from refactory_dsh import nn
+class Probe(nn.Mode):
+    name='read'
+    description='Runtime parameters preserve their declared types'
+    unscored_reason='Produces an invocation artifact'
+    @classmethod
+    def declare(cls):
+        return {'count':nn.Knob(1,'int',lo=0,hi=8,frozen=True),
+                'ratio':nn.Knob(1.0,'float'), 'flag':nn.Knob(False,'bool'),
+                'choice':nn.Knob(1,'enum',enum=(1,2)),
+                'label':nn.Knob('','str')}
+    def build(self):
+        g=nn.Graph()
+        g.add(nn.Node('read','op',call='refactory_packages.portable_probe.ops:read',
+                      knobs=('count','ratio','flag','choice','label'),writes=('result.json',)))
+        return g
+""")
+    (root / "ops.py").write_text("def read(ctx):\n    ctx.write_json('result.json', {name:ctx.knob(name) for name in ('count','ratio','flag','choice','label')})\n")
+    return root
+
+
+def test_native_cli_reuses_declared_kind_parsing_and_accepts_frozen_runtime_inputs(tmp_path):
+    typed_package(tmp_path)
+    run = tmp_path / "typed-invocation"
+    command = [sys.executable, "-m", "refactory_dsh.create_fidelity_ops", "run", "portable_probe/read", "--project", str(tmp_path), "--workdir", str(run)]
+    for value in ("count=3", "ratio=1.25", "flag=true", "choice=2", "label=001"):
+        command.extend(("--knob", value))
+    result = subprocess.run(command, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert json.loads((run / "result.json").read_text()) == {"count": 3, "ratio": 1.25, "flag": True, "choice": 2, "label": "001"}
+
+
+@pytest.mark.parametrize("entry", ["count=9", "count=3.5", "ratio=bad", "flag=maybe", "choice=7", "unknown=3"])
+def test_native_runtime_input_parser_rejects_invalid_names_types_bounds_and_enums(tmp_path, entry):
+    typed_package(tmp_path)
+    run = tmp_path / "invalid-invocation"
+    name, value = entry.split("=", 1)
+    report = ops.run_native_mode(tmp_path, "portable_probe/read", run, {name: value})
+    assert not report["exit_ok"]
+    assert name in report["error"]
+    assert not (run / "result.json").exists()
+
+
+def test_malformed_approval_metadata_becomes_failed_precheck_report(tmp_path):
+    make_package(tmp_path)
+    assert ops.admit_native_package(tmp_path, "portable_probe")["ok"]
+    corrupted = tmp_path / ".refactory/create-fidelity-gates/corrupt/verdict.json"
+    corrupted.parent.mkdir(parents=True)
+    corrupted.write_text("{bad")
+    ctx = RunContext(tmp_path, facts={"name": "portable_probe", "artifact_project": str(tmp_path),
+                     **{stage + "_verdict": "proceed" for stage in ("gate_build", "gate_qa", "gate_overwatch", "gate_doc_freshness")}})
+    assert ops.gate_precheck(ctx) == "halt"
+    report = json.loads((tmp_path / ".factory/reviews/precheck.json").read_text())
+    assert report["outcome"] == "halt" and report["ok"] is False
+    assert ctx.facts["create_fidelity_precheck_ok"] is False
+    assert "human approval evidence unreadable" in ctx.facts["create_fidelity_precheck_error"]
+
+
 def test_native_validator_refuses_unfeedable_input_broken_calls_and_stale_precheck(tmp_path):
     root = make_package(tmp_path)
     required = ops.validate_native_package(tmp_path, "portable_probe", requires_input=("missing_input",))
@@ -204,10 +297,11 @@ def test_native_validator_refuses_unfeedable_input_broken_calls_and_stale_preche
     assert any("missing" in p for p in broken["problems"])
 
 
-def test_synthesis_keeps_full_reports_and_promotes_independent_duplicate_issues(tmp_path):
+@pytest.mark.parametrize("marker", ["[FAIL] ", "Status: NOT_VERIFIED — ", "Severity: HIGH — "])
+def test_synthesis_keeps_full_reports_and_promotes_independent_duplicate_issues(tmp_path, marker):
     ctx = RunContext(tmp_path)
     reports = []
-    issue = "The native CLI is missing the required runtime document_path option and violates the original acceptance contract."
+    issue = marker + "The native CLI is missing the required runtime document_path option and violates the original acceptance contract."
     for i, task_id in enumerate(("custom-one", "custom-two", "workflow-validate", "cli-integration")):
         body = f"# {task_id}\n\nActual command: validation check {i}\nActual output: specific original evidence {i}.\n" + (issue if i < 2 else "Native graph and discovery checks passed with command evidence.")
         output = f".factory/reviews/testers/{task_id}.md"
@@ -224,3 +318,30 @@ def test_synthesis_keeps_full_reports_and_promotes_independent_duplicate_issues(
     ctx.write_text(reports[0]["output"], "modified stale report")
     with pytest.raises(ValueError, match="stale"):
         ops.synthesize_qa(ctx)
+
+
+@pytest.mark.parametrize("statement", [
+    "All invalid-input probes correctly failed with useful stderr and preserved existing output bytes.",
+    "No blocking issues were found; every required acceptance criterion passed with concrete command evidence.",
+    "Status: PASS — malformed inputs failed exactly as required and valid outputs stayed unchanged.",
+    "```text\nStatus: FAIL — this is captured expected negative-test output, not an adverse QA finding.\n```",
+])
+def test_synthesis_does_not_promote_successful_or_ambiguous_repeated_evidence(tmp_path, statement):
+    ctx = RunContext(tmp_path)
+    reports = []
+    for task_id in ("custom-one", "custom-two", "workflow-validate", "cli-integration"):
+        body = f"# {task_id}\n\n{statement}\n"
+        path = f".factory/reviews/testers/{task_id}.md"
+        ctx.write_text(path, body)
+        reports.append({"task_id": task_id, "status": "completed", "body": body, "output": path, "output_digest": hashlib.sha256(body.encode()).hexdigest()})
+    ctx.write_json(".factory/qa_director-findings.json", {"status": "completed", "reports": reports})
+    ctx.write_text(".factory/qa_director-findings.md", "\n\n".join(report["body"] for report in reports))
+    for review in ("health-check.md", "code-review.md"):
+        ctx.write_text(".factory/reviews/" + review, "# Review\n\nEvery original user acceptance requirement passed with complete actual command/output evidence.\n")
+    ops.synthesize_qa(ctx)
+    output = ctx.read_text(".factory/reviews/qa-synthesized.md")
+    confidence = output.split("## Cross-tester finding confidence", 1)[1].split("## Health checker", 1)[0]
+    assert "- HIGH" not in confidence
+    assert all(report["body"] in output for report in reports)
+    if not statement.startswith("```"):
+        assert "REPEATED EVIDENCE" in confidence

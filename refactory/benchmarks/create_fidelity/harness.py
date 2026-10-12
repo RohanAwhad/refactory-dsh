@@ -34,7 +34,7 @@ def write(path: Path, value) -> None:
     path.write_text(json.dumps(value, indent=2, default=str) + "\n")
 
 
-def source_identity(source: Path, revision: str) -> dict:
+def source_identity(source: Path, revision: str | None) -> dict:
     try:
         head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True, stderr=subprocess.DEVNULL).strip()
         patch = subprocess.check_output(["git", "diff", "HEAD", "--"], cwd=source)
@@ -50,7 +50,7 @@ def source_identity(source: Path, revision: str) -> dict:
         tracked = subprocess.check_output(["git", "ls-files"], cwd=source, text=True).splitlines()
         source_files = [source / p for p in [*tracked, *untracked] if (source / p).is_file() and not (source / p).is_symlink()]
     tree_digest = hashlib.sha256(json.dumps({str(p.relative_to(source)): digest(p) for p in sorted(source_files)}, sort_keys=True).encode()).hexdigest()
-    return {"source_root": str(source), "commit": head, "declared_revision": revision,
+    return {"source_root": str(source), "commit": head, "declared_revision": revision or head,
             "source_tree_sha256": tree_digest,
             "patch_sha256": hashlib.sha256(patch).hexdigest(),
             "untracked_sha256": {p: digest(source / p) for p in untracked if (source / p).is_file()},
@@ -77,6 +77,29 @@ def static_graph(source: Path, python: Path, mode: str) -> dict:
         return {"status": "unavailable", "origin": "static-source-inspection", "reason": str(exc), "graph": {}}
 
 
+def runtime_identity(root: Path, dependency_cache: dict | None = None) -> dict:
+    """Bind the installed worker runtime separately from the Python mode source."""
+    root = root.resolve()
+    modules = root / "node_modules"
+    store = (modules / ".pnpm").resolve() if (modules / ".pnpm").exists() else modules.resolve()
+    cache = dependency_cache if dependency_cache is not None else {}
+    if str(store) not in cache:
+        files = hash_tree(store)
+        links = {str(p.relative_to(store)): str(p.readlink()) for p in sorted(store.rglob("*")) if p.is_symlink()}
+        cache[str(store)] = {"root": str(store), "file_count": len(files),
+            "sha256": hashlib.sha256(json.dumps({"files": files, "links": links}, sort_keys=True).encode()).hexdigest()}
+    module_roots = [modules, *root.glob("packages/*/*/node_modules")]
+    bindings = {str(p.relative_to(root)): str(p.resolve()) for base in module_roots
+                for p in base.rglob("*") if p.is_symlink()}
+    launcher = modules / ".bin/dsh"
+    package = modules / "@deepseek-ai/dsh/package.json"
+    return {"root": str(root), "source": source_identity(root, None),
+            "dependencies": cache[str(store)], "module_bindings": bindings,
+            "dsh_package": {"path": str(package.resolve()), "version": read(package, {}).get("version"),
+                            "sha256": digest(package) if package.is_file() else None},
+            "launcher": {"path": str(launcher), "sha256": digest(launcher) if launcher.is_file() else None}}
+
+
 def prepare(args) -> dict:
     root = args.root.resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -92,6 +115,7 @@ def prepare(args) -> dict:
     (operator / "isolation-canary.txt").write_text("operator evidence\n")
     package = Path(__file__).resolve().parents[2]
     identities = {}
+    dependency_cache = {}
     for lane, project in projects.items():
         flavor = "dsh" if lane.startswith("dsh") else "remote"
         (project / "BRIEF.md").write_text((FIXTURES / "brief.md").read_text() + "\n## Native adapter\n" + ADAPTER_INSTRUCTIONS[flavor] +
@@ -100,8 +124,14 @@ def prepare(args) -> dict:
         inp.mkdir()
         for name in ("overlap", "touching", "invalid-duplicate"):
             shutil.copyfile(FIXTURES / (name + ".json"), inp / (name + ".json"))
-        revision = baseline["reference_commit"] if flavor == "remote" else baseline["dsh_baseline_commit"]
+        revision = (baseline["reference_commit"] if flavor == "remote" else
+                    baseline["dsh_baseline_commit"] if lane == "dsh-baseline" else
+                    getattr(args, "candidate_revision", None))
         identities[lane] = source_identity(sources[lane], revision)
+        runtime_root = (getattr(args, "baseline_runtime_root", None) if lane == "dsh-baseline" else
+                        getattr(args, "candidate_runtime_root", None) if lane == "dsh-candidate" else None) or args.runtime_root
+        runtime_root = runtime_root.resolve()
+        runtime_pin = runtime_identity(runtime_root, dependency_cache) if flavor == "dsh" else None
         hidden = [operator, FIXTURES, *getattr(args, "hidden", [])]
         peers = [p for other, p in projects.items() if other != lane]
         runtime_home = project / "runtime/dsh"
@@ -128,7 +158,9 @@ def prepare(args) -> dict:
         mode_name = "create_fidelity" if lane == "dsh-candidate" else "create" if flavor == "dsh" else "create-v2"
         write(operator / "graphs" / f"{lane}.json", static_graph(sources[lane], python, mode_name))
         python_roots = json.loads(subprocess.check_output([str(python), "-c", "import json,sys; print(json.dumps([sys.prefix,sys.base_prefix]))"], text=True))
-        dependencies = [args.runtime_root.resolve() / "node_modules", *map(Path, python_roots)]
+        dependencies = [runtime_root / "node_modules", *map(Path, python_roots)]
+        if runtime_pin:
+            dependencies.append(Path(runtime_pin["dependencies"]["root"]))
         node = shutil.which("node")
         if node:
             dependencies.append(Path(node).resolve())
@@ -142,11 +174,12 @@ def prepare(args) -> dict:
         policy.write_text(profile(project, peers, readonly, hidden, allowed_reads=allowed_reads))
         config = {"schema_version": 1, "lane": lane, "project": str(project), "source": str(sources[lane]),
                   "identity": identities[lane], "mode": mode_name,
+                  "runtime_identity": runtime_pin,
                   "python": str(args.dsh_python if flavor == "dsh" else args.remote_python),
                   "adapter_root": str(adapter_root), "adapter_sha256": hash_tree(adapter_root),
                   "policy": str(policy), "inputs": str(inp),
                   "total_timeout_s": args.total_timeout, "shutdown_grace_s": 15,
-                  "model_context": {"runtime_root": str(args.runtime_root.resolve()),
+                  "model_context": {"runtime_root": str(runtime_root),
                       "dsh_home": str(runtime_home),
                       "python_bin": str(args.dsh_python.parent), "provider": args.provider,
                       "model": args.model, "effort": "high", "timeout_s": 3600,
@@ -230,6 +263,9 @@ def run_lane(root: Path, lane: str, operation: str) -> dict:
         raise ValueError(f"{lane} source changed after freeze; use a new candidate trial")
     if config.get("adapter_sha256") and hash_tree(Path(config["adapter_root"])) != config["adapter_sha256"]:
         raise ValueError("Frozen benchmark adapter changed after preparation")
+    runtime_pin = config.get("runtime_identity")
+    if runtime_pin and runtime_identity(Path(runtime_pin["root"])) != runtime_pin:
+        raise ValueError("Worker runtime or installed dependencies changed after preparation")
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join([str(source / "refactory" if lane.startswith("dsh") else source), config["adapter_root"]])
     env["PATH"] = str(Path(config["python"]).parent) + os.pathsep + env.get("PATH", "")
@@ -247,9 +283,19 @@ def run_lane(root: Path, lane: str, operation: str) -> dict:
         native_policy.write_text(policy.read_text() + "\n(deny network*)\n")
         policy = native_policy
     argv = ["/usr/bin/sandbox-exec", "-f", str(policy), config["python"], "-m", "benchmarks.create_fidelity.lane", operation, str(config_path)]
-    return execute_command(argv, cwd=project, env=env, output=project / "raw" / operation,
+    result = execute_command(argv, cwd=project, env=env, output=project / "raw" / operation,
                            timeout=config["total_timeout_s"] if operation == "author" else 300,
                            grace=config["shutdown_grace_s"])
+    if runtime_pin:
+        stable = (runtime_identity(Path(runtime_pin["root"])) == runtime_pin
+                  and source_identity(source, config["identity"]["declared_revision"]) == config["identity"])
+        write(project / "raw" / operation / "runtime-integrity.json", {
+            "status": "passed" if stable else "failed", "runtime_identity": runtime_pin,
+            "boundary": "Source, launcher, module bindings and installed dependency bytes checked before and after the operation; authoring sandbox denies their writes",
+        })
+        if not stable:
+            result.update(status="failed", integrity_error="Source or installed runtime changed during operation")
+    return result
 
 
 def run_pair(root: Path, lanes: list[str]) -> list[dict]:
@@ -279,13 +325,19 @@ def collect(root: Path) -> dict:
         checker = read(root / "operator" / f"{lane}-checker.json")
         launch = read(project / "raw/launch.json", {})
         static = read(root / "operator/graphs" / f"{lane}.json", {})
+        runtime_integrity = read(project / "raw/author/runtime-integrity.json", {})
+        fidelity = authoring_score(normalized, outcome, director_manifests=directors, workers=workers, lane=lane, evidence_root=project,
+                                   expected_model=config["model_context"]["model"])
+        if lane.startswith("dsh"):
+            fidelity.append({"requirement_id": "F.runtime", "status": runtime_integrity.get("status", "unavailable"),
+                             "reason": "Separate frozen worker runtime/dependency identity, checked before and after authoring",
+                             "evidence": ["raw/author/runtime-integrity.json"] if runtime_integrity else []})
         lanes.append({"lane": lane, "identity": config["identity"], "graph": launch.get("graph", static.get("graph", {})),
             "graph_origin": "native-launch" if launch else "static-source-inspection",
             "evidence_root": str(project), "preflight": read(root / "operator/preflight.json", {}),
             "source_graph_path": str(root / "operator/graphs" / f"{lane}.json"),
             "capability": capability_score(checker, native),
-            "fidelity": authoring_score(normalized, outcome, director_manifests=directors, workers=workers, lane=lane, evidence_root=project,
-                                        expected_model=config["model_context"]["model"])})
+            "fidelity": fidelity})
     return write_report(root / "operator/report", lanes)
 
 
@@ -311,6 +363,9 @@ def main() -> int:
     for name in ("reference", "baseline", "candidate", "dsh-python", "remote-python", "runtime-root"):
         p.add_argument("--" + name, type=Path, required=True)
     p.add_argument("--provider", default="openai")
+    p.add_argument("--baseline-runtime-root", type=Path, help="Frozen baseline worker runtime; defaults to --runtime-root")
+    p.add_argument("--candidate-runtime-root", type=Path, help="Frozen candidate worker runtime; defaults to --runtime-root")
+    p.add_argument("--candidate-revision", help="Declared candidate revision for a source archive; Git checkouts default to their observed HEAD")
     p.add_argument("--model", choices=["gpt-6.1-sol", "gpt-6-sol"], default="gpt-6.1-sol")
     p.add_argument("--route-authorization", default="Original Sol 6.1/high requirement", help="Record the explicit authorization when selecting a fallback")
     p.add_argument("--dsh-home", type=Path, default=Path.home() / ".dsh", help="Read-only native profile/credential-reference source; session state stays private")

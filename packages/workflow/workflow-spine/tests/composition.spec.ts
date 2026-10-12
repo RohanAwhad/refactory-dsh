@@ -5,10 +5,10 @@
  *
  * These are the parts a run depends on but a single tool call does not reach.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { spawn } from 'node:child_process'
+import { join, resolve } from 'node:path'
+import { spawn, spawnSync } from 'node:child_process'
 import { Context } from '@deepseek-ai/cordis'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
@@ -348,6 +348,58 @@ describe('tool presentation', () => {
 })
 
 describe('asking a person', () => {
+  it.each(['native', 'pending'])('consumes a %s candidate revision once through the real Ledger bridge', async (channel) => {
+    const workdir = scratch()
+    const reads = ['.factory/strategy/current.md', '.factory/strategy/user-intent.md']
+    mkdirSync(join(workdir, '.factory/strategy'), { recursive: true })
+    for (const name of reads) writeFileSync(join(workdir, name), 'Original human requirements.')
+    writeFileSync(join(workdir, 'facts.json'), JSON.stringify({ create_fidelity: true }))
+    const python = resolve('.venv/bin/python')
+    const commandEnv = { PYTHONPATH: resolve('refactory') }
+    const feedback = 'Preserve every original requirement; test both invocations.'
+    const root = new Context()
+    await root.plugin(SystemPrompt)
+    await root.plugin(ToolRuntime)
+    await root.plugin(UserQuestionService)
+    const questions: string[] = []
+    root.on('user-questions/request', (request: { questions: Array<{ id: string; question: string }>; signal?: AbortSignal }) => {
+      const question = request.questions[0]!
+      questions.push(question.question)
+      if (channel === 'pending') {
+        const queued = spawnSync(python, ['-c',
+          'from pathlib import Path; from refactory_dsh.steering import Ledger; import json; '
+          + 'l=Ledger(Path.cwd()); r=json.loads(' + JSON.stringify(JSON.stringify(reads)) + '); '
+          + 'l.note("correction", ' + JSON.stringify(feedback) + '); '
+          + 'l.verdict("gate_strategy","reloop",review=l.review("gate_strategy",r))'],
+        { cwd: workdir, env: { ...process.env, ...commandEnv }, encoding: 'utf8', timeout: 10_000 })
+        expect(queued.status, queued.stderr).toBe(0)
+        return new Promise<never>((_resolve, reject) => request.signal?.addEventListener('abort',
+          () => reject(new Error('pending question released after Ledger answer')), { once: true }))
+      }
+      return Promise.resolve({ answers: [{ id: question.id, selected: question.id === 'gate_strategy' ? ['reloop'] : [],
+        custom: question.id === 'gate_strategy' ? '' : feedback }] })
+    })
+    await root.plugin(spinePlugin, config({ workdir, gateCommand: `'${python}' -m refactory_dsh.steering`, commandEnv,
+      graph: { name: 'candidate-revision', start_node: 'gate_strategy', nodes: {
+        gate_strategy: { id: 'gate_strategy', _type: 'GateNode', evaluator_type: 'user', reads,
+          gate_prompt: 'INTENT FIDELITY CHECK: preserve the original asks and Graph Topology.', max_iterations: 3 },
+        strategy: { id: 'strategy', _type: 'AgentNode', prompt_template: 'Revise from the human feedback.' },
+        builder: { id: 'builder', _type: 'AgentNode', prompt_template: 'Build the approved strategy.' },
+      }, edges: [{ source: 'gate_strategy', target: 'strategy', condition: 'reloop' },
+        { source: 'strategy', target: 'gate_strategy' }, { source: 'gate_strategy', target: 'builder', condition: 'proceed' }] },
+    }))
+    await expect(call(root, 'wf_verdict', { gate: 'gate_strategy' }))
+      .resolves.toMatchObject({ status: 'routed', verdict: 'reloop', answered_by: 'user' })
+    expect(questions[0]).toContain('INTENT FIDELITY CHECK')
+    expect(questions).toHaveLength(channel === 'native' ? 2 : 1)
+    expect((readFileSync(join(workdir, reads[1]!), 'utf8').match(/Preserve every original requirement/g) ?? [])).toHaveLength(1)
+    const receipts = readdirSync(join(workdir, '.refactory/create-fidelity-gates'))
+      .map(id => JSON.parse(readFileSync(join(workdir, '.refactory/create-fidelity-gates', id, 'verdict.json'), 'utf8')))
+    expect(receipts).toHaveLength(1)
+    expect(receipts[0]).toMatchObject({ owner: 'human', gate_id: 'gate_strategy', verdict: 'reloop', status: 'answered' })
+    expect(await call(root, 'wf_state')).toMatchObject({ cursor: ['strategy'], gate_verdicts: { gate_strategy: 'reloop' } })
+  })
+
   it.each(['pause', 'stop'])('applies %s while a gate question is pending without recording a verdict', async (action) => {
     const workdir = scratch()
     const root = new Context()

@@ -298,16 +298,37 @@ def human_main() -> int:
         elif request["action"] == "answer":
             if review != request["review"] or request["verdict"] not in labels:
                 raise SteeringError("strategy answer is stale or invalid")
+            if request["verdict"] == "reloop":
+                feedback = request.get("feedback", "")
+                if not isinstance(feedback, str) or not feedback.strip():
+                    raise SteeringError("strategy revision requires the human's current feedback")
+                ledger.note("correction", feedback.strip())
             ledger.verdict(gate, request["verdict"], review=review, answered=True)
             result = {"review": review, "verdict": request["verdict"]}
+        elif request["action"] == "confirm":
+            if review != request["review"]:
+                raise SteeringError("strategy inputs changed after the pending human answer")
+            receipt_id = request.get("receipt_id", "")
+            if not isinstance(receipt_id, str) or len(receipt_id) != 32 or any(c not in "0123456789abcdef" for c in receipt_id):
+                raise SteeringError("pending human answer has no valid receipt identity")
+            receipt = RunContext(Path.cwd()).read_json(str(ROOT / receipt_id / "verdict.json"), {})
+            if (receipt.get("owner") != "human" or receipt.get("gate_id") != gate
+                    or receipt.get("verdict") != request["verdict"] or receipt.get("status") != "answered"):
+                raise SteeringError("pending human answer receipt is inconsistent")
+            if request["verdict"] == "proceed" and receipt.get("input_digest") != review:
+                raise SteeringError("pending human approval is stale")
+            result = {"review": review, "verdict": request["verdict"], "confirmed": True}
         else:
             raise SteeringError("unknown human gate action")
-        if result.get("verdict"):
+        if result.get("verdict") and request["action"] != "confirm":
             if result["verdict"] == "reloop":
                 _human_feedback(RunContext(Path.cwd()), ledger, gate)
-            _record(RunContext(Path.cwd()), {"schema_version": 1, "id": uuid.uuid4().hex,
+            identifier = uuid.uuid4().hex
+            _record(RunContext(Path.cwd()), {"schema_version": 1, "id": identifier,
                     "gate_id": gate, "owner": "human", "input_digest": review,
                     "verdict": result["verdict"], "status": "answered", "source": "intent-ledger.md"})
+            result.update(receipt_id=identifier, current_review=ledger.review(gate, request["reads"]))
+        result["protocol"] = "create_fidelity_human_v1"
         print(json.dumps(result))
         return 0
     except Exception as error:

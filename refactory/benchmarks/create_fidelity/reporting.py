@@ -93,13 +93,27 @@ def annotated_html(path: Path, report: dict, oracle: dict) -> str:
         gaps.append(f'<tr id="gap-{quote(name)}"><th><a href="{source_url}">{html.escape(name)}</a><small>{html.escape(expected["_type"])}</small></th>{"".join(cells)}</tr>')
     requirements = list(dict.fromkeys(r["requirement_id"] for lane in lanes for key in ("capability", "fidelity") for r in lane[key]))
     body = []
+    regression_map = report.get("regression_links", {})
+    # Fix links refer to the current implementation, including regressions added
+    # after an old failed trial. Frozen run identities remain separate above.
+    revision = regression_map.get("fix_ref", "codex/create-fidelity")
+    repository_url = "https://github.com/boston-harness-group/refactory-dsh/blob/" + quote(revision, safe="/") + "/"
     for requirement in requirements:
         cells = []
         for lane in lanes:
             r = next((r for key in ("capability", "fidelity") for r in lane[key] if r["requirement_id"] == requirement),
                      {"status": "unavailable", "reason": "No evidence", "evidence": []})
             cells.append(f'<td class="{r["status"]}"><strong>{r["status"]}</strong><p>{html.escape(r["reason"])}</p>' + ''.join(evidence_link(e, lane) for e in r["evidence"]) + '</td>')
-        body.append(f'<tr><th>{html.escape(requirement)}</th>{"".join(cells)}</tr>')
+        fixes = []
+        for item in regression_map.get("rows", []):
+            if not any(requirement == prefix or prefix.endswith(".") and requirement.startswith(prefix)
+                       for prefix in item["requirements"]):
+                continue
+            fixes.append('<details><summary>' + html.escape(item["owner"]) + '</summary><p>' +
+                         html.escape(item["fix"]) + '</p><a href="' + repository_url + quote(item["source"], safe="/") +
+                         '">Current candidate fix</a><a href="' + repository_url + quote(item["regression"], safe="/") +
+                         '">Controlled regression</a></details>')
+        body.append(f'<tr><th>{html.escape(requirement)}{"".join(fixes)}</th>{"".join(cells)}</tr>')
     style = 'body{font:15px system-ui;margin:2rem;color:#172033}table{border-collapse:collapse;width:100%;margin:2rem 0}td,th{padding:.7rem;border:1px solid #ccd4df;vertical-align:top;text-align:left}.passed{background:#dcfce7}.failed{background:#fee2e2}.unavailable,.not_exercised{background:#f1f5f9}p{max-width:65rem}td a,small{display:block;overflow-wrap:anywhere}.graphs{display:flex;gap:1rem}.graphs section{flex:1;min-width:320px;border:1px solid #cbd5e1;padding:1rem}.graphs svg{width:100%}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px}h2{font-size:20px}th{max-width:220px}:target{background:#fef3c7}'
     return ('<!doctype html><meta charset="utf-8"><title>Create fidelity evidence</title><style>' + style +
             '</style><h1>Paired Create evidence</h1><p>' + html.escape(report["interpretation"]) +

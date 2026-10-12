@@ -148,7 +148,7 @@ class ExternalDshIO:
         return body
 
 
-def begin_trial(tmp_path, monkeypatch, *, rework=False, fail_precheck=False):
+def begin_trial(tmp_path, monkeypatch, *, rework=False, fail_precheck=False, public_run=False):
     source = tmp_path / "source"
     source.mkdir()
     (source / "main.py").write_text("import json\ndef main(): return json.dumps({'source': True})\n")
@@ -158,11 +158,89 @@ def begin_trial(tmp_path, monkeypatch, *, rework=False, fail_precheck=False):
     knobs = {"name": "portable_probe", "brief": BRIEF, "project_path": str(source), "requires_input": "document_path", "director_parallelism": 7, "child_attempts": 2}
     ctx = RunContext(tmp_path / "run", knobs=knobs, model=client)
     executor = Executor(CreateFidelityMode().graph(), ctx)
-    result = executor.run()
+    if public_run:
+        mode = CreateFidelityMode()
+        state = mode.state_dict()
+        for name, value in knobs.items():
+            state["knobs"][name]["value"] = value
+        mode.load_state_dict(state)
+        result = mode.run(ctx.workdir, model=client, task=knobs)
+        ctx.facts = result.facts
+        ctx.knobs = mode.values()
+    else:
+        result = executor.run()
     assert not result.exit_ok
     assert "fresh human approval" in result.error
     assert not responses.builder_count
     return executor.graph, ctx, responses, executor
+
+
+def test_actual_mode_resume_consumes_fresh_human_approval_and_restores_recorded_route(tmp_path, monkeypatch):
+    graph, ctx, responses, _ = begin_trial(tmp_path, monkeypatch, public_run=True)
+    gate = graph.nodes["gate_strategy"]
+    ledger = Ledger(ctx.workdir)
+    ledger.verdict(gate.id, "proceed", review=ledger.review(gate.id, gate.reads))
+    before = set((ctx.workdir / ".refactory/workers").glob("*.json"))
+    result = CreateFidelityMode.resume(ctx.workdir, model=DshModelClient(provider="wrong", model="wrong", effort="low"))
+    assert result.exit_ok, result.error
+    assert result.facts["create_fidelity_precheck_ok"] is True
+    assert responses.builder_count == 1
+    receipts = [json.loads(path.read_text()) for path in set((ctx.workdir / ".refactory/workers").glob("*.json")) - before]
+    assert receipts and all(receipt["requested_route"]["provider"] == "fixture" for receipt in receipts)
+    assert all(receipt["requested_route"]["effort"] == "high" for receipt in receipts)
+
+
+def test_actual_later_mode_resume_reuses_fresh_completed_gate_approvals(tmp_path, monkeypatch):
+    graph, ctx, responses, _ = begin_trial(tmp_path, monkeypatch, public_run=True)
+    gate = graph.nodes["gate_strategy"]
+    ledger = Ledger(ctx.workdir)
+    ledger.verdict(gate.id, "proceed", review=ledger.review(gate.id, gate.reads))
+    failed = False
+    def external(client, *args, **kwargs):
+        nonlocal failed
+        response = responses.complete(client, *args, **kwargs)
+        if client._node_id == "gate_overwatch" and not failed:
+            failed = True
+            return "invalid verdict JSON"
+        return response
+    monkeypatch.setattr(DshModelClient, "_complete", external)
+    result = CreateFidelityMode.resume(ctx.workdir)
+    assert not result.exit_ok and "JSON" in result.error
+    progress = json.loads((ctx.workdir / ".refactory/progress.json").read_text())
+    assert progress["node"] == "gate_overwatch"
+    result = CreateFidelityMode.resume(ctx.workdir)
+    assert result.exit_ok, result.error
+    assert result.facts["create_fidelity_precheck_ok"] is True
+    assert responses.builder_count == 1
+
+
+def test_actual_mode_resume_refuses_stale_human_approval_until_exact_review_is_answered(tmp_path, monkeypatch):
+    graph, ctx, responses, _ = begin_trial(tmp_path, monkeypatch, public_run=True)
+    gate = graph.nodes["gate_strategy"]
+    ledger = Ledger(ctx.workdir)
+    ledger.verdict(gate.id, "proceed", review=ledger.review(gate.id, gate.reads))
+    specification = ctx.workdir / ".factory/strategy/current.md"
+    specification.write_text(specification.read_text() + "\nClarification: preserve distinct invocation outputs.\n")
+    stale = CreateFidelityMode.resume(ctx.workdir)
+    assert not stale.exit_ok and "fresh human approval" in stale.error
+    assert not responses.builder_count
+    progress = json.loads((ctx.workdir / ".refactory/progress.json").read_text())
+    assert progress["node"] == gate.id and progress["outcome"] == "failed"
+    ledger.verdict(gate.id, "proceed", review=ledger.review(gate.id, gate.reads))
+    fresh = CreateFidelityMode.resume(ctx.workdir)
+    assert fresh.exit_ok, fresh.error
+    assert fresh.facts["create_fidelity_precheck_ok"] is True
+    assert responses.builder_count == 1
+
+
+def test_candidate_resume_still_refuses_changed_authored_instructions(tmp_path, monkeypatch):
+    _, ctx, _, _ = begin_trial(tmp_path, monkeypatch, public_run=True)
+    path = ctx.workdir / ".refactory/progress.json"
+    progress = json.loads(path.read_text())
+    progress["graph"]["nodes"]["builder"]["prompt_template"] += "\nDifferent authored instruction."
+    path.write_text(json.dumps(progress))
+    with pytest.raises(ValueError, match="graph or instructions changed"):
+        CreateFidelityMode.resume(ctx.workdir)
 
 
 def approve_and_resume(graph, old_ctx):
