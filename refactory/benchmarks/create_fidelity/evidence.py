@@ -446,7 +446,7 @@ def _protocol_rows(root: Path | None, events: list[dict], manifests: dict,
         receipt = receipts[-1][1]
         if receipt.get("verdict") != "proceed" or receipt.get("input_digest") != review:
             raise ValueError("native human gate receipt does not bind the latest exact approved revision")
-        return "Raw human answer and native gate receipt bind the current exact strategy/intent digest and prove one-use consumption; authenticated approver identity is a separate limitation", ["intent-ledger.md", receipts[-1][0], *inputs]
+        return "Raw strategy-gate answer and native gate receipt bind the current exact strategy/intent digest and prove one-use consumption; direct-human versus delegated operator authority is assessed separately", ["intent-ledger.md", receipts[-1][0], *inputs]
 
     def repair():
         reloops = [pair for pair in gates if pair[1].get("owner") == "agent" and pair[1].get("verdict") == "reloop"]

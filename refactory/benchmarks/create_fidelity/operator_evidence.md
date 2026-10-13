@@ -1,4 +1,4 @@
-# Supplemental operator evidence v1
+# Supplemental operator evidence v2
 
 This is a validation interface, not a passing attestation. Keep all documents
 under the operator-only review directory denied to every authoring lane.
@@ -61,6 +61,12 @@ The evaluator independently matches the current approved bytes, one-use request,
 archived actual decision and human native-gate acceptance receipt. A label in
 `--approver` does not supply a trusted user turn. No platform login or cryptographic
 authentication claim is inferred from an operator attestation.
+
+An optional [benchmark delegated review profile](delegated_review.md) instead
+binds actual recorded user authorization to an independent operator's specific
+review of the exact pending strategy. It has a separate authorization profile
+and explicitly records that it does not claim the human inspected new bytes.
+The original direct-human reference and receipt validation remains unchanged.
 
 README review adds `artifact_path`, `readme_path`, `readme_sha256`,
 `package_sha256` (current unchanged native package inventory), and exactly two

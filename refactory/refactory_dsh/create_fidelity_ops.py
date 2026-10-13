@@ -145,6 +145,19 @@ def init_user_intent(ctx: Any) -> dict[str, Any]:
     task = dict(getattr(ctx, "task", {}) or {})
     brief = str(task.get("brief") or ctx.knob("brief", "") or "").strip()
     raw_name = str(task.get("name") or ctx.knob("name", "") or "").strip()
+    revision = str(task.get("revision_of") or ctx.knob("revision_of", "") or "").strip()
+    variant = str(task.get("variant") or ctx.knob("variant", "portable") or "portable").strip()
+    if revision and variant == "portable":
+        variant = "update-existing"
+    if variant not in ("portable", "update-existing", "plugin"):
+        raise ValueError(f"Create fidelity variant {variant!r} is unsupported; choose portable, update-existing or plugin")
+    if variant == "update-existing":
+        if not revision:
+            raise ValueError("update-existing requires a qualified revision_of package/mode")
+        revision_package, _ = registry.split(revision)
+        raw_name = raw_name or revision_package
+    elif revision:
+        raise ValueError("revision_of applies only to update-existing")
     if not brief:
         raise ValueError("Create fidelity requires a nonempty original brief")
     if not raw_name:
@@ -153,11 +166,6 @@ def init_user_intent(ctx: Any) -> dict[str, Any]:
         if raw_name[0].isdigit():
             raw_name = "pkg_" + raw_name
     name = _name(raw_name)
-    variant = str(task.get("variant") or ctx.knob("variant", "portable") or "portable").strip()
-    if variant != "portable":
-        raise ValueError(f"Create fidelity variant {variant!r} is unsupported; only new portable native packages are implemented")
-    if task.get("revision_of") or task.get("mode") or ctx.knob("revision_of", ""):
-        raise ValueError("Create fidelity update-existing is unsupported; use public Edit")
     source = Path(str(task.get("project_path") or ctx.knob("project_path", "") or project_for_nodes())).resolve()
     if not source.is_dir():
         raise ValueError(f"source project does not exist: {source}")
@@ -166,7 +174,7 @@ def init_user_intent(ctx: Any) -> dict[str, Any]:
     requested = str(task.get("output_folder") or ctx.knob("output_folder", "") or "").strip()
     output = (run / requested).resolve() if requested and not Path(requested).is_absolute() else Path(requested).resolve() if requested else expected
     if output != expected:
-        raise ValueError(f"portable output_folder must be the native run-local package path {expected}; external output placement is unsupported")
+        raise ValueError(f"native output_folder must be the run-local package path {expected}; use registry import to install an accepted standalone artifact elsewhere")
     if registry.where(name) is not None:
         raise ValueError(f"package {name!r} clashes with a shipped package; choose a new name")
     inputs = tuple(dict.fromkeys(p.strip() for p in str(ctx.knob("requires_input", "") or "").split(",") if p.strip()))
@@ -176,6 +184,25 @@ def init_user_intent(ctx: Any) -> dict[str, Any]:
                "project_path": str(source), "artifact_project": str(run), "output_folder": str(output),
                "requires_input": list(inputs), "publication": "local-artifact-only"}
     previous = ctx.read_json(".factory/create-request.json")
+    baseline = None
+    if variant == "update-existing":
+        from refactory_dsh.create_fidelity_variants import BASELINE, inventory, snapshot_revision
+
+        if ctx.exists(BASELINE):
+            baseline = ctx.read_json(BASELINE)
+            if (baseline.get("revision_of") != revision or baseline.get("source_project") != str(source)
+                    or inventory(Path(baseline["source_package"])) != baseline["files"]):
+                raise ValueError("revision baseline or original source changed; use a fresh authoring run")
+        else:
+            # Refuse changed request reuse before copying any existing package.
+            if previous is not None:
+                raise ValueError("existing run has no compatible revision baseline; use a fresh run")
+            baseline = snapshot_revision(source, run, name, revision)
+            ctx.write_json(BASELINE, baseline)
+        request.update(revision_of=revision, baseline_sha256=_sha(ctx.path(BASELINE).read_bytes()),
+                       revision_publication="isolated candidate; source project preserved")
+    elif previous is None and output.exists():
+        raise ValueError("native package already exists in this run; use update-existing with its qualified identity")
     if previous is not None and previous != request:
         raise ValueError("run directory belongs to a different Create request; use a fresh run directory")
     _publish_template(ctx)
@@ -196,8 +223,13 @@ def init_user_intent(ctx: Any) -> dict[str, Any]:
             original = source / relative
             if original.is_file() and not ctx.exists(relative):
                 ctx.write_text(relative, original.read_text())
+    api = NATIVE_API
+    if baseline is not None:
+        api += "\n## Update existing native mode\nRevise the same qualified identity " + revision + ". Preserve all unrelated modes and public inputs unless the approved brief explicitly requires a change. The original project is read-only; deliver an isolated revised package. The COMPLETE baseline below includes every original package file and all native mode states; do not replace it with a summary.\n" + json.dumps(baseline, ensure_ascii=False, indent=2)
+    elif variant == "plugin":
+        api += "\n## Native Plugin Package\nDeliver a standalone native Package directory with PACKAGE, modes, ops, README and generated SKILL. Native installation is registry add/import (copy), discovery is registry list/show, removal is registry remove in an isolated consumer project. There is no factory.plugins or Python entry-point scanner in refactory-dsh. Do not invent register_plugin(), remote-factory dependencies or global pip installation. Run plugin-check and genuine native behavioral tests; preserve the standalone source bytes and prove consumer cleanup.\n"
     return {"create_fidelity": True, **{k: request[k] for k in ("name", "brief", "variant", "project_path", "artifact_project", "output_folder")},
-            "requires_input": ",".join(inputs), "native_api": NATIVE_API}
+            "requires_input": ",".join(inputs), "native_api": api, "revision_of": revision}
 
 
 def gate_has_factory(ctx: Any) -> str:
@@ -344,6 +376,15 @@ def _native_root(project: Path, name: str) -> Path:
 def validate_native_package(project: Path, name: str, *, requires_input: tuple[str, ...] = ()) -> dict[str, Any]:
     """Run genuine native validation without optimization-only admission rules."""
     project = Path(project).resolve()
+    required_mode = ""
+    request_path = project / ".factory/create-request.json"
+    if request_path.is_file():
+        request = json.loads(request_path.read_text())
+        if isinstance(request, dict) and request.get("variant") == "update-existing" and request.get("name") == name:
+            required_mode = str(request.get("revision_of", ""))
+            subject_package, _ = registry.split(required_mode)
+            if subject_package != name:
+                raise ValueError("revision input requirement is bound to a different package")
     problems = []
     try:
         root = _native_root(project, name)
@@ -356,7 +397,10 @@ def validate_native_package(project: Path, name: str, *, requires_input: tuple[s
     # This uses native validate_state and registry.resolve, in the same containment
     # boundary used by ordinary generated-package validation. No generated import
     # runs in the parent, and structural admission cannot author any missing code.
+    from refactory_dsh.create_fidelity_variants import source_import_code
+
     code = "\n".join([
+        source_import_code(name),
         "import importlib, json", "from pathlib import Path", "from refactory_dsh import registry",
         "from refactory_dsh.nn import validate_state", f"project = Path({str(project)!r})",
         f"package = registry.load({name!r}, project)", "problems = []", "modes = []",
@@ -367,9 +411,9 @@ def validate_native_package(project: Path, name: str, *, requires_input: tuple[s
         "    issues = validate_state(state, invariants=mode.invariants(), resolve_calls=True)",
         "    problems.extend(str(issue) for issue in issues)",
         "    if not mode.is_scored() and not mode.unscored_reason: problems.append(mode.name + ': declare an honest unscored_reason')",
-        f"    for wanted in {tuple(requires_input)!r}:",
-        "        if wanted not in mode.parameters(): problems.append(mode.name + ': missing runtime input ' + wanted)",
         "    identifier = package.name + '/' + mode.name", "    resolved = registry.resolve(project, identifier)",
+        f"    for wanted in {tuple(requires_input)!r} if not {required_mode!r} or identifier == {required_mode!r} else ():",
+        "        if wanted not in mode.parameters(): problems.append(mode.name + ': missing runtime input ' + wanted)",
         "    modes.append({'id': identifier, 'description': mode.description, 'state': state, 'unscored_reason': mode.unscored_reason})",
         "if package.name not in registry.discover_names(project): problems.append('package is not discoverable')",
         "print(json.dumps({'problems': problems, 'modes': modes, 'describe': package.describe()}))",
@@ -385,6 +429,7 @@ def validate_native_package(project: Path, name: str, *, requires_input: tuple[s
         problems.append("package changed during native admission")
     return {"schema_version": 1, "ok": not problems, "name": name, "package_digest": after,
             "requires_input": list(requires_input), "problems": problems,
+            "requires_input_mode": required_mode or "all modes",
             "modes": result.payload.get("modes", []), "describe": result.payload.get("describe", {}),
             "raw_evidence": {"stdout": result.stdout, "stderr": result.stderr, "returncode": result.returncode,
                              "timed_out": result.timed_out, "timeout_s": result.timeout_s}}
@@ -439,7 +484,10 @@ def run_native_mode(project: Path, identifier: str, workdir: Path, knobs: dict[s
     if not admission["ok"]:
         return {"exit_ok": False, "error": "; ".join(admission["problems"]), "raw_evidence": admission["raw_evidence"]}
     project, workdir = Path(project).resolve(), Path(workdir).resolve()
+    from refactory_dsh.create_fidelity_variants import source_import_code
+
     code = "\n".join([
+        source_import_code(package_name),
         "import json", "from pathlib import Path", "from refactory_dsh import registry", "from refactory_dsh.nn import execute", "from refactory_dsh.nn.edits import configure",
         f"_, mode_class = registry.resolve(Path({str(project)!r}), {identifier!r})", "mode = mode_class()",
         "state = mode.state_dict()", f"overrides = {knobs!r}",
@@ -538,6 +586,16 @@ def gate_precheck(ctx: Any) -> str:
         report = {"schema_version": 1, "name": name, "ok": False,
                   "problems": [f"native validation evidence unavailable: {type(exc).__name__}: {exc}"], "raw_evidence": {}}
     problems = list(report["problems"])
+    variant = str(ctx.facts.get("variant", "portable"))
+    if variant in ("update-existing", "plugin"):
+        from refactory_dsh.create_fidelity_variants import plugin_check, update_check
+
+        try:
+            variant_report = (update_check if variant == "update-existing" else plugin_check)(project, name)
+        except evidence_errors as exc:
+            variant_report = {"ok": False, "problems": [f"variant evidence unavailable: {type(exc).__name__}: {exc}"]}
+        report["variant_evidence"] = variant_report
+        problems.extend(variant_report["problems"])
     from refactory_dsh.create_fidelity_gates import human_current_approval
 
     try:
@@ -584,8 +642,8 @@ def gate_precheck(ctx: Any) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Native portable Create validation, inspection, skill export and execution")
-    parser.add_argument("verb", choices=("validate", "inspect", "export", "admit", "run"))
+    parser = argparse.ArgumentParser(description="Native Create validation, revision/plugin checks, skill export and execution")
+    parser.add_argument("verb", choices=("validate", "inspect", "export", "admit", "run", "update-check", "plugin-check"))
     parser.add_argument("target")
     parser.add_argument("--project", type=Path, default=project_for_nodes())
     parser.add_argument("--workdir", type=Path)
@@ -593,6 +651,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--requires-input", default="")
     args = parser.parse_args(argv)
     try:
+        if args.verb in ("update-check", "plugin-check"):
+            from refactory_dsh.create_fidelity_variants import plugin_check, update_check
+
+            report = (update_check if args.verb == "update-check" else plugin_check)(args.project, _name(args.target))
+            print(json.dumps(report, indent=2))
+            return 0 if report["ok"] else 1
         if args.verb == "run":
             if args.workdir is None:
                 parser.error("run requires --workdir")

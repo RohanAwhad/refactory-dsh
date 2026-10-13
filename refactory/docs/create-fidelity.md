@@ -22,8 +22,9 @@ The generated portable package lives under the run's `.factory/packages/`.
 `name` and `brief` identify the request. `requires_input` declares required
 runtime parameter names; `project_path` selects the read-only project to study.
 `output_folder` may select a directory inside the native package workspace.
-`child_attempts` defaults to 2, and `director_parallelism` to 7. Update and plugin
-variants fail explicitly before model dispatch. No Task or optimization score
+`child_attempts` defaults to 2, and `director_parallelism` to 7. `variant` also
+supports isolated `update-existing` and native `plugin` packages; see the
+[variant and adoption contract](create-fidelity-variants.md). No Task or optimization score
 is required for a portable, deliberately unscored generated mode.
 
 ## Reviewed native mappings
@@ -60,6 +61,8 @@ See the [benchmark README](../benchmarks/create_fidelity/README.md), pinned
 [semantic delta](../tests/fixtures/create_fidelity/v1/semantic-delta.md), and
 [shared protocol](../tests/fixtures/create_fidelity/v1/protocol.md).
 The source-derived oracle does not import candidate expectations.
+The [remote IR boundary](create-fidelity-ir-boundary.md) describes the separate
+optional schema compatibility checks and unresolved active-extension boundaries.
 
 The booking benchmark separates artifact capability (the frozen 56-case checker
 and native discovery/reuse) from authoring fidelity (roles, child dispatch,

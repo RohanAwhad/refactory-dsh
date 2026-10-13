@@ -124,14 +124,20 @@
       "examples": [{
         "explanation": "Opt-in portable authoring candidate; review the produced strategy at its human gate. Live fidelity has not yet been established.",
         "knobs": {"name": "tiny_example", "brief": "Write a reusable deterministic counter package", "variant": "portable"}
+      }, {
+        "explanation": "Revise an existing workspace mode in a separate fresh authoring workdir. Keep the source project unchanged and verify original, revised and unrelated behavior before adoption.",
+        "knobs": {"name": "existing_package", "brief": "Revise the existing mode according to the supplied acceptance contract", "variant": "update-existing", "revision_of": "existing_package/run", "project_path": "/absolute/original-project"}
+      }, {
+        "explanation": "Author a standalone native Package. Verify registry installation, discovery, behavioral execution and removal in an isolated consumer; foreign pip entry points are not a native mechanism.",
+        "knobs": {"name": "my_plugin", "brief": "Build a standalone native plugin with the supplied acceptance contract", "variant": "plugin"}
       }],
       "interfaces": {
         "chat": "wf_open mode=default_pack/create_fidelity; review refactory help topic=default_pack/create_fidelity before launch",
         "cli": "refactory ceo \"a reusable package\" --mode create_fidelity --name my_package",
         "panel": "Discoverable in the mode picker; opt-in candidate only. Use a reviewed DSH route and fresh human strategy approval; optimization is unavailable because authoring is unscored."
       },
-      "purpose": "Opt-in 29-stage Create-v2 fidelity candidate with DSH directors and independent children, human strategy approval, complete QA reports, repair and native portable package admission. Update/plugin variants and live fidelity remain unsupported or unverified.",
-      "reviewed_schema": "58ed2bdae73cda3757870b77aba2ac2eeb243062437674140ab6c53ed08399bc"
+      "purpose": "Opt-in 29-stage Create-v2 fidelity candidate with DSH directors and independent children, human strategy approval, complete QA reports, repair and native package admission. Portable, isolated update-existing and native plugin variants have explicit mappings; full live authoring acceptance remains unverified.",
+      "reviewed_schema": "d965464b57b6e902d8d5d5d292618b3978d1c0437bbe740f392df855d453b995"
     },
     "default_pack/create_fast": {
       "doc": "refactory/docs/authoring-validation.md",

@@ -18,7 +18,7 @@ from typing import Any, Mapping
 
 from .contract import FIXTURES, digest, reference
 
-VERSION = "create-fidelity-operator-evidence/v1"
+VERSION = "create-fidelity-operator-evidence/v2"
 FILES = {"semantic": "semantic-review.json", "identity": "human-approval.json", "readme": "readme-review.json"}
 
 
@@ -32,6 +32,7 @@ class OperatorEvidenceContext:
     # Allowlisted actual user decisions, provided by the operator channel,
     # never discovered from a model-writable project or from the review itself.
     trusted_user_references: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    trusted_operator_delegations: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
 
 def evaluator_provenance() -> dict:
@@ -177,11 +178,22 @@ def _semantic(project: Path, document: dict) -> list[str]:
 
 
 def _identity(project: Path, document: dict, context: OperatorEvidenceContext) -> list[str]:
+    if document.get("decision_source") == "delegated-operator":
+        from .approval import validate_delegation
+        reference = document.get("delegation_reference")
+        trusted = context.trusted_operator_delegations.get(reference, {})
+        validate_delegation(reference, trusted, trial_id=context.trial_id, lane_id=context.lane_id, operator_id=context.reviewer_id)
+        if document.get("human_inspected_strategy") is not False:
+            raise ValueError("Delegated operator review cannot claim the human inspected the new strategy bytes")
+        reviewer = context.reviewer_id
+    else:
+        reviewer = document.get("approver")
     turn = document.get("user_turn_reference")
     trusted = context.trusted_user_references.get(turn, {}) if isinstance(turn, str) else {}
     keys = ("question_reference", "decision", "approver", "strategy_digest", "input_paths")
-    if not trusted or any(document.get(key) != trusted.get(key) for key in keys) or not all(document.get(key) for key in keys):
-        raise ValueError("human approval does not match the operator's independently supplied actual user turn/question and decision")
+    if document.get("decision_source") != "delegated-operator":
+        if not trusted or any(document.get(key) != trusted.get(key) for key in keys) or not all(document.get(key) for key in keys):
+            raise ValueError("human approval does not match the operator's independently supplied actual user turn/question and decision")
     if document["decision"] != "proceed" or document["verdict"] != "passed":
         if document["verdict"] == "passed":
             raise ValueError("a human rejection cannot be certified as an approval")
@@ -190,10 +202,38 @@ def _identity(project: Path, document: dict, context: OperatorEvidenceContext) -
     answer = _read(project, answer_path)
     inputs = {name: digest(_path(project, name)) for name in document["input_paths"]}
     strategy_digest = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
-    if (answer.get("source") != "explicit-human" or answer.get("verdict") != "proceed"
-            or answer.get("approver") != document["approver"] or answer.get("strategy_digest") != strategy_digest
+    delegated = document.get("decision_source") == "delegated-operator"
+    if (answer.get("source") != ("delegated-operator" if delegated else "explicit-human") or answer.get("verdict") != "proceed"
+            or answer.get("approver") != reviewer or answer.get("strategy_digest") != strategy_digest
             or strategy_digest != document["strategy_digest"] or answer.get("input_paths") != document["input_paths"]):
         raise ValueError("archived human decision or current approved input bytes are inconsistent")
+    extra_refs = []
+    if delegated:
+        # Re-read the independent operator document, not a model-writable copy.
+        review_path = document["operator_review_path"]
+        review = _read(context.root, review_path)
+        if (digest(_path(context.root, review_path)) != answer.get("operator_review_sha256")
+                or answer.get("delegation_reference") != document["delegation_reference"]
+                or answer.get("trusted_user_delegation") != context.trusted_operator_delegations[document["delegation_reference"]]
+                or answer.get("human_inspected_strategy") is not False
+                or review.get("verdict") != "proceed" or review.get("strategy_digest") != strategy_digest
+                or review.get("reviewer_id") != reviewer or review.get("input_paths") != document["input_paths"]
+                or review.get("request_created_unix") != answer.get("request_created_unix")
+                or review.get("request_sha256") != answer.get("request_sha256")
+                or review.get("trial_id") != context.trial_id or review.get("lane_id") != context.lane_id
+                or review.get("gate") != "gate_strategy"
+                or review.get("decision_source") != "delegated-operator" or review.get("human_inspected_strategy") is not False
+                or not str(review.get("rationale", "")).strip()):
+            raise ValueError("Delegated approval lacks the actual independently reviewed operator decision and trusted authorization")
+        covered = set()
+        for citation in review.get("evidence", []):
+            name, quote = citation["path"], citation["quote"]
+            if name not in inputs or digest(_path(project, name)) != citation["sha256"] or not quote.strip() or quote not in _path(project, name).read_text():
+                raise ValueError("Delegated review input excerpt is stale or unsupported")
+            covered.add(name)
+        if covered != set(inputs):
+            raise ValueError("Delegated review omits strategy or original intent evidence")
+        extra_refs.append(str(_path(context.root, review_path)))
     request_path = document["request_evidence_path"]
     request = _read(project, request_path)
     if (request.get("status") != "consumed" or request.get("answer_path") != answer_path
@@ -205,7 +245,7 @@ def _identity(project: Path, document: dict, context: OperatorEvidenceContext) -
     if (receipt.get("gate_id") != "gate_strategy" or receipt.get("owner") != "human"
             or receipt.get("verdict") != "proceed" or receipt.get("status") != "answered" or receipt.get("input_digest") != review):
         raise ValueError("consumed native gate receipt does not match the actual human-approved strategy digest")
-    return [answer_path, request_path, receipt_path, *inputs]
+    return [answer_path, request_path, receipt_path, *inputs, *extra_refs]
 
 
 def _expanded_command(command: str, substitutions: dict) -> str:
@@ -377,6 +417,11 @@ def supplemental_row(identifier: str, kind: str, project: Path | None, context: 
         refs = (_semantic(project, document) if kind == "semantic" else _identity(project, document, context) if kind == "identity"
                 else _readme(project, document, context, native or {}))
         result.update(status=document["verdict"], reason=document["rationale"], evidence=[str(path), *sorted(set(refs))])
+        if kind == "identity":
+            delegated = document.get("decision_source") == "delegated-operator"
+            result.update(decision_source="delegated-operator" if delegated else "direct-human",
+                          authorization_profile="benchmark-delegated-strategy-review/v1" if delegated else "direct-user-answer",
+                          human_inspected_strategy=False if delegated else None)
         provenance.update(operator_document_sha256=digest(path), trial_id=context.trial_id, lane_id=context.lane_id,
                           reviewer_id=context.reviewer_id, trust_boundary="Operator context and files outside enumerated lane roots; platform authentication is not inferred")
     except FileNotFoundError as error:

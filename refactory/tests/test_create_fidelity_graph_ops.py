@@ -105,7 +105,7 @@ def test_unsupported_variant_rejected_before_any_dispatch(tmp_path):
     class NoCalls:
         def complete(self, *args, **kwargs):
             pytest.fail("unsupported variant must fail before model I/O")
-    for variant in ("plugin", "update-existing", "provider-swap"):
+    for variant in ("provider-swap", "foreign-entrypoint-plugin"):
         workdir = tmp_path / variant
         result = execute(CreateFidelityMode().graph(), workdir,
                          knobs={"name": "portable_test", "brief": "Produce a reusable local mode", "variant": variant}, model=NoCalls())

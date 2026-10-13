@@ -5,12 +5,14 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 from .contract import FIXTURES, digest, reference
@@ -18,6 +20,8 @@ from .evidence import authoring_score, capability_score, hash_tree, normalize, r
 from .isolation import probe, profile, runtime_probe
 from .operator_evidence import OperatorEvidenceContext, evaluator_provenance
 from . import approval
+from .remote_readiness import NATIVE_ENVIRONMENT_VERSION
+from .supervision import OWNER_FD, DEADLINE, GRACE, encode_message
 
 LANES = ("remote-reference", "dsh-baseline", "dsh-candidate")
 ADAPTER_INSTRUCTIONS = {
@@ -161,6 +165,11 @@ def prepare(args) -> dict:
             # is shared. No credential value enters config, prompts or reports.
             (runtime_home / ".credentials.yaml").symlink_to(auth_source)
         (project / "runtime/claude").mkdir()
+        native_environment = None
+        if flavor == "remote":
+            from .remote_readiness import environment_mapping
+            native_environment = environment_mapping(project)
+            (project / "runtime/native-home").mkdir()
         (project / "tmp").mkdir()
         adapter_root = project / "runtime/benchmark"
         adapter_package = adapter_root / "benchmarks/create_fidelity"
@@ -194,6 +203,10 @@ def prepare(args) -> dict:
                   "adapter_root": str(adapter_root), "adapter_sha256": hash_tree(adapter_root),
                   "policy": str(policy), "inputs": str(inp),
                   "total_timeout_s": args.total_timeout, "shutdown_grace_s": 15,
+                  "trial_id": root.name,
+                  "strategy_decision_policy": "direct-human-or-explicit-delegated-operator; exact reviewed gate bytes only",
+                  "remote_route": getattr(args, "remote_route", "native-python-v1") if flavor == "remote" else None,
+                  "native_environment_mapping": native_environment,
                   "model_context": {"runtime_root": str(runtime_root),
                       "dsh_home": str(runtime_home),
                       "python_bin": str(args.dsh_python.parent), "provider": args.provider,
@@ -203,6 +216,7 @@ def prepare(args) -> dict:
                       "qa_director": 3600, "builder": 1800, "overwatch": 1800},
                   "route_policy": f"DSH directors and children require served {args.model}/high; remote defaults disclosed",
                   "runtime_state_isolation": {"status": "pending-probe", "dsh_home": str(runtime_home),
+                      "native_home": native_environment["native_home"] if native_environment else None,
                       "claude_config_dir": str(project / "runtime/claude"),
                       "private_tmp": str(project / "tmp"), "shared_auth_reference": str(auth_source)},
                   "forbidden_controls": [str(operator / "isolation-canary.txt"), *[str(p / "isolation-canary.txt") for p in peers],
@@ -218,6 +232,9 @@ def prepare(args) -> dict:
              "reference_sha256": digest(FIXTURES / "reference.json"), "identities": identities,
              "model": args.model, "effort": "high", "route_authorization": args.route_authorization,
              "full_mode_allowance_s": args.total_timeout,
+             "remote_route": getattr(args, "remote_route", "native-python-v1"),
+             "remote_native_environment_mapping": NATIVE_ENVIRONMENT_VERSION,
+             "lifecycle_policy": "controller-owned pipe EOF and absolute wall deadline include strategy waiting; owned cleanup bounded by grace",
              "calibration": "Initial declared 12-hour ceiling; no claim of calibrated completion time"}
     write(root / "trial.json", trial)
     return trial
@@ -225,7 +242,7 @@ def prepare(args) -> dict:
 
 def preflight(root: Path, receipt_root: Path | None) -> dict:
     projects = [root / lane / "project" for lane in LANES]
-    result = {"isolation": {}, "runtime_state_isolation": {},
+    result = {"isolation": {}, "runtime_state_isolation": {}, "native_readiness": {},
               "route": {"status": "unavailable", "reason": "No served route probe supplied"}}
     for lane, project in zip(LANES, projects):
         config = read(root / lane / "config.json")
@@ -234,6 +251,13 @@ def preflight(root: Path, receipt_root: Path | None) -> dict:
         result["runtime_state_isolation"][lane] = runtime_probe(project, Path(config["policy"]), config["python"],
             [Path(p) for p in config.get("forbidden_controls", [])]) if runtime.get("dsh_home") else {
                 "status": "unavailable", "reason": "No per-lane runtime session/cache isolation configuration"}
+        if lane == "remote-reference" and config.get("native_environment_mapping"):
+            from .remote_readiness import probe as native_readiness
+            env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
+                   "PYTHONPATH": os.pathsep.join((config["adapter_root"], config["source"])),
+                   "PATH": str(Path(config["python"]).parent) + os.pathsep + os.environ.get("PATH", ""),
+                   "TMPDIR": runtime["private_tmp"]}
+            result["native_readiness"][lane] = native_readiness(config, env)
     if receipt_root is not None:
         workers = [read(p) for p in sorted(receipt_root.rglob(".refactory/workers/*.json"))]
         trial = read(root / "trial.json", {})
@@ -244,37 +268,93 @@ def preflight(root: Path, receipt_root: Path | None) -> dict:
         result["route"] = route
         result["route"]["raw_receipts"] = [str(p) for p in sorted(receipt_root.rglob(".refactory/workers/*.json"))]
         result["route"]["probe"] = str(receipt_root / "probe.json")
-    result["status"] = "passed" if result["route"]["status"] == "passed" and all(x["status"] == "passed" for group in ("isolation", "runtime_state_isolation") for x in result[group].values()) else "unavailable"
+    result["status"] = "passed" if result["route"]["status"] == "passed" and all(x["status"] == "passed" for group in ("isolation", "runtime_state_isolation", "native_readiness") for x in result[group].values()) else "unavailable"
     write(root / "operator/preflight.json", result)
     return result
 
 
 def execute_command(argv: list[str], *, cwd: Path, env: dict, output: Path,
-                    timeout: float, grace: float = 15) -> dict:
+                    timeout: float, grace: float = 15, control_messages=None, cancel_event=None) -> dict:
+    if any(not math.isfinite(value) or value <= 0 for value in (timeout, grace)):
+        raise ValueError("Benchmark command requires positive finite timeout and shutdown grace")
     output.mkdir(parents=True, exist_ok=True)
     record = {"argv": argv, "cwd": str(cwd), "timeout_s": timeout, "shutdown_grace_s": grace,
               "effective_deadline_layer": "paired-harness-wall", "started_unix": time.time()}
+    read_fd, write_fd = os.pipe()
+    child_env = {**env, OWNER_FD: str(read_fd), DEADLINE: str(record["started_unix"] + timeout), GRACE: str(grace)}
+    os.set_blocking(write_fd, False)
+    pending = b""
+    stopping = None
+    proc = None
     with (output / "stdout.log").open("wb") as stdout, (output / "stderr.log").open("wb") as stderr:
-        proc = subprocess.Popen(argv, cwd=cwd, env=env, stdout=stdout, stderr=stderr, start_new_session=True)
         try:
-            record["returncode"] = proc.wait(timeout=timeout)
-            record["status"] = "completed" if proc.returncode == 0 else "failed"
-        except (subprocess.TimeoutExpired, KeyboardInterrupt) as exc:
-            record["status"] = "timed_out" if isinstance(exc, subprocess.TimeoutExpired) else "interrupted"
-            os.killpg(proc.pid, signal.SIGTERM)
-            try:
-                proc.wait(timeout=grace)
-                record["cleanup"] = "owned process group terminated"
-            except subprocess.TimeoutExpired:
-                os.killpg(proc.pid, signal.SIGKILL)
-                proc.wait(timeout=grace)
-                record["cleanup"] = "forced owned-group kill; runtime cleanup unconfirmed"
+            proc = subprocess.Popen(argv, cwd=cwd, env=child_env, stdout=stdout, stderr=stderr,
+                                    start_new_session=True, pass_fds=(read_fd,))
+            os.close(read_fd)
+            read_fd = None
+            record["lane_pid"] = proc.pid
+            while proc.poll() is None:
+                expired = time.time() >= record["started_unix"] + timeout
+                cancelled = cancel_event is not None and cancel_event.is_set()
+                if stopping is None and (expired or cancelled):
+                    record["status"] = "timed_out" if expired else "interrupted"
+                    pending += encode_message({"type": "cancel", "reason": "wall_deadline_expired" if expired else "controller_cancelled"})
+                    stopping = time.monotonic()
+                if stopping is None and control_messages is not None:
+                    for message in control_messages():
+                        pending += encode_message(message)
+                if pending:
+                    try:
+                        pending = pending[os.write(write_fd, pending):]
+                    except BlockingIOError:
+                        pass
+                    except BrokenPipeError:
+                        pending = b""
+                if stopping is not None and time.monotonic() - stopping > grace:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                    proc.wait(timeout=2)
+                    record.update(cleanup="forced lane kill; detached child cleanup unconfirmed", cleanup_outcome="unknown")
+                    break
+                try:
+                    proc.wait(timeout=0.1)
+                except subprocess.TimeoutExpired:
+                    pass
+            record["returncode"] = proc.returncode
+            record.setdefault("status", "completed" if proc.returncode == 0 else "failed")
+        except BaseException:
+            # Closing the controller's sole write end also works after SIGKILL,
+            # when no finally block can run: lane EOF unwinds its owned workers.
+            os.close(write_fd)
+            write_fd = None
+            if proc is not None and proc.poll() is None:
+                try:
+                    proc.wait(timeout=grace)
+                except subprocess.TimeoutExpired:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                    proc.wait(timeout=2)
+                    record.update(cleanup="forced lane kill; detached child cleanup unconfirmed", cleanup_outcome="unknown")
+            record.update(status="interrupted", returncode=proc.returncode if proc is not None else None)
+            record["elapsed_s"] = time.time() - record["started_unix"]
+            write(output / "command.json", record)
+            raise
+        finally:
+            if read_fd is not None:
+                os.close(read_fd)
+            if write_fd is not None:
+                os.close(write_fd)
     record["elapsed_s"] = time.time() - record["started_unix"]
+    lifecycle = read(cwd / "raw/lifecycle.json", {})
+    if lifecycle.get("owner_pid") == record.get("lane_pid"):
+        record["lane_lifecycle"] = lifecycle
+        if lifecycle.get("reason") == "wall_deadline_expired":
+            record["status"] = "timed_out"
+        if str(lifecycle.get("status", "")).startswith("unknown"):
+            record.update(cleanup=lifecycle["status"], cleanup_outcome="unknown")
     write(output / "command.json", record)
     return record
 
 
-def run_lane(root: Path, lane: str, operation: str) -> dict:
+def run_lane(root: Path, lane: str, operation: str, *, cancel_event=None) -> dict:
     config_path = root / lane / "config.json"
     config = read(config_path)
     source, project = Path(config["source"]), Path(config["project"])
@@ -296,6 +376,9 @@ def run_lane(root: Path, lane: str, operation: str) -> dict:
     runtime = config["runtime_state_isolation"]
     env["DSH_HOME"] = runtime["dsh_home"]
     env["CLAUDE_CONFIG_DIR"] = runtime["claude_config_dir"]
+    if config.get("native_environment_mapping"):
+        from .remote_readiness import apply_environment
+        env = apply_environment(env, config["native_environment_mapping"], project)
     env["TMPDIR"] = runtime["private_tmp"]
     policy = Path(config["policy"])
     if operation == "native":
@@ -307,7 +390,8 @@ def run_lane(root: Path, lane: str, operation: str) -> dict:
     argv = ["/usr/bin/sandbox-exec", "-f", str(policy), config["python"], "-m", "benchmarks.create_fidelity.lane", operation, str(config_path)]
     result = execute_command(argv, cwd=project, env=env, output=project / "raw" / operation,
                            timeout=config["total_timeout_s"] if operation == "author" else 300,
-                           grace=config["shutdown_grace_s"])
+                           grace=config["shutdown_grace_s"], cancel_event=cancel_event,
+                           control_messages=decision_messages(root, lane) if operation == "author" else None)
     if runtime_pin:
         stable = (runtime_identity(Path(runtime_pin["root"])) == runtime_pin
                   and source_identity(source, config["identity"]["declared_revision"]) == config["identity"])
@@ -327,8 +411,75 @@ def run_pair(root: Path, lanes: list[str]) -> list[dict]:
         write(root / "operator/launch-blocked.json", blocked)
         return blocked
     # No model run is reachable without the explicit live command and preflight.
+    cancelled = threading.Event()
     with ThreadPoolExecutor(max_workers=len(lanes)) as pool:
-        return list(pool.map(lambda lane: run_lane(root, lane, "author"), lanes))
+        try:
+            return list(pool.map(lambda lane: run_lane(root, lane, "author", cancel_event=cancelled), lanes))
+        except BaseException:
+            cancelled.set()
+            raise
+
+
+def _trusted_context(root: Path) -> dict:
+    operator = root / "operator"
+    # A variant trial can contain one lane. Enumerate every actual lane config,
+    # rather than inventing absent sibling projects; the requested target is
+    # still mandatory in operator_decision and decision_messages.
+    configs = [read(path) for path in root.glob("*/config.json") if path.is_file()]
+    if not configs or any(not isinstance(config, dict) or not config.get("project") for config in configs):
+        raise ValueError("Trusted operator context requires the actual trial lane configurations")
+    projects = [Path(config["project"]).resolve() for config in configs]
+    path = operator / "review-context.json"
+    if (path.is_symlink() or not path.resolve().is_relative_to(operator.resolve())
+            or any(operator.resolve().is_relative_to(p) or p.is_relative_to(operator.resolve()) for p in projects)):
+        raise ValueError("Trusted operator context must be outside every lane and cannot link to lane-authored files")
+    context = read(path)
+    if not isinstance(context, dict) or not context.get("reviewer_id"):
+        raise ValueError("An actual external operator review/delegation context is required")
+    return context
+
+
+def operator_decision(root: Path, lane: str, review_path: Path, delegation_reference: str) -> dict:
+    """Queue a specific reviewed decision under operator authority, never a default."""
+    context = _trusted_context(root)
+    operator = root / "operator"
+    if review_path.is_symlink() or not review_path.resolve().is_relative_to(operator.resolve()):
+        raise ValueError("Strategy review must be operator-owned and outside authoring lanes")
+    config = read(root / lane / "config.json")
+    project = Path(config["project"])
+    trusted = context.get("trusted_operator_delegations", {}).get(delegation_reference, {})
+    review = read(review_path)
+    answer = approval.operator_answer(project, review=review, delegation_reference=delegation_reference,
+        trusted_delegation=trusted, trial_id=root.name, lane_id=lane, operator_id=context["reviewer_id"],
+        review_sha256=digest(review_path))
+    path = operator / "decisions" / lane / f"{answer['request_created_unix']}.json"
+    if path.exists():
+        raise ValueError("This gate visit already has an operator decision; it cannot be replayed")
+    write(path, {"status": "queued", "review_path": str(review_path.resolve()), "review_sha256": digest(review_path),
+                 "delegation_reference": delegation_reference, "answer": answer})
+    return {"status": "queued", "source": "delegated-operator", "strategy_digest": answer["strategy_digest"],
+            "verdict": answer["verdict"], "queue_path": str(path), "human_inspected_strategy": False}
+
+
+def decision_messages(root: Path, lane: str):
+    def poll():
+        messages = []
+        for path in sorted((root / "operator/decisions" / lane).glob("*.json")):
+            queued = read(path)
+            if queued.get("status") != "queued":
+                continue
+            context = _trusted_context(root)
+            review_path = Path(queued["review_path"])
+            if review_path.is_symlink() or not review_path.resolve().is_relative_to((root / "operator").resolve()) or digest(review_path) != queued["review_sha256"]:
+                raise ValueError("Queued external operator review changed before dispatch")
+            answer = approval.operator_answer(Path(read(root / lane / "config.json")["project"]), review=read(review_path),
+                delegation_reference=queued["delegation_reference"],
+                trusted_delegation=context.get("trusted_operator_delegations", {}).get(queued["delegation_reference"], {}),
+                trial_id=root.name, lane_id=lane, operator_id=context["reviewer_id"], review_sha256=queued["review_sha256"])
+            messages.append({"type": "operator-decision", "answer": answer})
+            write(path, {**queued, "status": "relayed-to-owner", "relayed_unix": time.time()})
+        return messages
+    return poll
 
 
 def collect(root: Path) -> dict:
@@ -354,7 +505,8 @@ def collect(root: Path) -> dict:
         operator_evidence = None if review_context is None else OperatorEvidenceContext(
             root=root / "operator/reviews", trial_id=root.name, lane_id=lane,
             reviewer_id=review_context["reviewer_id"], lane_roots=lane_roots,
-            trusted_user_references=review_context.get("trusted_user_references", {}).get(lane, {}))
+            trusted_user_references=review_context.get("trusted_user_references", {}).get(lane, {}),
+            trusted_operator_delegations=review_context.get("trusted_operator_delegations", {}))
         raw_file = project / ".refactory/events.jsonl"
         raw = [json.loads(line) for line in raw_file.read_text().splitlines() if line.strip()] if raw_file.is_file() else read(project / "raw/remote-events.json", {}).get("events", [])
         normalized = normalize(raw, trial_id=root.name, source=str(raw_file if raw_file.is_file() else project / "raw/remote-events.json"))
@@ -417,6 +569,8 @@ def main() -> int:
     p.add_argument("--dsh-home", type=Path, default=Path.home() / ".dsh", help="Read-only native profile/credential-reference source; session state stays private")
     p.add_argument("--hidden", type=Path, action="append", default=[], help="Historical/other evidence roots forbidden to authoring workers (repeatable)")
     p.add_argument("--total-timeout", type=int, default=43200)
+    p.add_argument("--remote-route", choices=["native-python-v1", "native-shell-prefix-v1", "native-shell-segments-v1"], default="native-python-v1",
+                   help="Explicit versioned remote executor command mapping; not evidence of a completed source workflow")
     p = sub.add_parser("preflight")
     p.add_argument("root", type=Path)
     p.add_argument("--route-receipts", type=Path)
@@ -430,6 +584,11 @@ def main() -> int:
     p.add_argument("--verdict", choices=["proceed", "reloop", "halt"], required=True)
     p.add_argument("--approver", required=True)
     p.add_argument("--feedback", default="")
+    p = sub.add_parser("operator-decision", help="Queue an explicitly delegated operator review of the exact current strategy; never impersonates a direct human answer")
+    p.add_argument("root", type=Path)
+    p.add_argument("lane", choices=LANES)
+    p.add_argument("--review", type=Path, required=True)
+    p.add_argument("--delegation-reference", required=True)
     for command in ("native", "check", "report", "probe"):
         p = sub.add_parser(command)
         p.add_argument("root", type=Path)
@@ -440,6 +599,7 @@ def main() -> int:
     elif args.command == "preflight": result = preflight(args.root.resolve(), args.route_receipts)
     elif args.command == "live": result = run_pair(args.root.resolve(), args.lanes)
     elif args.command == "approve": result = approval.deliver(args.root.resolve() / args.lane / "project", digest=args.strategy_digest, verdict=args.verdict, approver=args.approver, feedback=args.feedback)
+    elif args.command == "operator-decision": result = operator_decision(args.root.resolve(), args.lane, args.review.resolve(), args.delegation_reference)
     elif args.command == "native": result = run_lane(args.root.resolve(), args.lane, "native")
     elif args.command == "probe": result = run_lane(args.root.resolve(), args.lane, "probe")
     elif args.command == "check": result = check_artifact(args.root.resolve(), args.lane)
@@ -448,7 +608,7 @@ def main() -> int:
     successful = (isinstance(result, dict) and result.get("status") in {"passed", "completed"}
                   or isinstance(result, list) and bool(result)
                   and all(item.get("status") in {"passed", "completed"} for item in result))
-    return 0 if args.command in {"prepare", "approve"} or successful else 1
+    return 0 if args.command in {"prepare", "approve", "operator-decision"} or successful else 1
 
 
 if __name__ == "__main__":

@@ -20,7 +20,7 @@ R = ".factory/reviews/"
 
 class CreateFidelityMode(Mode):
     name = "create_fidelity"
-    description = "source-faithful Create with native portable package authoring"
+    description = "source-faithful Create with native package, revision and plugin authoring"
     unscored_reason = "creation is judged by native admission and verified user acceptance evidence"
 
     @classmethod
@@ -28,7 +28,8 @@ class CreateFidelityMode(Mode):
         return {
             "name": Knob("", "str", description="name of the reusable native package"),
             "brief": Knob("", "str", description="complete original authoring request"),
-            "variant": Knob("portable", "str", description="portable is supported; unsupported variants fail before dispatch"),
+            "variant": Knob("portable", "str", description="portable, update-existing or native plugin package"),
+            "revision_of": Knob("", "str", description="for update-existing: existing workspace package/mode identity"),
             "output_folder": Knob("", "str", description="package output folder; defaults to this run's native package workspace"),
             "project_path": Knob("", "str", description="read-only source project to study; defaults to the invocation project"),
             "requires_input": Knob("", "str", description="comma-separated runtime input parameter names required by the brief"),
@@ -39,11 +40,11 @@ class CreateFidelityMode(Mode):
     def build(self):
         g = Graph()
         g.add(Node("init_user_intent", "op", call=f"{OPS}:init_user_intent",
-                   knobs=("name", "brief", "variant", "output_folder", "project_path", "requires_input"),
-                   writes=(S + "user-intent.md", ".factory/create-request.json", R + "repair-feedback.md", "factory.md", ".factory/config.json",
+                   knobs=("name", "brief", "variant", "revision_of", "output_folder", "project_path", "requires_input"),
+                   writes=(S + "user-intent.md", ".factory/create-request.json", ".factory/create-baseline.json", ".factory/packages/", R + "repair-feedback.md", "factory.md", ".factory/config.json",
                            FACTORY_TEMPLATE_PATH, FACTORY_TEMPLATE_SOURCE_PATH),
                    produces=("create_fidelity", "name", "brief", "variant", "output_folder",
-                             "project_path", "artifact_project", "requires_input", "native_api")))
+                             "project_path", "artifact_project", "requires_input", "native_api", "revision_of")))
         g.add(Node("gate_has_factory", "gate", evaluator=f"{OPS}:gate_has_factory"))
         g.add(Node("discover", "op", call=f"{OPS}:discover", writes=(".factory/eval_profile.json",)))
         g.add(Node("gate_factory_md_exists", "gate", evaluator=f"{OPS}:gate_factory_md_exists"))

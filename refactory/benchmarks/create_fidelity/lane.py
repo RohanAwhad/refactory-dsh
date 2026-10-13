@@ -36,16 +36,20 @@ def dsh_author(config: dict, project: Path) -> dict:
     knobs = {"name": NAME, "brief": (project / "BRIEF.md").read_text(), "requires_input": "bookings_path"}
     if identifier == "create":
         knobs.update(single_shot=True)
+    knobs.update(config.get("authoring_knobs", {}))
     for key, value in knobs.items():
+        if key not in state["knobs"]:
+            raise ValueError(f"Benchmark authoring knob {key!r} is not declared by the selected mode")
         state["knobs"][key]["value"] = value
     mode.load_state_dict(state)
     client = DshModelClient(**config["model_context"])
     graph = mode.graph().to_state()
     save(project / "raw" / "launch.json", {"mode": identifier, "graph": graph,
          "source": str(sys.modules[mode.__class__.__module__].__file__),
-         "route": client.route(), "entrypoint": "registry.load/Mode.run"})
+         "route": client.route(), "entrypoint": "registry.load/Mode.run", "authoring_knobs": knobs})
     # No standing verdicts. Candidate pauses until its native human gate receives
     # a digest-bound answer. Human approval is an explicit later operation.
+    wall_deadline = time.monotonic() + config["total_timeout_s"]
     result = mode.run(project, model=client, task=knobs,
                       resource_limits={"max_elapsed_s": config["total_timeout_s"]})
     while not result.exit_ok:
@@ -54,19 +58,25 @@ def dsh_author(config: dict, project: Path) -> dict:
         if progress.get("node") != "gate_strategy" or "approval" not in str(result.error).lower() and "verdict" not in str(result.error).lower():
             break
         inputs = ("strategy.json", "brief.json") if identifier == "create" else approval.DEFAULT_INPUTS
-        pending = approval.request(project, "Review the strategy and original intent; explicitly approve or request revision.", inputs=inputs)
-        answer = None
-        while answer is None:
-            time.sleep(0.25)
-            answer = approval.take(project, pending)
+        gate = mode.graph().nodes["gate_strategy"]
+        question = gate.prompt_template or gate.notes or "Review the strategy and original intent; explicitly approve or request revision."
+        pending = approval.request(project, question, inputs=inputs,
+                                   trial_id=config.get("trial_id", ""), lane_id=config.get("lane", ""))
+        answer = approval.wait_for_answer(project, pending, timeout_s=max(0, wall_deadline - time.monotonic()))
         if answer["verdict"] == "halt":
-            return {"exit_ok": False, "error": "Human halted strategy", "approval": answer}
+            return {"exit_ok": False, "error": "Strategy reviewer halted the benchmark", "approval": answer}
         from refactory_dsh.steering import Ledger
         ledger = Ledger(project)
+        delegated = answer["source"] == "delegated-operator"
+        if delegated:
+            ledger.note("info", "Benchmark-only delegated operator review authorized by " + answer["delegation_reference"]
+                        + "; operator " + answer["approver"] + " reviewed the exact strategy/intent digest " + answer["strategy_digest"]
+                        + ". This is not a claim that the human inspected these new bytes.")
         if answer["feedback"]:
-            ledger.note("correction", answer["feedback"])
+            prefix = "Delegated operator feedback (not a new human utterance):\n" if delegated else ""
+            ledger.note("correction", prefix + answer["feedback"])
         reads = tuple(mode.graph().nodes["gate_strategy"].reads)
-        ledger.verdict("gate_strategy", answer["verdict"], review=ledger.visit("gate_strategy", reads))
+        decision = ledger.verdict("gate_strategy", answer["verdict"], review=ledger.visit("gate_strategy", reads))
         if identifier == "create":
             # The pinned baseline's Mode.resume compares newly annotated live
             # ledger prompts against the pre-answer graph and refuses them. Its
@@ -85,6 +95,17 @@ def dsh_author(config: dict, project: Path) -> dict:
         else:
             # Candidate exercises the certified checkpoint recovery API itself.
             result = type(mode).resume(project, model=client)
+        save(project / "raw/approvals" / f"native-consumption-{time.time_ns()}.json", {
+            "gate": "gate_strategy", "decision_source": answer["source"], "logical_gate_owner": "user",
+            "decision_actor": "delegated-operator" if delegated else "direct-human",
+            "human_inspected_strategy": False if delegated else None,
+            "strategy_digest": answer["strategy_digest"], "ledger_verdict_id": decision["id"],
+            "ledger_uses": [ledger._fields(entry) for entry in ledger.entries()
+                            if entry["kind"] == "verdict-use" and ledger._fields(entry).get("id") == decision["id"]],
+            "native_gate_receipts": [str(path.relative_to(project)) for path in (project / ".refactory/create-fidelity-gates").glob("*/verdict.json")
+                                     if json.loads(path.read_text()).get("gate_id") == "gate_strategy"],
+            "decision_authorization": answer.get("delegation_reference"),
+        })
     return {"exit_ok": result.exit_ok, "error": result.error,
             "duration_s": result.duration_s, "facts": result.facts}
 
@@ -104,18 +125,27 @@ def dsh_probe(config: dict, project: Path) -> dict:
 
 
 def remote_author(config: dict, project: Path) -> dict:
+    if config.get("native_environment_mapping"):
+        from .remote_readiness import apply_environment
+        expected = apply_environment(dict(os.environ), config["native_environment_mapping"], project)
+        keys = ("HOME", "CLAUDE_CONFIG_DIR", "FACTORY_RUNNER", "FACTORY_PLAYBOOKS_DIR", "FACTORY_PROFILE")
+        if any(os.environ.get(key) != expected.get(key) for key in keys):
+            raise ValueError("Remote private native environment must be configured before source imports")
     from factory.workflow.registry import WorkflowRegistry
     from factory.workflow.primitives import DEFAULT_AGENT_POOL
     from factory.workflow.executor import WorkflowExecutor
     from factory.agents.runner import invoke_agent
+    from .remote_route import configure, execute_segmented, LEGACY_ROUTE, SEGMENT_ROUTE
 
     workflow = WorkflowRegistry.get_workflow("create-v2", project)
     if workflow is None:
         raise ValueError("Pinned native registry cannot discover create-v2")
+    workflow, execution = configure(workflow, config.get("remote_route", LEGACY_ROUTE))
     os.environ["FACTORY_IDEA"] = (project / "BRIEF.md").read_text()
     save(project / "raw" / "launch.json", {"mode": "create-v2", "graph": workflow.to_dict(),
          "source": str(sys.modules[WorkflowExecutor.__module__].__file__),
          "entrypoint": "WorkflowRegistry.get_workflow/WorkflowExecutor.execute",
+         "execution": execution,
          "route": "native role defaults; actual served configuration unverified"})
     calls = []
 
@@ -130,21 +160,31 @@ def remote_author(config: dict, project: Path) -> dict:
         return output, code
 
     def human(prompt: str) -> str:
-        pending = approval.request(project, prompt)
-        answer = None
-        while answer is None:
-            time.sleep(0.25)
-            answer = approval.take(project, pending)
+        pending = approval.request(project, prompt, trial_id=config.get("trial_id", ""),
+                                   lane_id=config.get("lane", ""))
+        answer = approval.wait_for_answer(project, pending, timeout_s=config["total_timeout_s"])
         if answer["verdict"] == "reloop":
             if not answer["feedback"].strip():
-                raise ValueError("A strategy revision needs the human's feedback")
+                raise ValueError("A strategy revision needs the approver's feedback")
+            actor = "Delegated operator" if answer.get("source") == "delegated-operator" else "Human"
             with (project / ".factory/strategy/user-intent.md").open("a") as stream:
-                stream.write("\n## Human strategy feedback\n" + answer["feedback"] + "\n")
+                stream.write("\n## " + actor + " strategy feedback\n" + answer["feedback"] + "\n")
             return "reloop strategy_director " + answer["feedback"]
         return answer["verdict"]
 
-    executor = WorkflowExecutor(workflow, project, agent_pool=DEFAULT_AGENT_POOL,
+    def executor_factory(graph):
+        return WorkflowExecutor(graph, project, agent_pool=DEFAULT_AGENT_POOL,
                                 agent_fn=observed_agent, input_fn=human, auto_approve=False)
+
+    if execution["route"] == SEGMENT_ROUTE:
+        result = asyncio.run(execute_segmented(workflow, project, executor_factory,
+            timeout_s=config["total_timeout_s"], record=lambda index, segment:
+                save(project / "raw" / f"remote-segment-{index}.json", segment)))
+        save(project / "raw" / "remote-events.json", {"events": result.pop("events")})
+        result.pop("segments")
+        return result
+
+    executor = executor_factory(workflow)
     result = asyncio.run(executor.execute())
     save(project / "raw" / "remote-events.json", {"events": result.events})
     return {"success": result.success, "halted": result.halted,
@@ -365,20 +405,28 @@ def main() -> int:
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
     project = Path(config["project"])
+    from .supervision import LaneSupervisor
     try:
-        if args.operation == "probe":
-            result = dsh_probe(config, project)
-            save(project / "probe-result.json", result)
-            return 0 if result.get("status") == "completed" else 1
-        if args.operation == "author":
-            result = (dsh_author if config["lane"].startswith("dsh") else remote_author)(config, project)
-        else:
-            result = (dsh_native if config["lane"].startswith("dsh") else remote_native)(project, Path(config["inputs"]))
+        with LaneSupervisor(project, config["total_timeout_s"] if args.operation == "author" else 300,
+                            config.get("shutdown_grace_s", 15)):
+            if args.operation == "probe":
+                result = dsh_probe(config, project)
+                save(project / "probe-result.json", result)
+                return 0 if result.get("status") == "completed" else 1
+            if args.operation == "author":
+                result = (dsh_author if config["lane"].startswith("dsh") else remote_author)(config, project)
+            else:
+                result = (dsh_native if config["lane"].startswith("dsh") else remote_native)(project, Path(config["inputs"]))
         save(project / f"{args.operation}-result.json", result)
         return (0 if _native_complete(result) else 1) if args.operation == "native" else (0 if result.get("exit_ok", result.get("success", False)) else 1)
     except Exception as exc:
         save(project / f"{args.operation}-result.json", {"status": "failed", "error": f"{type(exc).__name__}: {exc}"})
         return 1
+    except SystemExit as exc:
+        lifecycle = json.loads((project / "raw/lifecycle.json").read_text())
+        save(project / f"{args.operation}-result.json", {"status": "timed_out" if lifecycle.get("reason") == "wall_deadline_expired" else "interrupted",
+             "exit_ok": False, "error": "Benchmark owner stopped: " + str(lifecycle.get("reason")), "lifecycle": lifecycle})
+        return int(exc.code) if isinstance(exc.code, int) else 1
 
 
 if __name__ == "__main__":

@@ -46,6 +46,14 @@ are relative to this invocation's run directory. The output project is
 {{artifact_project}} and the package directory is {{output_folder}}.
 The requested package name is {{name}}. The complete original request is in
 .factory/strategy/user-intent.md. Runtime inputs: {{requires_input}}.
+The actual variant is {{variant}}; revision subject is {{revision_of}}.
+
+Authoritative contracts of this native Create graph: the real human strategy
+gate binds `.factory/strategy/current.md` and `.factory/strategy/user-intent.md`.
+Its actual pending approval request is authoritative. Do not substitute the
+baseline adapter's `strategy.json`/`brief.json` pair. The builder publishes
+`.factory/reviews/builder-latest.md`; downstream gates and QA read that exact
+path. These names describe this graph's declarations, not another Create mode.
 
 * Workflow/AgentNode/FnNode/GateNode/ForkNode/JoinNode mean nn.Mode and native
   nn.Node kinds agent/op/gate/fork/join; Workflow means nn.Graph. The public API
@@ -77,6 +85,39 @@ The requested package name is {{name}}. The complete original request is in
   --project <artifact_project>`: native validation, discovery/inspection and
   skill export; write raw results and commands in builder-latest.md. This is
   structural admission, not proof of behavior. Run genuine acceptance tests.
+* Authored `package_digest()` excludes generated SKILL.md, .origin.json,
+  .native-admission.json, Python bytecode caches and only known pytest cache
+  records. It is not a fingerprint of the complete installed package. After
+  admission and export, freeze all relevant package files (including those
+  generated records and skill) before reuse; compare them after every real run.
+  Explicitly distinguish cache exclusions from authored files or test data;
+  do not silently exclude arbitrary files below a cache-named directory.
+* Update-existing means revising an existing qualified native package/mode,
+  supplied as revision_of. Init copies its complete workspace package into this
+  isolated run and binds `.factory/create-baseline.json` to the request. The
+  supplied API includes all original file bodies and mode states. Preserve the
+  same identity and every unrelated mode; original source stays read-only.
+  Replace source definitions.py/register_all/WORKFLOW_META and registration
+  checklist references with the actual PACKAGE declaration, modes/ops, native
+  discovery/resolve, knobs, graph/invariants, CLI, docs and generated skill.
+  Run `python -m refactory_dsh.create_fidelity_ops update-check <name> --project
+  <artifact_project>` plus genuine original/revised contract regression tests.
+  Structural comparison alone cannot prove unchanged unrelated behavior.
+  Deliver the revised candidate and baseline for review/rollback; no automatic
+  overwrite of the original project or shipped read-only packages occurs.
+* Plugin Package means a standalone native Package directory. The actual
+  registry uses copy/import, not factory.plugins entry points or register_plugin.
+  Verify `python -m refactory_dsh.create_fidelity_ops plugin-check <name>
+  --project <artifact_project>`: real isolated registry add, list/resolve,
+  native validation and remove cleanup, with unchanged standalone source bytes.
+  README documents actual `python -m refactory_dsh.registry add <output_folder>
+  --project <consumer>` and `remove <name> --project <consumer>` commands.
+  Do not invent remote-factory dependencies or global pip install/uninstall.
+  The plugin QA plan must cover this full lifetime, no upstream modifications,
+  and actual requested behavior through native run after consumer installation.
+  Native Package.version/requires and mode declarations replace remote plugin
+  metadata/registration; the foreign Python entry-point packaging convention
+  itself has no native loader and must not be claimed as supported.
 * Native mode execution is `python -m refactory_dsh.create_fidelity_ops run
   <name>/<mode> --project <artifact_project> --workdir <new-run-dir>
   --knob input_name=value`; this calls the real native executor through a

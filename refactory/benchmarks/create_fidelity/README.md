@@ -87,6 +87,65 @@ traces, semantic reviews, receipts or invocations cannot become passing evidence
 The unchanged 56-case checker is independently scored from native package reuse.
 Do not compare speed or cost causally from one diagnostic pair.
 
+The reference execution configuration is separately versioned with
+`prepare --remote-route`. The default `native-python-v1` preserves the original
+single native executor call, including its recorded inline-Python quoting
+failure. `native-shell-prefix-v1` selects the same executor's supported shell
+fallback for exactly `init_user_intent` and `synthesize_qa`. Their exact Python
+code and project argument remain separate shell arguments, including paths
+containing spaces or quotes. The source checkout is never patched.
+
+For a fresh comparator use `--remote-route native-shell-segments-v1`. It adds an
+explicit controller correction to the two commands above. The pinned executor
+does not follow HALT edges, including its bootstrap branches. The controller
+can start another full native graph execution only along these declared edges:
+`gate_has_factory → discover`, `gate_factory_md_exists → create_factory_md`, and
+`gate_precheck → archivist_build`. Bootstrap continuation requires the native
+parser's exact diagnostic containing the actual canonical `HALT` token. AI and
+user HALTs, command failures and unexpected diagnostics always stop. Source
+node fields, prompts, roles, gates, edges and allowances are preserved; only
+each segment's public `Workflow.start_node` changes. The public native
+`completed_files` state restores only actual prior native result outputs with
+verified unchanged hashes. Four segments and the overall deadline bound this
+controller; it has no implicit retry loop.
+
+`raw/launch.json` records the original/effective commands, full graph hashes,
+route and execution-correction label. `raw/remote-segment-N.json` records each
+full graph/start hash, restored input hashes, unmodified native result/events
+and any causal declared-edge continuation. These receipts do not turn the
+corrected route into evidence of the original single-call behavior. Historical
+failed trials remain unchanged; use a new trial directory for this route.
+
+A semantic precheck HALT followed by diagnostic archive remains an overall
+failure even when the archive succeeds. The pinned `factory precheck` actually
+exits 1 on failed checks, which the native executor reports as a command failure.
+This route stops on that actual ABI and cannot claim diagnostic archival for
+that path. It does not suppress the exit code or invent a gate verdict. Normal
+successful prechecks remain native. Spaced/quoted command-transport controls
+also do not establish that the source's separate inline-Python gate commands
+support those paths; fresh benchmark projects use ordinary allocated paths.
+
+Fresh remote preparations also record `private-native-home-v1` in trial/config
+identity. The remote process receives `HOME=PROJECT/runtime/native-home` and
+`CLAUDE_CONFIG_DIR=PROJECT/runtime/claude` before importing the pinned source.
+This excludes the original user's `.factory/config.toml`, prompt overrides,
+evolved playbooks and workflow/session state. The native Claude runner and
+shipped source prompts/playbooks remain in use. Global profile/playbook path
+environment overrides are excluded; native authentication environment remains
+available. No credential files or original settings are copied, and no new
+credential file reference is assumed. If actual native authentication requires
+an external file, add only an explicitly authorized read-only credential
+reference to a new frozen configuration and isolation policy.
+
+Preflight records actual source prompt/runner resolution and allowlisted
+`claude auth status --json` fields under the lane policy. It exposes hashes and
+paths instead of prompt, settings or credential contents, and dispatches no
+model. Reported login readiness does not establish a working API credential,
+the served model or successful authoring. Vertex/third-party authentication and
+native source aliases remain separate from DSH's observed Sol 6/high route.
+Existing frozen trials retain their
+original environment and cannot gain this correction through re-scoring.
+
 Independent semantic, human-decision and README reviews belong under
 `operator/reviews/LANE/`, outside every authoring project. The optional
 `operator/review-context.json` identifies the operator reviewer and allowlists

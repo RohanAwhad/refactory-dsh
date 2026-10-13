@@ -6950,11 +6950,11 @@ Build a small reusable package with a strategist, coder and focused QA. Canonica
 
 ## default_pack/create_fidelity
 
-Opt-in 29-stage Create-v2 fidelity candidate with DSH directors and independent children, human strategy approval, complete QA reports, repair and native portable package admission. Update/plugin variants and live fidelity remain unsupported or unverified.
+Opt-in 29-stage Create-v2 fidelity candidate with DSH directors and independent children, human strategy approval, complete QA reports, repair and native package admission. Portable, isolated update-existing and native plugin variants have explicit mappings; full live authoring acceptance remains unverified.
 
 ```json
 {
-  "description": "source-faithful Create with native portable package authoring",
+  "description": "source-faithful Create with native package, revision and plugin authoring",
   "edges": [
     {
       "condition": null,
@@ -7335,6 +7335,7 @@ Opt-in 29-stage Create-v2 fidelity candidate with DSH directors and independent 
         "name",
         "brief",
         "variant",
+        "revision_of",
         "output_folder",
         "project_path",
         "requires_input"
@@ -7501,9 +7502,21 @@ Opt-in 29-stage Create-v2 fidelity candidate with DSH directors and independent 
       "value": "",
       "values": []
     },
+    "revision_of": {
+      "default": "",
+      "description": "for update-existing: existing workspace package/mode identity",
+      "frozen": false,
+      "kind": "str",
+      "range": [
+        null,
+        null
+      ],
+      "value": "",
+      "values": []
+    },
     "variant": {
       "default": "portable",
-      "description": "portable is supported; unsupported variants fail before dispatch",
+      "description": "portable, update-existing or native plugin package",
       "frozen": false,
       "kind": "str",
       "range": [
@@ -7533,6 +7546,24 @@ Opt-in 29-stage Create-v2 fidelity candidate with DSH directors and independent 
           "name": "tiny_example",
           "variant": "portable"
         }
+      },
+      {
+        "explanation": "Revise an existing workspace mode in a separate fresh authoring workdir. Keep the source project unchanged and verify original, revised and unrelated behavior before adoption.",
+        "knobs": {
+          "brief": "Revise the existing mode according to the supplied acceptance contract",
+          "name": "existing_package",
+          "project_path": "/absolute/original-project",
+          "revision_of": "existing_package/run",
+          "variant": "update-existing"
+        }
+      },
+      {
+        "explanation": "Author a standalone native Package. Verify registry installation, discovery, behavioral execution and removal in an isolated consumer; foreign pip entry points are not a native mechanism.",
+        "knobs": {
+          "brief": "Build a standalone native plugin with the supplied acceptance contract",
+          "name": "my_plugin",
+          "variant": "plugin"
+        }
       }
     ],
     "interfaces": {
@@ -7540,8 +7571,8 @@ Opt-in 29-stage Create-v2 fidelity candidate with DSH directors and independent 
       "cli": "refactory ceo \"a reusable package\" --mode create_fidelity --name my_package",
       "panel": "Discoverable in the mode picker; opt-in candidate only. Use a reviewed DSH route and fresh human strategy approval; optimization is unavailable because authoring is unscored."
     },
-    "purpose": "Opt-in 29-stage Create-v2 fidelity candidate with DSH directors and independent children, human strategy approval, complete QA reports, repair and native portable package admission. Update/plugin variants and live fidelity remain unsupported or unverified.",
-    "reviewed_schema": "58ed2bdae73cda3757870b77aba2ac2eeb243062437674140ab6c53ed08399bc"
+    "purpose": "Opt-in 29-stage Create-v2 fidelity candidate with DSH directors and independent children, human strategy approval, complete QA reports, repair and native package admission. Portable, isolated update-existing and native plugin variants have explicit mappings; full live authoring acceptance remains unverified.",
+    "reviewed_schema": "d965464b57b6e902d8d5d5d292618b3978d1c0437bbe740f392df855d453b995"
   }
 }
 ```
