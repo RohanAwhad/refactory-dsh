@@ -427,6 +427,12 @@ export class Spine {
       view.reads = node.reads ?? []
       view.prompt_template = node.prompt_template ?? ''
       if (node.expand !== undefined) view.expand = node.expand
+      // Dispatched AgentNode: map dispatch_command to the view's command field
+      // so commandOf() and runDeterministic() can see it.
+      if (typeof node.dispatch_command === 'string' && node.dispatch_command !== '') {
+        view.command = node.dispatch_command
+        if (node.command_timeout_s !== undefined) view.command_timeout_s = node.command_timeout_s
+      }
     }
     if (node._type === 'LLMNode') {
       // A one-shot model call is delivered the same way an agent node is: the

@@ -207,7 +207,7 @@ def lower_workflow(workflow: Any, workdir: Path, model_context: dict[str, Any] |
         return workflow
     import hashlib
     import shlex
-    from refactory_dsh.ir import AgentNode, FnNode
+    from refactory_dsh.ir import AgentNode
     from refactory_dsh.model import DshModelClient
 
     # Routing/serialization does not dispatch work. The fresh invocation installs
@@ -247,11 +247,8 @@ def lower_workflow(workflow: Any, workdir: Path, model_context: dict[str, Any] |
         attempts = max(1, int(selected_context.get('attempts') or 1))
         per_completion = int(selected_context.get('timeout_s') or DEFAULT_TIMEOUT_S)
         command_timeout_s = node.timeout if node.timeout is not None else node_session_budget_s(attempts, per_completion)
-        result.nodes[name] = FnNode(id=name, reads=node.reads, writes=node.writes, blocking=node.blocking,
-                                    resource_role=node.resource_role,
-                                    command='python -m refactory_dsh.worker_node ' + shlex.quote(str(spec)),
-                                    notes=f'Graph-owned {selected.route()["worker_backend"]} worker dispatch',
-                                    command_timeout_s=command_timeout_s)
+        node.dispatch_command = 'python -m refactory_dsh.worker_node ' + shlex.quote(str(spec))
+        node.command_timeout_s = command_timeout_s
     return result
 
 

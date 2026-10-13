@@ -84,7 +84,7 @@ def test_lowered_bridge_preserves_edges_and_declared_outputs(tmp_path):
     lowered = workers.lower_workflow(graph, tmp_path, context)
     assert lowered.edges == graph.edges
     assert lowered.nodes['build'].writes == {'result.txt'}
-    assert 'refactory_dsh.worker_node' in lowered.nodes['build'].command
+    assert 'refactory_dsh.worker_node' in lowered.nodes['build'].dispatch_command
     assert graph.nodes['build'].prompt_template == 'write result.txt'
     spec = json.loads(next((tmp_path / '.refactory/worker-specs').glob('*.json')).read_text())
     assert spec['model_context']['worker_backend'] == 'codex'
@@ -295,7 +295,7 @@ def test_worker_specs_keep_old_invocation_route_immutable(tmp_path):
                 prompt_template='write result.txt', writes={'result.txt'})}, edges=[], start_node='build')
     first = workers.lower_workflow(graph, tmp_path, DshModelClient(model='first').context())
     second = workers.lower_workflow(graph, tmp_path, DshModelClient(model='second').context())
-    assert first.nodes['build'].command != second.nodes['build'].command
+    assert first.nodes['build'].dispatch_command != second.nodes['build'].dispatch_command
     specs = [json.loads(path.read_text()) for path in (tmp_path/'.refactory/worker-specs').glob('*.json')]
     assert {spec['model_context']['model'] for spec in specs} == {'first','second'}
 

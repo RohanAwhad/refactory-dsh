@@ -194,7 +194,7 @@ export function apply(ctx: Context): void {
         + 'wf_next crosses sole static fork/join boundaries and establishes branch delivery contexts '
         + 'for you. Dispatch only the AgentNode/LLMNode prompts it returns, never fork target ids from '
         + 'a state view. If a control node is explicitly returned, wf_done it, then call wf_next first. '
-        + 'For each AgentNode or LLMNode, spawn a subagent and pass the returned prompt in full. '
+        + 'For each AgentNode or LLMNode (unless it has a dispatch command — the runtime runs those), spawn a subagent and pass the returned prompt in full. '
         + 'Coordination notes must not weaken its requirements or waive the original brief/approved design '
         + 'without explicit user steering; a documented limitation is not a waiver. Preserve the node\'s '
         + 'declared `writes` contract and read its `reads`, plus any inputs expressly required by its prompt. '

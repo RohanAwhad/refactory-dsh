@@ -9,6 +9,8 @@
  */
 
 import { spawnSync } from 'node:child_process'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { ShellExecRequest, ShellExecSpec, ShellExecutor, ShellRunResult } from '@deepseek-ai/dsh-shell'
 import type { NodeView } from './spine.ts'
 
@@ -27,6 +29,7 @@ export interface NodeManifest {
   command: string
   reads: string[]
   writes: string[]
+  prompt_file?: string
 }
 
 /** Per-run settings for node commands: where they run, and with what. */
@@ -92,6 +95,12 @@ export function commandOf(node: NodeView): string | undefined {
     const command = node.evaluator_command
     return command === undefined || command === '' ? undefined : command
   }
+  // A dispatched AgentNode carries its dispatch command in the view's `command`
+  // field (mapped by spine.ts describe()). This makes it deterministic:
+  // drain() runs it, wf_done refuses it, and wf_next never hands it to the CEO.
+  if (node._type === 'AgentNode' && node.command !== undefined && node.command !== '') {
+    return node.command
+  }
   return undefined
 }
 
@@ -113,25 +122,26 @@ export function verdictOf(stdout: string): string | undefined {
 }
 
 /** The declaration handed to a node command. */
-function manifestOf(node: NodeView, command: string): NodeManifest {
+function manifestOf(node: NodeView, command: string, promptFile?: string): NodeManifest {
   return {
     id: node.id,
     type: node._type,
     command,
     reads: node.reads ?? [],
     writes: node.writes ?? [],
+    ...(promptFile !== undefined ? { prompt_file: promptFile } : {}),
   }
 }
 
 /** One command's request: where it runs, with what, and under which sandbox. */
-function requestFor(node: NodeView, command: string, config: CommandRunnerConfig): ShellExecRequest {
+function requestFor(node: NodeView, command: string, config: CommandRunnerConfig, promptFile?: string): ShellExecRequest {
   const seconds = node.command_timeout_s
   if (seconds !== undefined && (!Number.isSafeInteger(seconds) || seconds <= 0 || seconds > 2_147_483)) {
     throw new Error(`${node.id} has an invalid command_timeout_s`)
   }
   return {
     command,
-    env: { ...config.env, [NODE_ENV_KEY]: JSON.stringify(manifestOf(node, command)) },
+    env: { ...config.env, [NODE_ENV_KEY]: JSON.stringify(manifestOf(node, command, promptFile)) },
     timeoutMs: seconds === undefined ? config.timeoutMs : seconds * 1000,
     ...(config.workdir === undefined ? {} : { workdir: config.workdir }),
     ...(config.sandboxPolicy === undefined ? {} : { sandboxPolicy: config.sandboxPolicy }),
@@ -260,8 +270,19 @@ export async function runDeterministic(
     return { ...base, ok: false, error: `${node.id} has no command` }
   }
 
+  // Write the current prompt to a file for dispatched AgentNodes.
+  // The prompt_template may have been amended by wf_edit; the spec file
+  // holds the original. The prompt_file is what the worker reads.
+  let promptFile: string | undefined
+  if (node._type === 'AgentNode' && node.prompt_template !== undefined && config.workdir !== undefined) {
+    const dir = join(config.workdir, '.refactory', 'prompts')
+    mkdirSync(dir, { recursive: true })
+    promptFile = join(dir, `${node.id}.md`)
+    writeFileSync(promptFile, node.prompt_template)
+  }
+
   const allowance = resourceCheck(node, config)
-  const request = requestFor(node, command, config)
+  const request = requestFor(node, command, config, promptFile)
   const resolved = shell.resolve(request)
   // The model-facing shell caps arbitrary calls at its default maximum. This
   // trusted workflow operation carries a bounded allowance resolved at lowering;

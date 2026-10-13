@@ -563,7 +563,10 @@ export function apply(ctx: Context, config: Config): void {
       const views = next.status === 'ready' ? next.nodes : []
       const wait = status === 'paused' ? 'paused by user'
         : status === 'waiting_user' || views.some(node => node._type === 'GateNode' && node.evaluator_type === 'user') ? 'waiting for user gate'
-          : views.some(node => node._type === 'AgentNode' || node._type === 'LLMNode') ? 'waiting for worker delivery'
+          : views.some(node =>
+              (node._type === 'AgentNode' && !(node.command !== undefined && node.command !== ''))
+              || node._type === 'LLMNode'
+            ) ? 'waiting for worker delivery'
             : status === 'executing' ? 'running a graph check' : undefined
       const record = {
         schema_version: 1, run_id: resolve(workdir), at: new Date().toISOString(),
@@ -917,6 +920,9 @@ export function apply(ctx: Context, config: Config): void {
     if (next.status === 'ready' && !spine.isPaused() && agentCommand !== '' && workdir !== undefined) {
       for (const node of next.nodes) {
         if (node._type !== 'AgentNode' && node._type !== 'LLMNode') continue
+        // Dispatched AgentNodes are run by commandOf()/drain(); skip them here
+        // to avoid recording a double delivery.
+        if (node._type === 'AgentNode' && node.command !== undefined && node.command !== '') continue
         const receipt = runtimeBridge(agentCommand, workdir, commandEnv, {
           action: 'begin', node: node.id, prompt: node.prompt_template ?? '',
           reads: node.reads ?? [], writes: node.writes ?? [],
@@ -1086,8 +1092,8 @@ export function apply(ctx: Context, config: Config): void {
       + 'Intent records the same purpose in the authoritative ledger delivered to every agent node; '
       + 'an empty brief knob alone is not a reason to reopen a live run or edit a deterministic FnNode prompt. '
       + 'Use refactory action `runtime` when available to inspect inherited model/home context before asking setup questions. '
-      + `A FnNode, Study or `
-      + '`fn` gate listed in `nodes` is deterministic — do NOT run its command and do NOT call '
+      + `A FnNode, Study, \`fn\` gate, or AgentNode with a dispatch command listed in \`nodes\` is deterministic`
+      + ' — do NOT run its command and do NOT call '
       + `${toolPrefix}_done for it; call ${toolPrefix}_next again and the runtime runs it. `
       + `${toolPrefix}_done is only for a node whose work you or a subagent did.`
     : ''
