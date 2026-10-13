@@ -9,10 +9,13 @@ from __future__ import annotations
 import json
 import math
 import os
+import ctypes
+import errno
 from pathlib import Path
 import select
 import signal
 import subprocess
+import sys
 import threading
 import time
 
@@ -24,6 +27,44 @@ _ACTIVE = None
 
 def current():
     return _ACTIVE
+
+
+def _darwin_group_members(group: int) -> list[int]:
+    """Read only the owned group through libproc; setuid /bin/ps cannot run
+    under Seatbelt. ABI/constants follow the shipped macOS SDK proc_info.h.
+    """
+    class ShortInfo(ctypes.Structure):
+        _fields_ = [("pid", ctypes.c_uint32), ("ppid", ctypes.c_uint32),
+                    ("pgid", ctypes.c_uint32), ("status", ctypes.c_uint32),
+                    ("comm", ctypes.c_char * 16),
+                    *[(name, ctypes.c_uint32) for name in ("flags", "uid", "gid", "ruid", "rgid", "svuid", "svgid", "reserved")]]
+    library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+    library.proc_listpids.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_int]
+    library.proc_listpids.restype = ctypes.c_int
+    library.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
+    library.proc_pidinfo.restype = ctypes.c_int
+    pids = (ctypes.c_int * 4096)()
+    # PROC_PGRP_ONLY=2; listing is scoped to the dedicated lane group.
+    count = library.proc_listpids(2, group, pids, ctypes.sizeof(pids))
+    if count <= 0 or count >= ctypes.sizeof(pids) or count % ctypes.sizeof(ctypes.c_int):
+        raise OSError(ctypes.get_errno() or errno.EIO, "Owned-group libproc enumeration failed or truncated")
+    members = []
+    for pid in pids[:count // ctypes.sizeof(ctypes.c_int)]:
+        if pid <= 0 or pid == os.getpid():
+            continue
+        info = ShortInfo()
+        ctypes.set_errno(0)
+        # PROC_PIDT_SHORTBSDINFO=13; SZOMB=5 is an exited, unreaped child.
+        size = library.proc_pidinfo(pid, 13, 0, ctypes.byref(info), ctypes.sizeof(info))
+        if size != ctypes.sizeof(info):
+            try:
+                os.getpgid(pid)
+            except ProcessLookupError:
+                continue
+            raise OSError(ctypes.get_errno() or errno.EIO, f"Cannot confirm owned process {pid} state")
+        if info.pid == pid and info.pgid == group and info.status != 5:
+            members.append(pid)
+    return sorted(members)
 
 
 class LaneSupervisor:
@@ -40,6 +81,7 @@ class LaneSupervisor:
         self.reason = None
         self.group_cleanup = {"scope": "harness-owned native process group", "group": self.group,
                               "status": "pending", "trigger": None, "initial_members": None,
+                              "membership_probe": "libproc PROC_PGRP_ONLY/PROC_PIDT_SHORTBSDINFO" if sys.platform == "darwin" else "ps process-group membership",
                               "actions": [], "confirmed_empty": None}
         self._finished = threading.Event()
         self._answers = []
@@ -67,6 +109,8 @@ class LaneSupervisor:
                 os.kill(os.getpid(), signal.SIGTERM)
 
     def _group_members(self):
+        if sys.platform == "darwin":
+            return _darwin_group_members(self.group)
         result = subprocess.run(["/bin/ps", "-axo", "pid=,pgid=,stat="], capture_output=True, text=True,
                                 timeout=2, check=True, start_new_session=True)
         return [int(fields[0]) for line in result.stdout.splitlines()

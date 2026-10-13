@@ -165,3 +165,55 @@ with LaneSupervisor(Path.cwd(),10,4): asyncio.run(invoke())
     else:
         stat = subprocess.check_output(["/bin/ps", "-o", "stat=", "-p", str(pid)], text=True).strip()
         assert stat.startswith("Z"), "native runner residual child is still live"
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Exact macOS authoring Seatbelt boundary")
+@pytest.mark.parametrize("outcome", ["internal-timeout", "normal-return"])
+def test_group_cleanup_under_actual_authoring_read_separation_policy(tmp_path, outcome):
+    import shutil
+    from benchmarks.create_fidelity import supervision
+    from benchmarks.create_fidelity.harness import execute_command
+    from benchmarks.create_fidelity.isolation import profile
+    lane, peer, operator = (tmp_path / name for name in ("lane", "peer", "operator"))
+    for directory in (lane, peer, operator):
+        directory.mkdir()
+        (directory / "canary.txt").write_text("controlled isolation canary")
+    adapter = lane / "runtime/benchmark"
+    module = adapter / "benchmarks/create_fidelity"
+    module.mkdir(parents=True)
+    (adapter / "benchmarks/__init__.py").write_text("")
+    (module / "__init__.py").write_text("")
+    shutil.copyfile(supervision.__file__, module / "supervision.py")
+    owner = lane / "owner.py"
+    owner.write_text('''import asyncio,json,subprocess,sys
+from pathlib import Path
+from benchmarks.create_fidelity.supervision import LaneSupervisor
+for name in sys.argv[2:]:
+    try: Path(name).read_bytes()
+    except PermissionError: pass
+    else: raise AssertionError('independent peer/operator evidence was visible')
+try: subprocess.run(['/bin/ps','-axo','pid=,pgid=,stat='],check=True,capture_output=True)
+except PermissionError: ps_denied=True
+else: ps_denied=False
+Path('sandbox-control.json').write_text(json.dumps({'peer_operator_denied':True,'setuid_ps_denied':ps_denied}))
+async def invoke():
+    child=await asyncio.create_subprocess_exec(sys.executable,'-c',"import os,signal,time; from pathlib import Path; signal.signal(signal.SIGTERM,signal.SIG_IGN); Path('child-ready').write_text(str(os.getpid())); time.sleep(30)")
+    while not Path('child-ready').exists(): await asyncio.sleep(.01)
+    if sys.argv[1]=='normal-return': return
+    await asyncio.wait_for(child.wait(),timeout=.1)
+with LaneSupervisor(Path.cwd(),10,4): asyncio.run(invoke())
+''')
+    readonly = [adapter, Path(sys.prefix), Path(sys.base_prefix), Path(sys.executable).resolve().parent.parent]
+    policy = tmp_path / "isolation.sb"
+    policy.write_text(profile(lane, [peer], readonly, [operator], allowed_reads=readonly))
+    result = execute_command(["/usr/bin/sandbox-exec", "-f", str(policy), sys.executable, str(owner), outcome,
+                              str(peer / "canary.txt"), str(operator / "canary.txt")], cwd=lane,
+        env={**os.environ, "PYTHONPATH": str(adapter), "PYTHONDONTWRITEBYTECODE": "1", "TMPDIR": str(lane)},
+        output=lane / "raw/controller", timeout=10, grace=4)
+    assert result["status"] == ("completed" if outcome == "normal-return" else "failed"), (result, (lane / "raw/controller/stderr.log").read_text())
+    assert json.loads((lane / "sandbox-control.json").read_text()) == {"peer_operator_denied": True, "setuid_ps_denied": True}
+    cleanup = json.loads((lane / "raw/lifecycle.json").read_text())["owned_group_cleanup"]
+    assert cleanup["membership_probe"].startswith("libproc PROC_PGRP_ONLY")
+    assert cleanup["confirmed_empty"] is True and cleanup["status"] == "settled"
+    assert cleanup["initial_members"] == [int((lane / "child-ready").read_text())]
+    assert [action["signal"] for action in cleanup["actions"]] == ["SIGTERM", "SIGKILL"]

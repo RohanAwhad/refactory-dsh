@@ -125,6 +125,9 @@ initial residual member PIDs, each attempted signal and its group recheck result
 remaining members and confirmation. `no_residual_members_observed` differs from
 `residual_children_signalled`; a successful lane result does not hide forced
 residual cleanup. The cancellation reason remains separate from that exit check.
+On macOS, membership uses libproc scoped to the owned process group; Seatbelt
+rejects launching the system's setuid `ps` binary. The read separation policy
+remains in force during inspection and cleanup.
 
 Freeze this adapter and its identity into a fresh trial. Do not retrofit this
 authorization or supervision profile into an existing frozen execution.
