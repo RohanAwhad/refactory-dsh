@@ -9,6 +9,7 @@
  * configured-graph path is pinned too, so `interactiveOpen: false` stays exactly
  * what it was.
  */
+import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -187,6 +188,35 @@ function captureShell(seen: Array<Record<string, string> | undefined>): object {
           exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 10_000,
           stdout: { text: '', truncated: false },
           stderr: { text: '', truncated: false },
+        }
+      },
+    }),
+  }
+}
+
+/** A shell executor that really runs the command, for the dispatch e2e test. */
+function realShell(): object {
+  return {
+    resolve: (request: { command: string; workdir?: string; timeoutMs?: number; env?: Record<string, string>; sandboxPolicy?: unknown }) => ({
+      command: request.command,
+      workdir: request.workdir ?? process.cwd(),
+      timeoutMs: request.timeoutMs ?? 10_000,
+      onExpiry: 'kill',
+      stdoutMaxBytes: 100_000,
+      env: request.env,
+      sandboxPolicy: request.sandboxPolicy,
+    }),
+    execute: async (spec: { command: string; workdir: string; timeoutMs: number; env?: Record<string, string> }) => ({
+      result: async () => {
+        const started = spawnSync('/bin/sh', ['-c', spec.command], {
+          cwd: spec.workdir, encoding: 'utf8', timeout: spec.timeoutMs,
+          env: { ...process.env, ...spec.env },
+        })
+        return {
+          exitCode: started.status, signal: started.signal, timedOut: false, aborted: false,
+          timeoutMs: spec.timeoutMs,
+          stdout: { text: started.stdout ?? '', truncated: false },
+          stderr: { text: started.stderr ?? '', truncated: false },
         }
       },
     }),
@@ -743,6 +773,78 @@ describe('one deterministic node per call when the run is opened interactively',
       "python -m refactory_dsh.items begin --node 'data' --index 0",
       "python -m refactory_dsh.items begin --node 'data' --index 1",
     ])
+  })
+
+  it('skips the delivery bridge for a dispatched AgentNode and writes the amended prompt to prompt_file (watchpoints 2+3)', async () => {
+    const run = scratch()
+
+    // A dispatch command that copies prompt_file to out.txt, proving the engine
+    // wrote the amended prompt to that file before launching the command.
+    const dispatchScript = join(run, 'dispatch.sh')
+    writeFileSync(dispatchScript, [
+      '#!/bin/sh',
+      'PROMPT_FILE=$(echo "$DSH_WORKFLOW_NODE" | python3 -c "import sys,json; print(json.load(sys.stdin).get(\'prompt_file\',\'\'))")',
+      'if [ -n "$PROMPT_FILE" ] && [ -f "$PROMPT_FILE" ]; then',
+      '  cp "$PROMPT_FILE" "$REFACTORY_WORKDIR/out.txt"',
+      'else',
+      '  echo "NO_PROMPT_FILE" > "$REFACTORY_WORKDIR/out.txt"',
+      'fi',
+    ].join('\n'), { mode: 0o755 })
+
+    // A delivery bridge script that logs every call to a file.
+    const bridgeLog = join(run, 'bridge-calls.log')
+    const bridgeScript = join(run, 'bridge.sh')
+    writeFileSync(bridgeScript, [
+      '#!/bin/sh',
+      `echo "$@" >> "${bridgeLog}"`,
+      'echo \'{"prompt":"enriched"}\'',
+    ].join('\n'), { mode: 0o755 })
+
+    const graph = lower(run, {
+      name: 'dispatch-e2e',
+      start_node: 'pre',
+      nodes: {
+        pre: { _type: 'FnNode', id: 'pre', command: 'true', reads: [], writes: [] },
+        worker: {
+          _type: 'AgentNode', id: 'worker', role: 'builder',
+          prompt_template: 'original task',
+          dispatch_command: dispatchScript,
+          writes: ['out.txt'], reads: [],
+        },
+      },
+      edges: [{ source: 'pre', target: 'worker' }],
+    })
+
+    // The open stub payload carries agentCommand, just as a real lowered run does.
+    const ctx = await mount({
+      openCommand: openStub(run, graph, undefined, {
+        agentCommand: bridgeScript,
+        commandEnv: { REFACTORY_WORKDIR: run },
+      }),
+      executeCommands: true,
+    }, realShell())
+
+    // wf_open runs 'pre' (deterministic start) and returns ready with 'worker'.
+    const opened = await call(ctx, 'wf_open', { mode: 'pkg/t', workdir: run }, as('session-1'))
+    expect(opened).toMatchObject({ status: 'ready', nodes: [{ id: 'worker' }] })
+
+    // Amend the prompt before the dispatched node runs.
+    await call(ctx, 'wf_edit', { node: 'worker', action: 'append-prompt', text: 'also handle edge cases' }, as('session-1'))
+
+    // wf_next runs the dispatched node deterministically (one boundary per call).
+    const result = await call(ctx, 'wf_next', {}, as('session-1'))
+    expect((result as { status: string }).status).toBe('done')
+
+    // Watchpoint 3: the output file must contain the amended prompt,
+    // proving the engine wrote it to prompt_file and the command read it.
+    const output = readFileSync(join(run, 'out.txt'), 'utf8')
+    expect(output).toContain('original task')
+    expect(output).toContain('also handle edge cases')
+
+    // Watchpoint 2: the delivery bridge must NOT have been called for 'worker'.
+    // With interactiveOpen and a ready status, the bridge loop in report()
+    // iterates next.nodes; the skip guard must prevent it from calling begin.
+    expect(existsSync(bridgeLog)).toBe(false)
   })
 })
 
