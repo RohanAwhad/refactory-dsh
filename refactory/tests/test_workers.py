@@ -168,6 +168,57 @@ def test_worker_patch_carries_declared_provider_profiles(tmp_path):
                     str(root), str(tmp_path)], check=True)
 
 
+@pytest.mark.parametrize("case,route_provider,provider_config,expect_header,expect_entry", [
+    ("auto-inject when absent from provider_config",
+     "opencode-go", {"other": {"apiKeyEnv": "X"}},
+     True, True),
+    ("inject into existing entry without header",
+     "opencode-go", {"opencode-go": {"apiKeyEnv": "OPENCODE_API_KEY"}},
+     True, True),
+    ("skip when header already present",
+     "opencode-go", {"opencode-go": {"apiKeyEnv": "OPENCODE_API_KEY",
+                                      "headers": {"x-opencode-session": "custom"}}},
+     False, True),
+    ("skip for other providers",
+     "anthropic", {"anthropic": {"apiKeyEnv": "ANTHROPIC_API_KEY"}},
+     False, False),
+])
+def test_opencode_session_header_injection(case, route_provider, provider_config, expect_header, expect_entry):
+    """OpenCode workers need x-opencode-session; provider_config providers lack it."""
+    route = {"worker_backend": "dsh", "provider": route_provider}
+    rows = workers.provider_rows(route, provider_config)
+    providers = rows[0]["config"]["providers"] if rows else {}
+    oc = providers.get("opencode-go", {})
+    header = oc.get("headers", {}).get("x-opencode-session", "")
+    if expect_header:
+        assert header.startswith("refactory-worker-"), f"{case}: expected auto-injected header"
+        assert len(header) > len("refactory-worker-"), f"{case}: expected unique suffix"
+    elif expect_entry:
+        assert header == "custom" or "x-opencode-session" not in oc.get("headers", {}), \
+            f"{case}: header should be preserved or absent"
+    else:
+        assert "opencode-go" not in providers, f"{case}: opencode-go should not appear"
+
+
+def test_opencode_session_header_uses_correct_credential_name():
+    """The auto-created entry must use OPENCODE_API_KEY, matching the built-in provider."""
+    route = {"worker_backend": "dsh", "provider": "opencode-go"}
+    rows = workers.provider_rows(route, None)
+    oc = rows[0]["config"]["providers"]["opencode-go"]
+    assert oc["apiKeyEnv"] == "OPENCODE_API_KEY"
+
+
+def test_opencode_session_ids_are_unique_per_call():
+    """Each provider_rows call should produce a distinct session id."""
+    route = {"worker_backend": "dsh", "provider": "opencode-go"}
+    ids = set()
+    for _ in range(10):
+        rows = workers.provider_rows(route, None)
+        header = rows[0]["config"]["providers"]["opencode-go"]["headers"]["x-opencode-session"]
+        ids.add(header)
+    assert len(ids) == 10, "session ids should be unique per call"
+
+
 def test_coordinator_patch_carries_declared_provider_profiles(tmp_path):
     """The coordinator's graph runtime is as nested as a node's headless one.
 

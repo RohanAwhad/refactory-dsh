@@ -120,6 +120,7 @@ def permission_patch(route: dict[str, Any]) -> list[dict[str, Any]]:
 
 _OPENCODE_SESSION_HEADER = 'x-opencode-session'
 _OPENCODE_PROVIDER = 'opencode-go'
+_OPENCODE_API_KEY_ENV = 'OPENCODE_API_KEY'
 
 
 def _ensure_opencode_session(providers: dict[str, Any], route_provider: str) -> dict[str, Any]:
@@ -128,18 +129,17 @@ def _ensure_opencode_session(providers: dict[str, Any], route_provider: str) -> 
     The built-in opencode-go provider wraps every request with
     withOpenCodeSessionHeader, but provider_config creates a generic provider
     that lacks that wrapper.  When the route selects opencode-go and the
-    provider entry doesn't already carry the header, inject a static session
-    value.  Worker completions are independent one-shot calls, so a fixed
-    session id is sufficient.
+    provider entry doesn't already carry the header, inject a per-run session
+    id so workers are distinguishable from each other and from the GUI session.
     """
     if route_provider != _OPENCODE_PROVIDER:
         return providers
-    entry = providers.get(_OPENCODE_PROVIDER, {'apiKeyEnv': 'OPENCODE_GO_API_KEY'})
+    entry = providers.get(_OPENCODE_PROVIDER, {'apiKeyEnv': _OPENCODE_API_KEY_ENV})
     headers = entry.get('headers', {})
     if any(k.lower() == _OPENCODE_SESSION_HEADER for k in headers):
         return providers
     patched = dict(entry)
-    patched['headers'] = {**headers, _OPENCODE_SESSION_HEADER: 'refactory-worker'}
+    patched['headers'] = {**headers, _OPENCODE_SESSION_HEADER: f'refactory-worker-{uuid.uuid4().hex[:12]}'}
     return {**providers, _OPENCODE_PROVIDER: patched}
 
 
@@ -150,13 +150,12 @@ def provider_rows(route: dict[str, Any], provider_config: dict[str, Any] | None)
     profiles declared in another profile's patch (the web session's, say).
     Declared provider routes ride the worker patch so the same selection is
     resolvable in the nested composition; credentials stay in the native
-    store their apiKeyEnv names. The row targets the dormant base llm-pi-ai
-    entry the way a user's own profile patch does.
+    store their apiKeyEnv names.  When the route selects opencode-go, a
+    per-worker session header is injected automatically.
     """
     if route.get('worker_backend', 'dsh') != 'dsh':
         return []
-    providers = dict(provider_config or {})
-    providers = _ensure_opencode_session(providers, route.get('provider', ''))
+    providers = _ensure_opencode_session(dict(provider_config or {}), route.get('provider', ''))
     if providers:
         return [{'id': 'llm-pi-ai', 'config': {'providers': providers}}]
     return []
