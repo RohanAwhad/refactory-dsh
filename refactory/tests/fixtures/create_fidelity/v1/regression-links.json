@@ -4,6 +4,16 @@
   "issue": "https://github.com/boston-harness-group/refactory-dsh/issues/310",
   "rows": [
     {
+      "requirements": ["F.children.qa_director", "F.obligations.semantic", "B09"],
+      "owner": "parallel QA artifact ownership",
+      "fix": "Keep delivered builder-frozen artifacts read-only throughout QA. Run mutating admission/export and registry lifecycle tests on isolated disposable full copies/consumers, verify all source files before and after every command, and retain any observed transient drift as failure.",
+      "source": "refactory/refactory_dsh/create_fidelity_directors.py",
+      "regression": "refactory/tests/test_create_fidelity_qa_isolation.py",
+      "observed_trial": "create-fidelity-pair-sol6-20261013-v8",
+      "observed_failure": "Third-visit CLI integration QA readmitted the shared package, changed .origin.json and restored it while parallel testers observed failed freeze comparisons. Final matching hashes did not erase the transient mutation.",
+      "status": "Actual repeated admission/copy/import/run/remove tests and concurrent source observers verify isolated-copy behavior. Frozen v8 remains an interrupted diagnostic with failed QA ownership evidence; prepared v10 was held before authoring for this fresh-source correction."
+    },
+    {
       "requirements": ["F.stage.archivist_plan", "F.stage.archivist_build", "F.obligations.semantic"],
       "owner": "native archival duties",
       "fix": "Finalize the actual authored note, regenerate a source-bound report with actual gate and QA observations, preserve immutable invocation receipts and attempt the optional memory integration. Verified module absence maps to the pinned no-op; an unsupported installed backend remains unavailable.",

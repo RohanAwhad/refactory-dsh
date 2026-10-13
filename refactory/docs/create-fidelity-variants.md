@@ -78,6 +78,18 @@ finish before a claim of unchanged-package reuse freezes all relevant files,
 including origin/admission metadata and generated SKILL. The authored digest
 deliberately excludes those generated files and is insufficient for that claim.
 
+After the builder's admission/export and freeze, QA, code/health reviewers,
+Overwatch and documentation checks read the delivered package without modifying
+it. Existing skill/admission receipts are evidence to inspect; admitting or
+exporting again rewrites metadata and is not a read-only test. Mutation and
+registration/import/remove lifecycle tests use disposable complete file copies
+and separate consumers, with no links back to the delivered source. Compare
+every original source file before/after each operation, including generated and
+cache-named files. Restoring an earlier file after a mutation does not erase the
+drift seen by concurrent peers; preserve and report it as a failure. Native
+plugin verification uses actual `PACKAGE`/registry copy/import and consumer
+execution, not foreign pip entry points or editable-install claims.
+
 ## Public adoption and saved runs
 
 Public adoption remains pending full acceptance. Do not change

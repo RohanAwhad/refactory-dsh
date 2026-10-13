@@ -185,6 +185,14 @@ def test_real_executor_directors_extrema_and_full_report_delivery(tmp_path, monk
         assert "UPSTREAM-FULL-REPORT-CONSUMPTION" in responses.planning_prompts[stage.id]
     if stage is directors.QA:
         assert {report["task_id"] for report in manifest["reports"]} >= set(directors.MANDATORY)
+        cli=next(report for report in manifest["reports"] if report["task_id"]=="cli-integration")
+        delivery=json.loads((tmp_path/cli["raw_evidence"]["delivery_receipts"][0]).read_text())
+        prompt=(tmp_path/delivery["contexts"][-1]["prompt"]).read_text()
+        assert "Do not run admit/export on the shared package" in prompt
+        assert "registry add/copy/import" in prompt and "fresh-process resolution refusal" in prompt
+        assert "Admission/export or other mutations needed for a test run only on the disposable copy/consumer" in prompt
+        assert "Never repair/restore/re-admit shared bytes" in prompt
+        assert "verify package entry points, editable installation" not in prompt
     assert json.loads((tmp_path / stage.plan).read_text())["tasks"]
     assert (tmp_path / f".factory/{stage.id}-quality.md").read_text().strip()
 

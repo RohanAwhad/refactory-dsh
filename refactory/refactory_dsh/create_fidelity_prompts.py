@@ -85,6 +85,24 @@ path. These names describe this graph's declarations, not another Create mode.
   --project <artifact_project>`: native validation, discovery/inspection and
   skill export; write raw results and commands in builder-latest.md. This is
   structural admission, not proof of behavior. Run genuine acceptance tests.
+* After builder admission/export and freeze, QA, code review, health review,
+  Overwatch and documentation checks treat the shared delivered package as
+  read-only, including SKILL.md, .origin.json and .native-admission.json.
+  Inspect existing admission/export evidence; validate/list/show and behavioral
+  runs may read it, with fresh inputs/workdirs outside the package and bytecode
+  writes disabled. `admit` and `export` on that shared package belong ONLY to
+  the builder before freeze. They write metadata/skill and are not read-only
+  verification commands, even if validation succeeds or code stays identical.
+  Any mutation, registration, admission, export, install/import/remove lifetime
+  test uses an isolated disposable full copy and separate consumer project.
+  Copy every original file; do not use symlinks/hardlinks back to the delivered
+  package. Perform real native copy/import/resolve/run/remove operations there.
+  Compare the complete shared source inventory before/after every operation,
+  including all generated records and files under cache-named directories.
+  Record actual copy/consumer paths, commands, output and source digests.
+  Never repair, restore, re-admit or rewrite the shared package to hide a test
+  mutation. A transient drift observed by any peer remains a real failure;
+  returning bytes to their former contents does not erase that evidence.
 * Authored `package_digest()` excludes generated SKILL.md, .origin.json,
   .native-admission.json, Python bytecode caches and only known pytest cache
   records. It is not a fingerprint of the complete installed package. After
