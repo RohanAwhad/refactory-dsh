@@ -14,12 +14,23 @@ def execute(spec: dict[str, Any], workdir: Path) -> dict[str, Any]:
     for name in spec['reads']:
         if not _path(workdir, name).exists():
             raise ValueError(f'required worker input is missing: {name}')
+    # Read the prompt from prompt_file when present (edited prompt from spine).
+    # Fall back to spec['prompt'] when no prompt_file exists (original prompt).
+    import os
+    manifest = json.loads(os.environ.get('DSH_WORKFLOW_NODE', '{}'))
+    prompt_file = manifest.get('prompt_file')
+    prompt = spec['prompt']
+    if prompt_file:
+        prompt_path = Path(prompt_file)
+        if prompt_path.exists():
+            prompt = prompt_path.read_text()
+
     node = spec['node_id']
     from refactory_dsh.nn.executor import RunContext, render
     from refactory_dsh.run import _knobs, _read_facts
     context = RunContext(workdir, knobs=_knobs(), facts=_read_facts(workdir))
     client = DshModelClient(**spec['model_context']).for_node(node)
-    delivery = begin(workdir, node, render(spec['prompt'], context), spec['writes'],
+    delivery = begin(workdir, node, render(prompt, context), spec['writes'],
                      reads=spec['reads'], model_context=client.context())
     output = client.complete(delivery['prompt'], workdir=workdir)
     receipt = finish(workdir, node, final_response=output, capture_final=client.route()["worker_backend"] == "dsh")

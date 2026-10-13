@@ -105,6 +105,8 @@ class AgentNode(Node):
     timeout: int | None = None
     max_iterations: int = 1
     post_checks: list[ArtifactCheck] = Field(default_factory=list)
+    dispatch_command: str | None = None
+    command_timeout_s: int | None = Field(default=None, gt=0, le=2_147_483)
 
 
 class FnNode(Node):
@@ -252,6 +254,8 @@ class Workflow(BaseModel):
                 d.pop("resource_role", None)
             if d.get("command_timeout_s") is None:
                 d.pop("command_timeout_s", None)
+            if d.get("dispatch_command") is None:
+                d.pop("dispatch_command", None)
             for field_name in ("reads", "writes"):
                 value = d.get(field_name)
                 if isinstance(value, list):

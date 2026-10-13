@@ -84,6 +84,17 @@ describe('which nodes the plugin runs itself', () => {
     expect(isDeterministic(gate('g'))).toBe(false)
   })
 
+  it('claims a dispatched AgentNode with a dispatch command', () => {
+    const dispatched: NodeView = {
+      id: 'a',
+      _type: 'AgentNode',
+      command: 'echo hi',
+      prompt_template: 'task',
+    }
+    expect(isDeterministic(dispatched)).toBe(true)
+    expect(commandOf(dispatched)).toBe('echo hi')
+  })
+
   it('reports the command it would run', () => {
     expect(commandOf(fn('a', 'echo hi'))).toBe('echo hi')
     expect(commandOf(gate('g', 'echo proceed'))).toBe('echo proceed')
