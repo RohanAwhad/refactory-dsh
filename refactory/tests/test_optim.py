@@ -363,7 +363,7 @@ def test_a_node_session_runs_under_the_whole_dispatch_envelope(monkeypatch):
 
     seen: dict[str, object] = {}
 
-    def explode(self, cmd, run_dir, stop_at=None, budget_s=None):
+    def explode(self, cmd, run_dir, stop_at=None, budget_s=None, task=None):
         seen["stop_at"], seen["budget_s"] = stop_at, budget_s
         raise subprocess.TimeoutExpired(cmd="dsh", timeout=budget_s or 1)
 
@@ -410,6 +410,51 @@ def test_the_model_client_returns_stdout(monkeypatch):
 
     monkeypatch.setattr(DshModelClient, "_run_completion", lambda *a, **k: Ok())
     assert DshModelClient().complete("hello") == '{"proposals": []}\n'
+
+
+def test_large_prompt_is_sent_on_stdin_not_as_argument(monkeypatch):
+    import subprocess
+
+    from refactory_dsh.model import DshModelClient
+
+    seen = {}
+
+    def capture(self, cmd, run_dir, stop_at=None, budget_s=None, task=None):
+        seen['cmd'] = cmd
+        seen['task'] = task
+        return subprocess.CompletedProcess(cmd, 0, 'ok', '')
+
+    monkeypatch.setattr(DshModelClient, '_run_completion', capture)
+    large = 'x' * (200 * 1024)  # 200 KiB, well over the 128 KiB limit
+    result = DshModelClient().complete(large)
+    assert result == 'ok'
+    # The task must NOT appear in the command line
+    assert large not in seen['cmd']
+    # The last element of cmd should be '-' (stdin marker)
+    assert seen['cmd'][-1] == '-'
+    # The task must be passed separately for stdin delivery
+    assert seen['task'] == large
+
+
+def test_stdin_prompt_reaches_the_child_process_whole(tmp_path):
+    """A prompt over 128 KiB reaches the subprocess on stdin, not the command line."""
+    import subprocess, sys, textwrap
+    from refactory_dsh.model import DshModelClient
+
+    script = tmp_path / "echo_stdin.py"
+    script.write_text(textwrap.dedent("""\
+        import sys
+        data = sys.stdin.read()
+        print(len(data.encode('utf-8')))
+    """))
+
+    large = "\u00e9" * (200 * 1024)  # 200 KiB of non-ASCII
+    client = DshModelClient(timeout_s=10, attempts=1)
+    result = client._run_completion(
+        [sys.executable, str(script)], tmp_path, task=large,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == str(len(large.encode('utf-8')))
 
 
 def test_a_no_op_edit_is_refused_rather_than_re_evaluated():

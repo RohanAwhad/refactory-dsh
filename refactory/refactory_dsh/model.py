@@ -16,10 +16,12 @@ configured worker permission policy determines which other paths its tools can a
 from __future__ import annotations
 
 import copy
+import errno
 import json
 import os
 import re
 import subprocess
+import tempfile
 import threading
 import time
 from concurrent.futures import CancelledError
@@ -432,7 +434,7 @@ class DshModelClient:
                 cmd += ["--provider", self._provider]
             if self._model:
                 cmd += ["--model", self._model]
-        cmd.append(task)
+        cmd.append('-')
 
         scratch = Path(os.environ.get("REFACTORY_MODEL_SCRATCH", "/tmp")) / "refactory-model"
         run_dir = Path(workdir).expanduser().resolve() if workdir is not None else scratch
@@ -455,7 +457,15 @@ class DshModelClient:
             self._raise_if_cancelled()
             self._checkpoint()
             try:
-                proc = self._run_completion(cmd, run_dir, stop_at, budget_s)
+                proc = self._run_completion(cmd, run_dir, stop_at, budget_s, task=task)
+            except OSError as exc:
+                if exc.errno == errno.E2BIG:
+                    size_kb = len(task.encode()) // 1024
+                    raise RuntimeError(
+                        f"prompt is {size_kb} KiB; too large for a command-line argument "
+                        f"(this is a bug — the prompt should be sent on stdin)"
+                    ) from exc
+                raise
             except subprocess.TimeoutExpired as exc:
                 # A tool-using completion may already have changed its workdir.
                 # A deadline is not a transport failure: replaying the prompt can
@@ -496,7 +506,8 @@ class DshModelClient:
         )
 
     def _run_completion(
-        self, cmd: list[str], run_dir: Path, stop_at: float | None = None, budget_s: int | None = None
+        self, cmd: list[str], run_dir: Path, stop_at: float | None = None, budget_s: int | None = None,
+        task: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """Keep the CLI alive long enough to dispose its managed tool processes.
 
@@ -506,38 +517,52 @@ class DshModelClient:
         ``stop_at`` is an absolute monotonic deadline shared across a node's
         attempts; without one, the call is a plain completion bounded by
         ``timeout_s``.
+
+        When *task* is not ``None`` the prompt is delivered on the child's stdin
+        via a seekable temporary file, keeping large prompts off the command line
+        where they would exceed ``MAX_ARG_STRLEN``.
         """
         timeout_s = budget_s if budget_s is not None else self._timeout_s
         with _termination_as_exit():
             self._raise_if_cancelled()
-            proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                cwd=str(run_dir), env=self._environment(),
-                # A terminal Ctrl-C reaches the Python caller only. Forward one
-                # shutdown request: DSH escalates a second signal to immediate exit.
-                start_new_session=os.name == "posix",
-            )
+            task_file = None
             try:
-                deadline = stop_at if stop_at is not None else time.monotonic() + self._timeout_s
-                while True:
-                    self._raise_if_cancelled()
-                    self._checkpoint()
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        raise subprocess.TimeoutExpired(cmd, timeout_s)
-                    try:
-                        stdout, stderr = proc.communicate(
-                            timeout=min(remaining, 0.1)
-                        )
-                        break
-                    except subprocess.TimeoutExpired:
-                        # communicate retains its output across bounded waits. There
-                        # is no stdin input to resend, and the deadline never resets.
-                        if time.monotonic() >= deadline:
-                            raise
-            except BaseException:
-                # Direct interruption or the fork's cooperative event both use the
-                # runtime-owned cleanup before propagating failure.
-                shutdown(proc)
-                raise
-            return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+                if task is not None:
+                    task_file = tempfile.TemporaryFile('w+', encoding='utf-8')
+                    task_file.write(task)
+                    task_file.seek(0)
+                proc = subprocess.Popen(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                    stdin=task_file if task_file is not None else None,
+                    cwd=str(run_dir), env=self._environment(),
+                    # A terminal Ctrl-C reaches the Python caller only. Forward one
+                    # shutdown request: DSH escalates a second signal to immediate exit.
+                    start_new_session=os.name == "posix",
+                )
+                try:
+                    deadline = stop_at if stop_at is not None else time.monotonic() + self._timeout_s
+                    while True:
+                        self._raise_if_cancelled()
+                        self._checkpoint()
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise subprocess.TimeoutExpired(cmd, timeout_s)
+                        try:
+                            stdout, stderr = proc.communicate(
+                                timeout=min(remaining, 0.1)
+                            )
+                            break
+                        except subprocess.TimeoutExpired:
+                            # communicate retains its output across bounded waits. There
+                            # is no stdin input to resend, and the deadline never resets.
+                            if time.monotonic() >= deadline:
+                                raise
+                except BaseException:
+                    # Direct interruption or the fork's cooperative event both use the
+                    # runtime-owned cleanup before propagating failure.
+                    shutdown(proc)
+                    raise
+                return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+            finally:
+                if task_file is not None:
+                    task_file.close()
