@@ -317,6 +317,49 @@ def test_worker_bridge_renders_knobs_and_preserves_agent_facts(monkeypatch, tmp_
     assert json.loads((tmp_path/'facts.json').read_text())['answer'] == '42'
 
 
+def test_worker_uses_prompt_file_over_spec_prompt(monkeypatch, tmp_path):
+    """Watchpoint #3: worker_node.py must read prompt_file when present."""
+    from refactory_dsh.worker_node import execute
+    (tmp_path / '.refactory').mkdir()
+    (tmp_path / '.refactory/declarations.json').write_text(json.dumps({'build': {'produces': []}}))
+    seen = []
+    def complete(self, prompt, **kwargs):
+        seen.append(prompt)
+        return 'done'
+    monkeypatch.setattr(DshModelClient, 'complete', complete)
+    # Write a prompt file with different content from spec['prompt']
+    prompt_dir = tmp_path / '.refactory' / 'prompts'
+    prompt_dir.mkdir(parents=True)
+    prompt_file = prompt_dir / 'build.md'
+    prompt_file.write_text('EDITED prompt text', encoding='utf-8')
+    manifest = json.dumps({'id': 'build', 'type': 'AgentNode', 'command': 'echo', 'reads': [], 'writes': [], 'prompt_file': str(prompt_file)})
+    monkeypatch.setenv('DSH_WORKFLOW_NODE', manifest)
+    execute({'schema_version': 1, 'node_id': 'build', 'reads': [], 'writes': [],
+             'prompt': 'ORIGINAL prompt text', 'model_context': {}}, tmp_path)
+    assert len(seen) == 1
+    assert 'EDITED prompt text' in seen[0]
+    assert 'ORIGINAL prompt text' not in seen[0]
+
+
+def test_worker_falls_back_to_spec_prompt_without_prompt_file(monkeypatch, tmp_path):
+    """Watchpoint #3 fallback: without prompt_file, spec['prompt'] is used."""
+    from refactory_dsh.worker_node import execute
+    (tmp_path / '.refactory').mkdir()
+    (tmp_path / '.refactory/declarations.json').write_text(json.dumps({'build': {'produces': []}}))
+    seen = []
+    def complete(self, prompt, **kwargs):
+        seen.append(prompt)
+        return 'done'
+    monkeypatch.setattr(DshModelClient, 'complete', complete)
+    # No prompt_file in manifest
+    manifest = json.dumps({'id': 'build', 'type': 'AgentNode', 'command': 'echo', 'reads': [], 'writes': []})
+    monkeypatch.setenv('DSH_WORKFLOW_NODE', manifest)
+    execute({'schema_version': 1, 'node_id': 'build', 'reads': [], 'writes': [],
+             'prompt': 'ORIGINAL prompt text', 'model_context': {}}, tmp_path)
+    assert len(seen) == 1
+    assert 'ORIGINAL prompt text' in seen[0]
+
+
 def test_completion_timeout_stops_owned_runtime_and_records_reason(tmp_path):
     import os
     import sys

@@ -200,8 +200,8 @@ def lower_workflow(workflow: Any, workdir: Path, model_context: dict[str, Any] |
                    declarations: dict[str, Any] | None = None) -> Any:
     """Resolve explicit node workers before graph dispatch, preserving all edges.
 
-    These FnNodes are deterministic dispatch bridges, not model-generated shell.
-    Each bridge still enforces the original agent's declared output contract.
+    Each dispatched AgentNode carries a deterministic command the runtime runs.
+    The original prompt stays in the node so wf_edit can amend it.
     """
     if model_context is None:
         return workflow

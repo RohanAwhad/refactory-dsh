@@ -396,7 +396,7 @@ The workflow IR this package owns and lowers a mode state into.
 | kind | name | signature |
 |---|---|---|
 | class | `AgentConfig` | `(*, role: refactory_dsh.ir.AgentRole, model: str, timeout: int = 600) -> None` |
-| class | `AgentNode` | `(*, id: str, reads: set[str] = <factory>, writes: set[str] = <factory>, blocking: bool = True, resource_role: Literal['work', 'final_validation'] \| None = None, role: refactory_dsh.ir.AgentRole, model: str = '', prompt_template: str = '', tools: list[str] = <factory>, timeout: int \| None = None, max_iterations: int = 1, post_checks: list[refactory_dsh.ir.ArtifactCheck] = <factory>) -> None` |
+| class | `AgentNode` | `(*, id: str, reads: set[str] = <factory>, writes: set[str] = <factory>, blocking: bool = True, resource_role: Literal['work', 'final_validation'] \| None = None, role: refactory_dsh.ir.AgentRole, model: str = '', prompt_template: str = '', tools: list[str] = <factory>, timeout: int \| None = None, max_iterations: int = 1, post_checks: list[refactory_dsh.ir.ArtifactCheck] = <factory>, dispatch_command: str \| None = None, command_timeout_s: Annotated[int \| None, Gt(gt=0), Le(le=2147483)] = None) -> None` |
 | class | `AgentRole` | `(*values)` |
 | class | `ArtifactCheck` | `(*, path: str, must_exist: bool = True, min_size: int = 0, must_contain: list[str] = <factory>) -> None` |
 | class | `DataItem` | `(*, id: str, path: str \| None = None, metadata: dict[str, typing.Any] = <factory>, prompt: str = '') -> None` |

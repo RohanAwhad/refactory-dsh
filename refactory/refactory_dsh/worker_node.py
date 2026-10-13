@@ -1,6 +1,7 @@
 """Graph-owned agent dispatch bridge used by CLI and native GUI single runs."""
 from __future__ import annotations
 import json
+import os
 from pathlib import Path
 import sys
 from typing import Any
@@ -16,14 +17,13 @@ def execute(spec: dict[str, Any], workdir: Path) -> dict[str, Any]:
             raise ValueError(f'required worker input is missing: {name}')
     # Read the prompt from prompt_file when present (edited prompt from spine).
     # Fall back to spec['prompt'] when no prompt_file exists (original prompt).
-    import os
     manifest = json.loads(os.environ.get('DSH_WORKFLOW_NODE', '{}'))
     prompt_file = manifest.get('prompt_file')
     prompt = spec['prompt']
     if prompt_file:
         prompt_path = Path(prompt_file)
         if prompt_path.exists():
-            prompt = prompt_path.read_text()
+            prompt = prompt_path.read_text(encoding='utf-8')
 
     node = spec['node_id']
     from refactory_dsh.nn.executor import RunContext, render

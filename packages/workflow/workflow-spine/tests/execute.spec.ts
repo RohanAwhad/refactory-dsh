@@ -95,6 +95,27 @@ describe('which nodes the plugin runs itself', () => {
     expect(commandOf(dispatched)).toBe('echo hi')
   })
 
+  it('does not claim a dispatched AgentNode with an empty command', () => {
+    const empty: NodeView = {
+      id: 'a',
+      _type: 'AgentNode',
+      command: '',
+      prompt_template: 'task',
+    }
+    expect(isDeterministic(empty)).toBe(false)
+    expect(commandOf(empty)).toBeUndefined()
+  })
+
+  it('does not claim a dispatched AgentNode with undefined command', () => {
+    const undef: NodeView = {
+      id: 'a',
+      _type: 'AgentNode',
+      prompt_template: 'task',
+    }
+    expect(isDeterministic(undef)).toBe(false)
+    expect(commandOf(undef)).toBeUndefined()
+  })
+
   it('reports the command it would run', () => {
     expect(commandOf(fn('a', 'echo hi'))).toBe('echo hi')
     expect(commandOf(gate('g', 'echo proceed'))).toBe('echo proceed')
