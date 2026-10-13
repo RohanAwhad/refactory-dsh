@@ -436,6 +436,27 @@ def test_large_prompt_is_sent_on_stdin_not_as_argument(monkeypatch):
     assert seen['task'] == large
 
 
+def test_stdin_prompt_reaches_the_child_process_whole(tmp_path):
+    """A prompt over 128 KiB reaches the subprocess on stdin, not the command line."""
+    import subprocess, sys, textwrap
+    from refactory_dsh.model import DshModelClient
+
+    script = tmp_path / "echo_stdin.py"
+    script.write_text(textwrap.dedent("""\
+        import sys
+        data = sys.stdin.read()
+        print(len(data.encode('utf-8')))
+    """))
+
+    large = "\u00e9" * (200 * 1024)  # 200 KiB of non-ASCII
+    client = DshModelClient(timeout_s=10, attempts=1)
+    result = client._run_completion(
+        [sys.executable, str(script)], tmp_path, task=large,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == str(len(large.encode('utf-8')))
+
+
 def test_a_no_op_edit_is_refused_rather_than_re_evaluated():
     """Setting a knob to the value it already holds must not cost a batch slot."""
     mode = _mode()

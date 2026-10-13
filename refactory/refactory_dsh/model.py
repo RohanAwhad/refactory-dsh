@@ -528,7 +528,7 @@ class DshModelClient:
             task_file = None
             try:
                 if task is not None:
-                    task_file = tempfile.TemporaryFile('w+')
+                    task_file = tempfile.TemporaryFile('w+', encoding='utf-8')
                     task_file.write(task)
                     task_file.seek(0)
                 proc = subprocess.Popen(
