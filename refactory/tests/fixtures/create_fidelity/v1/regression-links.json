@@ -4,6 +4,38 @@
   "issue": "https://github.com/boston-harness-group/refactory-dsh/issues/310",
   "rows": [
     {
+      "requirements": ["F.stage.discover", "F.stage.create_factory_md", "F.completion"],
+      "owner": "reference execution adapter",
+      "fix": "Use the native public reachable subgraph for each declared HALT continuation, retaining exact node fields and internal edges, and declare only hash-verified prior native outputs as boundary runtime inputs. Keep native constructor validation enabled and preserve the failed v1 route.",
+      "source": "refactory/benchmarks/create_fidelity/remote_route.py",
+      "regression": "refactory/tests/test_create_fidelity_remote_route.py",
+      "observed_trial": "create-fidelity-pair-sol6-20261013-v8",
+      "reference_evidence": "remote-reference/project/raw/remote-segment-0.json",
+      "observed_failure": "The first native bootstrap segment halted as expected, but v1 changed the full graph start node and the next WorkflowExecutor constructor rejected unreachable predecessors.",
+      "status": "Controlled native constructors, bootstrap progression and missing/changed boundary input regressions passed against the actual pinned executor; fresh v2 live reference acceptance pending. The v8 failure remains failed."
+    },
+    {
+      "requirements": ["F.deadlines", "F.deadlines.expiry"],
+      "owner": "benchmark process ownership",
+      "fix": "Use macOS libproc scoped to the harness-owned process group because Seatbelt rejects spawning the system setuid ps binary; retain the same isolation policy and truthful unknown cleanup on inspection failures.",
+      "source": "refactory/benchmarks/create_fidelity/supervision.py",
+      "regression": "refactory/tests/test_create_fidelity_benchmark_supervision.py",
+      "observed_trial": "create-fidelity-pair-sol6-20261013-v8",
+      "reference_evidence": "remote-reference/project/raw/lifecycle.json",
+      "observed_failure": "Native process-group inspection raised PermissionError under the actual authoring policy. Earlier isolated process tests did not exercise that policy.",
+      "status": "Actual authoring-policy tests confirm owned residual children receive TERM then KILL and the group empties. Frozen v8 cleanup remains unknown; supplemental operator inspection is separate."
+    },
+    {
+      "requirements": ["F.deadlines", "F.approval.identity"],
+      "owner": "benchmark lifecycle and operator authority",
+      "fix": "Keep the full-mode deadline active while waiting at strategy gates and cancel on controller pipe loss. Bind explicitly delegated operator decisions to independently reviewed exact request/strategy/intent bytes, with original user authorization and a distinct non-human-inspection provenance label.",
+      "source": "refactory/benchmarks/create_fidelity/harness.py",
+      "regression": "refactory/tests/test_create_fidelity_delegation.py",
+      "observed_trial": "create-fidelity-pair-sol6-20261012-v7",
+      "observed_failure": "The old controller was lost while an orphan lane waited beyond its full-mode cap; subsequent user completion authority did not justify replaying that expired lane.",
+      "status": "The interrupted v7 trial is preserved. Fresh supervised trials require a real review of each strategy visit and never use standing approval; production human gates are unchanged."
+    },
+    {
       "requirements": ["F.children.qa_director", "F.consumption", "F.completion"],
       "owner": "DSH prompt transport",
       "fix": "Send large DSH prompts through the installed headless CLI's supported stdin task, preserving exact full report bytes, transport hashes, deadlines and owned-process cleanup instead of exceeding OS argv limits.",

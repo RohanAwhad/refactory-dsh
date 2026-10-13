@@ -95,26 +95,40 @@ fallback for exactly `init_user_intent` and `synthesize_qa`. Their exact Python
 code and project argument remain separate shell arguments, including paths
 containing spaces or quotes. The source checkout is never patched.
 
-For a fresh comparator use `--remote-route native-shell-segments-v1`. It adds an
+For a fresh comparator use `--remote-route native-shell-segments-v2`. It adds an
 explicit controller correction to the two commands above. The pinned executor
 does not follow HALT edges, including its bootstrap branches. The controller
-can start another full native graph execution only along these declared edges:
+can start another native execution only along these declared edges:
 `gate_has_factory → discover`, `gate_factory_md_exists → create_factory_md`, and
 `gate_precheck → archivist_build`. Bootstrap continuation requires the native
 parser's exact diagnostic containing the actual canonical `HALT` token. AI and
 user HALTs, command failures and unexpected diagnostics always stop. Source
-node fields, prompts, roles, gates, edges and allowances are preserved; only
-each segment's public `Workflow.start_node` changes. The public native
-`completed_files` state restores only actual prior native result outputs with
+node fields, prompts, roles, gates and allowances are preserved. Each segment
+uses public `Workflow.subgraph` for all nodes reachable from its selected start,
+including native implicit fork/join links. All original edges whose endpoints
+are retained remain exact, including optional branches and reloops; full
+workflow metadata is preserved except for explicit native `runtime_inputs` at
+the boundary: only retained-node reads backed by hash-verified actual prior
+native outputs are added. This declares the supplied intent/profile/review
+artifacts without weakening any retained node's input contract. Native
+constructor validation stays enabled. Only unreachable predecessors are excluded
+from each execution segment. The public native `completed_files` state restores
+only actual prior native result outputs with
 verified unchanged hashes. Four segments and the overall deadline bound this
 controller; it has no implicit retry loop.
 
 `raw/launch.json` records the original/effective commands, full graph hashes,
 route and execution-correction label. `raw/remote-segment-N.json` records each
-full graph/start hash, restored input hashes, unmodified native result/events
-and any causal declared-edge continuation. These receipts do not turn the
+segment graph/start hash, original and full effective graph hashes, excluded
+unreachable predecessors, restored input hashes, unmodified native result/events,
+bound native runtime-input hashes and any causal declared-edge continuation.
+These receipts do not turn the
 corrected route into evidence of the original single-call behavior. Historical
 failed trials remain unchanged; use a new trial directory for this route.
+The earlier `native-shell-segments-v1` full-graph start-node copy is retained as
+a diagnostic route. Its v8 failure is preserved: the native constructor rejects
+unreachable predecessor nodes when starting at `discover`. V2 does not disable
+that check or reinterpret v8 as a successful comparison.
 
 A semantic precheck HALT followed by diagnostic archive remains an overall
 failure even when the archive succeeds. The pinned `factory precheck` actually

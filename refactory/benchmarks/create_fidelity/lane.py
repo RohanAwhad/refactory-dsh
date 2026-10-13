@@ -135,7 +135,7 @@ def remote_author(config: dict, project: Path) -> dict:
     from factory.workflow.primitives import DEFAULT_AGENT_POOL
     from factory.workflow.executor import WorkflowExecutor
     from factory.agents.runner import invoke_agent
-    from .remote_route import configure, execute_segmented, LEGACY_ROUTE, SEGMENT_ROUTE
+    from .remote_route import configure, execute_segmented, LEGACY_ROUTE, LEGACY_SEGMENT_ROUTE, SEGMENT_ROUTE
 
     workflow = WorkflowRegistry.get_workflow("create-v2", project)
     if workflow is None:
@@ -176,9 +176,9 @@ def remote_author(config: dict, project: Path) -> dict:
         return WorkflowExecutor(graph, project, agent_pool=DEFAULT_AGENT_POOL,
                                 agent_fn=observed_agent, input_fn=human, auto_approve=False)
 
-    if execution["route"] == SEGMENT_ROUTE:
+    if execution["route"] in (LEGACY_SEGMENT_ROUTE, SEGMENT_ROUTE):
         result = asyncio.run(execute_segmented(workflow, project, executor_factory,
-            timeout_s=config["total_timeout_s"], record=lambda index, segment:
+            timeout_s=config["total_timeout_s"], route=execution["route"], record=lambda index, segment:
                 save(project / "raw" / f"remote-segment-{index}.json", segment)))
         save(project / "raw" / "remote-events.json", {"events": result.pop("events")})
         result.pop("segments")

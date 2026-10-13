@@ -17,8 +17,9 @@ from typing import Any
 
 LEGACY_ROUTE = "native-python-v1"
 SHELL_ROUTE = "native-shell-prefix-v1"
-SEGMENT_ROUTE = "native-shell-segments-v1"
-ROUTES = (LEGACY_ROUTE, SHELL_ROUTE, SEGMENT_ROUTE)
+LEGACY_SEGMENT_ROUTE = "native-shell-segments-v1"
+SEGMENT_ROUTE = "native-shell-segments-v2"
+ROUTES = (LEGACY_ROUTE, SHELL_ROUTE, LEGACY_SEGMENT_ROUTE, SEGMENT_ROUTE)
 SOURCE_COMMIT = "3ab6f8f7ca792c874f2654574d7f7fd6dd18b896"
 SOURCE_GRAPH_SHA256 = "64bbad14710d4584f6bcf5094e59556622d75ddcab0cbd24f1c9eaa79b212951"
 COMMANDS = {
@@ -44,7 +45,7 @@ def configure(workflow: Any, route: str = LEGACY_ROUTE) -> tuple[Any, dict[str, 
     original_digest = graph_digest(original)
     mapped = workflow.model_copy(deep=True)
     commands = []
-    if route in (SHELL_ROUTE, SEGMENT_ROUTE):
+    if route in (SHELL_ROUTE, LEGACY_SEGMENT_ROUTE, SEGMENT_ROUTE):
         if original_digest != SOURCE_GRAPH_SHA256:
             raise ValueError("Remote shell route requires the exact pinned create-v2 graph")
         for node_id, expected in COMMANDS.items():
@@ -67,11 +68,12 @@ def configure(workflow: Any, route: str = LEGACY_ROUTE) -> tuple[Any, dict[str, 
         "original_graph": original, "original_graph_sha256": original_digest,
         "effective_graph": effective_graph, "effective_graph_sha256": graph_digest(effective_graph),
         "commands": commands,
-        "controller": ({"public_start_node_copies": True, "maximum_segments": 4,
+        "controller": ({"public_start_node_copies": True,
+            "public_reachable_subgraphs": route == SEGMENT_ROUTE, "maximum_segments": 4,
             "halt_boundaries": HALT_BOUNDARIES,
             "completed_files_restoration": "Prior actual native result outputs only, verified unchanged hashes",
             "precheck_nonzero_exit": "Stop; diagnostic archive unavailable for the pinned rc1 failure ABI"}
-            if route == SEGMENT_ROUTE else None),
+            if route in (LEGACY_SEGMENT_ROUTE, SEGMENT_ROUTE) else None),
         "comparison_scope": "Distinct execution configuration; historical native-Python failure retained. No causal model comparison established.",
     }
 
@@ -129,15 +131,74 @@ def _completed_inputs(project: Path, paths: set[str]) -> dict[str, str]:
     return observed
 
 
+def reachable_segment(workflow: Any, start: str, *, runtime_inputs: set[str] | frozenset[str] = frozenset()) -> Any:
+    """Public native subgraph with exact retained fields and edges.
+
+    Native validation counts ForkNode targets and JoinNode source→join links as
+    implicit edges. Include the same reachability semantics; remove only nodes
+    unreachable from the continuation entry, without pruning optional branches
+    or feedback loops. Preserve metadata and explicitly declare supplied boundary
+    inputs; no retained node's read/write declaration changes.
+    """
+    original = workflow.to_dict()
+    nodes = original["nodes"]
+    if start not in nodes:
+        raise ValueError(f"Unknown remote continuation entry: {start}")
+    adjacency = {node_id: set() for node_id in nodes}
+    for edge in original["edges"]:
+        adjacency[edge["source"]].add(edge["target"])
+    for node_id, node in nodes.items():
+        if node["_type"] == "ForkNode":
+            adjacency[node_id].update(node.get("targets", []))
+        if node["_type"] == "JoinNode":
+            for source in node.get("sources", []):
+                adjacency[source].add(node_id)
+    reachable = set()
+    pending = [start]
+    while pending:
+        current = pending.pop()
+        if current in reachable:
+            continue
+        reachable.add(current)
+        pending.extend(adjacency[current] - reachable)
+    subgraph = workflow.subgraph(reachable, name=original["name"], start_node=start)
+    # subgraph() deliberately resets workflow metadata; preserve the author's
+    # terminal/knob/task/capability/runtime-input declarations in the full copy.
+    retained_reads = {path for node_id in reachable for path in nodes[node_id]["reads"]}
+    supplied = set(original.get("runtime_inputs", [])) | (set(runtime_inputs) & retained_reads)
+    selected = workflow.model_copy(update={"nodes": subgraph.nodes, "edges": subgraph.edges,
+                                          "start_node": start, "runtime_inputs": frozenset(supplied)}, deep=True)
+    actual = selected.to_dict()
+    expected = {**original, "start_node": start,
+                "nodes": {key: value for key, value in nodes.items() if key in reachable},
+                "edges": [edge for edge in original["edges"]
+                          if edge["source"] in reachable and edge["target"] in reachable]}
+    if supplied:
+        expected["runtime_inputs"] = sorted(supplied)
+    if actual != expected:
+        raise ValueError("Native reachable subgraph changed retained source declarations")
+    return selected
+
+
+def bound_segment(workflow: Any, project: Path, start: str, completed: dict[str, str]) -> Any:
+    """Build the native continuation only from unchanged supplied output bytes."""
+    if _completed_inputs(project, set(completed)) != completed:
+        raise ValueError("Native prior segment output changed before continuation")
+    return reachable_segment(workflow, start, runtime_inputs=set(completed))
+
+
 async def execute_segmented(workflow: Any, project: Path, executor_factory: Any, *,
-                            timeout_s: float, record: Any) -> dict[str, Any]:
-    """Native full-graph executions joined only at three declared HALT edges.
+                            timeout_s: float, record: Any,
+                            route: str = SEGMENT_ROUTE) -> dict[str, Any]:
+    """Native executions joined only at three declared HALT edges.
 
     Each start-node copy uses the public Pydantic Workflow API. The native
     completed-files set is restored solely from hash-bound prior native outputs;
     no unproduced file or invented verdict is admitted. This correction is
     explicitly separate from the source's single execute() route.
     """
+    if route not in (LEGACY_SEGMENT_ROUTE, SEGMENT_ROUTE):
+        raise ValueError("Unsupported remote segment controller route")
     if timeout_s <= 0:
         raise ValueError("Remote controller timeout must be positive")
     expected = workflow.to_dict()
@@ -167,16 +228,23 @@ async def execute_segmented(workflow: Any, project: Path, executor_factory: Any,
             raise ValueError("Remote graph changed during segmented execution")
         if _completed_inputs(project, set(completed)) != completed:
             raise ValueError("Native prior segment output changed before continuation")
-        segment_graph = workflow.model_copy(update={"start_node": start}, deep=True)
-        executor = executor_factory(segment_graph)
-        # This is public native state, populated only by actual previous results.
-        executor.completed_files.update(completed)
+        segment_graph = (bound_segment(workflow, project, start, completed) if route == SEGMENT_ROUTE else
+                         workflow.model_copy(update={"start_node": start}, deep=True))
         segment = {"index": index, "start_node": start, "graph": segment_graph.to_dict(),
                    "graph_sha256": graph_digest(segment_graph.to_dict()),
+                   "full_graph_sha256": graph_digest(expected),
+                   "original_source_graph_sha256": SOURCE_GRAPH_SHA256,
+                   "excluded_unreachable_nodes": sorted(set(expected["nodes"]) - set(segment_graph.nodes)),
+                   "bound_runtime_inputs": {name: completed[name] for name in
+                       segment_graph.to_dict().get("runtime_inputs", []) if name in completed},
+                   "route": route,
                    "restored_completed_inputs": completed, "remaining_timeout_s": remaining,
                    "status": "running"}
         record(index, segment)
         try:
+            executor = executor_factory(segment_graph)
+            # This is public native state, populated only by prior native results.
+            executor.completed_files.update(completed)
             if _completed_inputs(project, set(completed)) != completed:
                 raise ValueError("Native prior segment output changed during continuation preparation")
             remaining = deadline - time.monotonic()
@@ -214,6 +282,6 @@ async def execute_segmented(workflow: Any, project: Path, executor_factory: Any,
             "error": failure or final.halt_reason, "nodes_executed": sum(s["native_result"]["nodes_executed"] for s in segments),
             "duration_ms": sum(s["native_result"]["duration_ms"] for s in segments),
             "events": events, "segments": segments,
-            "execution_route": SEGMENT_ROUTE,
+            "execution_route": route,
             "diagnostic_archive_after_precheck_failure": bool(failure),
             "diagnostic_archive_native_success": final.success if failure else None}

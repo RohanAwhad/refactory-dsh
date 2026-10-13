@@ -569,7 +569,7 @@ def main() -> int:
     p.add_argument("--dsh-home", type=Path, default=Path.home() / ".dsh", help="Read-only native profile/credential-reference source; session state stays private")
     p.add_argument("--hidden", type=Path, action="append", default=[], help="Historical/other evidence roots forbidden to authoring workers (repeatable)")
     p.add_argument("--total-timeout", type=int, default=43200)
-    p.add_argument("--remote-route", choices=["native-python-v1", "native-shell-prefix-v1", "native-shell-segments-v1"], default="native-python-v1",
+    p.add_argument("--remote-route", choices=["native-python-v1", "native-shell-prefix-v1", "native-shell-segments-v1", "native-shell-segments-v2"], default="native-python-v1",
                    help="Explicit versioned remote executor command mapping; not evidence of a completed source workflow")
     p = sub.add_parser("preflight")
     p.add_argument("root", type=Path)
