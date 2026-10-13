@@ -7,14 +7,21 @@ import shutil
 import stat
 import tempfile
 import subprocess
+import sys
 import json
 from typing import Any
 
 VERSION = "private-native-temp-v1"
 
 
+def _parent() -> Path:
+    # Keep Unix socket names short. Linux CI has /tmp, not macOS's /private/tmp.
+    # This allocation helper does not establish a non-macOS isolation boundary.
+    return Path("/private/tmp" if sys.platform == "darwin" else "/tmp")
+
+
 def create(trial_id: str, lane_id: str) -> dict[str, Any]:
-    root = Path(tempfile.mkdtemp(prefix="cf-", dir="/private/tmp"))
+    root = Path(tempfile.mkdtemp(prefix="cf-", dir=_parent()))
     root.chmod(0o700)
     observed = root.stat()
     (root / "isolation-canary.txt").write_text("private native temp\n")
@@ -29,7 +36,7 @@ def validate(mapping: dict[str, Any]) -> Path:
     if mapping.get("version") != VERSION:
         raise ValueError("Unknown native temp mapping")
     root = Path(mapping["path"])
-    if (root.parent != Path("/private/tmp") or not root.name.startswith("cf-")
+    if (root.parent != _parent() or not root.name.startswith("cf-")
             or root.is_symlink() or len(str(root).encode()) > 48):
         raise ValueError("Native temp root is not a short private owned directory")
     observed = root.stat()
@@ -53,8 +60,11 @@ def cleanup(mapping: dict[str, Any]) -> dict[str, Any]:
 def probe(config: dict[str, Any], env: dict[str, str]) -> dict[str, Any]:
     """Actual positive own-temp access and negative forbidden read/write controls."""
     root = validate(config["native_temp_mapping"])
+    if sys.platform != "darwin" or not Path("/usr/bin/sandbox-exec").is_file():
+        return {"status": "unavailable", "mapping": config["native_temp_mapping"],
+                "reason": "Native temp isolation requires the actual macOS Seatbelt boundary"}
     forbidden = config.get("forbidden_controls", [])
-    global_control = Path("/private/tmp") / ("native-global-denial-" + root.name)
+    global_control = _parent() / ("native-global-denial-" + root.name)
     code = r'''
 import json,sys
 from pathlib import Path
