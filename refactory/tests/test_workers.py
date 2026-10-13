@@ -202,12 +202,26 @@ def test_opencode_session_header_injection(case, route_provider, provider_config
             assert providers[name] == entry, f"{case}: {name} entry should be unchanged"
 
 
-def test_opencode_session_header_uses_correct_credential_name():
-    """The auto-created entry must use OPENCODE_API_KEY, matching the built-in provider."""
+def test_opencode_auto_entry_is_complete():
+    """The auto-created entry must carry protocol, endpoint, credential and models."""
     route = {"worker_backend": "dsh", "provider": "opencode-go"}
     rows = workers.provider_rows(route, None)
     oc = rows[0]["config"]["providers"]["opencode-go"]
     assert oc["apiKeyEnv"] == "OPENCODE_API_KEY"
+    assert oc["api"] == "openai-completions"
+    assert "opencode.ai" in oc["baseURL"]
+    assert any(m["id"] == "deepseek-v4.1-flash" for m in oc["models"])
+
+
+def test_opencode_user_fields_override_defaults():
+    """User-supplied fields in provider_config override the built-in defaults."""
+    route = {"worker_backend": "dsh", "provider": "opencode-go"}
+    custom = {"apiKeyEnv": "MY_CUSTOM_KEY", "models": [{"id": "custom-model", "contextWindow": 500000}]}
+    rows = workers.provider_rows(route, {"opencode-go": custom})
+    oc = rows[0]["config"]["providers"]["opencode-go"]
+    assert oc["apiKeyEnv"] == "MY_CUSTOM_KEY"
+    assert oc["models"] == [{"id": "custom-model", "contextWindow": 500000}]
+    assert oc["api"] == "openai-completions", "defaults should fill missing fields"
 
 
 def test_opencode_session_ids_are_unique_per_call():

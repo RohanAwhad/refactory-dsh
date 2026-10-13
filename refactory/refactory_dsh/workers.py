@@ -120,27 +120,34 @@ def permission_patch(route: dict[str, Any]) -> list[dict[str, Any]]:
 
 _OPENCODE_SESSION_HEADER = 'x-opencode-session'
 _OPENCODE_PROVIDER = 'opencode-go'
-_OPENCODE_API_KEY_ENV = 'OPENCODE_API_KEY'
+_OPENCODE_DEFAULTS: dict[str, Any] = {
+    'api': 'openai-completions',
+    'baseURL': 'https://opencode.ai/zen/go/v1',
+    'apiKeyEnv': 'OPENCODE_API_KEY',
+    'models': [
+        {'id': 'deepseek-v4.1-flash', 'name': 'DeepSeek V4.1 Flash', 'contextWindow': 1000000},
+        {'id': 'deepseek-v4-flash', 'name': 'DeepSeek V4 Flash', 'contextWindow': 1000000},
+    ],
+}
 
 
 def _ensure_opencode_session(providers: dict[str, Any], route_provider: str) -> dict[str, Any]:
-    """Inject x-opencode-session for OpenCode worker routes.
+    """Ensure OpenCode worker routes carry a complete, session-tagged entry.
 
     The built-in opencode-go provider wraps every request with
     withOpenCodeSessionHeader, but provider_config creates a generic provider
-    that lacks that wrapper.  When the route selects opencode-go and the
-    provider entry doesn't already carry the header, inject a per-run session
-    id so workers are distinguishable from each other and from the GUI session.
+    that lacks that wrapper.  When the route selects opencode-go, ensure the
+    entry has the required wire protocol, endpoint, models and a per-worker
+    session header.  User-supplied fields override defaults.
     """
     if route_provider != _OPENCODE_PROVIDER:
         return providers
-    entry = providers.get(_OPENCODE_PROVIDER, {'apiKeyEnv': _OPENCODE_API_KEY_ENV})
+    entry = {**_OPENCODE_DEFAULTS, **providers.get(_OPENCODE_PROVIDER, {})}
     headers = entry.get('headers', {})
     if any(k.lower() == _OPENCODE_SESSION_HEADER for k in headers):
-        return providers
-    patched = dict(entry)
-    patched['headers'] = {**headers, _OPENCODE_SESSION_HEADER: f'refactory-worker-{uuid.uuid4().hex[:12]}'}
-    return {**providers, _OPENCODE_PROVIDER: patched}
+        return {**providers, _OPENCODE_PROVIDER: entry}
+    entry['headers'] = {**headers, _OPENCODE_SESSION_HEADER: f'refactory-worker-{uuid.uuid4().hex[:12]}'}
+    return {**providers, _OPENCODE_PROVIDER: entry}
 
 
 def provider_rows(route: dict[str, Any], provider_config: dict[str, Any] | None) -> list[dict[str, Any]]:
