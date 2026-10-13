@@ -118,6 +118,31 @@ def permission_patch(route: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+_OPENCODE_SESSION_HEADER = 'x-opencode-session'
+_OPENCODE_PROVIDER = 'opencode-go'
+
+
+def _ensure_opencode_session(providers: dict[str, Any], route_provider: str) -> dict[str, Any]:
+    """Inject x-opencode-session for OpenCode worker routes.
+
+    The built-in opencode-go provider wraps every request with
+    withOpenCodeSessionHeader, but provider_config creates a generic provider
+    that lacks that wrapper.  When the route selects opencode-go and the
+    provider entry doesn't already carry the header, inject a static session
+    value.  Worker completions are independent one-shot calls, so a fixed
+    session id is sufficient.
+    """
+    if route_provider != _OPENCODE_PROVIDER:
+        return providers
+    entry = providers.get(_OPENCODE_PROVIDER, {'apiKeyEnv': 'OPENCODE_GO_API_KEY'})
+    headers = entry.get('headers', {})
+    if any(k.lower() == _OPENCODE_SESSION_HEADER for k in headers):
+        return providers
+    patched = dict(entry)
+    patched['headers'] = {**headers, _OPENCODE_SESSION_HEADER: 'refactory-worker'}
+    return {**providers, _OPENCODE_PROVIDER: patched}
+
+
 def provider_rows(route: dict[str, Any], provider_config: dict[str, Any] | None) -> list[dict[str, Any]]:
     """Declare selected provider routes to a runtime that cannot see profiles.
 
@@ -128,8 +153,12 @@ def provider_rows(route: dict[str, Any], provider_config: dict[str, Any] | None)
     store their apiKeyEnv names. The row targets the dormant base llm-pi-ai
     entry the way a user's own profile patch does.
     """
-    if route.get('worker_backend', 'dsh') == 'dsh' and provider_config:
-        return [{'id': 'llm-pi-ai', 'config': {'providers': provider_config}}]
+    if route.get('worker_backend', 'dsh') != 'dsh':
+        return []
+    providers = dict(provider_config or {})
+    providers = _ensure_opencode_session(providers, route.get('provider', ''))
+    if providers:
+        return [{'id': 'llm-pi-ai', 'config': {'providers': providers}}]
     return []
 
 
