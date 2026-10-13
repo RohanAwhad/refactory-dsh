@@ -33,6 +33,10 @@ The candidate retains 29 stages, 33 edges, original gate owners, research and
 strategy planning, three parallel QA branches and their join, Overwatch,
 documentation review, final precheck, and non-blocking archives.
 
+The actual archivist finalizes its own note with native `archive-update`, which
+regenerates a sourcebound performance report and records the optional MemPalace
+attempt. See [the archival mapping and installed-backend boundary](create-fidelity-archive.md).
+
 Each director is a composite native operation with a DSH CEO planning call,
 independent DSH child calls, complete raw report collection, CEO quality review,
 and bounded retries of rejected children. Research plans 3–7 children; strategy

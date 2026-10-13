@@ -43,6 +43,12 @@ def probe(config: dict[str, Any], env: dict[str, str]) -> dict[str, Any]:
     project = Path(config["project"])
     mapping = config["native_environment_mapping"]
     isolated = apply_environment(env, mapping, project)
+    if config.get("native_temp_mapping"):
+        from .native_temp import apply_environment as native_temp_environment
+        isolated = native_temp_environment(isolated, config["native_temp_mapping"])
+    if config.get("native_credential_mapping"):
+        from .native_credentials import apply_environment as native_credential_environment
+        isolated = native_credential_environment(isolated, config["native_credential_mapping"])
     code = r'''
 import hashlib, json, os, subprocess, sys
 from pathlib import Path
@@ -79,6 +85,7 @@ def auth():
     return safe
 attempt('ceo_prompt',prompt); attempt('runner',runner); attempt('native_auth_status',auth)
 result['native_home']=str(Path.home()); result['claude_config_dir']=os.environ.get('CLAUDE_CONFIG_DIR')
+result['claude_native_tmp']=os.environ.get('CLAUDE_CODE_TMPDIR')
 result['model_dispatched']=False
 print(json.dumps(result))
 '''
@@ -92,5 +99,75 @@ print(json.dumps(result))
         for key in ("ceo_prompt", "runner", "native_auth_status"))
     return {"schema_version": 1, "kind": "isolated native readiness without model execution",
             "status": "passed" if passed else "failed", "returncode": result.returncode,
-            "mapping": mapping, "policy": config["policy"], "observed": observed,
+            "mapping": mapping, "credential_mapping": config.get("native_credential_mapping"),
+            "temp_mapping": config.get("native_temp_mapping"), "policy": config["policy"], "observed": observed,
             "limits": "Auth status reports configuration/login readiness; no API credential refresh, served model or authoring success is established."}
+
+
+def invocation_probe(config: dict[str, Any], project: Path) -> dict[str, Any]:
+    """One real native CEO request, with tools disabled and a small budget.
+
+    The supported FACTORY_CLAUDE_BIN override adds probe-only CLI restrictions
+    while retaining the same executable, runner, provider and source alias.
+    Authoring never uses this wrapper. Native writes stay in the private probe.
+    """
+    import asyncio
+    import hashlib
+    import os
+    import re
+    import shutil
+    from .native_temp import validate
+    validate(config["native_temp_mapping"])
+    from factory.agents.runner import invoke_agent
+    from factory.workflow.primitives import DEFAULT_AGENT_POOL
+
+    directory = project / "native-route-probe"
+    directory.mkdir(exist_ok=False)
+    native = Path(shutil.which("claude") or "")
+    if not native.is_file():
+        raise ValueError("Native Claude executable is unavailable")
+    wrapper = directory / "native-probe-cli"
+    code = (f"#!{config['python']}\nimport os,sys\n"
+            f"os.execv({str(native)!r},[{str(native)!r},'--tools','','--max-turns','1',"
+            "'--max-budget-usd','0.10',*sys.argv[1:]])\n")
+    wrapper.write_text(code)
+    wrapper.chmod(0o700)
+    previous = os.environ.get("FACTORY_CLAUDE_BIN")
+    os.environ["FACTORY_CLAUDE_BIN"] = str(wrapper)
+    alias = DEFAULT_AGENT_POOL["ceo"].model
+    try:
+        response, returncode = asyncio.run(invoke_agent("ceo",
+            "Respond with exactly NATIVE_ROUTE_OK. Do not call any tools, read credentials or modify files. This is only a native invocation readiness probe.",
+            directory, timeout=20, model=alias, dangerously_skip_permissions=False,
+            _track_failures=False))
+    finally:
+        if previous is None:
+            os.environ.pop("FACTORY_CLAUDE_BIN", None)
+        else:
+            os.environ["FACTORY_CLAUDE_BIN"] = previous
+    marker = response.strip() == "NATIVE_ROUTE_OK"
+    # Keep diagnostic text out of the receipt: provider errors can contain
+    # account identifiers. Exact native stderr remains in the private probe log.
+    lowered = response.lower()
+    categories = [label for label, pattern in (
+        ("budget-limit", r"budget|cost limit|spending limit"),
+        ("missing-adc", r"default credentials|application.default.credentials"),
+        ("authentication", r"authenticate|authentication|unauthorized|credential"),
+        ("permission", r"eperm|permission|access denied|403"),
+        ("model-alias", r"model.*not found|unsupported model|invalid model"),
+    ) if re.search(pattern, lowered)]
+    events = directory / ".factory/events.jsonl"
+    completed = [json.loads(line) for line in events.read_text().splitlines()
+                 if json.loads(line).get("type") == "agent.completed"] if events.is_file() else []
+    return {"schema_version": 1, "kind": "real native invocation preflight; not workflow authoring",
+            "status": "passed" if returncode == 0 and marker else "failed",
+            "returncode": returncode, "marker_received": marker,
+            "requested_alias": alias, "runner": "claude", "provider_policy": "unchanged inherited native configuration",
+            "tools": [], "max_turns": 1, "budget_usd": 0.10, "inactivity_timeout_s": 20,
+            "diagnostic_categories": categories,
+            "native_cli": {"path": str(native.resolve()), "sha256": hashlib.sha256(native.read_bytes()).hexdigest()},
+            "probe_wrapper_sha256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
+            "native_completed_usage": [{key: row.get("data", {}).get(key) for key in
+                ("model", "input_tokens", "output_tokens", "total_cost_usd")} for row in completed],
+            "response_sha256": hashlib.sha256(response.encode()).hexdigest(),
+            "limits": "A passing probe establishes this one native alias invocation only; it does not establish other roles or Create acceptance."}

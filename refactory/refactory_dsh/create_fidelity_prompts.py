@@ -181,6 +181,37 @@ def load_prompt(role: str, node_id: str = "") -> str:
     if node_id:
         sections.append("## Source stage duties\n" + node_prompt(node_id))
     sections.append(NATIVE_INSTRUCTIONS)
+    if role=="archivist" and node_id in ("archivist_plan","archivist_build"):
+        phase="plan" if node_id=="archivist_plan" else "build"
+        sections.append(f"""## Native archival finalization (this stage only)
+Write your complete substantive `.factory/archive/create-{phase}.md` first.
+Preserve the actual approved plan/intent or actual build results and unresolved
+precheck failures. Include the exact command you will execute and the separate
+receipt path below; do not claim a result before executing it. Then run:
+`python -m refactory_dsh.create_fidelity_ops archive-update {phase} --project "{{{{artifact_project}}}}"`
+using the supplied interpreter and actual invocation project. This maps the
+source's ALWAYS `factory report-update`, followed by `factory mempalace write`.
+The helper reads actual available archive, strategy, native gate and QA bytes,
+regenerates `.factory/performance_report.json`, preserves existing valid CEO
+memory/create[] without invented multi-experiment insights, and records an
+actual optional MemPalace availability attempt. Verified missing module is the
+source's explicit no-op; installed unsupported integration is unavailable and
+nonzero. It never writes a shared home or fabricates scores or experiment IDs.
+The helper owns report/receipt writes outside your markdown. This specific
+source-command mapping permits its declared performance_report.json output;
+your direct authored prose still belongs only to .factory/archive/.
+Retain its actual command/stdout/status and `.factory/archive/create-{phase}-receipt.json`.
+That receipt links immutable report/input hashes and the integration attempt.
+Do not edit the note after finalization: that would stale the captured digest.
+If you must revise the note, rerun the helper and preserve its prior immutable
+receipt. Failed/unavailable finalization cannot be called archival success.
+No actual experiment verdict exists merely because Create builds a mode:
+experiment markdown+JSON and memory entries require their source evidence;
+do not invent an experiment, score, cycle pattern or MemPalace success.
+Helper outputs use atomic replacement and serialized current-note rescans so
+nonblocking plan/build archives can overlap. Finish promptly; do not wait for
+later stages, execute later worker tasks, or modify their reports.
+""")
     if node_id == "create_factory_md":
         sections.append(f"""## Native bootstrap template assignment (this stage only)
 Read `{FACTORY_TEMPLATE_PATH}` and `{FACTORY_TEMPLATE_SOURCE_PATH}` in full,

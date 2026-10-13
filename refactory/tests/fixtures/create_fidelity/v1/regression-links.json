@@ -4,6 +4,55 @@
   "issue": "https://github.com/boston-harness-group/refactory-dsh/issues/310",
   "rows": [
     {
+      "requirements": ["F.stage.archivist_plan", "F.stage.archivist_build", "F.obligations.semantic"],
+      "owner": "native archival duties",
+      "fix": "Finalize the actual authored note, regenerate a source-bound report with actual gate and QA observations, preserve immutable invocation receipts and attempt the optional memory integration. Verified module absence maps to the pinned no-op; an unsupported installed backend remains unavailable.",
+      "source": "refactory/refactory_dsh/create_fidelity_archive.py",
+      "regression": "refactory/tests/test_create_fidelity_archive.py",
+      "observed_trial": "create-fidelity-pair-sol6-20261013-v8",
+      "observed_failure": "Independent semantic review found an actual plan archive snapshot but no evidence of the pinned unconditional report-update and optional MemPalace duties.",
+      "status": "Real local CLI, concurrency, late-plan, malformed-memory and optional-backend controls pass. Frozen historical archives remain unchanged; fresh live model adherence requires independent receipt and note review."
+    },
+    {
+      "requirements": ["F.stage.overwatch", "F.stage.gate_overwatch", "F.completion"],
+      "owner": "local and external verification ownership",
+      "fix": "Version the common authoring context to require separate local verdicts and external acceptance tables. Preserve every original requirement and real local repair duty while assigning hidden-checker and peer identity observations to the isolated operator.",
+      "source": "refactory/tests/fixtures/create_fidelity/v1/authoring-boundary.md",
+      "regression": "refactory/tests/test_create_fidelity_harness.py",
+      "observed_trial": "create-fidelity-pair-sol6-20261013-v8",
+      "observed_failure": "Overwatch reported local booking checks passed but returned FAIL partly because the other lane's brief and external acceptance evidence were deliberately inaccessible. It also identified stale local report particulars, which remain genuine repair findings.",
+      "status": "New context v3 does not waive local defects or supply external proof. Existing v8 verdicts and repair visits are preserved; actual pre-launch and post-run operator identity observations remain required."
+    },
+    {
+      "requirements": ["F.stage.create_factory_md", "F.route", "F.isolation"],
+      "owner": "reference native runner readiness",
+      "fix": "Use a short owned per-lane private native temp root through the actual CLI temp variable; prove a bounded real native invocation before full authoring. An explicitly supplied existing ADC file is a single read-only reference, never copied.",
+      "source": "refactory/benchmarks/create_fidelity/remote_readiness.py",
+      "regression": "refactory/tests/test_create_fidelity_native_temp.py",
+      "observed_trial": "create-fidelity-pair-sol6-20261013-v9",
+      "observed_failure": "The native CLI used /tmp/claude-501 despite TMPDIR and failed EPERM; a subsequent isolated actual invocation cleared the temp failure but reported missing ADC. Auth-status alone had not tested that execution boundary.",
+      "status": "Failed v9 and first invocation are preserved. Separate native-temp and credential-policy regressions exercise own-root access, peer/operator/global-temp denial and exact-file readonly reference; fresh complete reference acceptance remains pending."
+    },
+    {
+      "requirements": ["B09", "B10", "F.obligations.semantic"],
+      "owner": "generated-artifact identity",
+      "fix": "Use a separate strict all-regular-file inventory including cache-named directories and generated records; reject symlinks and special files. Version new native and README receipts rather than upgrading historical generic-tree evidence.",
+      "source": "refactory/benchmarks/create_fidelity/artifact_inventory.py",
+      "regression": "refactory/tests/test_create_fidelity_artifact_inventory.py",
+      "observed_failure": "Independent code review found generic source-tree hashing could omit authored content under cache-named directories.",
+      "status": "Meaningful import/native-run/README mutation controls added; legacy missing strict-inventory receipts remain unavailable under evaluator v3."
+    },
+    {
+      "requirements": ["F.variants", "F.isolation"],
+      "owner": "variant verification and isolated preparation",
+      "fix": "Check exact JSON numeric types and values, independently probe beyond the default integer-digit limit, preserve original v1 evidence, and allocate a new owned temp root rather than inheriting the template trial root.",
+      "source": "refactory/benchmarks/create_fidelity/variant_cases.py",
+      "regression": "refactory/tests/test_create_fidelity_variant_cases.py",
+      "observed_trial": "create-fidelity-update-sol6-20261013-v1",
+      "observed_failure": "Live research rejected bool/float equality and broad cache exclusions; integration review found inherited template temp mapping. The update authoring run later failed at CEO quality with a generic model service error, before an artifact existed.",
+      "status": "Evaluator v2 and actual fresh-template isolation controls added. The failed update v1 remains failed; no generated implementation is operator-repaired or retroactively certified."
+    },
+    {
       "requirements": ["F.stage.discover", "F.stage.create_factory_md", "F.completion"],
       "owner": "reference execution adapter",
       "fix": "Use the native public reachable subgraph for each declared HALT continuation, retaining exact node fields and internal edges, and declare only hash-verified prior native outputs as boundary runtime inputs. Keep native constructor validation enabled and preserve the failed v1 route.",

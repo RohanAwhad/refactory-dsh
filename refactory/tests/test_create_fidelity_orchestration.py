@@ -7,6 +7,9 @@ native entry points. Scripted evidence is never presented as live model work.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -97,11 +100,27 @@ class ExternalDshIO:
             return "# " + node + " report\n\nPASS: every original user ask and criterion was inspected against actual native package code and executed evidence.\nCommand: candidate validate portable_probe --requires-input document_path\nActual output:\n" + json.dumps(check) + "\nAcceptance outcome, connected scope and input/output evidence are present. No blocking code issues were observed.\n"
         if node == "archivist_plan":
             self.plan_archive_saw_builder = self.builder_started.wait(3)
-            return "# Approved plan archive\n\nPreserved the approved original document-mode specification and its runtime input and output responsibilities. Builder started while this archive remained in flight.\n"
+            body="# Approved plan archive\n\nPreserved the approved original document-mode specification and its runtime input and output responsibilities. Builder started while this archive remained in flight.\n"
+            return self.archive_response(run,"plan",body)
         if node == "archivist_build":
             precheck = json.loads((run / ".factory/reviews/precheck.json").read_text())
-            return "# Build archive\n\nActual final precheck outcome: " + precheck["outcome"] + "\n\nComplete diagnostic evidence:\n" + json.dumps(precheck) + "\n"
+            body="# Build archive\n\nActual final precheck outcome: " + precheck["outcome"] + "\n\nComplete diagnostic evidence:\n" + json.dumps(precheck) + "\n"
+            return self.archive_response(run,"build",body)
         pytest.fail("unexpected controlled external node " + node)
+
+    def archive_response(self,run,phase,body):
+        # Controlled external response authors its own note and invokes the real
+        # production helper/CLI. No canned report/memory/integration receipt.
+        command=[sys.executable,"-m","refactory_dsh.create_fidelity_ops","archive-update",phase,"--project",str(run)]
+        note=run/f".factory/archive/create-{phase}.md";note.parent.mkdir(parents=True,exist_ok=True)
+        note.write_text(body+"\nActual finalization command: "+" ".join(command)+f"\nReceipt: .factory/archive/create-{phase}-receipt.json\n")
+        env={**os.environ,"PYTHONPATH":str(Path(ops.__file__).parents[1]),"PYTHONDONTWRITEBYTECODE":"1"}
+        completed=subprocess.run(command,cwd=run,env=env,capture_output=True,text=True,timeout=30)
+        assert completed.returncode==0,(completed.stdout,completed.stderr)
+        receipt=json.loads(completed.stdout)
+        assert receipt["ok"] and receipt["report_regeneration"]["status"]=="completed"
+        assert receipt["mempalace"]["attempted"]
+        return "Delivered archive note, regenerated native report and actual optional integration receipt."
 
     def director_response(self, node, prompt, run):
         stage, _, task, _ = node.split(":")

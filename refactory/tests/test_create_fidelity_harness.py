@@ -9,9 +9,11 @@ from benchmarks.create_fidelity.contract import FIXTURES
 from benchmarks.create_fidelity.evidence import (
     aggregate, authoring_score, capability_score, normalize, route_score, write_report,
 )
-from benchmarks.create_fidelity.harness import ADAPTER_INSTRUCTIONS, authoring_brief, run_pair
+from benchmarks.create_fidelity.harness import ADAPTER_INSTRUCTIONS, AUTHORING_CONTEXT_VERSION, authoring_brief, run_pair
 from benchmarks.create_fidelity.isolation import profile
 from benchmarks.create_fidelity import approval
+from benchmarks.create_fidelity import harness
+from benchmarks.create_fidelity.contract import digest
 
 
 def test_both_lanes_receive_identical_public_contract_and_external_check_ownership():
@@ -25,6 +27,25 @@ def test_both_lanes_receive_identical_public_contract_and_external_check_ownersh
     assert briefs["dsh"].replace(ADAPTER_INSTRUCTIONS["dsh"], "<native>") == briefs["remote"].replace(ADAPTER_INSTRUCTIONS["remote"], "<native>")
     # External ownership cannot turn completed authoring into checker evidence.
     assert aggregate(capability_score(None, None)) != "passed"
+
+
+def test_fresh_common_context_separates_local_verdict_from_actual_operator_identity_without_waiving_local_checks():
+    assert AUTHORING_CONTEXT_VERSION == 3
+    boundary = (FIXTURES / "authoring-boundary.md").read_text()
+    assert "authoring context v3" in boundary
+    for flavor in ("dsh", "remote"):
+        brief = authoring_brief(flavor)
+        assert (FIXTURES / "brief.md").read_text() in brief
+        assert boundary in brief
+        assert "real pre-launch and post-run hash/identity" in brief
+        assert "report a local Create verdict separately from an external acceptance table" in brief
+        assert "must not by itself produce" in brief
+        assert "Do not label external obligations PASS or claim full benchmark acceptance" in brief
+        assert "cannot overrule a demonstrated local defect" in brief
+        assert "no B01–B10 behavior" in brief
+        assert "unavailable required command remains unavailable and blocks its local" in brief
+        assert "never pretend a lint tool passed" in brief
+        assert "nonblocking build archive must settle" in brief
 
 
 def test_checker_runs_all_56_cases_and_rejects_bad_program(tmp_path):
@@ -86,6 +107,83 @@ def test_live_command_without_preflight_does_not_launch(tmp_path):
     result = run_pair(tmp_path, ["dsh-baseline", "remote-reference"])
     assert all(r["status"] == "unavailable" for r in result)
     assert (tmp_path / "operator/launch-blocked.json").is_file()
+
+
+def _controlled_bound_preflight(root):
+    """Synthetic observation fixture; never model-backed route evidence."""
+    groups = ("isolation", "runtime_state_isolation", "native_temp_isolation", "native_readiness", "native_invocation")
+    receipt = {"status": "unavailable", "checked_at": "2026-10-13T20:00:00+00:00",
+               "route": {"status": "passed", "fixture": "controlled served-route observation"},
+               "lane_bindings": {}, **{group: {} for group in groups}}
+    for lane in harness.LANES:
+        directory = root / lane
+        directory.mkdir(parents=True)
+        policy = directory / "controlled-policy.sb"
+        policy.write_text("controlled non-executed policy fixture\n")
+        config = directory / "config.json"
+        harness.write(config, {"policy": str(policy), "project": str(directory / "project")})
+        receipt["lane_bindings"][lane] = {"config_sha256": digest(config), "policy_sha256": digest(policy)}
+        for group in groups:
+            receipt[group][lane] = {"status": "passed"}
+    # Preserve an actual unavailable reference in this controlled selection.
+    receipt["native_invocation"]["remote-reference"] = {"status": "unavailable", "reason": "controlled API failure"}
+    harness.write(root / "operator/preflight.json", receipt)
+    return receipt
+
+
+def test_dsh_selection_requires_own_guards_and_preserves_unavailable_reference(tmp_path, monkeypatch):
+    receipt = _controlled_bound_preflight(tmp_path)
+    calls = []
+    monkeypatch.setattr(harness, "run_lane", lambda root, lane, operation, **kwargs:
+                        calls.append((lane, operation)) or {"lane": lane, "status": "controlled-dispatch"})
+    result = run_pair(tmp_path, ["dsh-candidate"])
+    assert calls == [("dsh-candidate", "author")]
+    assert result[0]["status"] == "controlled-dispatch"
+    snapshot = harness.read(tmp_path / "operator/selected-launch.json")
+    assert snapshot["status"] == "passed"
+    assert snapshot["source_preflight"]["overall_status"] == "unavailable"
+    assert snapshot["source_preflight"]["sha256"] == digest(tmp_path / "operator/preflight.json")
+    assert snapshot["source_preflight"]["checked_at"] == receipt["checked_at"]
+    assert list(snapshot["lanes"]) == ["dsh-candidate"]
+    assert snapshot["lanes"]["dsh-candidate"]["current_binding"] == receipt["lane_bindings"]["dsh-candidate"]
+    assert harness.read(tmp_path / "operator/preflight.json") == receipt
+
+
+@pytest.mark.parametrize("missing", ["route", "isolation", "runtime_state_isolation", "native_temp_isolation", "binding", "observation_time"])
+def test_selected_dsh_missing_required_observation_cannot_dispatch(tmp_path, monkeypatch, missing):
+    receipt = _controlled_bound_preflight(tmp_path)
+    if missing == "route":
+        receipt.pop("route")
+    elif missing == "binding":
+        receipt.pop("lane_bindings")
+    elif missing == "observation_time":
+        receipt.pop("checked_at")
+    else:
+        receipt[missing].pop("dsh-candidate")
+    harness.write(tmp_path / "operator/preflight.json", receipt)
+    monkeypatch.setattr(harness, "run_lane", lambda *args, **kwargs: pytest.fail("Unready lane dispatched"))
+    assert run_pair(tmp_path, ["dsh-candidate"])[0]["status"] == "unavailable"
+
+
+@pytest.mark.parametrize("mutated", ["config.json", "controlled-policy.sb"])
+def test_selected_launch_rejects_changed_probed_config_or_policy(tmp_path, monkeypatch, mutated):
+    _controlled_bound_preflight(tmp_path)
+    path = tmp_path / "dsh-candidate" / mutated
+    path.write_text(path.read_text() + "\n")
+    monkeypatch.setattr(harness, "run_lane", lambda *args, **kwargs: pytest.fail("Changed observation dispatched"))
+    assert run_pair(tmp_path, ["dsh-candidate"])[0]["status"] == "unavailable"
+    snapshot = harness.read(tmp_path / "operator/selected-launch.json")
+    assert snapshot["lanes"]["dsh-candidate"]["requirements"]["observation_binding"] == "unavailable"
+
+
+@pytest.mark.parametrize("lanes", [["remote-reference"], ["dsh-candidate", "remote-reference"]])
+def test_unready_selected_reference_blocks_entire_selection(tmp_path, monkeypatch, lanes):
+    _controlled_bound_preflight(tmp_path)
+    monkeypatch.setattr(harness, "run_lane", lambda *args, **kwargs: pytest.fail("Partial selected pair dispatched"))
+    result = run_pair(tmp_path, lanes)
+    assert [row["lane"] for row in result] == lanes
+    assert all(row["status"] == "unavailable" for row in result)
+    assert harness.read(tmp_path / "operator/selected-launch.json")["source_preflight"]["overall_status"] == "unavailable"
 
 
 def test_isolation_denies_peers_operator_checker_and_source_writes(tmp_path):

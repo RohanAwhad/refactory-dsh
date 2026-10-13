@@ -13,6 +13,7 @@ import sys
 import pytest
 
 from benchmarks.create_fidelity import approval
+from benchmarks.create_fidelity.artifact_inventory import VERSION as ARTIFACT_INVENTORY_VERSION, strict_artifact_inventory
 from benchmarks.create_fidelity.contract import digest
 from benchmarks.create_fidelity.evidence import authoring_score, capability_score, hash_tree
 from benchmarks.create_fidelity.operator_evidence import (
@@ -227,7 +228,10 @@ raise SystemExit(0 if r.exit_ok else 1)
     (artifact / "README.md").write_text("Installation: use Python with the framework installed.\n\n" + "\n\n".join(commands.values()))
     ctx = context(tmp_path, project)
     ctx.root.mkdir()
-    package = hash_tree(artifact)
+    cache = artifact / "__pycache__"
+    cache.mkdir()
+    (cache / "authored-contract.json").write_text('{"authored":"part of the delivered package"}')
+    package = strict_artifact_inventory(artifact)
     input_file = ctx.root / "input.json"
     input_file.write_text(json.dumps([{"id": "a", "room": "A", "start": 0, "end": 10},
                                     {"id": "b", "room": "A", "start": 5, "end": 15}]))
@@ -240,7 +244,8 @@ raise SystemExit(0 if r.exit_ok else 1)
         started = datetime.now(timezone.utc).isoformat()
         cp = subprocess.run(shlex.split(expanded), cwd=ctx.root, capture_output=True, text=True, timeout=10,
                             env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
-                                 "TEST_NATIVE_FAILURE": native_failure if kind == "native" and native_failure else ""})
+                                 "TEST_NATIVE_FAILURE": native_failure if kind == "native" and native_failure else "",
+                                 "PYTHONDONTWRITEBYTECODE": "1"})
         assert cp.returncode == (1 if kind == "native" and native_failure else 0), cp.stderr
         streams = {}
         for stream in ("stdout", "stderr"):
@@ -250,7 +255,8 @@ raise SystemExit(0 if r.exit_ok else 1)
         receipt = {"trial_id": ctx.trial_id, "lane_id": ctx.lane_id, "reviewer_id": ctx.reviewer_id, "kind": kind,
                    "documented_command": command, "substitutions": substitutions, "argv": shlex.split(expanded),
                    "cwd": str(ctx.root), "started": started, "finished": datetime.now(timezone.utc).isoformat(),
-                   "returncode": cp.returncode, "package_before": package, "package_after": hash_tree(artifact),
+                   "returncode": cp.returncode, "package_inventory_version": ARTIFACT_INVENTORY_VERSION,
+                   "package_before": package, "package_after": strict_artifact_inventory(artifact),
                    "input_file": str(input_file), "output_file": str(output), "run_directory": str(output.parent),
                    "input": {"path": input_file.name, "sha256": digest(input_file)},
                    "output": {"path": str(output.relative_to(ctx.root)), "sha256": digest(output)} if output.exists() else None,
@@ -269,7 +275,8 @@ raise SystemExit(0 if r.exit_ok else 1)
     record.update(artifact_path=str(artifact.relative_to(project)), readme_path=str((artifact / "README.md").relative_to(project)),
                   readme_sha256=digest(artifact / "README.md"), package_sha256=package, executions=executions)
     save(ctx, "readme", record)
-    native = {"package_before_import": package, "package_unchanged": True}
+    native = {"package_before_import": package, "package_unchanged": True,
+              "package_inventory_version": ARTIFACT_INVENTORY_VERSION}
     return project, artifact, ctx, record, native
 
 
@@ -278,6 +285,35 @@ def test_readme_check_requires_actual_documented_cli_and_native_mode_execution(r
     row = capability_score(None, native, evidence_root=project, operator_evidence=ctx)[-1]
     assert row["status"] == "passed", row
     assert row["evaluator"]["operator_document_sha256"]
+    assert row["evaluator"]["artifact_inventory_sha256"]
+
+
+def test_readme_review_detects_authored_cache_data_change_even_when_generic_raw_inventory_matches(readme_trial):
+    project, artifact, ctx, record, native = readme_trial
+    original_raw = hash_tree(project)
+    (artifact / "__pycache__/authored-contract.json").write_text('{"changed":"after actual README execution"}')
+    assert hash_tree(project) == original_raw == record["raw_evidence_sha256"]
+    row = capability_score(None, native, evidence_root=project, operator_evidence=ctx)[-1]
+    assert row["status"] == "failed", row
+    assert "unchanged native artifact" in row["reason"]
+
+
+@pytest.mark.parametrize("missing", ["native", "execution"])
+def test_legacy_generic_package_inventory_cannot_be_upgraded_by_new_supplemental_evaluator(readme_trial, missing):
+    project, _, ctx, record, native = readme_trial
+    if missing == "native":
+        native.pop("package_inventory_version")
+    else:
+        item = record["executions"][0]
+        path = ctx.root / item["receipt_path"]
+        receipt = json.loads(path.read_text())
+        receipt.pop("package_inventory_version")
+        path.write_text(json.dumps(receipt))
+        item["sha256"] = digest(path)
+        save(ctx, "readme", record)
+    row = capability_score(None, native, evidence_root=project, operator_evidence=ctx)[-1]
+    assert row["status"] == "unavailable", row
+    assert "historical" in row["reason"]
 
 
 @pytest.mark.parametrize("readme_trial,expected", [("setup", "unavailable"), ("execution", "failed")], indirect=["readme_trial"])

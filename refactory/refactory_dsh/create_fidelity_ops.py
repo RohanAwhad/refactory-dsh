@@ -643,7 +643,7 @@ def gate_precheck(ctx: Any) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Native Create validation, revision/plugin checks, skill export and execution")
-    parser.add_argument("verb", choices=("validate", "inspect", "export", "admit", "run", "update-check", "plugin-check"))
+    parser.add_argument("verb", choices=("validate", "inspect", "export", "admit", "run", "update-check", "plugin-check", "archive-update"))
     parser.add_argument("target")
     parser.add_argument("--project", type=Path, default=project_for_nodes())
     parser.add_argument("--workdir", type=Path)
@@ -651,6 +651,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--requires-input", default="")
     args = parser.parse_args(argv)
     try:
+        if args.verb == "archive-update":
+            from refactory_dsh.create_fidelity_archive import finalize
+
+            report=finalize(args.project,args.target)
+            print(json.dumps(report,indent=2))
+            return 0 if report["ok"] else 1
         if args.verb in ("update-check", "plugin-check"):
             from refactory_dsh.create_fidelity_variants import plugin_check, update_check
 
@@ -675,7 +681,7 @@ def main(argv: list[str] | None = None) -> int:
             report["skill"] = str(export_skill(args.project, args.target, admission=report))
         print(json.dumps(report, indent=2))
         return 0 if report["ok"] else 1
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, TimeoutError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}))
         return 1
 

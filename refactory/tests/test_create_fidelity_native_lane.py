@@ -8,6 +8,7 @@ import sys
 import pytest
 
 from benchmarks.create_fidelity import harness, lane
+from benchmarks.create_fidelity.artifact_inventory import VERSION as ARTIFACT_INVENTORY_VERSION
 
 
 def controlled_os_boundary(monkeypatch):
@@ -54,10 +55,21 @@ class Bookings(nn.Mode):
 def test_native_adapter_freezes_before_import_and_uses_real_native_runtime(tmp_path, monkeypatch):
     controlled_os_boundary(monkeypatch)
     root, inputs = package(tmp_path)
+    # Legitimate authored data and existing generated records are all part of
+    # the freeze. Read-only imports must not add bytecode to the package.
+    cache = root / "__pycache__"
+    cache.mkdir()
+    (cache / "authored-contract.json").write_text('{"fixture":"must remain frozen"}')
+    (root / "SKILL.md").write_text("controlled generated skill")
+    (root / ".native-admission.json").write_text('{"controlled":"generated record"}')
     result = lane.dsh_native(tmp_path, inputs)
     assert result["validated"], result
     assert result["package_before_import"] == result["package_after_inspection"] == result["package_after_native"]
     assert result["package_unchanged"]
+    assert result["package_inventory_version"] == ARTIFACT_INVENTORY_VERSION
+    assert "__pycache__/authored-contract.json" in result["package_before_import"]
+    assert "SKILL.md" in result["package_before_import"] and ".native-admission.json" in result["package_before_import"]
+    assert not list(root.rglob("*.pyc")), "native inspection/execution suppresses bytecode"
     assert result["invocations"][0]["exit_ok"]
     assert result["invocations"][0]["output"] == {"conflicts": [["a", "b"]]}
     assert result["invocations"][1]["output"] == {"conflicts": []}
@@ -77,6 +89,30 @@ def test_import_time_mutation_fails_before_native_invocation(tmp_path, monkeypat
     assert result["invocations"] == []
     assert result["package_before_import"] != result["package_after_inspection"]
     assert not lane._native_complete(result)
+
+
+@pytest.mark.parametrize("folder", ["__pycache__", ".git", ".pytest_cache/v/cache"])
+@pytest.mark.parametrize("phase", ["import", "invocation"])
+def test_authored_file_in_cache_named_directory_mutation_fails_real_native_identity(tmp_path, monkeypatch, folder, phase):
+    controlled_os_boundary(monkeypatch)
+    root, inputs = package(tmp_path)
+    marker = root / folder / "authored-contract.json"
+    marker.parent.mkdir(parents=True)
+    marker.write_text('{"original":"authored fixture"}')
+    if phase == "import":
+        path = root / "__init__.py"
+        path.write_text("from pathlib import Path\n(Path(__file__).parent / " + repr(folder) + " / 'authored-contract.json').write_text('changed by import')\n" + path.read_text())
+    else:
+        path = root / "ops.py"
+        path.write_text(path.read_text().replace("def compute(ctx):\n", "def compute(ctx):\n (Path(__file__).parent / " + repr(folder) + " / 'authored-contract.json').write_text('changed by invocation')\n"))
+    result = lane.dsh_native(tmp_path, inputs)
+    assert result["status"] == "failed" and result["package_unchanged"] is False, result
+    assert folder + "/authored-contract.json" in result["package_before_import"]
+    assert not lane._native_complete(result)
+    if phase == "import":
+        assert result["invocations"] == [] and result["validated"] is False
+    else:
+        assert result["validated"] is True and result["invocations"][0]["exit_ok"] is False
 
 
 @pytest.mark.parametrize("operation", ["model", "network", "mutation"])

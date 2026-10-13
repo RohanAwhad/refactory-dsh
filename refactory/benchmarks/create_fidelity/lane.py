@@ -15,7 +15,7 @@ import sys
 import time
 from pathlib import Path
 
-from .evidence import hash_tree
+from .artifact_inventory import VERSION as ARTIFACT_INVENTORY_VERSION, strict_artifact_inventory
 from . import approval
 
 NAME = "booking_conflicts_bench"
@@ -131,6 +131,15 @@ def remote_author(config: dict, project: Path) -> dict:
         keys = ("HOME", "CLAUDE_CONFIG_DIR", "FACTORY_RUNNER", "FACTORY_PLAYBOOKS_DIR", "FACTORY_PROFILE")
         if any(os.environ.get(key) != expected.get(key) for key in keys):
             raise ValueError("Remote private native environment must be configured before source imports")
+    if config.get("native_temp_mapping"):
+        from .native_temp import validate
+        if os.environ.get("CLAUDE_CODE_TMPDIR") != str(validate(config["native_temp_mapping"])):
+            raise ValueError("Remote private native temp must be configured before source imports")
+    if config.get("native_credential_mapping"):
+        from .native_credentials import apply_environment as native_credential_environment
+        expected_auth = native_credential_environment(dict(os.environ), config["native_credential_mapping"])
+        if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") != expected_auth["GOOGLE_APPLICATION_CREDENTIALS"]:
+            raise ValueError("Remote native credential reference must be configured before source imports")
     from factory.workflow.registry import WorkflowRegistry
     from factory.workflow.primitives import DEFAULT_AGENT_POOL
     from factory.workflow.executor import WorkflowExecutor
@@ -268,9 +277,7 @@ if importlib.util.find_spec('factory') is not None:
 
 
 def _artifact_fingerprint(root: Path) -> dict:
-    if any(path.is_symlink() for path in root.rglob("*")) or root.is_symlink():
-        raise ValueError("Generated native artifact contains a symlink")
-    return hash_tree(root)
+    return strict_artifact_inventory(root)
 
 
 def _native_verify(project: Path, inputs: Path, *, remote: bool) -> dict:
@@ -313,7 +320,8 @@ print(json.dumps({'discovered':True,'inspected':mode.describe(),'validated':not 
 """
     result = _native_child(project, inspection)
     after = _artifact_fingerprint(artifact)
-    result.update(artifact=str(artifact), package_before_import=frozen, package_after_inspection=after, invocations=[])
+    result.update(artifact=str(artifact), package_inventory_version=ARTIFACT_INVENTORY_VERSION,
+                  package_before_import=frozen, package_after_inspection=after, invocations=[])
     if after != frozen:
         result.update(status="failed", validated=False, error="Generated package changed during import/native inspection", package_unchanged=False)
         return result
@@ -400,19 +408,25 @@ def _native_complete(result: dict) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("operation", choices=["author", "native", "probe"])
+    parser.add_argument("operation", choices=["author", "native", "probe", "native-probe"])
     parser.add_argument("config", type=Path)
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
     project = Path(config["project"])
     from .supervision import LaneSupervisor
     try:
-        with LaneSupervisor(project, config["total_timeout_s"] if args.operation == "author" else 300,
+        with LaneSupervisor(project, config["total_timeout_s"] if args.operation == "author" else 35 if args.operation == "native-probe" else 300,
                             config.get("shutdown_grace_s", 15)):
             if args.operation == "probe":
                 result = dsh_probe(config, project)
                 save(project / "probe-result.json", result)
                 return 0 if result.get("status") == "completed" else 1
+            if args.operation == "native-probe":
+                from .remote_readiness import invocation_probe
+                result = invocation_probe(config, project)
+                result["config_sha256"] = hashlib.sha256(args.config.read_bytes()).hexdigest()
+                save(project / "native-probe-result.json", result)
+                return 0 if result["status"] == "passed" else 1
             if args.operation == "author":
                 result = (dsh_author if config["lane"].startswith("dsh") else remote_author)(config, project)
             else:

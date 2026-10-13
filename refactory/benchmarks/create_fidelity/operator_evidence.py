@@ -17,8 +17,9 @@ import shlex
 from typing import Any, Mapping
 
 from .contract import FIXTURES, digest, reference
+from .artifact_inventory import VERSION as ARTIFACT_INVENTORY_VERSION, strict_artifact_inventory
 
-VERSION = "create-fidelity-operator-evidence/v2"
+VERSION = "create-fidelity-operator-evidence/v3"
 FILES = {"semantic": "semantic-review.json", "identity": "human-approval.json", "readme": "readme-review.json"}
 
 
@@ -39,6 +40,8 @@ def evaluator_provenance() -> dict:
     return {"version": VERSION, "validator_sha256": digest(Path(__file__)),
             "scorecard_sha256": digest(Path(__file__).with_name("evidence.py")),
             "deadline_validator_sha256": digest(Path(__file__).with_name("deadline_evidence.py")),
+            "artifact_inventory_version": ARTIFACT_INVENTORY_VERSION,
+            "artifact_inventory_sha256": digest(Path(__file__).with_name("artifact_inventory.py")),
             "contract_reader_sha256": digest(Path(__file__).with_name("contract.py")),
             "reference_sha256": digest(FIXTURES / "reference.json"),
             "scope": "Independent operator review of this task and frozen evidence; no universal semantic or account-authentication claim"}
@@ -88,6 +91,8 @@ def review_template(project: Path, context: OperatorEvidenceContext, kind: str) 
         result["assessments"] = [{"obligation_id": name, "source_sha256": duty["source_sha256"],
                                    "verdict": None, "rationale": None, "evidence": []}
                                   for name, duty in source_obligations().items()]
+    elif kind == "readme":
+        result["package_inventory_version"] = ARTIFACT_INVENTORY_VERSION
     return result
 
 
@@ -292,10 +297,11 @@ def _readme(project: Path, document: dict, context: OperatorEvidenceContext, nat
     text = readme.read_text()
     if digest(readme) != document.get("readme_sha256"):
         raise ValueError("reviewed README differs from the authored current bytes")
-    from .evidence import hash_tree
-    if any(path.is_symlink() for path in artifact.rglob("*")):
-        raise ValueError("README artifact identity cannot omit linked implementation bytes")
-    package = hash_tree(artifact)
+    if native.get("package_inventory_version") != ARTIFACT_INVENTORY_VERSION:
+        raise FileNotFoundError("Native evidence did not record a strict artifact inventory; historical generic-tree evidence cannot establish this stronger package identity")
+    if document.get("package_inventory_version") != ARTIFACT_INVENTORY_VERSION:
+        raise ValueError("README review did not declare the strict artifact inventory policy")
+    package = strict_artifact_inventory(artifact)
     if not package or document.get("package_sha256") != package or package != native.get("package_before_import") or not native.get("package_unchanged"):
         raise ValueError("README execution evidence is not bound to the unchanged native artifact")
     executions = document.get("executions", [])
@@ -305,6 +311,8 @@ def _readme(project: Path, document: dict, context: OperatorEvidenceContext, nat
     observed_statuses = []
     for item in executions:
         execution = _read(context.root, item["receipt_path"])
+        if execution.get("package_inventory_version") != ARTIFACT_INVENTORY_VERSION:
+            raise FileNotFoundError("README execution has no recorded strict artifact inventory; absent historical evidence cannot be upgraded")
         if digest(_path(context.root, item["receipt_path"])) != item.get("sha256"):
             raise ValueError("operator command receipt changed after review")
         if any(execution.get(key) != value for key, value in {"trial_id": context.trial_id, "lane_id": context.lane_id,

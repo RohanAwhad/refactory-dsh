@@ -1,4 +1,4 @@
-# Supplemental operator evidence v2
+# Supplemental operator evidence v3
 
 This is a validation interface, not a passing attestation. Keep all documents
 under the operator-only review directory denied to every authoring lane.
@@ -75,12 +75,25 @@ and its `sha256`. Execute the actual authored examples with explicitly recorded
 path substitutions. Preserve input, output, stdout and stderr under operator
 ownership. An execution receipt has this unfilled shape:
 
+Generated artifact identity uses the separate
+`create-fidelity-artifact-inventory/v1` policy: hash **every regular file**, even
+under `__pycache__`, `.pytest_cache` or `.git`, including generated skill and
+admission/origin records; reject symlinks and special files. There are no cache
+exclusions. Suppress bytecode (`PYTHONDONTWRITEBYTECODE=1`) for read-only imports
+and executions before taking the freeze. New native results, review documents
+and command receipts record
+`package_inventory_version: create-fidelity-artifact-inventory/v1`; before/after
+maps come from `artifact_inventory.strict_artifact_inventory(artifact)`.
+The generic source/runtime/raw `hash_tree` remains unchanged and is not a
+complete generated-artifact identity.
+
 ```json
 {
   "trial_id": null, "lane_id": null, "reviewer_id": null,
   "kind": null, "documented_command": null, "substitutions": {},
   "argv": [], "cwd": null, "started": null, "finished": null,
   "returncode": null, "package_before": {}, "package_after": {},
+  "package_inventory_version": "create-fidelity-artifact-inventory/v1",
   "execution_status": null, "reason": null,
   "diagnostic": {"stream": null, "quote": null},
   "input_file": null, "output_file": null, "run_directory": null,
@@ -114,7 +127,15 @@ documented command and actual shell invocation bytes remain unchanged.
 The operator executes and records commands; the evaluator executes no code.
 
 `evaluator_provenance()` records evaluator version, validator/scorecard/reference
-hashes and the bounded claim. A later report over existing raw trials must retain
+hashes, strict artifact-inventory version/helper hash, and the bounded claim.
+A later report over existing raw trials must retain
 the original trial identity and add this evaluator identity, review-context hash,
 review-document hash and reviewer identity. It is a new evaluation of existing
 evidence, never an amendment to the frozen execution or retroactive model proof.
+Version3 requires the strict inventory to have been recorded by native and README
+executions. A legacy generic inventory without that marker remains unavailable
+for the stronger supplemental identity claim, even if today's files happen to
+produce the same map. Never rewrite frozen receipts or infer missing historical
+before/after cache bytes. If independently executing a supplemental check later,
+record its new evaluator/source hashes, time and full pre/post artifact maps
+separately; it establishes that later observation, not the earlier trial's proof.

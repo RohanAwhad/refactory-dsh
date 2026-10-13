@@ -80,7 +80,9 @@ class CreateFidelityMode(Mode):
                    notes="Review the actual current strategy and intent; approval must bind its digest."))
         g.add(Node("archivist_plan", "agent", role="archivist", blocking=False,
                    prompt_template=load_prompt("archivist", "archivist_plan"),
-                   reads=(S + "current.md", S + "user-intent.md"), writes=(".factory/archive/create-plan.md",)))
+                   reads=(S + "current.md", S + "user-intent.md"),
+                   writes=(".factory/archive/create-plan.md", ".factory/archive/create-plan-receipt.json",
+                           ".factory/archive/", ".factory/performance_report.json")))
         g.add(Node("builder", "agent", role="builder", timeout_s=1800,
                    prompt_template=load_prompt("builder", "builder"),
                    reads=(S + "current.md", S + "user-intent.md", ".factory/create-request.json", R + "repair-feedback.md"),
@@ -113,7 +115,9 @@ class CreateFidelityMode(Mode):
                    writes=(R + "precheck.json",), produces=("create_fidelity_precheck_ok", "create_fidelity_precheck_error")))
         g.add(Node("archivist_build", "agent", role="archivist", blocking=False,
                    prompt_template=load_prompt("archivist", "archivist_build") + "\nRead .factory/reviews/precheck.json; document the actual final outcome and unresolved failures.",
-                   reads=(R + "qa-synthesized.md", R + "precheck.json", R + "overwatch-latest.md"), writes=(".factory/archive/create-build.md",)))
+                   reads=(R + "qa-synthesized.md", R + "precheck.json", R + "overwatch-latest.md"),
+                   writes=(".factory/archive/create-build.md", ".factory/archive/create-build-receipt.json",
+                           ".factory/archive/", ".factory/performance_report.json")))
         edges = (
             ("gate_strategy", "archivist_plan", "proceed"), ("archivist_plan", "builder", None),
             ("builder", "gate_build", None), ("gate_build", "fork_qa", "proceed"), ("gate_build", "builder", "reloop"),

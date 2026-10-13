@@ -20,13 +20,63 @@ python -m benchmarks.create_fidelity.harness preflight /tmp/create-pair \
 python -m benchmarks.create_fidelity.harness live /tmp/create-pair
 ```
 
+Fresh preparations record `private-native-temp-v1`: short real per-lane
+`/private/tmp/cf-*` directories owned by the current user with mode 0700. Native
+Claude receives its supported `CLAUDE_CODE_TMPDIR` override; ordinary `TMPDIR`
+alone does not redirect its `/tmp/claude-UID` runtime. Policies explicitly allow
+the lane's temp access and deny peer/operator access and shared global temp
+writes. Directory device/inode/owner/mode identity is verified before use and
+removal. Creation and explicit `cleanup-native-temp ROOT` receipts live under
+the operator; cleanup refuses running or unconfirmed lane ownership. Perform
+cleanup after native verification and final evidence collection.
+
+`native-probe ROOT remote-reference` explicitly runs one real native CEO request
+before full reference authoring. A probe-only supported `FACTORY_CLAUDE_BIN`
+passthrough adds `--tools '' --max-turns 1 --max-budget-usd 0.10` to the same
+native CLI, retaining the same provider and source `opus` alias. The owned
+35-second process deadline includes cleanup; the source request has a
+20-second inactivity allowance. It writes only private probe/runtime state and
+never authors benchmark deliverables. Full launch preflight requires the actual
+marker, successful native return code and matching frozen config/CLI identity.
+Auth status alone cannot pass this requirement. Missing ADC/auth errors remain
+failures; credential references and provider/model changes require separate
+explicit configuration. V9's global-temp failure remains historical failure.
+The optional `prepare --native-adc-reference /absolute/existing/adc.json` maps
+native `GOOGLE_APPLICATION_CREDENTIALS` to that single nonsymlink file with
+literal-file read-only policy. Preparation records path/type/configuration
+metadata without reading, hashing or copying its contents, or permitting the
+surrounding home/config directory. This retains native Vertex authentication
+and source aliases; it introduces no provider/model fallback. Failed preflight
+controls are retained and a changed reference requires a fresh configuration.
+
+`live ROOT --lanes dsh-candidate` can launch a ready DSH lane while reference
+invocation readiness remains unavailable. Each selected DSH lane still requires
+the observed served route, project isolation, runtime isolation and native temp
+isolation. A selected reference also requires both native readiness receipts.
+Preflight records the observed config/policy hashes; launch rejects changed or
+missing bindings and records the source preflight hash/time in
+`operator/selected-launch.json`. Mixed selections require every selected lane
+to be ready. The overall pair status remains unavailable when reference readiness
+fails, and unselected lanes never dispatch or gain a passing score.
+
 Preparation freezes source bytes, lockfiles, brief, checker, topology contract,
 runtime route, and timeout allowances. Changing any source requires a new trial.
-Authoring context v2 also supplies the same explicit external-check ownership
+Authoring context v3 also supplies the same explicit external-check ownership
 to every lane, with a separate frozen digest. The public booking brief and
 56-case checker stay unchanged. The checker runs under the operator after
 authoring; internal gates must still evaluate actual local tests and defects,
 while final benchmark acceptance cannot pass without the external checker.
+Version 3 also assigns actual cross-lane public-brief/common-instruction comparison
+and frozen source/runtime/checker identity checks to the outside operator. Each
+strategy/report separates a local Create verdict from an external acceptance
+table: deliberately unavailable operator evidence stays PENDING/UNVERIFIED and
+cannot by itself fail local authoring, nor supply a benchmark PASS. Every locally
+required check, observed protected-file violation and genuine defect still
+controls the original gates; later precheck/archive must execute at their actual
+stages. All configured lint/health commands remain required; unconfigured lint
+is reported as not executed, never as a tool pass. Configurations and trial.json
+record `authoring_context_version: 3` and the common boundary hash. The operator
+must actually verify identities before full acceptance; no context grants it.
 Older trials retain their original context and cannot gain this clarification
 through re-scoring.
 Supply `--baseline-runtime-root` and `--candidate-runtime-root` to keep each

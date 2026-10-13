@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 import hashlib
 import json
 import math
@@ -24,6 +25,7 @@ from .remote_readiness import NATIVE_ENVIRONMENT_VERSION
 from .supervision import OWNER_FD, DEADLINE, GRACE, encode_message
 
 LANES = ("remote-reference", "dsh-baseline", "dsh-candidate")
+AUTHORING_CONTEXT_VERSION = 3
 ADAPTER_INSTRUCTIONS = {
     "dsh": "Native mapping: deliver .factory/packages/booking_conflicts_bench with PACKAGE and one Mode. Declare a string knob bookings_path; the operation receives it from RunContext. Write conflicts.json under ctx.workdir. Use standard native discovery/validation. No Task/scoring contract is required for the portable candidate; baseline --single is its native invocation mapping.",
     "remote": "Native mapping: deliver .factory/workflows/booking_conflicts_bench.py with meta/workflow(), CLI and README. Runtime parameter bookings_path is the field in invocation-local inputs.json; declare inputs.json in Workflow.runtime_inputs. Discovery uses the authoring project; execution uses a distinct invocation project_path containing inputs.json. Resolve packaged booking_conflicts.py from the workflow module's __file__; never bake a benchmark input path into the workflow.",
@@ -122,11 +124,18 @@ def prepare(args) -> dict:
     baseline = read(FIXTURES / "baseline.json")
     sources = {"remote-reference": args.reference.resolve(), "dsh-baseline": args.baseline.resolve(), "dsh-candidate": args.candidate.resolve()}
     projects = {lane: root / lane / "project" for lane in LANES}
+    from .native_temp import create as create_native_temp
+    native_temps = {lane: create_native_temp(root.name, lane) for lane in LANES}
+    credential_mapping = None
+    if getattr(args, "native_adc_reference", None):
+        from .native_credentials import reference as native_credential_reference
+        credential_mapping = native_credential_reference(args.native_adc_reference)
     for project in projects.values():
         project.mkdir(parents=True, exist_ok=False)
     operator = root / "operator"
     operator.mkdir()
     (operator / "isolation-canary.txt").write_text("operator evidence\n")
+    write(operator / "native-temp-creation.json", {"mappings": native_temps, "status": "created"})
     package = Path(__file__).resolve().parents[2]
     identities = {}
     dependency_cache = {}
@@ -152,6 +161,8 @@ def prepare(args) -> dict:
                         (src / "tests", src / "refactory/tests", src / "refactory/benchmarks")]
         hidden = [operator, FIXTURES, *source_tests, *getattr(args, "hidden", [])]
         peers = [p for other, p in projects.items() if other != lane]
+        peer_temps = [Path(value["path"]) for other, value in native_temps.items() if other != lane]
+        own_temp = Path(native_temps[lane]["path"])
         runtime_home = project / "runtime/dsh"
         profile_dir = runtime_home / "profiles/headless"
         profile_dir.mkdir(parents=True)
@@ -191,13 +202,16 @@ def prepare(args) -> dict:
         if flavor == "remote" and claude:
             dependencies.append(Path(claude).resolve())
         readonly = [*sources.values(), package, adapter_root, *dependencies, auth_source]
-        allowed_reads = [sources[lane], adapter_root, *dependencies, auth_source,
+        allowed_reads = [sources[lane], adapter_root, *dependencies, auth_source, own_temp,
                          root / lane / "config.json", root / lane / "isolation.sb"]
         policy = root / lane / "isolation.sb"
-        policy.write_text(profile(project, peers, readonly, hidden, allowed_reads=allowed_reads))
+        policy.write_text(profile(project, peers + peer_temps, readonly, hidden,
+                                  allowed_reads=allowed_reads, writable_roots=[own_temp],
+                                  readonly_files=[Path(credential_mapping["path"])] if flavor == "remote" and credential_mapping else []))
         config = {"schema_version": 1, "lane": lane, "project": str(project), "source": str(sources[lane]),
                   "identity": identities[lane], "mode": mode_name,
-                  "authoring_context_version": 2, "authoring_brief_sha256": digest(project / "BRIEF.md"),
+                  "authoring_context_version": AUTHORING_CONTEXT_VERSION, "authoring_brief_sha256": digest(project / "BRIEF.md"),
+                  "authoring_boundary_sha256": digest(FIXTURES / "authoring-boundary.md"),
                   "runtime_identity": runtime_pin,
                   "python": str(args.dsh_python if flavor == "dsh" else args.remote_python),
                   "adapter_root": str(adapter_root), "adapter_sha256": hash_tree(adapter_root),
@@ -207,6 +221,10 @@ def prepare(args) -> dict:
                   "strategy_decision_policy": "direct-human-or-explicit-delegated-operator; exact reviewed gate bytes only",
                   "remote_route": getattr(args, "remote_route", "native-python-v1") if flavor == "remote" else None,
                   "native_environment_mapping": native_environment,
+                  "native_temp_mapping": native_temps[lane],
+                  "native_credential_mapping": credential_mapping if flavor == "remote" else None,
+                  "native_cli_identity": ({"path": str(Path(claude).resolve()), "sha256": digest(Path(claude))}
+                      if flavor == "remote" and claude else None),
                   "model_context": {"runtime_root": str(runtime_root),
                       "dsh_home": str(runtime_home),
                       "python_bin": str(args.dsh_python.parent), "provider": args.provider,
@@ -217,16 +235,17 @@ def prepare(args) -> dict:
                   "route_policy": f"DSH directors and children require served {args.model}/high; remote defaults disclosed",
                   "runtime_state_isolation": {"status": "pending-probe", "dsh_home": str(runtime_home),
                       "native_home": native_environment["native_home"] if native_environment else None,
+                      "native_tmp": str(own_temp),
                       "claude_config_dir": str(project / "runtime/claude"),
                       "private_tmp": str(project / "tmp"), "shared_auth_reference": str(auth_source)},
-                  "forbidden_controls": [str(operator / "isolation-canary.txt"), *[str(p / "isolation-canary.txt") for p in peers],
+                  "forbidden_controls": [str(operator / "isolation-canary.txt"), *[str(p / "isolation-canary.txt") for p in peers + peer_temps],
                       *[str(p) for src in sources.values() for p in
                         (src / "refactory/tests/fixtures/create_fidelity/v1/acceptance.py",
                          src / "refactory/tests/test_create_fidelity_native_lane.py") if p.is_file()]]}
         write(root / lane / "config.json", config)
     trial = {"schema_version": 1, "benchmark_version": 1, "trial_id": root.name,
              "shared_brief_sha256": digest(FIXTURES / "brief.md"),
-             "authoring_context_version": 2,
+             "authoring_context_version": AUTHORING_CONTEXT_VERSION,
              "authoring_boundary_sha256": digest(FIXTURES / "authoring-boundary.md"),
              "checker_sha256": digest(FIXTURES / "acceptance.py"),
              "reference_sha256": digest(FIXTURES / "reference.json"), "identities": identities,
@@ -234,6 +253,8 @@ def prepare(args) -> dict:
              "full_mode_allowance_s": args.total_timeout,
              "remote_route": getattr(args, "remote_route", "native-python-v1"),
              "remote_native_environment_mapping": NATIVE_ENVIRONMENT_VERSION,
+             "native_temp_mappings": native_temps,
+             "native_credential_mapping": credential_mapping,
              "lifecycle_policy": "controller-owned pipe EOF and absolute wall deadline include strategy waiting; owned cleanup bounded by grace",
              "calibration": "Initial declared 12-hour ceiling; no claim of calibrated completion time"}
     write(root / "trial.json", trial)
@@ -242,12 +263,21 @@ def prepare(args) -> dict:
 
 def preflight(root: Path, receipt_root: Path | None) -> dict:
     projects = [root / lane / "project" for lane in LANES]
-    result = {"isolation": {}, "runtime_state_isolation": {}, "native_readiness": {},
+    result = {"isolation": {}, "runtime_state_isolation": {}, "native_readiness": {}, "native_invocation": {}, "native_temp_isolation": {},
+              "checked_at": datetime.now(timezone.utc).isoformat(), "lane_bindings": {},
               "route": {"status": "unavailable", "reason": "No served route probe supplied"}}
     for lane, project in zip(LANES, projects):
         config = read(root / lane / "config.json")
+        result["lane_bindings"][lane] = {
+            "config_sha256": digest(root / lane / "config.json"),
+            "policy_sha256": digest(Path(config["policy"])),
+        }
         result["isolation"][lane] = probe(project, [p for p in projects if p != project], Path(config["policy"]), config["python"])
         runtime = config.get("runtime_state_isolation", {})
+        if config.get("native_temp_mapping"):
+            from .native_temp import probe as native_temp_probe
+            result["native_temp_isolation"][lane] = native_temp_probe(config,
+                {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
         result["runtime_state_isolation"][lane] = runtime_probe(project, Path(config["policy"]), config["python"],
             [Path(p) for p in config.get("forbidden_controls", [])]) if runtime.get("dsh_home") else {
                 "status": "unavailable", "reason": "No per-lane runtime session/cache isolation configuration"}
@@ -258,6 +288,13 @@ def preflight(root: Path, receipt_root: Path | None) -> dict:
                    "PATH": str(Path(config["python"]).parent) + os.pathsep + os.environ.get("PATH", ""),
                    "TMPDIR": runtime["private_tmp"]}
             result["native_readiness"][lane] = native_readiness(config, env)
+            invoked = read(project / "native-probe-result.json", {})
+            valid = (invoked.get("status") == "passed" and invoked.get("marker_received") is True
+                     and invoked.get("config_sha256") == digest(root / lane / "config.json")
+                     and invoked.get("native_cli") == config.get("native_cli_identity"))
+            result["native_invocation"][lane] = {"status": "passed" if valid else "unavailable",
+                "receipt": str(project / "native-probe-result.json"),
+                "reason": "Actual bounded native invocation must pass for this exact frozen configuration"}
     if receipt_root is not None:
         workers = [read(p) for p in sorted(receipt_root.rglob(".refactory/workers/*.json"))]
         trial = read(root / "trial.json", {})
@@ -268,7 +305,7 @@ def preflight(root: Path, receipt_root: Path | None) -> dict:
         result["route"] = route
         result["route"]["raw_receipts"] = [str(p) for p in sorted(receipt_root.rglob(".refactory/workers/*.json"))]
         result["route"]["probe"] = str(receipt_root / "probe.json")
-    result["status"] = "passed" if result["route"]["status"] == "passed" and all(x["status"] == "passed" for group in ("isolation", "runtime_state_isolation", "native_readiness") for x in result[group].values()) else "unavailable"
+    result["status"] = "passed" if result["route"]["status"] == "passed" and all(x["status"] == "passed" for group in ("isolation", "runtime_state_isolation", "native_readiness", "native_invocation", "native_temp_isolation") for x in result[group].values()) else "unavailable"
     write(root / "operator/preflight.json", result)
     return result
 
@@ -358,6 +395,9 @@ def run_lane(root: Path, lane: str, operation: str, *, cancel_event=None) -> dic
     config_path = root / lane / "config.json"
     config = read(config_path)
     source, project = Path(config["source"]), Path(config["project"])
+    cli_identity = config.get("native_cli_identity")
+    if cli_identity and digest(Path(cli_identity["path"])) != cli_identity["sha256"]:
+        raise ValueError("Native reference CLI executable changed after preparation")
     current = source_identity(source, config["identity"]["declared_revision"])
     if current != config["identity"]:
         raise ValueError(f"{lane} source changed after freeze; use a new candidate trial")
@@ -379,6 +419,12 @@ def run_lane(root: Path, lane: str, operation: str, *, cancel_event=None) -> dic
     if config.get("native_environment_mapping"):
         from .remote_readiness import apply_environment
         env = apply_environment(env, config["native_environment_mapping"], project)
+    if config.get("native_temp_mapping"):
+        from .native_temp import apply_environment as native_temp_environment
+        env = native_temp_environment(env, config["native_temp_mapping"])
+    if config.get("native_credential_mapping"):
+        from .native_credentials import apply_environment as native_credential_environment
+        env = native_credential_environment(env, config["native_credential_mapping"])
     env["TMPDIR"] = runtime["private_tmp"]
     policy = Path(config["policy"])
     if operation == "native":
@@ -389,7 +435,7 @@ def run_lane(root: Path, lane: str, operation: str, *, cancel_event=None) -> dic
         policy = native_policy
     argv = ["/usr/bin/sandbox-exec", "-f", str(policy), config["python"], "-m", "benchmarks.create_fidelity.lane", operation, str(config_path)]
     result = execute_command(argv, cwd=project, env=env, output=project / "raw" / operation,
-                           timeout=config["total_timeout_s"] if operation == "author" else 300,
+                           timeout=config["total_timeout_s"] if operation == "author" else 35 if operation == "native-probe" else 300,
                            grace=config["shutdown_grace_s"], cancel_event=cancel_event,
                            control_messages=decision_messages(root, lane) if operation == "author" else None)
     if runtime_pin:
@@ -404,10 +450,54 @@ def run_lane(root: Path, lane: str, operation: str, *, cancel_event=None) -> dic
     return result
 
 
+def cleanup_native_temps(root: Path) -> dict:
+    from .native_temp import cleanup
+    mappings = read(root / "operator/native-temp-creation.json", {}).get("mappings", {})
+    for lane in mappings:
+        lifecycle = read(root / lane / "project/raw/lifecycle.json", {})
+        if lifecycle.get("status") in {"running", "cancelling"} or str(lifecycle.get("status", "")).startswith("unknown"):
+            raise ValueError("Native temp cleanup requires settled lane ownership")
+    result = {"status": "removed", "roots": {lane: cleanup(mapping) for lane, mapping in mappings.items()}}
+    write(root / "operator/native-temp-cleanup.json", result)
+    return result
+
+
 def run_pair(root: Path, lanes: list[str]) -> list[dict]:
-    receipt = read(root / "operator/preflight.json", {})
-    if receipt.get("status") != "passed":
-        blocked = [{"lane": lane, "status": "unavailable", "reason": "Required route/isolation preflight did not pass"} for lane in lanes]
+    if not lanes or len(set(lanes)) != len(lanes) or any(lane not in LANES for lane in lanes):
+        raise ValueError("Select distinct supported benchmark lanes")
+    preflight_path = root / "operator/preflight.json"
+    receipt = read(preflight_path, {})
+    selected = {}
+    for lane in lanes:
+        groups = ["isolation", "runtime_state_isolation", "native_temp_isolation"]
+        if lane == "remote-reference":
+            groups += ["native_readiness", "native_invocation"]
+        requirements = {group: receipt.get(group, {}).get(lane, {}).get("status", "unavailable")
+                        for group in groups}
+        if lane.startswith("dsh-"):
+            requirements["route"] = receipt.get("route", {}).get("status", "unavailable")
+        config_path = root / lane / "config.json"
+        config = read(config_path, {})
+        policy_path = Path(config["policy"]) if config.get("policy") else None
+        current = {"config_sha256": digest(config_path) if config_path.is_file() else None,
+                   "policy_sha256": digest(policy_path) if policy_path and policy_path.is_file() else None}
+        observed = receipt.get("lane_bindings", {}).get(lane, {})
+        requirements["observation_binding"] = "passed" if (
+            receipt.get("checked_at") and all(current.values()) and observed == current) else "unavailable"
+        selected[lane] = {"status": "passed" if all(value == "passed" for value in requirements.values()) else "unavailable",
+                          "requirements": requirements, "observed_binding": observed, "current_binding": current}
+    ready = all(value["status"] == "passed" for value in selected.values())
+    write(root / "operator/selected-launch.json", {
+        "status": "passed" if ready else "unavailable", "selected_lanes": lanes,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "source_preflight": {"path": str(preflight_path),
+            "sha256": digest(preflight_path) if preflight_path.is_file() else None,
+            "checked_at": receipt.get("checked_at"), "overall_status": receipt.get("status", "unavailable")},
+        "lanes": selected, "dispatch_policy": "All selected lanes must be ready; unselected lanes never dispatch",
+    })
+    if not ready:
+        blocked = [{"lane": lane, "status": "unavailable", "reason": "Selected route/isolation/native readiness or observation binding did not pass",
+                    "readiness": selected[lane], "selection_blocked": True} for lane in lanes]
         write(root / "operator/launch-blocked.json", blocked)
         return blocked
     # No model run is reachable without the explicit live command and preflight.
@@ -567,6 +657,7 @@ def main() -> int:
     p.add_argument("--model", choices=["gpt-6.1-sol", "gpt-6-sol"], default="gpt-6.1-sol")
     p.add_argument("--route-authorization", default="Original Sol 6.1/high requirement", help="Record the explicit authorization when selecting a fallback")
     p.add_argument("--dsh-home", type=Path, default=Path.home() / ".dsh", help="Read-only native profile/credential-reference source; session state stays private")
+    p.add_argument("--native-adc-reference", type=Path, help="Explicit existing nonsymlink Google ADC file for the native reference only; exact-file read-only, never copied")
     p.add_argument("--hidden", type=Path, action="append", default=[], help="Historical/other evidence roots forbidden to authoring workers (repeatable)")
     p.add_argument("--total-timeout", type=int, default=43200)
     p.add_argument("--remote-route", choices=["native-python-v1", "native-shell-prefix-v1", "native-shell-segments-v1", "native-shell-segments-v2"], default="native-python-v1",
@@ -589,7 +680,9 @@ def main() -> int:
     p.add_argument("lane", choices=LANES)
     p.add_argument("--review", type=Path, required=True)
     p.add_argument("--delegation-reference", required=True)
-    for command in ("native", "check", "report", "probe"):
+    p = sub.add_parser("cleanup-native-temp", help="Remove identity-bound private temp roots after every lane owner settles")
+    p.add_argument("root", type=Path)
+    for command in ("native", "check", "report", "probe", "native-probe"):
         p = sub.add_parser(command)
         p.add_argument("root", type=Path)
         if command != "report":
@@ -602,13 +695,15 @@ def main() -> int:
     elif args.command == "operator-decision": result = operator_decision(args.root.resolve(), args.lane, args.review.resolve(), args.delegation_reference)
     elif args.command == "native": result = run_lane(args.root.resolve(), args.lane, "native")
     elif args.command == "probe": result = run_lane(args.root.resolve(), args.lane, "probe")
+    elif args.command == "native-probe": result = run_lane(args.root.resolve(), args.lane, "native-probe")
+    elif args.command == "cleanup-native-temp": result = cleanup_native_temps(args.root.resolve())
     elif args.command == "check": result = check_artifact(args.root.resolve(), args.lane)
     else: result = collect(args.root.resolve())
     print(json.dumps(result, indent=2))
     successful = (isinstance(result, dict) and result.get("status") in {"passed", "completed"}
                   or isinstance(result, list) and bool(result)
                   and all(item.get("status") in {"passed", "completed"} for item in result))
-    return 0 if args.command in {"prepare", "approve", "operator-decision"} or successful else 1
+    return 0 if args.command in {"prepare", "approve", "operator-decision", "cleanup-native-temp"} or successful else 1
 
 
 if __name__ == "__main__":

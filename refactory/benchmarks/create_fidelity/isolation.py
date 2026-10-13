@@ -8,10 +8,14 @@ from pathlib import Path
 
 
 def profile(lane: Path, peers: list[Path], readonly: list[Path], hidden: list[Path],
-            *, allowed_reads: list[Path] | None = None) -> str:
+            *, allowed_reads: list[Path] | None = None,
+            writable_roots: list[Path] | None = None,
+            readonly_files: list[Path] | None = None) -> str:
     """Read separation is enforced in every descendant, not an agent instruction."""
     def subpath(path: Path) -> str:
         return f"(subpath {json.dumps(str(path.resolve()))})"
+    def literal(path: Path) -> str:
+        return f"(literal {json.dumps(str(path.resolve()))})"
     if allowed_reads is None:
         rules = ["(version 1)", "(allow default)"]
     else:
@@ -22,11 +26,18 @@ def profile(lane: Path, peers: list[Path], readonly: list[Path], hidden: list[Pa
         # Seatbelt deny rules dominate allow rules. Express the complement of
         # the allowlist in one deny filter instead of a blanket deny+allow.
         excludes = " ".join(f"(require-not {subpath(p)})" for p in [lane, *allowed_reads])
+        excludes += "".join(f" (require-not {literal(p)})" for p in (readonly_files or []))
         boundaries = [Path.home(), Path("/private/tmp"), Path("/private/var/folders")]
         rules += [f"(deny file-read-data (require-all {subpath(boundary)} {excludes}))" for boundary in boundaries]
+        if writable_roots is not None:
+            writable = " ".join(f"(require-not {subpath(p)})" for p in [lane, *writable_roots])
+            rules += [f"(deny file-write* (require-all {subpath(boundary)} {writable}))" for boundary in boundaries]
+            rules += [f"(allow file-write* {subpath(p)})" for p in writable_roots]
     forbidden = [p for p in peers + hidden if p.resolve() != lane.resolve()]
     rules.extend(f"(deny file-read* {subpath(p)})" for p in forbidden)
     rules.extend(f"(deny file-write* {subpath(p)})" for p in peers + readonly + hidden)
+    rules.extend(f"(allow file-read* {literal(p)})" for p in (readonly_files or []))
+    rules.extend(f"(deny file-write* {literal(p)})" for p in (readonly_files or []))
     return "\n".join(rules) + "\n"
 
 

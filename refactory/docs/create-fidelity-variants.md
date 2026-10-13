@@ -147,3 +147,31 @@ JSON output produces a failed row and remaining cases continue. Missing OS
 boundary evidence is unavailable. Capability results deliberately keep
 `case_accepted=false`: final acceptance still needs independent complete Create
 role/output/approval/lifecycle review. No live variant result is claimed here.
+
+Each prepared variant allocates its own short identity-bound native temporary
+root and records it in `operator/native-temp-creation.json` for controller
+cleanup after ownership settles. Its policy permits that root and denies
+template/peer projects and temporary roots; remote-only ADC, environment and
+CLI mappings are removed from the DSH configuration. Preflight includes actual
+own-root read/write and peer/global-temp denial controls. A template's passed
+preflight does not establish a new variant's isolation.
+
+Variant capability evaluator `create-fidelity-native-variant-capability/v2`
+checks exact JSON integer tokens before value equality: booleans and decimal
+floats cannot satisfy integer results. It keeps the original eight cases and
+adds positive, negative and carry probes beyond 4300 decimal digits for the
+update contract. The operator parses those tokens lexically without changing
+the generated native child process's Python digit limit. All regular package
+files are frozen through `create-fidelity-artifact-inventory/v1`, including
+cache-named directories, generated metadata and authored data; symlinks and
+special files are rejected. This is stricter than the generic source inventory
+used by historical evaluator v1.
+
+Use the pinned checker for a frozen historical trial. Running the current
+`check` against a v1 trial is refused. A separate `supplemental-check` creates
+`operator/evaluators/native-variant-v2`, pins the evaluator, inventory helper,
+supervisor and copied dependencies, and uses a distinct supervisor directory.
+It preserves the original trial/configuration, frozen checker, lifecycle and
+capability result. Supplemental evidence names its version and provenance; it
+does not claim v1 performed those stronger checks and cannot establish full
+authoring acceptance.
