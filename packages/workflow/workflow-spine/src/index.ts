@@ -1264,7 +1264,7 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.tools.register(defineTool({
     name: `${toolPrefix}_done`,
-    description: 'Mark one non-gate node complete and advance the spine. Returns only a confirmation — call `wf_next` to learn the next node. Static fork/join boundaries normally advance through `wf_next`. Only if it explicitly returns a due ForkNode/JoinNode, acknowledge that control here and call `wf_next` before dispatching branches. For a non-dispatched AgentNode/LLMNode, call this only after its dispatched worker finishes. Never call this for a deterministic node (`FnNode`/`Study`, or an `fn` gate) when the composition runs commands: the runtime runs those itself on the next `wf_next`, and marking one complete here would skip its work.',
+    description: 'Mark one non-gate node complete and advance the spine. Returns only a confirmation — call `wf_next` to learn the next node. Static fork/join boundaries normally advance through `wf_next`. Only if it explicitly returns a due ForkNode/JoinNode, acknowledge that control here and call `wf_next` before dispatching branches. For an AgentNode/LLMNode without a dispatch command, call this only after the subagent you started finishes. Never call this for a deterministic node (`FnNode`/`Study`, or an `fn` gate) when the composition runs commands: the runtime runs those itself on the next `wf_next`, and marking one complete here would skip its work.',
     parameters: {
       node: { type: 'string', required: true, description: 'The node id to mark complete.' },
     },

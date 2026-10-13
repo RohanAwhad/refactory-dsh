@@ -5,7 +5,8 @@
  *
  * These are the parts a run depends on but a single tool call does not reach.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -518,5 +519,108 @@ describe('the CEO deny guard', () => {
   it('disposes an agent the guard never restricted without failing', async () => {
     const { root, composition } = await composed(['wf_next'])
     expect(() => { composition.emit('agent/disposed', { agent: agentWith(root) }) }).not.toThrow()
+  })
+})
+
+/** A shell executor that really runs the command, for the dispatch e2e test. */
+function realShell(): object {
+  return {
+    resolve: (request: ShellRequest & { env?: Record<string, string>; sandboxPolicy?: unknown }) => ({
+      command: request.command,
+      workdir: request.workdir ?? process.cwd(),
+      timeoutMs: request.timeoutMs ?? 10_000,
+      onExpiry: 'kill',
+      stdoutMaxBytes: 100_000,
+      env: request.env,
+      sandboxPolicy: request.sandboxPolicy,
+    }),
+    execute: async (spec: { command: string; workdir: string; timeoutMs: number; env?: Record<string, string> }) => ({
+      result: async () => {
+        const started = spawnSync('/bin/sh', ['-c', spec.command], {
+          cwd: spec.workdir, encoding: 'utf8', timeout: spec.timeoutMs,
+          env: { ...process.env, ...spec.env },
+        })
+        return {
+          exitCode: started.status, signal: started.signal, timedOut: false, aborted: false,
+          timeoutMs: spec.timeoutMs,
+          stdout: { text: started.stdout ?? '', truncated: false },
+          stderr: { text: started.stderr ?? '', truncated: false },
+        }
+      },
+    }),
+  }
+}
+
+describe('dispatched AgentNode end-to-end (watchpoints 2+3)', () => {
+  it('runs the edited prompt through prompt_file and skips the delivery bridge', async () => {
+    const workdir = scratch()
+    mkdirSync(join(workdir, '.refactory'), { recursive: true })
+
+    // A dispatch command that copies prompt_file to out.txt, proving the engine
+    // wrote the amended prompt to that file before launching the command.
+    const dispatchScript = join(workdir, 'dispatch.sh')
+    writeFileSync(dispatchScript, [
+      '#!/bin/sh',
+      'NODE_JSON="$DSH_WORKFLOW_NODE"',
+      'PROMPT_FILE=$(echo "$NODE_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get(\'prompt_file\',\'\'))")',
+      'if [ -n "$PROMPT_FILE" ] && [ -f "$PROMPT_FILE" ]; then',
+      '  cp "$PROMPT_FILE" "out.txt"',
+      'else',
+      '  echo "NO_PROMPT_FILE" > "out.txt"',
+      'fi',
+    ].join('\n'), { mode: 0o755 })
+
+    // A delivery bridge script that logs every call, so we can assert it was
+    // never called for the dispatched node.
+    const bridgeLog = join(workdir, 'bridge-calls.log')
+    const bridgeScript = join(workdir, 'bridge.sh')
+    writeFileSync(bridgeScript, [
+      '#!/bin/sh',
+      `echo "$@" >> "${bridgeLog}"`,
+      'echo \'{"prompt":"enriched"}\'',
+    ].join('\n'), { mode: 0o755 })
+
+    const dispatched: WorkflowGraph = {
+      name: 'e2e-dispatch',
+      start_node: 'worker',
+      nodes: {
+        worker: {
+          _type: 'AgentNode', id: 'worker', role: 'builder',
+          prompt_template: 'original task',
+          dispatch_command: dispatchScript,
+          writes: ['out.txt'], reads: [],
+        },
+      },
+      edges: [],
+    }
+
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(UserQuestionService)
+    await ctx.plugin(spinePlugin, config({
+      graph: dispatched,
+      executeCommands: true,
+      workdir,
+      agentCommand: bridgeScript,
+    }))
+
+    ctx.provide('shell', realShell() as never)
+
+    // Amend the prompt before the node runs.
+    await call(ctx, 'wf_edit', { node: 'worker', action: 'append-prompt', text: 'also handle edge cases' })
+
+    // wf_next runs the dispatched node deterministically via drain().
+    const result = await call(ctx, 'wf_next', {})
+    expect((result as { status: string }).status).toBe('done')
+
+    // Watchpoint 3: the output file must contain the amended prompt,
+    // proving the engine wrote it to prompt_file and the command read it.
+    const output = readFileSync(join(workdir, 'out.txt'), 'utf8')
+    expect(output).toContain('original task')
+    expect(output).toContain('also handle edge cases')
+
+    // Watchpoint 2: the delivery bridge must NOT have been called.
+    expect(existsSync(bridgeLog)).toBe(false)
   })
 })
