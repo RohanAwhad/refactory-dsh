@@ -194,10 +194,12 @@ def test_opencode_session_header_injection(case, route_provider, provider_config
         assert header.startswith("refactory-worker-"), f"{case}: expected auto-injected header"
         assert len(header) > len("refactory-worker-"), f"{case}: expected unique suffix"
     elif expect_entry:
-        assert header == "custom" or "x-opencode-session" not in oc.get("headers", {}), \
-            f"{case}: header should be preserved or absent"
+        assert header == "custom", f"{case}: user-supplied header must be preserved exactly"
     else:
         assert "opencode-go" not in providers, f"{case}: opencode-go should not appear"
+        # Other provider entries must pass through unchanged.
+        for name, entry in provider_config.items():
+            assert providers[name] == entry, f"{case}: {name} entry should be unchanged"
 
 
 def test_opencode_session_header_uses_correct_credential_name():
