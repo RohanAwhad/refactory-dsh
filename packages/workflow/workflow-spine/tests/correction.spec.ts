@@ -166,6 +166,30 @@ describe('amendPrompt', () => {
     expect(() => new Spine(amendGraph()).amendPrompt('a', '   ', 'append'))
       .toThrow('prompt amendment text is required')
   })
+
+  it('amends a dispatched AgentNode prompt (the whole point of this feature)', () => {
+    const graph: WorkflowGraph = {
+      name: 't',
+      start_node: 'a',
+      nodes: {
+        a: {
+          _type: 'AgentNode', id: 'a', role: 'builder',
+          prompt_template: 'original task',
+          dispatch_command: 'python -m worker build',
+          reads: [], writes: [],
+        },
+      },
+      edges: [],
+    }
+    const spine = new Spine(graph)
+    // This is the operation that failed before: a dispatched node used to be a
+    // FnNode which carries no prompt, so amendPrompt refused it.
+    spine.amendPrompt('a', 'also handle edge cases', 'append')
+    expect(spine.view('a').prompt_template).toBe('original task\n\nalso handle edge cases')
+    // The dispatch command must survive the amendment.
+    expect(spine.view('a').command).toBe('python -m worker build')
+    expect(spine.state().prompts).toEqual({ a: 'original task\n\nalso handle edge cases' })
+  })
 })
 
 /** One agent node, so the cursor has something a model must do. */
@@ -238,6 +262,55 @@ describe('the correction tools', () => {
     const ctx = await mount()
     await call(ctx, 'wf_edit', { node: 'a', action: 'append-prompt', text: 'more' })
     expect(await call(ctx, 'wf_next')).toMatchObject({ nodes: [{ prompt_template: 'A\n\nmore' }] })
+  })
+
+  it('amends and redoes a dispatched AgentNode through the tools', async () => {
+    const dispatched: WorkflowGraph = {
+      name: 't',
+      start_node: 'a',
+      nodes: {
+        a: {
+          _type: 'AgentNode', id: 'a', role: 'builder',
+          prompt_template: 'build it',
+          dispatch_command: 'echo dispatched',
+          reads: [], writes: [],
+        },
+      },
+      edges: [],
+    }
+    function dispatchedConfig(): Config {
+      return {
+        graph: dispatched,
+        toolPrefix: 'wf',
+        maxIterations: 3,
+        interactiveOpen: false,
+        openCommand: '',
+        openArgs: [],
+        executeCommands: false,
+        commandEnv: {},
+        commandTimeoutMs: 10_000,
+        commandSandboxMode: 'danger-full-access',
+        dataCommand: '',
+        steerCommand: '',
+        steerArgs: [],
+        ceoDeny: [],
+      }
+    }
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(spinePlugin, dispatchedConfig())
+    // The dispatched node is non-deterministic here (executeCommands: false),
+    // so it appears in wf_next for the CEO. But we can still edit its prompt.
+    await call(ctx, 'wf_edit', { node: 'a', action: 'append-prompt', text: 'also handle errors' })
+    const next = await call(ctx, 'wf_next') as { nodes: Array<{ prompt_template: string }> }
+    expect(next.nodes[0]!.prompt_template).toBe('build it\n\nalso handle errors')
+
+    // Complete and redo: the amended prompt survives.
+    await call(ctx, 'wf_done', { node: 'a' })
+    await call(ctx, 'wf_redo', { node: 'a' })
+    const redone = await call(ctx, 'wf_next') as { nodes: Array<{ prompt_template: string }> }
+    expect(redone.nodes[0]!.prompt_template).toBe('build it\n\nalso handle errors')
   })
 
   it('refuses a prompt action with no text', async () => {

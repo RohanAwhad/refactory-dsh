@@ -31,6 +31,29 @@ describe('durable graph checkpoints', () => {
     source.nodes.a!.prompt_template = 'different objective'
     expect(() => new Spine(source).restore(saved)).toThrow(/source graph changed/)
   })
+  it('preserves an amended prompt on a dispatched AgentNode across checkpoint restore', () => {
+    const dispatchedGraph = (): WorkflowGraph => ({
+      name: 'checkpoint', start_node: 'a', nodes: {
+        a: {
+          id: 'a', _type: 'AgentNode', role: 'builder',
+          prompt_template: 'build it',
+          dispatch_command: 'python -m worker build',
+          reads: [], writes: [],
+        },
+        b: { id: 'b', _type: 'AgentNode', prompt_template: 'review it' },
+      }, edges: [{ source: 'a', target: 'b' }],
+    })
+    const first = new Spine(dispatchedGraph())
+    first.amendPrompt('a', 'also handle edge cases', 'append')
+    const saved = JSON.parse(JSON.stringify(first.checkpoint()))
+    const second = new Spine(dispatchedGraph())
+    second.restore(saved)
+    expect(second.state()).toEqual(first.state())
+    // The amended prompt survives the round-trip.
+    expect(second.view('a').prompt_template).toBe('build it\n\nalso handle edge cases')
+    // The dispatch command is still there.
+    expect(second.view('a').command).toBe('python -m worker build')
+  })
   it('provides invalidation plan without mutating completed results', () => {
     const spine = new Spine(graph())
     spine.complete('a')

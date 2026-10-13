@@ -50,7 +50,8 @@ def test_final_validation_role_survives_lowering_and_worker_bridge(tmp_path):
     assert graph["nodes"]["focused_check"]["resource_role"] == "final_validation"
     assert graph["nodes"]["emit"]["resource_role"] == "work"
     assert graph["nodes"]["focused_qa"]["resource_role"] == "final_validation"
-    assert graph["nodes"]["focused_qa"]["_type"] == "FnNode"
+    assert graph["nodes"]["focused_qa"]["_type"] == "AgentNode"
+    assert graph["nodes"]["focused_qa"]["dispatch_command"]
 
 
 def test_resource_phase_is_optional_serializable_and_independent_of_routing():
