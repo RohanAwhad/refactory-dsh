@@ -178,8 +178,12 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
             "reads": set(node.reads),
             "writes": set(node.writes),
             "blocking": node.blocking,
-            "resource_role": node.resource_phase,
         }
+        # The pinned reference IR rejects DSH-only extensions even when their
+        # value is None. Supply them only when active; never drop an actual
+        # validation phase or command deadline to make an older schema accept it.
+        if node.resource_phase is not None:
+            common["resource_role"] = node.resource_phase
         if node.kind == "op":
             command_timeout_s = node.timeout_s
             if node.call in ("refactory_dsh.create_ops:smoke", "refactory_dsh.fast_ops:smoke"):
@@ -195,7 +199,7 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
                     raise LoweringError("smoke_timeout_s must be between 1 and 86400 seconds")
                 command_timeout_s = 3 * budget + 600
             nodes[node_id] = FnNode(
-                command_timeout_s=command_timeout_s,
+                **({"command_timeout_s": command_timeout_s} if command_timeout_s is not None else {}),
                 **common,
                 # Both fields, and both for a reason. `callable_name` is
                 # the language's own way of naming what an `FnNode` runs
