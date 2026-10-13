@@ -4,6 +4,26 @@
   "issue": "https://github.com/boston-harness-group/refactory-dsh/issues/310",
   "rows": [
     {
+      "requirements": ["F.stage.code_reviewer", "F.obligations.semantic", "F.repair"],
+      "owner": "source review role ownership",
+      "fix": "Clarify that the shared read-only artifact boundary does not expand source role duties. Code review remains the full static eight-category and test-evidence-scope review; health, QA and Overwatch retain their actual assigned execution duties.",
+      "source": "refactory/refactory_dsh/create_fidelity_prompts.py",
+      "regression": "refactory/tests/test_create_fidelity_runtime.py",
+      "observed_trial": "create-fidelity-pair-sol6-20261013-v11",
+      "observed_failure": "Research and strategy recommended code-reviewer behavioral spot tests despite the pinned static-only role. Exact strategy review caught the conflict and requested a genuine reloop before code review or building occurred.",
+      "status": "The native mapping now states the original owners explicitly without dropping any tests. Earlier recommendation and quality-review gaps and the real correction decision remain preserved; fresh adherence is not inferred from prompt text."
+    },
+    {
+      "requirements": ["F.children.strategy_director", "F.repair", "F.completion"],
+      "owner": "director plan reentry",
+      "fix": "Accept the runtime-published mandatory:false marker on custom tasks when a revised plan retains it. Reject every other supplied value, unknown task field and reserved mandatory tester identity before child dispatch.",
+      "source": "refactory/refactory_dsh/create_fidelity_directors.py",
+      "regression": "refactory/tests/test_create_fidelity_directors.py",
+      "observed_trial": "create-fidelity-pair-sol6-20261013-v11",
+      "observed_failure": "After a legitimate strategy-gate revision, the CEO retained mandatory:false from the runtime's saved normalized plan. The parser rejected its own emitted field on all four custom tasks and terminated before revised child dispatch.",
+      "status": "A real two-visit director/Executor regression and pre-dispatch mandatory-forgery controls pass. Frozen v11 remains failed; no saved plan or generated deliverable was operator-repaired."
+    },
+    {
       "requirements": ["F.children.qa_director", "F.obligations.semantic", "B09"],
       "owner": "parallel QA artifact ownership",
       "fix": "Keep delivered builder-frozen artifacts read-only throughout QA. Run mutating admission/export and registry lifecycle tests on isolated disposable full copies/consumers, verify all source files before and after every command, and retain any observed transient drift as failure.",

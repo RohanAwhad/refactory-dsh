@@ -85,6 +85,15 @@ path. These names describe this graph's declarations, not another Create mode.
   --project <artifact_project>`: native validation, discovery/inspection and
   skill export; write raw results and commands in builder-latest.md. This is
   structural admission, not proof of behavior. Run genuine acceptance tests.
+* The shared read-only boundary does not expand source role duties. The
+  code_reviewer performs the complete eight-category static code/diff review,
+  including test coverage and the adequacy/scope of cited execution evidence;
+  it does not run eval, adversarial tests, or CLI/native behavioral spot checks.
+  Health checker and QA/testers execute their assigned health/eval/smoke and
+  behavioral tests. Overwatch executes its mandatory validation/registry/skill/
+  declaration spot checks and any assigned behavioral checks. Directors and
+  strategists must preserve these owners in plans, criteria and reports without
+  dropping required tests.
 * After builder admission/export and freeze, QA, code review, health review,
   Overwatch and documentation checks treat the shared delivered package as
   read-only, including SKILL.md, .origin.json and .native-admission.json.

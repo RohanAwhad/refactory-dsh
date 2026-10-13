@@ -104,9 +104,13 @@ def normalize_plan(raw: Any, stage: Stage, required: list[dict[str, Any]]) -> di
     for item in intent:
         _require(item["id"] in by_id and by_id[item["id"]]["text"] == item["text"], f"intent item {item['id']} missing from coverage_items")
     normalized = []
-    allowed = {"id", "slug", "role", "focus", "direction", "perspective", "approach", "prompt", "output", "coverage"}
+    allowed = {"id", "slug", "role", "focus", "direction", "perspective", "approach", "prompt", "output", "coverage", "mandatory"}
     for raw_task in tasks:
         _require(isinstance(raw_task, dict) and set(raw_task) <= allowed, "task must have only typed task fields")
+        # Published custom tasks carry this marker. A revised saved plan may
+        # retain it, but only the runtime can add mandatory QA testers.
+        _require("mandatory" not in raw_task or raw_task["mandatory"] is False,
+                 "custom task mandatory must be false when supplied")
         slug = raw_task.get("slug")
         _require(isinstance(slug, str) and bool(SLUG.fullmatch(slug)) and slug not in MANDATORY, "invalid, unsafe, or reserved task slug")
         identifier = raw_task.get("id", slug)

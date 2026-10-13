@@ -342,6 +342,44 @@ def test_required_acceptance_cannot_be_removed_or_changed():
         directors.normalize_plan(plan, directors.QA, required)
 
 
+def test_published_strategy_plan_can_reenter_real_director_with_custom_markers(tmp_path, monkeypatch):
+    stage = directors.STRATEGY
+    first, original_manifest, _ = run_stage(tmp_path, monkeypatch, stage=stage)
+    assert first.exit_ok, first.error
+    published = json.loads((tmp_path / stage.plan).read_text())
+    assert all(task["mandatory"] is False for task in published["tasks"])
+    published["tasks"][0]["prompt"] += " Preserve every behavior while correcting review ownership."
+    monkeypatch.setitem(plan_for.__globals__, "plan_for", lambda *args: copy.deepcopy(published))
+    second, revised_manifest, responses = run_stage(tmp_path, monkeypatch, stage=stage)
+    assert second.exit_ok, second.error
+    assert original_manifest["visit"] == 1 and revised_manifest["visit"] == 2
+    assert revised_manifest["status"] == "completed"
+    assert revised_manifest["intent_items"] == original_manifest["intent_items"]
+    assert revised_manifest["coverage_items"] == original_manifest["coverage_items"]
+    for visit in (1, 2):
+        receipt = json.loads((tmp_path / f".factory/directors/strategy_director/v{visit}/plan-receipt.json").read_text())
+        assert receipt["status"] == "completed" and receipt["raw_evidence"]["worker_receipts"]
+    assert json.loads((tmp_path / stage.plan).read_text()) == published
+    assert responses.full_quality_bodies
+    assert all(":v2:" in node for node, _ in responses.calls)
+
+
+@pytest.mark.parametrize("marker", [True, 0, 1, None, "false", [], {}])
+def test_custom_task_cannot_forge_mandatory_status_before_dispatch(tmp_path, monkeypatch, marker):
+    original = plan_for
+
+    def forged_plan(stage, count):
+        plan = original(stage, count)
+        plan["tasks"][0]["mandatory"] = marker
+        return plan
+
+    monkeypatch.setitem(plan_for.__globals__, "plan_for", forged_plan)
+    result, manifest, responses = run_stage(tmp_path, monkeypatch, stage=directors.QA)
+    assert not result.exit_ok and "custom task mandatory must be false" in result.error
+    assert manifest is None
+    assert [node.split(":")[2] for node, _ in responses.calls] == ["plan"]
+
+
 def test_source_requirement_ids_preserve_case_and_metadata_through_typed_plan():
     plan = plan_for(directors.RESEARCH, 3)
     items = [{"id": "B01", "text": "An empty array is valid", "source": "user-intent.md:9"},
