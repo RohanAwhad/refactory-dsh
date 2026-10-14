@@ -48,6 +48,8 @@ def matches_output(actual: object, expected: dict, case_id: str) -> bool:
                 and all(type(value) is int for value in values) and values==expected["values"])
     if case_id=="native-plugin-reverse-v1":
         return type(actual.get("text")) is str and actual["text"]==expected["text"]
+    if case_id=="native-portable-document-v1":
+        return json.dumps(actual,sort_keys=True,ensure_ascii=False)==json.dumps(expected,sort_keys=True,ensure_ascii=False)
     raise ValueError("unknown versioned variant output contract")
 
 
@@ -90,14 +92,14 @@ def provision(project: Path, source: Path, case_id: str) -> tuple[dict, Path, Pa
     if supplied["variant"]=="update-existing":
         target=original/".factory/packages"/supplied["name"]
         shutil.copytree(FIXTURES/"update_seed"/supplied["name"],target)
-    elif supplied["variant"]=="plugin":
-        # A standalone plugin has no existing application to study. Keep its
+    elif supplied["variant"] in ("plugin", "portable"):
+        # A new package has no existing application to study. Keep its
         # empty local context inside this lane; the framework is an API
         # reference, not an authoring project (its tests remain hidden).
         original.mkdir()
     study=original if original.exists() else source
-    seed_note=("The study project is empty; no existing plugin or finished output is supplied."
-               if supplied["variant"]=="plugin" else
+    seed_note=("The study project is empty; no existing package or finished output is supplied."
+               if supplied["variant"] in ("plugin", "portable") else
                "The original seed is intended input only, not the requested final implementation.")
     brief=supplied["brief"]+f"\n\nNative case identity: {case_id}; fixture version 1. Author into {project}/.factory/packages/{supplied['name']}. Source project for study: {study}. {seed_note}\n"
     (project/"BRIEF.md").write_text(brief)
@@ -168,6 +170,9 @@ def prepare(root: Path, template: Path, case_id: str) -> dict:
             "strategy_decision_policy":"direct-human-or-explicit-delegated-operator; exact reviewed gate bytes only"}
     for remote_only in ("remote_route","native_environment_mapping","native_credential_mapping","native_vertex_mapping","native_cli_identity"):
         config.pop(remote_only,None)
+    if supplied.get("development_limits"):
+        config["development_limits"] = supplied["development_limits"]
+        config["total_timeout_s"] = supplied["development_limits"]["max_elapsed_s"]
     write(config_path,config)
     trial={"schema_version":1,"kind":"native-variant-case","fixture_version":1,"trial_id":root.name,"case_id":case_id,
            "evaluator_id":EVALUATOR_ID,"evaluator_version":EVALUATOR_VERSION,
@@ -213,6 +218,11 @@ def fixtures(case_id: str) -> list[tuple[str, str, dict | None]]:
                 ("unicode",json.dumps("e\u0301雪😀"),{"text":"😀雪\u0301e"}),
                 ("whitespace",json.dumps(" a\n b "),{"text":" b \na "}),
                 ("number","7",None),("object","{}",None),("array","[]",None),("syntax",'"',None)]
+    if case_id=="native-portable-document-v1":
+        return [("empty","{}",{}),("first",'{"name":"first"}',{"name":"first"}),
+                ("second",'{"n":2,"nested":{"items":[true,null,"雪"]}}',{"n":2,"nested":{"items":[True,None,"雪"]}}),
+                ("whitespace",'{"text":" a\\n b "}',{"text":" a\n b "}),
+                ("array","[]",None),("number","7",None),("string",'"object"',None),("syntax","{",None)]
     raise ValueError("unknown versioned variant case")
 
 
@@ -253,7 +263,7 @@ def check_inside(config_path: Path) -> dict:
         removed=_native_child(project,common+f"registry.remove(Path({str(consumer)!r}),{name!r})\nprint(json.dumps({{'removed':registry.where({name!r},Path({str(consumer)!r})) is None}}))")
         after_remove=_native_child(project,common+f"found=False\ntry: registry.resolve(Path({str(consumer)!r}),{name+'/run'!r});found=True\nexcept ValueError: pass\nprint(json.dumps({{'still_resolves':found}}))")
         extra.append({"check":"actual install/discovery/remove/fresh resolution refusal","passed":bool(installation and installation.get("discoverable") and installation.get("installed")==[name+"/run"] and removed.get("removed") and after_remove.get("still_resolves") is False),"installation":installation,"removal":removed,"fresh_resolution":after_remove})
-    else:
+    elif spec["variant"]=="update-existing":
         # Run both original and revised unrelated modes; compare actual values.
         for label,owner,mode,artifact,want in [("original",project/"original-project","run","adjusted.json",{"values":[2,-1]}),("unrelated-original",project/"original-project","identity","identity.json",{"values":[1,-2]}),("unrelated-revised",project,"identity","identity.json",{"values":[1,-2]})]:
             source=temporary/(label+".json");source.write_text("[1,-2]");run=temporary/label

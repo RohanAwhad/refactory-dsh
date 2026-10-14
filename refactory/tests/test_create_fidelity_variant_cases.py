@@ -69,7 +69,7 @@ def decimal(value):
     return operation
 
 
-@pytest.mark.parametrize("case_id",["native-update-offset-v1","native-plugin-reverse-v1"])
+@pytest.mark.parametrize("case_id",["native-update-offset-v1","native-plugin-reverse-v1","native-portable-document-v1"])
 def test_provision_only_intended_original_input_no_final_artifacts(tmp_path,case_id):
     project=tmp_path/"case";spec,original,study=cases.provision(project,tmp_path,case_id)
     assert case_id in (project/"BRIEF.md").read_text()
@@ -82,6 +82,24 @@ def test_provision_only_intended_original_input_no_final_artifacts(tmp_path,case
     else:
         assert study==original and original.is_dir()
         assert not list(original.iterdir())
+
+
+def test_tiny_document_checker_through_real_native_runtime_and_bad_control(tmp_path, monkeypatch):
+    from test_create_fidelity_graph_ops import make_package
+    monkeypatch.setattr(lane,"_offline_argv",lambda code:([sys.executable,"-c",code],{"status":"passed","kind":"controlled OS test shim"}))
+    project=tmp_path/"project"
+    spec,original,study=cases.provision(project,tmp_path,"native-portable-document-v1")
+    init(project,study,spec)
+    package=make_package(project)  # test control only; provisioning supplies no answer
+    config=tmp_path/"config.json"
+    config.write_text(json.dumps({"project":str(project),"variant_case":{"case_id":"native-portable-document-v1",**spec}}))
+    result=cases.check_inside(config)
+    assert result["status"]=="passed" and result["passed"]==8,result
+    assert all(row["passed"] for row in result["extra_checks"])
+    operation=package/"ops.py"
+    operation.write_text("def read(ctx):\n    ctx.write_json('result.json',{})\n")
+    failed=cases.check_inside(config)
+    assert failed["status"]=="failed" and failed["passed"]<8
 
 
 @pytest.mark.parametrize("case_id",["native-update-offset-v1","native-plugin-reverse-v1"])

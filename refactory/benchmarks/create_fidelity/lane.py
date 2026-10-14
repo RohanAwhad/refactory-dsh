@@ -27,6 +27,12 @@ def save(path: Path, payload: dict) -> None:
 
 
 def dsh_author(config: dict, project: Path) -> dict:
+    from .development_limits import dispatch_limit
+    with dispatch_limit(project, config.get("development_limits", {}).get("max_dispatches")):
+        return _dsh_author(config, project)
+
+
+def _dsh_author(config: dict, project: Path) -> dict:
     from refactory_dsh import registry
     from refactory_dsh.model import DshModelClient
     os.environ["REFACTORY_PROJECT"] = str(project)
@@ -50,8 +56,10 @@ def dsh_author(config: dict, project: Path) -> dict:
     # No standing verdicts. Candidate pauses until its native human gate receives
     # a digest-bound answer. Human approval is an explicit later operation.
     wall_deadline = time.monotonic() + config["total_timeout_s"]
-    result = mode.run(project, model=client, task=knobs,
-                      resource_limits={"max_elapsed_s": config["total_timeout_s"]})
+    limits = {"max_elapsed_s": config["total_timeout_s"]}
+    if config.get("development_limits", {}).get("max_tokens"):
+        limits["max_tokens"] = config["development_limits"]["max_tokens"]
+    result = mode.run(project, model=client, task=knobs, resource_limits=limits)
     while not result.exit_ok:
         progress_path = project / ".refactory/progress.json"
         progress = json.loads(progress_path.read_text()) if progress_path.is_file() else {}
