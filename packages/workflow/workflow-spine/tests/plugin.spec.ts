@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -58,6 +58,44 @@ async function run(ctx: Context, name: string, args: unknown): Promise<unknown> 
   return definition.execute(args, {} as never)
 }
 
+/** One question as the user-questions channel received it. */
+interface AskedQuestion {
+  id: string
+  detail?: string
+  options?: Array<{ label: string }>
+  intent?: unknown
+}
+
+/**
+ * A composition walked to its user gate, whose answerer records each question and
+ * replies with `reply`.
+ * @param gateGraph - the graph to open.
+ * @param workdir - the run directory, when the run has one.
+ * @param reply - the person's answer to a question.
+ * @returns the composition and the questions asked so far.
+ */
+async function gateRun(
+  gateGraph: WorkflowGraph, workdir: string | undefined, reply: (question: AskedQuestion) => Promise<unknown>,
+): Promise<{ ctx: Context; asked: AskedQuestion[] }> {
+  const asked: AskedQuestion[] = []
+  const ctx = new Context()
+  await ctx.plugin(SystemPrompt)
+  await ctx.plugin(ToolRuntime)
+  await ctx.plugin(UserQuestionService)
+  ctx.on('user-questions/request', request => {
+    asked.push(...request.questions)
+    return reply(request.questions[0]!) as never
+  })
+  await ctx.plugin(workflowSpine, { graph: gateGraph, toolPrefix: 'wf', maxIterations: 3, ...(workdir === undefined ? {} : { workdir }) })
+  await run(ctx, 'wf_done', { node: 'a' })
+  return { ctx, asked }
+}
+
+/** An answerer that always chooses `proceed`. */
+function proceed(question: AskedQuestion): Promise<unknown> {
+  return Promise.resolve({ answers: [{ id: question.id, selected: ['proceed'] }] })
+}
+
 describe('workflow-spine real composition', () => {
   it('registers the six wf_* tools and walks a graph through them', async () => {
     const ctx = await setup()
@@ -108,93 +146,42 @@ describe('workflow-spine real composition', () => {
       .rejects.toThrow(/gate gate is answered by a person and could not be asked/)
   })
 
-  it('includes gate reads files in the question detail', async () => {
-    let capturedRequest: { questions: Array<{ id: string; detail?: string }> } | undefined
-    const ctx = new Context()
-    await ctx.plugin(SystemPrompt)
-    await ctx.plugin(ToolRuntime)
-    await ctx.plugin(UserQuestionService)
-    ctx.on('user-questions/request', request => {
-      capturedRequest = request
-      return Promise.resolve({
-        answers: request.questions.map(question => ({ id: question.id, selected: ['proceed'] })),
-      })
-    })
-    await ctx.plugin(workflowSpine, { graph: graphWithReads, toolPrefix: 'wf', maxIterations: 3 })
-
-    // Walk to the gate
-    await run(ctx, 'wf_done', { node: 'a' })
-    // Route the user gate (triggers userQuestions.ask)
-    await run(ctx, 'wf_verdict', { gate: 'gate' })
-
-    expect(capturedRequest).toBeDefined()
-    const firstQuestion = capturedRequest!.questions[0]!
-    expect(firstQuestion.detail).toBeDefined()
-    expect(firstQuestion.detail).toContain('design.md')
-  })
-
-  type Asked = { id: string; detail?: string; options?: Array<{ label: string }>; intent?: unknown }
-
-  /** A composition whose answerer records the question and replies with `reply`. */
-  async function gateRun(
-    gateGraph: WorkflowGraph, workdir: string, reply: (question: Asked) => Promise<unknown>,
-  ): Promise<{ ctx: Context; asked: Asked[] }> {
-    const asked: Asked[] = []
-    const ctx = new Context()
-    await ctx.plugin(SystemPrompt)
-    await ctx.plugin(ToolRuntime)
-    await ctx.plugin(UserQuestionService)
-    ctx.on('user-questions/request', request => {
-      asked.push(...request.questions)
-      return reply(request.questions[0]!) as never
-    })
-    await ctx.plugin(workflowSpine, { graph: gateGraph, toolPrefix: 'wf', maxIterations: 3, workdir })
-    await run(ctx, 'wf_done', { node: 'a' })
-    return { ctx, asked }
-  }
-
-  const proceed = (question: Asked) => Promise.resolve({ answers: [{ id: question.id, selected: ['proceed'] }] })
-
-  it('shows the gate reads in the question, with every outcome offered', async () => {
-    // The question stays host-neutral: no presentation intent, so the gate's own
-    // outcomes (and free text) are what every host's question UI offers.
+  it('asks with the gate prompt and outcomes only, plus halt', async () => {
+    // The question stays host-neutral and short: no presentation intent, no detail and
+    // no description, so the gate's own outcomes (and free text) are all there is.
     const tmp = mkdtempSync(join(tmpdir(), 'spine-gate-reads-'))
     try {
-      writeFileSync(join(tmp, 'design.md'), '# My Design\n\nThe plan is to do X.')
       const { ctx, asked } = await gateRun(graphWithReads, tmp, proceed)
       expect(await run(ctx, 'wf_verdict', { gate: 'gate' }))
         .toMatchObject({ status: 'routed', verdict: 'proceed', answered_by: 'user' })
-      expect(asked[0]!.detail).toBe('# My Design\n\nThe plan is to do X.')
+      expect(asked[0]!.detail).toBeUndefined()
       expect(asked[0]!.intent).toBeUndefined()
-      expect(asked[0]!.options?.map(option => option.label)).toEqual(['proceed', 'reloop'])
+      expect(asked[0]!.options).toEqual([{ label: 'proceed' }, { label: 'reloop' }, { label: 'halt' }])
     } finally { rmSync(tmp, { recursive: true, force: true }) }
   })
 
-  it('does not inline a read outside the run directory', async () => {
-    const tmp = mkdtempSync(join(tmpdir(), 'spine-gate-reads-'))
+  it('lets the person stop the run at a user gate that has no halt edge', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'spine-gate-halt-'))
     try {
-      writeFileSync(join(tmp, 'secret.txt'), 'not for the card')
-      const run_dir = join(tmp, 'run')
-      mkdirSync(run_dir)
-      const escaping: WorkflowGraph = {
-        ...graphWithReads,
-        nodes: { ...graphWithReads.nodes,
-          gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'user', gate_prompt: 'ok?', reads: ['../secret.txt'] } },
-      }
-      const { ctx, asked } = await gateRun(escaping, run_dir, proceed)
-      await run(ctx, 'wf_verdict', { gate: 'gate' })
-      expect(asked[0]!.detail).not.toContain('not for the card')
+      const { ctx } = await gateRun(graphWithReads, tmp,
+        question => Promise.resolve({ answers: [{ id: question.id, selected: [], custom: 'halt' }] }))
+      expect(await run(ctx, 'wf_verdict', { gate: 'gate' }))
+        .toMatchObject({ status: 'routed', verdict: 'halt', answered_by: 'user', halted: true })
+      expect(await run(ctx, 'wf_next', {})).toMatchObject({ halted: { gate: 'gate', reason: 'verdict' } })
+      expect(await run(ctx, 'wf_state', {})).toMatchObject({ gate_verdicts: { gate: 'halt' }, cursor: [] })
     } finally { rmSync(tmp, { recursive: true, force: true }) }
   })
 
-  it('shows only an excerpt of long reads, so the outcomes stay in view', async () => {
-    const tmp = mkdtempSync(join(tmpdir(), 'spine-gate-reads-'))
+  it('tells the CEO to reply, then ask the gate again at once, when the answer is no outcome', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'spine-gate-replied-'))
     try {
-      writeFileSync(join(tmp, 'design.md'), 'x'.repeat(50_000))
-      const { ctx, asked } = await gateRun(graphWithReads, tmp, proceed)
-      await run(ctx, 'wf_verdict', { gate: 'gate' })
-      expect(asked[0]!.detail!.length).toBeLessThan(2_000)
-      expect(asked[0]!.detail).toMatch(/excerpt; the full text is in design\.md in the run directory/)
+      const { ctx } = await gateRun(graphWithReads, tmp,
+        question => Promise.resolve({ answers: [{ id: question.id, selected: [], custom: 'what happens next?' }] }))
+      const replied = await run(ctx, 'wf_verdict', { gate: 'gate' }) as { status: string; note: string }
+      expect(replied.status).toBe('replied')
+      expect(replied.note).toMatch(/asked correctly/)
+      expect(replied.note).toMatch(/call this tool again with the gate alone straight away/)
+      expect(replied.note).toMatch(/Do not ask them to type an outcome in chat/)
     } finally { rmSync(tmp, { recursive: true, force: true }) }
   })
 

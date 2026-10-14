@@ -28,7 +28,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { UserQuestionService } from '@deepseek-ai/dsh-user-questions'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
-import { Spine, validateGraph } from './spine.ts'
+import { HALT, Spine, validateGraph } from './spine.ts'
 import type { NodeView, SpineNext } from './spine.ts'
 import { commandOf, isDeterministic, runDataCommand, runDeterministic } from './execute.ts'
 import type { CommandFailure } from './execute.ts'
@@ -196,6 +196,34 @@ export const Config = z.object({
 
 /** How much of a failed node's stderr the status file keeps. */
 const STATUS_DETAIL = 2_000
+
+/**
+ * What asking a person at a user gate came to: a verdict with any feedback; text
+ * that is no answer, which leaves the gate due for the CEO to reply to; or nothing,
+ * when the run was halted, paused or changed while the question was open.
+ */
+type UserGateResult =
+  | { verdict: string; feedback: string }
+  | { status: 'replied'; gate: string; text: string }
+  | undefined
+
+/**
+ * Read a typed gate answer. An exact outcome, or `outcome: feedback`, is a verdict;
+ * anything else is conversation for the CEO, so nothing is guessed on the person's behalf.
+ * @param text - what the person typed.
+ * @param labels - the outcomes the gate offers.
+ * @returns the verdict and its feedback, or undefined when the text is no outcome.
+ */
+function readGateAnswer(text: string, labels: string[]): { verdict: string; feedback: string } | undefined {
+  if (labels.length === 0) return { verdict: text, feedback: '' }
+  const lower = text.toLowerCase()
+  const exact = labels.find(label => label.toLowerCase() === lower)
+  if (exact !== undefined) return { verdict: exact, feedback: '' }
+  // Longest label first, so one label that prefixes another cannot claim its answers.
+  const prefixed = [...labels].sort((a, b) => b.length - a.length)
+    .find(label => lower.startsWith(label.toLowerCase() + ':'))
+  return prefixed === undefined ? undefined : { verdict: prefixed, feedback: text.slice(prefixed.length + 1).trim() }
+}
 
 /** One model-visible step, rendered as compact JSON text. */
 function text(value: JsonValue): { type: 'text'; text: string } {
@@ -977,52 +1005,6 @@ export function apply(ctx: Context, config: Config): void {
   const pendingQuestions = new WeakSet<Spine>()
 
   /**
-   * Result of a user-gate question.
-   * - `{ verdict, feedback }` — a recognized verdict, optionally with parsed feedback.
-   * - `{ status: 'replied', gate, text }` — free text that does not match any verdict label;
-   *   the gate stays open and the caller should surface the text and re-ask.
-   * - `undefined` — halted, paused, or state changed during the question.
-   */
-  type UserGateResult =
-    | { verdict: string; feedback: string }
-    | { status: 'replied'; gate: string; text: string }
-    | undefined
-
-  /**
-   * The most of a gate's reads shown in its question: enough for the opening of a
-   * plan, small enough that the outcomes stay in view in any host's question UI.
-   */
-  const GATE_DETAIL_LIMIT = 1_500
-
-  /**
-   * What a person reviews at a user gate: an excerpt of the gate's reads, inlined
-   * from the run directory, and where the full text is.
-   * @param reads - the gate's reads, relative to the run directory.
-   * @param workdir - the run directory, when the run has one.
-   * @returns the markdown shown with the question.
-   */
-  function gateDetail(reads: string[], workdir: string | undefined): string {
-    if (workdir === undefined) return `Gate reads files: ${reads.join(', ')}`
-    const root = resolve(workdir)
-    const parts = reads.map(file => {
-      const path = resolve(root, file)
-      let text: string
-      if (path !== root && !path.startsWith(root + sep)) text = '*(outside the run directory; not shown)*'
-      else {
-        try {
-          text = readFileSync(path, 'utf8')
-        } catch { text = '*(file not found)*' }
-      }
-      return reads.length > 1 ? `### ${file}\n\n${text}` : text
-    })
-    let detail = parts.join('\n\n---\n\n')
-    if (detail.length > GATE_DETAIL_LIMIT) {
-      detail = `${detail.slice(0, GATE_DETAIL_LIMIT)}\n\n*(excerpt; the full text is in ${reads.join(', ')} in the run directory)*`
-    }
-    return detail
-  }
-
-  /**
    * The verdict a person gives at a `user` gate, asked by the runtime.
    *
    * Asked here rather than left to the model's own `ask_user_question`, because a
@@ -1058,8 +1040,11 @@ export function apply(ctx: Context, config: Config): void {
     const { gateCommand, commandEnv, dataCommand } = requireRun(exec)
     applyControls(spine, workdir, commandEnv, dataCommand)
     if (spine.isPaused() || spine.isHalted()) return undefined
-    const labels = spine.acceptedVerdicts(gate)
-    const request = { gate, reads: view.reads ?? [], labels }
+    const request = { gate, reads: view.reads ?? [], labels: spine.acceptedVerdicts(gate) }
+    // The engine halts the run at any gate, with or without a `halt` edge, so the
+    // person is always offered it; otherwise "stop" is unanswerable at a user gate.
+    const labels = request.labels.length === 0 || request.labels.includes(HALT)
+      ? request.labels : [...request.labels, HALT]
     const prior = gateCommand !== '' && workdir !== undefined
       ? runtimeBridge(gateCommand, workdir, commandEnv, { ...request, action: 'begin' })
       : undefined
@@ -1071,8 +1056,6 @@ export function apply(ctx: Context, config: Config): void {
       recordStatus(spine, workdir, 'refused', message)
       throw new Error(message)
     }
-    const reads = view.reads ?? []
-    const shown = reads.length > 0 ? gateDetail(reads, workdir) : undefined
     let answer
     const questionLifetime = new AbortController()
     const questionSignal = exec.signal === undefined ? questionLifetime.signal : AbortSignal.any([exec.signal, questionLifetime.signal])
@@ -1083,8 +1066,7 @@ export function apply(ctx: Context, config: Config): void {
           id: gate,
           header: 'Workflow gate',
           question: view.gate_prompt || `Gate ${gate}`,
-          ...(shown === undefined ? {} : { detail: shown }),
-          ...(labels.length === 0 ? {} : { options: labels.map(verdict => ({ label: verdict })) }),
+          ...(labels.length === 0 ? {} : { options: labels.map(label => ({ label })) }),
         }],
         ...(exec.agent === undefined ? {} : { agent: exec.agent }),
         signal: questionSignal,
@@ -1111,50 +1093,29 @@ export function apply(ctx: Context, config: Config): void {
       throw new Error(message)
     } finally { questionLifetime.abort() }
     if (answer === undefined) return undefined
-    const chosen = answer.answers.find(entry => entry.id === gate)
-    const rawText = (chosen?.selected[0] ?? chosen?.custom ?? '').trim()
-    if (rawText === '') {
-      throw new Error(`gate ${gate} was answered without a verdict`)
-    }
     if (JSON.stringify(spine.state()) !== stateBefore) {
       throw new Error(`gate ${gate} changed while awaiting the answer; ask again`)
     }
-
-    // Detect whether this is a custom-text answer (user typed in "Other" box)
-    const isCustomText = (chosen?.selected.length === 0 || chosen?.selected[0] === undefined)
-      && typeof chosen?.custom === 'string' && chosen.custom.trim() !== ''
-
+    const chosen = answer.answers.find(entry => entry.id === gate)
+    if (chosen === undefined || (chosen.selected[0] ?? chosen.custom ?? '').trim() === '') {
+      throw new Error(`gate ${gate} was answered without a verdict`)
+    }
+    const [picked] = chosen.selected
     let verdict: string
     let feedback = ''
-
-    if (!isCustomText) {
-      // Normal selection path — enforce label validation as before
-      if (labels.length > 0 && !labels.includes(rawText)) {
-        throw new Error(`gate ${gate} does not accept ${rawText}`)
-      }
-      verdict = rawText
-    } else if (labels.length === 0) {
-      // No labels constrain the gate; accept any text as the verdict
-      verdict = rawText
+    if (picked !== undefined) {
+      if (labels.length > 0 && !labels.includes(picked.trim())) throw new Error(`gate ${gate} does not accept ${picked}`)
+      verdict = picked.trim()
     } else {
-      // Case-insensitive exact match, then "label: feedback" prefix match
-      const exactMatch = labels.find(l => l.toLowerCase() === rawText.toLowerCase())
-      if (exactMatch !== undefined) {
-        verdict = exactMatch
-      } else {
-        // Check for "label: feedback" pattern (longest label first to avoid prefix ambiguity)
-        const sortedLabels = [...labels].sort((a, b) => b.length - a.length)
-        const matchedLabel = sortedLabels.find(label =>
-          rawText.toLowerCase().startsWith(label.toLowerCase() + ':'),
-        )
-        if (matchedLabel === undefined) {
-          // Unrecognized free text → gate stays open, return non-error reply
-          recordStatus(spine, workdir, 'ready')
-          return { status: 'replied', gate, text: rawText }
-        }
-        verdict = matchedLabel
-        feedback = rawText.slice(matchedLabel.length + 1).trim()
+      const typed = (chosen.custom ?? '').trim()
+      const read = readGateAnswer(typed, labels)
+      if (read === undefined) {
+        // Anything but an outcome is conversation: the CEO replies, and the gate stays due.
+        recordStatus(spine, workdir, 'ready')
+        return { status: 'replied', gate, text: typed }
       }
+      verdict = read.verdict
+      feedback = read.feedback
     }
 
     if (gateCommand !== '' && workdir !== undefined) {
@@ -1421,17 +1382,17 @@ export function apply(ctx: Context, config: Config): void {
             ...(state.halted === undefined ? {} : { halted: state.halted }) })
         }
         if ('status' in result) {
-          // Unrecognized free text: gate stays open, return non-error JSON to the CEO
           return json({
             status: 'replied', gate: args.gate, text: result.text,
-            note: 'The user typed free text that does not match any accepted verdict. The gate remains due. Respond to the user and call this tool again to re-ask.',
+            note: 'The person answered with text that is none of the gate\'s outcomes. The gate was asked correctly and remains due. Answer what they wrote in conversation, then call this tool again with the gate alone straight away, so the question is shown again under your reply. Do not ask them to type an outcome in chat, ask the gate\'s question yourself, or recommend an outcome.',
           })
         }
-        // Normal verdict path
         spine.verdict(args.gate, result.verdict, result.feedback || args.feedback || '')
+        if (spine.isHalted()) recordStatus(spine, workdir, 'halted')
         return json({
           status: 'routed', gate: args.gate, verdict: result.verdict, answered_by: 'user',
           ...(result.feedback ? { feedback: result.feedback } : {}),
+          ...(spine.isHalted() ? { halted: true } : {}),
         })
       }
       if (args.verdict === undefined) {

@@ -99,9 +99,9 @@ const EXECUTED_TYPES = new Set([
 ])
 
 /** Verdict labels the spine treats as control flow rather than a forward branch. */
-const RELOOP = 'reloop'
-const HALT = 'halt'
-const PROCEED = 'proceed'
+export const RELOOP = 'reloop'
+export const HALT = 'halt'
+export const PROCEED = 'proceed'
 
 /** Normalize a verdict/condition label. Gates and evaluators name outcomes freely. */
 function label(value: string): string {
