@@ -975,41 +975,35 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   const pendingQuestions = new WeakSet<Spine>()
-  /** Gates whose plan-review card the person set aside; the re-ask offers every outcome. */
-  const discussedGates = new WeakMap<Spine, Set<string>>()
 
   /**
    * Result of a user-gate question.
    * - `{ verdict, feedback }` — a recognized verdict, optionally with parsed feedback.
    * - `{ status: 'replied', gate, text }` — free text that does not match any verdict label;
    *   the gate stays open and the caller should surface the text and re-ask.
-   * - `{ status: 'discussing', gate }` — the person set the plan-review card aside to talk;
-   *   the gate stays open until they have said what they want.
    * - `undefined` — halted, paused, or state changed during the question.
    */
   type UserGateResult =
     | { verdict: string; feedback: string }
     | { status: 'replied'; gate: string; text: string }
-    | { status: 'discussing'; gate: string }
     | undefined
 
-  /** The outcome a plan-review card approves with: the gate's own `proceed` edge. */
-  const PROCEED_LABEL = 'proceed'
-
-  /** The most of a gate's reads shown in its question; the rest stays in the run directory. */
-  const GATE_DETAIL_LIMIT = 12_000
+  /**
+   * The most of a gate's reads shown in its question: enough for the opening of a
+   * plan, small enough that the outcomes stay in view in any host's question UI.
+   */
+  const GATE_DETAIL_LIMIT = 1_500
 
   /**
-   * What a person reviews at a user gate: the gate's reads, inlined from the run
-   * directory so the question carries the plan itself rather than its file names.
+   * What a person reviews at a user gate: an excerpt of the gate's reads, inlined
+   * from the run directory, and where the full text is.
    * @param reads - the gate's reads, relative to the run directory.
    * @param workdir - the run directory, when the run has one.
-   * @returns the markdown shown with the question, and whether any read was inlined.
+   * @returns the markdown shown with the question.
    */
-  function gateDetail(reads: string[], workdir: string | undefined): { detail: string; inlined: boolean } {
-    if (workdir === undefined) return { detail: `Gate reads files: ${reads.join(', ')}`, inlined: false }
+  function gateDetail(reads: string[], workdir: string | undefined): string {
+    if (workdir === undefined) return `Gate reads files: ${reads.join(', ')}`
     const root = resolve(workdir)
-    let inlined = false
     const parts = reads.map(file => {
       const path = resolve(root, file)
       let text: string
@@ -1017,16 +1011,15 @@ export function apply(ctx: Context, config: Config): void {
       else {
         try {
           text = readFileSync(path, 'utf8')
-          inlined = true
         } catch { text = '*(file not found)*' }
       }
       return reads.length > 1 ? `### ${file}\n\n${text}` : text
     })
     let detail = parts.join('\n\n---\n\n')
     if (detail.length > GATE_DETAIL_LIMIT) {
-      detail = `${detail.slice(0, GATE_DETAIL_LIMIT)}\n\n*(truncated; the full text is in ${reads.join(', ')})*`
+      detail = `${detail.slice(0, GATE_DETAIL_LIMIT)}\n\n*(excerpt; the full text is in ${reads.join(', ')} in the run directory)*`
     }
-    return { detail, inlined }
+    return detail
   }
 
   /**
@@ -1080,12 +1073,6 @@ export function apply(ctx: Context, config: Config): void {
     }
     const reads = view.reads ?? []
     const shown = reads.length > 0 ? gateDetail(reads, workdir) : undefined
-    // DSH's plan-review card offers approve-or-discuss, so it fits a gate with a
-    // `proceed` outcome and at most one alternative. Wider gates keep the option list.
-    // The card has no button for the other outcome, so once the person has set it
-    // aside to talk, the re-ask is the full option list (with free text) instead.
-    const discussed = discussedGates.get(spine)?.has(gate) === true
-    const planReview = !discussed && shown?.inlined === true && labels.includes(PROCEED_LABEL) && labels.length <= 2
     let answer
     const questionLifetime = new AbortController()
     const questionSignal = exec.signal === undefined ? questionLifetime.signal : AbortSignal.any([exec.signal, questionLifetime.signal])
@@ -1096,9 +1083,8 @@ export function apply(ctx: Context, config: Config): void {
           id: gate,
           header: 'Workflow gate',
           question: view.gate_prompt || `Gate ${gate}`,
-          ...(shown === undefined ? {} : { detail: shown.detail }),
+          ...(shown === undefined ? {} : { detail: shown }),
           ...(labels.length === 0 ? {} : { options: labels.map(verdict => ({ label: verdict })) }),
-          ...(planReview ? { intent: { kind: 'plan-review' as const, approve: PROCEED_LABEL } } : {}),
         }],
         ...(exec.agent === undefined ? {} : { agent: exec.agent }),
         signal: questionSignal,
@@ -1119,11 +1105,6 @@ export function apply(ctx: Context, config: Config): void {
       }
       answer = await Promise.race([nativeAnswer, panelAnswer()])
     } catch (error: unknown) {
-      if (planReview && (error as { code?: unknown } | null)?.code === 'ASK_CANCELLED') {
-        recordStatus(spine, workdir, 'waiting_user')
-        discussedGates.set(spine, (discussedGates.get(spine) ?? new Set()).add(gate))
-        return { status: 'discussing', gate }
-      }
       const detail = error instanceof Error ? error.message : String(error)
       const message = `gate ${gate} is answered by a person and could not be asked: ${detail}`
       recordStatus(spine, workdir, 'refused', message)
@@ -1438,12 +1419,6 @@ export function apply(ctx: Context, config: Config): void {
           return json({ status, gate: args.gate, interrupted_by: 'graph_control',
             nodes: state.cursor, completed: state.completed,
             ...(state.halted === undefined ? {} : { halted: state.halted }) })
-        }
-        if ('status' in result && result.status === 'discussing') {
-          return json({
-            status: 'discussing', gate: args.gate,
-            note: 'The person set the review aside to talk. The gate remains due. Stop here and wait for their message; then call this tool again with the gate alone, and the person is offered every outcome.',
-          })
         }
         if ('status' in result) {
           // Unrecognized free text: gate stays open, return non-error JSON to the CEO
