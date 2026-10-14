@@ -300,7 +300,7 @@ class CreateMode(Mode):
                 "as a declared input. The `data` node is the harness's input port, so "
                 "its items come from the Task it binds or from a `source_path` with a "
                 "`source_format` at run time, never from a list baked into the graph.\n\n"
-                "## The approach that was chosen\nRead the file `strategy.json` in the run directory. It contains the chosen strategy with the approach, graph design, and acceptance criteria.\n\n"
+                "## The approach that was chosen\n{{strategy}}\n\n"
                 "## What this mode must take as input\n{{requires_input}}\n"
                 "## API\n{{api}}\n\n"
                 "## Reference package\n{{reference}}\n"
