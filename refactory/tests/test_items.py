@@ -427,14 +427,14 @@ def test_non_data_reset_archives_only_owned_outputs_when_requested(tmp_path, arc
         assert (tmp_path / name).read_text() == original[name]
 
 
-def test_reset_retains_files_read_by_non_start_invalidated_nodes(tmp_path):
-    """Files written by a node outside the invalidated set are retained (#317).
+def test_reset_keeps_files_an_outside_node_also_writes(tmp_path):
+    """A redo archives only files the invalidated nodes own outright (#317).
 
-    ``shared.txt`` is written by *prepare* (outside) **and** *middle* (inside),
-    so it must survive the archive.  ``internal.txt`` is written **only** by
-    invalidated nodes and read by *downstream* (non-start invalidated); it must
-    be archived because no outside node writes it — the narrower rule does not
-    protect files solely because an invalidated node reads them.
+    ``shared.txt`` is written by *prepare* (not redone) **and** *middle*
+    (redone), so the redo keeps it: archiving it would leave nothing to
+    recreate it. ``internal.txt`` is written **only** by redone nodes, so it is
+    archived even though *downstream* reads it; being read by a redone node is
+    not a reason to keep a file.
     """
     graph = nn.Graph()
     graph.add(nn.Node('prepare', 'op', call='loop_ops:write_number',
