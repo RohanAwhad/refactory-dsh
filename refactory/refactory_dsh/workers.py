@@ -21,6 +21,9 @@ SKIP_PERMISSIONS = {'codex': 'dangerously-bypass-approvals-and-sandbox',
                     'claude_code': 'bypassPermissions'}
 PACKAGES = {'codex': '@deepseek-ai/dsh-subagent-codex',
             'claude_code': '@deepseek-ai/dsh-subagent-claude-code'}
+OPENCODE_PROVIDER = 'opencode-go'
+OPENCODE_API_KEY_ENV = 'OPENCODE_API_KEY'
+OPENCODE_SESSION_HEADER = 'x-opencode-session'
 
 
 def capabilities(backend: str) -> dict[str, Any]:
@@ -118,29 +121,24 @@ def permission_patch(route: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
-_OPENCODE_SESSION_HEADER = 'x-opencode-session'
-_OPENCODE_PROVIDER = 'opencode-go'
-_OPENCODE_API_KEY_ENV = 'OPENCODE_API_KEY'
-
-
 def _ensure_opencode_session(providers: dict[str, Any], route_provider: str) -> dict[str, Any]:
     """Inject x-opencode-session for OpenCode worker routes.
 
     The built-in opencode-go provider wraps every request with
     withOpenCodeSessionHeader, but provider_config creates a generic provider
-    that lacks that wrapper.  When the route selects opencode-go and the
+    that lacks that wrapper. When the route selects opencode-go and the
     provider entry doesn't already carry the header, inject a per-run session
     id so workers are distinguishable from each other and from the GUI session.
     """
-    if route_provider != _OPENCODE_PROVIDER:
+    if route_provider != OPENCODE_PROVIDER:
         return providers
-    entry = providers.get(_OPENCODE_PROVIDER, {'apiKeyEnv': _OPENCODE_API_KEY_ENV})
+    entry = providers.get(OPENCODE_PROVIDER, {'apiKeyEnv': OPENCODE_API_KEY_ENV})
     headers = entry.get('headers', {})
-    if any(k.lower() == _OPENCODE_SESSION_HEADER for k in headers):
+    if any(k.lower() == OPENCODE_SESSION_HEADER for k in headers):
         return providers
     patched = dict(entry)
-    patched['headers'] = {**headers, _OPENCODE_SESSION_HEADER: f'refactory-worker-{uuid.uuid4().hex[:12]}'}
-    return {**providers, _OPENCODE_PROVIDER: patched}
+    patched['headers'] = {**headers, OPENCODE_SESSION_HEADER: f'refactory-worker-{uuid.uuid4().hex[:12]}'}
+    return {**providers, OPENCODE_PROVIDER: patched}
 
 
 def provider_rows(route: dict[str, Any], provider_config: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -150,7 +148,7 @@ def provider_rows(route: dict[str, Any], provider_config: dict[str, Any] | None)
     profiles declared in another profile's patch (the web session's, say).
     Declared provider routes ride the worker patch so the same selection is
     resolvable in the nested composition; credentials stay in the native
-    store their apiKeyEnv names.  When the route selects opencode-go, a
+    store their apiKeyEnv names. When the route selects opencode-go, a
     per-worker session header is injected automatically.
     """
     if route.get('worker_backend', 'dsh') != 'dsh':
