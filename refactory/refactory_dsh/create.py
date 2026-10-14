@@ -300,7 +300,7 @@ class CreateMode(Mode):
                 "as a declared input. The `data` node is the harness's input port, so "
                 "its items come from the Task it binds or from a `source_path` with a "
                 "`source_format` at run time, never from a list baked into the graph.\n\n"
-                "## The approach that was chosen\n{{strategy}}\n\n"
+                "## The approach that was chosen\nRead the file `strategy.json` in the run directory. It contains the chosen strategy with the approach, graph design, and acceptance criteria.\n\n"
                 "## What this mode must take as input\n{{requires_input}}\n"
                 "## API\n{{api}}\n\n"
                 "## Reference package\n{{reference}}\n"
@@ -335,7 +335,7 @@ class CreateMode(Mode):
                 "fields in their actual template context; punctuation, braces, or "
                 "ordinary words alone are not evidence of a placeholder. Keep guards "
                 "small and specific to a stated contract violation.\n\n"
-                "Design:\n{{design}}\n\n"
+                "Design: Read the file `design.md` in the run directory. It contains the package design with all operations, nodes, knobs, and score definitions.\n\n"
                 "## What this mode must take as input\n{{requires_input}}\n\n"
                 "## API\n{{api}}\n\n"
                 "## Reference package\n{{reference}}\n\n"
@@ -391,7 +391,7 @@ class CreateMode(Mode):
         graph.add(Node(
             "health_checker", "agent",
             prompt_template=(
-                "Brief: {{brief}}\n\n## The design\n{{design}}\n\n"
+                "Brief: {{brief}}\n\n## The design\nRead the file `design.md` in the run directory. It contains the package design to check the implementation against.\n\n"
                 "You are the health checker. Run the created package the way a user "
                 "would: import it, list its modes, check its declared tools, and run "
                 "bounded interface and artifact checks. Canonical smoke has already run. "
@@ -410,7 +410,7 @@ class CreateMode(Mode):
         graph.add(Node(
             "code_reviewer", "agent",
             prompt_template=(
-                "## The design\n{{design}}\n\n## The emitted source\n{{emit}}\n\n"
+                "## The design\nRead the file `design.md` in the run directory. It contains the package design.\n\n## The emitted source\nRead the file `emit.txt` in the run directory. It contains the emitted package source files. Review these against the design.\n\n"
                 "You are the code reviewer. Read the emitted source against the design "
                 "and the API: are every op, node, knob and fact declared and consumed, "
                 "does `score()` read a fact the graph produces, and would the package "
@@ -432,7 +432,7 @@ class CreateMode(Mode):
             "qa_director", "agent",
             prompt_template=(
                 "Brief: {{brief}}\n\n## The strategy (the acceptance criteria are in "
-                "it)\n{{strategy}}\n\n"
+                "it)\nRead the file `strategy.json` in the run directory. It contains the strategy with acceptance criteria to test the package against.\n\n"
                 "You are the QA director. Design adversarial checks against this "
                 "package — the cases a friendly reviewer would not try — and run them. "
                 "Full model/Task validation has already run in canonical smoke. Inspect its "
@@ -483,8 +483,8 @@ class CreateMode(Mode):
         graph.add(Node(
             "overwatch", "agent",
             prompt_template=(
-                "Brief: {{brief}}\n\n## The strategy\n{{strategy}}\n\n"
-                "## The merged reviews\n{{qa}}\n\n"
+                "Brief: {{brief}}\n\n## The strategy\nRead the file `strategy.json` in the run directory. It contains the strategy and acceptance criteria.\n\n"
+                "## The merged reviews\nRead the file `reviews/qa-synthesized.md` in the run directory. It contains the merged reviews from all three reviewers.\n\n"
                 "You are the overwatch. This is not another review: audit the reviews "
                 "themselves. Take each ask in the brief and each acceptance criterion, "
                 "and say what evidence proves it — a command and its output — or that "

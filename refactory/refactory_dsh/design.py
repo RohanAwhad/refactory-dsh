@@ -349,7 +349,7 @@ class DesignMode(Mode):
                 "from your working directory.\n\n"
                 "Brief: {{brief}}\nThe check it must pass: {{check}}\n\n"
                 "## The design\nRead the approved design from `design.md` in the run directory.\n\n"
-                "## The merged reviews\n{{qa}}\n\n"
+                "## The merged reviews\nRead the file `reviews/qa-synthesized.md` in the run directory. It contains the merged reviews from the health checker, code reviewer, and QA director.\n\n"
                 + _ACCEPTANCE_BASELINE
                 + "You are the overwatch. Audit the reviews rather than repeating them: "
                 "take each ask in the brief and say what evidence proves it — a command "
