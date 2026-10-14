@@ -259,6 +259,21 @@ pointers and unchanged per-input page provenance reconstruct the original full
 finding ledger; adverse findings and the required output schema stay unchanged.
 The independent evaluator checks this reconstruction as well as actual delivery.
 
+Fresh packets and aggregation records explicitly mark
+`positive_reference_policy: per-decision-unique/v1`. A known positive source may
+support distinct conclusions without becoming additional independent evidence.
+Each source pair must be unique within one decision, and the global union must
+still cover every supplied positive finding. Unknown sources, duplicate decision
+IDs, omitted findings and altered adverse content remain invalid. Records without
+this marker retain the earlier global uniqueness rule; the failed update v7
+response is not retroactively accepted. Byte limits, progress checks, deadlines
+and retry behavior are unchanged.
+The same call also receives the exact packet's read-only snapshot path and hash
+and is instructed to audit its proposed citation set and retained findings with
+a read-only computation before returning. That snapshot is a declared input and
+must remain unchanged. Runtime coverage validation remains strict; this guidance
+neither fills missing references nor adds a correction attempt.
+
 A completed, otherwise-valid page read with an invalid quote/range may receive
 one `quote-anchor-correction/v1` request. It receives the complete original page,
 authority, rejected response and precise rejection, within the original deadline

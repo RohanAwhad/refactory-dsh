@@ -13,6 +13,7 @@ from .bounded_context_evidence import _bytes, _require, _sha, _supplied
 
 
 INPUT_RENDERING = "positive-findings-json-pointers/v1"
+REFERENCE_POLICY = "per-decision-unique/v1"
 
 
 def _render_inputs(expected: dict) -> dict:
@@ -124,6 +125,11 @@ def verify_adjudications(root: Path, manifest: dict, *, snapshot: Callable,
             _require(entry["input_rendering"] == INPUT_RENDERING,
                      "adjudication declares an unsupported or retroactively upgraded input rendering")
             rendered = _render_inputs(expected)
+        per_decision = "positive_reference_policy" in entry
+        if per_decision:
+            _require(entry["positive_reference_policy"] == REFERENCE_POLICY,
+                     "adjudication declares an unsupported positive reference policy")
+            rendered = {**rendered, "positive_reference_policy": REFERENCE_POLICY}
         packet = json.dumps(rendered, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
         _require(snapshot(entry.get("input_packet")) == packet, "adjudication packet replaced or dropped actual full prior outputs")
         node = f"{manifest['logical_node_id']}:context:{manifest['context_id']}:{identifier}"
@@ -134,6 +140,10 @@ def verify_adjudications(root: Path, manifest: dict, *, snapshot: Callable,
                  and entry.get("delivery_receipt_sha256") == _sha(_bytes(root, entry["delivery_receipt"])),
                  "adjudication raw worker/delivery changed from captured original evidence")
         delivery = json.loads(_bytes(root, entry["delivery_receipt"]))
+        if per_decision:
+            _require(delivery["execution"]["input_fingerprints"].get(entry["input_packet"]["snapshot"])
+                     == entry["input_packet"]["sha256"],
+                     "fresh adjudication omitted or changed its declared complete input packet fingerprint")
         _require(all(delivery["execution"]["input_fingerprints"].get(name) == _sha(data)
                      for name, data in source_bytes.items()), "adjudication omitted or changed original raw source inputs")
         _require(snapshot(entry.get("application_before")) == snapshot(entry.get("application_after")),
@@ -165,6 +175,7 @@ def verify_adjudications(root: Path, manifest: dict, *, snapshot: Callable,
                      and type(decision["sources"]) is list and bool(decision["sources"]),
                      "adjudication emitted invalid or out-of-scope decision identities")
             decision_ids.add(decision["decision_id"])
+            decision_seen = set()
             for source in decision["sources"]:
                 _require(type(source) is dict and set(source) == {"input_id", "finding_ids"}
                          and type(source["input_id"]) is str and type(source["finding_ids"]) is list
@@ -172,7 +183,9 @@ def verify_adjudications(root: Path, manifest: dict, *, snapshot: Callable,
                          "adjudication lacks exact positive input references")
                 for finding in source["finding_ids"]:
                     pair = (source["input_id"], finding)
-                    _require(pair in required and pair not in seen, "adjudication invented or duplicated positive evidence")
+                    _require(pair in required and pair not in (decision_seen if per_decision else seen),
+                             "adjudication invented or duplicated positive evidence")
+                    decision_seen.add(pair)
                     seen.add(pair)
         _require(seen == required, "adjudication dropped positive input evidence without source disposition")
         input_size = sum(len(item["raw_response"].encode()) for item in expected["records"])

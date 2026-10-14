@@ -90,6 +90,7 @@ def test_absent_version_retains_original_full_positive_body_packet_path(tmp_path
     def old_dispatch(self, ids, round_number):
         result = original(self, ids, round_number)
         self.record["aggregations"][-1].pop("input_rendering")
+        self.record["aggregations"][-1].pop("positive_reference_policy", None)
         self.flush()
         return result
     monkeypatch.setattr(runtime._Session, "adjudicate", old_dispatch)

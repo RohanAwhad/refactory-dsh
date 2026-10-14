@@ -4,6 +4,86 @@
   "issue": "https://github.com/boston-harness-group/refactory-dsh/issues/310",
   "rows": [
     {
+      "requirements": [
+        "F.consumption",
+        "F.obligations.semantic"
+      ],
+      "owner": "adjudication citation audit guidance",
+      "fix": "Supply the exact immutable adjudication packet snapshot path and hash as a declared read. Ask the same original model call to compute required-versus-cited source sets, per-decision uniqueness and exact retained-findings equality before returning. Keep host validation strict and fail on packet drift; do not fill references or add retries.",
+      "source": "refactory/refactory_dsh/create_fidelity_context.py",
+      "regression": "refactory/tests/test_create_fidelity_positive_references.py",
+      "observed_trial": "create-fidelity-plugin-sol6-20261014-v8",
+      "observed_failure": "Research quality cited202of203positive source pairs, with no unknown or duplicate citation and exact adverse findings. One builder-admission source was omitted even though existing conclusions discussed builder-only admission and export before freeze.",
+      "status": "The captured response remains failed. Prospective guidance and snapshot/drift controls pass within121affectedruntime tests plus42independent evidence tests. No live repair or full acceptance is claimed."
+    },
+    {
+      "requirements": [
+        "F.consumption",
+        "F.obligations.semantic"
+      ],
+      "owner": "shared positive source support",
+      "fix": "Explicitly version per-decision-unique/v1 in the actual packet and aggregation entry. Permit one known source to support distinct conclusions without added evidence or confidence credit; keep every source unique within one decision and require the global union to cover all supplied positives. Unknown, missing and adverse-content changes remain invalid; absent markers retain historical global uniqueness.",
+      "source": "refactory/refactory_dsh/create_fidelity_context.py",
+      "regression": "refactory/tests/test_create_fidelity_positive_references.py",
+      "observed_trial": "create-fidelity-update-sol6-20261014-v7",
+      "observed_failure": "Strategy planning cited all182positive source pairs with no invented or omitted source and exact adverse content, but three known graph facts supported both architecture and portability/documentation conclusions. An added global exact-once restriction rejected this legitimate shared support.",
+      "status": "Independent source-duty review confirms legitimate shared support. The combined121runtime and42independent evidence tests pass, including legacy global uniqueness and strict negative controls. Fresh live acceptance remains required; failed v7 is unchanged."
+    },
+    {
+      "requirements": [
+        "F.consumption",
+        "F.obligations.semantic",
+        "F.deadlines"
+      ],
+      "owner": "quote-only evidence correction",
+      "fix": "Allow one corrective request only for an otherwise-valid completed read rejected solely for quote anchoring. Supply its complete immutable page, full rejected response and precise validation feedback under the same role, route, byte ceiling and original absolute deadline. All semantic fields, finding order and coverage must remain unchanged; preserve both attempts and apply the original strict validator.",
+      "source": "refactory/refactory_dsh/create_fidelity_context.py",
+      "regression": "refactory/tests/test_create_fidelity_quote_correction.py",
+      "observed_trial": "create-fidelity-update-sol6-20261014-v6; create-fidelity-plugin-sol6-20261014-v7",
+      "observed_failure": "Update research quality omitted six zero digits from one quoted literal; plugin strategy included one extra trailing space in a claimed source range. Both otherwise-completed page responses failed strict anchoring.",
+      "status": "Controlled real-dispatch and independent evidence checks pass. Fresh updatev7 strategy planning exercised one quote-only correction preserving55claims/two coverage records under the unchanged ceiling; its later aggregate failed the old global-reference uniqueness rule. Bookingv17 and pluginv8 continue; no full live acceptance is claimed."
+    },
+    {
+      "requirements": [
+        "F.consumption",
+        "F.obligations.semantic"
+      ],
+      "owner": "lossless adjudication input rendering",
+      "fix": "Retain complete raw responses and every adverse/unresolved finding verbatim. Represent only duplicated positive bodies with exact JSON pointers into those raw responses, with page provenance once per input. Independent validation reconstructs the entire original positive ledger before validating every source disposition.",
+      "source": "refactory/refactory_dsh/create_fidelity_context.py",
+      "regression": "refactory/tests/test_create_fidelity_adjudication_rendering_evidence.py",
+      "observed_trial": "create-fidelity-plugin-sol6-20261014-v7",
+      "observed_failure": "Strategy quality completed nine evidence reads but its first complete prior-output packet could not fit with unchanged fixed authority. The packet repeated positive bodies and page provenance already retained in raw evidence.",
+      "status": "Bookingv17 research independently completed five reads, two actual indexed aggregations and the bound final over six complete reports. Captured pluginv7 packets also fit prospectively with exact reconstruction. Neither observation changes old failed trials or establishes whole-workflow acceptance."
+    },
+    {
+      "requirements": [
+        "F.consumption",
+        "F.obligations.semantic"
+      ],
+      "owner": "adjudication singleton scheduling",
+      "fix": "Carry an individually fitting singleton unchanged while considering later reducible groups; never infer failure solely because the first adjacent pair cannot fit. Retain raw identities, response-progress guards and refusal when no valid reduction is possible.",
+      "source": "refactory/refactory_dsh/create_fidelity_context.py",
+      "regression": "refactory/tests/test_create_fidelity_adjudication_batching.py",
+      "observed_trial": "create-fidelity-update-sol6-20261014-v5; create-fidelity-pair-sol6-20261014-v15",
+      "observed_failure": "Greedy grouping could stop after a nonmergeable singleton although a later pair could fit. Some captured records also had genuine duplicate-body or unresolved-content size failures; singleton carry alone did not solve those cases.",
+      "status": "Actual orchestration regressions pass. Genuine no-fit/nonprogress failures remain failures; later quote and rendering fixes are separately identified."
+    },
+    {
+      "requirements": [
+        "F.variants",
+        "F.isolation",
+        "F.stage.discover"
+      ],
+      "owner": "empty plugin project study",
+      "fix": "Prepare a fresh lane-owned empty source project for a new plugin, so required study and discovery operate on the actual new project without scanning protected framework tests. Keep framework and peer denial policies intact.",
+      "source": "refactory/benchmarks/create_fidelity/variant_cases.py",
+      "regression": "refactory/tests/test_create_fidelity_plugin_study.py",
+      "observed_trial": "create-fidelity-plugin-sol6-20261014-v5",
+      "observed_failure": "Plugin setup selected framework source as the project to study and native discovery encountered protected framework tests before any authoring model dispatch.",
+      "status": "Real bootstrap/discovery under kernel-denied framework tests passes. Pluginv7 and v8 subsequently completed setup and research dispatch; v7 failed during strategy evidence delivery, v8 during research quality on one omitted citation. No full plugin-lifecycle acceptance is claimed."
+    },
+    {
       "requirements": ["F.consumption", "F.children.research_director", "F.obligations.semantic"],
       "owner": "bounded adjudication response budget",
       "fix": "State the exact existing strict response byte budget and request compact JSON while retaining every adverse/unresolved finding verbatim and every positive source disposition. Preserve raw outputs and unchanged validation, deadlines and retry policy.",

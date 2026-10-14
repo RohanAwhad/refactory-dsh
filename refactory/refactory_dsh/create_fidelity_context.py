@@ -134,6 +134,7 @@ def adjudication_inputs(record: dict, ids: list[str], workdir: Path) -> dict:
 
 
 ADJUDICATION_RENDERING = "positive-findings-json-pointers/v1"
+POSITIVE_REFERENCE_POLICY = "per-decision-unique/v1"
 
 
 def render_adjudication_inputs(inputs: dict) -> dict:
@@ -164,7 +165,8 @@ def render_adjudication_inputs(inputs: dict) -> dict:
                 raise ValueError("positive evidence does not identify one complete raw finding")
             group["findings"][stable_id] = pointer
         indexed[identifier] = group
-    return {**inputs, "input_rendering": ADJUDICATION_RENDERING, "positive_findings": indexed}
+    return {**inputs, "input_rendering": ADJUDICATION_RENDERING,
+            "positive_reference_policy": POSITIVE_REFERENCE_POLICY, "positive_findings": indexed}
 
 
 @dataclass(frozen=True)
@@ -427,7 +429,7 @@ class _Session:
                 attempts.append(rejected)
             attempts.append(review)
         for review in attempts:
-            for key in ("supplied_prompt", "raw_response", "application_before", "application_after"):
+            for key in ("supplied_prompt", "raw_response", "input_packet", "application_before", "application_after"):
                 item = review.get(key)
                 if item is not None and _sha(self.ctx.path(item["snapshot"]).read_bytes()) != item["sha256"]:
                     raise ValueError("supplied context prompt or raw review response changed")
@@ -676,9 +678,11 @@ class _Session:
         request = {"schema_version": 1, "context_id": self.root.name, "logical_node_id": self.node.id,
                    "role": self.node.role, "aggregation_id": identifier, "input_ids": ids,
                    "input_sha256": {item["input_id"]: item["input_sha256"] for item in inputs["records"]}}
+        input_packet = self.snapshot(identifier + ".inputs.json", _json(rendered_inputs).encode())
         max_response_bytes = sum(len(item["raw_response"].encode("utf-8")) for item in inputs["records"]) - 1
         prompt = (self.fixed + "\n\nSCOPED ADJUDICATION REQUEST:\n" + _json(request)
                   + "\n\nCOMPLETE PRIOR MODEL OUTPUTS:\n" + _json(rendered_inputs)
+                  + "\n\nREAD-ONLY AUDIT PACKET SNAPSHOT:\n" + _json(input_packet)
                   + "\nThe positive_findings index preserves each stable finding ID. Resolve its json_pointer inside that input's parsed raw_response. "
                     "For page findings, combine the group's unchanged source provenance, the indexed kind and the pointed-to complete finding. "
                     "For prior decisions, the pointer identifies the complete decision. Every original raw response is supplied verbatim; no positive content is omitted."
@@ -687,7 +691,12 @@ class _Session:
                     "retained_findings MUST copy EVERY adverse/unresolved finding from the supplied retained_findings verbatim (stable ID, status, full content); "
                     "do not discard, summarize or rewrite any. decisions may combine only supplied positive_findings with explicit original source references. "
                     "Each decision has decision_id, conclusion (substantive nonempty text), obligation_ids (only IDs from CLOSED COVERAGE ID VOCABULARY above), sources (objects with input_id and finding_ids). "
-                    "Every positive finding must be referenced; no unknown, duplicate or unread source reference is allowed. "
+                    "The positive_reference_policy is per-decision-unique/v1: every positive finding must be referenced at least once globally. "
+                    "A known source may support distinct decisions, but each (input_id, finding_id) pair may appear only once within any one decision, including across its sources objects. "
+                    "Repeated support across decisions is not new or independent evidence and does not increase coverage or confidence. Unknown or unread source references are forbidden. "
+                    "Before returning, use a read-only computation against this exact packet snapshot (verify its SHA256) to audit your proposed JSON: "
+                    "derive all required source pairs from positive_findings, compare them with the union of proposed sources, check per-decision uniqueness and exact retained_findings equality. "
+                    "Print only counts and differences. Resolve missing or unknown citations only where the supplied evidence supports the conclusion; never invent support or silently drop findings. "
                     f"The complete response must contain at most {max_response_bytes} UTF-8 bytes (sum of the exact supplied raw responses minus one). "
                     "Return compact JSON with no indentation or formatting whitespace outside strings. Combine only positive findings through the required exact source references. "
                     "Never shorten, omit or rewrite mandatory retained adverse/unresolved/not_in_page data to meet this budget; preserve it completely even if the full required response cannot fit, so the runtime can fail honestly. "
@@ -697,14 +706,16 @@ class _Session:
         execution_id = f"{self.node.id}:context:{self.root.name}:{identifier}"
         client = self.bound_client(execution_id)
         system = "Scoped evidence adjudication by the original logical role."
-        delivery = begin(self.ctx.workdir, execution_id, prompt, [], reads=list(self.source_bytes), model_context=client.context())
+        delivery = begin(self.ctx.workdir, execution_id, prompt, [],
+                         reads=[*self.source_bytes, input_packet["snapshot"]], model_context=client.context())
         self.policy.check(delivery["prompt"], system)
         before = set((self.ctx.workdir / ".refactory/workers").glob("*.json"))
         entry = {"aggregation_id": identifier, "round": round_number, "input_ids": ids,
                  "input_sha256": request["input_sha256"], "logical_node_id": self.node.id, "role": self.node.role,
                  "execution_node_id": execution_id, "system": system, "delivery_receipt": delivery["receipt"],
                  "input_rendering": ADJUDICATION_RENDERING,
-                 "input_packet": self.snapshot(identifier + ".inputs.json", _json(rendered_inputs).encode()),
+                 "positive_reference_policy": POSITIVE_REFERENCE_POLICY,
+                 "input_packet": input_packet,
                  "supplied_prompt": self.snapshot(identifier + ".prompt.txt", delivery["prompt"].encode()),
                  "status": "running", "worker_receipts": []}
         application_before = self.application_snapshot()
@@ -768,6 +779,7 @@ class _Session:
                     or not isinstance(decision["sources"], list) or not decision["sources"]):
                 raise ValueError("scoped adjudication has invalid scoped decision fields")
             decision_ids.add(decision["decision_id"])
+            decision_sources = set()
             for source in decision["sources"]:
                 if (not isinstance(source, dict) or set(source) != {"input_id", "finding_ids"}
                         or not isinstance(source["input_id"], str) or not isinstance(source["finding_ids"], list)
@@ -775,8 +787,9 @@ class _Session:
                     raise ValueError("scoped adjudication decision lacks exact positive source references")
                 for finding in source["finding_ids"]:
                     pair = (source["input_id"], finding)
-                    if pair not in required or pair in seen:
+                    if pair not in required or pair in decision_sources:
                         raise ValueError("scoped adjudication cites unknown/duplicate positive evidence")
+                    decision_sources.add(pair)
                     seen.add(pair)
         if seen != required:
             raise ValueError("scoped adjudication omitted positive input evidence")
