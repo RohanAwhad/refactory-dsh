@@ -381,6 +381,9 @@ function payloadEnv(value: unknown): Record<string, string> | undefined {
 }
 
 export function apply(ctx: Context, config: Config): void {
+  // Detect stale builds early, before any graph is configured or opened.
+  validateBuild()
+
   const { toolPrefix, maxIterations, ceoDeny, interactiveOpen } = config
   // This is initialized before an explicit checkpoint restore at mount time.
   const materialised = new WeakMap<Spine, Materialised>()
@@ -1120,7 +1123,6 @@ export function apply(ctx: Context, config: Config): void {
       },
       output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
       execute(args, exec) {
-        validateBuild()
         const session = exec.agent?.session
         if (session === undefined) {
           throw new Error(`${toolPrefix}_open requires an owning agent session`)

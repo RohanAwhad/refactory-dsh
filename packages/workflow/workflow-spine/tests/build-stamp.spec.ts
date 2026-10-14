@@ -2,22 +2,22 @@
  * Tests for the build-stamp stale-build detection mechanism.
  *
  * These tests run from TypeScript source (not the built bundle), so
- * `BUILD_STAMP` keeps its placeholder value and `validateBuild()` no-ops.
- * The tests verify the mechanism's components individually.
+ * `BUILD_STAMP` is the empty string (the `typeof` guard falls through)
+ * and `validateBuild()` no-ops.
  */
 
 import { describe, expect, it } from 'vitest'
 import { BUILD_STAMP, computeSourceStamp, validateBuild } from '../src/build-stamp.ts'
 
 describe('build-stamp', () => {
-  it('BUILD_STAMP exists and is a non-empty string', () => {
+  it('BUILD_STAMP is empty when running from source', () => {
     expect(BUILD_STAMP).toBeTypeOf('string')
-    expect(BUILD_STAMP.length).toBeGreaterThan(0)
+    expect(BUILD_STAMP).toBe('')
   })
 
-  it('validateBuild() is a no-op when running from source (placeholder)', () => {
-    // When running from source the placeholder is intact, so validateBuild
-    // should return without throwing.
+  it('validateBuild() is a no-op when running from source', () => {
+    // BUILD_STAMP is '' when not bundled, so validateBuild should return
+    // without throwing.
     expect(() => validateBuild()).not.toThrow()
   })
 
@@ -28,15 +28,22 @@ describe('build-stamp', () => {
     expect(stamp1).toMatch(/^[0-9a-f]{16}$/)
   })
 
-  it('detects a mismatch when BUILD_STAMP differs from the source stamp', async () => {
-    // Dynamically import the module and override BUILD_STAMP to simulate a
-    // stale build. We test the logic by calling the internal comparison
-    // directly rather than mutating the const export.
+  it('computeSourceStamp() returns string or null', () => {
+    const stamp = computeSourceStamp()
+    // From within the repo with src/ present, should be a string.
+    expect(stamp).not.toBeNull()
+    expect(stamp).toMatch(/^[0-9a-f]{16}$/)
+  })
+
+  it('detects a mismatch when BUILD_STAMP differs from the source stamp', () => {
     const current = computeSourceStamp()
+    expect(current).not.toBeNull()
     const stale = '0000000000000000'
     expect(stale).not.toBe(current)
 
-    // Simulate what validateBuild does when stamps differ
+    // Simulate what validateBuild does when stamps differ:
+    // BUILD_STAMP is not empty (it would be a real hash in a bundle) and
+    // it doesn't match the freshly computed stamp.
     const mismatch = stale !== current
     expect(mismatch).toBe(true)
 
@@ -45,6 +52,6 @@ describe('build-stamp', () => {
       + `source stamp: ${current}). Run \`pnpm run build\` to rebuild.`
     expect(errorMessage).toContain('out of date')
     expect(errorMessage).toContain(stale)
-    expect(errorMessage).toContain(current)
+    expect(errorMessage).toContain(current!)
   })
 })
