@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from .contract import FIXTURES, reference
-from .deadline_evidence import dispatch_deadline_row
+from .deadline_evidence import (SOURCE_WALL_S, dispatch_deadline_row,
+                                source_idle_allowance, source_timing_policy, transport_timing)
 from .operator_evidence import OperatorEvidenceContext, supplemental_row
 from .bounded_context_evidence import verify_bounded_context
 
@@ -609,10 +610,18 @@ def _protocol_rows(root: Path | None, events: list[dict], manifests: dict,
             node = worker.get("node_id", "")
             stage = node.split(":", 1)[0]
             expected = allowances.get(stage)
-            if expected and ":" not in node and limits["declared_stage_timeout_s"] != expected:
-                raise ValueError(f"worker {node} did not retain the frozen source stage allowance")
-            if expected and ":" in node and (not limits["declared_stage_timeout_s"] or limits["stage_timeout_s"] > expected):
-                raise ValueError("director dispatch wall exceeds or omits its declared enclosing allowance")
+            if source_timing_policy(limits):
+                if limits["inactivity_timeout_s"] != source_idle_allowance(node, worker.get("role", "")):
+                    raise ValueError("worker did not retain the pinned source inactivity allowance")
+                declared = limits["declared_stage_timeout_s"]
+                if type(declared) not in (int, float) or not 0 < declared <= SOURCE_WALL_S or limits["stage_timeout_s"] > declared:
+                    raise ValueError("source hard wall or remaining physical allocation is invalid")
+                transport_timing(worker, limits)
+            else:
+                if expected and ":" not in node and limits["declared_stage_timeout_s"] != expected:
+                    raise ValueError(f"worker {node} did not retain the frozen source stage allowance")
+                if expected and ":" in node and (not limits["declared_stage_timeout_s"] or limits["stage_timeout_s"] > expected):
+                    raise ValueError("director dispatch wall exceeds or omits its declared enclosing allowance")
             if worker.get("state") in ("starting", "running") and not worker.get("finished"):
                 raise FileNotFoundError("worker is still active; terminal settlement evidence is not yet available")
             if worker.get("state") not in ("completed", "failed", "cancelled", "timed_out", "budget_exhausted") or not worker.get("finished"):
@@ -621,7 +630,7 @@ def _protocol_rows(root: Path | None, events: list[dict], manifests: dict,
             if elapsed < 0 or elapsed > limits["stage_timeout_s"] + limits["shutdown_grace_s"] + 2:
                 raise ValueError("observed worker interval exceeded its recorded wall/shutdown envelope")
             refs.append(path)
-        return "Raw actual workers retain source allowances and effective completion/stage/shutdown/budget layers, and every supplied worker settled; idle/remaining-budget telemetry and expiry enforcement are separate limitations", refs
+        return "Raw actual workers retain source allowances and effective completion/stage/shutdown/budget layers, and every supplied worker settled; explicitly marked records distinguish source inactivity from the physical wall using actual transport observations. Remaining clocks and expiry/process cleanup are separate assessments; unmarked historical receipts retain their original interpretation", refs
 
     rows = [inspect("F.obligations", obligations), inspect("F.consumption", consumption), inspect("F.approval", approval)]
     try:

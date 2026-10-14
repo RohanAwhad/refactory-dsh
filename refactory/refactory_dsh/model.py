@@ -153,6 +153,8 @@ class DshModelClient:
         effort: str = "",
         permission_mode: str = "",
         node_timeout_s: int | None = None,
+        inactivity_timeout_s: float | None = None,
+        inactivity_timeout_policy: str | None = None,
         role_routes: dict[str, Any] | None = None,
         node_routes: dict[str, Any] | None = None,
         provider_config: dict[str, Any] | None = None,
@@ -205,6 +207,11 @@ class DshModelClient:
         attempts = inherited.get("attempts", attempts) if attempts == DEFAULT_ATTEMPTS else attempts
         self._timeout_s = timeout_s
         self._node_timeout_s = node_timeout_s or inherited.get("node_timeout_s")
+        self._inactivity_timeout_s = (inactivity_timeout_s if inactivity_timeout_s is not None
+                                      else inherited.get("inactivity_timeout_s"))
+        self._inactivity_timeout_policy = (inactivity_timeout_policy or inherited.get("inactivity_timeout_policy"))
+        self._validate_inactivity(self._inactivity_timeout_s, self._inactivity_timeout_policy)
+        self._activity_callbacks = ()
         self._worker_backend = worker_backend or os.environ.get("REFACTORY_WORKER_BACKEND", "dsh")
         self._effort = effort or (os.environ.get("REFACTORY_MODEL_EFFORT", "") if self._worker_backend == "dsh" and not routes_resolved else "")
         self._permission_mode = permission_mode
@@ -288,6 +295,30 @@ class DshModelClient:
             client._node_timeout_s = timeout_s
         return client
 
+    @staticmethod
+    def _validate_inactivity(timeout_s, policy) -> None:
+        import math
+        if timeout_s is None and policy is None:
+            return
+        if (type(timeout_s) not in (int, float) or not math.isfinite(timeout_s) or timeout_s <= 0
+                or policy != "create-fidelity-native-idle-wall/v1"):
+            raise ValueError("inactivity timing needs a positive finite timeout and known Create fidelity policy")
+
+    def with_inactivity_timeout(self, timeout_s: float, *, policy: str) -> DshModelClient:
+        """Opt into the pinned native Create runner's separate inactivity clock."""
+        self._validate_inactivity(timeout_s, policy)
+        client = copy.copy(self)
+        client._inactivity_timeout_s, client._inactivity_timeout_policy = timeout_s, policy
+        return client
+
+    def with_activity_callback(self, callback) -> DshModelClient:
+        """Observe actual transport output in this process; never serialize callbacks."""
+        if not callable(callback):
+            raise ValueError("activity callback must be callable")
+        client = copy.copy(self)
+        client._activity_callbacks = (*self._activity_callbacks, callback)
+        return client
+
     def with_deadline_observation(self, scope: str, stop_at: float) -> DshModelClient:
         """Carry an already enforced caller timer into dispatch telemetry only.
 
@@ -311,6 +342,9 @@ class DshModelClient:
                     if self._worker_backend == "dsh" and self._node_id else self._timeout_s)
         return {"completion_timeout_s": self._timeout_s, "stage_timeout_s": wall,
                 "declared_stage_timeout_s": self._node_timeout_s,
+                **({"inactivity_timeout_s": self._inactivity_timeout_s,
+                    "inactivity_timeout_policy": self._inactivity_timeout_policy}
+                   if self._inactivity_timeout_s is not None else {}),
                 "shutdown_grace_s": SHUTDOWN_GRACE_S,
                 "run_budget": str(self._budget.path) if self._budget is not None else None}
 
@@ -325,6 +359,9 @@ class DshModelClient:
             "dsh_home": str(self._dsh_home), "provider": self._provider, "model": self._model,
             "timeout_s": self._timeout_s, "attempts": self._attempts, "backoff_s": self._backoff_s,
             **({"node_timeout_s": self._node_timeout_s} if self._node_timeout_s is not None else {}),
+            **({"inactivity_timeout_s": self._inactivity_timeout_s,
+                "inactivity_timeout_policy": self._inactivity_timeout_policy}
+               if self._inactivity_timeout_s is not None else {}),
             "runtime_root": str(self._runtime_root), "dsh_cli": self._dsh_cli,
             "python_bin": str(self._python_bin),
             "worker_backend": self._worker_backend, "effort": self._effort,
@@ -514,14 +551,18 @@ class DshModelClient:
                     from refactory_dsh.workers import dispatch_deadlines
                     dispatch_deadlines(self._worker_receipt, budget=self._budget,
                                        stage_stop_at=stop_at, stage_timeout_s=budget_s,
-                                       attempt=attempt, enclosing_deadlines=self._deadline_observations)
+                                       attempt=attempt, enclosing_deadlines=self._deadline_observations,
+                                       inactivity_timeout_s=self._inactivity_timeout_s,
+                                       inactivity_timeout_policy=self._inactivity_timeout_policy)
                 proc = self._run_completion(cmd, run_dir, stop_at, budget_s)
             except subprocess.TimeoutExpired as exc:
                 # A tool-using completion may already have changed its workdir.
                 # A deadline is not a transport failure: replaying the prompt can
                 # duplicate real work even after its subprocesses have shut down.
+                clock = "inactivity" if getattr(exc, "deadline_kind", None) == "idle" else "completion"
+                limit = exc.timeout if clock == "inactivity" else budget_s
                 raise RuntimeError(
-                    f"model completion timed out after {budget_s}s; "
+                    f"model {clock} timed out after {limit}s; "
                     "requested runtime shutdown; not retried"
                 ) from exc
             else:
@@ -611,6 +652,35 @@ class DshModelClient:
                 # shutdown request: DSH escalates a second signal to immediate exit.
                 start_new_session=os.name == "posix",
             )
+            started_mono, started_unix = time.monotonic(), time.time()
+            last_activity = started_mono
+            activity_observations = 0
+            observed_lines = [0, 0]
+            observed_bytes = [0, 0]
+            end_reason = "error"
+            observe_activity = self._inactivity_timeout_s is not None or bool(self._activity_callbacks)
+
+            def observe_output(stdout, stderr, *, eof=False):
+                nonlocal last_activity, activity_observations
+                if not observe_activity:
+                    return
+                active = False
+                for index, output in enumerate((stdout, stderr)):
+                    data = output.encode("utf-8") if isinstance(output, str) else output or b""
+                    lines = data.count(b"\n")
+                    # communicate's TimeoutExpired output is cumulative. Count
+                    # only newly completed lines, matching native readline;
+                    # an unterminated final line becomes activity at real EOF.
+                    if lines > observed_lines[index] or (eof and data and not data.endswith(b"\n")):
+                        active = True
+                    observed_lines[index] = max(observed_lines[index], lines)
+                    observed_bytes[index] = max(observed_bytes[index], len(data))
+                if active:
+                    last_activity = time.monotonic()
+                    activity_observations += 1
+                    for callback in self._activity_callbacks:
+                        callback()
+
             try:
                 deadline = stop_at if stop_at is not None else time.monotonic() + self._timeout_s
                 while True:
@@ -618,20 +688,49 @@ class DshModelClient:
                     self._checkpoint()
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
+                        end_reason = "wall"
                         raise subprocess.TimeoutExpired(cmd, timeout_s)
+                    if self._inactivity_timeout_s is not None and time.monotonic() - last_activity >= self._inactivity_timeout_s:
+                        end_reason = "idle"
+                        raise subprocess.TimeoutExpired(cmd, self._inactivity_timeout_s)
                     try:
                         stdout, stderr = proc.communicate(
                             timeout=min(remaining, 0.1)
                         )
+                        observe_output(stdout, stderr, eof=True)
+                        end_reason = "completed"
                         break
-                    except subprocess.TimeoutExpired:
+                    except subprocess.TimeoutExpired as waiting:
                         # communicate retains its output across bounded waits. There
                         # is no stdin input to resend, and the deadline never resets.
+                        observe_output(waiting.output, waiting.stderr)
                         if time.monotonic() >= deadline:
+                            end_reason = "wall"
                             raise
-            except BaseException:
+            except BaseException as error:
                 # Direct interruption or the fork's cooperative event both use the
                 # runtime-owned cleanup before propagating failure.
+                if isinstance(error, CancelledError):
+                    end_reason = "cancelled"
+                if isinstance(error, subprocess.TimeoutExpired):
+                    error.deadline_kind = end_reason
                 shutdown(proc)
                 raise
+            finally:
+                if self._inactivity_timeout_s is not None and self._worker_receipt is not None:
+                    finished_mono = time.monotonic()
+                    timing = {"policy": self._inactivity_timeout_policy,
+                              "inactivity_timeout_s": self._inactivity_timeout_s,
+                              "wall_timeout_s": timeout_s, "started_unix": started_unix,
+                              "finished_unix": time.time(),
+                              "last_activity_unix": started_unix + last_activity - started_mono,
+                              "activity_observations": activity_observations,
+                              "stdout_lines": observed_lines[0], "stderr_lines": observed_lines[1],
+                              "stdout_bytes": observed_bytes[0], "stderr_bytes": observed_bytes[1],
+                              "elapsed_s": finished_mono - started_mono,
+                              "idle_elapsed_s": finished_mono - last_activity, "end_reason": end_reason}
+                    from refactory_dsh.workers import _write_receipt
+                    record = json.loads(self._worker_receipt.read_text())
+                    record.setdefault("transport_timing", []).append(timing)
+                    _write_receipt(self._worker_receipt, record)
             return subprocess.CompletedProcess(launch, proc.returncode, stdout, stderr)

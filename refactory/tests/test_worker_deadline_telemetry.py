@@ -168,7 +168,10 @@ def test_real_composite_dispatch_reports_existing_outer_timer_as_minimum(tmp_pat
         outer, = sample["enclosing_deadlines"]
         assert outer["scope"] == "composite_stage"
         assert "caller-owned timer" in outer["enforcement"]
-        assert 0 < outer["remaining_s"] <= 3600
+        assert 0 < outer["remaining_s"] <= 14400
+        limits = worker["effective_deadlines"]
+        assert limits["inactivity_timeout_policy"] == "create-fidelity-native-idle-wall/v1"
+        assert limits["inactivity_timeout_s"] == (3600 if worker["role"] == "ceo" else 600)
         assert sample["effective_remaining_s"] == min(sample["stage_remaining_s"], outer["remaining_s"])
         samples.append((worker["node_id"], sample))
     planner = next(sample for node, sample in samples if ":plan:" in node)
@@ -176,4 +179,5 @@ def test_real_composite_dispatch_reports_existing_outer_timer_as_minimum(tmp_pat
     from benchmarks.create_fidelity.deadline_evidence import dispatch_deadline_row
     scored = dispatch_deadline_row([(str(path), json.loads(path.read_text()))
                                    for path in (tmp_path / ".refactory/workers").glob("*.json")])
-    assert scored["status"] == "passed", scored["reason"]
+    # This fixture bypasses real transport. Never fabricate activity evidence.
+    assert scored["status"] == "unavailable", scored["reason"]

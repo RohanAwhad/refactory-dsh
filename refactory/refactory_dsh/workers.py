@@ -112,7 +112,9 @@ def begin(workdir: Path, route: dict[str, Any], *, node: str = '', role: str = '
 
 def dispatch_deadlines(path: Path, *, budget: Any = None, stage_stop_at: float | None,
                        stage_timeout_s: float, attempt: int,
-                       enclosing_deadlines: tuple[tuple[str, float], ...] = ()) -> dict[str, Any]:
+                       enclosing_deadlines: tuple[tuple[str, float], ...] = (),
+                       inactivity_timeout_s: float | None = None,
+                       inactivity_timeout_policy: str | None = None) -> dict[str, Any]:
     """Observe the existing clocks immediately before one transport dispatch.
 
     The minimum is telemetry, not a replacement deadline. The model owner keeps
@@ -174,6 +176,15 @@ def dispatch_deadlines(path: Path, *, budget: Any = None, stage_stop_at: float |
             'enclosing_deadlines': 'Existing caller-owned cancellation timers; no timer is created by this observation.',
         },
     }
+    if inactivity_timeout_s is not None:
+        from refactory_dsh.model import DshModelClient
+        DshModelClient._validate_inactivity(inactivity_timeout_s, inactivity_timeout_policy)
+        sample['idle_timer'] = {
+            'status': 'window_not_started', 'timeout_s': inactivity_timeout_s,
+            'scope': 'refactory_dispatch_owner', 'policy': inactivity_timeout_policy,
+            'reset_on': 'actual stdout/stderr complete line or EOF tail',
+        }
+        sample['enforcement_layers']['idle'] = 'Separate transport inactivity clock; observed output never extends the absolute wall.'
     record = json.loads(path.read_text())
     deadlines = record.setdefault('effective_deadlines', {})
     deadlines.setdefault('dispatches', []).append(sample)
@@ -276,6 +287,12 @@ def lower_workflow(workflow: Any, workdir: Path, model_context: dict[str, Any] |
         selected = client.for_node(name, role=node.role.value)
         if node.timeout is not None:
             selected = selected.with_node_timeout(node.timeout)
+        source_timing = (declarations or {}).get(name, {}).get('source_timing')
+        if source_timing:
+            from refactory_dsh.create_fidelity_timing import POLICY, SOURCE_WALL_S, configure_client
+            if source_timing['policy'] != POLICY or source_timing['wall_timeout_s'] != SOURCE_WALL_S:
+                raise ValueError('unknown Create fidelity source timing declaration')
+            selected = configure_client(selected, source_timing['inactivity_timeout_s'])
         if node.tools:
             raise ValueError(f'worker node {name!r} declares tool restrictions this bridge cannot enforce')
         directory.mkdir(parents=True, exist_ok=True)
@@ -303,6 +320,8 @@ def lower_workflow(workflow: Any, workdir: Path, model_context: dict[str, Any] |
         attempts = max(1, int(selected_context.get('attempts') or 1))
         per_completion = int(selected_context.get('timeout_s') or DEFAULT_TIMEOUT_S)
         command_timeout_s = node.timeout if node.timeout is not None else node_session_budget_s(attempts, per_completion)
+        if source_timing:
+            command_timeout_s = selected_context['node_timeout_s']
         if (declarations or {}).get(name, {}).get('create_fidelity'):
             from refactory_dsh.owned_process import SHUTDOWN_GRACE_S
             command_timeout_s += SHUTDOWN_GRACE_S + 2

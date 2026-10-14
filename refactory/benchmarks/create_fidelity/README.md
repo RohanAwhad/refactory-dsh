@@ -99,9 +99,15 @@ published dependencies may be copied into a disposable snapshot; workspace
 bindings must point into the corresponding frozen checkout. Do not use the
 original dirty checkout as an unrecorded runtime dependency.
 The declared 12-hour full-mode ceiling is an initial cap, not a calibrated
-completion estimate. Director stages retain 3600 seconds; builder and Overwatch
-retain 1800. Timeout records distinguish the layer that stopped execution and
-whether process cleanup was confirmed.
+completion estimate. The pinned source's director 3600-second and builder /
+Overwatch 1800-second allowances are inactivity windows, with a separate
+14400-second hard wall. Custom director children and AI gates use the source
+CLI's 600-second inactivity default. `source-timing.json` pins the complete
+default/override mapping. Only newly observed stdout/stderr lines or a final
+nonempty EOF tail reset inactivity; polling does not extend either clock.
+Run budgets may stop work earlier. Marked timing receipts record actual activity
+and preserve the interpretation of older, unmarked runs. Expiry and owned-process
+settlement are tested separately from observed configuration.
 
 `live` runs the reference and updated DSH baseline concurrently. Candidate work
 can be invoked separately with `--lanes dsh-candidate`. The request and input

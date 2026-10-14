@@ -4,6 +4,49 @@ from __future__ import annotations
 from datetime import datetime
 import math
 
+SOURCE_TIMING_POLICY = "create-fidelity-native-idle-wall/v1"
+SOURCE_WALL_S = 14400
+_SOURCE_AGENTS = {
+    "create_factory_md": ("ceo", 3600), "graph_explorer": ("researcher", 600),
+    "synthesize_strategy": ("strategist", 600), "builder": ("builder", 1800),
+    "health_checker": ("health_checker", 600), "code_reviewer": ("code_reviewer", 900),
+    "overwatch": ("ceo", 1800), "archivist_plan": ("archivist", 300),
+    "archivist_build": ("archivist", 300),
+}
+_SOURCE_DIRECTORS = {"research_director": "researcher", "strategy_director": "strategist",
+                     "qa_director": "adversarial_tester"}
+_SOURCE_AGENT_GATES = {"gate_build", "gate_qa", "gate_overwatch", "gate_doc_freshness"}
+
+
+def source_idle_allowance(node: str, role: str) -> int:
+    """Independent pinned source call/default resolution, never runtime constants."""
+    stage = node.split(":", 1)[0]
+    if stage in _SOURCE_DIRECTORS:
+        if role == "ceo":
+            return 3600
+        if ":" in node and role == _SOURCE_DIRECTORS[stage]:
+            return 600  # factory agent CLI default, not the agent pool
+        raise ValueError("director timing belongs to a different source role")
+    expected = ("ceo", 600) if stage in _SOURCE_AGENT_GATES else _SOURCE_AGENTS.get(stage)
+    if expected is None or role != expected[0]:
+        raise ValueError("marked worker has no matching pinned source timing owner")
+    return expected[1]
+
+
+def source_timing_policy(deadlines: dict) -> bool:
+    """Unmarked historical records retain their original inactive-idle checks."""
+    policy = deadlines.get("inactivity_timeout_policy")
+    if policy is None:
+        if deadlines.get("inactivity_timeout_s") is not None:
+            raise ValueError("active inactivity allowance omitted its versioned policy")
+        return False
+    if policy != SOURCE_TIMING_POLICY:
+        raise ValueError("unknown source inactivity policy")
+    idle = _number(deadlines.get("inactivity_timeout_s"), "source inactivity allowance")
+    if idle == 0:
+        raise ValueError("source inactivity allowance must be positive")
+    return True
+
 
 def _number(value, label, *, optional=False):
     if value is None and optional:
@@ -103,14 +146,76 @@ def _sample(sample, deadlines, worker, attempt):
     if not isinstance(limiters, list) or limiters != expected_limiters:
         raise ValueError("recorded minimum limiter differs from the active clocks")
     idle = sample["idle_timer"]
-    if (not isinstance(idle, dict) or idle.get("status") != "inactive" or idle.get("timeout_s") is not None
-            or idle.get("scope") != "refactory_dispatch_owner" or not isinstance(idle.get("policy"), str) or not idle["policy"].strip()):
+    if source_timing_policy(deadlines):
+        expected_idle = {"status": "window_not_started", "timeout_s": deadlines["inactivity_timeout_s"],
+                         "scope": "refactory_dispatch_owner", "policy": SOURCE_TIMING_POLICY,
+                         "reset_on": "actual stdout/stderr complete line or EOF tail"}
+        if idle != expected_idle:
+            raise ValueError("active idle dispatch omitted or changed its exact observed policy")
+    elif (not isinstance(idle, dict) or idle.get("status") != "inactive" or idle.get("timeout_s") is not None
+          or idle.get("scope") != "refactory_dispatch_owner" or not isinstance(idle.get("policy"), str) or not idle["policy"].strip()):
         raise ValueError("idle timer policy is absent or differs from the dispatch owner's inactive policy")
     layers = sample["enforcement_layers"]
     if not isinstance(layers, dict) or any(not isinstance(layers.get(key), str) or not layers[key].strip()
                                          for key in ("stage", "run_budget", "enclosing_deadlines")):
         raise ValueError("deadline enforcement layers are unlabeled")
     return observed
+
+
+def transport_timing(worker: dict, deadlines: dict) -> None:
+    """Check actual terminal transport observations; never infer process cleanup."""
+    if not source_timing_policy(deadlines):
+        return
+    timings = worker.get("transport_timing")
+    samples = deadlines.get("dispatches")
+    if not isinstance(timings, list) or not timings or not isinstance(samples, list) or len(timings) != len(samples):
+        raise FileNotFoundError("active idle policy lacks one actual terminal transport observation per dispatch")
+    if not worker.get("finished"):
+        raise FileNotFoundError("active idle transport has no settled worker interval")
+    worker_start = _timestamp(worker["started"]).timestamp()
+    worker_finish = _timestamp(worker["finished"]).timestamp()
+    previous_finish = worker_start
+    for record, sample in zip(timings, samples):
+        if not isinstance(record, dict) or record.get("policy") != SOURCE_TIMING_POLICY:
+            raise ValueError("transport timing policy differs from the declared source policy")
+        idle = _number(record.get("inactivity_timeout_s"), "actual inactivity allowance")
+        _same(idle, deadlines["inactivity_timeout_s"], "actual inactivity allowance")
+        wall = _number(record.get("wall_timeout_s"), "actual wall allowance")
+        if wall <= 0 or wall > deadlines["stage_timeout_s"]:
+            raise ValueError("transport wall exceeds or omits its recorded allocation")
+        start, finish, last = [_number(record.get(key), key) for key in
+                               ("started_unix", "finished_unix", "last_activity_unix")]
+        sample_at = _timestamp(sample["sampled_at"]).timestamp()
+        if not worker_start - 1e-4 <= start <= last <= finish <= worker_finish + 1e-4 or start < previous_finish - 1e-4 or start < sample_at - 1e-4:
+            raise ValueError("actual transport timestamps are stale, overlapping or outside the worker interval")
+        previous_finish = finish
+        elapsed = _number(record.get("elapsed_s"), "actual transport elapsed")
+        quiet = _number(record.get("idle_elapsed_s"), "actual transport idle elapsed")
+        # Unix and monotonic clocks are independently sampled by the producer.
+        if not math.isclose(elapsed, finish - start, abs_tol=.05, rel_tol=1e-8) or not math.isclose(quiet, finish - last, abs_tol=.05, rel_tol=1e-8):
+            raise ValueError("transport duration differs from its actual clock observations")
+        counts = {}
+        for key in ("activity_observations", "stdout_lines", "stderr_lines", "stdout_bytes", "stderr_bytes"):
+            value = record.get(key)
+            if type(value) is not int or value < 0:
+                raise ValueError("actual output activity counters must be nonnegative integers")
+            counts[key] = value
+        lines = counts["stdout_lines"] + counts["stderr_lines"]
+        tails = sum(counts[key] > 0 for key in ("stdout_bytes", "stderr_bytes"))
+        observed = counts["activity_observations"]
+        if (counts["stdout_lines"] > counts["stdout_bytes"] or counts["stderr_lines"] > counts["stderr_bytes"]
+                or observed > lines + tails or (lines and not observed)
+                or (not observed and not math.isclose(last, start, abs_tol=1e-4))):
+            raise ValueError("idle activity is inconsistent with actual new output or EOF observations")
+        reason = record.get("end_reason")
+        if reason not in {"completed", "idle", "wall", "cancelled", "error"}:
+            raise ValueError("actual transport end reason is unknown")
+        if reason == "idle" and quiet < idle - min(.05, idle / 10):
+            raise ValueError("idle expiry claimed before the observed inactivity window")
+        if reason == "wall" and elapsed < wall - min(.05, wall / 10):
+            # An absolute stage may have started before this subprocess.
+            if sample["stage_clock"]["scope"] != "absolute_stage" or finish - sample_at < sample["stage_remaining_s"] - .05:
+                raise ValueError("wall expiry claimed before the observed absolute deadline")
 
 
 def dispatch_deadline_row(workers: list[tuple[str, dict]]) -> dict:
@@ -132,6 +237,9 @@ def dispatch_deadline_row(workers: list[tuple[str, dict]]) -> dict:
                 if previous is not None and observed < previous:
                     raise ValueError("dispatch observation timestamps run backward")
                 previous = observed
+            transport_timing(worker, deadlines)
+        if any(source_timing_policy(worker["effective_deadlines"]) for _, worker in actual):
+            reason = "Raw dispatch and actual terminal transport samples distinguish versioned source inactivity/activity from the unchanged absolute wall and budget clocks; historical unmarked receipts retain inactive policy. Process cleanup and expiry enforcement are assessed separately."
     except (OSError, FileNotFoundError) as error:
         status, reason = "unavailable", f"Dispatch deadline telemetry is incomplete: {error}"
     except (ValueError, TypeError, KeyError, AttributeError) as error:

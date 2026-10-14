@@ -284,6 +284,11 @@ class _Session:
         self.stop = threading.Event()
         self.client = self.client.with_cancellation(self.stop)
         allowance = node.timeout_s or self.client.effective_deadlines().get("stage_timeout_s") or 3600
+        from refactory_dsh.create_fidelity_timing import POLICY
+        if self.client.effective_deadlines().get("inactivity_timeout_policy") == POLICY:
+            # Logical source timeout fields are inactivity allowances. The
+            # configured client owns the separately mapped physical wall.
+            allowance = self.client.effective_deadlines()["stage_timeout_s"]
         self.deadline = min(time.monotonic() + allowance, deadline if deadline is not None else math.inf)
         self.timer = threading.Timer(max(0, self.deadline - time.monotonic()), self.stop.set)
         self.timer.daemon = True

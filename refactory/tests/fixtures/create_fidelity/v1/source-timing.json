@@ -1,0 +1,168 @@
+{
+  "schema_version": 1,
+  "policy": "create-fidelity-native-idle-wall/v1",
+  "source_commit": "3ab6f8f7ca792c874f2654574d7f7fd6dd18b896",
+  "source_graph_sha256": "8e4ef617c47174d46acdbc4f390c5ab69a8c67b76ebefac6cd438c302c7ee9c4",
+  "ordinary_runner": "claude",
+  "source_timeout_kind": "inactivity",
+  "source_hard_wall_s": 14400,
+  "director_child_cli_idle_s": 600,
+  "agent_pool_idle_s": {
+    "ceo": 3600,
+    "researcher": 600,
+    "strategist": 600,
+    "builder": 1200,
+    "health_checker": 600,
+    "code_reviewer": 900,
+    "adversarial_tester": 1800,
+    "failure_analyst": 600,
+    "archivist": 300,
+    "refiner": 600
+  },
+  "agent_nodes": {
+    "create_factory_md": {
+      "role": "ceo",
+      "declared_timeout_s": null,
+      "idle_timeout_s": 3600
+    },
+    "graph_explorer": {
+      "role": "researcher",
+      "declared_timeout_s": null,
+      "idle_timeout_s": 600
+    },
+    "research_director": {
+      "role": "ceo",
+      "declared_timeout_s": 3600,
+      "idle_timeout_s": 3600
+    },
+    "strategy_director": {
+      "role": "ceo",
+      "declared_timeout_s": 3600,
+      "idle_timeout_s": 3600
+    },
+    "qa_director": {
+      "role": "ceo",
+      "declared_timeout_s": 3600,
+      "idle_timeout_s": 3600
+    },
+    "synthesize_strategy": {
+      "role": "strategist",
+      "declared_timeout_s": null,
+      "idle_timeout_s": 600
+    },
+    "builder": {
+      "role": "builder",
+      "declared_timeout_s": 1800,
+      "idle_timeout_s": 1800
+    },
+    "health_checker": {
+      "role": "health_checker",
+      "declared_timeout_s": null,
+      "idle_timeout_s": 600
+    },
+    "code_reviewer": {
+      "role": "code_reviewer",
+      "declared_timeout_s": null,
+      "idle_timeout_s": 900
+    },
+    "overwatch": {
+      "role": "ceo",
+      "declared_timeout_s": 1800,
+      "idle_timeout_s": 1800
+    },
+    "archivist_plan": {
+      "role": "archivist",
+      "declared_timeout_s": null,
+      "idle_timeout_s": 300
+    },
+    "archivist_build": {
+      "role": "archivist",
+      "declared_timeout_s": null,
+      "idle_timeout_s": 300
+    }
+  },
+  "agent_gates": {
+    "gate_build": {
+      "role": "ceo",
+      "idle_timeout_s": 600,
+      "origin": "invoke_agent default, not CEO pool"
+    },
+    "gate_qa": {
+      "role": "ceo",
+      "idle_timeout_s": 600,
+      "origin": "invoke_agent default, not CEO pool"
+    },
+    "gate_overwatch": {
+      "role": "ceo",
+      "idle_timeout_s": 600,
+      "origin": "invoke_agent default, not CEO pool"
+    },
+    "gate_doc_freshness": {
+      "role": "ceo",
+      "idle_timeout_s": 600,
+      "origin": "invoke_agent default, not CEO pool"
+    }
+  },
+  "activity": "Successful stdout/stderr readline, including final nonempty EOF tail; timer polling is not activity.",
+  "scope": "Original AgentNode invokes one parent role session covering its tools/child orchestration/quality. The numeric timeout is inactivity, not a3600-second composite elapsed wall. Child CLI invocations have their own default inactivity and ordinary runner wall. Hard wall does not reset with activity.",
+  "stale_docstring": "_subprocess says default3600 in prose; actual function signature max_timeout=14400.0 is authoritative.",
+  "source_files": {
+    "factory/runners/_subprocess.py": "074c7cd3d34175465cc10d0e4c918c53eed75a729a6325060b32e6e3c79d9d96",
+    "factory/runners/claude.py": "e56a2a42d86c1f8a8a4790e92e5ba38567f09a0347b48d154d88648bbdca6593",
+    "factory/workflow/executor.py": "90bca0dc0021716fb044f7dbfedf1371c338de3b105527e95171fb4e9f1d686b",
+    "factory/workflow/primitives.py": "610ea5fa95b45ea225e0f38b3e7b749eb22fe3564013b5055e93cd8b04b00035",
+    "factory/cli/_parser_groups.py": "d93c17ef8d7923b68d5b1b747948f3d55f3bbc389a2c4b6db73078898c1b8241",
+    "factory/agents/runner.py": "980bdf7c8ba7a88d30e5768b4be2af57b0025fe144037b6dc899e39bfaf27e3b",
+    "factory/runners/_stream.py": "7ece994a8d7486dc9ef666234a1a059a578f4c25daaeea4c7caf3a869a9e55b0"
+  },
+  "source_sections": {
+    "subprocess_signature": {
+      "path": "factory/runners/_subprocess.py",
+      "start_line": 32,
+      "end_line": 55,
+      "text": "async def run_subprocess(\n    cmd: list[str],\n    *,\n    cwd: str,\n    env: dict[str, str],\n    timeout: float,\n    runner_name: str,\n    role: str,\n    sanitize: bool = False,\n    max_timeout: float = 14400.0,\n    on_line: Callable[[bytes], None] | None = None,\n) -> AgentRunResult:\n    \"\"\"Run a subprocess with streaming, timeout, and error handling.\n\n    This is the shared execution path for all runners, eliminating\n    ~30 lines of duplicated subprocess code per runner.\n\n    Args:\n        timeout: Inactivity timeout \u2014 kills the subprocess if no output is\n            produced for this many seconds.\n        max_timeout: Hard wall-clock backstop via ``asyncio.wait_for``.\n            Catches pathological trickle-output that keeps the inactivity\n            watchdog alive indefinitely. Defaults to 3600s (1 hour).\n    \"\"\""
+    },
+    "claude_call": {
+      "path": "factory/runners/claude.py",
+      "start_line": 266,
+      "end_line": 275,
+      "text": "            result = await run_subprocess(\n                cmd,\n                cwd=str(request.cwd),\n                env=env,\n                timeout=request.timeout,\n                runner_name=\"claude\",\n                role=request.role,\n                on_line=on_line,\n                sanitize=True,\n            )"
+    },
+    "agent_gate_call": {
+      "path": "factory/workflow/executor.py",
+      "start_line": 1215,
+      "end_line": 1228,
+      "text": "        prompt = self._build_gate_prompt(node)\n        from factory.agents.runner import invoke_agent\n\n        model = \"opus\"\n        pool_entry = self.agent_pool.get(\"ceo\")\n        if pool_entry:\n            model = pool_entry.model\n\n        stdout, code = await invoke_agent(\n            \"ceo\",\n            prompt,\n            self.project_path,\n            model=model,\n        )"
+    },
+    "agent_pool": {
+      "path": "factory/workflow/primitives.py",
+      "start_line": 50,
+      "end_line": 63,
+      "text": "DEFAULT_AGENT_POOL: dict[str, AgentConfig] = {\n    \"researcher\": AgentConfig(role=AgentRole.RESEARCHER, model=\"sonnet\", timeout=600),\n    \"strategist\": AgentConfig(role=AgentRole.STRATEGIST, model=\"opus\", timeout=600),\n    \"builder\": AgentConfig(role=AgentRole.BUILDER, model=\"opus\", timeout=1200),\n    \"health_checker\": AgentConfig(role=AgentRole.HEALTH_CHECKER, model=\"opus\", timeout=600),\n    \"code_reviewer\": AgentConfig(role=AgentRole.CODE_REVIEWER, model=\"opus\", timeout=900),\n    \"adversarial_tester\": AgentConfig(\n        role=AgentRole.ADVERSARIAL_TESTER, model=\"opus\", timeout=1800\n    ),\n    \"failure_analyst\": AgentConfig(role=AgentRole.FAILURE_ANALYST, model=\"opus\", timeout=600),\n    \"ceo\": AgentConfig(role=AgentRole.CEO, model=\"opus\", timeout=3600),\n    \"archivist\": AgentConfig(role=AgentRole.ARCHIVIST, model=\"haiku\", timeout=300),\n    \"refiner\": AgentConfig(role=AgentRole.REFINER, model=\"opus\", timeout=600),\n}"
+    },
+    "agent_cli_default": {
+      "path": "factory/cli/_parser_groups.py",
+      "start_line": 348,
+      "end_line": 354,
+      "text": "                    help=\"Agent role to invoke (built-in or plugin-registered)\")\n    p.add_argument(\"--task\", required=True, help=\"Task description for the agent\")\n    p.add_argument(\"--project\", required=True, help=\"Path to the project\")\n    p.add_argument(\"--timeout\", type=float, default=600.0,\n                    help=\"Timeout in seconds (default: 600)\")\n    p.add_argument(\"--model\", default=None,\n                    help=\"Claude model for agent subprocess (default: FACTORY_MODEL env var, or claude CLI default)\")"
+    },
+    "invoke_agent_signature": {
+      "path": "factory/agents/runner.py",
+      "start_line": 240,
+      "end_line": 261,
+      "text": "async def invoke_agent(\n    role: AgentRole,\n    task: str,\n    project_path: Path,\n    *,\n    timeout: float = 600.0,\n    dangerously_skip_permissions: bool = True,\n    model: str | None = None,\n    runner_name: str | None = None,\n    _track_failures: bool = True,\n    session_name: str | None = None,\n    session_id: str | None = None,\n    resume_session_id: str | None = None,\n    use_profile: bool = False,\n    tmux_persist: bool = False,\n    background: bool = False,\n    review_tag: str | None = None,\n    workflow_mode: str | None = None,\n    settings_file: str | None = None,\n    prompt_override: str | None = None,\n    node_id: str | None = None,\n) -> tuple[str, int]:"
+    },
+    "activity_reset": {
+      "path": "factory/runners/_stream.py",
+      "start_line": 98,
+      "end_line": 106,
+      "text": "        last_activity: Single-element list holding a monotonic timestamp. Updated on\n            each successful readline() so the watchdog can detect inactivity.\n    \"\"\"\n    while True:\n        line = await src.readline()\n        if not line:\n            break\n        if last_activity is not None:\n            last_activity[0] = time.monotonic()"
+    },
+    "idle_watchdog": {
+      "path": "factory/runners/_stream.py",
+      "start_line": 120,
+      "end_line": 139,
+      "text": "async def _watchdog(\n    proc: asyncio.subprocess.Process,\n    last_activity: list[float],\n    inactivity_timeout: float,\n    killed_by_watchdog: list[bool] | None = None,\n) -> None:\n    \"\"\"Kill the subprocess if no output is produced for ``inactivity_timeout`` seconds.\"\"\"\n    poll_interval = min(inactivity_timeout / 4, 30.0)\n    while proc.returncode is None:\n        await asyncio.sleep(poll_interval)\n        idle = time.monotonic() - last_activity[0]\n        if idle >= inactivity_timeout and proc.returncode is None:\n            log.warning(\"watchdog_killing_process\", idle_seconds=round(idle, 1), threshold=inactivity_timeout)\n            try:\n                proc.kill()\n            except ProcessLookupError:\n                return\n            if killed_by_watchdog is not None:\n                killed_by_watchdog[0] = True\n            return"
+    }
+  }
+}

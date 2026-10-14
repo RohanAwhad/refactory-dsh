@@ -203,6 +203,8 @@ def evaluate(ctx: RunContext, node: Node) -> str:
         client = client.for_node(node.id, role=node.role)
     if callable(getattr(client, "with_node_timeout", None)):
         client = client.with_node_timeout(node.timeout_s)
+    from refactory_dsh.create_fidelity_timing import configure_client, source_idle_timeout
+    client = configure_client(client, source_idle_timeout(node.id, node.role, is_gate=True))
     route = client.route() if callable(getattr(client, "route", None)) else {}
     if route.get("worker_backend") != "dsh":
         raise ExecutionError("Create fidelity CEO gates require DSH execution")

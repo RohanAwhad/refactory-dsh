@@ -93,6 +93,12 @@ def node_declarations(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
         }
         if candidate:
             entry["create_fidelity"] = True
+            if (node.kind == "agent" or (node.kind == "gate" and node.gate_kind == "agent")
+                    or node.call.startswith("refactory_dsh.create_fidelity_directors:")):
+                from refactory_dsh.create_fidelity_timing import POLICY, SOURCE_WALL_S, source_idle_timeout
+                entry["source_timing"] = {"policy": POLICY, "wall_timeout_s": SOURCE_WALL_S,
+                    "inactivity_timeout_s": source_idle_timeout(node.id, node.role, node.timeout_s,
+                                                               is_gate=node.kind == "gate")}
         if node.timeout_s is not None:
             entry["timeout_s"] = node.timeout_s
         if candidate and node.kind == "gate":
@@ -186,6 +192,10 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
             common["resource_role"] = node.resource_phase
         if node.kind == "op":
             command_timeout_s = node.timeout_s
+            if candidate and node.call.startswith("refactory_dsh.create_fidelity_directors:"):
+                from refactory_dsh.create_fidelity_timing import SOURCE_WALL_S
+                from refactory_dsh.owned_process import SHUTDOWN_GRACE_S
+                command_timeout_s = SOURCE_WALL_S + SHUTDOWN_GRACE_S + 2
             if node.call in ("refactory_dsh.create_ops:smoke", "refactory_dsh.fast_ops:smoke"):
                 # Resolve from the final state, after command-line/GUI knobs.
                 # The operation owns up to three bounded passes plus sandbox
@@ -238,6 +248,8 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
                 gate["evaluator_role"] = AgentRole(node.role)
                 gate["gate_prompt"] = node.prompt_template
                 gate["evaluator_command"] = f"{RUNNER} refactory_dsh.create_fidelity_gates:evaluate_native"
+                from refactory_dsh.create_fidelity_timing import SOURCE_WALL_S
+                gate["command_timeout_s"] = SOURCE_WALL_S
             if node.gate_kind == "fn":
                 gate["evaluator_command"] = f"{RUNNER} {node.evaluator}"
                 if node.evaluator == "refactory_dsh.create_ops:gate_smoke":

@@ -46,6 +46,12 @@ native lowering must preserve logical evaluator ownership in receipts.
 
 Add optional `timeout_s` to native Node without serializing unset defaults.
 Per-stage declared allowances apply in both Python and native lowering.
+For this Create port those source values are inactivity allowances, as pinned
+by `source-timing.json`; physical worker commands use the separate 14400-second
+source wall plus owned shutdown grace. Director planning, children and quality
+share one parent wall and activity clock. Actual output resets idle, never wall;
+remaining run budgets can end either scope earlier. Other modes keep their
+existing `timeout_s` interpretation.
 Non-blocking archives must settle before terminal result, report errors, and
 must never turn a failed final precheck into success. Gate HALT is a branch
 label where an edge exists. The candidate final precheck records its outcome;

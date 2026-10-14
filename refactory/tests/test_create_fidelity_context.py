@@ -177,6 +177,12 @@ def test_final_must_utter_exact_reconciliation_and_retain_actual_read_bytes(tmp_
 
 @pytest.mark.parametrize("problem", ["read-deadline", "final-deadline"])
 def test_one_original_stage_deadline_cancels_read_or_final_and_settles_workers(tmp_path, monkeypatch, problem):
+    from refactory_dsh import create_fidelity_timing
+    configure = create_fidelity_timing.configure_client
+    # Model I/O is mocked here, so exercise the shared physical context wall
+    # explicitly; a logical source timeout now declares inactivity instead.
+    monkeypatch.setattr(create_fidelity_timing, "configure_client",
+                        lambda client, idle, *args, **kwargs: configure(client, idle, wall_timeout_s=1))
     started = time.monotonic()
     result, manifest, external, _ = run_stage(tmp_path, monkeypatch, problem=problem, timeout=1)
     assert not result.exit_ok and time.monotonic() - started < 3

@@ -70,9 +70,10 @@ def test_agent_gate_keeps_question_model_owner_and_strict_fresh_verdict(monkeypa
     result = execute(graph, tmp_path, facts={'create_fidelity': True}, model=DshModelClient(effort='high'))
     assert result.exit_ok and (tmp_path / 'accepted.md').exists()
     assert result.model_calls == 3
-    assert 'Original CEO criteria.' in seen[1][2] and seen[1][1] == 3600
+    assert 'Original CEO criteria.' in seen[1][2] and seen[1][1] == 14400
     receipt = json.loads(next((tmp_path / '.refactory/create-fidelity-gates').glob('*/verdict.json')).read_text())
     assert receipt['owner'] == 'agent' and receipt['actual_route']['worker_backend'] == 'dsh'
+    assert receipt['effective_deadlines']['inactivity_timeout_s'] == 600
     assert receipt['evidence']['deliveries']['review']['execution']['input_fingerprints']['spec.md']
 
 
@@ -243,7 +244,9 @@ print(json.dumps(answer))
     assert proc.stdout.strip() == 'proceed'
     assert json.loads((tmp_path / 'facts.json').read_text())['choose_verdict'] == 'proceed'
     receipt = json.loads(next((tmp_path / '.refactory/workers').glob('*.json')).read_text())
-    assert receipt['role'] == 'ceo' and receipt['effective_deadlines']['stage_timeout_s'] == 5
+    assert receipt['role'] == 'ceo' and receipt['effective_deadlines']['stage_timeout_s'] == 14400
+    assert receipt['effective_deadlines']['inactivity_timeout_s'] == 600
+    assert receipt['transport_timing'][0]['activity_observations'] > 0
 
 
 def test_native_human_bridge_publishes_digest_bound_receipt_and_expires_on_change(tmp_path):

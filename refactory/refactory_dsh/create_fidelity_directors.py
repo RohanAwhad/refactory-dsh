@@ -12,6 +12,7 @@ import math
 import re
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -19,6 +20,9 @@ from typing import Any
 
 from refactory_dsh.nn.executor import ExecutionError, Executor, RunContext, render
 from refactory_dsh.nn.graph import Graph, Node
+from refactory_dsh.create_fidelity_timing import (
+    ActivityClock, DEFAULT_IDLE_S, POLICY, SOURCE_WALL_S, configure_client,
+)
 
 
 @dataclass(frozen=True)
@@ -188,26 +192,32 @@ def _receipts(workdir: Path, node: str) -> tuple[list[str], list[dict[str, Any]]
 
 
 def _run_agent(ctx: RunContext, node: str, role: str, prompt: str, output: str,
-               reads: tuple[str, ...], identity: dict[str, Any], timeout_s: int = 1800, *,
+               reads: tuple[str, ...], identity: dict[str, Any], timeout_s: int = DEFAULT_IDLE_S, *,
                instructions: str | None = None,
                documents: dict[str, str] | None = None,
                obligations: list[dict[str, Any]] | None = None,
                fixed_documents: dict[str, tuple[str, dict[str, Any]]] | None = None) -> dict[str, Any]:
     logical_id = identity["stage_id"] if role == "ceo" else identity["task_id"]
+    clock = getattr(ctx, "_director_clock", None)
+    if clock is not None:
+        _require(clock.expiry() is None,
+                 f"{identity['stage_id']} composite stage {clock.expiry()} deadline expired")
     selected = _route(ctx.model, logical_id, role)
     deadline = getattr(ctx, "_director_deadline", None)
+    wall_timeout_s = SOURCE_WALL_S
     if deadline is not None:
         remaining = deadline - time.monotonic()
         _require(remaining > 0, f"{identity['stage_id']} composite stage deadline expired")
-        timeout_s = min(timeout_s, max(1, math.ceil(remaining)))
+        wall_timeout_s = min(wall_timeout_s, remaining)
         if callable(getattr(selected, "with_deadline_observation", None)):
             selected = selected.with_deadline_observation("composite_stage", deadline)
-    if callable(getattr(selected, "with_node_timeout", None)):
-        selected = selected.with_node_timeout(timeout_s)
+    selected = configure_client(selected, idle_timeout_s=timeout_s,
+                                wall_timeout_s=wall_timeout_s)
+    dispatch_wall_s = max(1, math.ceil(wall_timeout_s))
     requested = selected.route()
     agent = Node(id=node, kind="agent", role=role, prompt_template=prompt,
                  reads=reads, writes=(output,), notes=f"Create fidelity {role} task",
-                 **({"timeout_s": timeout_s} if "timeout_s" in Node.__dataclass_fields__ else {}))
+                 **({"timeout_s": dispatch_wall_s} if "timeout_s" in Node.__dataclass_fields__ else {}))
     # Role/task templates are rendered before raw input bodies are appended.
     # Empty interpolation values keep embedded report code such as {{name}}
     # byte-for-byte intact through the Executor's normal render boundary.
@@ -271,7 +281,7 @@ def _run_agent(ctx: RunContext, node: str, role: str, prompt: str, output: str,
             "output": output, "output_digest": _digest(body.encode()), "body": body,
             "raw_evidence": {"worker_receipts": worker_paths, "delivery_receipts": delivery_paths},
             **({"bounded_context": context_evidence} if context_evidence else {}),
-            "effective_deadlines": selected.effective_deadlines() if callable(getattr(selected, "effective_deadlines", None)) else {"stage_timeout_s": timeout_s},
+            "effective_deadlines": selected.effective_deadlines() if callable(getattr(selected, "effective_deadlines", None)) else {"stage_timeout_s": dispatch_wall_s},
             "steps": [{"node": step.node, "kind": step.kind, "error": step.error} for step in executor.steps]}
 
 
@@ -462,28 +472,61 @@ def _direct(ctx: RunContext, stage: Stage) -> None:
         from refactory_dsh.model import DshModelClient
         ctx.model = DshModelClient(project=ctx.workdir)
     original_model = ctx.model
-    allowance = 3600
+    idle_allowance = 3600
     if callable(getattr(original_model, "effective_deadlines", None)):
-        allowance = original_model.effective_deadlines().get("declared_stage_timeout_s") or allowance
+        controls = original_model.effective_deadlines()
+        idle_allowance = (controls.get("inactivity_timeout_s")
+                          if controls.get("inactivity_timeout_policy") == POLICY
+                          else controls.get("declared_stage_timeout_s")) or idle_allowance
+    wall_allowance = SOURCE_WALL_S
+    if ctx.budget is not None:
+        ctx.budget.checkpoint()
+        remaining = ctx.budget.remaining_s()
+        if remaining is not None:
+            _require(remaining > 0, f"{stage.id} run budget expired")
+            wall_allowance = min(wall_allowance, remaining)
     stopped = threading.Event()
+    clock = ActivityClock(idle_allowance, wall_allowance, on_expire=stopped.set)
+    ctx.model = configure_client(original_model, idle_allowance, wall_allowance,
+                                 activity_callback=clock.touch)
     if callable(getattr(original_model, "with_cancellation", None)):
-        ctx.model = original_model.with_cancellation(stopped)
-    ctx._director_deadline = time.monotonic() + allowance
-    timer = threading.Timer(allowance, stopped.set)
-    timer.daemon = True
-    timer.start()
+        ctx.model = ctx.model.with_cancellation(stopped)
+    ctx._director_deadline = clock.deadline
+    ctx._director_clock = clock
+    ctx._director_visit = None
+    clock.start()
     from refactory_dsh.owned_process import _termination_as_exit
     # During fanout model calls run on worker threads, so their own shutdown
     # scopes cannot install the owner's main-thread SIGTERM handler. Keep the
     # whole composite inside that scope: an external stop unwinds the join,
     # signals the existing cancellation events and awaits owned runtimes/tools.
     with _termination_as_exit():
+        failure = None
         try:
             _direct_stage(ctx, stage)
+            _require(clock.expiry() is None, f"{stage.id} composite stage {clock.expiry()} deadline expired")
+        except BaseException as error:
+            failure = error
+            raise
         finally:
-            timer.cancel()
-            ctx.model = original_model
-            del ctx._director_deadline
+            clock.close()
+            visit = ctx._director_visit
+            timing = {"schema_version": 1, "kind": "director_invocation_timing",
+                      "stage_id": stage.id, "visit": visit,
+                      "run_id": str(ctx.task.get("trial_id") or ctx.facts.get("trial_id") or ctx.workdir.resolve()),
+                      "source_wall_timeout_s": SOURCE_WALL_S,
+                      "effective_wall_bound": "minimum source hard wall and remaining run budget",
+                      **clock.snapshot(),
+                      "end_reason": clock.expiry() or ("completed" if failure is None else "failed"),
+                      "error": None if failure is None else f"{type(failure).__name__}: {failure}"}
+            timing_name = f"v{visit}" if visit is not None else f"unstarted-{uuid.uuid4().hex}"
+            try:
+                ctx.write_json(f".factory/directors/{stage.id}/timing-{timing_name}.json", timing)
+            finally:
+                ctx.model = original_model
+                del ctx._director_deadline
+                del ctx._director_clock
+                del ctx._director_visit
 
 
 def _direct_stage(ctx: RunContext, stage: Stage) -> None:
@@ -497,6 +540,7 @@ def _direct_stage(ctx: RunContext, stage: Stage) -> None:
     state_path = f".factory/directors/{stage.id}/visits.json"
     visits = ctx.read_json(state_path, default={})
     visit = int(visits.get("visits", 0)) + 1
+    ctx._director_visit = visit
     ctx.write_json(state_path, {"visits": visit})
     directory = f".factory/directors/{stage.id}/v{visit}"
     run_id = str(ctx.task.get("trial_id") or ctx.facts.get("trial_id") or ctx.workdir.resolve())
@@ -549,6 +593,7 @@ def _direct_stage(ctx: RunContext, stage: Stage) -> None:
                            model=model, enforce_writes=ctx.enforce_writes)
         local.budget = ctx.budget
         local._director_deadline = ctx._director_deadline
+        local._director_clock = ctx._director_clock
         if hasattr(ctx, "_create_fidelity_context_policy"):
             local._create_fidelity_context_policy = ctx._create_fidelity_context_policy
         record = _run_agent(local, f"{stage.id}:v{visit}:{identifier}:a{attempt}", task["role"], prompt,

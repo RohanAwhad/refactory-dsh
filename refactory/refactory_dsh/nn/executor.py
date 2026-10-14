@@ -704,6 +704,8 @@ class Executor:
             allowance = node.timeout_s or DEFAULT_TIMEOUT_S
             if callable(getattr(model, "effective_deadlines", None)):
                 selected = model.for_node(node.id, role=node.role).with_node_timeout(node.timeout_s)
+                from refactory_dsh.create_fidelity_timing import configure_client, source_idle_timeout
+                selected = configure_client(selected, source_idle_timeout(node.id, node.role, node.timeout_s))
                 allowance = selected.effective_deadlines()["stage_timeout_s"]
             self._background.append((future, pool, child, stopped,
                                      time.monotonic() + allowance + SHUTDOWN_GRACE_S + 2))
@@ -760,6 +762,11 @@ class Executor:
             client = client.for_node(node.id, role=node.role)
         if callable(getattr(client, "with_node_timeout", None)):
             client = client.with_node_timeout(node.timeout_s)
+        if self.ctx.facts.get("create_fidelity"):
+            from refactory_dsh.create_fidelity_timing import POLICY, configure_client, source_idle_timeout
+            timing = client.effective_deadlines() if callable(getattr(client, "effective_deadlines", None)) else {}
+            if timing.get("inactivity_timeout_policy") != POLICY:
+                client = configure_client(client, source_idle_timeout(node.id, node.role, node.timeout_s))
         route = client.route() if callable(getattr(client, "route", None)) else {}
         if self.ctx.facts.get("create_fidelity") and node.role != "builder" and route.get("worker_backend", "dsh") != "dsh":
             raise ExecutionError(f"Create fidelity role {node.role!r} requires DSH execution")
