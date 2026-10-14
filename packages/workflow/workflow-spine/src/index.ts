@@ -975,6 +975,8 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   const pendingQuestions = new WeakSet<Spine>()
+  /** Gates whose plan-review card the person set aside; the re-ask offers every outcome. */
+  const discussedGates = new WeakMap<Spine, Set<string>>()
 
   /**
    * Result of a user-gate question.
@@ -1080,7 +1082,10 @@ export function apply(ctx: Context, config: Config): void {
     const shown = reads.length > 0 ? gateDetail(reads, workdir) : undefined
     // DSH's plan-review card offers approve-or-discuss, so it fits a gate with a
     // `proceed` outcome and at most one alternative. Wider gates keep the option list.
-    const planReview = shown?.inlined === true && labels.includes(PROCEED_LABEL) && labels.length <= 2
+    // The card has no button for the other outcome, so once the person has set it
+    // aside to talk, the re-ask is the full option list (with free text) instead.
+    const discussed = discussedGates.get(spine)?.has(gate) === true
+    const planReview = !discussed && shown?.inlined === true && labels.includes(PROCEED_LABEL) && labels.length <= 2
     let answer
     const questionLifetime = new AbortController()
     const questionSignal = exec.signal === undefined ? questionLifetime.signal : AbortSignal.any([exec.signal, questionLifetime.signal])
@@ -1116,6 +1121,7 @@ export function apply(ctx: Context, config: Config): void {
     } catch (error: unknown) {
       if (planReview && (error as { code?: unknown } | null)?.code === 'ASK_CANCELLED') {
         recordStatus(spine, workdir, 'waiting_user')
+        discussedGates.set(spine, (discussedGates.get(spine) ?? new Set()).add(gate))
         return { status: 'discussing', gate }
       }
       const detail = error instanceof Error ? error.message : String(error)
@@ -1436,7 +1442,7 @@ export function apply(ctx: Context, config: Config): void {
         if ('status' in result && result.status === 'discussing') {
           return json({
             status: 'discussing', gate: args.gate,
-            note: 'The person set the review aside to talk. The gate remains due. Stop here and wait for their message; then route it with their verdict, or call this tool again to re-ask.',
+            note: 'The person set the review aside to talk. The gate remains due. Stop here and wait for their message; then call this tool again with the gate alone, and the person is offered every outcome.',
           })
         }
         if ('status' in result) {

@@ -180,6 +180,24 @@ describe('workflow-spine real composition', () => {
     } finally { rmSync(tmp, { recursive: true, force: true }) }
   })
 
+  it('re-asks a discussed gate with every outcome so the person can reloop', async () => {
+    // The card offers only approve and discuss: without this, `reloop` is unreachable.
+    const tmp = mkdtempSync(join(tmpdir(), 'spine-gate-reads-'))
+    try {
+      writeFileSync(join(tmp, 'design.md'), '# My Design')
+      let calls = 0
+      const { ctx, asked } = await gateRun(graphWithReads, tmp, question => ++calls === 1
+        ? Promise.reject(new UserQuestionError('dismissed', 'ASK_CANCELLED'))
+        : Promise.resolve({ answers: [{ id: question.id, selected: [], custom: 'reloop: cover the error path' }] }))
+      expect(await run(ctx, 'wf_verdict', { gate: 'gate' })).toMatchObject({ status: 'discussing' })
+      expect(await run(ctx, 'wf_verdict', { gate: 'gate' }))
+        .toMatchObject({ status: 'routed', verdict: 'reloop', feedback: 'cover the error path' })
+      expect(asked[1]!.intent).toBeUndefined()
+      expect(asked[1]!.options?.map(option => option.label)).toEqual(['proceed', 'reloop'])
+      expect(asked[1]!.detail).toBe('# My Design')
+    } finally { rmSync(tmp, { recursive: true, force: true }) }
+  })
+
   it('keeps the option list for a gate with more outcomes than the review card offers', async () => {
     const tmp = mkdtempSync(join(tmpdir(), 'spine-gate-reads-'))
     try {
