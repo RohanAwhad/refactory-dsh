@@ -34,6 +34,12 @@ class ExternalModel:
         client._worker_receipt.write_text(json.dumps(record))
         self.calls.append((client._node_id, client._role, client.route(), task))
         if "EVIDENCE READ REQUEST:\n" in prompt:
+            assert "Apply the CURRENT original role/stage assignment." in prompt
+            assert "not delivered-capability or execution PASS evidence" in prompt
+            assert "Actual unsupported claims, including completion or design-feasibility assertions" in prompt
+            assert "missing duties required at this current stage remain adverse/unresolved" in prompt
+            assert "Use read-only code on the supplied page snapshot to compute offsets; never estimate them mentally." in prompt
+            assert "Verify the actual byte slice equals quote.encode('utf-8') before responding." in prompt
             request = json.JSONDecoder().raw_decode(prompt.split("EVIDENCE READ REQUEST:\n", 1)[1])[0]
             data = (self.root / request["document_snapshot"]).read_bytes()
             text = data[request["start_byte"]:request["end_byte"]].decode()
