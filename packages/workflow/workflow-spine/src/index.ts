@@ -1384,7 +1384,7 @@ export function apply(ctx: Context, config: Config): void {
         if ('status' in result) {
           return json({
             status: 'replied', gate: args.gate, text: result.text,
-            note: 'The person answered with text that is none of the gate\'s outcomes. The gate was asked correctly and remains due. Reply to them in conversation (the outcomes are the options they were shown) and wait for their message. Do not ask the gate\'s question yourself or recommend an outcome; once they have answered, call this tool again with the gate alone.',
+            note: 'The person answered with text that is none of the gate\'s outcomes. The gate was asked correctly and remains due. Answer what they wrote in conversation, then call this tool again with the gate alone straight away, so the question is shown again under your reply. Do not ask them to type an outcome in chat, ask the gate\'s question yourself, or recommend an outcome.',
           })
         }
         spine.verdict(args.gate, result.verdict, result.feedback || args.feedback || '')

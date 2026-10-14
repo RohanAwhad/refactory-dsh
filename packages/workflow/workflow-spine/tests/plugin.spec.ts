@@ -172,7 +172,7 @@ describe('workflow-spine real composition', () => {
     } finally { rmSync(tmp, { recursive: true, force: true }) }
   })
 
-  it('tells the CEO to reply and wait, not re-ask, when the answer is no outcome', async () => {
+  it('tells the CEO to reply, then ask the gate again at once, when the answer is no outcome', async () => {
     const tmp = mkdtempSync(join(tmpdir(), 'spine-gate-replied-'))
     try {
       const { ctx } = await gateRun(graphWithReads, tmp,
@@ -180,7 +180,8 @@ describe('workflow-spine real composition', () => {
       const replied = await run(ctx, 'wf_verdict', { gate: 'gate' }) as { status: string; note: string }
       expect(replied.status).toBe('replied')
       expect(replied.note).toMatch(/asked correctly/)
-      expect(replied.note).toMatch(/Do not ask the gate's question yourself or recommend an outcome/)
+      expect(replied.note).toMatch(/call this tool again with the gate alone straight away/)
+      expect(replied.note).toMatch(/Do not ask them to type an outcome in chat/)
     } finally { rmSync(tmp, { recursive: true, force: true }) }
   })
 
