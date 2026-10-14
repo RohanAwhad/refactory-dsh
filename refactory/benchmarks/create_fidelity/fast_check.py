@@ -19,6 +19,10 @@ TESTS = (
     "test_create_fidelity_source_timing.py",
     "test_create_fidelity_director_timing.py",
     "test_create_fidelity_transport_inactivity.py",
+    "test_create_fidelity_context.py",
+    "test_create_fidelity_context_review.py",
+    "test_create_fidelity_adjudication.py",
+    "test_create_fidelity_quote_correction.py",
 )
 
 

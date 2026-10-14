@@ -121,6 +121,8 @@ def run_quote_stage(tmp_path, monkeypatch, *, problem=None, ceiling=65536, timeo
     monkeypatch.setattr(DshModelClient, "_complete", lambda client, prompt, **kw: responses.complete(client, prompt, **kw))
     client = DshModelClient(provider="fixture", model="gpt-6-sol", effort="high", attempts=1,
                             node_routes={"review": {"model": "specific-model", "effort": "high"}})
+    from refactory_dsh.create_fidelity_timing import configure_client
+    client = configure_client(client, timeout, wall_timeout_s=timeout)
     ctx = RunContext(tmp_path, facts={"create_fidelity": True}, model=client)
     ctx._create_fidelity_context_policy = ContextPolicy(max_prompt_bytes=ceiling)
     graph = Graph()

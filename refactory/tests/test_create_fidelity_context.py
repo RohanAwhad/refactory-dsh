@@ -116,6 +116,10 @@ def run_stage(tmp_path, monkeypatch, *, problem=None, large=True, timeout=20, ro
     monkeypatch.setattr(DshModelClient, "_complete", lambda client, prompt, **kwargs: external.complete(client, prompt, **kwargs))
     client = DshModelClient(provider="fixture", model="gpt-6-sol", effort="high", attempts=1,
                             node_routes={"review": {"model": "specific-model", "effort": "high"}})
+    from refactory_dsh.create_fidelity_timing import configure_client
+    # Controlled I/O has no real output activity; retain an accelerated shared
+    # physical wall for all consumers of this test fixture.
+    client = configure_client(client, idle_timeout_s=timeout, wall_timeout_s=timeout)
     ctx = RunContext(tmp_path, facts={"create_fidelity": True}, model=client)
     ctx._create_fidelity_context_policy = ContextPolicy(max_prompt_bytes=32768)
     graph = Graph()
@@ -177,12 +181,6 @@ def test_final_must_utter_exact_reconciliation_and_retain_actual_read_bytes(tmp_
 
 @pytest.mark.parametrize("problem", ["read-deadline", "final-deadline"])
 def test_one_original_stage_deadline_cancels_read_or_final_and_settles_workers(tmp_path, monkeypatch, problem):
-    from refactory_dsh import create_fidelity_timing
-    configure = create_fidelity_timing.configure_client
-    # Model I/O is mocked here, so exercise the shared physical context wall
-    # explicitly; a logical source timeout now declares inactivity instead.
-    monkeypatch.setattr(create_fidelity_timing, "configure_client",
-                        lambda client, idle, *args, **kwargs: configure(client, idle, wall_timeout_s=1))
     started = time.monotonic()
     result, manifest, external, _ = run_stage(tmp_path, monkeypatch, problem=problem, timeout=1)
     assert not result.exit_ok and time.monotonic() - started < 3

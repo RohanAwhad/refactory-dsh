@@ -79,6 +79,9 @@ def run_adjudication(tmp_path, monkeypatch, problem=None):
     # this case intentionally expires inside the aggregate external boundary.
     graph.add(Node("review", "agent", role="health_checker", prompt_template="Original role: inspect all complete evidence, then perform final assigned report.", reads=("evidence.md",), writes=("report.md",), timeout_s=5 if problem == "deadline" else 30))
     ctx = RunContext(tmp_path, facts={"create_fidelity": True}, model=DshModelClient(provider="fixture", model="default", effort="high", attempts=1, node_routes={"review": {"model": "original-route"}}))
+    from refactory_dsh.create_fidelity_timing import configure_client
+    allowance = 5 if problem == "deadline" else 30
+    ctx.model = configure_client(ctx.model, allowance, wall_timeout_s=allowance)
     ctx._create_fidelity_context_policy = ContextPolicy(max_prompt_bytes=32768)
     result = Executor(graph, ctx).run()
     manifest = json.loads(next(tmp_path.glob(".refactory/create-fidelity-context/*/*/manifest.json")).read_text())
