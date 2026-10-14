@@ -49,6 +49,9 @@ def probe(config: dict[str, Any], env: dict[str, str]) -> dict[str, Any]:
     if config.get("native_credential_mapping"):
         from .native_credentials import apply_environment as native_credential_environment
         isolated = native_credential_environment(isolated, config["native_credential_mapping"])
+    if config.get("native_vertex_mapping"):
+        from .native_vertex import apply_environment as native_vertex_environment
+        isolated = native_vertex_environment(isolated, config["native_vertex_mapping"])
     code = r'''
 import hashlib, json, os, subprocess, sys
 from pathlib import Path
@@ -100,6 +103,7 @@ print(json.dumps(result))
     return {"schema_version": 1, "kind": "isolated native readiness without model execution",
             "status": "passed" if passed else "failed", "returncode": result.returncode,
             "mapping": mapping, "credential_mapping": config.get("native_credential_mapping"),
+            "vertex_mapping": config.get("native_vertex_mapping"),
             "temp_mapping": config.get("native_temp_mapping"), "policy": config["policy"], "observed": observed,
             "limits": "Auth status reports configuration/login readiness; no API credential refresh, served model or authoring success is established."}
 
@@ -118,6 +122,9 @@ def invocation_probe(config: dict[str, Any], project: Path) -> dict[str, Any]:
     import shutil
     from .native_temp import validate
     validate(config["native_temp_mapping"])
+    if config.get("native_vertex_mapping"):
+        from .native_vertex import validate_process
+        validate_process(dict(os.environ), config["native_vertex_mapping"])
     from factory.agents.runner import invoke_agent
     from factory.workflow.primitives import DEFAULT_AGENT_POOL
 
@@ -162,7 +169,9 @@ def invocation_probe(config: dict[str, Any], project: Path) -> dict[str, Any]:
     return {"schema_version": 1, "kind": "real native invocation preflight; not workflow authoring",
             "status": "passed" if returncode == 0 and marker else "failed",
             "returncode": returncode, "marker_received": marker,
-            "requested_alias": alias, "runner": "claude", "provider_policy": "unchanged inherited native configuration",
+            "requested_alias": alias, "runner": "claude",
+            "provider_policy": "explicitly pinned native Vertex settings" if config.get("native_vertex_mapping") else "unchanged inherited native configuration",
+            "vertex_mapping_sha256": config.get("native_vertex_mapping", {}).get("environment_sha256") if config.get("native_vertex_mapping") else None,
             "tools": [], "max_turns": 1, "budget_usd": 0.10, "inactivity_timeout_s": 20,
             "diagnostic_categories": categories,
             "native_cli": {"path": str(native.resolve()), "sha256": hashlib.sha256(native.read_bytes()).hexdigest()},

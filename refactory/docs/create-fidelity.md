@@ -45,6 +45,31 @@ integration testers. The source's 3600-second director and 1800-second builder
 and Overwatch allowances are retained. Supplied outer limits still apply and
 appear in worker evidence.
 
+Large evidence bundles use bounded reading passes by the same logical role and
+model route, followed by the original task's final assessment. The runtime keeps
+the complete source bytes and records exact UTF-8 ranges, actual worker and
+delivery receipts, claim excerpts, coverage findings and the final reconciliation
+digest under `.refactory/create-fidelity-context/`. Missing ranges, stale inputs,
+invalid excerpts or an unbound final response fail the stage. All reading passes
+and the final task share the original stage deadline and cancellation scope.
+Reading evidence does not replace the role's required execution or review work.
+This staging applies to DSH execution. An explicitly selected native builder
+retains its existing direct delivery and backend context handling.
+
+When the read records themselves exceed the ceiling, the same role adjudicates
+bounded groups of complete prior responses. Every positive finding needs an
+explicit source disposition; adverse, unresolved and absent-page findings carry
+forward verbatim under stable identities. The final task receives the complete
+remaining records with the full strategy, intent and decision obligations.
+All intermediate responses remain preserved and digest-bound. The runtime limits
+adjudication depth and calls and refuses a reduction that makes no size progress.
+
+The configured prompt byte ceiling is not a claim about an unknown provider's
+context window. Oversized fixed instructions or final reconciliation records fail
+explicitly; they are never truncated. Small inputs retain direct delivery. These
+receipts establish supplied evidence and model responses; independent semantic
+review must still judge whether the role performed its duties correctly.
+
 Remote workflow registration becomes native package discovery, validation,
 admission, skill export, and invocation. Source Study becomes a read-only AST
 and repository inventory. Reports retain their full bodies and provenance in

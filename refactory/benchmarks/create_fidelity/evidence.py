@@ -11,6 +11,7 @@ from typing import Any
 from .contract import FIXTURES, reference
 from .deadline_evidence import dispatch_deadline_row
 from .operator_evidence import OperatorEvidenceContext, supplemental_row
+from .bounded_context_evidence import verify_bounded_context
 
 STATUSES = {"passed", "failed", "unavailable", "not_exercised"}
 
@@ -95,6 +96,32 @@ def _read_evidence(root: Path, name: Any) -> dict:
     return value
 
 
+def _bounded_proof(root: Path, record: dict, *, node: str, role: str,
+                   required_documents: dict[str, str] | None = None,
+                   required_bodies: list[str] | None = None, historical: bool = False,
+                   historical_inputs: dict[str, str] | None = None) -> list[str]:
+    """An explicit new receipt can establish range transport, not semantics."""
+    binding = record.get("bounded_context")
+    if (not isinstance(binding, dict) or set(binding) not in ({"manifest", "digest"}, {"protocol", "manifest", "digest"})
+            or ("protocol" in binding and binding["protocol"] != "create-fidelity-full-context/v1")):
+        raise ValueError("full bodies absent and no explicit versioned bounded context binding")
+    manifest = _read_evidence(root, binding["manifest"])
+    if manifest.get("reconciliation_digest") != binding["digest"]:
+        raise ValueError("bounded context receipt references a stale reconciliation digest")
+    source = reference()
+    roles = {Path(name).stem: body for name, body in source["role_prompts"].items()}
+    stage = node.split(":", 1)[0]
+    definition = source["graph"]["nodes"].get(stage)
+    if role not in roles or not definition:
+        raise ValueError("bounded context consumer has no pinned source role/stage")
+    stage_text = ""
+    if node == stage or ":plan:" in node or ":quality:" in node:
+        stage_text = definition.get("prompt_template", definition.get("gate_prompt", ""))
+    return verify_bounded_context(root, binding["manifest"], consumer_node=node, role=role,
+        role_text=roles[role], stage_text=stage_text, required_documents=required_documents,
+        required_bodies=required_bodies or (), historical=historical, historical_inputs=historical_inputs)
+
+
 def _verify_director_envelope(root: Path, report: dict, *, stage: str, visit: int,
                               run_id: str, role: str, task_id: str,
                               plan_normalization: bool = False) -> list[str]:
@@ -144,7 +171,10 @@ def _verify_director_envelope(root: Path, report: dict, *, stage: str, visit: in
         raise ValueError("input digest does not match the actual supplied model context")
     if delivery.get("execution", {}).get("node") != node or not isinstance(delivery.get("execution", {}).get("input_fingerprints"), dict):
         raise ValueError("raw delivery omits exact input fingerprint evidence")
-    return [*raw["worker_receipts"], *raw["delivery_receipts"], str(prompt.relative_to(root))]
+    refs = [*raw["worker_receipts"], *raw["delivery_receipts"], str(prompt.relative_to(root))]
+    if "bounded_context" in report:
+        refs.extend(_bounded_proof(root, report, node=node, role=role))
+    return refs
 
 
 def _director_evidence_score(name: str, manifest: dict | None, root: Path | None,
@@ -238,7 +268,8 @@ def _raw_records(root: Path, pattern: str) -> list[tuple[str, dict]]:
             for path in sorted(root.glob(pattern), key=lambda p: p.stat().st_mtime_ns)]
 
 
-def _delivery_prompt(root: Path, pair: tuple[str, dict], workers: list[tuple[str, dict]] | None = None) -> tuple[str, list[str]]:
+def _delivery_prompt(root: Path, pair: tuple[str, dict], workers: list[tuple[str, dict]] | None = None,
+                     *, historical: bool = False) -> tuple[str, list[str]]:
     path, receipt = pair
     if receipt.get("status") != "delivered" or receipt.get("missing_or_unchanged"):
         raise ValueError("model input belongs to an undelivered worker")
@@ -261,6 +292,16 @@ def _delivery_prompt(root: Path, pair: tuple[str, dict], workers: list[tuple[str
         if not matching:
             raise FileNotFoundError("supplied context lacks an actual completed worker within its delivery interval")
         refs.extend(worker_path for worker_path, _ in matching)
+    if "bounded_context" in receipt:
+        node = receipt["node"]
+        stage = node.split(":", 1)[0]
+        definition = reference()["graph"]["nodes"].get(stage, {})
+        role = definition.get("role") or definition.get("evaluator_role")
+        if stage.endswith("_director") and ":plan:" not in node and ":quality:" not in node:
+            role = {"research_director": "researcher", "strategy_director": "strategist",
+                    "qa_director": "adversarial_tester"}.get(stage)
+        refs.extend(_bounded_proof(root, receipt, node=node, role=role, historical=historical,
+            historical_inputs=receipt["execution"]["input_fingerprints"] if historical else None))
     return prompt, refs
 
 
@@ -276,7 +317,7 @@ def _body_supplied(prompt: str, body: str) -> bool:
     return body in prompt or any(json.dumps(body, ensure_ascii=ascii_only) in prompt for ascii_only in (False, True))
 
 
-def _verified_gate(root: Path, pair: tuple[str, dict]) -> tuple[str, list[str]]:
+def _verified_gate(root: Path, pair: tuple[str, dict], *, historical: bool = False) -> tuple[str, list[str]]:
     path, receipt = pair
     parent = Path(path).parent
     prompt_path, response_path = str(parent / "prompt.txt"), str(parent / "model-response.txt")
@@ -299,7 +340,63 @@ def _verified_gate(root: Path, pair: tuple[str, dict]) -> tuple[str, list[str]]:
         raise ValueError("gate verdict evidence digest is invalid")
     if digest(evidence.get("inputs")) != receipt.get("input_digest"):
         raise ValueError("gate input digest is invalid")
-    return prompt, [path, prompt_path, response_path]
+    refs = [path, prompt_path, response_path]
+    if "bounded_context" in receipt:
+        gate = receipt["gate_id"]
+        manifest = _read_evidence(root, receipt["bounded_context"]["manifest"])
+        if historical:
+            required = {}
+            available = [*manifest["documents"], *manifest["fixed_documents"]]
+            for name, digest in evidence["inputs"].items():
+                if digest is None:
+                    continue
+                document = next((item for item in available if item.get("source_path", item.get("path")) == name), None)
+                if document is None:
+                    raise ValueError("historical gate omitted an original immutable input")
+                body = _evidence_path(root, document["snapshot"]).read_bytes().decode("utf-8")
+                if hashlib.sha256(body.encode()).hexdigest() != digest:
+                    raise ValueError("historical gate snapshot differs from original gate input digest")
+                required[name] = body
+            for producer in evidence.get("deliveries", {}).values():
+                actual = _read_evidence(root, f".refactory/agent-delivery/{producer['id']}/receipt.json")
+                if (actual.get("node") != producer.get("node") or actual.get("status") != "delivered"
+                        or actual.get("execution") != producer.get("execution")
+                        or actual.get("contexts") != producer.get("contexts")
+                        or any(actual.get("artifacts", {}).get(name) != artifact
+                               for name, artifact in producer.get("artifacts", {}).items())):
+                    raise ValueError("historical gate producer hashes do not match actual original delivery")
+        else:
+            required = {name: _evidence_path(root, name).read_bytes().decode("utf-8")
+                        for name, value in evidence["inputs"].items() if value is not None}
+        # This document is a runtime-derived request, independently rebuilt
+        # from the already verified raw gate evidence instead of its own hash.
+        derived = next((item for item in manifest["documents"]
+                        if item.get("path") == "runtime-gate-evidence.json"), None)
+        if derived is None:
+            raise ValueError("bounded gate omitted its complete actual runtime request")
+        request = json.loads(_evidence_path(root, derived["snapshot"]).read_text())
+        labels = request.get("verdict_labels")
+        original_labels = {edge["condition"] for edge in reference()["graph"]["edges"]
+                           if edge["source"] == gate and edge.get("condition") is not None}
+        if (not isinstance(labels, list) or not labels or len(set(labels)) != len(labels)
+                or not set(labels) <= {"proceed", "reloop", "halt"}
+                or set(labels) != original_labels
+                or answer["verdict"] not in labels):
+            raise ValueError("bounded gate request has invalid original verdict labels")
+        expected = {"schema_version": 1, "gate_id": gate, "input_digest": receipt["input_digest"],
+                    "evidence_digest": receipt["evidence_digest"], "verdict_labels": labels,
+                    "guard_problems": receipt.get("guard_problems", []), "evidence": evidence}
+        if request != expected:
+            raise ValueError("bounded gate request does not derive from its actual gate evidence")
+        required["runtime-gate-evidence.json"] = json.dumps(expected, indent=2)
+        refs.extend(_bounded_proof(root, receipt, node=gate, role="ceo", required_documents=required,
+            historical=historical, historical_inputs={name: digest for name, digest in evidence["inputs"].items()
+                                                       if digest is not None} if historical else None))
+        actual = _evidence_path(root, manifest["final"]["raw_response"]["snapshot"]).read_text()
+        if actual != _evidence_path(root, response_path).read_text():
+            raise ValueError("bounded gate verdict differs from its actual final model response")
+        prompt = _evidence_path(root, manifest["final"]["supplied_prompt"]["snapshot"]).read_text()
+    return prompt, refs
 
 
 def _protocol_rows(root: Path | None, events: list[dict], manifests: dict,
@@ -366,10 +463,15 @@ def _protocol_rows(root: Path | None, events: list[dict], manifests: dict,
     def consumption():
         refs = []
         def supplied_input(prompt, receipt, name):
-            body = _evidence_path(root, name).read_text()
+            body = _evidence_path(root, name).read_bytes().decode("utf-8")
             fingerprints = receipt.get("execution", {}).get("input_fingerprints", {})
-            if fingerprints.get(name) != hashlib.sha256(body.encode()).hexdigest() or not _body_supplied(prompt, body):
+            if fingerprints.get(name) != hashlib.sha256(body.encode()).hexdigest():
                 raise ValueError(f"actual {receipt.get('node')} context omitted or consumed stale input {name}")
+            if not _body_supplied(prompt, body):
+                node = receipt["node"]
+                definition = reference()["graph"]["nodes"][node]
+                refs.extend(_bounded_proof(root, receipt, node=node, role=definition["role"],
+                                            required_documents={name: body}))
         # All fixed source agents must consume the exact current declared input
         # bodies. Composite director envelopes are checked separately below.
         for name, definition in reference()["graph"]["nodes"].items():
@@ -400,9 +502,13 @@ def _protocol_rows(root: Path | None, events: list[dict], manifests: dict,
                     raise ValueError("QA synthesis omitted substantive child report content")
                 consumers.append("overwatch")
             for consumer in consumers:
-                prompt, evidence = _delivery_prompt(root, _latest_delivery(deliveries, consumer), workers)
+                pair = _latest_delivery(deliveries, consumer)
+                prompt, evidence = _delivery_prompt(root, pair, workers)
                 if any(not _body_supplied(prompt, report["body"]) for report in manifest["reports"]):
-                    raise ValueError(f"actual {consumer} context omitted full child report bodies")
+                    proof = quality if consumer == quality["node_id"] else pair[1]
+                    role = "ceo" if ":quality:" in consumer or ":plan:" in consumer or consumer == "overwatch" else "strategist"
+                    refs.extend(_bounded_proof(root, proof, node=consumer, role=role,
+                        required_bodies=[report["body"] for report in manifest["reports"]]))
                 refs.extend(evidence)
         synthesized_path = ".factory/reviews/qa-synthesized.md"
         synthesized = _evidence_path(root, synthesized_path).read_text()
@@ -414,7 +520,10 @@ def _protocol_rows(root: Path | None, events: list[dict], manifests: dict,
             raise FileNotFoundError("no raw QA gate context")
         prompt, evidence = _verified_gate(root, qa_gate)
         if synthesized not in prompt:
-            raise ValueError("CEO QA evaluation did not receive the complete synthesized reports")
+            if ("bounded_context" not in qa_gate[1]
+                    or qa_gate[1].get("evidence", {}).get("inputs", {}).get(synthesized_path)
+                    != hashlib.sha256(synthesized.encode()).hexdigest()):
+                raise ValueError("CEO QA evaluation did not receive complete current synthesized reports")
         refs.extend([synthesized_path, *evidence])
         return "Raw model contexts prove complete digest-bound reports reached director review, strategy synthesis, QA synthesis, Overwatch and the CEO QA gate", refs
 
@@ -457,15 +566,17 @@ def _protocol_rows(root: Path | None, events: list[dict], manifests: dict,
         refs = []
         builders = sorted([pair for pair in deliveries if pair[1].get("node") == "builder"], key=lambda pair: pair[1].get("started", ""))
         for pair in reloops:
-            _, evidence = _verified_gate(root, pair)
+            _, evidence = _verified_gate(root, pair, historical=True)
             gate_time = _evidence_path(root, pair[0]).stat().st_mtime
             after = [builder for builder in builders if datetime.fromisoformat(builder[1]["started"]).timestamp() > gate_time]
             before = [builder for builder in builders if datetime.fromisoformat(builder[1]["finished"]).timestamp() <= gate_time]
             if not before or not after:
                 raise FileNotFoundError("reloop has no preceding completed build and subsequent repair dispatch")
-            prompt, builder_refs = _delivery_prompt(root, after[0], workers)
+            prompt, builder_refs = _delivery_prompt(root, after[0], workers, historical=True)
             if pair[1]["rationale"] not in prompt:
-                raise ValueError("repair worker did not receive the actual gate feedback")
+                builder_refs.extend(_bounded_proof(root, after[0][1], node="builder", role="builder",
+                    required_bodies=[pair[1]["rationale"]], historical=True,
+                    historical_inputs=after[0][1]["execution"]["input_fingerprints"]))
             def authored_bytes(builder):
                 artifact = builder[1].get("artifacts", {}).get(".factory/packages/", {})
                 files = artifact.get("files")
@@ -479,7 +590,7 @@ def _protocol_rows(root: Path | None, events: list[dict], manifests: dict,
             if not completed_workers:
                 raise FileNotFoundError("repair delivery lacks a completed actual builder worker")
             refs.extend([*evidence, before[-1][0], *builder_refs])
-        return "Observed raw CEO reloop decisions dispatched fresh builders with the exact critique and changed actual authored bytes; repair correctness remains subject to independent acceptance", refs
+        return "Observed raw CEO reloop decisions dispatched fresh builders with the exact critique and changed actual authored bytes; bounded historical proofs establish only that repair episode, never current consumption or semantic acceptance", refs
 
     def deadlines():
         if not workers:

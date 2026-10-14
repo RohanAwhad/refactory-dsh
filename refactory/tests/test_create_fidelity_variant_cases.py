@@ -237,7 +237,8 @@ def prepared_temp_variant(tmp_path):
          "model_context":{"runtime_root":str(runtime),"model":"gpt-6-sol","effort":"high","dsh_home":str(old_home)},
          "runtime_state_isolation":{"dsh_home":str(old_home),"shared_auth_reference":str(auth)},
          "native_temp_mapping":old_temp,"native_environment_mapping":{"native_home":"foreign"},
-         "native_credential_mapping":{"path":"foreign-adc"},"native_cli_identity":{"path":"foreign-cli"},"remote_route":"foreign"}
+         "native_credential_mapping":{"path":"foreign-adc"},"native_vertex_mapping":{"version":"foreign-vertex"},
+         "native_cli_identity":{"path":"foreign-cli"},"remote_route":"foreign"}
     template.write_text(json.dumps(old))
     peer_config=template_root/"remote-reference/config.json";peer_config.parent.mkdir()
     peer_config.write_text(json.dumps({"native_temp_mapping":peer_temp}))
@@ -260,7 +261,7 @@ def test_variant_allocates_own_identity_bound_temp_and_denies_template_peers(tmp
         assert own["path"] not in {mapping["path"] for mapping in mappings}
         assert own["trial_id"]==root.name and own["lane_id"]==cases.LANE
         assert config["runtime_state_isolation"]["native_tmp"]==own["path"]
-        assert all(key not in config for key in ("remote_route","native_environment_mapping","native_credential_mapping","native_cli_identity"))
+        assert all(key not in config for key in ("remote_route","native_environment_mapping","native_credential_mapping","native_vertex_mapping","native_cli_identity"))
         creation=json.loads((root/"operator/native-temp-creation.json").read_text())
         assert creation["mappings"]=={cases.LANE:own}
         policy=Path(config["policy"]).read_text()

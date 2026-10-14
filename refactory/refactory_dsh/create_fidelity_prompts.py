@@ -156,6 +156,12 @@ path. These names describe this graph's declarations, not another Create mode.
   the invocation's filesystem boundary; do not assume global /tmp is accessible.
   This governs test outputs, not user-supplied external runtime input paths.
   Reuse the same unchanged package with each invocation's declared inputs.
+  Permission-error probes change only their own disposable scratch files.
+  Record the input bytes/hash, permission change, exact command and actual
+  permission failure before restoring readability of that same scratch file
+  in test cleanup. Preserve its input and result records for later inspection.
+  This never permits restoring or repairing the shared delivered package, and
+  cleanup cannot erase a failed assertion or an observed protected-file drift.
 * Source factory study/discover/init/precheck map to the candidate's native
   bootstrap, AST graph study, and final validation/discovery/evidence checks.
   Source eval and PR diff mean the actual local tests and local artifact diff.

@@ -158,7 +158,7 @@ def prepare(root: Path, template: Path, case_id: str) -> dict:
             "forbidden_controls":[str(operator/"isolation-canary.txt"),str(FIXTURES/"cases.json"),str(hidden_checker),
                                   *[str(path/"isolation-canary.txt") for path in peers]],
             "strategy_decision_policy":"direct-human-or-explicit-delegated-operator; exact reviewed gate bytes only"}
-    for remote_only in ("remote_route","native_environment_mapping","native_credential_mapping","native_cli_identity"):
+    for remote_only in ("remote_route","native_environment_mapping","native_credential_mapping","native_vertex_mapping","native_cli_identity"):
         config.pop(remote_only,None)
     write(config_path,config)
     trial={"schema_version":1,"kind":"native-variant-case","fixture_version":1,"trial_id":root.name,"case_id":case_id,

@@ -763,21 +763,34 @@ class Executor:
         route = client.route() if callable(getattr(client, "route", None)) else {}
         if self.ctx.facts.get("create_fidelity") and node.role != "builder" and route.get("worker_backend", "dsh") != "dsh":
             raise ExecutionError(f"Create fidelity role {node.role!r} requires DSH execution")
-        prompt = render(node.prompt_template, self.ctx)
-        if self.ctx.facts.get("create_fidelity"):
-            from refactory_dsh.create_fidelity_ops import agent_prompt
-            prompt = agent_prompt(self.ctx, node)
-        delivery = begin(self.ctx.workdir, node.id, prompt, list(node.writes),
-                         reads=list(node.reads),
-                         model_context=client.context() if callable(getattr(client, "context", None)) else None)
-        self.model_calls += 1
-        if self.ctx.budget is not None and not callable(getattr(client, "with_budget", None)):
-            self.ctx.budget.require_usage_capability(False)
-        output = _ask_model(
-            client, delivery["prompt"], system=node.notes, workdir=self.ctx.workdir
-        )
-        finish(self.ctx.workdir, node.id, final_response=output,
-               capture_final=route.get("worker_backend", "dsh") == "dsh")
+        from refactory_dsh.create_fidelity_context import PreparedPrompt, DirectPrompt, bind_final, close_context, validate_final
+        prompt = node.prompt_template
+        if not isinstance(prompt, (PreparedPrompt, DirectPrompt)):
+            prompt = render(prompt, self.ctx)
+            if self.ctx.facts.get("create_fidelity"):
+                from refactory_dsh.create_fidelity_ops import agent_prompt
+                prompt = agent_prompt(self.ctx, node, client=client)
+        error = None
+        try:
+            if isinstance(prompt, PreparedPrompt):
+                client = prompt.client
+                self.model_calls += len(prompt.session.record["reviews"]) + len(prompt.session.record["aggregations"])
+            delivery = begin(self.ctx.workdir, node.id, prompt, list(node.writes),
+                             reads=list(node.reads),
+                             model_context=client.context() if callable(getattr(client, "context", None)) else None)
+            bind_final(self.ctx, prompt, delivery, system=node.notes)
+            self.model_calls += 1
+            if self.ctx.budget is not None and not callable(getattr(client, "with_budget", None)):
+                self.ctx.budget.require_usage_capability(False)
+            output = _ask_model(client, delivery["prompt"], system=node.notes, workdir=self.ctx.workdir)
+            receipt = finish(self.ctx.workdir, node.id, final_response=output,
+                             capture_final=route.get("worker_backend", "dsh") == "dsh")
+            validate_final(self.ctx, prompt, output, receipt)
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            close_context(prompt, error)
         if node.produces:
             # Text-producing nodes expose the delivered artifact, which can have
             # been written by tools while the final response only summarizes it.

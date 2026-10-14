@@ -18,8 +18,9 @@ from typing import Any, Mapping
 
 from .contract import FIXTURES, digest, reference
 from .artifact_inventory import VERSION as ARTIFACT_INVENTORY_VERSION, strict_artifact_inventory
+from .bounded_context_evidence import PROTOCOL as BOUNDED_CONTEXT_VERSION
 
-VERSION = "create-fidelity-operator-evidence/v3"
+VERSION = "create-fidelity-operator-evidence/v4"
 FILES = {"semantic": "semantic-review.json", "identity": "human-approval.json", "readme": "readme-review.json"}
 
 
@@ -40,6 +41,9 @@ def evaluator_provenance() -> dict:
     return {"version": VERSION, "validator_sha256": digest(Path(__file__)),
             "scorecard_sha256": digest(Path(__file__).with_name("evidence.py")),
             "deadline_validator_sha256": digest(Path(__file__).with_name("deadline_evidence.py")),
+            "bounded_context_version": BOUNDED_CONTEXT_VERSION,
+            "bounded_context_validator_sha256": digest(Path(__file__).with_name("bounded_context_evidence.py")),
+            "bounded_adjudication_validator_sha256": digest(Path(__file__).with_name("bounded_adjudication_evidence.py")),
             "artifact_inventory_version": ARTIFACT_INVENTORY_VERSION,
             "artifact_inventory_sha256": digest(Path(__file__).with_name("artifact_inventory.py")),
             "contract_reader_sha256": digest(Path(__file__).with_name("contract.py")),

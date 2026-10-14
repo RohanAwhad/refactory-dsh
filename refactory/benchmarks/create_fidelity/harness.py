@@ -130,6 +130,10 @@ def prepare(args) -> dict:
     if getattr(args, "native_adc_reference", None):
         from .native_credentials import reference as native_credential_reference
         credential_mapping = native_credential_reference(args.native_adc_reference)
+    vertex_mapping = None
+    if getattr(args, "native_vertex_settings", None):
+        from .native_vertex import from_settings
+        vertex_mapping = from_settings(args.native_vertex_settings)
     for project in projects.values():
         project.mkdir(parents=True, exist_ok=False)
     operator = root / "operator"
@@ -223,6 +227,7 @@ def prepare(args) -> dict:
                   "native_environment_mapping": native_environment,
                   "native_temp_mapping": native_temps[lane],
                   "native_credential_mapping": credential_mapping if flavor == "remote" else None,
+                  "native_vertex_mapping": vertex_mapping if flavor == "remote" else None,
                   "native_cli_identity": ({"path": str(Path(claude).resolve()), "sha256": digest(Path(claude))}
                       if flavor == "remote" and claude else None),
                   "model_context": {"runtime_root": str(runtime_root),
@@ -255,6 +260,7 @@ def prepare(args) -> dict:
              "remote_native_environment_mapping": NATIVE_ENVIRONMENT_VERSION,
              "native_temp_mappings": native_temps,
              "native_credential_mapping": credential_mapping,
+             "native_vertex_mapping": vertex_mapping,
              "lifecycle_policy": "controller-owned pipe EOF and absolute wall deadline include strategy waiting; owned cleanup bounded by grace",
              "calibration": "Initial declared 12-hour ceiling; no claim of calibrated completion time"}
     write(root / "trial.json", trial)
@@ -425,6 +431,9 @@ def run_lane(root: Path, lane: str, operation: str, *, cancel_event=None) -> dic
     if config.get("native_credential_mapping"):
         from .native_credentials import apply_environment as native_credential_environment
         env = native_credential_environment(env, config["native_credential_mapping"])
+    if config.get("native_vertex_mapping"):
+        from .native_vertex import apply_environment as native_vertex_environment
+        env = native_vertex_environment(env, config["native_vertex_mapping"])
     env["TMPDIR"] = runtime["private_tmp"]
     policy = Path(config["policy"])
     if operation == "native":
@@ -658,6 +667,7 @@ def main() -> int:
     p.add_argument("--route-authorization", default="Original Sol 6.1/high requirement", help="Record the explicit authorization when selecting a fallback")
     p.add_argument("--dsh-home", type=Path, default=Path.home() / ".dsh", help="Read-only native profile/credential-reference source; session state stays private")
     p.add_argument("--native-adc-reference", type=Path, help="Explicit existing nonsymlink Google ADC file for the native reference only; exact-file read-only, never copied")
+    p.add_argument("--native-vertex-settings", type=Path, help="Explicit existing Claude Code settings; pin only allowlisted Vertex project, region and role alias targets, without API keys or user workflow settings")
     p.add_argument("--hidden", type=Path, action="append", default=[], help="Historical/other evidence roots forbidden to authoring workers (repeatable)")
     p.add_argument("--total-timeout", type=int, default=43200)
     p.add_argument("--remote-route", choices=["native-python-v1", "native-shell-prefix-v1", "native-shell-segments-v1", "native-shell-segments-v2"], default="native-python-v1",

@@ -4,6 +4,25 @@
   "issue": "https://github.com/boston-harness-group/refactory-dsh/issues/310",
   "rows": [
     {
+      "requirements": ["F.consumption", "F.children.qa_director", "F.obligations.semantic", "F.deadlines"],
+      "owner": "complete evidence within bounded model requests",
+      "fix": "Read every exact UTF-8 evidence range through the original role and route with full fixed authority. If complete read outputs exceed the request ceiling, the same role adjudicates bounded groups with explicit positive-source dispositions and verbatim adverse/unresolved preservation before the original final task. Preserve all raw bodies, intermediate responses, receipts and shared deadline.",
+      "source": "refactory/refactory_dsh/create_fidelity_context.py",
+      "regression": "refactory/tests/test_create_fidelity_bounded_context_evidence.py",
+      "observed_trial": "create-fidelity-update-sol6-20261013-v2",
+      "observed_failure": "All seven QA children completed, but their quality request supplied 1385785 UTF-8 bytes and exceeded the serving model context window. A first bounded-read offline replay also exposed an oversized final reconciliation, which was preserved as a separate failure.",
+      "status": "An offline replay of the actual captured payload supplied all 44 exact pages, seven same-role adjudications and the final request below the configured ceiling with independent provenance verification. Mixed adverse/unresolved findings remained intact; a noncompressible unresolved control failed before final dispatch. External model I/O was fake, so neither semantic correctness nor live acceptance is inferred. Original v2 remains failed."
+    },
+    {
+      "requirements": ["F.route", "F.isolation", "F.stage.create_factory_md"],
+      "owner": "explicit native Vertex routing",
+      "fix": "Pin only the user's explicitly selected native Vertex project, region and three role alias targets in a versioned allowlisted mapping. Apply the same pin to readiness and native invocation without importing user workflow state or Anthropic API keys.",
+      "source": "refactory/benchmarks/create_fidelity/native_vertex.py",
+      "regression": "refactory/tests/test_create_fidelity_native_vertex.py",
+      "observed_failure": "Private native configuration excluded the user's working Claude Code settings, leaving a different inherited Vertex project and built-in alias target; the earlier real invocation returned HTTP 403.",
+      "status": "A fresh explicitly authorized isolated Vertex probe passed with the expected response and actual claude-opus-4-6 session metadata; owned processes settled and source/adapter identities remained stable. This establishes one native invocation only. Historical 403 results remain unchanged and full reference acceptance is pending."
+    },
+    {
       "requirements": ["F.stage.code_reviewer", "F.obligations.semantic", "F.repair"],
       "owner": "source review role ownership",
       "fix": "Clarify that the shared read-only artifact boundary does not expand source role duties. Code review remains the full static eight-category and test-evidence-scope review; health, QA and Overwatch retain their actual assigned execution duties.",

@@ -13,7 +13,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -188,7 +188,11 @@ def _receipts(workdir: Path, node: str) -> tuple[list[str], list[dict[str, Any]]
 
 
 def _run_agent(ctx: RunContext, node: str, role: str, prompt: str, output: str,
-               reads: tuple[str, ...], identity: dict[str, Any], timeout_s: int = 1800) -> dict[str, Any]:
+               reads: tuple[str, ...], identity: dict[str, Any], timeout_s: int = 1800, *,
+               instructions: str | None = None,
+               documents: dict[str, str] | None = None,
+               obligations: list[dict[str, Any]] | None = None,
+               fixed_documents: dict[str, tuple[str, dict[str, Any]]] | None = None) -> dict[str, Any]:
     logical_id = identity["stage_id"] if role == "ceo" else identity["task_id"]
     selected = _route(ctx.model, logical_id, role)
     deadline = getattr(ctx, "_director_deadline", None)
@@ -201,21 +205,41 @@ def _run_agent(ctx: RunContext, node: str, role: str, prompt: str, output: str,
     if callable(getattr(selected, "with_node_timeout", None)):
         selected = selected.with_node_timeout(timeout_s)
     requested = selected.route()
-    graph = Graph()
-    graph.add(Node(id=node, kind="agent", role=role, prompt_template=prompt,
-                   reads=reads, writes=(output,), notes=f"Create fidelity {role} task",
-                   **({"timeout_s": timeout_s} if "timeout_s" in Node.__dataclass_fields__ else {})))
+    agent = Node(id=node, kind="agent", role=role, prompt_template=prompt,
+                 reads=reads, writes=(output,), notes=f"Create fidelity {role} task",
+                 **({"timeout_s": timeout_s} if "timeout_s" in Node.__dataclass_fields__ else {}))
     # Role/task templates are rendered before raw input bodies are appended.
     # Empty interpolation values keep embedded report code such as {{name}}
     # byte-for-byte intact through the Executor's normal render boundary.
     child_ctx = RunContext(ctx.workdir, task=ctx.task,
                            model=_BoundRoute(selected), enforce_writes=ctx.enforce_writes)
     child_ctx.budget = ctx.budget
+    prepared = None
+    preparation_error = None
+    context_evidence = None
+    if instructions is not None:
+        from refactory_dsh.create_fidelity_context import Document, prepare_context
+        try:
+            prepared = prepare_context(child_ctx, node=agent, instructions=instructions,
+                                       documents=[Document(name, body) for name, body in (documents or {}).items()]
+                                       + [Document(name, body, fixed=True, provenance=provenance)
+                                          for name, (body, provenance) in (fixed_documents or {}).items()],
+                                       direct_prompt=prompt, client=selected, deadline=deadline,
+                                       obligations=obligations,
+                                       policy=getattr(ctx, "_create_fidelity_context_policy", None))
+            agent = replace(agent, prompt_template=prepared)
+        except Exception as failure:
+            preparation_error = f"bounded context preparation failed: {failure}"
+            if getattr(failure, "bounded_context_manifest", None):
+                context_evidence = {"manifest": failure.bounded_context_manifest,
+                                    "digest": getattr(failure, "bounded_context_digest", None)}
+    graph = Graph()
+    graph.add(agent)
     executor = Executor(graph, child_ctx, max_steps=1)
     # The enclosing Executor owns progress.json. The branch walker still crosses
     # real dispatch and agent-delivery boundaries without racing that marker.
     executor._reserve_step = lambda: True
-    error = executor._walk_branch(node, None)
+    error = preparation_error or executor._walk_branch(node, None)
     worker_paths, workers, delivery_paths, deliveries = _receipts(ctx.workdir, node)
     actual = workers[-1].get("actual_route") if workers else None
     supplied_input_digest = identity.get("input_digest")
@@ -239,11 +263,14 @@ def _run_agent(ctx: RunContext, node: str, role: str, prompt: str, output: str,
             error = "worker requested route differs from the resolved route"
         elif len(deliveries) != 1 or deliveries[0].get("status") != "delivered":
             error = "missing, duplicate, or stale delivery receipt"
-    body = ctx.read_text(output) if ctx.exists(output) and ctx.path(output).is_file() else ""
+    body = ctx.path(output).read_bytes().decode("utf-8") if ctx.exists(output) and ctx.path(output).is_file() else ""
+    if getattr(prepared, "manifest_path", None):
+        context_evidence = {"manifest": prepared.manifest_path, "digest": prepared.digest}
     return {**identity, "input_digest": supplied_input_digest, "node_id": node, "role": role, "requested_route": requested,
             "actual_route": actual, "status": "failed" if error else "completed", "error": error,
             "output": output, "output_digest": _digest(body.encode()), "body": body,
             "raw_evidence": {"worker_receipts": worker_paths, "delivery_receipts": delivery_paths},
+            **({"bounded_context": context_evidence} if context_evidence else {}),
             "effective_deadlines": selected.effective_deadlines() if callable(getattr(selected, "effective_deadlines", None)) else {"stage_timeout_s": timeout_s},
             "steps": [{"node": step.node, "kind": step.kind, "error": step.error} for step in executor.steps]}
 
@@ -252,7 +279,7 @@ def _input_bundle(ctx: RunContext, stage: Stage) -> tuple[dict[str, str], list[d
     bodies = {}
     for name in stage.reads:
         _require(ctx.exists(name) and ctx.path(name).is_file(), f"{stage.id} missing input {name}")
-        bodies[name] = ctx.read_text(name)
+        bodies[name] = ctx.path(name).read_bytes().decode("utf-8")
     if stage is STRATEGY:
         upstream = _json(bodies[".factory/research_director-findings.json"], "research findings")
         _require(upstream.get("status") == "completed" and bool(upstream.get("reports")), "strategy requires completed research findings")
@@ -280,19 +307,19 @@ def _context_text(bodies: dict[str, str]) -> str:
 
 
 def _mandatory_tasks(ctx: RunContext) -> list[dict[str, Any]]:
-    # The graph owns the native spelling of validation/discovery/invocation.
-    from refactory_dsh.create_fidelity_ops import native_instructions
-    native = native_instructions(ctx)
+    # Each actual child and CEO quality context already carries the exact common
+    # native mapping through its inherited role prompt. Do not repeat that full
+    # API in task metadata (and again in normalized plans and joined reviews).
     prompts = {
         "workflow-validate": "Run the generated mode through the actual native read-only validation pipeline. Report exact commands, exit codes and full output. Inspect the native graph, compare node/edge counts with current.md, and call its Python graph validator directly. Zero validation issues are required. Preserve the shared builder-frozen package's complete inventory, including metadata/skill/cache-named files; do not admit/export it. Any intentional invalid-graph or mutation test belongs to an isolated disposable full copy, never the shared delivered package.",
         "cli-integration": "Verify the generated mode through actual native discovery and CLI inspection, read-only against the shared builder-frozen package. Report exact commands, exit codes and full output. Verify a nonempty description, visible nodes/edges and existing generated SKILL.md documentation plus the builder's actual admission/export receipts. Do not run admit/export on the shared package. Test registration and portability from an unrelated working directory through an isolated disposable full copy and separate consumer project. For native plugin packages, exercise PACKAGE modes/ops metadata and real registry add/copy/import, list/resolve, validation, installed native execution, remove cleanup and fresh-process resolution refusal; foreign plugin entry points and editable pip installation have no native loader. Admission/export or other mutations needed for a test run only on the disposable copy/consumer. For project-local modes, verify the original package location and documented project discovery read-only. Compare every shared source file before/after each operation, including origin/admission records, SKILL and cache-named data. Never repair/restore/re-admit shared bytes or erase transient drift observed by peers; report such drift as a failure. Prove no upstream source was changed.",
     }
     return [{"id": slug, "slug": slug, "role": QA.role, "focus": slug,
-             "prompt": f"{prompt}\n\n{native}", "output": f"{QA.reports}/{slug}.md",
+             "prompt": prompt, "output": f"{QA.reports}/{slug}.md",
              "coverage": [], "mandatory": True} for slug, prompt in prompts.items()]
 
 
-def _plan_prompt(ctx: RunContext, stage: Stage, bodies: dict[str, str], required: list[dict[str, Any]]) -> str:
+def _plan_instructions(ctx: RunContext, stage: Stage, required: list[dict[str, Any]]) -> str:
     return (
         render(_load_prompt("ceo", stage.id), ctx) + "\n\nDSH COMPOSITE PHASE: PLAN ONLY.\n"
         "The runtime launches and joins all workers. Do not launch workers yourself. "
@@ -313,12 +340,16 @@ def _plan_prompt(ctx: RunContext, stage: Stage, bodies: dict[str, str], required
         "outside this custom count; do not include them. For strategy include explicit testing/verification "
         "and architecture coverage and preserve each ask in relevant strategist prompts.\n"
         "Required coverage items (may add others, must not change or drop these):\n"
-        + json.dumps(required, ensure_ascii=False) + "\n\n" + _context_text(bodies)
+        + json.dumps(required, ensure_ascii=False)
     )
 
 
-def _child_prompt(ctx: RunContext, stage: Stage, task: dict[str, Any], plan: dict[str, Any], bodies: dict[str, str],
-                  identity: dict[str, Any], retry: str = "") -> str:
+def _plan_prompt(ctx: RunContext, stage: Stage, bodies: dict[str, str], required: list[dict[str, Any]]) -> str:
+    return _plan_instructions(ctx, stage, required) + "\n\n" + _context_text(bodies)
+
+
+def _child_instructions(ctx: RunContext, stage: Stage, task: dict[str, Any], plan: dict[str, Any],
+                        identity: dict[str, Any], retry: str = "") -> str:
     assigned = [item for item in plan["coverage_items"] if item["id"] in task["coverage"]]
     asks = [item for item in plan["intent_items"] if item["id"] in task["coverage"]]
     return (
@@ -331,11 +362,15 @@ def _child_prompt(ctx: RunContext, stage: Stage, task: dict[str, Any], plan: dic
         + "IMPORTANT: The user specifically asked for: " + json.dumps(asks, ensure_ascii=False)
         + ". Your work MUST address each assigned ask. Do not substitute your own ideas for what the user asked for.\n"
         + (f"DIRECTOR RETRY INSTRUCTIONS FOR THIS SAME CHILD:\n{render(retry, ctx)}\n" if retry else "")
-        + _context_text(bodies)
     )
 
 
-def _review_prompt(ctx: RunContext, stage: Stage, plan: dict[str, Any], reports: list[dict[str, Any]], bodies: dict[str, str]) -> str:
+def _child_prompt(ctx: RunContext, stage: Stage, task: dict[str, Any], plan: dict[str, Any], bodies: dict[str, str],
+                  identity: dict[str, Any], retry: str = "") -> str:
+    return _child_instructions(ctx, stage, task, plan, identity, retry) + _context_text(bodies)
+
+
+def _review_instructions(ctx: RunContext, stage: Stage) -> str:
     return (
         render(_load_prompt("ceo", stage.id), ctx) + "\n\nDSH COMPOSITE PHASE: QUALITY REVIEW ONLY.\n"
         "Assess the complete reports below as the original director. Check substantive work, "
@@ -349,10 +384,34 @@ def _review_prompt(ctx: RunContext, stage: Stage, plan: dict[str, Any], reports:
         "coverage_complete (boolean). Each decision: id, verdict (accept or retry), reason (nonempty), "
         "retry_prompt (required nonempty for retry), outcome (passed, findings, or failed). "
         "If any intent/acceptance item is missing, set coverage_complete false and retry the responsible child.\n"
-        + "NORMALIZED PLAN:\n" + json.dumps(plan, ensure_ascii=False)
+    )
+
+
+def _review_prompt(ctx: RunContext, stage: Stage, plan: dict[str, Any], reports: list[dict[str, Any]], bodies: dict[str, str]) -> str:
+    return (
+        _review_instructions(ctx, stage) + "NORMALIZED PLAN:\n" + json.dumps(plan, ensure_ascii=False)
         + "\nCOMPLETE JOINED CHILD REPORTS AND RECEIPTS:\n" + json.dumps(reports, ensure_ascii=False)
         + "\n\n" + _context_text(bodies)
     )
+
+
+def _quality_decision_universe(plan: dict[str, Any]) -> dict[str, Any]:
+    """Full final decision/requirement universe; tailored prompts remain paged."""
+    return {"tasks": [{key: task[key] for key in ("id", "role", "focus", "output", "mandatory", "coverage")}
+                      for task in plan["tasks"]],
+            "intent_items": plan["intent_items"], "coverage_items": plan["coverage_items"]}
+
+
+def _child_context_obligations(task: dict[str, Any], plan: dict[str, Any]) -> list[dict[str, Any]]:
+    assigned = [item for item in plan["coverage_items"] if item["id"] in task["coverage"]]
+    if task["mandatory"]:
+        # Fixed QA tasks have no custom coverage assignment; retain their exact
+        # concrete native duty rather than substituting one generic obligation.
+        identifier = f"mandatory:{task['id']}"
+        while any(item["id"] == identifier for item in assigned):
+            identifier += ":native"
+        assigned.append({"id": identifier, "text": task["prompt"]})
+    return assigned
 
 
 def _validate_review(raw: Any, tasks: list[dict[str, Any]], reports: list[dict[str, Any]]) -> dict[str, Any]:
@@ -446,7 +505,8 @@ def _direct_stage(ctx: RunContext, stage: Stage) -> None:
     plan_identity = {**base, "kind": "director_plan", "task_id": "plan", "parent_task_id": stage.id,
                      "attempt": 1, "plan_digest": None, "task_digest": _digest({"stage": stage.id, "required": required})}
     proposal = _run_agent(ctx, f"{stage.id}:v{visit}:plan:a1", "ceo", _plan_prompt(ctx, stage, bodies, required),
-                          stage.plan, stage.reads, plan_identity, timeout_s=3600)
+                          stage.plan, stage.reads, plan_identity, timeout_s=3600,
+                          instructions=_plan_instructions(ctx, stage, required), documents=bodies, obligations=required)
     ctx.write_json(f"{directory}/plan-receipt.json", proposal)
     _require(proposal["status"] == "completed", f"{stage.id} planning failed: {proposal['error']}")
     validation = {**base, "kind": "director_plan_validation", "plan_path": stage.plan,
@@ -489,8 +549,12 @@ def _direct_stage(ctx: RunContext, stage: Stage) -> None:
                            model=model, enforce_writes=ctx.enforce_writes)
         local.budget = ctx.budget
         local._director_deadline = ctx._director_deadline
+        if hasattr(ctx, "_create_fidelity_context_policy"):
+            local._create_fidelity_context_policy = ctx._create_fidelity_context_policy
         record = _run_agent(local, f"{stage.id}:v{visit}:{identifier}:a{attempt}", task["role"], prompt,
-                            task["output"], stage.reads, identity)
+                            task["output"], stage.reads, identity,
+                            instructions=_child_instructions(ctx, stage, task, plan, identity, retry), documents=bodies,
+                            obligations=_child_context_obligations(task, plan))
         if record["status"] == "completed" and len(record["body"].encode()) <= stage.minimum_bytes:
             record.update(status="invalid", error=f"thin report: requires more than {stage.minimum_bytes} bytes")
         if record["status"] == "completed" and not record["body"].strip():
@@ -534,8 +598,30 @@ def _direct_stage(ctx: RunContext, stage: Stage) -> None:
                                "task_digest": _digest({"reports": [report["task_id"] for report in reports], "coverage_items": plan["coverage_items"]})}
             prompt = _review_prompt(ctx, stage, plan, reports, bodies)
             review_identity["input_digest"] = _digest(prompt.encode())
+            # The large-context path reviews exact source artifacts, including
+            # all full joined bodies and earlier attempts. Actual named files
+            # make their run/visit/attempt identity and freshness independently
+            # verifiable; the direct small prompt retains its original bytes.
+            review_documents = {**bodies, stage.plan: ctx.path(stage.plan).read_bytes().decode("utf-8"),
+                                join_path: ctx.path(join_path).read_bytes().decode("utf-8")}
+            current_nodes = {report["node_id"] for report in reports}
+            for previous in history:
+                if previous["node_id"] not in current_nodes:
+                    previous_path = f"{directory}/{previous['task_id']}-a{previous['attempt']}.json"
+                    review_documents[previous_path] = ctx.path(previous_path).read_bytes().decode("utf-8")
+            for previous_round in range(1, round_number):
+                previous_path = f"{directory}/quality-{previous_round}.json"
+                review_documents[previous_path] = ctx.path(previous_path).read_bytes().decode("utf-8")
+            universe = json.dumps(_quality_decision_universe(plan), ensure_ascii=False,
+                                  sort_keys=True, separators=(",", ":"))
+            universe_provenance = {"kind": "derived_plan_universe", "source_path": stage.plan,
+                                   "source_sha256": _digest(ctx.path(stage.plan).read_bytes()),
+                                   "projection": "quality-decision-universe/v1"}
             receipt = _run_agent(ctx, f"{stage.id}:v{visit}:quality:a{round_number}", "ceo", prompt,
-                                 review_path, (*stage.reads, stage.plan, join_path), review_identity, timeout_s=3600)
+                                 review_path, (*stage.reads, stage.plan, join_path), review_identity, timeout_s=3600,
+                                 instructions=_review_instructions(ctx, stage), documents=review_documents,
+                                 obligations=plan["coverage_items"],
+                                 fixed_documents={"director-decision-universe.json": (universe, universe_provenance)})
             ctx.write_json(f"{directory}/quality-{round_number}-receipt.json", receipt)
             _require(receipt["status"] == "completed", f"director quality review failed: {receipt['error']}")
             review = _validate_review(_json(receipt["body"], "quality review"), plan["tasks"], reports)

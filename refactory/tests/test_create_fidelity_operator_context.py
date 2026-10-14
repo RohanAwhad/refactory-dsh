@@ -1,5 +1,6 @@
 """The report trusts user-decision context only from the isolated operator."""
 import json
+from pathlib import Path
 
 import pytest
 
@@ -51,6 +52,14 @@ def test_external_context_is_scoped_to_its_lane_and_evaluator_versioned(trial):
     assert report["evaluation"]["context_sha256"] == harness.digest(context)
     assert report["evaluation"]["validator_sha256"]
     assert report["evaluation"]["scorecard_sha256"]
+    from benchmarks.create_fidelity import bounded_context_evidence
+    assert report["evaluation"]["version"] == "create-fidelity-operator-evidence/v4"
+    assert report["evaluation"]["bounded_context_version"] == bounded_context_evidence.PROTOCOL
+    assert report["evaluation"]["bounded_context_validator_sha256"] == harness.digest(
+        Path(bounded_context_evidence.__file__))
+    from benchmarks.create_fidelity import bounded_adjudication_evidence
+    assert report["evaluation"]["bounded_adjudication_validator_sha256"] == harness.digest(
+        Path(bounded_adjudication_evidence.__file__))
 
 
 def test_context_symlink_cannot_promote_lane_claims(trial):

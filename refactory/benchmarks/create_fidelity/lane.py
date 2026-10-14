@@ -125,6 +125,9 @@ def dsh_probe(config: dict, project: Path) -> dict:
 
 
 def remote_author(config: dict, project: Path) -> dict:
+    if config.get("native_vertex_mapping"):
+        from .native_vertex import validate_process
+        validate_process(dict(os.environ), config["native_vertex_mapping"])
     if config.get("native_environment_mapping"):
         from .remote_readiness import apply_environment
         expected = apply_environment(dict(os.environ), config["native_environment_mapping"], project)

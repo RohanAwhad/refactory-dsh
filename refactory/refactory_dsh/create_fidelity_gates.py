@@ -217,15 +217,54 @@ def evaluate(ctx: RunContext, node: Node) -> str:
     request = {"schema_version": 1, "gate_id": node.id, "input_digest": input_digest,
                "evidence_digest": evidence_digest, "verdict_labels": labels,
                "guard_problems": problems, "evidence": evidence}
-    from refactory_dsh.create_fidelity_ops import agent_prompt
-    prompt = agent_prompt(ctx, node) + "\n\nRuntime evidence (read current artifacts before judging):\n" + json.dumps(request, indent=2)
-    prompt += ("\nReturn ONLY a JSON object with exactly schema_version (1), gate_id, input_digest, "
+    from refactory_dsh.create_fidelity_ops import complete_inputs
+    from refactory_dsh.create_fidelity_context import (Document, PreparedPrompt, prepare_context,
+                                                    bind_final, validate_final, close_context)
+    from refactory_dsh.nn.executor import render
+    instructions = render(node.prompt_template, ctx)
+    response_contract = ("\nReturn ONLY a JSON object with exactly schema_version (1), gate_id, input_digest, "
                "evidence_digest, verdict (one supplied label), and rationale (nonempty string). "
                "Echo the digests exactly. Guard problems cannot authorize proceed. Do not modify artifacts.")
+    evidence_text = json.dumps(request, indent=2)
+    direct = instructions + complete_inputs(ctx, node.reads) + "\n\nRuntime evidence (read current artifacts before judging):\n" + evidence_text + response_contract
+    documents = [Document(name, ctx.path(name).read_bytes().decode("utf-8")) for name in node.reads]
+    documents.append(Document("runtime-gate-evidence.json", evidence_text, provenance={
+        "kind": "derived_gate_request", "gate_id": node.id,
+        "parent_receipt": str(ROOT / record["id"] / "verdict.json"),
+        "input_digest": input_digest, "evidence_digest": evidence_digest,
+        "verdict_labels": labels, "guard_problems": problems}))
+    try:
+        prompt = prepare_context(ctx, node=node, instructions=instructions + response_contract
+                                 + "\nFinal gate identity/guards: " + json.dumps({k: request[k] for k in
+                                    ("schema_version", "gate_id", "input_digest", "evidence_digest", "verdict_labels", "guard_problems")}),
+                                 documents=documents, direct_prompt=direct, client=client)
+    except BaseException as error:
+        record.update(status="failed", error=f"{type(error).__name__}: {error}")
+        if getattr(error, "bounded_context_manifest", None):
+            record["bounded_context"] = {"manifest": error.bounded_context_manifest,
+                                         "digest": error.bounded_context_digest}
+        _record(ctx, record, prompt=direct)
+        raise
+    if isinstance(prompt, PreparedPrompt):
+        record["bounded_context"] = {"manifest": prompt.manifest_path, "digest": prompt.digest}
     raw = ""
     workers_before = set((ctx.workdir / ".refactory/workers").glob("*.json"))
+    context_error = None
     try:
-        raw = _ask_model(client, prompt, system="You are the original Create CEO gate evaluator.", workdir=ctx.workdir)
+        if isinstance(prompt, PreparedPrompt):
+            from refactory_dsh.agent_delivery import begin, finish
+            client = prompt.client
+            delivery = begin(ctx.workdir, node.id, prompt, [], reads=list(node.reads), model_context=client.context())
+            bind_final(ctx, prompt, delivery, system="You are the original Create CEO gate evaluator.")
+            supplied_prompt = delivery["prompt"]
+        else:
+            supplied_prompt = prompt
+            bind_final(ctx, prompt, {"prompt": prompt}, system="You are the original Create CEO gate evaluator.")
+        raw = _ask_model(client, supplied_prompt, system="You are the original Create CEO gate evaluator.", workdir=ctx.workdir)
+        if isinstance(prompt, PreparedPrompt):
+            receipt = finish(ctx.workdir, node.id, final_response=raw, capture_final=False)
+            validate_final(ctx, prompt, raw, receipt)
+            record["bounded_context"] = {"manifest": prompt.manifest_path, "digest": prompt.digest}
         workers = [json.loads(path.read_text()) for path in sorted(
             set((ctx.workdir / ".refactory/workers").glob("*.json")) - workers_before)]
         record["worker_receipts"] = workers
@@ -260,9 +299,11 @@ def evaluate(ctx: RunContext, node: Node) -> str:
             _feedback(ctx, node.id, feedback)
         return verdict
     except BaseException as error:
+        context_error = error
         record.update(status="failed", error=f"{type(error).__name__}: {error}")
         raise
     finally:
+        close_context(prompt, context_error)
         record["raw_native_validation"] = getattr(ctx, "_gate_validation_evidence", {}).get(node.id)
         _record(ctx, record, raw=raw, prompt=prompt)
 

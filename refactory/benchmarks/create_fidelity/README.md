@@ -49,6 +49,18 @@ surrounding home/config directory. This retains native Vertex authentication
 and source aliases; it introduces no provider/model fallback. Failed preflight
 controls are retained and a changed reference requires a fresh configuration.
 
+`prepare --native-vertex-settings /absolute/claude/settings.json` explicitly
+pins the existing native settings' Vertex project, region and all three role
+alias targets under `configured-native-vertex-v1`. Only those six allowlisted
+environment fields enter the frozen configuration; user prompts, hooks,
+permissions, sessions and API keys do not. The source retains its logical
+`opus`/`sonnet`/`haiku` role selections. Both readiness and real native processes
+receive the same hash-bound routing pin, with conflicting Anthropic API-key,
+token, base-URL and provider overrides removed from their child environment.
+The settings file is not exposed to isolated workers and later user edits do
+not change a prepared trial. This routing mapping does not itself establish
+authentication or successful invocation: a fresh real probe is still required.
+
 `live ROOT --lanes dsh-candidate` can launch a ready DSH lane while reference
 invocation readiness remains unavailable. Each selected DSH lane still requires
 the observed served route, project isolation, runtime isolation and native temp
@@ -229,6 +241,29 @@ must follow native/CLI verification, because any later change to the raw evidenc
 invalidates their hash binding. Observed deadline snapshots are available only
 for runs whose worker runtime actually recorded them; older trials cannot gain
 missing timing telemetry through re-scoring.
+
+Fresh candidate sources can record `create-fidelity-full-context/v1` when a
+complete evidence bundle exceeds the configured prompt byte ceiling. Every
+immutable input range must reach a completed DSH worker in the original role and
+route. Its actual model response must bind the range and cite exact evidence;
+the final consumer must reconcile all read records under the same stage clock.
+If those records exceed the ceiling, bounded same-role adjudications consume
+complete prior responses and retain every adverse, unresolved and absent-page
+finding verbatim. Positive findings require explicit source dispositions; the
+independent validator checks the complete ordered dependency graph and final
+remaining records. Fixed strategy, intent and decision obligations reach every
+dispatch, and noncompressible evidence fails instead of being truncated.
+The independent evaluator checks raw transport, source hashes, complete range
+coverage and the final response binding. This is transport and consumption
+evidence, not an automatic semantic PASS. Legacy direct receipts retain their
+original checks and cannot gain staged-reading evidence retrospectively.
+
+The frozen update v2 trial remains failed: all seven QA child reports completed,
+but its 1,385,785-byte director-quality request ended without a quality verdict.
+The serving session advertised a 272,000-token context and recorded 444,543
+cached input tokens with a max-tokens finish. Later delivery changes neither
+retry that trial nor turn its separately passing artifact checks into completed
+authoring evidence.
 
 OS isolation currently requires macOS Seatbelt. It proves peer/evidence content
 denial in child processes and private runtime writes. It is not a claim of a

@@ -61,7 +61,7 @@ def native_instructions(ctx: Any) -> str:
     return render(NATIVE_INSTRUCTIONS, ctx)
 
 
-def agent_prompt(ctx: Any, node: Any) -> str:
+def agent_prompt(ctx: Any, node: Any, *, client: Any = None, trailer: str = "") -> str:
     """Supply complete declared input bodies, preserving their bytes after render.
 
     Report text may itself contain template-looking strings or source code. Only
@@ -69,8 +69,18 @@ def agent_prompt(ctx: Any, node: Any) -> str:
     """
     from refactory_dsh.nn.executor import render
 
+    from refactory_dsh.create_fidelity_context import Document, prepare_context
+
     prompt = render(node.prompt_template, ctx)
-    return prompt + complete_inputs(ctx, node.reads)
+    documents = []
+    for relative in node.reads:
+        path = ctx.path(relative)
+        if not path.is_file():
+            raise ValueError(f"candidate stage requires declared substantive input {relative}")
+        documents.append(Document(relative, path.read_bytes().decode("utf-8")))
+    direct = prompt + complete_inputs(ctx, node.reads) + trailer
+    return prepare_context(ctx, node=node, instructions=prompt + trailer,
+                           documents=documents, direct_prompt=direct, client=client)
 
 
 def complete_inputs(ctx: Any, reads: tuple[str, ...]) -> str:
@@ -79,7 +89,7 @@ def complete_inputs(ctx: Any, reads: tuple[str, ...]) -> str:
         path = ctx.path(relative)
         if not path.is_file():
             raise ValueError(f"candidate stage requires declared substantive input {relative}")
-        sections.append(f"=== COMPLETE DECLARED INPUT {relative} ===\n" + path.read_text())
+        sections.append(f"=== COMPLETE DECLARED INPUT {relative} ===\n" + path.read_bytes().decode("utf-8"))
     return "\n\n" + "\n\n".join(sections) if sections else ""
 
 
