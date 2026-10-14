@@ -231,9 +231,10 @@ def command_reset(workdir: Path, request: dict[str, Any]) -> dict[str, Any]:
     """Archive prior facts, then invalidate the facts of explicitly redone work.
 
     A full dataset restart or explicit graph-control reset archives affected
-    node-owned outputs, excluding the restart node's declared inputs. Legacy
-    current-item corrections keep artifacts unless archiveArtifacts is requested.
-    Pending agent snapshots are retired in either case.
+    node-owned outputs, excluding the restart node's declared inputs and files
+    also written by a node outside the invalidated set. Legacy current-item
+    corrections keep artifacts unless archiveArtifacts is requested. Pending
+    agent snapshots are retired in either case.
     """
     import uuid
     from refactory_dsh.agent_delivery import invalidate
@@ -267,6 +268,11 @@ def command_reset(workdir: Path, request: dict[str, Any]) -> dict[str, Any]:
     if request.get('restartData') or request.get('archiveArtifacts') is True:
         reads = [Path(name) for name in declarations.get(request.get('start'), {}).get('reads', [])]
         writes = {name for node in nodes for name in declarations.get(node, {}).get('writes', [])}
+        # Retain files also written by a node outside the invalidated set (issue #317).
+        outside_writes = {name for node_id, decl in declarations.items()
+                          if isinstance(decl, dict) and node_id not in nodes
+                          for name in decl.get('writes', [])}
+        reads.extend(Path(name) for name in writes & outside_writes)
         from refactory_dsh.run_artifacts import owned_outputs
 
         try:
