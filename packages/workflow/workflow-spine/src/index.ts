@@ -33,12 +33,14 @@ import type { NodeView, SpineNext } from './spine.ts'
 import { commandOf, isDeterministic, runDataCommand, runDeterministic } from './execute.ts'
 import type { CommandFailure } from './execute.ts'
 import type { WorkflowGraph } from './types.ts'
+import { validateBuild } from './build-stamp.ts'
 
 export { Spine, validateGraph } from './spine.ts'
 export { commandOf, dataCommandOf, isDeterministic, runDataCommand, verdictOf, NODE_ENV_KEY } from './execute.ts'
 export type { CommandFailure, CommandOutcome, CommandRunnerConfig, NodeManifest } from './execute.ts'
 export type { DataPass, GraphIssue, NodeView, PromptAmendmentMode, SpineNext } from './spine.ts'
 export type { WorkflowEdge, WorkflowGraph, WorkflowNode } from './types.ts'
+export { BUILD_STAMP, computeSourceStamp, validateBuild } from './build-stamp.ts'
 
 export const name = 'workflow-spine'
 export const inject = ['tools', 'systemPrompt']
@@ -379,6 +381,19 @@ function payloadEnv(value: unknown): Record<string, string> | undefined {
 }
 
 export function apply(ctx: Context, config: Config): void {
+  // Detect stale builds early, before any graph is configured or opened.
+  // A stale build is a developer-infrastructure error with no recovery path —
+  // the engine and Python halves would disagree on node dispatch — so exit
+  // immediately instead of throwing into Cordis (which catches, marks the
+  // plugin inactive, and hangs the process waiting for services that never
+  // arrive).
+  try {
+    validateBuild()
+  } catch (err) {
+    process.stderr.write(`\n${err instanceof Error ? err.message : String(err)}\n\n`)
+    process.exit(1)
+  }
+
   const { toolPrefix, maxIterations, ceoDeny, interactiveOpen } = config
   // This is initialized before an explicit checkpoint restore at mount time.
   const materialised = new WeakMap<Spine, Materialised>()
