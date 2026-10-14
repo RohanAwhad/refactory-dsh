@@ -58,6 +58,44 @@ async function run(ctx: Context, name: string, args: unknown): Promise<unknown> 
   return definition.execute(args, {} as never)
 }
 
+/** One question as the user-questions channel received it. */
+interface AskedQuestion {
+  id: string
+  detail?: string
+  options?: Array<{ label: string }>
+  intent?: unknown
+}
+
+/**
+ * A composition walked to its user gate, whose answerer records each question and
+ * replies with `reply`.
+ * @param gateGraph - the graph to open.
+ * @param workdir - the run directory.
+ * @param reply - the person's answer to a question.
+ * @returns the composition and the questions asked so far.
+ */
+async function gateRun(
+  gateGraph: WorkflowGraph, workdir: string, reply: (question: AskedQuestion) => Promise<unknown>,
+): Promise<{ ctx: Context; asked: AskedQuestion[] }> {
+  const asked: AskedQuestion[] = []
+  const ctx = new Context()
+  await ctx.plugin(SystemPrompt)
+  await ctx.plugin(ToolRuntime)
+  await ctx.plugin(UserQuestionService)
+  ctx.on('user-questions/request', request => {
+    asked.push(...request.questions)
+    return reply(request.questions[0]!) as never
+  })
+  await ctx.plugin(workflowSpine, { graph: gateGraph, toolPrefix: 'wf', maxIterations: 3, workdir })
+  await run(ctx, 'wf_done', { node: 'a' })
+  return { ctx, asked }
+}
+
+/** An answerer that always chooses `proceed`. */
+function proceed(question: AskedQuestion): Promise<unknown> {
+  return Promise.resolve({ answers: [{ id: question.id, selected: ['proceed'] }] })
+}
+
 describe('workflow-spine real composition', () => {
   it('registers the six wf_* tools and walks a graph through them', async () => {
     const ctx = await setup()
@@ -132,28 +170,6 @@ describe('workflow-spine real composition', () => {
     expect(firstQuestion.detail).toBeDefined()
     expect(firstQuestion.detail).toContain('design.md')
   })
-
-  type Asked = { id: string; detail?: string; options?: Array<{ label: string }>; intent?: unknown }
-
-  /** A composition whose answerer records the question and replies with `reply`. */
-  async function gateRun(
-    gateGraph: WorkflowGraph, workdir: string, reply: (question: Asked) => Promise<unknown>,
-  ): Promise<{ ctx: Context; asked: Asked[] }> {
-    const asked: Asked[] = []
-    const ctx = new Context()
-    await ctx.plugin(SystemPrompt)
-    await ctx.plugin(ToolRuntime)
-    await ctx.plugin(UserQuestionService)
-    ctx.on('user-questions/request', request => {
-      asked.push(...request.questions)
-      return reply(request.questions[0]!) as never
-    })
-    await ctx.plugin(workflowSpine, { graph: gateGraph, toolPrefix: 'wf', maxIterations: 3, workdir })
-    await run(ctx, 'wf_done', { node: 'a' })
-    return { ctx, asked }
-  }
-
-  const proceed = (question: Asked) => Promise.resolve({ answers: [{ id: question.id, selected: ['proceed'] }] })
 
   it('names the gate reads by full path, with every outcome offered', async () => {
     // The question stays host-neutral and short: no presentation intent and no inlined

@@ -28,7 +28,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { UserQuestionService } from '@deepseek-ai/dsh-user-questions'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
-import { Spine, validateGraph } from './spine.ts'
+import { HALT, Spine, validateGraph } from './spine.ts'
 import type { NodeView, SpineNext } from './spine.ts'
 import { commandOf, isDeterministic, runDataCommand, runDeterministic } from './execute.ts'
 import type { CommandFailure } from './execute.ts'
@@ -196,6 +196,20 @@ export const Config = z.object({
 
 /** How much of a failed node's stderr the status file keeps. */
 const STATUS_DETAIL = 2_000
+
+/**
+ * Where a person finds what a user gate asks them to review: the gate's reads,
+ * as full paths when the run has a directory. The content itself is not inlined;
+ * a host may render it at length and push the outcomes out of view, and the CEO
+ * already summarises the reads before asking.
+ * @param reads - the gate's reads, relative to the run directory.
+ * @param workdir - the run directory, when the run has one.
+ * @returns the one-line detail shown with the question.
+ */
+function gateDetail(reads: string[], workdir: string | undefined): string {
+  const paths = workdir === undefined ? reads : reads.map(file => resolve(workdir, file))
+  return `Gate reads files: ${paths.join(', ')}`
+}
 
 /** One model-visible step, rendered as compact JSON text. */
 function text(value: JsonValue): { type: 'text'; text: string } {
@@ -975,8 +989,6 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   const pendingQuestions = new WeakSet<Spine>()
-  /** The outcome that stops a run at any gate; the engine accepts it without a `halt` edge. */
-  const HALT_LABEL = 'halt'
 
   /**
    * Result of a user-gate question.
@@ -989,20 +1001,6 @@ export function apply(ctx: Context, config: Config): void {
     | { verdict: string; feedback: string }
     | { status: 'replied'; gate: string; text: string }
     | undefined
-
-  /**
-   * Where a person finds what a user gate asks them to review: the gate's reads,
-   * as full paths when the run has a directory. The content itself is not inlined;
-   * a host may render it at length and push the outcomes out of view, and the CEO
-   * already summarises the reads before asking.
-   * @param reads - the gate's reads, relative to the run directory.
-   * @param workdir - the run directory, when the run has one.
-   * @returns the one-line detail shown with the question.
-   */
-  function gateDetail(reads: string[], workdir: string | undefined): string {
-    const paths = workdir === undefined ? reads : reads.map(file => resolve(workdir, file))
-    return `Gate reads files: ${paths.join(', ')}`
-  }
 
   /**
    * The verdict a person gives at a `user` gate, asked by the runtime.
@@ -1041,10 +1039,10 @@ export function apply(ctx: Context, config: Config): void {
     applyControls(spine, workdir, commandEnv, dataCommand)
     if (spine.isPaused() || spine.isHalted()) return undefined
     const request = { gate, reads: view.reads ?? [], labels: spine.acceptedVerdicts(gate) }
-    // The engine can halt the run at any gate, with or without a `halt` edge, so the
+    // The engine halts the run at any gate, with or without a `halt` edge, so the
     // person is always offered it; otherwise "stop" is unanswerable at a user gate.
-    const labels = request.labels.length === 0 || request.labels.includes(HALT_LABEL)
-      ? request.labels : [...request.labels, HALT_LABEL]
+    const labels = request.labels.length === 0 || request.labels.includes(HALT)
+      ? request.labels : [...request.labels, HALT]
     const prior = gateCommand !== '' && workdir !== undefined
       ? runtimeBridge(gateCommand, workdir, commandEnv, { ...request, action: 'begin' })
       : undefined
@@ -1069,7 +1067,7 @@ export function apply(ctx: Context, config: Config): void {
           header: 'Workflow gate',
           question: view.gate_prompt || `Gate ${gate}`,
           ...(shown === undefined ? {} : { detail: shown }),
-          ...(labels.length === 0 ? {} : { options: labels.map(verdict => verdict === HALT_LABEL && !request.labels.includes(HALT_LABEL)
+          ...(labels.length === 0 ? {} : { options: labels.map(verdict => verdict === HALT && !request.labels.includes(HALT)
             ? { label: verdict, description: 'Stop the run here.' } : { label: verdict }) }),
         }],
         ...(exec.agent === undefined ? {} : { agent: exec.agent }),
