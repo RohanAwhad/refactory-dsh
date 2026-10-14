@@ -91,6 +91,26 @@ def test_lowered_bridge_preserves_edges_and_declared_outputs(tmp_path):
     assert spec['writes'] == ['result.txt']
 
 
+def test_lowered_bridge_carries_file_policy_in_worker_spec(tmp_path):
+    from refactory_dsh.ir import AgentNode, AgentRole, Workflow
+    graph = Workflow(name='tiny', nodes={'emit': AgentNode(id='emit', role=AgentRole.BUILDER,
+                prompt_template='write emit.txt', writes={'emit.txt'}, file_policy='workspace-write')},
+                     edges=[], start_node='emit')
+    lowered = workers.lower_workflow(graph, tmp_path, DshModelClient().context())
+    spec = json.loads(next((tmp_path / '.refactory/worker-specs').glob('*.json')).read_text())
+    assert spec['file_policy'] == 'workspace-write'
+
+
+def test_lowered_bridge_omits_file_policy_when_unset(tmp_path):
+    from refactory_dsh.ir import AgentNode, AgentRole, Workflow
+    graph = Workflow(name='tiny', nodes={'build': AgentNode(id='build', role=AgentRole.BUILDER,
+                prompt_template='write result.txt', writes={'result.txt'})},
+                     edges=[], start_node='build')
+    workers.lower_workflow(graph, tmp_path, DshModelClient().context())
+    spec = json.loads(next((tmp_path / '.refactory/worker-specs').glob('*.json')).read_text())
+    assert 'file_policy' not in spec
+
+
 def test_lowered_node_timeout_covers_the_declared_completion_budget(tmp_path):
     from refactory_dsh.ir import AgentNode, AgentRole, Workflow
     from refactory_dsh.model import DEFAULT_TIMEOUT_S
@@ -496,3 +516,17 @@ def test_graph_worker_refuses_modified_dispatch_contract(tmp_path):
     result=subprocess.run([sys.executable,'-m','refactory_dsh.worker_node',str(spec)],capture_output=True,text=True)
     assert result.returncode == 1
     assert 'modified after graph preparation' in result.stderr
+
+
+def test_file_policy_rejected_on_non_agent_node():
+    from refactory_dsh.nn.graph import Node, GraphError
+    import pytest
+    with pytest.raises(GraphError, match='file_policy is only valid on agent nodes'):
+        Node('test_op', 'op', call='some.module:func', file_policy='workspace-write')
+
+
+def test_file_policy_rejects_unknown_value():
+    from refactory_dsh.nn.graph import Node, GraphError
+    import pytest
+    with pytest.raises(GraphError, match='unknown file_policy'):
+        Node('test_agent', 'agent', prompt_template='do something', file_policy='danger-full-access')

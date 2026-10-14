@@ -41,6 +41,7 @@ _NODE_FIELDS = frozenset(
         "prompt_template",
         "role",
         "resource_role",
+        "file_policy",
         "tools",
         "max_iterations",
         "notes",
@@ -116,6 +117,7 @@ class Node:
     #: Resource phase is independent of worker routing. Unset preserves the
     #: enclosing phase, except the legacy validation role enters validation.
     resource_role: str | None = None
+    file_policy: str | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in NODE_KINDS:
@@ -164,6 +166,14 @@ class Node:
             )
         if self.resource_role not in (None, "work", "final_validation"):
             raise GraphError(f"node {self.id!r}: unknown resource_role {self.resource_role!r}")
+        if self.file_policy is not None:
+            if self.kind != "agent":
+                raise GraphError(f"node {self.id!r}: file_policy is only valid on agent nodes")
+            if self.file_policy not in ("read-only", "workspace-write"):
+                raise GraphError(
+                    f"node {self.id!r}: unknown file_policy {self.file_policy!r}; "
+                    "known: read-only, workspace-write"
+                )
 
     @property
     def resource_phase(self) -> str | None:
@@ -188,6 +198,7 @@ class Node:
             "prompt_template": self.prompt_template,
             "role": self.role,
             **({"resource_role": self.resource_role} if self.resource_role is not None else {}),
+            **({"file_policy": self.file_policy} if self.file_policy is not None else {}),
             "tools": list(self.tools),
             "max_iterations": self.max_iterations,
             "notes": self.notes,
@@ -225,6 +236,7 @@ class Node:
             prompt_template=str(state.get("prompt_template", "")),
             role=str(state.get("role", "ceo")),
             resource_role=state.get("resource_role"),
+            file_policy=state.get("file_policy"),
             tools=tuple(state.get("tools") or ()),
             max_iterations=int(state.get("max_iterations", 1)),
             notes=str(state.get("notes", "")),

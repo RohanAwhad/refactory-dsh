@@ -32,7 +32,8 @@ def execute(spec: dict[str, Any], workdir: Path) -> dict[str, Any]:
     client = DshModelClient(**spec['model_context']).for_node(node)
     delivery = begin(workdir, node, render(prompt, context), spec['writes'],
                      reads=spec['reads'], model_context=client.context())
-    output = client.complete(delivery['prompt'], workdir=workdir)
+    output = client.complete(delivery['prompt'], workdir=workdir,
+                         file_policy=spec.get('file_policy'))
     receipt = finish(workdir, node, final_response=output, capture_final=client.route()["worker_backend"] == "dsh")
     for check in spec.get('post_checks', []):
         artifact = _path(workdir, check['path'])

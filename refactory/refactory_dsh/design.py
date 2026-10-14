@@ -209,6 +209,7 @@ class DesignMode(Mode):
             reads=("brief.json", "design.md", "check.txt"),
             writes=("emit.txt",),
             produces=("emit",),
+            file_policy="workspace-write",
             notes="write the artifact's files",
         ))
         graph.add(Node(

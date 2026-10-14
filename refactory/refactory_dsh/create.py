@@ -360,6 +360,7 @@ class CreateMode(Mode):
             reads=("brief.json", "design.md", "validation.txt"),
             writes=("emit.txt",),
             produces=("emit",),
+            file_policy="workspace-write",
             notes="write the package's source files",
         ))
         graph.add(Node(

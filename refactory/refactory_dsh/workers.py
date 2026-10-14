@@ -110,9 +110,20 @@ def finish(path: Path, state: str, *, error: str | None = None) -> dict[str, Any
     return record
 
 
-def permission_patch(route: dict[str, Any]) -> list[dict[str, Any]]:
-    """Scope DSH bypass to this runtime, without leaking through child env."""
-    if route.get('worker_backend', 'dsh') == 'dsh' and route.get('permission_mode', 'skip') == 'skip':
+def permission_patch(route: dict[str, Any], file_policy: str | None = None) -> list[dict[str, Any]]:
+    """Scope DSH bypass to this runtime, without leaking through child env.
+
+    When *file_policy* is set the node author asked for a narrower sandbox,
+    and that wins over the run-level ``skip`` default.
+    """
+    if route.get('worker_backend', 'dsh') != 'dsh':
+        return []
+    if file_policy is not None:
+        # Node-level policy narrows the sandbox; approval stays ``never``
+        # because the worker is still non-interactive.
+        return [{'id': 'sandbox-policy', 'config': {'mode': file_policy}},
+                {'id': 'approval', 'config': {'policy': 'never'}}]
+    if route.get('permission_mode', 'skip') == 'skip':
         return [{'id': 'sandbox-policy', 'config': {'mode': 'danger-full-access'}},
                 {'id': 'approval', 'config': {'policy': 'never'}}]
     return []
@@ -168,12 +179,13 @@ def provider_rows(route: dict[str, Any], provider_config: dict[str, Any] | None)
 
 
 def write_patch(path: Path, runtime_root: Path, route: dict[str, Any],
-                provider_config: dict[str, Any] | None = None) -> None:
+                provider_config: dict[str, Any] | None = None,
+                file_policy: str | None = None) -> None:
     """Compose installed DSH services, never a parallel agent wire protocol."""
     observer = Path(__file__).with_name('worker_observer.mjs')
     rows: list[dict[str, Any]] = [{'insert': [
         {'id': 'refactory-worker-observer', 'name': str(observer)}]}]
-    rows.extend(permission_patch(route))
+    rows.extend(permission_patch(route, file_policy=file_policy))
     rows.extend(provider_rows(route, provider_config))
     if route['worker_backend'] != 'dsh':
         package = PACKAGES[route['worker_backend']]
@@ -234,6 +246,8 @@ def lower_workflow(workflow: Any, workdir: Path, model_context: dict[str, Any] |
                                     'produces': list((declarations or {}).get(name, {}).get('produces', [])),
                                     'post_checks': [check.model_dump() for check in node.post_checks],
                                     'model_context': selected_context}
+        if node.file_policy is not None:
+            payload['file_policy'] = node.file_policy
         serialized = json.dumps(payload, indent=2, sort_keys=True) + '\n'
         spec = directory / (hashlib.sha256(serialized.encode()).hexdigest() + '.json')
         spec.write_text(serialized)

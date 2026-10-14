@@ -356,7 +356,8 @@ class DshModelClient:
         return result
 
     def complete(
-        self, prompt: str, *, system: str = "", workdir: Path | None = None
+        self, prompt: str, *, system: str = "", workdir: Path | None = None,
+        file_policy: str | None = None,
     ) -> str:
         from refactory_dsh import workers
         scratch = Path(os.environ.get("REFACTORY_MODEL_SCRATCH", "/tmp")) / "refactory-model"
@@ -368,7 +369,7 @@ class DshModelClient:
             client._budget.require_usage_capability(self._worker_backend == "dsh")
         client._worker_receipt = workers.begin(run_dir, self.route(), node=self._node_id, role=self._role)
         try:
-            result = client._complete(prompt, system=system, workdir=run_dir)
+            result = client._complete(prompt, system=system, workdir=run_dir, file_policy=file_policy)
             client._checkpoint(final=True)
         except BaseException as error:
             state = "failed"
@@ -387,7 +388,8 @@ class DshModelClient:
         return result
 
     def _complete(
-        self, prompt: str, *, system: str = "", workdir: Path | None = None
+        self, prompt: str, *, system: str = "", workdir: Path | None = None,
+        file_policy: str | None = None,
     ) -> str:
         """Return the model's answer to ``prompt``.
 
@@ -427,7 +429,8 @@ class DshModelClient:
         if self._worker_receipt is not None:
             from refactory_dsh.workers import write_patch
             patch = self._worker_receipt.with_suffix(".patch.yml")
-            write_patch(patch, self._runtime_root, self.route(), provider_config=self._provider_config)
+            write_patch(patch, self._runtime_root, self.route(), provider_config=self._provider_config,
+                        file_policy=file_policy)
             cmd += ["--patch", str(patch)]
         if self._worker_backend == "dsh":
             if self._provider:

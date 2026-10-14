@@ -179,3 +179,38 @@ def test_legacy_null_context_without_budget_pins_native_policy_for_nested_worker
     assert len(seen) == 1
     assert config.read_bytes() == original
     assert not (tmp_path / '.refactory/resource-usage.json').exists()
+
+
+def test_file_policy_narrows_sandbox_in_worker_patch(tmp_path, monkeypatch):
+    """A node's file_policy overrides the run-level skip default."""
+    monkeypatch.delenv('REFACTORY_WORKER_CONTEXT', raising=False)
+    seen = []
+
+    def inspect_completion(client, argv, _workdir, _stop_at=None, _budget_s=None, task=None):
+        index = len(argv) - 1 - argv[::-1].index('--patch')
+        seen.extend(json.loads(Path(argv[index + 1]).read_text()))
+        return subprocess.CompletedProcess(argv, 0, 'done', '')
+
+    monkeypatch.setattr(DshModelClient, '_run_completion', inspect_completion)
+    client = DshModelClient(permission_mode='skip')
+    client.for_node('emit').complete('task', workdir=tmp_path, file_policy='workspace-write')
+    policies = {row['id']: row['config'] for row in seen if row.get('id') in ('sandbox-policy', 'approval')}
+    assert policies['sandbox-policy']['mode'] == 'workspace-write'
+    assert policies['approval']['policy'] == 'never'
+
+
+def test_no_file_policy_keeps_danger_full_access(tmp_path, monkeypatch):
+    """Without file_policy the existing skip → danger-full-access behavior is preserved."""
+    monkeypatch.delenv('REFACTORY_WORKER_CONTEXT', raising=False)
+    seen = []
+
+    def inspect_completion(client, argv, _workdir, _stop_at=None, _budget_s=None, task=None):
+        index = len(argv) - 1 - argv[::-1].index('--patch')
+        seen.extend(json.loads(Path(argv[index + 1]).read_text()))
+        return subprocess.CompletedProcess(argv, 0, 'done', '')
+
+    monkeypatch.setattr(DshModelClient, '_run_completion', inspect_completion)
+    DshModelClient(permission_mode='skip').for_node('build').complete('task', workdir=tmp_path)
+    policies = {row['id']: row['config'] for row in seen if row.get('id') in ('sandbox-policy', 'approval')}
+    assert policies['sandbox-policy']['mode'] == 'danger-full-access'
+    assert policies['approval']['policy'] == 'never'

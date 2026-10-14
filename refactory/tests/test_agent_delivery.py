@@ -44,7 +44,7 @@ def test_python_and_native_worker_dispatch_share_execution_contract(tmp_path, mo
     from refactory_dsh.worker_node import execute
 
     seen = []
-    def complete(self, prompt, *, system='', workdir=None):
+    def complete(self, prompt, *, system='', workdir=None, file_policy=None):
         seen.append(prompt)
         (workdir / 'answer.txt').write_text('42')
         return 'Done.'

@@ -159,7 +159,8 @@ class CreateFastMode(CreateMode):
                 "nodes; do not invoke them or locate their implementation during emission."
             ), reads=("brief.json", "survey.json", "repair.txt", "validation.txt")
                      + (("implementation-plan.txt",) if self.plan_first else ()),
-            writes=("emit.txt",), produces=("emit",), notes="implement directly from the brief and current source",
+            writes=("emit.txt",), produces=("emit",), file_policy="workspace-write",
+            notes="implement directly from the brief and current source",
         ))
         graph.add(replace(full.nodes["materialise"], resource_role="work"))
         graph.add(replace(full.nodes["validate"], evaluator=f"{OPS}:validate_package",
@@ -247,7 +248,8 @@ class DesignFastMode(DesignMode):
                 "emit.txt, return a short completion message. Do not materialize the artifact "
                 "or invoke downstream graph operations yourself."
             ), reads=("brief.json", "source-manifest.json", "implementation-plan.txt", "repair.txt"),
-            writes=("emit.txt",), produces=("emit",), notes="implement the small artifact/change directly",
+            writes=("emit.txt",), produces=("emit",), file_policy="workspace-write",
+            notes="implement the small artifact/change directly",
         ))
         graph.add(Node(
             "materialise", "op", call=f"{OPS}:materialise_artifact", resource_role="work",

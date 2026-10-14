@@ -258,6 +258,7 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
                 prompt_template=node.prompt_template,
                 tools=list(node.tools),
                 max_iterations=node.max_iterations,
+                file_policy=node.file_policy,
             )
 
     edges = [
