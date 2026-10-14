@@ -265,7 +265,7 @@ def command_reset(workdir: Path, request: dict[str, Any]) -> dict[str, Any]:
     targets: list[Path] = []
     retained: list[str] = []
     if request.get('restartData') or request.get('archiveArtifacts') is True:
-        reads = [Path(name) for name in declarations.get(request.get('start'), {}).get('reads', [])]
+        reads = [Path(name) for node in nodes for name in declarations.get(node, {}).get('reads', [])]
         writes = {name for node in nodes for name in declarations.get(node, {}).get('writes', [])}
         from refactory_dsh.run_artifacts import owned_outputs
 

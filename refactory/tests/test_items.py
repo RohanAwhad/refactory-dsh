@@ -425,3 +425,63 @@ def test_non_data_reset_archives_only_owned_outputs_when_requested(tmp_path, arc
         assert all((tmp_path / name).read_text() == contents for name, contents in original.items())
     for name in ('input.txt', 'shared.txt', 'unrelated.txt'):
         assert (tmp_path / name).read_text() == original[name]
+
+
+def test_reset_retains_files_read_by_non_start_invalidated_nodes(tmp_path):
+    """Regression: reads must be collected from all invalidated nodes, not just the start node.
+
+    When a file is written by one invalidated node and read by a different (non-start)
+    invalidated node, the file must be retained so the replaying node can find its input.
+    The buggy code collected reads only from the start node, causing shared files to be
+    archived even though downstream invalidated nodes needed them.
+    """
+    graph = nn.Graph()
+    graph.add(nn.Node('prepare', 'op', call='loop_ops:write_number',
+                      writes=('shared.txt',), produces=('prepared',)))
+    graph.add(nn.Node('middle', 'op', call='loop_ops:write_number',
+                      writes=('shared.txt', 'output.txt'), produces=('computed',)))
+    graph.add(nn.Node('downstream', 'op', call='loop_ops:write_number',
+                      reads=('shared.txt',), writes=('result.txt',), produces=('finished',)))
+    graph.connect('prepare', 'middle')
+    graph.connect('middle', 'downstream')
+    lowering.write_declarations({'graph': graph.to_state()}, tmp_path)
+
+    # Create the files that would exist before a redo.
+    (tmp_path / 'shared.txt').write_text('shared content')
+    (tmp_path / 'output.txt').write_text('output content')
+    (tmp_path / 'result.txt').write_text('result content')
+
+    # Facts from all three nodes.
+    prior_facts = {'prepared': True, 'computed': 42, 'finished': 'done'}
+    (tmp_path / 'facts.json').write_text(json.dumps(prior_facts))
+
+    # Redo middle and downstream; prepare is NOT invalidated.
+    request = {
+        'requested': 'middle',
+        'start': 'middle',
+        'nodes': ['middle', 'downstream'],
+        'archiveArtifacts': True,
+    }
+    receipt = items.command_reset(tmp_path, request)
+
+    # shared.txt is retained because downstream (a non-start invalidated node) reads it.
+    assert 'shared.txt' in receipt['retained_inputs']
+
+    # output.txt and result.txt are archived (written by invalidated nodes, not read by any).
+    assert 'output.txt' in receipt['archived_artifacts']
+    assert 'result.txt' in receipt['archived_artifacts']
+    assert 'shared.txt' not in receipt['archived_artifacts']
+
+    # shared.txt still exists in the workdir with original content.
+    assert (tmp_path / 'shared.txt').read_text() == 'shared content'
+
+    # output.txt and result.txt were moved to the archive.
+    archive = tmp_path / receipt['archive']
+    assert not (tmp_path / 'output.txt').exists()
+    assert not (tmp_path / 'result.txt').exists()
+    assert (archive / 'artifacts' / 'output.txt').read_text() == 'output content'
+    assert (archive / 'artifacts' / 'result.txt').read_text() == 'result content'
+
+    # Only facts from invalidated nodes are cleared; prepared is kept.
+    assert receipt['cleared_facts'] == ['computed', 'finished']
+    assert json.loads((tmp_path / 'facts.json').read_text()) == {'prepared': True}
