@@ -166,7 +166,31 @@ describe('workflow-spine real composition', () => {
         .toMatchObject({ status: 'routed', verdict: 'proceed', answered_by: 'user' })
       expect(asked[0]!.detail).toBe(`Gate reads files: ${join(tmp, 'design.md')}`)
       expect(asked[0]!.intent).toBeUndefined()
-      expect(asked[0]!.options?.map(option => option.label)).toEqual(['proceed', 'reloop'])
+      expect(asked[0]!.options?.map(option => option.label)).toEqual(['proceed', 'reloop', 'halt'])
+    } finally { rmSync(tmp, { recursive: true, force: true }) }
+  })
+
+  it('lets the person stop the run at a user gate that has no halt edge', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'spine-gate-halt-'))
+    try {
+      const { ctx } = await gateRun(graphWithReads, tmp,
+        question => Promise.resolve({ answers: [{ id: question.id, selected: [], custom: 'halt' }] }))
+      expect(await run(ctx, 'wf_verdict', { gate: 'gate' }))
+        .toMatchObject({ status: 'routed', verdict: 'halt', answered_by: 'user', halted: true })
+      expect(await run(ctx, 'wf_next', {})).toMatchObject({ halted: { gate: 'gate', reason: 'verdict' } })
+      expect(await run(ctx, 'wf_state', {})).toMatchObject({ gate_verdicts: { gate: 'halt' }, cursor: [] })
+    } finally { rmSync(tmp, { recursive: true, force: true }) }
+  })
+
+  it('tells the CEO to reply and wait, not re-ask, when the answer is no outcome', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'spine-gate-replied-'))
+    try {
+      const { ctx } = await gateRun(graphWithReads, tmp,
+        question => Promise.resolve({ answers: [{ id: question.id, selected: [], custom: 'stop' }] }))
+      const replied = await run(ctx, 'wf_verdict', { gate: 'gate' }) as { status: string; note: string }
+      expect(replied.status).toBe('replied')
+      expect(replied.note).toMatch(/asked correctly/)
+      expect(replied.note).toMatch(/Do not ask the gate's question yourself or recommend an outcome/)
     } finally { rmSync(tmp, { recursive: true, force: true }) }
   })
 

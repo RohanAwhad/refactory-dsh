@@ -975,6 +975,8 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   const pendingQuestions = new WeakSet<Spine>()
+  /** The outcome that stops a run at any gate; the engine accepts it without a `halt` edge. */
+  const HALT_LABEL = 'halt'
 
   /**
    * Result of a user-gate question.
@@ -1038,8 +1040,11 @@ export function apply(ctx: Context, config: Config): void {
     const { gateCommand, commandEnv, dataCommand } = requireRun(exec)
     applyControls(spine, workdir, commandEnv, dataCommand)
     if (spine.isPaused() || spine.isHalted()) return undefined
-    const labels = spine.acceptedVerdicts(gate)
-    const request = { gate, reads: view.reads ?? [], labels }
+    const request = { gate, reads: view.reads ?? [], labels: spine.acceptedVerdicts(gate) }
+    // The engine can halt the run at any gate, with or without a `halt` edge, so the
+    // person is always offered it; otherwise "stop" is unanswerable at a user gate.
+    const labels = request.labels.length === 0 || request.labels.includes(HALT_LABEL)
+      ? request.labels : [...request.labels, HALT_LABEL]
     const prior = gateCommand !== '' && workdir !== undefined
       ? runtimeBridge(gateCommand, workdir, commandEnv, { ...request, action: 'begin' })
       : undefined
@@ -1064,7 +1069,8 @@ export function apply(ctx: Context, config: Config): void {
           header: 'Workflow gate',
           question: view.gate_prompt || `Gate ${gate}`,
           ...(shown === undefined ? {} : { detail: shown }),
-          ...(labels.length === 0 ? {} : { options: labels.map(verdict => ({ label: verdict })) }),
+          ...(labels.length === 0 ? {} : { options: labels.map(verdict => verdict === HALT_LABEL && !request.labels.includes(HALT_LABEL)
+            ? { label: verdict, description: 'Stop the run here.' } : { label: verdict }) }),
         }],
         ...(exec.agent === undefined ? {} : { agent: exec.agent }),
         signal: questionSignal,
@@ -1404,14 +1410,16 @@ export function apply(ctx: Context, config: Config): void {
           // Unrecognized free text: gate stays open, return non-error JSON to the CEO
           return json({
             status: 'replied', gate: args.gate, text: result.text,
-            note: 'The user typed free text that does not match any accepted verdict. The gate remains due. Respond to the user and call this tool again to re-ask.',
+            note: 'The person answered with text that is none of the gate\'s outcomes. The gate was asked correctly and remains due. Reply to them in conversation (the outcomes are the options they were shown) and wait for their message. Do not ask the gate\'s question yourself or recommend an outcome; once they have answered, call this tool again with the gate alone.',
           })
         }
         // Normal verdict path
         spine.verdict(args.gate, result.verdict, result.feedback || args.feedback || '')
+        if (spine.isHalted()) recordStatus(spine, workdir, 'halted')
         return json({
           status: 'routed', gate: args.gate, verdict: result.verdict, answered_by: 'user',
           ...(result.feedback ? { feedback: result.feedback } : {}),
+          ...(spine.isHalted() ? { halted: true } : {}),
         })
       }
       if (args.verdict === undefined) {
