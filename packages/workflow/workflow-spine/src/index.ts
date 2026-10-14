@@ -33,12 +33,14 @@ import type { NodeView, SpineNext } from './spine.ts'
 import { commandOf, isDeterministic, runDataCommand, runDeterministic } from './execute.ts'
 import type { CommandFailure } from './execute.ts'
 import type { WorkflowGraph } from './types.ts'
+import { validateBuild } from './build-stamp.ts'
 
 export { Spine, validateGraph } from './spine.ts'
 export { commandOf, dataCommandOf, isDeterministic, runDataCommand, verdictOf, NODE_ENV_KEY } from './execute.ts'
 export type { CommandFailure, CommandOutcome, CommandRunnerConfig, NodeManifest } from './execute.ts'
 export type { DataPass, GraphIssue, NodeView, PromptAmendmentMode, SpineNext } from './spine.ts'
 export type { WorkflowEdge, WorkflowGraph, WorkflowNode } from './types.ts'
+export { BUILD_STAMP, computeSourceStamp, validateBuild } from './build-stamp.ts'
 
 export const name = 'workflow-spine'
 export const inject = ['tools', 'systemPrompt']
@@ -1118,6 +1120,7 @@ export function apply(ctx: Context, config: Config): void {
       },
       output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
       execute(args, exec) {
+        validateBuild()
         const session = exec.agent?.session
         if (session === undefined) {
           throw new Error(`${toolPrefix}_open requires an owning agent session`)
