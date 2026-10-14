@@ -775,7 +775,7 @@ describe('one deterministic node per call when the run is opened interactively',
     ])
   })
 
-  it('skips the delivery bridge for a dispatched AgentNode and writes the amended prompt to prompt_file (watchpoints 2+3)', async () => {
+  it('runs a dispatched AgentNode without the delivery bridge, handing it the amended prompt through prompt_file', async () => {
     const run = scratch()
 
     // A dispatch command that copies prompt_file to out.txt, proving the engine
@@ -791,7 +791,6 @@ describe('one deterministic node per call when the run is opened interactively',
       'fi',
     ].join('\n'), { mode: 0o755 })
 
-    // A delivery bridge script that logs every call to a file.
     const bridgeLog = join(run, 'bridge-calls.log')
     const bridgeScript = join(run, 'bridge.sh')
     writeFileSync(bridgeScript, [
@@ -824,26 +823,20 @@ describe('one deterministic node per call when the run is opened interactively',
       executeCommands: true,
     }, realShell())
 
-    // wf_open runs 'pre' (deterministic start) and returns ready with 'worker'.
     const opened = await call(ctx, 'wf_open', { mode: 'pkg/t', workdir: run }, as('session-1'))
     expect(opened).toMatchObject({ status: 'ready', nodes: [{ id: 'worker' }] })
 
-    // Amend the prompt before the dispatched node runs.
     await call(ctx, 'wf_edit', { node: 'worker', action: 'append-prompt', text: 'also handle edge cases' }, as('session-1'))
 
-    // wf_next runs the dispatched node deterministically (one boundary per call).
     const result = await call(ctx, 'wf_next', {}, as('session-1'))
     expect((result as { status: string }).status).toBe('done')
 
-    // Watchpoint 3: the output file must contain the amended prompt,
-    // proving the engine wrote it to prompt_file and the command read it.
     const output = readFileSync(join(run, 'out.txt'), 'utf8')
     expect(output).toContain('original task')
     expect(output).toContain('also handle edge cases')
 
-    // Watchpoint 2: the delivery bridge must NOT have been called for 'worker'.
-    // With interactiveOpen and a ready status, the bridge loop in report()
-    // iterates next.nodes; the skip guard must prevent it from calling begin.
+    // report() hands every ready agent node to the bridge, so an empty log means
+    // the dispatched node was recognised as deterministic and left out.
     expect(existsSync(bridgeLog)).toBe(false)
   })
 })

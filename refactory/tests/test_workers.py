@@ -318,7 +318,7 @@ def test_worker_bridge_renders_knobs_and_preserves_agent_facts(monkeypatch, tmp_
 
 
 def test_worker_uses_prompt_file_over_spec_prompt(monkeypatch, tmp_path):
-    """Watchpoint #3: worker_node.py must read prompt_file when present."""
+    """A worker reads its prompt from the node's prompt_file when the manifest names one."""
     from refactory_dsh.worker_node import execute
     (tmp_path / '.refactory').mkdir()
     (tmp_path / '.refactory/declarations.json').write_text(json.dumps({'build': {'produces': []}}))
@@ -327,7 +327,6 @@ def test_worker_uses_prompt_file_over_spec_prompt(monkeypatch, tmp_path):
         seen.append(prompt)
         return 'done'
     monkeypatch.setattr(DshModelClient, 'complete', complete)
-    # Write a prompt file with different content from spec['prompt']
     prompt_dir = tmp_path / '.refactory' / 'prompts'
     prompt_dir.mkdir(parents=True)
     prompt_file = prompt_dir / 'build.md'
@@ -342,7 +341,7 @@ def test_worker_uses_prompt_file_over_spec_prompt(monkeypatch, tmp_path):
 
 
 def test_worker_falls_back_to_spec_prompt_without_prompt_file(monkeypatch, tmp_path):
-    """Watchpoint #3 fallback: without prompt_file, spec['prompt'] is used."""
+    """A worker uses the spec's prompt when the manifest names no prompt_file."""
     from refactory_dsh.worker_node import execute
     (tmp_path / '.refactory').mkdir()
     (tmp_path / '.refactory/declarations.json').write_text(json.dumps({'build': {'produces': []}}))
@@ -351,7 +350,6 @@ def test_worker_falls_back_to_spec_prompt_without_prompt_file(monkeypatch, tmp_p
         seen.append(prompt)
         return 'done'
     monkeypatch.setattr(DshModelClient, 'complete', complete)
-    # No prompt_file in manifest
     manifest = json.dumps({'id': 'build', 'type': 'AgentNode', 'command': 'echo', 'reads': [], 'writes': []})
     monkeypatch.setenv('DSH_WORKFLOW_NODE', manifest)
     execute({'schema_version': 1, 'node_id': 'build', 'reads': [], 'writes': [],
