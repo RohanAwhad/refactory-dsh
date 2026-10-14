@@ -52,6 +52,13 @@ def test_actual_transport_records_pass_independent_clock_validation(actual_trans
     assert score["status"] == "passed", score
 
 
+@pytest.mark.parametrize("offset,status", [(0.00005, "passed"), (0.001, "failed")])
+def test_independent_clock_sampling_tolerance_is_bounded(actual_transport, offset, status):
+    record = actual_transport[0][1]["transport_timing"][0]
+    record["last_activity_unix"] = record["finished_unix"] + offset
+    assert dispatch_deadline_row(actual_transport)["status"] == status
+
+
 @pytest.mark.parametrize("mutation", ["missing", "policy", "idle", "wall", "activity", "time", "early-expiry"])
 def test_incomplete_or_forged_activity_never_passes(actual_transport, mutation):
     worker = actual_transport[0][1]

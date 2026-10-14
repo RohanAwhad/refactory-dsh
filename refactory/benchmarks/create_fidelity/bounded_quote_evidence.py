@@ -70,7 +70,7 @@ def _task(prompt, has_steering):
 
 def verify_quote_attempt(root, manifest, entry, page, *, dispatch, snapshot, obligation_ids, source_bytes):
     from .bounded_context_evidence import _bytes, _canonical, _record, _require, _sha
-    from .deadline_evidence import dispatch_deadline_row
+    from .deadline_evidence import remaining_clock_samples
     correction = entry["quote_correction"]
     keys = {"schema_version", "kind", "max_extra_requests", "semantic_projection_sha256", "rejected_response_sha256",
             "validation_failures", "rejected_attempt", "request"}
@@ -132,7 +132,10 @@ def verify_quote_attempt(root, manifest, entry, page, *, dispatch, snapshot, obl
     _require(all(old_delivery["execution"]["input_fingerprints"].get(name) == _sha(data)
                  for name, data in source_bytes.items()), "rejected quote attempt input fingerprints stale or incomplete")
     workers = [(item["worker_receipts"][0], _record(root, item["worker_receipts"][0])) for item in (rejected, entry)]
-    _require(dispatch_deadline_row(workers)["status"] == "passed", "quote correction lacks actual valid remaining-clock observations")
+    # This check binds retries to the original wall clock. Actual transport
+    # activity is assessed separately by F.deadlines.remaining.
+    for _, worker in workers:
+        remaining_clock_samples(worker)
     expiries = []
     for _, worker in workers:
         samples = worker["effective_deadlines"]["dispatches"]

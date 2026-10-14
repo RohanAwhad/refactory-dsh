@@ -10,7 +10,7 @@ from typing import Any
 
 from .contract import FIXTURES, reference
 from .deadline_evidence import (SOURCE_WALL_S, dispatch_deadline_row,
-                                source_idle_allowance, source_timing_policy, transport_timing)
+                                source_idle_allowance, source_timing_policy)
 from .operator_evidence import OperatorEvidenceContext, supplemental_row
 from .bounded_context_evidence import verify_bounded_context
 
@@ -616,7 +616,6 @@ def _protocol_rows(root: Path | None, events: list[dict], manifests: dict,
                 declared = limits["declared_stage_timeout_s"]
                 if type(declared) not in (int, float) or not 0 < declared <= SOURCE_WALL_S or limits["stage_timeout_s"] > declared:
                     raise ValueError("source hard wall or remaining physical allocation is invalid")
-                transport_timing(worker, limits)
             else:
                 if expected and ":" not in node and limits["declared_stage_timeout_s"] != expected:
                     raise ValueError(f"worker {node} did not retain the frozen source stage allowance")
@@ -630,7 +629,7 @@ def _protocol_rows(root: Path | None, events: list[dict], manifests: dict,
             if elapsed < 0 or elapsed > limits["stage_timeout_s"] + limits["shutdown_grace_s"] + 2:
                 raise ValueError("observed worker interval exceeded its recorded wall/shutdown envelope")
             refs.append(path)
-        return "Raw actual workers retain source allowances and effective completion/stage/shutdown/budget layers, and every supplied worker settled; explicitly marked records distinguish source inactivity from the physical wall using actual transport observations. Remaining clocks and expiry/process cleanup are separate assessments; unmarked historical receipts retain their original interpretation", refs
+        return "Raw worker configuration retains source allowances and effective completion/stage/shutdown/budget layers, and every supplied worker settled; explicitly marked configuration distinguishes source inactivity from the physical wall. Actual activity, remaining clocks and expiry/process cleanup are separate assessments; unmarked historical receipts retain their original interpretation", refs
 
     rows = [inspect("F.obligations", obligations), inspect("F.consumption", consumption), inspect("F.approval", approval)]
     try:

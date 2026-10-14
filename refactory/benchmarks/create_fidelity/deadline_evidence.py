@@ -186,7 +186,12 @@ def transport_timing(worker: dict, deadlines: dict) -> None:
         start, finish, last = [_number(record.get(key), key) for key in
                                ("started_unix", "finished_unix", "last_activity_unix")]
         sample_at = _timestamp(sample["sampled_at"]).timestamp()
-        if not worker_start - 1e-4 <= start <= last <= finish <= worker_finish + 1e-4 or start < previous_finish - 1e-4 or start < sample_at - 1e-4:
+        # The last activity is mapped from monotonic time while finish is a
+        # separate Unix-clock read. Apply the same 100us sampling tolerance
+        # used for the worker boundaries to this internal boundary too.
+        if (start < worker_start - 1e-4 or last < start - 1e-4 or last > finish + 1e-4
+                or finish > worker_finish + 1e-4 or finish < start
+                or start < previous_finish - 1e-4 or start < sample_at - 1e-4):
             raise ValueError("actual transport timestamps are stale, overlapping or outside the worker interval")
         previous_finish = finish
         elapsed = _number(record.get("elapsed_s"), "actual transport elapsed")
@@ -218,6 +223,19 @@ def transport_timing(worker: dict, deadlines: dict) -> None:
                 raise ValueError("wall expiry claimed before the observed absolute deadline")
 
 
+def remaining_clock_samples(worker: dict) -> None:
+    """Validate pre-dispatch clock arithmetic only, without claiming output activity."""
+    deadlines = worker.get("effective_deadlines")
+    if not isinstance(deadlines, dict) or not isinstance(deadlines.get("dispatches"), list) or not deadlines["dispatches"]:
+        raise FileNotFoundError("worker receipt lacks actual pre-dispatch remaining-clock samples")
+    previous = None
+    for attempt, sample in enumerate(deadlines["dispatches"], 1):
+        observed = _sample(sample, deadlines, worker, attempt)
+        if previous is not None and observed < previous:
+            raise ValueError("dispatch observation timestamps run backward")
+        previous = observed
+
+
 def dispatch_deadline_row(workers: list[tuple[str, dict]]) -> dict:
     refs = []
     status, reason = "passed", "Raw per-transport dispatch samples record stage and run time remaining, retained validation reserve, enclosing cancellation clocks, effective minimum and inactive owner idle policy; expiry enforcement is assessed separately."
@@ -229,14 +247,7 @@ def dispatch_deadline_row(workers: list[tuple[str, dict]]) -> dict:
         for path, worker in actual:
             refs.append(path)
             deadlines = worker.get("effective_deadlines")
-            if not isinstance(deadlines, dict) or not isinstance(deadlines.get("dispatches"), list) or not deadlines["dispatches"]:
-                raise FileNotFoundError("worker receipt lacks actual pre-dispatch remaining-clock samples")
-            previous = None
-            for attempt, sample in enumerate(deadlines["dispatches"], 1):
-                observed = _sample(sample, deadlines, worker, attempt)
-                if previous is not None and observed < previous:
-                    raise ValueError("dispatch observation timestamps run backward")
-                previous = observed
+            remaining_clock_samples(worker)
             transport_timing(worker, deadlines)
         if any(source_timing_policy(worker["effective_deadlines"]) for _, worker in actual):
             reason = "Raw dispatch and actual terminal transport samples distinguish versioned source inactivity/activity from the unchanged absolute wall and budget clocks; historical unmarked receipts retain inactive policy. Process cleanup and expiry enforcement are assessed separately."

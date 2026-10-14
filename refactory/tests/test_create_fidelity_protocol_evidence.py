@@ -136,8 +136,7 @@ def test_deadline_configuration_and_terminal_settlement_require_raw_records(tria
         if problem == "missing-layers":
             record.pop("effective_deadlines")
         elif problem == "short-builder":
-            record["effective_deadlines"]["declared_stage_timeout_s"] = 900
-            record["effective_deadlines"]["stage_timeout_s"] = 900
+            record["effective_deadlines"]["inactivity_timeout_s"] = 900
         elif problem == "overlong":
             record["finished"] = "2099-01-01T00:00:00+00:00"
         elif problem == "active-no-finished":

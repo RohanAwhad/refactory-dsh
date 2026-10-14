@@ -33,6 +33,8 @@ class QuoteResponses:
         dispatch_deadlines(client._worker_receipt, budget=client._budget,
                            stage_stop_at=time.monotonic() + client._node_timeout_s,
                            stage_timeout_s=client._node_timeout_s, attempt=1,
+                           inactivity_timeout_s=client._inactivity_timeout_s,
+                           inactivity_timeout_policy=client._inactivity_timeout_policy,
                            enclosing_deadlines=client._deadline_observations)
         worker = json.loads(client._worker_receipt.read_text())
         worker.update(actual_route={**client.route(), "source": "runtime-request"}, prompt_transport={

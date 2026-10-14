@@ -23,6 +23,8 @@ TESTS = (
     "test_create_fidelity_context_review.py",
     "test_create_fidelity_adjudication.py",
     "test_create_fidelity_quote_correction.py",
+    "test_create_fidelity_protocol_evidence.py",
+    "test_create_fidelity_quote_evidence.py",
 )
 
 
