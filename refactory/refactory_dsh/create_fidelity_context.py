@@ -533,6 +533,7 @@ class _Session:
         request = {"schema_version": 1, "context_id": self.root.name, "logical_node_id": self.node.id,
                    "role": self.node.role, "aggregation_id": identifier, "input_ids": ids,
                    "input_sha256": {item["input_id"]: item["input_sha256"] for item in inputs["records"]}}
+        max_response_bytes = sum(len(item["raw_response"].encode("utf-8")) for item in inputs["records"]) - 1
         prompt = (self.fixed + "\n\nSCOPED ADJUDICATION REQUEST:\n" + _json(request)
                   + "\n\nCOMPLETE PRIOR MODEL OUTPUTS:\n" + _json(inputs)
                   + "\nReturn ONLY strict JSON with schema_version:1, scope:'scoped_adjudication', context_id, logical_node_id, role, "
@@ -541,6 +542,9 @@ class _Session:
                     "do not discard, summarize or rewrite any. decisions may combine only supplied positive_findings with explicit original source references. "
                     "Each decision has decision_id, conclusion (substantive nonempty text), obligation_ids (only IDs from CLOSED COVERAGE ID VOCABULARY above), sources (objects with input_id and finding_ids). "
                     "Every positive finding must be referenced; no unknown, duplicate or unread source reference is allowed. "
+                    f"The complete response must contain at most {max_response_bytes} UTF-8 bytes (sum of the exact supplied raw responses minus one). "
+                    "Return compact JSON with no indentation or formatting whitespace outside strings. Combine only positive findings through the required exact source references. "
+                    "Never shorten, omit or rewrite mandatory retained adverse/unresolved/not_in_page data to meet this budget; preserve it completely even if the full required response cannot fit, so the runtime can fail honestly. "
                     "No final global PASS is authorized by this scoped adjudication. Original raw reports and prior outputs remain preserved; "
                     "Use only this complete prior-output packet; do not print whole original documents or other ledger branches into tool history. "
                     "resolve scope/coverage/conflicts honestly without manufacturing missing evidence. Do not execute final application tasks/tests or edit artifacts.")

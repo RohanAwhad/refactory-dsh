@@ -10,6 +10,30 @@ import time
 import pytest
 
 
+def _assert_process_stopped(pid, message):
+    # Query once: a child can be reaped between kill(pid, 0) and ps.
+    result = subprocess.run(["/bin/ps", "-o", "stat=", "-p", str(pid)],
+                            text=True, capture_output=True, check=False)
+    vanished = result.returncode == 1 and not result.stdout.strip() and not result.stderr.strip()
+    zombie = result.returncode == 0 and result.stdout.strip().startswith("Z")
+    assert vanished or zombie, f"{message}: {result}"
+
+
+@pytest.mark.parametrize("returncode,stdout,stderr,stopped", [
+    (1, "", "", True), (0, "Z\n", "", True), (0, "S\n", "", False),
+    (1, "", "ps: denied", False), (2, "", "", False), (0, "", "", False),
+])
+def test_process_exit_observation_distinguishes_reaping_from_live_or_failed_probe(
+        monkeypatch, returncode, stdout, stderr, stopped):
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs:
+                        subprocess.CompletedProcess(args[0], returncode, stdout, stderr))
+    if stopped:
+        _assert_process_stopped(123, "still live")
+    else:
+        with pytest.raises(AssertionError, match="still live"):
+            _assert_process_stopped(123, "still live")
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX controller pipe/process ownership")
 @pytest.mark.parametrize("operation", ["waiting", "model", "native-subprocess"])
 @pytest.mark.parametrize("stop", ["controller-loss", "deadline"])
@@ -102,13 +126,7 @@ execute_command([sys.executable,sys.argv[2],sys.argv[1],sys.argv[3],sys.argv[4]]
             assert len(workers) == 1 and workers[0]["state"] == "cancelled"
         elif operation == "native-subprocess":
             pid = int((root / "native-child-ready").read_text())
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                pass
-            else:
-                stat = subprocess.check_output(["/bin/ps", "-o", "stat=", "-p", str(pid)], text=True).strip()
-                assert stat.startswith("Z"), "frozen native runner child remained live after owner unwound"
+            _assert_process_stopped(pid, "frozen native runner child remained live after owner unwound")
         else:
             assert not (root / "human-answer.json").exists(), "no decision should be invented to escape waiting"
     finally:
@@ -158,13 +176,7 @@ with LaneSupervisor(Path.cwd(),10,4): asyncio.run(invoke())
     assert cleanup["completion"] == "residual_children_signalled"
     assert [action["signal"] for action in cleanup["actions"]] == ["SIGTERM", "SIGKILL"]
     assert all(action["outcome"] == "sent after owned-group recheck" for action in cleanup["actions"])
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        pass
-    else:
-        stat = subprocess.check_output(["/bin/ps", "-o", "stat=", "-p", str(pid)], text=True).strip()
-        assert stat.startswith("Z"), "native runner residual child is still live"
+    _assert_process_stopped(pid, "native runner residual child is still live")
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="Exact macOS authoring Seatbelt boundary")

@@ -4,6 +4,16 @@
   "issue": "https://github.com/boston-harness-group/refactory-dsh/issues/310",
   "rows": [
     {
+      "requirements": ["F.consumption", "F.children.research_director", "F.obligations.semantic"],
+      "owner": "bounded adjudication response budget",
+      "fix": "State the exact existing strict response byte budget and request compact JSON while retaining every adverse/unresolved finding verbatim and every positive source disposition. Preserve raw outputs and unchanged validation, deadlines and retry policy.",
+      "source": "refactory/refactory_dsh/create_fidelity_context.py",
+      "regression": "refactory/tests/test_create_fidelity_adjudication_budget.py",
+      "observed_trial": "create-fidelity-update-sol6-20261014-v3",
+      "observed_failure": "The actual second quality aggregate preserved all 44 adverse/unresolved findings and all 74 positive source references, but its 29697-byte formatted JSON exceeded 29454 bytes of prior outputs. The prompt did not state the enforced reduction budget. The same parsed content compactly encoded is 28406 bytes; no output was normalized or repaired in the failed trial.",
+      "status": "Prospective prompt guidance retains strict nonprogress rejection and immutable raw evidence. Fresh live confirmation remains required; v3 remains failed."
+    },
+    {
       "requirements": ["F.consumption", "F.children.strategy_director", "F.obligations.semantic"],
       "owner": "bounded evidence coverage vocabulary",
       "fix": "Enumerate the exact active coverage IDs separately from requirement labels embedded in evidence. Keep all source findings in quoted claims; retain strict rejection of unknown structured IDs without filtering or rewriting model responses.",

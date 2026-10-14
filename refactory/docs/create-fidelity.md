@@ -69,6 +69,9 @@ forward verbatim under stable identities. The final task receives the complete
 remaining records with the full strategy, intent and decision obligations.
 All intermediate responses remain preserved and digest-bound. The runtime limits
 adjudication depth and calls and refuses a reduction that makes no size progress.
+Each adjudication request states its exact maximum response size in UTF-8 bytes
+and asks for compact JSON. Formatting guidance never permits shortening retained
+findings; a response that cannot fit while preserving them still fails.
 
 The configured prompt byte ceiling is not a claim about an unknown provider's
 context window. Oversized fixed instructions or final reconciliation records fail
