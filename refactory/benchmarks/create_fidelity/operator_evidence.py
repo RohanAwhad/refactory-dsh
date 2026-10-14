@@ -43,6 +43,7 @@ def evaluator_provenance() -> dict:
             "deadline_validator_sha256": digest(Path(__file__).with_name("deadline_evidence.py")),
             "bounded_context_version": BOUNDED_CONTEXT_VERSION,
             "bounded_context_validator_sha256": digest(Path(__file__).with_name("bounded_context_evidence.py")),
+            "bounded_quote_validator_sha256": digest(Path(__file__).with_name("bounded_quote_evidence.py")),
             "bounded_adjudication_validator_sha256": digest(Path(__file__).with_name("bounded_adjudication_evidence.py")),
             "artifact_inventory_version": ARTIFACT_INVENTORY_VERSION,
             "artifact_inventory_sha256": digest(Path(__file__).with_name("artifact_inventory.py")),

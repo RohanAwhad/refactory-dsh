@@ -38,6 +38,20 @@ def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def quote_semantics(value: dict) -> dict:
+    """Everything a quote-only correction must preserve, including order."""
+    return {**value, "claims": [{key: item for key, item in claim.items()
+                                 if key not in {"quote", "start_byte", "end_byte"}}
+                                for claim in value["claims"]]}
+
+
+class _QuoteAnchoringError(ValueError):
+    def __init__(self, failures):
+        self.failures = failures
+        super().__init__("context evidence read has forged or invalid exact claim excerpt: "
+                         + "; ".join(item["claim_id"] + ": " + item["reason"] for item in failures))
+
+
 @dataclass(frozen=True)
 class Document:
     name: str
@@ -119,6 +133,40 @@ def adjudication_inputs(record: dict, ids: list[str], workdir: Path) -> dict:
             "positive_findings": positives}
 
 
+ADJUDICATION_RENDERING = "positive-findings-json-pointers/v1"
+
+
+def render_adjudication_inputs(inputs: dict) -> dict:
+    """Index duplicate positive bodies already present in complete raw outputs.
+
+    The internal ledgers and every adverse finding stay unchanged. Identical
+    page provenance appears once per input; each positive body has an exact
+    pointer into that input's parsed, byte-preserved raw model response.
+    """
+    raw = {item["input_id"]: json.loads(item["raw_response"]) for item in inputs["records"]}
+    indexed = {}
+    for identifier, findings in inputs["positive_findings"].items():
+        value = raw[identifier]
+        group = {"findings": {}}
+        for stable_id, content in findings.items():
+            if value["scope"] == "page_only":
+                array = "claims" if content["kind"] == "claim" else "coverage"
+                positions = [i for i, finding in enumerate(value[array]) if finding == content["finding"]]
+                source = {key: content[key] for key in ("page_id", "path", "document_sha256")}
+                if "source" in group and group["source"] != source:
+                    raise ValueError("positive evidence has conflicting page provenance")
+                group["source"] = source
+                pointer = {"kind": content["kind"], "json_pointer": f"/{array}/{positions[0]}"} if len(positions) == 1 else None
+            else:
+                positions = [i for i, finding in enumerate(value["decisions"]) if finding == content]
+                pointer = {"json_pointer": f"/decisions/{positions[0]}"} if len(positions) == 1 else None
+            if pointer is None:
+                raise ValueError("positive evidence does not identify one complete raw finding")
+            group["findings"][stable_id] = pointer
+        indexed[identifier] = group
+    return {**inputs, "input_rendering": ADJUDICATION_RENDERING, "positive_findings": indexed}
+
+
 @dataclass(frozen=True)
 class ContextPolicy:
     max_prompt_bytes: int = 196608
@@ -129,6 +177,13 @@ class ContextPolicy:
     accounting: str = "configured_utf8_byte_ceiling"
     max_adjudications: int = 128
     max_adjudication_rounds: int = 16
+    quote_correction_reserve_bytes: int = 32768
+
+    @property
+    def applied_quote_correction_reserve_bytes(self) -> int:
+        # A byte reserve, not a token/window estimate. Keep custom small
+        # policies usable while reserving 32 KiB at the production ceiling.
+        return min(self.quote_correction_reserve_bytes, self.max_prompt_bytes // 6)
 
     def check(self, prompt: str, system: str = "") -> None:
         size = len((system + "\n\n" + prompt if system else prompt).encode())
@@ -147,6 +202,8 @@ class ContextPolicy:
                 raise ValueError(f"{key} must be a positive integer")
         if self.max_adjudications > 128 or self.max_adjudication_rounds > 16:
             raise ValueError("scoped adjudication is limited to 128 calls and 16 rounds")
+        if type(self.quote_correction_reserve_bytes) is not int or self.quote_correction_reserve_bytes < 0:
+            raise ValueError("quote correction byte reserve must be a nonnegative integer")
         if self.accounting != "configured_utf8_byte_ceiling" or type(self.approved_byte_bpe) is not bool:
             raise ValueError("unsupported context accounting policy")
         if self.declared_context_tokens is not None and (type(self.declared_context_tokens) is not int or self.declared_context_tokens <= 0):
@@ -236,6 +293,7 @@ class _Session:
                        "policy": asdict(policy), "instructions": self.snapshot("instructions.txt", instructions.encode()),
                        "fixed_documents": [], "documents": [], "pages": [], "reviews": [], "aggregations": [], "frontier": [],
                        "obligations": obligations, "deadline_scope": "one absolute scope across reads and final call"}
+        self.record["policy"]["applied_quote_correction_reserve_bytes"] = policy.applied_quote_correction_reserve_bytes
         fixed = []
         for name in (".factory/strategy/user-intent.md", ".factory/strategy/current.md"):
             path = ctx.path(name)
@@ -362,12 +420,18 @@ class _Session:
                 digest = item.get("page_sha256", item.get("sha256"))
                 if _sha(data) != digest:
                     raise ValueError("immutable context snapshot was modified")
+        attempts = []
         for review in self.record["reviews"] + self.record["aggregations"]:
+            rejected = review.get("quote_correction", {}).get("rejected_attempt")
+            if rejected is not None:
+                attempts.append(rejected)
+            attempts.append(review)
+        for review in attempts:
             for key in ("supplied_prompt", "raw_response", "application_before", "application_after"):
                 item = review.get(key)
                 if item is not None and _sha(self.ctx.path(item["snapshot"]).read_bytes()) != item["sha256"]:
                     raise ValueError("supplied context prompt or raw review response changed")
-            if review.get("status") == "reviewed":
+            if "delivery_receipt_sha256" in review:
                 if _sha(self.ctx.path(review["delivery_receipt"]).read_bytes()) != review["delivery_receipt_sha256"]:
                     raise ValueError("completed context read delivery receipt changed")
                 for name, digest in review["worker_receipt_sha256"].items():
@@ -414,47 +478,108 @@ class _Session:
                   "Give substantive evidence observations, not generic PASS or filename assertions. No final task verdict yet."
                 + "\n=== EXACT EVIDENCE RANGE ===\n" + text + "\n=== END EXACT EVIDENCE RANGE ===")
 
-    def review(self, page, text):
+    def _review_attempt(self, page, prompt, *, correction=None):
         from refactory_dsh.agent_delivery import begin, finish
         from refactory_dsh.nn.executor import _ask_model
-        identity = f"{self.node.id}:context:{self.root.name}:{page['page_id']}"
+        suffix = ":quote-correction-1" if correction is not None else ""
+        identity = f"{self.node.id}:context:{self.root.name}:{page['page_id']}" + suffix
         client = self.bound_client(identity)
-        prompt = self.page_prompt(page, text)
         system = "Evidence-only read by the original logical role."
         delivery = begin(self.ctx.workdir, identity, prompt, [], reads=list(self.source_bytes), model_context=client.context())
         self.policy.check(delivery["prompt"], system)
+        if correction is None:
+            first_ceiling = self.policy.max_prompt_bytes - self.record["policy"]["applied_quote_correction_reserve_bytes"]
+            if len((system + "\n\n" + delivery["prompt"]).encode()) > first_ceiling:
+                raise ValueError("first evidence read exhausts the configured quote correction byte reserve")
         before = set((self.ctx.workdir / ".refactory/workers").glob("*.json"))
         entry = {"logical_node_id": self.node.id, "role": self.node.role, "page_id": page["page_id"],
                  "execution_node_id": identity, "system": system, "delivery_receipt": delivery["receipt"],
-                 "supplied_prompt": self.snapshot(page["page_id"] + ".prompt.txt", delivery["prompt"].encode()),
+                 "supplied_prompt": self.snapshot(page["page_id"] + suffix + ".prompt.txt", delivery["prompt"].encode()),
                  "status": "running", "worker_receipts": []}
+        if correction is not None:
+            entry["quote_correction"] = correction
         application_before = self.application_snapshot()
         before_bytes = _json(application_before).encode()
         entry["application_before"] = self.snapshot("application-" + _sha(before_bytes) + ".json", before_bytes)
-        self.record["reviews"].append(entry)
+        if correction is None:
+            self.record["reviews"].append(entry)
+        else:
+            # One page leaf. The rejected request remains a complete immutable
+            # attempt inside the accepted/failed correction entry.
+            self.record["reviews"][-1] = entry
         self.flush()
         try:
             raw = _ask_model(client, delivery["prompt"], system=system, workdir=self.ctx.workdir)
             receipt = finish(self.ctx.workdir, identity, final_response=raw, capture_final=False)
-            entry["raw_response"] = self.snapshot(page["page_id"] + ".response.json", raw.encode())
-            entry["worker_receipts"] = self.workers(before, identity, delivery["prompt"], system)
-            entry["worker_receipt_sha256"] = {name: _sha(self.ctx.path(name).read_bytes()) for name in entry["worker_receipts"]}
-            entry["delivery_receipt_sha256"] = _sha(self.ctx.path(entry["delivery_receipt"]).read_bytes())
-            entry["review"] = json.loads(raw)
-            self.validate_read(entry["review"], page)
+            entry["raw_response"] = self.snapshot(page["page_id"] + suffix + ".response.json", raw.encode())
             application_after = self.application_snapshot()
             after_bytes = _json(application_after).encode()
             entry["application_after"] = self.snapshot("application-" + _sha(after_bytes) + ".json", after_bytes)
             if application_before != self.application_before or application_after != self.application_before:
                 raise ValueError("observed application-output/package drift during evidence-only read; worker attribution unproven")
             entry["application_observation_scope"] = "Before/after full inventories detect persistent changes; not an OS read-only sandbox or proof against transient changes."
-            entry["status"] = "reviewed"
+            entry["worker_receipts"] = self.workers(before, identity, delivery["prompt"], system)
+            entry["worker_receipt_sha256"] = {name: _sha(self.ctx.path(name).read_bytes()) for name in entry["worker_receipts"]}
+            entry["delivery_receipt_sha256"] = _sha(self.ctx.path(entry["delivery_receipt"]).read_bytes())
             self.fresh()
+            entry["review"] = json.loads(raw)
+            return entry
         except BaseException as error:
             entry.update(status="failed", error=f"{type(error).__name__}: {error}")
             entry["worker_receipts"] = [str(path.relative_to(self.ctx.workdir)) for path in sorted(
                 set((self.ctx.workdir / ".refactory/workers").glob("*.json")) - before)
                 if self._worker_identity(path) == identity]
+            raise
+        finally:
+            self.flush()
+
+    def review(self, page, text):
+        prompt = self.page_prompt(page, text)
+        entry = self._review_attempt(page, prompt)
+        try:
+            try:
+                self.validate_read(entry["review"], page)
+            except _QuoteAnchoringError as error:
+                # All other typed fields and every semantic value have already
+                # passed validation; this is not a general response retry.
+                entry.update(status="quote_rejected", error=f"{type(error).__name__}: {error}")
+                self.flush()
+                rejected = json.loads(_json(entry))
+                projection = _sha(_json(quote_semantics(entry["review"])).encode())
+                entry["quote_rejection"] = {"validation_failures": error.failures,
+                                           "semantic_projection_sha256": projection}
+                request = {"schema_version": 1, "kind": "quote-anchor-correction/v1",
+                           "context_id": self.root.name, "logical_node_id": self.node.id,
+                           "role": self.node.role, "page_id": page["page_id"],
+                           "rejected_response_sha256": entry["raw_response"]["sha256"],
+                           "semantic_projection_sha256": projection,
+                           "validation_failures": error.failures}
+                correction = {"schema_version": 1, "kind": "quote-anchor-correction/v1",
+                              "max_extra_requests": 1, "semantic_projection_sha256": projection,
+                              "rejected_response_sha256": entry["raw_response"]["sha256"],
+                              "validation_failures": error.failures, "rejected_attempt": rejected,
+                              "request": request}
+                raw = self.ctx.path(entry["raw_response"]["snapshot"]).read_bytes().decode("utf-8")
+                corrected_prompt = (prompt + "\n\nQUOTE ANCHOR CORRECTION REQUEST:\n" + _json(request)
+                    + "\nThe prior completed response has otherwise valid strict fields but invalid quote/range anchoring. "
+                      "Return the complete same strict JSON response, changing ONLY quote, start_byte and end_byte inside claims. "
+                      "Preserve every other field/value, coverage item, claim ID/order/verdict/reason and all adverse/unresolved content EXACTLY. "
+                      "Use read-only byte computations on the SAME supplied immutable page and validate every final quote/range. "
+                      "Do not repair source evidence, omit findings, change semantics, or invent a final verdict. This is the only extra request."
+                    + "\nCOMPLETE REJECTED MODEL RESPONSE:\n" + raw
+                    + "\n=== END COMPLETE REJECTED MODEL RESPONSE ===")
+                # Complete original authority/page and rejected raw output must
+                # fit together. Neither source nor model content is shortened.
+                self.policy.check(corrected_prompt, "Evidence-only read by the original logical role.")
+                self.fresh()
+                entry = self._review_attempt(page, corrected_prompt, correction=correction)
+                if _sha(_json(quote_semantics(entry["review"])).encode()) != projection:
+                    raise ValueError("quote-only correction changed original evidence semantics")
+                self.validate_read(entry["review"], page)
+            entry["status"] = "reviewed"
+            self.fresh()
+        except BaseException as error:
+            self.record["reviews"][-1].update(status="failed", error=f"{type(error).__name__}: {error}")
             raise
         finally:
             self.flush()
@@ -516,7 +641,6 @@ class _Session:
         claims = value["claims"]
         if not isinstance(claims, list) or not claims:
             raise ValueError("context evidence read lacks concrete claim/excerpt observations")
-        data = self.ctx.path(page["document_snapshot"]).read_bytes()
         ids = set()
         for claim in claims:
             if (not isinstance(claim, dict) or set(claim) != {"claim_id", "verdict", "reason", "start_byte", "end_byte", "quote"}
@@ -524,11 +648,22 @@ class _Session:
                     or claim["verdict"] not in {"supported", "adverse", "unresolved"}
                     or not isinstance(claim["reason"], str) or not claim["reason"].strip()
                     or type(claim["start_byte"]) is not int or type(claim["end_byte"]) is not int
-                    or not page["start_byte"] <= claim["start_byte"] < claim["end_byte"] <= page["end_byte"]
                     or not isinstance(claim["quote"], str) or not claim["quote"]
-                    or claim["quote"].encode() != data[claim["start_byte"]:claim["end_byte"]]):
-                raise ValueError("context evidence read has forged or invalid exact claim excerpt")
+                    ):
+                raise ValueError("context evidence read has invalid strict claim fields")
             ids.add(claim["claim_id"])
+        # Inspect every semantic/typed field before classifying a failure as
+        # quote-only. A later malformed claim must not become retry eligible.
+        data = self.ctx.path(page["document_snapshot"]).read_bytes()
+        failures = []
+        for claim in claims:
+            in_page = page["start_byte"] <= claim["start_byte"] < claim["end_byte"] <= page["end_byte"]
+            if not in_page or claim["quote"].encode() != data[claim["start_byte"]:claim["end_byte"]]:
+                failures.append({"claim_id": claim["claim_id"], "reason":
+                                 "declared range is outside the supplied page" if not in_page else
+                                 "literal quote does not equal its declared original UTF-8 byte slice"})
+        if failures:
+            raise _QuoteAnchoringError(failures)
 
     def adjudicate(self, ids, round_number):
         from refactory_dsh.agent_delivery import begin, finish
@@ -536,13 +671,17 @@ class _Session:
         if len(ids) < 2 or len(self.record["aggregations"]) >= self.policy.max_adjudications:
             raise ValueError("bounded adjudication cannot progress within configured call bound")
         inputs = adjudication_inputs(self.record, ids, self.ctx.workdir)
+        rendered_inputs = render_adjudication_inputs(inputs)
         identifier = f"aggregate-{len(self.record['aggregations']) + 1:04d}"
         request = {"schema_version": 1, "context_id": self.root.name, "logical_node_id": self.node.id,
                    "role": self.node.role, "aggregation_id": identifier, "input_ids": ids,
                    "input_sha256": {item["input_id"]: item["input_sha256"] for item in inputs["records"]}}
         max_response_bytes = sum(len(item["raw_response"].encode("utf-8")) for item in inputs["records"]) - 1
         prompt = (self.fixed + "\n\nSCOPED ADJUDICATION REQUEST:\n" + _json(request)
-                  + "\n\nCOMPLETE PRIOR MODEL OUTPUTS:\n" + _json(inputs)
+                  + "\n\nCOMPLETE PRIOR MODEL OUTPUTS:\n" + _json(rendered_inputs)
+                  + "\nThe positive_findings index preserves each stable finding ID. Resolve its json_pointer inside that input's parsed raw_response. "
+                    "For page findings, combine the group's unchanged source provenance, the indexed kind and the pointed-to complete finding. "
+                    "For prior decisions, the pointer identifies the complete decision. Every original raw response is supplied verbatim; no positive content is omitted."
                   + "\nReturn ONLY strict JSON with schema_version:1, scope:'scoped_adjudication', context_id, logical_node_id, role, "
                     "aggregation_id, input_ids, input_sha256, retained_findings, decisions. Echo identity and every exact ordered input ID/digest. "
                     "retained_findings MUST copy EVERY adverse/unresolved finding from the supplied retained_findings verbatim (stable ID, status, full content); "
@@ -564,7 +703,8 @@ class _Session:
         entry = {"aggregation_id": identifier, "round": round_number, "input_ids": ids,
                  "input_sha256": request["input_sha256"], "logical_node_id": self.node.id, "role": self.node.role,
                  "execution_node_id": execution_id, "system": system, "delivery_receipt": delivery["receipt"],
-                 "input_packet": self.snapshot(identifier + ".inputs.json", _json(inputs).encode()),
+                 "input_rendering": ADJUDICATION_RENDERING,
+                 "input_packet": self.snapshot(identifier + ".inputs.json", _json(rendered_inputs).encode()),
                  "supplied_prompt": self.snapshot(identifier + ".prompt.txt", delivery["prompt"].encode()),
                  "status": "running", "worker_receipts": []}
         application_before = self.application_snapshot()
@@ -657,13 +797,13 @@ class _Session:
             # Group by exact encoded packet bytes rather than /4 token guesses.
             for identifier in old:
                 candidate = current + [identifier]
-                encoded = _json(adjudication_inputs(self.record, candidate, self.ctx.workdir)).encode()
+                encoded = _json(render_adjudication_inputs(adjudication_inputs(self.record, candidate, self.ctx.workdir))).encode()
                 if len(self.fixed.encode()) + len(encoded) + 12000 > self.policy.max_prompt_bytes:
                     if not current:
                         raise ValueError("complete prior adjudication output cannot fit with original authority under the configured ceiling")
                     groups.append(current)
                     current = [identifier]
-                    encoded = _json(adjudication_inputs(self.record, current, self.ctx.workdir)).encode()
+                    encoded = _json(render_adjudication_inputs(adjudication_inputs(self.record, current, self.ctx.workdir))).encode()
                     if len(self.fixed.encode()) + len(encoded) + 12000 > self.policy.max_prompt_bytes:
                         raise ValueError("complete prior adjudication output cannot fit with original authority under the configured ceiling")
                 else:
@@ -711,9 +851,15 @@ def prepare_context(ctx, *, node, instructions: str, documents: Sequence[Documen
         session = _Session(ctx, node, instructions, documents, client, deadline or getattr(ctx, "_director_deadline", None), policy, obligations)
         # Reserve actual execution-contract/ledger overhead. bind/check also
         # rejects excess actual bytes after those runtime fields are supplied.
-        allowance = policy.max_prompt_bytes - len(session.fixed.encode()) - 12000
-        if allowance <= 0:
+        page_room = policy.max_prompt_bytes - len(session.fixed.encode()) - 12000
+        if page_room <= 0:
             raise ValueError("original role and complete authoritative obligations cannot fit configured ceiling")
+        reserve = min(policy.applied_quote_correction_reserve_bytes, page_room // 3)
+        session.record["policy"].update(applied_quote_correction_reserve_bytes=reserve,
+            quote_correction_page_room_bytes=page_room,
+            quote_correction_reserve_rule="min(configured_bytes, max_prompt_bytes//6, original_page_room_bytes//3)")
+        session.flush()
+        allowance = page_room - reserve
         for document in session.record["documents"]:
             if document["reviewed_as"] != "complete byte ranges":
                 continue

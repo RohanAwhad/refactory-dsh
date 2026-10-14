@@ -46,7 +46,8 @@ class CompleteEvidenceResponses(ExternalResponses):
             inputs = json.JSONDecoder().raw_decode(prompt.split("COMPLETE PRIOR MODEL OUTPUTS:\n", 1)[1])[0]
             assert [item["input_id"] for item in inputs["records"]] == request["input_ids"]
             assert all(hashlib.sha256(item["raw_response"].encode()).hexdigest() == request["input_sha256"][item["input_id"]] for item in inputs["records"])
-            sources = [{"input_id": name, "finding_ids": list(findings)} for name, findings in inputs["positive_findings"].items() if findings]
+            sources = [{"input_id": name, "finding_ids": list(group["findings"])}
+                       for name, group in inputs["positive_findings"].items() if group["findings"]]
             return json.dumps({**request, "scope": "scoped_adjudication", "retained_findings": inputs["retained_findings"],
                                "decisions": [{"decision_id": "positive-1", "conclusion": "Scoped original-role evidence adjudicated against exact source references; no global acceptance asserted.",
                                               "obligation_ids": [], "sources": sources}] if sources else []})

@@ -70,8 +70,8 @@ class BudgetResponses(ExternalModel):
         assert "Never shorten, omit or rewrite mandatory retained adverse/unresolved/not_in_page data" in prompt
         assert all(hashlib.sha256(item["raw_response"].encode("utf-8")).hexdigest()
                    == request["input_sha256"][item["input_id"]] for item in inputs["records"])
-        sources = [{"input_id": identifier, "finding_ids": list(findings)}
-                   for identifier, findings in inputs["positive_findings"].items() if findings]
+        sources = [{"input_id": identifier, "finding_ids": list(group["findings"])}
+                   for identifier, group in inputs["positive_findings"].items() if group["findings"]]
         response = {**request, "scope": "scoped_adjudication", "retained_findings": inputs["retained_findings"],
                     "decisions": [{"decision_id": "positive-sources", "conclusion": "Scoped positive sources remain linked; global acceptance remains unproven.",
                                    "obligation_ids": [], "sources": sources}] if sources else []}
@@ -104,7 +104,7 @@ def test_actual_adjudication_dispatch_has_exact_budget_and_preserves_dense_findi
     assert len(dense_response["retained_findings"]) == 45
     assert dense_response["retained_findings"] == dense["inputs"]["retained_findings"]
     assert {finding["status"] for finding in dense_response["retained_findings"]} == {"adverse", "unresolved", "not_in_page"}
-    required = {(name, finding) for name, findings in dense["inputs"]["positive_findings"].items() for finding in findings}
+    required = {(name, finding) for name, group in dense["inputs"]["positive_findings"].items() for finding in group["findings"]}
     refs = [(source["input_id"], finding) for decision in dense_response["decisions"]
             for source in decision["sources"] for finding in source["finding_ids"]]
     assert set(refs) == required and len(refs) == len(set(refs))

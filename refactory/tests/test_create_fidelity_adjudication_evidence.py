@@ -34,7 +34,9 @@ def run_actual_controller(root, monkeypatch):
     ctx = RunContext(root, facts={"create_fidelity": True}, model=DshModelClient(
         provider="fixture", model="default", effort="high", attempts=1,
         node_routes={"health_checker": {"model": "original-health-route"}}))
-    ctx._create_fidelity_context_policy = ContextPolicy(max_prompt_bytes=32768)
+    # This fixture exercises recursive adjudication with exact, already-valid
+    # quotes. Quote-only reserve/attempts have their own real-delivery suite.
+    ctx._create_fidelity_context_policy = ContextPolicy(max_prompt_bytes=32768, quote_correction_reserve_bytes=0)
     outcome = Executor(graph, ctx).run()
     assert outcome.exit_ok, outcome.error
     path = next(root.glob(".refactory/create-fidelity-context/*/*/manifest.json"))

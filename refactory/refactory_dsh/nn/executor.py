@@ -775,6 +775,7 @@ class Executor:
             if isinstance(prompt, PreparedPrompt):
                 client = prompt.client
                 self.model_calls += len(prompt.session.record["reviews"]) + len(prompt.session.record["aggregations"])
+                self.model_calls += sum("quote_correction" in review for review in prompt.session.record["reviews"])
             delivery = begin(self.ctx.workdir, node.id, prompt, list(node.writes),
                              reads=list(node.reads),
                              model_context=client.context() if callable(getattr(client, "context", None)) else None)

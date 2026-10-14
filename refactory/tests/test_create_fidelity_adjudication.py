@@ -50,7 +50,8 @@ class AdjudicationResponses(ExternalModel):
             while True:
                 client._raise_if_cancelled()
                 time.sleep(.01)
-        sources = [{"input_id": identifier, "finding_ids": list(findings)} for identifier, findings in inputs["positive_findings"].items() if findings]
+        sources = [{"input_id": identifier, "finding_ids": list(group["findings"])}
+                   for identifier, group in inputs["positive_findings"].items() if group["findings"]]
         value = {**request, "scope": "scoped_adjudication", "retained_findings": inputs["retained_findings"],
                  "decisions": [{"decision_id": "scoped-positive", "conclusion": "Original-role scoped positive evidence adjudicated using every exact source reference. Global coverage remains unproven.", "obligation_ids": [], "sources": sources}] if sources else []}
         if self.problem == "drop-negative":
@@ -74,7 +75,9 @@ def run_adjudication(tmp_path, monkeypatch, problem=None):
     responses = AdjudicationResponses(tmp_path, problem)
     monkeypatch.setattr(DshModelClient, "_complete", lambda client, prompt, **kwargs: responses.complete(client, prompt, **kwargs))
     graph = Graph()
-    graph.add(Node("review", "agent", role="health_checker", prompt_template="Original role: inspect all complete evidence, then perform final assigned report.", reads=("evidence.md",), writes=("report.md",), timeout_s=1 if problem == "deadline" else 30))
+    # Leave enough of the one shared deadline for every real leaf delivery;
+    # this case intentionally expires inside the aggregate external boundary.
+    graph.add(Node("review", "agent", role="health_checker", prompt_template="Original role: inspect all complete evidence, then perform final assigned report.", reads=("evidence.md",), writes=("report.md",), timeout_s=5 if problem == "deadline" else 30))
     ctx = RunContext(tmp_path, facts={"create_fidelity": True}, model=DshModelClient(provider="fixture", model="default", effort="high", attempts=1, node_routes={"review": {"model": "original-route"}}))
     ctx._create_fidelity_context_policy = ContextPolicy(max_prompt_bytes=32768)
     result = Executor(graph, ctx).run()

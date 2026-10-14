@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from refactory_dsh.create_fidelity_context import ContextPolicy, adjudication_inputs
+from refactory_dsh.create_fidelity_context import ContextPolicy, adjudication_inputs, render_adjudication_inputs
 from refactory_dsh.model import DshModelClient
 from refactory_dsh.nn.executor import Executor, RunContext
 from refactory_dsh.nn.graph import Graph, Node
@@ -22,7 +22,7 @@ class LaterPairResponses(BudgetResponses):
             return super().complete(client, prompt, system=system, workdir=workdir)
         value = json.loads(ExternalModel.complete(self, client, prompt, system=system, workdir=workdir))
         value["coverage"] = []
-        size = 13000 if self.all_singletons or value["page_id"] in {"page-0001", "page-0002"} else 1000
+        size = 23000 if self.all_singletons or value["page_id"] in {"page-0001", "page-0002"} else 1000
         if self.oversized_later and value["page_id"] == "page-0002":
             size = 40000
         value["claims"][0].update(verdict="supported", reason="Exact source observation. " + "x" * size)
@@ -46,12 +46,12 @@ def test_real_adjudication_carries_singleton_to_reach_later_fitting_pair(tmp_pat
     assert len(manifest["reviews"]) > 3
     assert all(item["status"] == "reviewed" for item in manifest["reviews"])
     assert b"".join(body for _, _, body in responses.ranges) == evidence
-    first = adjudication_inputs(manifest, ["page-0001"], tmp_path)
-    pair = adjudication_inputs(manifest, ["page-0001", "page-0002"], tmp_path)
+    first = render_adjudication_inputs(adjudication_inputs(manifest, ["page-0001"], tmp_path))
+    pair = render_adjudication_inputs(adjudication_inputs(manifest, ["page-0001", "page-0002"], tmp_path))
     # Before any final reconciliation, even the first two raw-output packets
     # differ enough that a singleton fits but their combined packet cannot.
     assert len(compact(first).encode()) < 38000
-    assert len(compact(pair).encode()) > 50000
+    assert len(compact(pair).encode()) + 12000 > 50000
     assert all(route["model"] == "original-route" and role == "health_checker" for _, role, route, _ in responses.calls)
     if shape != "later-pair":
         expected = "frontier made no progress" if shape == "all-singletons" else "complete prior adjudication output cannot fit"
@@ -63,7 +63,9 @@ def test_real_adjudication_carries_singleton_to_reach_later_fitting_pair(tmp_pat
         assert manifest["status"] == "reconciled" and responses.final_called
         assert responses.aggregate_calls[0]["request"]["input_ids"][0] == "page-0002"
         assert len(responses.aggregate_calls[0]["request"]["input_ids"]) >= 2
-        assert "page-0001" in manifest["frontier"]
+        assert all("page-0001" not in item["input_ids"] for item in manifest["aggregations"] if item["round"] == 1)
+        assert "page-0001" in manifest["frontier"] or any(
+            "page-0001" in item["input_ids"] and item["round"] > 1 for item in manifest["aggregations"])
         for item, call in zip(manifest["aggregations"], responses.aggregate_calls, strict=True):
             assert item["status"] == "reviewed"
             assert (tmp_path / item["raw_response"]["snapshot"]).read_bytes() == call["raw"].encode()

@@ -57,6 +57,9 @@ def test_external_context_is_scoped_to_its_lane_and_evaluator_versioned(trial):
     assert report["evaluation"]["bounded_context_version"] == bounded_context_evidence.PROTOCOL
     assert report["evaluation"]["bounded_context_validator_sha256"] == harness.digest(
         Path(bounded_context_evidence.__file__))
+    from benchmarks.create_fidelity import bounded_quote_evidence
+    assert report["evaluation"]["bounded_quote_validator_sha256"] == harness.digest(
+        Path(bounded_quote_evidence.__file__))
     from benchmarks.create_fidelity import bounded_adjudication_evidence
     assert report["evaluation"]["bounded_adjudication_validator_sha256"] == harness.digest(
         Path(bounded_adjudication_evidence.__file__))

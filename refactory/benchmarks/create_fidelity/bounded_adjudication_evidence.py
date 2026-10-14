@@ -12,6 +12,43 @@ from typing import Callable
 from .bounded_context_evidence import _bytes, _require, _sha, _supplied
 
 
+INPUT_RENDERING = "positive-findings-json-pointers/v1"
+
+
+def _render_inputs(expected: dict) -> dict:
+    """Reconstruct the compact input independently from every actual raw body."""
+    indexed, restored = {}, {}
+    for record in expected["records"]:
+        identifier = record["input_id"]
+        value = json.loads(record["raw_response"])
+        group, original = {"findings": {}}, {}
+        if value["scope"] == "page_only":
+            for kind, array, status_key, positive_status, id_key in (
+                    ("claim", "claims", "verdict", "supported", "claim_id"),
+                    ("coverage", "coverage", "status", "evidence", "obligation_id")):
+                for index, finding in enumerate(value[array]):
+                    if finding[status_key] != positive_status:
+                        continue
+                    stable = f"{identifier}:{kind}:{finding[id_key]}"
+                    content = expected["positive_findings"][identifier][stable]
+                    source = {key: content[key] for key in ("page_id", "path", "document_sha256")}
+                    _require("source" not in group or group["source"] == source,
+                             "compact input conflicts with original page provenance")
+                    group["source"] = source
+                    group["findings"][stable] = {"kind": kind, "json_pointer": f"/{array}/{index}"}
+                    original[stable] = {"kind": kind, **source, "finding": finding}
+        else:
+            _require(value["scope"] == "scoped_adjudication", "unknown compact input source scope")
+            for index, decision in enumerate(value["decisions"]):
+                stable = f"{identifier}:decision:{decision['decision_id']}"
+                group["findings"][stable] = {"json_pointer": f"/decisions/{index}"}
+                original[stable] = decision
+        indexed[identifier], restored[identifier] = group, original
+    _require(restored == expected["positive_findings"],
+             "compact positive input does not reconstruct every canonical original finding")
+    return {**expected, "input_rendering": INPUT_RENDERING, "positive_findings": indexed}
+
+
 def verify_adjudications(root: Path, manifest: dict, *, snapshot: Callable,
                          dispatch: Callable, source_bytes: dict[str, bytes],
                          obligation_ids: set[str]) -> list[dict]:
@@ -82,7 +119,12 @@ def verify_adjudications(root: Path, manifest: dict, *, snapshot: Callable,
         expected = inputs(ids)
         hashes = {item["input_id"]: item["input_sha256"] for item in expected["records"]}
         _require(entry.get("input_sha256") == hashes, "adjudication input digests differ from actual prior responses")
-        packet = json.dumps(expected, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        rendered = expected
+        if "input_rendering" in entry:
+            _require(entry["input_rendering"] == INPUT_RENDERING,
+                     "adjudication declares an unsupported or retroactively upgraded input rendering")
+            rendered = _render_inputs(expected)
+        packet = json.dumps(rendered, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
         _require(snapshot(entry.get("input_packet")) == packet, "adjudication packet replaced or dropped actual full prior outputs")
         node = f"{manifest['logical_node_id']}:context:{manifest['context_id']}:{identifier}"
         _require(entry.get("execution_node_id") == node, "adjudication changed original logical ownership")

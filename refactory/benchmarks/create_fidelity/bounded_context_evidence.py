@@ -364,6 +364,10 @@ def verify_bounded_context(root: Path, manifest_path: str, *, consumer_node: str
         seen_pages.add(page_id)
         page = pages_by_id[page_id]
         node = f"{consumer_node}:context:{manifest['context_id']}:{page_id}"
+        from .bounded_quote_evidence import validate_page_read, verify_quote_attempt
+        if "quote_correction" in entry:
+            node = verify_quote_attempt(root, manifest, entry, page, dispatch=dispatch, snapshot=snapshot,
+                                        obligation_ids=obligation_ids, source_bytes=source_bytes)
         _require(entry.get("execution_node_id") == node, "context read execution is bound to another logical owner")
         prompt, raw = dispatch(entry, node)
         _require(entry.get("worker_receipt_sha256") == {name: _sha(_bytes(root, name)) for name in entry["worker_receipts"]}
@@ -372,39 +376,9 @@ def verify_bounded_context(root: Path, manifest_path: str, *, consumer_node: str
         page_data = _bytes(root, page["snapshot"])
         _require("=== EXACT EVIDENCE RANGE ===\n" + page_data.decode() + "\n=== END EXACT EVIDENCE RANGE ===" in prompt,
                  "actual model input omitted the complete assigned page bytes")
-        value = json.loads(raw)
-        keys = {"schema_version", "scope", "context_id", "logical_node_id", "role", "page_id", "document_sha256",
-                "start_byte", "end_byte", "page_sha256", "coverage", "claims"}
-        _require(type(value) is dict and set(value) == keys and type(value.get("schema_version")) is int
-                 and value["schema_version"] == 1 and value.get("scope") == "page_only" and value == entry.get("review"),
-                 "context read record differs from the actual uttered typed model response")
-        identity = {"context_id": manifest["context_id"], "logical_node_id": consumer_node, "role": role,
-                    **{key: page[key] for key in ("page_id", "document_sha256", "start_byte", "end_byte", "page_sha256")}}
-        _require(all(value[key] == expected and type(value[key]) is type(expected) for key, expected in identity.items()),
-                 "actual uttered context read has stale/forged range identity")
-        coverage = value["coverage"]
-        _require(type(coverage) is list and all(type(item) is dict for item in coverage)
-                 and len({item.get("obligation_id") for item in coverage}) == len(coverage)
-                 and {item.get("obligation_id") for item in coverage} <= obligation_ids
-                 and all(type(item) is dict and set(item) == {"obligation_id", "status", "reason"}
-                         and item["status"] in {"evidence", "adverse", "not_in_page", "unresolved"}
-                         and isinstance(item["reason"], str) and bool(item["reason"].strip()) for item in coverage),
-                 "actual page-only read has duplicate, unknown or invalid sparse obligation coverage")
-        claims = value["claims"]
-        _require(type(claims) is list and bool(claims), "actual read omitted concrete source excerpts")
-        ids = set()
-        original = _bytes(root, page["document_snapshot"])
-        for claim in claims:
-            _require(type(claim) is dict and set(claim) == {"claim_id", "verdict", "reason", "start_byte", "end_byte", "quote"}
-                     and isinstance(claim["claim_id"], str) and bool(claim["claim_id"].strip()) and claim["claim_id"] not in ids
-                     and claim["verdict"] in {"supported", "adverse", "unresolved"}
-                     and isinstance(claim["reason"], str) and bool(claim["reason"].strip())
-                     and type(claim["start_byte"]) is int and type(claim["end_byte"]) is int
-                     and page["start_byte"] <= claim["start_byte"] < claim["end_byte"] <= page["end_byte"]
-                     and isinstance(claim["quote"], str) and bool(claim["quote"])
-                     and claim["quote"].encode() == original[claim["start_byte"]:claim["end_byte"]],
-                     "actual read claims have fabricated, missing or out-of-page quotes")
-            ids.add(claim["claim_id"])
+        _require(not validate_page_read(raw, entry, page, manifest, obligation_ids,
+                                       _bytes(root, page["document_snapshot"])),
+                 "actual read claims have fabricated, missing or out-of-page quotes")
         delivery = _record(root, entry["delivery_receipt"])
         _require(all(delivery["execution"]["input_fingerprints"].get(name) == _sha(data)
                      for name, data in source_bytes.items()), "context reader raw input fingerprints are stale/incomplete")

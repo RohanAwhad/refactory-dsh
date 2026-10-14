@@ -253,6 +253,23 @@ finding verbatim. Positive findings require explicit source dispositions; the
 independent validator checks the complete ordered dependency graph and final
 remaining records. Fixed strategy, intent and decision obligations reach every
 dispatch, and noncompressible evidence fails instead of being truncated.
+Fresh adjudication packets may use `positive-findings-json-pointers/v1` to avoid
+repeating positive bodies already present in complete raw responses. Exact JSON
+pointers and unchanged per-input page provenance reconstruct the original full
+finding ledger; adverse findings and the required output schema stay unchanged.
+The independent evaluator checks this reconstruction as well as actual delivery.
+
+A completed, otherwise-valid page read with an invalid quote/range may receive
+one `quote-anchor-correction/v1` request. It receives the complete original page,
+authority, rejected response and precise rejection, within the original deadline
+and byte ceiling. Only claim quotes and their byte ranges may change; all other
+semantic fields, claim order and coverage must remain identical. The first read
+reserves explicitly recorded byte room, and an oversized correction fails.
+Both attempts retain separate raw delivery and worker evidence; only the fully
+validated corrected response becomes the page's accepted leaf. Invalid identity,
+schema, transport, stale evidence or artifact drift does not qualify for this
+correction. The evaluator independently verifies both attempts and their clock.
+
 The independent evaluator checks raw transport, source hashes, complete range
 coverage and the final response binding. This is transport and consumption
 evidence, not an automatic semantic PASS. Legacy direct receipts retain their
