@@ -72,3 +72,27 @@ class TestBlockingFindings:
         findings = blocking_findings(text)
         assert len(findings) == 1
         assert "new widget crash" in findings[0]
+
+    def test_code_formatted_marker_with_separator_is_caught(self):
+        """`BLOCKING:` followed by finding text is a real marker."""
+        text = "`BLOCKING:` the CLI crashes on an empty file\n"
+        findings = blocking_findings(text)
+        assert len(findings) == 1
+        assert "the CLI crashes" in findings[0]
+
+    def test_bold_code_formatted_marker_is_caught(self):
+        """**`BLOCKING:`** followed by finding text is a real marker."""
+        text = "**`BLOCKING:`** the CLI crashes on an empty file\n"
+        findings = blocking_findings(text)
+        assert len(findings) == 1
+        assert "the CLI crashes" in findings[0]
+
+    def test_bare_code_mention_without_separator_is_skipped(self):
+        """`BLOCKING` without a separator is a prose mention, not a marker."""
+        text = "`BLOCKING` finding. The stale reference does not change the substance.\n"
+        assert blocking_findings(text) == []
+
+    def test_code_quoted_full_finding_is_skipped(self):
+        """A full old finding inside backticks is a quotation, not live."""
+        text = "The earlier review said `BLOCKING: widget crashes on empty input` but this was fixed.\n"
+        assert blocking_findings(text) == []

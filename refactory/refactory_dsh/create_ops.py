@@ -1493,9 +1493,15 @@ def blocking_findings(text: str) -> list[str]:
         # Skip blockquoted lines (quoting earlier diagnostics).
         if stripped.startswith(">"):
             continue
-        # Skip lines where BLOCKING appears only inside inline code spans.
-        without_code = re.sub(r"`[^`]+`", "", stripped)
-        if not re.search(r"BLOCKING", without_code, re.I):
+        # A code-formatted BLOCKING with a separator (: — – -) is a finding
+        # marker when the finding text is outside the code span, e.g.
+        # `BLOCKING:` the CLI crashes.  It is a quoted mention when the full
+        # finding is inside the span (`BLOCKING: old text`) or when BLOCKING
+        # appears without a separator (`BLOCKING` finding).  Strip only
+        # mentions; keep markers so the finding is counted.
+        without_mentions = re.sub(r"`BLOCKING[:—–-]\s+\S[^`]*`", "", stripped, flags=re.I)
+        without_mentions = re.sub(r"`BLOCKING`", "", without_mentions, flags=re.I)
+        if not re.search(r"BLOCKING", without_mentions, re.I):
             continue
         cleaned = stripped.lstrip("*-+>#` \t")
         cleaned = re.sub(r"^\d+[.)]\s+", "", cleaned).lstrip("*_` ")
