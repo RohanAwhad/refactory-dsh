@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -146,24 +146,17 @@ describe('workflow-spine real composition', () => {
       .rejects.toThrow(/gate gate is answered by a person and could not be asked/)
   })
 
-  it('names the gate reads in the question when the run has no directory', async () => {
-    const { ctx, asked } = await gateRun(graphWithReads, undefined, proceed)
-    await run(ctx, 'wf_verdict', { gate: 'gate' })
-    expect(asked[0]!.detail).toBe('Gate reads files: design.md')
-  })
-
-  it('names the gate reads by full path, with every outcome offered', async () => {
-    // The question stays host-neutral and short: no presentation intent and no inlined
-    // file content, so the gate's own outcomes (and free text) stay in view.
+  it('asks with the gate prompt and outcomes only, plus halt', async () => {
+    // The question stays host-neutral and short: no presentation intent, no detail and
+    // no description, so the gate's own outcomes (and free text) are all there is.
     const tmp = mkdtempSync(join(tmpdir(), 'spine-gate-reads-'))
     try {
-      writeFileSync(join(tmp, 'design.md'), '# My Design\n\nThe plan is to do X.')
       const { ctx, asked } = await gateRun(graphWithReads, tmp, proceed)
       expect(await run(ctx, 'wf_verdict', { gate: 'gate' }))
         .toMatchObject({ status: 'routed', verdict: 'proceed', answered_by: 'user' })
-      expect(asked[0]!.detail).toBe(`Gate reads files: ${join(tmp, 'design.md')}`)
+      expect(asked[0]!.detail).toBeUndefined()
       expect(asked[0]!.intent).toBeUndefined()
-      expect(asked[0]!.options?.map(option => option.label)).toEqual(['proceed', 'reloop', 'halt'])
+      expect(asked[0]!.options).toEqual([{ label: 'proceed' }, { label: 'reloop' }, { label: 'halt' }])
     } finally { rmSync(tmp, { recursive: true, force: true }) }
   })
 
