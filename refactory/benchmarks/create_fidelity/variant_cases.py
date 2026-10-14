@@ -90,8 +90,16 @@ def provision(project: Path, source: Path, case_id: str) -> tuple[dict, Path, Pa
     if supplied["variant"]=="update-existing":
         target=original/".factory/packages"/supplied["name"]
         shutil.copytree(FIXTURES/"update_seed"/supplied["name"],target)
+    elif supplied["variant"]=="plugin":
+        # A standalone plugin has no existing application to study. Keep its
+        # empty local context inside this lane; the framework is an API
+        # reference, not an authoring project (its tests remain hidden).
+        original.mkdir()
     study=original if original.exists() else source
-    brief=supplied["brief"]+f"\n\nNative case identity: {case_id}; fixture version 1. Author into {project}/.factory/packages/{supplied['name']}. Source project for study: {study}. The original seed is intended input only, not the requested final implementation.\n"
+    seed_note=("The study project is empty; no existing plugin or finished output is supplied."
+               if supplied["variant"]=="plugin" else
+               "The original seed is intended input only, not the requested final implementation.")
+    brief=supplied["brief"]+f"\n\nNative case identity: {case_id}; fixture version 1. Author into {project}/.factory/packages/{supplied['name']}. Source project for study: {study}. {seed_note}\n"
     (project/"BRIEF.md").write_text(brief)
     return supplied,original,study
 

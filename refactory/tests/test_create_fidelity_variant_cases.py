@@ -79,7 +79,9 @@ def test_provision_only_intended_original_input_no_final_artifacts(tmp_path,case
         assert study==original
         assert "+ 1" in (original/".factory/packages/offset_probe/ops.py").read_text()
         assert hash_tree(original)
-    else: assert not original.exists()
+    else:
+        assert study==original and original.is_dir()
+        assert not list(original.iterdir())
 
 
 @pytest.mark.parametrize("case_id",["native-update-offset-v1","native-plugin-reverse-v1"])
