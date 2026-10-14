@@ -70,12 +70,12 @@ interface AskedQuestion {
  * A composition walked to its user gate, whose answerer records each question and
  * replies with `reply`.
  * @param gateGraph - the graph to open.
- * @param workdir - the run directory.
+ * @param workdir - the run directory, when the run has one.
  * @param reply - the person's answer to a question.
  * @returns the composition and the questions asked so far.
  */
 async function gateRun(
-  gateGraph: WorkflowGraph, workdir: string, reply: (question: AskedQuestion) => Promise<unknown>,
+  gateGraph: WorkflowGraph, workdir: string | undefined, reply: (question: AskedQuestion) => Promise<unknown>,
 ): Promise<{ ctx: Context; asked: AskedQuestion[] }> {
   const asked: AskedQuestion[] = []
   const ctx = new Context()
@@ -86,7 +86,7 @@ async function gateRun(
     asked.push(...request.questions)
     return reply(request.questions[0]!) as never
   })
-  await ctx.plugin(workflowSpine, { graph: gateGraph, toolPrefix: 'wf', maxIterations: 3, workdir })
+  await ctx.plugin(workflowSpine, { graph: gateGraph, toolPrefix: 'wf', maxIterations: 3, ...(workdir === undefined ? {} : { workdir }) })
   await run(ctx, 'wf_done', { node: 'a' })
   return { ctx, asked }
 }
@@ -146,29 +146,10 @@ describe('workflow-spine real composition', () => {
       .rejects.toThrow(/gate gate is answered by a person and could not be asked/)
   })
 
-  it('includes gate reads files in the question detail', async () => {
-    let capturedRequest: { questions: Array<{ id: string; detail?: string }> } | undefined
-    const ctx = new Context()
-    await ctx.plugin(SystemPrompt)
-    await ctx.plugin(ToolRuntime)
-    await ctx.plugin(UserQuestionService)
-    ctx.on('user-questions/request', request => {
-      capturedRequest = request
-      return Promise.resolve({
-        answers: request.questions.map(question => ({ id: question.id, selected: ['proceed'] })),
-      })
-    })
-    await ctx.plugin(workflowSpine, { graph: graphWithReads, toolPrefix: 'wf', maxIterations: 3 })
-
-    // Walk to the gate
-    await run(ctx, 'wf_done', { node: 'a' })
-    // Route the user gate (triggers userQuestions.ask)
+  it('names the gate reads in the question when the run has no directory', async () => {
+    const { ctx, asked } = await gateRun(graphWithReads, undefined, proceed)
     await run(ctx, 'wf_verdict', { gate: 'gate' })
-
-    expect(capturedRequest).toBeDefined()
-    const firstQuestion = capturedRequest!.questions[0]!
-    expect(firstQuestion.detail).toBeDefined()
-    expect(firstQuestion.detail).toContain('design.md')
+    expect(asked[0]!.detail).toBe('Gate reads files: design.md')
   })
 
   it('names the gate reads by full path, with every outcome offered', async () => {

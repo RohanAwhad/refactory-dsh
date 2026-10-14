@@ -242,6 +242,16 @@ const PROCEED_WORDS = new Set(['yes', 'y', 'ok', 'okay', 'approve', 'approved', 
   'go ahead', 'build it', 'ship it', 'sounds good', 'yes please', 'continue'])
 
 /**
+ * What asking a person at a user gate came to: a verdict with any feedback; text
+ * that is no answer, which leaves the gate due for the CEO to reply to; or nothing,
+ * when the run was halted, paused or changed while the question was open.
+ */
+type UserGateResult =
+  | { verdict: string; feedback: string }
+  | { status: 'replied'; gate: string; text: string }
+  | undefined
+
+/**
  * How a typed gate answer reads: a verdict to route, an outcome to suggest and
  * have the person confirm, or talk for the CEO to answer.
  */
@@ -1082,18 +1092,6 @@ export function apply(ctx: Context, config: Config): void {
   const pendingQuestions = new WeakSet<Spine>()
 
   /**
-   * Result of a user-gate question.
-   * - `{ verdict, feedback }` — a recognized verdict, optionally with parsed feedback.
-   * - `{ status: 'replied', gate, text }` — free text that does not match any verdict label;
-   *   the gate stays open and the caller should surface the text and re-ask.
-   * - `undefined` — halted, paused, or state changed during the question.
-   */
-  type UserGateResult =
-    | { verdict: string; feedback: string }
-    | { status: 'replied'; gate: string; text: string }
-    | undefined
-
-  /**
    * The verdict a person gives at a `user` gate, asked by the runtime.
    *
    * Asked here rather than left to the model's own `ask_user_question`, because a
@@ -1507,13 +1505,11 @@ export function apply(ctx: Context, config: Config): void {
             ...(state.halted === undefined ? {} : { halted: state.halted }) })
         }
         if ('status' in result) {
-          // Unrecognized free text: gate stays open, return non-error JSON to the CEO
           return json({
             status: 'replied', gate: args.gate, text: result.text,
             note: 'The person answered with text that is none of the gate\'s outcomes. The gate was asked correctly and remains due. Reply to them in conversation (the outcomes are the options they were shown) and wait for their message. Do not ask the gate\'s question yourself or recommend an outcome; once they have answered, call this tool again with the gate alone.',
           })
         }
-        // Normal verdict path
         spine.verdict(args.gate, result.verdict, result.feedback || args.feedback || '')
         if (spine.isHalted()) recordStatus(spine, workdir, 'halted')
         return json({

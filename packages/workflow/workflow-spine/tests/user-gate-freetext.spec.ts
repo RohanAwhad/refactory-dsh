@@ -7,7 +7,7 @@ import * as workflowSpine from '../src/index.ts'
 import type { WorkflowGraph } from '../src/types.ts'
 
 /**
- * Minimal graph: FnNode \u2192 USER gate (proceed/reloop) \u2192 done.
+ * Minimal graph: FnNode → USER gate (proceed/reloop) → done.
  * The gate has two labelled edges so `acceptedVerdicts` returns ['proceed', 'reloop'].
  */
 const graph: WorkflowGraph = {
@@ -43,38 +43,44 @@ interface AskedQuestion {
   options?: Array<{ label: string }>
 }
 
+/**
+ * A composition whose person gives `personAnswers` in turn, one per question asked.
+ * @param personAnswers - the answers, consumed in order.
+ * @param asked - collects each question as it is asked.
+ * @returns the composition, ready to drive.
+ */
+async function setup(
+  personAnswers: Array<{ selected: string[]; custom: string }>, asked: AskedQuestion[] = [],
+): Promise<Context> {
+  const ctx = new Context()
+  await ctx.plugin(SystemPrompt)
+  await ctx.plugin(ToolRuntime)
+  await ctx.plugin(UserQuestionService)
+  ctx.on('user-questions/request', request => Promise.resolve({
+    answers: request.questions.map(question => {
+      asked.push(question)
+      const answer = personAnswers.shift()!
+      return { id: question.id, selected: answer.selected, custom: answer.custom }
+    }),
+  }))
+  await ctx.plugin(workflowSpine, { graph, toolPrefix: 'wf', maxIterations: 3 })
+  return ctx
+}
+
+/** Complete the start node so the user gate is due. */
+async function advanceToGate(ctx: Context): Promise<void> {
+  const next = await run(ctx, 'wf_next', {})
+  if (ids(next).includes('init')) {
+    await run(ctx, 'wf_done', { node: 'init' })
+    await run(ctx, 'wf_next', {})
+  }
+}
+
 describe('user gate free-text answers', () => {
-  function setup(personAnswers: Array<{ selected: string[]; custom: string }>, asked: AskedQuestion[] = []) {
-    const ctx = new Context()
-    const pluginReady = (async () => {
-      await ctx.plugin(SystemPrompt)
-      await ctx.plugin(ToolRuntime)
-      await ctx.plugin(UserQuestionService)
-      ctx.on('user-questions/request', request => Promise.resolve({
-        answers: request.questions.map(question => {
-          asked.push(question)
-          const answer = personAnswers.shift()!
-          return { id: question.id, selected: answer.selected, custom: answer.custom }
-        }),
-      }))
-      await ctx.plugin(workflowSpine, { graph, toolPrefix: 'wf', maxIterations: 3 })
-    })()
-    return { ctx, pluginReady }
-  }
-
-  async function advanceToGate(ctx: Context): Promise<void> {
-    const next = await run(ctx, 'wf_next', {})
-    if (ids(next).includes('init')) {
-      await run(ctx, 'wf_done', { node: 'init' })
-      await run(ctx, 'wf_next', {})
-    }
-  }
-
   it('routes case-insensitive exact label match', async () => {
-    const { ctx, pluginReady } = setup([
+    const ctx = await setup([
       { selected: [], custom: 'Proceed' },
     ])
-    await pluginReady
     await advanceToGate(ctx)
     expect(ids(await run(ctx, 'wf_next', {}))).toEqual(['gate'])
     const result = await run(ctx, 'wf_verdict', { gate: 'gate' })
@@ -82,10 +88,9 @@ describe('user gate free-text answers', () => {
   })
 
   it('parses "reloop: feedback" prefix and routes with feedback', async () => {
-    const { ctx, pluginReady } = setup([
+    const ctx = await setup([
       { selected: [], custom: 'reloop: make it simpler' },
     ])
-    await pluginReady
     await advanceToGate(ctx)
     expect(ids(await run(ctx, 'wf_next', {}))).toEqual(['gate'])
     const result = await run(ctx, 'wf_verdict', { gate: 'gate' })
@@ -98,11 +103,10 @@ describe('user gate free-text answers', () => {
   })
 
   it('returns replied when the person passes their words to the CEO, gate stays due', async () => {
-    const { ctx, pluginReady } = setup([
+    const ctx = await setup([
       { selected: [], custom: 'show me the strategy' },
       { selected: ['ask the CEO'], custom: '' },
     ])
-    await pluginReady
     await advanceToGate(ctx)
     expect(ids(await run(ctx, 'wf_next', {}))).toEqual(['gate'])
     const result = await run(ctx, 'wf_verdict', { gate: 'gate' })
@@ -113,11 +117,10 @@ describe('user gate free-text answers', () => {
 
   it('confirms "stop" as halt before stopping the run', async () => {
     const asked: AskedQuestion[] = []
-    const { ctx, pluginReady } = setup([
+    const ctx = await setup([
       { selected: [], custom: 'stop' },
       { selected: ['halt'], custom: '' },
     ], asked)
-    await pluginReady
     await advanceToGate(ctx)
     expect(await run(ctx, 'wf_verdict', { gate: 'gate' }))
       .toMatchObject({ status: 'routed', verdict: 'halt', answered_by: 'user', halted: true })
@@ -126,11 +129,10 @@ describe('user gate free-text answers', () => {
   })
 
   it('confirms plain approval as proceed', async () => {
-    const { ctx, pluginReady } = setup([
+    const ctx = await setup([
       { selected: [], custom: 'Looks good!' },
       { selected: ['proceed'], custom: '' },
     ])
-    await pluginReady
     await advanceToGate(ctx)
     expect(await run(ctx, 'wf_verdict', { gate: 'gate' }))
       .toMatchObject({ status: 'routed', verdict: 'proceed', answered_by: 'user' })
@@ -138,11 +140,10 @@ describe('user gate free-text answers', () => {
 
   it('offers a remark back as reloop feedback, routed only once confirmed', async () => {
     const asked: AskedQuestion[] = []
-    const { ctx, pluginReady } = setup([
+    const ctx = await setup([
       { selected: [], custom: 'also add a --keep-last flag' },
       { selected: ['reloop'], custom: '' },
     ], asked)
-    await pluginReady
     await advanceToGate(ctx)
     expect(await run(ctx, 'wf_verdict', { gate: 'gate' })).toMatchObject({
       status: 'routed', verdict: 'reloop', answered_by: 'user', feedback: 'also add a --keep-last flag',
@@ -152,11 +153,10 @@ describe('user gate free-text answers', () => {
   })
 
   it('does not carry the note when the person picks a different outcome than suggested', async () => {
-    const { ctx, pluginReady } = setup([
+    const ctx = await setup([
       { selected: [], custom: 'also add a --keep-last flag' },
       { selected: ['proceed'], custom: '' },
     ])
-    await pluginReady
     await advanceToGate(ctx)
     const routed = await run(ctx, 'wf_verdict', { gate: 'gate' }) as Record<string, unknown>
     expect(routed).toMatchObject({ status: 'routed', verdict: 'proceed' })
@@ -165,12 +165,11 @@ describe('user gate free-text answers', () => {
 
   it('returns to the original question on "go back"', async () => {
     const asked: AskedQuestion[] = []
-    const { ctx, pluginReady } = setup([
+    const ctx = await setup([
       { selected: [], custom: 'stop' },
       { selected: ['go back'], custom: '' },
       { selected: ['proceed'], custom: '' },
     ], asked)
-    await pluginReady
     await advanceToGate(ctx)
     expect(await run(ctx, 'wf_verdict', { gate: 'gate' })).toMatchObject({ status: 'routed', verdict: 'proceed' })
     expect(asked.map(question => question.question)).toEqual([asked[0]!.question, 'You answered "stop". Stop the run here?', asked[0]!.question])
@@ -178,8 +177,7 @@ describe('user gate free-text answers', () => {
 
   it('hands a question straight to the CEO without a follow-up', async () => {
     const asked: AskedQuestion[] = []
-    const { ctx, pluginReady } = setup([{ selected: [], custom: 'what does section 3 mean?' }], asked)
-    await pluginReady
+    const ctx = await setup([{ selected: [], custom: 'what does section 3 mean?' }], asked)
     await advanceToGate(ctx)
     expect(await run(ctx, 'wf_verdict', { gate: 'gate' }))
       .toMatchObject({ status: 'replied', text: 'what does section 3 mean?' })
