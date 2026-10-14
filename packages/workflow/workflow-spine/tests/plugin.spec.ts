@@ -155,46 +155,18 @@ describe('workflow-spine real composition', () => {
 
   const proceed = (question: Asked) => Promise.resolve({ answers: [{ id: question.id, selected: ['proceed'] }] })
 
-  it('shows the gate reads in the question, with every outcome offered', async () => {
-    // The question stays host-neutral: no presentation intent, so the gate's own
-    // outcomes (and free text) are what every host's question UI offers.
+  it('names the gate reads by full path, with every outcome offered', async () => {
+    // The question stays host-neutral and short: no presentation intent and no inlined
+    // file content, so the gate's own outcomes (and free text) stay in view.
     const tmp = mkdtempSync(join(tmpdir(), 'spine-gate-reads-'))
     try {
       writeFileSync(join(tmp, 'design.md'), '# My Design\n\nThe plan is to do X.')
       const { ctx, asked } = await gateRun(graphWithReads, tmp, proceed)
       expect(await run(ctx, 'wf_verdict', { gate: 'gate' }))
         .toMatchObject({ status: 'routed', verdict: 'proceed', answered_by: 'user' })
-      expect(asked[0]!.detail).toBe('# My Design\n\nThe plan is to do X.')
+      expect(asked[0]!.detail).toBe(`Gate reads files: ${join(tmp, 'design.md')}`)
       expect(asked[0]!.intent).toBeUndefined()
       expect(asked[0]!.options?.map(option => option.label)).toEqual(['proceed', 'reloop'])
-    } finally { rmSync(tmp, { recursive: true, force: true }) }
-  })
-
-  it('does not inline a read outside the run directory', async () => {
-    const tmp = mkdtempSync(join(tmpdir(), 'spine-gate-reads-'))
-    try {
-      writeFileSync(join(tmp, 'secret.txt'), 'not for the card')
-      const run_dir = join(tmp, 'run')
-      mkdirSync(run_dir)
-      const escaping: WorkflowGraph = {
-        ...graphWithReads,
-        nodes: { ...graphWithReads.nodes,
-          gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'user', gate_prompt: 'ok?', reads: ['../secret.txt'] } },
-      }
-      const { ctx, asked } = await gateRun(escaping, run_dir, proceed)
-      await run(ctx, 'wf_verdict', { gate: 'gate' })
-      expect(asked[0]!.detail).not.toContain('not for the card')
-    } finally { rmSync(tmp, { recursive: true, force: true }) }
-  })
-
-  it('shows only an excerpt of long reads, so the outcomes stay in view', async () => {
-    const tmp = mkdtempSync(join(tmpdir(), 'spine-gate-reads-'))
-    try {
-      writeFileSync(join(tmp, 'design.md'), 'x'.repeat(50_000))
-      const { ctx, asked } = await gateRun(graphWithReads, tmp, proceed)
-      await run(ctx, 'wf_verdict', { gate: 'gate' })
-      expect(asked[0]!.detail!.length).toBeLessThan(2_000)
-      expect(asked[0]!.detail).toMatch(/excerpt; the full text is in design\.md in the run directory/)
     } finally { rmSync(tmp, { recursive: true, force: true }) }
   })
 

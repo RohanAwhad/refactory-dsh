@@ -989,37 +989,17 @@ export function apply(ctx: Context, config: Config): void {
     | undefined
 
   /**
-   * The most of a gate's reads shown in its question: enough for the opening of a
-   * plan, small enough that the outcomes stay in view in any host's question UI.
-   */
-  const GATE_DETAIL_LIMIT = 1_500
-
-  /**
-   * What a person reviews at a user gate: an excerpt of the gate's reads, inlined
-   * from the run directory, and where the full text is.
+   * Where a person finds what a user gate asks them to review: the gate's reads,
+   * as full paths when the run has a directory. The content itself is not inlined;
+   * a host may render it at length and push the outcomes out of view, and the CEO
+   * already summarises the reads before asking.
    * @param reads - the gate's reads, relative to the run directory.
    * @param workdir - the run directory, when the run has one.
-   * @returns the markdown shown with the question.
+   * @returns the one-line detail shown with the question.
    */
   function gateDetail(reads: string[], workdir: string | undefined): string {
-    if (workdir === undefined) return `Gate reads files: ${reads.join(', ')}`
-    const root = resolve(workdir)
-    const parts = reads.map(file => {
-      const path = resolve(root, file)
-      let text: string
-      if (path !== root && !path.startsWith(root + sep)) text = '*(outside the run directory; not shown)*'
-      else {
-        try {
-          text = readFileSync(path, 'utf8')
-        } catch { text = '*(file not found)*' }
-      }
-      return reads.length > 1 ? `### ${file}\n\n${text}` : text
-    })
-    let detail = parts.join('\n\n---\n\n')
-    if (detail.length > GATE_DETAIL_LIMIT) {
-      detail = `${detail.slice(0, GATE_DETAIL_LIMIT)}\n\n*(excerpt; the full text is in ${reads.join(', ')} in the run directory)*`
-    }
-    return detail
+    const paths = workdir === undefined ? reads : reads.map(file => resolve(workdir, file))
+    return `Gate reads files: ${paths.join(', ')}`
   }
 
   /**
