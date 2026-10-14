@@ -428,28 +428,36 @@ def test_non_data_reset_archives_only_owned_outputs_when_requested(tmp_path, arc
 
 
 def test_reset_retains_files_read_by_non_start_invalidated_nodes(tmp_path):
-    """Regression: reads must be collected from all invalidated nodes, not just the start node.
+    """Files written by a node outside the invalidated set are retained (#317).
 
-    When a file is written by one invalidated node and read by a different (non-start)
-    invalidated node, the file must be retained so the replaying node can find its input.
-    The buggy code collected reads only from the start node, causing shared files to be
-    archived even though downstream invalidated nodes needed them.
+    ``shared.txt`` is written by *prepare* (outside) **and** *middle* (inside),
+    so it must survive the archive.  ``internal.txt`` is written **only** by
+    invalidated nodes and read by *downstream* (non-start invalidated); it must
+    be archived because no outside node writes it — the narrower rule does not
+    protect files solely because an invalidated node reads them.
     """
     graph = nn.Graph()
     graph.add(nn.Node('prepare', 'op', call='loop_ops:write_number',
                       writes=('shared.txt',), produces=('prepared',)))
     graph.add(nn.Node('middle', 'op', call='loop_ops:write_number',
-                      writes=('shared.txt', 'output.txt'), produces=('computed',)))
+                      reads=('shared.txt',),
+                      writes=('shared.txt', 'internal.txt'),
+                      produces=('computed',)))
     graph.add(nn.Node('downstream', 'op', call='loop_ops:write_number',
-                      reads=('shared.txt',), writes=('result.txt',), produces=('finished',)))
+                      reads=('internal.txt',), writes=('result.txt',),
+                      produces=('finished',)))
     graph.connect('prepare', 'middle')
     graph.connect('middle', 'downstream')
     lowering.write_declarations({'graph': graph.to_state()}, tmp_path)
 
     # Create the files that would exist before a redo.
-    (tmp_path / 'shared.txt').write_text('shared content')
-    (tmp_path / 'output.txt').write_text('output content')
-    (tmp_path / 'result.txt').write_text('result content')
+    original = {
+        'shared.txt': 'written by prepare and middle',
+        'internal.txt': 'written only by middle',
+        'result.txt': 'result content',
+    }
+    for name, contents in original.items():
+        (tmp_path / name).write_text(contents)
 
     # Facts from all three nodes.
     prior_facts = {'prepared': True, 'computed': 42, 'finished': 'done'}
@@ -464,23 +472,21 @@ def test_reset_retains_files_read_by_non_start_invalidated_nodes(tmp_path):
     }
     receipt = items.command_reset(tmp_path, request)
 
-    # shared.txt is retained because downstream (a non-start invalidated node) reads it.
+    # shared.txt is retained: prepare (outside the invalidated set) also writes it.
     assert 'shared.txt' in receipt['retained_inputs']
+    assert (tmp_path / 'shared.txt').read_text() == original['shared.txt']
 
-    # output.txt and result.txt are archived (written by invalidated nodes, not read by any).
-    assert 'output.txt' in receipt['archived_artifacts']
-    assert 'result.txt' in receipt['archived_artifacts']
-    assert 'shared.txt' not in receipt['archived_artifacts']
-
-    # shared.txt still exists in the workdir with original content.
-    assert (tmp_path / 'shared.txt').read_text() == 'shared content'
-
-    # output.txt and result.txt were moved to the archive.
+    # internal.txt is archived: written solely by invalidated nodes, even
+    # though downstream (a non-start invalidated node) reads it.
+    assert 'internal.txt' in receipt['archived_artifacts']
+    assert not (tmp_path / 'internal.txt').exists()
     archive = tmp_path / receipt['archive']
-    assert not (tmp_path / 'output.txt').exists()
+    assert (archive / 'artifacts' / 'internal.txt').read_text() == original['internal.txt']
+
+    # result.txt is archived normally.
+    assert 'result.txt' in receipt['archived_artifacts']
     assert not (tmp_path / 'result.txt').exists()
-    assert (archive / 'artifacts' / 'output.txt').read_text() == 'output content'
-    assert (archive / 'artifacts' / 'result.txt').read_text() == 'result content'
+    assert (archive / 'artifacts' / 'result.txt').read_text() == original['result.txt']
 
     # Only facts from invalidated nodes are cleared; prepared is kept.
     assert receipt['cleared_facts'] == ['computed', 'finished']
