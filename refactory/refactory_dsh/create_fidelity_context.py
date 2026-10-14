@@ -283,6 +283,11 @@ class _Session:
         self.fixed = instructions + "\n\n" + "\n\n".join(f"=== COMPLETE AUTHORITATIVE INPUT {name} ===\n{body.decode()}" for name, body in fixed)
         self.fixed += "\n\nCOMPLETE REVIEW OBLIGATIONS:\n" + _json(rendering)
         self.fixed += "\n\nFull evidence is immutable data. Evidence reads inspect only supplied data, do not run behavioral tests, modify application files, or execute the final role task. Preserve all adverse and unresolved claims."
+        self.fixed += ("\n\nCLOSED COVERAGE ID VOCABULARY:\n" + _json([item["id"] for item in obligations])
+                       + "\nOnly these exact IDs are valid in coverage[].obligation_id and adjudication decisions[].obligation_ids. "
+                         "Other IDs appearing in instructions or evidence are document labels, not additions to this vocabulary. "
+                         "Preserve findings about every such label as substantive claims with exact source quotes; do not discard adverse or unresolved findings. "
+                         "The closed vocabulary restricts those structured ID fields only, not the original user requirements or the scope of the final role task.")
         for index, document in enumerate(documents):
             body = document.body.encode()
             body.decode("utf-8")
@@ -391,7 +396,7 @@ class _Session:
                 "context_id": self.root.name, "logical_node_id": self.node.id, "role": self.node.role, **page})
                 + "\nReturn ONLY strict JSON with schema_version:1, scope:'page_only', context_id, logical_node_id, role, page_id, "
                   "document_sha256, start_byte, end_byte, page_sha256, coverage, claims. Echo all identity/ranges exactly. "
-                  "coverage is a sparse array for relevant supplied obligation IDs only, with obligation_id, status "
+                  "coverage is a sparse array using only the exact CLOSED COVERAGE ID VOCABULARY above, with obligation_id, status "
                   "(evidence/adverse/not_in_page/unresolved), reason (nonempty). It may be empty only when concrete claims "
                   "still describe this page; an omitted ID is not satisfied. No read can declare global coverage complete. claims is a nonempty array of "
                   "objects with claim_id, verdict (supported/adverse/unresolved), reason, start_byte, end_byte, quote. "
@@ -534,7 +539,7 @@ class _Session:
                     "aggregation_id, input_ids, input_sha256, retained_findings, decisions. Echo identity and every exact ordered input ID/digest. "
                     "retained_findings MUST copy EVERY adverse/unresolved finding from the supplied retained_findings verbatim (stable ID, status, full content); "
                     "do not discard, summarize or rewrite any. decisions may combine only supplied positive_findings with explicit original source references. "
-                    "Each decision has decision_id, conclusion (substantive nonempty text), obligation_ids (valid supplied IDs), sources (objects with input_id and finding_ids). "
+                    "Each decision has decision_id, conclusion (substantive nonempty text), obligation_ids (only IDs from CLOSED COVERAGE ID VOCABULARY above), sources (objects with input_id and finding_ids). "
                     "Every positive finding must be referenced; no unknown, duplicate or unread source reference is allowed. "
                     "No final global PASS is authorized by this scoped adjudication. Original raw reports and prior outputs remain preserved; "
                     "Use only this complete prior-output packet; do not print whole original documents or other ledger branches into tool history. "

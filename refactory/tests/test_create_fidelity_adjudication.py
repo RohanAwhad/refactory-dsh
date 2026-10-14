@@ -41,6 +41,8 @@ class AdjudicationResponses(ExternalModel):
         self.calls.append((client._node_id, client._role, client.route(), task))
         request = json.JSONDecoder().raw_decode(prompt.split("SCOPED ADJUDICATION REQUEST:\n", 1)[1])[0]
         inputs = json.JSONDecoder().raw_decode(prompt.split("COMPLETE PRIOR MODEL OUTPUTS:\n", 1)[1])[0]
+        allowed = json.JSONDecoder().raw_decode(prompt.split("CLOSED COVERAGE ID VOCABULARY:\n", 1)[1])[0]
+        assert allowed == ["original-role-stage-and-user-contract"]
         self.aggregate_calls.append((request, inputs))
         assert [item["input_id"] for item in inputs["records"]] == request["input_ids"]
         assert all(hashlib.sha256(item["raw_response"].encode()).hexdigest() == request["input_sha256"][item["input_id"]] for item in inputs["records"])
@@ -59,6 +61,8 @@ class AdjudicationResponses(ExternalModel):
             sources[0]["finding_ids"].append("unknown-positive")
         elif self.problem == "drop-positive":
             value["decisions"] = []
+        elif self.problem == "unknown-obligation" and value["decisions"]:
+            value["decisions"][0]["obligation_ids"] = ["B08"]
         elif self.problem == "no-progress" and value["decisions"]:
             value["decisions"][0]["conclusion"] += "x" * sum(len(item["raw_response"].encode()) for item in inputs["records"])
         return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
@@ -97,7 +101,7 @@ def test_bounded_recursive_original_role_adjudication_keeps_all_adverse_and_sour
     assert manifest["final"]["uttered_reconciliation_marker"] == MARKER + manifest["reconciliation_digest"]
 
 
-@pytest.mark.parametrize("problem", ["drop-negative", "rewrite-negative", "unknown-positive", "drop-positive", "no-progress", "deadline"])
+@pytest.mark.parametrize("problem", ["drop-negative", "rewrite-negative", "unknown-positive", "drop-positive", "unknown-obligation", "no-progress", "deadline"])
 def test_unproven_or_nonprogressing_adjudication_never_reaches_final(tmp_path, monkeypatch, problem):
     result, manifest, responses, _ = run_adjudication(tmp_path, monkeypatch, problem)
     assert not result.exit_ok and manifest["status"] == "failed"

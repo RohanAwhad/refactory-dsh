@@ -4,6 +4,16 @@
   "issue": "https://github.com/boston-harness-group/refactory-dsh/issues/310",
   "rows": [
     {
+      "requirements": ["F.consumption", "F.children.strategy_director", "F.obligations.semantic"],
+      "owner": "bounded evidence coverage vocabulary",
+      "fix": "Enumerate the exact active coverage IDs separately from requirement labels embedded in evidence. Keep all source findings in quoted claims; retain strict rejection of unknown structured IDs without filtering or rewriting model responses.",
+      "source": "refactory/refactory_dsh/create_fidelity_context.py",
+      "regression": "refactory/tests/test_create_fidelity_context_coverage.py",
+      "observed_trial": "create-fidelity-pair-sol6-20261014-v13",
+      "observed_failure": "The actual strategy planning read returned the two allowed IDs plus 19 B/I/C labels from the full research evidence. Strict coverage validation correctly rejected the response before any final planning dispatch; the phrase relevant supplied obligation IDs did not clearly distinguish the closed vocabulary from document labels.",
+      "status": "Prompt clarification and controlled real-dispatch regression preserve adverse claims and reject unknown coverage IDs. Fresh live confirmation remains required; v13 remains failed."
+    },
+    {
       "requirements": ["F.consumption", "F.children.qa_director", "F.obligations.semantic", "F.deadlines"],
       "owner": "complete evidence within bounded model requests",
       "fix": "Read every exact UTF-8 evidence range through the original role and route with full fixed authority. If complete read outputs exceed the request ceiling, the same role adjudicates bounded groups with explicit positive-source dispositions and verbatim adverse/unresolved preservation before the original final task. Preserve all raw bodies, intermediate responses, receipts and shared deadline.",

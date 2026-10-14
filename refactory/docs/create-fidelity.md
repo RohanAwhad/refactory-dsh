@@ -56,6 +56,12 @@ Reading evidence does not replace the role's required execution or review work.
 This staging applies to DSH execution. An explicitly selected native builder
 retains its existing direct delivery and backend context handling.
 
+Read and adjudication requests enumerate the exact IDs allowed in their coverage
+fields. Requirement labels inside source documents do not expand that vocabulary;
+their substantive findings still belong in quoted claims. Unknown coverage IDs
+fail validation rather than being silently removed or admitted. This restriction
+does not narrow the original requirements or the final role's review duties.
+
 When the read records themselves exceed the ceiling, the same role adjudicates
 bounded groups of complete prior responses. Every positive finding needs an
 explicit source disposition; adverse, unresolved and absent-page findings carry
