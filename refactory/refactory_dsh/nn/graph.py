@@ -169,10 +169,10 @@ class Node:
         if self.file_policy is not None:
             if self.kind != "agent":
                 raise GraphError(f"node {self.id!r}: file_policy is only valid on agent nodes")
-            if self.file_policy not in ("read-only", "workspace-write"):
+            if self.file_policy not in ("read-only", "workspace-write", "danger-full-access"):
                 raise GraphError(
                     f"node {self.id!r}: unknown file_policy {self.file_policy!r}; "
-                    "known: read-only, workspace-write"
+                    "known: read-only, workspace-write, danger-full-access"
                 )
 
     @property

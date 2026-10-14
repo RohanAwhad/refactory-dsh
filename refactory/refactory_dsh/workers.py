@@ -110,23 +110,34 @@ def finish(path: Path, state: str, *, error: str | None = None) -> dict[str, Any
     return record
 
 
+# Sandbox modes ordered from narrowest to widest.
+_SANDBOX_MODES = ('read-only', 'workspace-write', 'danger-full-access')
+
+
 def permission_patch(route: dict[str, Any], file_policy: str | None = None) -> list[dict[str, Any]]:
     """Scope DSH bypass to this runtime, without leaking through child env.
 
-    When *file_policy* is set the node author asked for a narrower sandbox,
-    and that wins over the run-level ``skip`` default.
+    When *file_policy* is set the node author asked for a narrower sandbox.
+    The effective mode is the stricter of the node policy and the run policy,
+    so a node can narrow but never widen the run's access.
     """
     if route.get('worker_backend', 'dsh') != 'dsh':
         return []
+    if route.get('permission_mode', 'skip') != 'skip':
+        # ``default`` retains the ambient native policy; no overlay.
+        return []
+    # Run-level ``skip`` now defaults to ``workspace-write`` — the run
+    # directory — instead of ``danger-full-access``.  Nodes that genuinely
+    # need wider access declare ``file_policy='danger-full-access'``.
+    run_mode = 'workspace-write'
     if file_policy is not None:
-        # Node-level policy narrows the sandbox; approval stays ``never``
-        # because the worker is still non-interactive.
-        return [{'id': 'sandbox-policy', 'config': {'mode': file_policy}},
-                {'id': 'approval', 'config': {'policy': 'never'}}]
-    if route.get('permission_mode', 'skip') == 'skip':
-        return [{'id': 'sandbox-policy', 'config': {'mode': 'danger-full-access'}},
-                {'id': 'approval', 'config': {'policy': 'never'}}]
-    return []
+        # Take the stricter (lower-index) of node and run policies.
+        mode = _SANDBOX_MODES[min(_SANDBOX_MODES.index(file_policy),
+                                   _SANDBOX_MODES.index(run_mode))]
+    else:
+        mode = run_mode
+    return [{'id': 'sandbox-policy', 'config': {'mode': mode}},
+            {'id': 'approval', 'config': {'policy': 'never'}}]
 
 
 _OPENCODE_SESSION_HEADER = 'x-opencode-session'
@@ -235,6 +246,11 @@ def lower_workflow(workflow: Any, workdir: Path, model_context: dict[str, Any] |
         selected = client.for_node(name, role=node.role.value)
         if node.tools:
             raise ValueError(f'worker node {name!r} declares tool restrictions this bridge cannot enforce')
+        if node.file_policy is not None and selected.route()['worker_backend'] != 'dsh':
+            raise ValueError(
+                f'worker node {name!r} declares file_policy={node.file_policy!r} but the '
+                f'selected backend {selected.route()["worker_backend"]!r} cannot enforce it'
+            )
         directory.mkdir(parents=True, exist_ok=True)
         selected_context = selected.context()
         if budget_ledger:

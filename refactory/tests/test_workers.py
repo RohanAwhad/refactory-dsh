@@ -529,4 +529,42 @@ def test_file_policy_rejects_unknown_value():
     from refactory_dsh.nn.graph import Node, GraphError
     import pytest
     with pytest.raises(GraphError, match='unknown file_policy'):
-        Node('test_agent', 'agent', prompt_template='do something', file_policy='danger-full-access')
+        Node('test_agent', 'agent', prompt_template='do something', file_policy='yolo-full-access')
+
+
+def test_permission_patch_defaults_to_workspace_write_without_file_policy():
+    """skip permission mode now defaults to workspace-write, not danger-full-access."""
+    route = {'worker_backend': 'dsh', 'permission_mode': 'skip'}
+    rows = workers.permission_patch(route)
+    policies = {row['id']: row['config'] for row in rows}
+    assert policies['sandbox-policy']['mode'] == 'workspace-write'
+
+
+def test_permission_patch_file_policy_cannot_widen():
+    """A node declaring danger-full-access cannot widen past the run default."""
+    route = {'worker_backend': 'dsh', 'permission_mode': 'skip'}
+    rows = workers.permission_patch(route, file_policy='danger-full-access')
+    policies = {row['id']: row['config'] for row in rows}
+    # The run defaults to workspace-write; danger-full-access is wider,
+    # so the stricter workspace-write wins.
+    assert policies['sandbox-policy']['mode'] == 'workspace-write'
+
+
+def test_permission_patch_file_policy_narrows():
+    """read-only is stricter than the run default and wins."""
+    route = {'worker_backend': 'dsh', 'permission_mode': 'skip'}
+    rows = workers.permission_patch(route, file_policy='read-only')
+    policies = {row['id']: row['config'] for row in rows}
+    assert policies['sandbox-policy']['mode'] == 'read-only'
+
+
+def test_lower_workflow_rejects_file_policy_on_external_backend(tmp_path):
+    """file_policy on a node routed to codex fails at lowering time."""
+    from refactory_dsh.ir import AgentNode, AgentRole, Workflow
+    import pytest
+    graph = Workflow(name='tiny', nodes={'build': AgentNode(id='build', role=AgentRole.BUILDER,
+                prompt_template='write result.txt', writes={'result.txt'},
+                file_policy='workspace-write')}, edges=[], start_node='build')
+    context = DshModelClient(worker_backend='codex', model='m').context()
+    with pytest.raises(ValueError, match='cannot enforce'):
+        workers.lower_workflow(graph, tmp_path, context)

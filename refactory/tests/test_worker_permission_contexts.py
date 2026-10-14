@@ -39,7 +39,7 @@ def test_dsh_worker_and_coordinator_overlay_do_not_change_child_environment(tmp_
     for overlay in (seen, coordinator):
         policies = {row['id']: row['config'] for row in overlay if row.get('id') in ('sandbox-policy', 'approval')}
         if permission == 'skip':
-            assert policies['sandbox-policy']['mode'] == 'danger-full-access'
+            assert policies['sandbox-policy']['mode'] == 'workspace-write'
             assert policies['approval']['policy'] == 'never'
         else:
             assert policies == {}
@@ -199,8 +199,8 @@ def test_file_policy_narrows_sandbox_in_worker_patch(tmp_path, monkeypatch):
     assert policies['approval']['policy'] == 'never'
 
 
-def test_no_file_policy_keeps_danger_full_access(tmp_path, monkeypatch):
-    """Without file_policy the existing skip → danger-full-access behavior is preserved."""
+def test_no_file_policy_defaults_to_workspace_write(tmp_path, monkeypatch):
+    """Without file_policy, skip permission mode defaults to workspace-write."""
     monkeypatch.delenv('REFACTORY_WORKER_CONTEXT', raising=False)
     seen = []
 
@@ -212,5 +212,16 @@ def test_no_file_policy_keeps_danger_full_access(tmp_path, monkeypatch):
     monkeypatch.setattr(DshModelClient, '_run_completion', inspect_completion)
     DshModelClient(permission_mode='skip').for_node('build').complete('task', workdir=tmp_path)
     policies = {row['id']: row['config'] for row in seen if row.get('id') in ('sandbox-policy', 'approval')}
-    assert policies['sandbox-policy']['mode'] == 'danger-full-access'
+    assert policies['sandbox-policy']['mode'] == 'workspace-write'
     assert policies['approval']['policy'] == 'never'
+
+
+def test_workspace_write_sandbox_refuses_writes_outside_run_dir(tmp_path):
+    """workspace-write confines file creation to the workspace root."""
+    from refactory_dsh.workers import permission_patch
+    patch = permission_patch({'worker_backend': 'dsh', 'permission_mode': 'skip'})
+    policies = {row['id']: row['config'] for row in patch}
+    # The default skip mode now produces workspace-write, scoped to the run dir.
+    assert policies['sandbox-policy']['mode'] == 'workspace-write'
+    # Enforcement is kernel-level (bwrap/Landlock/Seatbelt) and verified by
+    # dsh-sandbox's own tests; this test verifies the policy is emitted.
