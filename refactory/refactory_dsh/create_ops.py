@@ -1500,7 +1500,7 @@ def blocking_findings(text: str) -> list[str]:
         # appears without a separator (`BLOCKING` finding).  Strip only
         # mentions; keep markers so the finding is counted.
         without_mentions = re.sub(r"`BLOCKING[:—–-]\s+\S[^`]*`", "", stripped, flags=re.I)
-        without_mentions = re.sub(r"`BLOCKING`", "", without_mentions, flags=re.I)
+        without_mentions = re.sub(r"`BLOCKING`(?![*_]*\s*[:—–-])", "", without_mentions, flags=re.I)
         if not re.search(r"BLOCKING", without_mentions, re.I):
             continue
         cleaned = stripped.lstrip("*-+>#` \t")

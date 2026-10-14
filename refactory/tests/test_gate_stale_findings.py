@@ -96,3 +96,17 @@ class TestBlockingFindings:
         """A full old finding inside backticks is a quotation, not live."""
         text = "The earlier review said `BLOCKING: widget crashes on empty input` but this was fixed.\n"
         assert blocking_findings(text) == []
+
+    def test_code_marker_separator_after_span_is_caught(self):
+        """`BLOCKING`: with the separator outside the backticks is a marker."""
+        text = "`BLOCKING`: the CLI crashes on an empty file\n"
+        findings = blocking_findings(text)
+        assert len(findings) == 1
+        assert "the CLI crashes" in findings[0]
+
+    def test_bold_code_marker_separator_after_span_is_caught(self):
+        """**`BLOCKING`** — with separator after bold+code is a marker."""
+        text = "**`BLOCKING`** — the CLI crashes on an empty file\n"
+        findings = blocking_findings(text)
+        assert len(findings) == 1
+        assert "the CLI crashes" in findings[0]
