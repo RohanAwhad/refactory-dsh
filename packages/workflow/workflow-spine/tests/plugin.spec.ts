@@ -25,6 +25,21 @@ const graph: WorkflowGraph = {
   ],
 }
 
+const graphWithReads: WorkflowGraph = {
+  name: 't',
+  start_node: 'a',
+  nodes: {
+    a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', writes: [], reads: [] },
+    gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'user', gate_prompt: 'ok?', reads: ['design.md'] },
+    b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', writes: [], reads: [] },
+  },
+  edges: [
+    { source: 'a', target: 'gate' },
+    { source: 'gate', target: 'b', condition: 'proceed' },
+    { source: 'gate', target: 'a', condition: 'reloop' },
+  ],
+}
+
 async function setup(): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
@@ -91,6 +106,41 @@ describe('workflow-spine real composition', () => {
     await run(ctx, 'wf_done', { node: 'a' })
     await expect(run(ctx, 'wf_verdict', { gate: 'gate' }))
       .rejects.toThrow(/gate gate is answered by a person and could not be asked/)
+  })
+
+  it('includes gate reads files in the question detail', async () => {
+    let capturedRequest: { questions: Array<{ id: string; detail?: string }> } | undefined
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(UserQuestionService)
+    ctx.on('user-questions/request', request => {
+      capturedRequest = request
+      return Promise.resolve({
+        answers: request.questions.map(question => ({ id: question.id, selected: ['proceed'] })),
+      })
+    })
+    await ctx.plugin(workflowSpine, { graph: graphWithReads, toolPrefix: 'wf', maxIterations: 3 })
+
+    // Walk to the gate
+    await run(ctx, 'wf_done', { node: 'a' })
+    // Route the user gate (triggers userQuestions.ask)
+    await run(ctx, 'wf_verdict', { gate: 'gate' })
+
+    expect(capturedRequest).toBeDefined()
+    const firstQuestion = capturedRequest!.questions[0]!
+    expect(firstQuestion.detail).toBeDefined()
+    expect(firstQuestion.detail).toContain('design.md')
+  })
+
+  it('CEO prompt instructs to present gate reads files before routing a user gate', async () => {
+    const ctx = await setup()
+    const assembly = await ctx.systemPrompt.assemble()
+    const spineSection = assembly.sections.find(s => s.name === 'tool:wf-spine')
+    expect(spineSection).toBeDefined()
+    expect(spineSection!.text).toMatch(/user gate/)
+    expect(spineSection!.text).toMatch(/reads/)
+    expect(spineSection!.text).toMatch(/summarise|summarize/)
   })
 })
 

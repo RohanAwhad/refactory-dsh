@@ -962,6 +962,18 @@ export function apply(ctx: Context, config: Config): void {
   const pendingQuestions = new WeakSet<Spine>()
 
   /**
+   * Result of a user-gate question.
+   * - `{ verdict, feedback }` — a recognized verdict, optionally with parsed feedback.
+   * - `{ status: 'replied', gate, text }` — free text that does not match any verdict label;
+   *   the gate stays open and the caller should surface the text and re-ask.
+   * - `undefined` — halted, paused, or state changed during the question.
+   */
+  type UserGateResult =
+    | { verdict: string; feedback: string }
+    | { status: 'replied'; gate: string; text: string }
+    | undefined
+
+  /**
    * The verdict a person gives at a `user` gate, asked by the runtime.
    *
    * Asked here rather than left to the model's own `ask_user_question`, because a
@@ -981,7 +993,7 @@ export function apply(ctx: Context, config: Config): void {
     view: NodeView,
     exec: ToolExec,
     workdir: string | undefined,
-  ): Promise<string | undefined> {
+  ): Promise<UserGateResult> {
     if (pendingQuestions.has(spine)) throw new Error('a user-gate question is already pending for this run')
     pendingQuestions.add(spine)
     try {
@@ -993,7 +1005,7 @@ export function apply(ctx: Context, config: Config): void {
 
   async function askCurrentReview(
     gate: string, spine: Spine, view: NodeView, exec: ToolExec, workdir: string | undefined,
-  ): Promise<string | undefined> {
+  ): Promise<UserGateResult> {
     const { gateCommand, commandEnv, dataCommand } = requireRun(exec)
     applyControls(spine, workdir, commandEnv, dataCommand)
     if (spine.isPaused() || spine.isHalted()) return undefined
@@ -1002,7 +1014,7 @@ export function apply(ctx: Context, config: Config): void {
     const prior = gateCommand !== '' && workdir !== undefined
       ? runtimeBridge(gateCommand, workdir, commandEnv, { ...request, action: 'begin' })
       : undefined
-    if (typeof prior?.verdict === 'string' && prior.verdict !== '') return prior.verdict
+    if (typeof prior?.verdict === 'string' && prior.verdict !== '') return { verdict: prior.verdict, feedback: '' }
     const stateBefore = JSON.stringify(spine.state())
     if (userQuestions === undefined) {
       const message = `gate ${gate} is answered by a person and this composition mounts no user-questions `
@@ -1020,6 +1032,7 @@ export function apply(ctx: Context, config: Config): void {
           id: gate,
           header: 'Workflow gate',
           question: view.gate_prompt || `Gate ${gate}`,
+          ...((view.reads ?? []).length > 0 ? { detail: `Gate reads files: ${(view.reads ?? []).join(', ')}` } : {}),
           ...(labels.length === 0 ? {} : { options: labels.map(verdict => ({ label: verdict })) }),
         }],
         ...(exec.agent === undefined ? {} : { agent: exec.agent }),
@@ -1048,20 +1061,58 @@ export function apply(ctx: Context, config: Config): void {
     } finally { questionLifetime.abort() }
     if (answer === undefined) return undefined
     const chosen = answer.answers.find(entry => entry.id === gate)
-    const verdict = (chosen?.selected[0] ?? chosen?.custom ?? '').trim()
-    if (verdict === '') {
+    const rawText = (chosen?.selected[0] ?? chosen?.custom ?? '').trim()
+    if (rawText === '') {
       throw new Error(`gate ${gate} was answered without a verdict`)
     }
     if (JSON.stringify(spine.state()) !== stateBefore) {
       throw new Error(`gate ${gate} changed while awaiting the answer; ask again`)
     }
-    if (labels.length > 0 && !labels.includes(verdict)) throw new Error(`gate ${gate} does not accept ${verdict}`)
+
+    // Detect whether this is a custom-text answer (user typed in "Other" box)
+    const isCustomText = (chosen?.selected.length === 0 || chosen?.selected[0] === undefined)
+      && typeof chosen?.custom === 'string' && chosen.custom.trim() !== ''
+
+    let verdict: string
+    let feedback = ''
+
+    if (!isCustomText) {
+      // Normal selection path — enforce label validation as before
+      if (labels.length > 0 && !labels.includes(rawText)) {
+        throw new Error(`gate ${gate} does not accept ${rawText}`)
+      }
+      verdict = rawText
+    } else if (labels.length === 0) {
+      // No labels constrain the gate; accept any text as the verdict
+      verdict = rawText
+    } else {
+      // Case-insensitive exact match, then "label: feedback" prefix match
+      const exactMatch = labels.find(l => l.toLowerCase() === rawText.toLowerCase())
+      if (exactMatch !== undefined) {
+        verdict = exactMatch
+      } else {
+        // Check for "label: feedback" pattern (longest label first to avoid prefix ambiguity)
+        const sortedLabels = [...labels].sort((a, b) => b.length - a.length)
+        const matchedLabel = sortedLabels.find(label =>
+          rawText.toLowerCase().startsWith(label.toLowerCase() + ':'),
+        )
+        if (matchedLabel === undefined) {
+          // Unrecognized free text → gate stays open, return non-error reply
+          recordStatus(spine, workdir, 'ready')
+          return { status: 'replied', gate, text: rawText }
+        }
+        verdict = matchedLabel
+        feedback = rawText.slice(matchedLabel.length + 1).trim()
+      }
+    }
+
     if (gateCommand !== '' && workdir !== undefined) {
       runtimeBridge(gateCommand, workdir, commandEnv, {
         ...request, action: 'answer', review: prior?.review, verdict,
+        ...(feedback ? { feedback } : {}),
       })
     }
-    return verdict
+    return { verdict, feedback }
   }
 
   // The driving contract. The spine enforces "what is next" structurally (it
@@ -1100,7 +1151,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.systemPrompt.section({
     name: `tool:${toolPrefix}-spine`,
     order: ctx.systemPrompt.getSectionOrder('TOOL_WORKFLOW'),
-    text: `You are the CEO of a workflow run, and you are DRIVING A WORKFLOW GRAPH. Your coding tools (bash, write, edit, web, skill) are disabled — you cannot implement, edit files, or browse yourself. Advance only through the wf tools.${openInstruction} If the person requests a pause before a named node or deterministic dataset, arm it FIRST with ${toolPrefix}_edit action \`pause\` for that node, before any ${toolPrefix}_next that could reach it. Use ${toolPrefix}_state to inspect ids without executing work. When status is \`paused\`, end your turn and wait for the person. Only after an explicit request to continue, use ${toolPrefix}_edit action \`unpause\` on that boundary and resume. Repeated ${toolPrefix}_next calls do not release a pause; never skip or redo around it. ${toolPrefix}_state inspects the cursor without execution; ${toolPrefix}_next executes due deterministic work. After reading steering and arming any requested pause, call it to advance, and call it again after every ${toolPrefix}_done / ${toolPrefix}_verdict / ${toolPrefix}_edit / ${toolPrefix}_expand — those tools only confirm the mutation, they do not tell you what is next. When ${toolPrefix}_steer is available, read it before each ${toolPrefix}_next: it is what the person said about the run since you last looked. A correction from the person is applied to that node's prompt with ${toolPrefix}_edit (\`set-prompt\`/\`append-prompt\`) and the node is re-run with ${toolPrefix}_redo. With automatic execution enabled, ${toolPrefix}_next crosses sole static ForkNode/JoinNode boundaries for you and establishes delivery contexts before returning the branch AgentNode/LLMNode prompts. Dispatch only those returned prompts in parallel; target ids in a state view are not dispatch instructions. If a ForkNode or JoinNode is explicitly returned (manual execution or a mixed cursor), acknowledge only that due control node with ${toolPrefix}_done, then call ${toolPrefix}_next before dispatching branch work. For an AgentNode or LLMNode (unless the runtime runs it — it has a dispatch command), spawn a subagent (the subagent tool) whose task is the node's prompt_template, and explicitly tell the subagent to read the node's reads files and write its result to the node's writes file (the filename in the node's writes field, e.g. candidate.py) — wait for it, then report the node with ${toolPrefix}_done. Every path in a node's reads and writes is relative to ${runDirectory}, and the subagent's own working directory is NOT that directory: give the subagent the absolute path (${runDirectory}/<the path>) for each file it must read or write, and tell it to write nowhere else. For a FnNode with a command, call ${toolPrefix}_next to execute it; only a command-less FnNode is yours to complete. Automatic gates also run through ${toolPrefix}_next; never supply their evaluator result. For a manually driven gate, use ${toolPrefix}_verdict with one of its listed outcomes. For a user gate the runtime asks the person itself and routes the answer they give: call ${toolPrefix}_verdict with the gate id and no verdict, and never answer for them — a verdict passed for their gate is refused. Fan out a director's plan with ${toolPrefix}_expand, and apply user steering ("skip the tests") with ${toolPrefix}_edit. When a person says a step is wrong, read the run's ledger if one is configured, then use ${toolPrefix}_edit with \`set-prompt\` or \`append-prompt\` to correct that node's prompt and ${toolPrefix}_redo to run the node again with the correction. A DataNode is iterated for you: the runtime selects its items and hands you the subgraph's nodes one pass at a time, with the item being processed in the payload's item field and on disk as the node's current item file. Do not try to iterate it yourself, and do not report the data node — or the pass's last node — before its work is done. Never skip, reorder, or bypass a node — the runner refuses to advance until you report the current node complete.`,
+    text: `You are the CEO of a workflow run, and you are DRIVING A WORKFLOW GRAPH. Your coding tools (bash, write, edit, web, skill) are disabled — you cannot implement, edit files, or browse yourself. Advance only through the wf tools.${openInstruction} If the person requests a pause before a named node or deterministic dataset, arm it FIRST with ${toolPrefix}_edit action \`pause\` for that node, before any ${toolPrefix}_next that could reach it. Use ${toolPrefix}_state to inspect ids without executing work. When status is \`paused\`, end your turn and wait for the person. Only after an explicit request to continue, use ${toolPrefix}_edit action \`unpause\` on that boundary and resume. Repeated ${toolPrefix}_next calls do not release a pause; never skip or redo around it. ${toolPrefix}_state inspects the cursor without execution; ${toolPrefix}_next executes due deterministic work. After reading steering and arming any requested pause, call it to advance, and call it again after every ${toolPrefix}_done / ${toolPrefix}_verdict / ${toolPrefix}_edit / ${toolPrefix}_expand — those tools only confirm the mutation, they do not tell you what is next. When ${toolPrefix}_steer is available, read it before each ${toolPrefix}_next: it is what the person said about the run since you last looked. A correction from the person is applied to that node's prompt with ${toolPrefix}_edit (\`set-prompt\`/\`append-prompt\`) and the node is re-run with ${toolPrefix}_redo. With automatic execution enabled, ${toolPrefix}_next crosses sole static ForkNode/JoinNode boundaries for you and establishes delivery contexts before returning the branch AgentNode/LLMNode prompts. Dispatch only those returned prompts in parallel; target ids in a state view are not dispatch instructions. If a ForkNode or JoinNode is explicitly returned (manual execution or a mixed cursor), acknowledge only that due control node with ${toolPrefix}_done, then call ${toolPrefix}_next before dispatching branch work. For an AgentNode or LLMNode (unless the runtime runs it — it has a dispatch command), spawn a subagent (the subagent tool) whose task is the node's prompt_template, and explicitly tell the subagent to read the node's reads files and write its result to the node's writes file (the filename in the node's writes field, e.g. candidate.py) — wait for it, then report the node with ${toolPrefix}_done. Every path in a node's reads and writes is relative to ${runDirectory}, and the subagent's own working directory is NOT that directory: give the subagent the absolute path (${runDirectory}/<the path>) for each file it must read or write, and tell it to write nowhere else. For a FnNode with a command, call ${toolPrefix}_next to execute it; only a command-less FnNode is yours to complete. Automatic gates also run through ${toolPrefix}_next; never supply their evaluator result. For a manually driven gate, use ${toolPrefix}_verdict with one of its listed outcomes. For a user gate the runtime asks the person itself and routes the answer they give: call ${toolPrefix}_verdict with the gate id and no verdict, and never answer for them — a verdict passed for their gate is refused. Before routing a user gate, read and summarise its \`reads\` files (listed in the node view returned by ${toolPrefix}_next) for the person — key decisions, scope, notable risks or non-goals — and link each file, so they see what they are deciding on before the question is put to them. Fan out a director's plan with ${toolPrefix}_expand, and apply user steering ("skip the tests") with ${toolPrefix}_edit. When a person says a step is wrong, read the run's ledger if one is configured, then use ${toolPrefix}_edit with \`set-prompt\` or \`append-prompt\` to correct that node's prompt and ${toolPrefix}_redo to run the node again with the correction. A DataNode is iterated for you: the runtime selects its items and hands you the subgraph's nodes one pass at a time, with the item being processed in the payload's item field and on disk as the node's current item file. Do not try to iterate it yourself, and do not report the data node — or the pass's last node — before its work is done. Never skip, reorder, or bypass a node — the runner refuses to advance until you report the current node complete.`,
   })
 
   // Open a mode's graph after boot, for a caller that will drive it node by node.
@@ -1309,8 +1360,8 @@ export function apply(ctx: Context, config: Config): void {
         if (args.verdict !== undefined) {
           throw new Error(`gate ${args.gate} is a user gate: calling it with a verdict would record an answer the person never gave. Call again with the gate id alone; the runtime asks them.`)
         }
-        const verdict = await askPerson(args.gate, spine, view, exec, workdir)
-        if (verdict === undefined) {
+        const result = await askPerson(args.gate, spine, view, exec, workdir)
+        if (result === undefined) {
           const status = spine.isHalted() ? 'halted' : spine.isPaused() ? 'paused' : 'ready'
           recordStatus(spine, workdir, status)
           const state = spine.state()
@@ -1318,8 +1369,19 @@ export function apply(ctx: Context, config: Config): void {
             nodes: state.cursor, completed: state.completed,
             ...(state.halted === undefined ? {} : { halted: state.halted }) })
         }
-        spine.verdict(args.gate, verdict, args.feedback ?? '')
-        return json({ status: 'routed', gate: args.gate, verdict, answered_by: 'user' })
+        if ('status' in result) {
+          // Unrecognized free text: gate stays open, return non-error JSON to the CEO
+          return json({
+            status: 'replied', gate: args.gate, text: result.text,
+            note: 'The user typed free text that does not match any accepted verdict. The gate remains due. Respond to the user and call this tool again to re-ask.',
+          })
+        }
+        // Normal verdict path
+        spine.verdict(args.gate, result.verdict, result.feedback || args.feedback || '')
+        return json({
+          status: 'routed', gate: args.gate, verdict: result.verdict, answered_by: 'user',
+          ...(result.feedback ? { feedback: result.feedback } : {}),
+        })
       }
       if (args.verdict === undefined) {
         const offered = (view.verdicts ?? []).join(', ')
