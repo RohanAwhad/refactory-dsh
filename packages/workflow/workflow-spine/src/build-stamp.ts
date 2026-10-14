@@ -38,6 +38,7 @@ export const BUILD_STAMP: string =
  * Returns `null` when the `src/` directory does not exist (e.g. installed
  * package without source), so callers can distinguish "absent" from "present
  * but empty".
+ * @returns the 16-character hex stamp, or `null` when there is no source to hash.
  */
 export function computeSourceStamp(): string | null {
   const thisDir = dirname(fileURLToPath(import.meta.url))
@@ -70,19 +71,26 @@ export function computeSourceStamp(): string | null {
  * - When source is absent (computeSourceStamp returns null): no-op.
  * - When stamps match: no-op.
  * - When stamps differ: throws an error telling the developer to rebuild.
+ * @param built - the stamp embedded in the bundle; defaults to `BUILD_STAMP`.
+ * @param source - computes the source tree's stamp; defaults to `computeSourceStamp`, and is
+ *   called only when there is a built stamp to compare, so running from source never hashes.
+ * @returns nothing; a stale build throws instead.
  */
-export function validateBuild(): void {
+export function validateBuild(
+  built: string = BUILD_STAMP,
+  source: () => string | null = computeSourceStamp,
+): void {
   // Running from TypeScript source — the identifier wasn't replaced.
-  if (BUILD_STAMP === '') return
+  if (built === '') return
 
-  const current = computeSourceStamp()
+  const current = source()
   // Source tree absent (installed package) — nothing to validate against.
   if (current === null) return
 
-  if (BUILD_STAMP === current) return
+  if (built === current) return
 
   throw new Error(
-    `Workflow engine build is out of date (build stamp: ${BUILD_STAMP}, `
+    `Workflow engine build is out of date (build stamp: ${built}, `
     + `source stamp: ${current}). Run \`pnpm run build\` to rebuild.`,
   )
 }
