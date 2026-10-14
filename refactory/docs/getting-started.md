@@ -7,13 +7,13 @@ Start with a small offline search, then connect a model for authoring and intera
 You need Git, [Node.js](https://nodejs.org/) `^22.19` or `>=24`, and [uv](https://docs.astral.sh/uv/). The installer sets up the pinned Node dependencies, Python environment, UI bundles and DSH graph profile.
 
 ```bash
-git clone https://github.com/akashgit/refactory-dsh.git
+git clone https://github.com/boston-harness-group/refactory-dsh.git
 cd refactory-dsh
 ./install.sh
 uv run refactory list
 ```
 
-The repository must be accessible to your GitHub account. `uv` manages the Python environment. Run `./install.sh` again after an update that changes dependencies or the UI bundles.
+The repository must be accessible to your GitHub account. `uv` manages the Python environment. Run `./install.sh` again after every pull, then restart any running GUI; see [Updating](../../README.md#updating).
 
 ## 2. Try a search without a model
 

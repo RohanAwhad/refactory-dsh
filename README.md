@@ -33,7 +33,7 @@ The graph and knobs are inspectable data. The optimizer proposes typed changes t
 Requires Git, [Node.js](https://nodejs.org/) `^22.19` or `>=24`, and [uv](https://docs.astral.sh/uv/). The installer sets up the pinned dependencies, Python environment and DSH profile.
 
 ```bash
-git clone https://github.com/akashgit/refactory-dsh.git
+git clone https://github.com/boston-harness-group/refactory-dsh.git
 cd refactory-dsh
 ./install.sh
 uv run refactory list
@@ -61,6 +61,19 @@ uv run refactory package smoke first_tuned/adaptive
 ```
 
 The original package remains available. [Continue the walkthrough →](refactory/docs/getting-started.md)
+
+## Updating
+
+After every pull, run the installer again and restart any running GUI:
+
+```bash
+git pull
+./install.sh
+```
+
+`./install.sh` is safe to repeat: it re-syncs the Python and Node dependencies, rebuilds every package and updates the DSH profiles only when they changed. A running `refactory ui` or `./refactory-dsh` keeps the build it started with, so restart it afterwards.
+
+If a run stops with `Workflow engine build is out of date … Run pnpm run build`, the source was updated without rebuilding. Run `./install.sh` (or `pnpm run build`) and restart.
 
 ## Choose your interface
 
