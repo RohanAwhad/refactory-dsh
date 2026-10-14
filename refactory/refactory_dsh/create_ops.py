@@ -1490,7 +1490,6 @@ def blocking_findings(text: str) -> list[str]:
                 historical = True
         if historical:
             continue
-        # Skip blockquoted lines (quoting earlier diagnostics).
         if stripped.startswith(">"):
             continue
         # A code-formatted BLOCKING with a separator (: — – -) is a finding

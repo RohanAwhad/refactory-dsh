@@ -16,6 +16,8 @@ EVIDENCE = "authoring-evidence.json"
 AUDIT = "intent-audit.json"
 REVIEWERS = ("health_checker", "code_reviewer", "qa_director", "overwatch", "focused_qa")
 INPUTS = ("brief.json", "strategy.json", "design.md", "implementation-plan.txt")
+# Longer inputs are cited by path and sha256: the evidence is inlined into every reviewer prompt.
+INLINE_LIMIT = 2048
 SETTINGS = ("sample_knobs", "allow_regression", "check", "task_ref", "single_shot", "requires_input")
 
 REVIEW_CONTEXT = (
@@ -100,7 +102,7 @@ def requirements(ctx: Any) -> list[dict[str, str]]:
         if not ctx.exists(name):
             continue
         raw = ctx.read_text(name)
-        if len(raw) > 2048:
+        if len(raw) > INLINE_LIMIT:
             sha = hashlib.sha256(raw.encode()).hexdigest()
             result.append({"id": key, "path": name, "sha256": sha})
         else:
