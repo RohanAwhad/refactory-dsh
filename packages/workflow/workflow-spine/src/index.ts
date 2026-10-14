@@ -34,6 +34,7 @@ import { commandOf, isDeterministic, runDataCommand, runDeterministic } from './
 import type { CommandFailure } from './execute.ts'
 import type { WorkflowGraph } from './types.ts'
 import { validateBuild } from './build-stamp.ts'
+import { presentCall, presentResult, presentationMeta } from './present.ts'
 
 export { Spine, validateGraph } from './spine.ts'
 export { commandOf, dataCommandOf, isDeterministic, runDataCommand, verdictOf, NODE_ENV_KEY } from './execute.ts'
@@ -1179,7 +1180,13 @@ export function apply(ctx: Context, config: Config): void {
         intent: { type: 'string', description: 'The user’s purpose for this run, recorded in its intent ledger. Without one the ledger records the requested mode identifier.' },
         workdir: { type: 'string', description: 'The run directory to lower into. When absent the spine derives one from this session and the mode — `<cwd>/.factory/web/<session>/<package>-<mode>` — creates it, and passes it as `--workdir`; the console\'s `open` verb requires a workdir, so one is always sent.' },
       },
-      output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
+      output: {
+        schema: { type: 'json' },
+        render: (_args, value) => [text(value)],
+        presentationMeta: (_args, value) => presentationMeta('open', value),
+      },
+      presentCall: args => presentCall('open', args as Record<string, unknown>),
+      presentResult: (args, result) => presentResult('open', args as Record<string, unknown>, result),
       execute(args, exec) {
         const session = exec.agent?.session
         if (session === undefined) {
@@ -1318,7 +1325,13 @@ export function apply(ctx: Context, config: Config): void {
     name: `${toolPrefix}_next`,
     description: 'Get the next node(s) the workflow graph says are due now. Deterministic nodes (a command an `fn` gate or an `FnNode` runs) and a data node\'s item passes are executed for you and do not appear, except that when a mode is open interactively one dispatch boundary runs per call: every deterministic node the cursor holds at once is a fork peer the graph declared concurrent, so they are dispatched together and a node that ran is named under `ran` (with its id, declared outputs, the run\'s facts, and `peers` naming the whole boundary when more than one ran), and `nodes` then names what is due next — which may itself be deterministic, in which case call this tool again rather than running it or calling `wf_done`. Returns `{ status, nodes }`: for `ready`, the node views you must act on (agent task / one-shot LLM / user gate / fork) with the fields you need, plus `item` while a data node is iterating; for `done`, the run is complete; for `failed`, a deterministic node failed; its fork peers that did run have completed, and the failure names the node that did not. With automatic execution, sole static ForkNode/JoinNode boundaries are crossed for you and returned branch prompts already have their delivery contexts. Dispatch only returned AgentNode/LLMNode prompts, never fork target ids from a state view. Pass each returned prompt in full; coordination notes must not weaken its requirements or waive the original brief/approved design without explicit user steering. A documented limitation is not a waiver. If a control node is explicitly returned (manual execution or a mixed cursor), acknowledge it with `wf_done`, then call this tool before dispatching branches. Always call this first and act only on what it returns — never skip or reorder.',
     parameters: {},
-    output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
+    output: {
+      schema: { type: 'json' },
+      render: (_args, value) => [text(value)],
+      presentationMeta: (_args, value) => presentationMeta('next', value),
+    },
+    presentCall: args => presentCall('next', args as Record<string, unknown>),
+    presentResult: (args, result) => presentResult('next', args as Record<string, unknown>, result),
     execute(_args, exec) {
       const { spine, workdir, commandEnv, dataCommand, agentCommand } = requireRun(exec)
       return report(spine, workdir, commandEnv, dataCommand, agentCommand)
@@ -1331,7 +1344,13 @@ export function apply(ctx: Context, config: Config): void {
     parameters: {
       node: { type: 'string', required: true, description: 'The node id to mark complete.' },
     },
-    output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
+    output: {
+      schema: { type: 'json' },
+      render: (_args, value) => [text(value)],
+      presentationMeta: (_args, value) => presentationMeta('done', value),
+    },
+    presentCall: args => presentCall('done', args as Record<string, unknown>),
+    presentResult: (args, result) => presentResult('done', args as Record<string, unknown>, result),
     execute(args, exec) {
       const { spine, workdir, commandEnv, agentCommand } = requireRun(exec)
       spine.assertDue(args.node)
@@ -1355,7 +1374,13 @@ export function apply(ctx: Context, config: Config): void {
       verdict: { type: 'string', description: 'For a manually driven gate: one of its listed `verdicts`. Automatic gates use `wf_next`; literal `halt` without a forward halt edge cancels. Omit it for a `user` gate — the runtime puts that gate to the person, and a verdict passed here is refused rather than recorded, because a person\'s answer is not the caller\'s to give.' },
       feedback: { type: 'string', description: 'Feedback to attach to the reloop target (reloop only).' },
     },
-    output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
+    output: {
+      schema: { type: 'json' },
+      render: (_args, value) => [text(value)],
+      presentationMeta: (_args, value) => presentationMeta('verdict', value),
+    },
+    presentCall: args => presentCall('verdict', args as Record<string, unknown>),
+    presentResult: (args, result) => presentResult('verdict', args as Record<string, unknown>, result),
     async execute(args, exec) {
       const { spine, workdir } = requireRun(exec)
       spine.assertDue(args.gate)
@@ -1412,7 +1437,13 @@ export function apply(ctx: Context, config: Config): void {
       action: { type: 'string', required: true, enum: ['skip', 'unskip', 'set-prompt', 'append-prompt', 'pause', 'unpause'], description: 'The edit.' },
       text: { type: 'string', description: 'The new prompt text; required for `set-prompt` and `append-prompt`.' },
     },
-    output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
+    output: {
+      schema: { type: 'json' },
+      render: (_args, value) => [text(value)],
+      presentationMeta: (_args, value) => presentationMeta('edit', value),
+    },
+    presentCall: args => presentCall('edit', args as Record<string, unknown>),
+    presentResult: (args, result) => presentResult('edit', args as Record<string, unknown>, result),
     execute(args, exec) {
       const { spine, workdir, commandEnv, agentCommand } = requireRun(exec)
       if (args.action === 'pause' || args.action === 'unpause') {
@@ -1443,7 +1474,13 @@ export function apply(ctx: Context, config: Config): void {
     parameters: {
       node: { type: 'string', required: true, description: 'The completed node id to reopen.' },
     },
-    output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
+    output: {
+      schema: { type: 'json' },
+      render: (_args, value) => [text(value)],
+      presentationMeta: (_args, value) => presentationMeta('redo', value),
+    },
+    presentCall: args => presentCall('redo', args as Record<string, unknown>),
+    presentResult: (args, result) => presentResult('redo', args as Record<string, unknown>, result),
     execute(args, exec) {
       const { spine, workdir, commandEnv, dataCommand } = requireRun(exec)
       const plan = spine.planRedo(args.node)
@@ -1469,7 +1506,13 @@ export function apply(ctx: Context, config: Config): void {
       director: { type: 'string', required: true, description: 'The director node id.' },
       entries: { type: 'array', required: true, items: { type: 'object', additionalProperties: true }, description: 'The plan entries (each with slug + prompt fields).' },
     },
-    output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
+    output: {
+      schema: { type: 'json' },
+      render: (_args, value) => [text(value)],
+      presentationMeta: (_args, value) => presentationMeta('expand', value),
+    },
+    presentCall: args => presentCall('expand', args as Record<string, unknown>),
+    presentResult: (args, result) => presentResult('expand', args as Record<string, unknown>, result),
     execute(args, exec) {
       const { spine } = requireRun(exec)
       const entries = args.entries as Array<Record<string, unknown>>
@@ -1482,7 +1525,13 @@ export function apply(ctx: Context, config: Config): void {
     name: `${toolPrefix}_state`,
     description: 'Return the full live state: cursor, completed, skipped, gate verdicts, iteration counts, feedback, amended prompts, and the run log.',
     parameters: {},
-    output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
+    output: {
+      schema: { type: 'json' },
+      render: (_args, value) => [text(value)],
+      presentationMeta: (_args, value) => presentationMeta('state', value),
+    },
+    presentCall: args => presentCall('state', args as Record<string, unknown>),
+    presentResult: (args, result) => presentResult('state', args as Record<string, unknown>, result),
     execute(_args, exec) {
       const { spine } = requireRun(exec)
       return sync(json(spine.state()))
@@ -1506,7 +1555,13 @@ export function apply(ctx: Context, config: Config): void {
         note: { type: 'string', description: 'Append the user’s stated note, correction, or constraint to this run. Omit to read without writing.' },
         kind: { type: 'string', enum: ['info', 'correction', 'constraint'], description: 'The note kind; defaults to info. Requires note.' },
       },
-      output: { schema: { type: 'json' }, render: (_args, value) => [text(value)] },
+      output: {
+        schema: { type: 'json' },
+        render: (_args, value) => [text(value)],
+        presentationMeta: (_args, value) => presentationMeta('steer', value),
+      },
+      presentCall: args => presentCall('steer', args as Record<string, unknown>),
+      presentResult: (args, result) => presentResult('steer', args as Record<string, unknown>, result),
       execute(args, exec) {
         const unknown = Object.keys(args).filter(key => key !== 'note' && key !== 'kind')
         if (unknown.length > 0) throw new Error(`${toolPrefix}_steer does not support: ${unknown.join(', ')}`)

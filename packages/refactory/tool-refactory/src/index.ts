@@ -17,7 +17,6 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
-import type { ToolCallView, ToolResultView } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import {
   CONSOLE_DEFAULTS, Console, isRecord, resolveConsoleSettings,
@@ -25,6 +24,7 @@ import {
 } from './console.ts'
 
 import { CHAT, PARAMETERS, OPERATING_GUIDE, BUILD_ID } from './generated-help.ts'
+import { presentCall, presentResult, presentationMeta } from './present.ts'
 
 export const name = 'tool-refactory'
 export const inject = ['tools', 'subprocess', 'systemPrompt']
@@ -368,47 +368,6 @@ export function renderResult(args: Args, value: unknown): ContentBlock[] {
   return [{ type: 'text', text: lines.join('\n') }]
 }
 
-/**
- * The structured payload the browser card renders. The card cannot rebuild the
- * console's answer from the summary text, so the answer travels beside it —
- * which is what makes the view a view of the run rather than of a sentence
- * about the run. Persisted with the session log, so a replayed call renders the
- * same card.
- * @param value - the tool's canonical output.
- * @returns the action and the console's payload.
- */
-export function presentationMeta(value: { action: string; data: JsonValue }): JsonValue {
-  return { action: value.action, data: value.data }
-}
-
-/**
- * The pending-call card: which action is about to run, and on what.
- * @param args - the call's arguments.
- * @returns the generic card intent.
- */
-export function presentCall(args: Args): ToolCallView {
-  const subject = args.mode ?? args.run ?? args.candidate ?? ''
-  return {
-    card: 'generic',
-    title: subject === '' ? `refactory ${args.action}` : `refactory ${args.action} ${subject}`,
-    kind: 'other',
-  }
-}
-
-/**
- * The completed-call card: the same action title, with the summary the model saw.
- * @param args - the call's arguments.
- * @param result - the tool's canonical output.
- * @returns the generic result intent.
- */
-export function presentResult(args: Args, result: unknown): ToolResultView {
-  return {
-    card: 'generic',
-    title: `refactory ${args.action}`,
-    content: renderResult(args, isRecord(result) ? result.data : undefined),
-  }
-}
-
 export function apply(ctx: Context, config: Config): void {
   const resolved = config as Required<Config>
   const console = new Console(ctx.subprocess, resolveConsoleSettings(resolved))
@@ -468,7 +427,8 @@ export function apply(ctx: Context, config: Config): void {
       return { action: typed.action, data: data as JsonValue }
     },
     presentCall: args => presentCall(args as unknown as Args),
-    presentResult: (args, result) => presentResult(args as unknown as Args, result),
+    presentResult: (args, result) => presentResult(args as unknown as Args, result,
+      data => renderResult(args as unknown as Args, data)),
   }))
 }
 
