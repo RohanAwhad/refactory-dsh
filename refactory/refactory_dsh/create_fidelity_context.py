@@ -652,10 +652,13 @@ class _Session:
                 candidate = current + [identifier]
                 encoded = _json(adjudication_inputs(self.record, candidate, self.ctx.workdir)).encode()
                 if len(self.fixed.encode()) + len(encoded) + 12000 > self.policy.max_prompt_bytes:
-                    if len(current) < 2:
+                    if not current:
                         raise ValueError("complete prior adjudication output cannot fit with original authority under the configured ceiling")
                     groups.append(current)
                     current = [identifier]
+                    encoded = _json(adjudication_inputs(self.record, current, self.ctx.workdir)).encode()
+                    if len(self.fixed.encode()) + len(encoded) + 12000 > self.policy.max_prompt_bytes:
+                        raise ValueError("complete prior adjudication output cannot fit with original authority under the configured ceiling")
                 else:
                     current = candidate
             if current:
