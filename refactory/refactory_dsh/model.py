@@ -16,7 +16,6 @@ configured worker permission policy determines which other paths its tools can a
 from __future__ import annotations
 
 import copy
-import errno
 import json
 import os
 import re
@@ -434,7 +433,7 @@ class DshModelClient:
                 cmd += ["--provider", self._provider]
             if self._model:
                 cmd += ["--model", self._model]
-        cmd.append('-')
+        cmd.append("-")
 
         scratch = Path(os.environ.get("REFACTORY_MODEL_SCRATCH", "/tmp")) / "refactory-model"
         run_dir = Path(workdir).expanduser().resolve() if workdir is not None else scratch
@@ -458,14 +457,6 @@ class DshModelClient:
             self._checkpoint()
             try:
                 proc = self._run_completion(cmd, run_dir, stop_at, budget_s, task=task)
-            except OSError as exc:
-                if exc.errno == errno.E2BIG:
-                    size_kb = len(task.encode()) // 1024
-                    raise RuntimeError(
-                        f"prompt is {size_kb} KiB; too large for a command-line argument "
-                        f"(this is a bug — the prompt should be sent on stdin)"
-                    ) from exc
-                raise
             except subprocess.TimeoutExpired as exc:
                 # A tool-using completion may already have changed its workdir.
                 # A deadline is not a transport failure: replaying the prompt can
@@ -518,7 +509,7 @@ class DshModelClient:
         attempts; without one, the call is a plain completion bounded by
         ``timeout_s``.
 
-        When *task* is not ``None`` the prompt is delivered on the child's stdin
+        When ``task`` is not ``None`` the prompt is delivered on the child's stdin
         via a seekable temporary file, keeping large prompts off the command line
         where they would exceed ``MAX_ARG_STRLEN``.
         """
@@ -528,7 +519,7 @@ class DshModelClient:
             task_file = None
             try:
                 if task is not None:
-                    task_file = tempfile.TemporaryFile('w+', encoding='utf-8')
+                    task_file = tempfile.TemporaryFile("w+", encoding="utf-8")
                     task_file.write(task)
                     task_file.seek(0)
                 proc = subprocess.Popen(

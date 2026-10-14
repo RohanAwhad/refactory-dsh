@@ -167,7 +167,7 @@ describe('amendPrompt', () => {
       .toThrow('prompt amendment text is required')
   })
 
-  it('amends a dispatched AgentNode prompt (the whole point of this feature)', () => {
+  it('amends the prompt of an AgentNode that has a dispatch command', () => {
     const graph: WorkflowGraph = {
       name: 't',
       start_node: 'a',
@@ -182,11 +182,8 @@ describe('amendPrompt', () => {
       edges: [],
     }
     const spine = new Spine(graph)
-    // This is the operation that failed before: a dispatched node used to be a
-    // FnNode which carries no prompt, so amendPrompt refused it.
     spine.amendPrompt('a', 'also handle edge cases', 'append')
     expect(spine.view('a').prompt_template).toBe('original task\n\nalso handle edge cases')
-    // The dispatch command must survive the amendment.
     expect(spine.view('a').command).toBe('python -m worker build')
     expect(spine.state().prompts).toEqual({ a: 'original task\n\nalso handle edge cases' })
   })
@@ -202,9 +199,9 @@ function agentGraph(): WorkflowGraph {
   }
 }
 
-function config(): Config {
+function config(graph: WorkflowGraph = agentGraph()): Config {
   return {
-    graph: agentGraph(),
+    graph,
     toolPrefix: 'wf',
     maxIterations: 3,
     interactiveOpen: false,
@@ -222,11 +219,11 @@ function config(): Config {
 }
 
 /** A context with the two services the plugin injects, and the plugin mounted. */
-async function mount(): Promise<Context> {
+async function mount(graph: WorkflowGraph = agentGraph()): Promise<Context> {
   const root = new Context()
   await root.plugin(SystemPrompt)
   await root.plugin(ToolRuntime)
-  await root.plugin(spinePlugin, config())
+  await root.plugin(spinePlugin, config(graph))
   return root
 }
 
@@ -278,28 +275,7 @@ describe('the correction tools', () => {
       },
       edges: [],
     }
-    function dispatchedConfig(): Config {
-      return {
-        graph: dispatched,
-        toolPrefix: 'wf',
-        maxIterations: 3,
-        interactiveOpen: false,
-        openCommand: '',
-        openArgs: [],
-        executeCommands: false,
-        commandEnv: {},
-        commandTimeoutMs: 10_000,
-        commandSandboxMode: 'danger-full-access',
-        dataCommand: '',
-        steerCommand: '',
-        steerArgs: [],
-        ceoDeny: [],
-      }
-    }
-    const ctx = new Context()
-    await ctx.plugin(SystemPrompt)
-    await ctx.plugin(ToolRuntime)
-    await ctx.plugin(spinePlugin, dispatchedConfig())
+    const ctx = await mount(dispatched)
     // The dispatched node is non-deterministic here (executeCommands: false),
     // so it appears in wf_next for the CEO. But we can still edit its prompt.
     await call(ctx, 'wf_edit', { node: 'a', action: 'append-prompt', text: 'also handle errors' })

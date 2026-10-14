@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * Standalone CLI and importable helper for computing the current source stamp.
+ * Standalone CLI for computing the current source stamp.
  *
  * Usage:
  *   pnpm exec tsx packages/workflow/workflow-spine/scripts/source-stamp.ts
@@ -12,9 +12,6 @@
 
 import { computeSourceStamp } from '../src/build-stamp.ts'
 import { fileURLToPath } from 'node:url'
-
-// Re-export so other scripts can `import { computeSourceStamp } from './source-stamp.ts'`
-export { computeSourceStamp }
 
 // When run directly as a CLI
 const __file = fileURLToPath(import.meta.url)

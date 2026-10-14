@@ -5,8 +5,13 @@ Workers read these files from their declared reads paths instead.
 """
 from __future__ import annotations
 
+import json
+import tempfile
+from pathlib import Path
+
 import pytest
 
+from refactory_dsh.authoring_evidence import INLINE_LIMIT, requirements
 from refactory_dsh.create import CreateMode
 from refactory_dsh.design import DesignMode
 
@@ -34,171 +39,93 @@ ALLOWED = {
 }
 
 
-class TestDesignModeNoInlinedArtifacts:
-    """DesignMode agent templates must not inline large artifacts."""
+class FakeContext:
+    """The parts of a run context ``requirements`` reads, over in-memory files."""
 
-    @pytest.fixture
-    def graph(self):
-        return DesignMode().build()
+    def __init__(self, files, brief="build a widget"):
+        self.facts = {"brief": brief}
+        self._files = files
 
-    @pytest.mark.parametrize("var", sorted(LARGE_ARTIFACT_VARS))
-    def test_no_large_artifact_in_agent_prompts(self, graph, var):
-        for node_id, node in _agent_nodes(graph):
-            if (node_id, var) in ALLOWED:
-                continue
-            assert var not in node.prompt_template, (
-                f"DesignMode node {node_id!r} still inlines {var}; "
-                f"use a file-read instruction instead (issue #320)"
-            )
+    @property
+    def workdir(self):
+        return Path(tempfile.gettempdir())
 
+    def exists(self, name):
+        return name in self._files
 
-class TestCreateModeNoInlinedArtifacts:
-    """CreateMode agent templates must not inline large artifacts."""
-
-    @pytest.fixture
-    def graph(self):
-        return CreateMode().build()
-
-    @pytest.mark.parametrize("var", sorted(LARGE_ARTIFACT_VARS))
-    def test_no_large_artifact_in_agent_prompts(self, graph, var):
-        for node_id, node in _agent_nodes(graph):
-            if (node_id, var) in ALLOWED:
-                continue
-            assert var not in node.prompt_template, (
-                f"CreateMode node {node_id!r} still inlines {var}; "
-                f"use a file-read instruction instead (issue #320)"
-            )
+    def read_text(self, name):
+        return self._files[name]
 
 
-class TestRuntimeEvidenceSize:
-    """Large requirement inputs must be referenced by path, not inlined."""
-
-    def test_large_requirement_uses_path_reference(self):
-        """A requirement over 2048 chars should have path+sha256, not text."""
-        from refactory_dsh.authoring_evidence import requirements
-
-        class FakeCtx:
-            def __init__(self):
-                self.facts = {"brief": "build a widget"}
-                self._files = {
-                    "strategy.json": '{"chosen": "x", "why": "y", "score": "z", "considered": []}',
-                    "design.md": "# Design\n" + "x" * 3000,  # over threshold
-                }
-
-            @property
-            def workdir(self):
-                import tempfile
-                return Path(tempfile.gettempdir())
-
-            def exists(self, name):
-                return name in self._files
-
-            def read_text(self, name):
-                return self._files[name]
-
-        from pathlib import Path
-        ctx = FakeCtx()
-        reqs = requirements(ctx)
-        by_id = {r["id"]: r for r in reqs}
-        # brief is always inline
-        assert "text" in by_id["brief"]
-        # strategy is short (<2048) so inline
-        assert "text" in by_id["strategy"]
-        # design is large (>2048) so referenced by path
-        design_req = by_id["design"]
-        assert "path" in design_req
-        assert "sha256" in design_req
-        assert "text" not in design_req
-
-    def test_small_requirement_stays_inline(self):
-        """A requirement under 2048 chars should have text, not path."""
-        from refactory_dsh.authoring_evidence import requirements
-
-        class FakeCtx:
-            def __init__(self):
-                self.facts = {"brief": "build a widget"}
-                self._files = {
-                    "design.md": "# Small design\nJust a few lines.",
-                }
-
-            @property
-            def workdir(self):
-                import tempfile
-                return Path(tempfile.gettempdir())
-
-            def exists(self, name):
-                return name in self._files
-
-            def read_text(self, name):
-                return self._files[name]
-
-        from pathlib import Path
-        ctx = FakeCtx()
-        reqs = requirements(ctx)
-        by_id = {r["id"]: r for r in reqs}
-        design_req = by_id["design"]
-        assert "text" in design_req
-        assert "path" not in design_req
-
-    def test_runtime_evidence_fact_has_no_oversized_requirements(self):
-        """The serialized runtime_evidence JSON must not contain requirement text > 2 KB.
-
-        runtime_evidence is set as a fact via ctx.set_fact("runtime_evidence",
-        json.dumps(payload)) and inlined into every reviewer prompt via
-        {{runtime_evidence}} in REVIEW_CONTEXT.  If a requirement entry
-        carries full text instead of a path+sha256 reference, the prompt
-        balloons to tens of KB per reviewer — the root cause of #320.
-        """
-        import json
-        from refactory_dsh.authoring_evidence import requirements
-
-        class FakeCtx:
-            def __init__(self):
-                self.facts = {"brief": "write wordcount.py"}
-                self._files = {
-                    "strategy.json": json.dumps({
-                        "chosen": "simple approach", "why": "minimal",
-                        "score": "line count", "considered": [
-                            {"approach": "a", "why_not": ""},
-                            {"approach": "b", "why_not": "complex"},
-                        ],
-                        "acceptance_criteria": ["counts lines"],
-                    }) + "x" * 20000,   # realistic: 20 KB strategy
-                    "design.md": "# Design\n" + "detailed design " * 2000,  # ~30 KB
-                }
-
-            @property
-            def workdir(self):
-                import tempfile
-                return Path(tempfile.gettempdir())
-
-            def exists(self, name):
-                return name in self._files
-
-            def read_text(self, name):
-                return self._files[name]
-
-        from pathlib import Path
-        ctx = FakeCtx()
-        reqs = requirements(ctx)
-
-        # Simulate what record() does: json.dumps the requirements into a payload
-        payload = {"schema": 1, "requirements": reqs}
-        serialized = json.dumps(payload)
-
-        # The entire serialized payload must be small — under 8 KB.
-        # Before the fix it was 50-60 KB; with path+sha256 refs it's ~2-3 KB.
-        MAX_EVIDENCE_KB = 8
-        assert len(serialized) < MAX_EVIDENCE_KB * 1024, (
-            f"runtime_evidence payload is {len(serialized)} bytes "
-            f"(>{MAX_EVIDENCE_KB} KB); large requirements must use "
-            f"path+sha256 references, not inline text (issue #320)"
+@pytest.mark.parametrize("mode", [DesignMode, CreateMode], ids=["design", "create"])
+@pytest.mark.parametrize("var", sorted(LARGE_ARTIFACT_VARS))
+def test_no_large_artifact_in_agent_prompts(mode, var):
+    for node_id, node in _agent_nodes(mode().build()):
+        if (node_id, var) in ALLOWED:
+            continue
+        assert var not in node.prompt_template, (
+            f"{mode.__name__} node {node_id!r} still inlines {var}; "
+            f"use a file-read instruction instead (issue #320)"
         )
 
-        # No individual requirement should have text > 2048 chars
-        for req in reqs:
-            text = req.get("text", "")
-            assert len(text) <= 2048, (
-                f"requirement {req['id']!r} has {len(text)}-char inline text; "
-                f"inputs over 2048 chars must use path+sha256 (issue #320)"
-            )
+
+def test_large_requirement_uses_path_reference():
+    """A requirement over the inline limit has path+sha256, not text."""
+    ctx = FakeContext({
+        "strategy.json": '{"chosen": "x", "why": "y", "score": "z", "considered": []}',
+        "design.md": "# Design\n" + "x" * (INLINE_LIMIT + 1000),
+    })
+    by_id = {r["id"]: r for r in requirements(ctx)}
+    assert "text" in by_id["brief"]
+    assert "text" in by_id["strategy"]
+    design_req = by_id["design"]
+    assert "path" in design_req
+    assert "sha256" in design_req
+    assert "text" not in design_req
+
+
+def test_small_requirement_stays_inline():
+    """A requirement under the inline limit has text, not path."""
+    ctx = FakeContext({"design.md": "# Small design\nJust a few lines."})
+    by_id = {r["id"]: r for r in requirements(ctx)}
+    design_req = by_id["design"]
+    assert "text" in design_req
+    assert "path" not in design_req
+
+
+def test_runtime_evidence_fact_has_no_oversized_requirements():
+    """The serialized runtime_evidence JSON must not contain oversized requirement text.
+
+    runtime_evidence is set as a fact via ctx.set_fact("runtime_evidence",
+    json.dumps(payload)) and inlined into every reviewer prompt via
+    {{runtime_evidence}} in REVIEW_CONTEXT. If a requirement entry
+    carries full text instead of a path+sha256 reference, the prompt
+    balloons to tens of KB per reviewer — the root cause of #320.
+    """
+    ctx = FakeContext({
+        "strategy.json": json.dumps({
+            "chosen": "simple approach", "why": "minimal",
+            "score": "line count", "considered": [
+                {"approach": "a", "why_not": ""},
+                {"approach": "b", "why_not": "complex"},
+            ],
+            "acceptance_criteria": ["counts lines"],
+        }) + "x" * 20000,   # realistic: 20 KB strategy
+        "design.md": "# Design\n" + "detailed design " * 2000,  # ~30 KB
+    }, brief="write wordcount.py")
+    reqs = requirements(ctx)
+    serialized = json.dumps({"schema": 1, "requirements": reqs})
+
+    # Before the fix it was 50-60 KB; with path+sha256 refs it's ~2-3 KB.
+    MAX_EVIDENCE_KB = 8
+    assert len(serialized) < MAX_EVIDENCE_KB * 1024, (
+        f"runtime_evidence payload is {len(serialized)} bytes "
+        f"(>{MAX_EVIDENCE_KB} KB); large requirements must use "
+        f"path+sha256 references, not inline text (issue #320)"
+    )
+    for req in reqs:
+        text = req.get("text", "")
+        assert len(text) <= INLINE_LIMIT, (
+            f"requirement {req['id']!r} has {len(text)}-char inline text; "
+            f"inputs over {INLINE_LIMIT} chars must use path+sha256 (issue #320)"
+        )

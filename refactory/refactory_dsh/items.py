@@ -268,7 +268,8 @@ def command_reset(workdir: Path, request: dict[str, Any]) -> dict[str, Any]:
     if request.get('restartData') or request.get('archiveArtifacts') is True:
         reads = [Path(name) for name in declarations.get(request.get('start'), {}).get('reads', [])]
         writes = {name for node in nodes for name in declarations.get(node, {}).get('writes', [])}
-        # Retain files also written by a node outside the invalidated set (issue #317).
+        # A node that is not redone will not recreate what it wrote, so a file it
+        # shares with a redone node stays put.
         outside_writes = {name for node_id, decl in declarations.items()
                           if isinstance(decl, dict) and node_id not in nodes
                           for name in decl.get('writes', [])}

@@ -420,32 +420,31 @@ def test_large_prompt_is_sent_on_stdin_not_as_argument(monkeypatch):
     seen = {}
 
     def capture(self, cmd, run_dir, stop_at=None, budget_s=None, task=None):
-        seen['cmd'] = cmd
-        seen['task'] = task
-        return subprocess.CompletedProcess(cmd, 0, 'ok', '')
+        seen["cmd"] = cmd
+        seen["task"] = task
+        return subprocess.CompletedProcess(cmd, 0, "ok", "")
 
-    monkeypatch.setattr(DshModelClient, '_run_completion', capture)
-    large = 'x' * (200 * 1024)  # 200 KiB, well over the 128 KiB limit
+    monkeypatch.setattr(DshModelClient, "_run_completion", capture)
+    large = "x" * (200 * 1024)  # 200 KiB, well over the 128 KiB limit
     result = DshModelClient().complete(large)
-    assert result == 'ok'
-    # The task must NOT appear in the command line
-    assert large not in seen['cmd']
-    # The last element of cmd should be '-' (stdin marker)
-    assert seen['cmd'][-1] == '-'
-    # The task must be passed separately for stdin delivery
-    assert seen['task'] == large
+    assert result == "ok"
+    assert large not in seen["cmd"]
+    assert seen["cmd"][-1] == "-"
+    assert seen["task"] == large
 
 
 def test_stdin_prompt_reaches_the_child_process_whole(tmp_path):
     """A prompt over 128 KiB reaches the subprocess on stdin, not the command line."""
-    import subprocess, sys, textwrap
+    import sys
+    import textwrap
+
     from refactory_dsh.model import DshModelClient
 
     script = tmp_path / "echo_stdin.py"
     script.write_text(textwrap.dedent("""\
         import sys
         data = sys.stdin.read()
-        print(len(data.encode('utf-8')))
+        print(len(data.encode("utf-8")))
     """))
 
     large = "\u00e9" * (200 * 1024)  # 200 KiB of non-ASCII
@@ -454,7 +453,7 @@ def test_stdin_prompt_reaches_the_child_process_whole(tmp_path):
         [sys.executable, str(script)], tmp_path, task=large,
     )
     assert result.returncode == 0
-    assert result.stdout.strip() == str(len(large.encode('utf-8')))
+    assert result.stdout.strip() == str(len(large.encode("utf-8")))
 
 
 def test_a_no_op_edit_is_refused_rather_than_re_evaluated():

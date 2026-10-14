@@ -579,7 +579,7 @@ export function apply(ctx: Context, config: Config): void {
       const wait = status === 'paused' ? 'paused by user'
         : status === 'waiting_user' || views.some(node => node._type === 'GateNode' && node.evaluator_type === 'user') ? 'waiting for user gate'
           : views.some(node =>
-              (node._type === 'AgentNode' && !(node.command !== undefined && node.command !== ''))
+              (node._type === 'AgentNode' && !isDeterministic(node))
               || node._type === 'LLMNode'
             ) ? 'waiting for worker delivery'
             : status === 'executing' ? 'running a graph check' : undefined
@@ -937,7 +937,7 @@ export function apply(ctx: Context, config: Config): void {
         if (node._type !== 'AgentNode' && node._type !== 'LLMNode') continue
         // Dispatched AgentNodes are run by commandOf()/drain(); skip them here
         // to avoid recording a double delivery.
-        if (node._type === 'AgentNode' && node.command !== undefined && node.command !== '') continue
+        if (isDeterministic(node)) continue
         const receipt = runtimeBridge(agentCommand, workdir, commandEnv, {
           action: 'begin', node: node.id, prompt: node.prompt_template ?? '',
           reads: node.reads ?? [], writes: node.writes ?? [],

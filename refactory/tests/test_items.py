@@ -450,7 +450,6 @@ def test_reset_keeps_files_an_outside_node_also_writes(tmp_path):
     graph.connect('middle', 'downstream')
     lowering.write_declarations({'graph': graph.to_state()}, tmp_path)
 
-    # Create the files that would exist before a redo.
     original = {
         'shared.txt': 'written by prepare and middle',
         'internal.txt': 'written only by middle',
@@ -459,11 +458,9 @@ def test_reset_keeps_files_an_outside_node_also_writes(tmp_path):
     for name, contents in original.items():
         (tmp_path / name).write_text(contents)
 
-    # Facts from all three nodes.
     prior_facts = {'prepared': True, 'computed': 42, 'finished': 'done'}
     (tmp_path / 'facts.json').write_text(json.dumps(prior_facts))
 
-    # Redo middle and downstream; prepare is NOT invalidated.
     request = {
         'requested': 'middle',
         'start': 'middle',
@@ -472,22 +469,17 @@ def test_reset_keeps_files_an_outside_node_also_writes(tmp_path):
     }
     receipt = items.command_reset(tmp_path, request)
 
-    # shared.txt is retained: prepare (outside the invalidated set) also writes it.
     assert 'shared.txt' in receipt['retained_inputs']
     assert (tmp_path / 'shared.txt').read_text() == original['shared.txt']
 
-    # internal.txt is archived: written solely by invalidated nodes, even
-    # though downstream (a non-start invalidated node) reads it.
     assert 'internal.txt' in receipt['archived_artifacts']
     assert not (tmp_path / 'internal.txt').exists()
     archive = tmp_path / receipt['archive']
     assert (archive / 'artifacts' / 'internal.txt').read_text() == original['internal.txt']
 
-    # result.txt is archived normally.
     assert 'result.txt' in receipt['archived_artifacts']
     assert not (tmp_path / 'result.txt').exists()
     assert (archive / 'artifacts' / 'result.txt').read_text() == original['result.txt']
 
-    # Only facts from invalidated nodes are cleared; prepared is kept.
     assert receipt['cleared_facts'] == ['computed', 'finished']
     assert json.loads((tmp_path / 'facts.json').read_text()) == {'prepared': True}

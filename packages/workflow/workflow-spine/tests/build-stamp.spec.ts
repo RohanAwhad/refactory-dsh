@@ -3,55 +3,45 @@
  *
  * These tests run from TypeScript source (not the built bundle), so
  * `BUILD_STAMP` is the empty string (the `typeof` guard falls through)
- * and `validateBuild()` no-ops.
+ * and `validateBuild()` no-ops unless a test passes the stamps to compare.
  */
 
 import { describe, expect, it } from 'vitest'
 import { BUILD_STAMP, computeSourceStamp, validateBuild } from '../src/build-stamp.ts'
 
 describe('build-stamp', () => {
-  it('BUILD_STAMP is empty when running from source', () => {
+  it('leaves the build stamp empty when running from source', () => {
     expect(BUILD_STAMP).toBeTypeOf('string')
     expect(BUILD_STAMP).toBe('')
   })
 
-  it('validateBuild() is a no-op when running from source', () => {
-    // BUILD_STAMP is '' when not bundled, so validateBuild should return
-    // without throwing.
+  it('accepts any source when running from source', () => {
     expect(() => validateBuild()).not.toThrow()
   })
 
-  it('computeSourceStamp() returns a deterministic 16-char hex string', () => {
+  it('hashes the source to the same 16-character hex stamp every time', () => {
     const stamp1 = computeSourceStamp()
     const stamp2 = computeSourceStamp()
     expect(stamp1).toBe(stamp2)
     expect(stamp1).toMatch(/^[0-9a-f]{16}$/)
   })
 
-  it('computeSourceStamp() returns string or null', () => {
-    const stamp = computeSourceStamp()
-    // From within the repo with src/ present, should be a string.
-    expect(stamp).not.toBeNull()
-    expect(stamp).toMatch(/^[0-9a-f]{16}$/)
+  it('throws, naming both stamps, when the build stamp differs from the source', () => {
+    const stale = '0000000000000000'
+    const current = 'ffffffffffffffff'
+    expect(() => validateBuild(stale, () => current)).toThrow(
+      `Workflow engine build is out of date (build stamp: ${stale}, `
+      + `source stamp: ${current}). Run \`pnpm run build\` to rebuild.`,
+    )
   })
 
-  it('detects a mismatch when BUILD_STAMP differs from the source stamp', () => {
+  it('accepts a build whose stamp matches the source', () => {
     const current = computeSourceStamp()
     expect(current).not.toBeNull()
-    const stale = '0000000000000000'
-    expect(stale).not.toBe(current)
+    expect(() => validateBuild(current!)).not.toThrow()
+  })
 
-    // Simulate what validateBuild does when stamps differ:
-    // BUILD_STAMP is not empty (it would be a real hash in a bundle) and
-    // it doesn't match the freshly computed stamp.
-    const mismatch = stale !== current
-    expect(mismatch).toBe(true)
-
-    // Verify the error message format
-    const errorMessage = `Workflow engine build is out of date (build stamp: ${stale}, `
-      + `source stamp: ${current}). Run \`pnpm run build\` to rebuild.`
-    expect(errorMessage).toContain('out of date')
-    expect(errorMessage).toContain(stale)
-    expect(errorMessage).toContain(current!)
+  it('accepts a build when there is no source tree to compare against', () => {
+    expect(() => validateBuild('0000000000000000', () => null)).not.toThrow()
   })
 })

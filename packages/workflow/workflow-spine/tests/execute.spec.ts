@@ -70,6 +70,12 @@ function gate(id: string, evaluatorCommand?: string): NodeView {
   return view
 }
 
+function agent(id: string, command?: string): NodeView {
+  const view: NodeView = { id, _type: 'AgentNode', prompt_template: 'task' }
+  if (command !== undefined) view.command = command
+  return view
+}
+
 describe('which nodes the plugin runs itself', () => {
   it('claims an FnNode with a command and an fn gate with an evaluator', () => {
     expect(isDeterministic(fn('a', 'true'))).toBe(true)
@@ -85,35 +91,18 @@ describe('which nodes the plugin runs itself', () => {
   })
 
   it('claims a dispatched AgentNode with a dispatch command', () => {
-    const dispatched: NodeView = {
-      id: 'a',
-      _type: 'AgentNode',
-      command: 'echo hi',
-      prompt_template: 'task',
-    }
-    expect(isDeterministic(dispatched)).toBe(true)
-    expect(commandOf(dispatched)).toBe('echo hi')
+    expect(isDeterministic(agent('a', 'echo hi'))).toBe(true)
+    expect(commandOf(agent('a', 'echo hi'))).toBe('echo hi')
   })
 
   it('does not claim a dispatched AgentNode with an empty command', () => {
-    const empty: NodeView = {
-      id: 'a',
-      _type: 'AgentNode',
-      command: '',
-      prompt_template: 'task',
-    }
-    expect(isDeterministic(empty)).toBe(false)
-    expect(commandOf(empty)).toBeUndefined()
+    expect(isDeterministic(agent('a', ''))).toBe(false)
+    expect(commandOf(agent('a', ''))).toBeUndefined()
   })
 
   it('does not claim a dispatched AgentNode with undefined command', () => {
-    const undef: NodeView = {
-      id: 'a',
-      _type: 'AgentNode',
-      prompt_template: 'task',
-    }
-    expect(isDeterministic(undef)).toBe(false)
-    expect(commandOf(undef)).toBeUndefined()
+    expect(isDeterministic(agent('a'))).toBe(false)
+    expect(commandOf(agent('a'))).toBeUndefined()
   })
 
   it('reports the command it would run', () => {
