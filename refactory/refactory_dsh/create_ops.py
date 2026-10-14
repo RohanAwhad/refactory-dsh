@@ -1490,6 +1490,19 @@ def blocking_findings(text: str) -> list[str]:
                 historical = True
         if historical:
             continue
+        # Skip blockquoted lines (quoting earlier diagnostics).
+        if stripped.startswith(">"):
+            continue
+        # A code-formatted BLOCKING with a separator (: — – -) is a finding
+        # marker when the finding text is outside the code span, e.g.
+        # `BLOCKING:` the CLI crashes.  It is a quoted mention when the full
+        # finding is inside the span (`BLOCKING: old text`) or when BLOCKING
+        # appears without a separator (`BLOCKING` finding).  Strip only
+        # mentions; keep markers so the finding is counted.
+        without_mentions = re.sub(r"`BLOCKING[:—–-]\s+\S[^`]*`", "", stripped, flags=re.I)
+        without_mentions = re.sub(r"`BLOCKING`(?![*_]*\s*[:—–-])", "", without_mentions, flags=re.I)
+        if not re.search(r"BLOCKING", without_mentions, re.I):
+            continue
         cleaned = stripped.lstrip("*-+>#` \t")
         cleaned = re.sub(r"^\d+[.)]\s+", "", cleaned).lstrip("*_` ")
         # A numbered finding is still a finding, including when its marker is
@@ -1618,12 +1631,13 @@ def gate_qa(ctx: Any) -> str:
                     for finding in review["findings"]]
         reason = "reloop: " + "\n".join(findings) if findings else ""
     if reason:
-        evidence.stop_unrepairable(evidence.failure_kind(reason), reason)
         ctx.write_text("reviews/qa-gate.txt", reason + "\n")
         ctx.set_fact("qa_gate", reason)
         return repair(ctx, [reason]) if ctx.exists(evidence.EVIDENCE) else "reloop"
     ctx.write_text("reviews/qa-gate.txt", "proceed: no blocking finding\n")
     ctx.set_fact("qa_gate", "(the reviews found nothing blocking)")
+    ctx.write_text("validation.txt", "(reviews passed)\n")
+    ctx.set_fact("validation", "(reviews passed)")
     return "proceed"
 
 
@@ -1641,6 +1655,8 @@ def gate_overwatch(ctx: Any) -> str:
     if verdict == PASS_MARK and not problems:
         ctx.write_text("reviews/overwatch-gate.txt", "proceed: overwatch passed\n")
         ctx.set_fact("overwatch_review", "(overwatch passed)")
+        ctx.write_text("validation.txt", "(overwatch passed)\n")
+        ctx.set_fact("validation", "(overwatch passed)")
         return "proceed"
     # The audit's own findings are the most useful thing a rebuild can be given, so
     # they travel both ways: the file for a reader, the fact for the next attempt.
@@ -1650,5 +1666,6 @@ def gate_overwatch(ctx: Any) -> str:
     )
     ctx.write_text("reviews/overwatch-gate.txt", reason + "\n")
     ctx.set_fact("overwatch_review", reason)
-    evidence.stop_unrepairable(evidence.failure_kind(reason), reason)
+    ctx.write_text("validation.txt", reason + "\n")
+    ctx.set_fact("validation", reason)
     return repair(ctx, [reason]) if ctx.exists(evidence.EVIDENCE) else "reloop"

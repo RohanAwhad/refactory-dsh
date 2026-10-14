@@ -198,7 +198,7 @@ class DesignMode(Mode):
                 "Write the artifact `{{name}}` as complete, runnable files.\n\n"
                 "Brief: {{brief}}\n"
                 "It will be checked by running: {{check}}\n\n"
-                "## The design\n{{design}}\n\n"
+                "## The design\nRead the approved design from `design.md` in the run directory.\n\n"
                 "## What went wrong last time\n{{validation}}\n\n"
                 "## What the reviews refused\n{{qa_gate}}\n{{overwatch_review}}\n\n"
                 + _ACCEPTANCE_BASELINE
@@ -239,7 +239,7 @@ class DesignMode(Mode):
                 "Read and run the delivered files at this exact path; do not infer it "
                 "from your working directory.\n\n"
                 "Brief: {{brief}}\nThe check it must pass: {{check}}\n\n"
-                "## The design\n{{design}}\n\n"
+                "## The design\nRead the approved design from `design.md` in the run directory.\n\n"
                 + _ACCEPTANCE_BASELINE
                 + "You are the health checker. Run the artifact the way a user would: run "
                 "targeted checks for uncovered requirements. Reuse the canonical acceptance "
@@ -276,7 +276,8 @@ class DesignMode(Mode):
                 "Read and run the delivered files at this exact path; do not infer it "
                 "from your working directory.\n\n"
                 "Brief: {{brief}}\n\n"
-                "## The design\n{{design}}\n\n## The emitted source\n{{emit}}\n\n"
+                "## The design\nRead the approved design from `design.md` in the run directory.\n\n"
+                "## The emitted source\nRead the emitted source from `emit.txt` in the run directory.\n\n"
                 + _ACCEPTANCE_BASELINE
                 + "You are the code reviewer. Read the emitted files against the design "
                 "and the brief: is every file the design names present, does it do what "
@@ -300,8 +301,8 @@ class DesignMode(Mode):
                 "Read and run the delivered files at this exact path; do not infer it "
                 "from your working directory.\n\n"
                 "Brief: {{brief}}\nThe check it must pass: {{check}}\n\n"
-                "## The approved design\n{{design}}\n\n"
-                "## The plan\n{{strategy}}\n\n"
+                "## The approved design\nRead the approved design from `design.md` in the run directory.\n\n"
+                "## The plan\nRead the synthesis strategy from `strategy.json` in the run directory.\n\n"
                 + _ACCEPTANCE_BASELINE
                 + "You are the QA director. Design adversarial checks on the artifact — "
                 "the cases a friendly reviewer would not try — and run them. Vary one "
@@ -347,8 +348,8 @@ class DesignMode(Mode):
                 "Read and run the delivered files at this exact path; do not infer it "
                 "from your working directory.\n\n"
                 "Brief: {{brief}}\nThe check it must pass: {{check}}\n\n"
-                "## The design\n{{design}}\n\n"
-                "## The merged reviews\n{{qa}}\n\n"
+                "## The design\nRead the approved design from `design.md` in the run directory.\n\n"
+                "## The merged reviews\nRead the file `reviews/qa-synthesized.md` in the run directory. It contains the merged reviews from the health checker, code reviewer, and QA director.\n\n"
                 + _ACCEPTANCE_BASELINE
                 + "You are the overwatch. Audit the reviews rather than repeating them: "
                 "take each ask in the brief and say what evidence proves it — a command "

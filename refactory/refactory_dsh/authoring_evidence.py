@@ -20,6 +20,9 @@ SETTINGS = ("sample_knobs", "allow_regression", "check", "task_ref", "single_sho
 
 REVIEW_CONTEXT = (
     "\n## Authoritative validation and intent baseline\n{{runtime_evidence}}\n"
+    "Large requirement inputs (design, strategy, plan) are referenced by path and "
+    "sha256 above rather than inlined. Read those files from the run directory and "
+    "read authoring-evidence.json for the full validation receipt.\n"
     "Prior validation/review diagnostics (resolve any evidence-format errors in your own report): "
     "{{repair_feedback}}\n{{qa_gate}}\n{{overwatch_review}}\n"
     "The runtime has already executed canonical smoke/acceptance on this revision. "
@@ -97,7 +100,11 @@ def requirements(ctx: Any) -> list[dict[str, str]]:
         if not ctx.exists(name):
             continue
         raw = ctx.read_text(name)
-        result.append({"id": key, "text": raw})
+        if len(raw) > 2048:
+            sha = hashlib.sha256(raw.encode()).hexdigest()
+            result.append({"id": key, "path": name, "sha256": sha})
+        else:
+            result.append({"id": key, "text": raw})
         if key == "strategy":
             try:
                 strategy = json.loads(raw)
