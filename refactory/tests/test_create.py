@@ -1106,15 +1106,15 @@ def test_a_review_that_reloops_the_build_says_why_into_the_rebuild(tmp_path):
     for name in create_ops.QA_REVIEWS:
         ctx.write_text(name, "BLOCKING: adding pytest.ini makes it score 1.0")
     create_ops.synthesize_qa(ctx)
-    ctx._declared = ("reviews/qa-gate.txt",)
-    ctx._declared_facts = ("qa_gate",)
+    ctx._declared = ("reviews/qa-gate.txt", "validation.txt")
+    ctx._declared_facts = ("qa_gate", "validation")
     assert create_ops.gate_qa(ctx) == "reloop"
     assert "adding pytest.ini" in ctx.facts["qa_gate"]
 
     (tmp_path / "reviews/overwatch.md").write_text(
         "Wrote the audit.\n\nVERDICT: FAIL\n\nThe scorer can be gamed by deleting the test.\n"
     )
-    ctx._declared = ("reviews/overwatch-gate.txt",)
-    ctx._declared_facts = ("overwatch_review",)
+    ctx._declared = ("reviews/overwatch-gate.txt", "validation.txt")
+    ctx._declared_facts = ("overwatch_review", "validation")
     assert create_ops.gate_overwatch(ctx) == "reloop"
     assert "deleting the test" in ctx.facts["overwatch_review"]

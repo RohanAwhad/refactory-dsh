@@ -68,3 +68,74 @@ class TestCreateModeNoInlinedArtifacts:
                 f"CreateMode node {node_id!r} still inlines {var}; "
                 f"use a file-read instruction instead (issue #320)"
             )
+
+
+class TestRuntimeEvidenceSize:
+    """Large requirement inputs must be referenced by path, not inlined."""
+
+    def test_large_requirement_uses_path_reference(self):
+        """A requirement over 2048 chars should have path+sha256, not text."""
+        from refactory_dsh.authoring_evidence import requirements
+
+        class FakeCtx:
+            def __init__(self):
+                self.facts = {"brief": "build a widget"}
+                self._files = {
+                    "strategy.json": '{"chosen": "x", "why": "y", "score": "z", "considered": []}',
+                    "design.md": "# Design\n" + "x" * 3000,  # over threshold
+                }
+
+            @property
+            def workdir(self):
+                import tempfile
+                return Path(tempfile.gettempdir())
+
+            def exists(self, name):
+                return name in self._files
+
+            def read_text(self, name):
+                return self._files[name]
+
+        from pathlib import Path
+        ctx = FakeCtx()
+        reqs = requirements(ctx)
+        by_id = {r["id"]: r for r in reqs}
+        # brief is always inline
+        assert "text" in by_id["brief"]
+        # strategy is short (<2048) so inline
+        assert "text" in by_id["strategy"]
+        # design is large (>2048) so referenced by path
+        design_req = by_id["design"]
+        assert "path" in design_req
+        assert "sha256" in design_req
+        assert "text" not in design_req
+
+    def test_small_requirement_stays_inline(self):
+        """A requirement under 2048 chars should have text, not path."""
+        from refactory_dsh.authoring_evidence import requirements
+
+        class FakeCtx:
+            def __init__(self):
+                self.facts = {"brief": "build a widget"}
+                self._files = {
+                    "design.md": "# Small design\nJust a few lines.",
+                }
+
+            @property
+            def workdir(self):
+                import tempfile
+                return Path(tempfile.gettempdir())
+
+            def exists(self, name):
+                return name in self._files
+
+            def read_text(self, name):
+                return self._files[name]
+
+        from pathlib import Path
+        ctx = FakeCtx()
+        reqs = requirements(ctx)
+        by_id = {r["id"]: r for r in reqs}
+        design_req = by_id["design"]
+        assert "text" in design_req
+        assert "path" not in design_req
