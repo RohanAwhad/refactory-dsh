@@ -962,6 +962,18 @@ export function apply(ctx: Context, config: Config): void {
   const pendingQuestions = new WeakSet<Spine>()
 
   /**
+   * Result of a user-gate question.
+   * - `{ verdict, feedback }` — a recognized verdict, optionally with parsed feedback.
+   * - `{ status: 'replied', gate, text }` — free text that does not match any verdict label;
+   *   the gate stays open and the caller should surface the text and re-ask.
+   * - `undefined` — halted, paused, or state changed during the question.
+   */
+  type UserGateResult =
+    | { verdict: string; feedback: string }
+    | { status: 'replied'; gate: string; text: string }
+    | undefined
+
+  /**
    * The verdict a person gives at a `user` gate, asked by the runtime.
    *
    * Asked here rather than left to the model's own `ask_user_question`, because a
@@ -981,7 +993,7 @@ export function apply(ctx: Context, config: Config): void {
     view: NodeView,
     exec: ToolExec,
     workdir: string | undefined,
-  ): Promise<string | undefined> {
+  ): Promise<UserGateResult> {
     if (pendingQuestions.has(spine)) throw new Error('a user-gate question is already pending for this run')
     pendingQuestions.add(spine)
     try {
@@ -993,7 +1005,7 @@ export function apply(ctx: Context, config: Config): void {
 
   async function askCurrentReview(
     gate: string, spine: Spine, view: NodeView, exec: ToolExec, workdir: string | undefined,
-  ): Promise<string | undefined> {
+  ): Promise<UserGateResult> {
     const { gateCommand, commandEnv, dataCommand } = requireRun(exec)
     applyControls(spine, workdir, commandEnv, dataCommand)
     if (spine.isPaused() || spine.isHalted()) return undefined
@@ -1002,7 +1014,7 @@ export function apply(ctx: Context, config: Config): void {
     const prior = gateCommand !== '' && workdir !== undefined
       ? runtimeBridge(gateCommand, workdir, commandEnv, { ...request, action: 'begin' })
       : undefined
-    if (typeof prior?.verdict === 'string' && prior.verdict !== '') return prior.verdict
+    if (typeof prior?.verdict === 'string' && prior.verdict !== '') return { verdict: prior.verdict, feedback: '' }
     const stateBefore = JSON.stringify(spine.state())
     if (userQuestions === undefined) {
       const message = `gate ${gate} is answered by a person and this composition mounts no user-questions `
@@ -1048,20 +1060,54 @@ export function apply(ctx: Context, config: Config): void {
     } finally { questionLifetime.abort() }
     if (answer === undefined) return undefined
     const chosen = answer.answers.find(entry => entry.id === gate)
-    const verdict = (chosen?.selected[0] ?? chosen?.custom ?? '').trim()
-    if (verdict === '') {
+    const rawText = (chosen?.selected[0] ?? chosen?.custom ?? '').trim()
+    if (rawText === '') {
       throw new Error(`gate ${gate} was answered without a verdict`)
     }
     if (JSON.stringify(spine.state()) !== stateBefore) {
       throw new Error(`gate ${gate} changed while awaiting the answer; ask again`)
     }
-    if (labels.length > 0 && !labels.includes(verdict)) throw new Error(`gate ${gate} does not accept ${verdict}`)
+
+    // Detect whether this is a custom-text answer (user typed in "Other" box)
+    const isCustomText = (chosen?.selected.length === 0 || chosen?.selected[0] === undefined)
+      && typeof chosen?.custom === 'string' && chosen.custom.trim() !== ''
+
+    let verdict: string
+    let feedback = ''
+
+    if (!isCustomText) {
+      // Normal selection path — enforce label validation as before
+      if (labels.length > 0 && !labels.includes(rawText)) {
+        throw new Error(`gate ${gate} does not accept ${rawText}`)
+      }
+      verdict = rawText
+    } else if (labels.length === 0) {
+      // No labels constrain the gate; accept any text as the verdict
+      verdict = rawText
+    } else if (labels.includes(rawText)) {
+      // Custom text exactly matches an accepted label → route as that verdict
+      verdict = rawText
+    } else {
+      // Check for "label: feedback" pattern (longest label first to avoid prefix ambiguity)
+      const sortedLabels = [...labels].sort((a, b) => b.length - a.length)
+      const matchedLabel = sortedLabels.find(label =>
+        rawText.toLowerCase().startsWith(label.toLowerCase() + ':'),
+      )
+      if (matchedLabel === undefined) {
+        // Unrecognized free text → gate stays open, return non-error reply
+        return { status: 'replied', gate, text: rawText }
+      }
+      verdict = matchedLabel
+      feedback = rawText.slice(matchedLabel.length + 1).trim()
+    }
+
     if (gateCommand !== '' && workdir !== undefined) {
       runtimeBridge(gateCommand, workdir, commandEnv, {
         ...request, action: 'answer', review: prior?.review, verdict,
+        ...(feedback ? { feedback } : {}),
       })
     }
-    return verdict
+    return { verdict, feedback }
   }
 
   // The driving contract. The spine enforces "what is next" structurally (it
@@ -1309,8 +1355,8 @@ export function apply(ctx: Context, config: Config): void {
         if (args.verdict !== undefined) {
           throw new Error(`gate ${args.gate} is a user gate: calling it with a verdict would record an answer the person never gave. Call again with the gate id alone; the runtime asks them.`)
         }
-        const verdict = await askPerson(args.gate, spine, view, exec, workdir)
-        if (verdict === undefined) {
+        const result = await askPerson(args.gate, spine, view, exec, workdir)
+        if (result === undefined) {
           const status = spine.isHalted() ? 'halted' : spine.isPaused() ? 'paused' : 'ready'
           recordStatus(spine, workdir, status)
           const state = spine.state()
@@ -1318,8 +1364,19 @@ export function apply(ctx: Context, config: Config): void {
             nodes: state.cursor, completed: state.completed,
             ...(state.halted === undefined ? {} : { halted: state.halted }) })
         }
-        spine.verdict(args.gate, verdict, args.feedback ?? '')
-        return json({ status: 'routed', gate: args.gate, verdict, answered_by: 'user' })
+        if ('status' in result) {
+          // Unrecognized free text: gate stays open, return non-error JSON to the CEO
+          return json({
+            status: 'replied', gate: args.gate, text: result.text,
+            note: 'The user typed free text that does not match any accepted verdict. The gate remains due. Respond to the user and call this tool again to re-ask.',
+          })
+        }
+        // Normal verdict path
+        spine.verdict(args.gate, result.verdict, result.feedback || args.feedback || '')
+        return json({
+          status: 'routed', gate: args.gate, verdict: result.verdict, answered_by: 'user',
+          ...(result.feedback ? { feedback: result.feedback } : {}),
+        })
       }
       if (args.verdict === undefined) {
         const offered = (view.verdicts ?? []).join(', ')
