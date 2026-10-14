@@ -36,10 +36,15 @@ function ids(result: unknown): string[] {
   return nodes.map(node => node.id)
 }
 
-describe('user gate free-text answers', () => {
-  type Asked = { question: string; detail?: string; options?: Array<{ label: string }> }
+/** One question as the user-questions channel received it. */
+interface AskedQuestion {
+  question: string
+  detail?: string
+  options?: Array<{ label: string }>
+}
 
-  function setup(personAnswers: Array<{ selected: string[]; custom: string }>, asked: Asked[] = []) {
+describe('user gate free-text answers', () => {
+  function setup(personAnswers: Array<{ selected: string[]; custom: string }>, asked: AskedQuestion[] = []) {
     const ctx = new Context()
     const pluginReady = (async () => {
       await ctx.plugin(SystemPrompt)
@@ -107,7 +112,7 @@ describe('user gate free-text answers', () => {
   })
 
   it('confirms "stop" as halt before stopping the run', async () => {
-    const asked: Asked[] = []
+    const asked: AskedQuestion[] = []
     const { ctx, pluginReady } = setup([
       { selected: [], custom: 'stop' },
       { selected: ['halt'], custom: '' },
@@ -132,7 +137,7 @@ describe('user gate free-text answers', () => {
   })
 
   it('offers a remark back as reloop feedback, routed only once confirmed', async () => {
-    const asked: Asked[] = []
+    const asked: AskedQuestion[] = []
     const { ctx, pluginReady } = setup([
       { selected: [], custom: 'also add a --keep-last flag' },
       { selected: ['reloop'], custom: '' },
@@ -159,7 +164,7 @@ describe('user gate free-text answers', () => {
   })
 
   it('returns to the original question on "go back"', async () => {
-    const asked: Asked[] = []
+    const asked: AskedQuestion[] = []
     const { ctx, pluginReady } = setup([
       { selected: [], custom: 'stop' },
       { selected: ['go back'], custom: '' },
@@ -172,7 +177,7 @@ describe('user gate free-text answers', () => {
   })
 
   it('hands a question straight to the CEO without a follow-up', async () => {
-    const asked: Asked[] = []
+    const asked: AskedQuestion[] = []
     const { ctx, pluginReady } = setup([{ selected: [], custom: 'what does section 3 mean?' }], asked)
     await pluginReady
     await advanceToGate(ctx)

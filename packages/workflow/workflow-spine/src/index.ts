@@ -28,7 +28,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { UserQuestionService } from '@deepseek-ai/dsh-user-questions'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
-import { HALT, Spine, validateGraph } from './spine.ts'
+import { HALT, PROCEED, RELOOP, Spine, validateGraph } from './spine.ts'
 import type { NodeView, SpineNext } from './spine.ts'
 import { commandOf, isDeterministic, runDataCommand, runDeterministic } from './execute.ts'
 import type { CommandFailure } from './execute.ts'
@@ -209,6 +209,97 @@ const STATUS_DETAIL = 2_000
 function gateDetail(reads: string[], workdir: string | undefined): string {
   const paths = workdir === undefined ? reads : reads.map(file => resolve(workdir, file))
   return `Gate reads files: ${paths.join(', ')}`
+}
+
+/** One question put to the person at a user gate. */
+interface GateQuestion {
+  id: string
+  question: string
+  detail?: string
+  options?: GateOption[]
+}
+
+/** One choice offered with a gate question. */
+interface GateOption {
+  label: string
+  description?: string
+}
+
+/** The follow-up choice that shows the gate's own question again. */
+const GATE_BACK = 'go back'
+
+/** The follow-up choice that passes the person's words to the CEO as conversation. */
+const GATE_TALK = 'ask the CEO'
+
+/** How many follow-ups a plain-language gate answer gets before it goes to the CEO. */
+const GATE_CONFIRM_ROUNDS = 3
+
+/** Plain words read as "stop the run", after lowercasing and trimming end punctuation. */
+const HALT_WORDS = new Set(['stop', 'cancel', 'abort', 'quit', 'end', 'stop the run', 'stop it'])
+
+/** Plain words read as approval, after lowercasing and trimming end punctuation. */
+const PROCEED_WORDS = new Set(['yes', 'y', 'ok', 'okay', 'approve', 'approved', 'lgtm', 'looks good', 'go',
+  'go ahead', 'build it', 'ship it', 'sounds good', 'yes please', 'continue'])
+
+/**
+ * How a typed gate answer reads: a verdict to route, an outcome to suggest and
+ * have the person confirm, or talk for the CEO to answer.
+ */
+type GateReading =
+  | { kind: 'verdict'; verdict: string; feedback: string }
+  | { kind: 'suggest'; verdict: string; feedback: string }
+  | { kind: 'talk' }
+
+/**
+ * Read a typed gate answer. An exact outcome, or `outcome: feedback`, is a verdict.
+ * Plain words for stopping or approving, and any other remark when the gate can
+ * reloop, are suggestions the person confirms. A question is talk, for the CEO.
+ * @param text - what the person typed.
+ * @param labels - the outcomes the gate offers.
+ * @returns how the answer reads.
+ */
+function readGateAnswer(text: string, labels: string[]): GateReading {
+  if (labels.length === 0) return { kind: 'verdict', verdict: text, feedback: '' }
+  const lower = text.toLowerCase()
+  const exact = labels.find(label => label.toLowerCase() === lower)
+  if (exact !== undefined) return { kind: 'verdict', verdict: exact, feedback: '' }
+  // Longest label first, so one label that prefixes another cannot claim its answers.
+  const prefixed = [...labels].sort((a, b) => b.length - a.length)
+    .find(label => lower.startsWith(label.toLowerCase() + ':'))
+  if (prefixed !== undefined) return { kind: 'verdict', verdict: prefixed, feedback: text.slice(prefixed.length + 1).trim() }
+  const words = lower.replace(/[.!,]+$/u, '').trim()
+  if (HALT_WORDS.has(words) && labels.includes(HALT)) return { kind: 'suggest', verdict: HALT, feedback: '' }
+  if (PROCEED_WORDS.has(words) && labels.includes(PROCEED)) return { kind: 'suggest', verdict: PROCEED, feedback: '' }
+  if (text.endsWith('?')) return { kind: 'talk' }
+  if (labels.includes(RELOOP)) return { kind: 'suggest', verdict: RELOOP, feedback: text }
+  return { kind: 'talk' }
+}
+
+/**
+ * The follow-up that confirms how a plain-language gate answer was read.
+ * @param gate - the gate node id, which the answer is keyed by.
+ * @param typed - what the person typed.
+ * @param reading - the suggested outcome and the feedback it would carry.
+ * @param outcomes - the gate's own outcomes as offered.
+ * @returns the suggested outcome first, the other outcomes, then a way to talk to the CEO and a way back.
+ */
+function confirmQuestion(
+  gate: string, typed: string, reading: { verdict: string; feedback: string }, outcomes: GateOption[],
+): GateQuestion {
+  const question = reading.verdict === HALT ? `You answered "${typed}". Stop the run here?`
+    : reading.verdict === RELOOP ? 'Send this back to be redone, with your note as feedback?'
+      : `You answered "${typed}". Choose ${reading.verdict} to continue?`
+  return {
+    id: gate,
+    question,
+    ...(reading.feedback ? { detail: `Your note: ${reading.feedback}` } : {}),
+    options: [
+      ...outcomes.filter(option => option.label === reading.verdict),
+      ...outcomes.filter(option => option.label !== reading.verdict),
+      { label: GATE_TALK, description: 'Not an answer: pass your words to the CEO to reply in chat.' },
+      { label: GATE_BACK, description: 'Show the original question again.' },
+    ],
+  }
 }
 
 /** One model-visible step, rendered as compact JSON text. */
@@ -990,71 +1081,6 @@ export function apply(ctx: Context, config: Config): void {
 
   const pendingQuestions = new WeakSet<Spine>()
 
-  /** The follow-up option that returns to the gate's own question. */
-  const GATE_BACK_LABEL = 'go back'
-  /** The follow-up option that hands the person's words to the CEO as conversation. */
-  const GATE_TALK_LABEL = 'ask the CEO'
-  /** How many follow-ups a plain-language answer gets before it is handed to the CEO. */
-  const GATE_CONFIRM_ROUNDS = 3
-  /** Plain words that mean "stop the run" or "approve", matched after lowercasing and trimming punctuation. */
-  const HALT_WORDS = new Set(['stop', 'cancel', 'abort', 'quit', 'end', 'stop the run', 'stop it'])
-  const PROCEED_WORDS = new Set(['yes', 'y', 'ok', 'okay', 'approve', 'approved', 'lgtm', 'looks good', 'go', 'go ahead',
-    'build it', 'ship it', 'sounds good', 'yes please', 'continue'])
-
-  type GateReading =
-    | { kind: 'verdict'; verdict: string; feedback: string }
-    | { kind: 'suggest'; verdict: string; feedback: string }
-    | { kind: 'talk' }
-
-  /**
-   * Read a typed gate answer. An exact outcome, or `outcome: feedback`, is a verdict.
-   * Plain words for stopping or approving, and any other remark when the gate can
-   * reloop, are suggestions the person confirms. A question is talk, for the CEO.
-   * @param text - what the person typed.
-   * @param labels - the outcomes the gate offers.
-   * @returns how the answer reads.
-   */
-  function interpretGateAnswer(text: string, labels: string[]): GateReading {
-    if (labels.length === 0) return { kind: 'verdict', verdict: text, feedback: '' }
-    const lower = text.toLowerCase()
-    const exact = labels.find(label => label.toLowerCase() === lower)
-    if (exact !== undefined) return { kind: 'verdict', verdict: exact, feedback: '' }
-    const prefixed = [...labels].sort((a, b) => b.length - a.length)
-      .find(label => lower.startsWith(label.toLowerCase() + ':'))
-    if (prefixed !== undefined) return { kind: 'verdict', verdict: prefixed, feedback: text.slice(prefixed.length + 1).trim() }
-    const words = lower.replace(/[.!,]+$/u, '').trim()
-    if (HALT_WORDS.has(words) && labels.includes(HALT_LABEL)) return { kind: 'suggest', verdict: HALT_LABEL, feedback: '' }
-    if (PROCEED_WORDS.has(words) && labels.includes('proceed')) return { kind: 'suggest', verdict: 'proceed', feedback: '' }
-    if (text.endsWith('?')) return { kind: 'talk' }
-    if (labels.includes('reloop')) return { kind: 'suggest', verdict: 'reloop', feedback: text }
-    return { kind: 'talk' }
-  }
-
-  /**
-   * The follow-up that confirms how a plain-language answer was read: the suggested
-   * outcome first, the gate's other outcomes, and a way back to the original question.
-   */
-  function confirmQuestion(
-    gate: string, typed: string, reading: { verdict: string; feedback: string },
-    outcomes: Array<{ label: string; description?: string }>,
-  ): { id: string; question: string; detail?: string; options: Array<{ label: string; description?: string }> } {
-    const question = reading.verdict === HALT_LABEL ? `You answered "${typed}". Stop the run here?`
-      : reading.verdict === 'reloop' ? 'Send this back to be redone, with your note as feedback?'
-        : `You answered "${typed}". Choose ${reading.verdict} to continue?`
-    const suggested = outcomes.find(option => option.label === reading.verdict)!
-    return {
-      id: gate,
-      question,
-      ...(reading.feedback ? { detail: `Your note: ${reading.feedback}` } : {}),
-      options: [
-        suggested,
-        ...outcomes.filter(option => option.label !== reading.verdict),
-        { label: GATE_TALK_LABEL, description: 'Not an answer: pass your words to the CEO to reply in chat.' },
-        { label: GATE_BACK_LABEL, description: 'Show the original question again.' },
-      ],
-    }
-  }
-
   /**
    * Result of a user-gate question.
    * - `{ verdict, feedback }` — a recognized verdict, optionally with parsed feedback.
@@ -1121,24 +1147,24 @@ export function apply(ctx: Context, config: Config): void {
     }
     const reads = view.reads ?? []
     const shown = reads.length > 0 ? gateDetail(reads, workdir) : undefined
-    type Asked = { id: string; question: string; detail?: string; options?: Array<{ label: string; description?: string }> }
-    const outcomeOptions = labels.map(verdict => verdict === HALT_LABEL && !request.labels.includes(HALT_LABEL)
+    const questions = userQuestions
+    const outcomes: GateOption[] = labels.map(verdict => verdict === HALT && !request.labels.includes(HALT)
       ? { label: verdict, description: 'Stop the run here.' } : { label: verdict })
-    const gateQuestion: Asked = {
+    const gateQuestion: GateQuestion = {
       id: gate,
       question: view.gate_prompt || `Gate ${gate}`,
       ...(shown === undefined ? {} : { detail: shown }),
-      ...(labels.length === 0 ? {} : { options: outcomeOptions }),
+      ...(labels.length === 0 ? {} : { options: outcomes }),
     }
 
     /** Put one question to the person; undefined when a graph control interrupted it. */
-    const pose = async (asked: Asked): Promise<{ selected: string[]; custom?: string } | undefined> => {
+    const pose = async (asked: GateQuestion): Promise<{ selected: string[]; custom?: string } | undefined> => {
       let answer
       const questionLifetime = new AbortController()
       const questionSignal = exec.signal === undefined ? questionLifetime.signal : AbortSignal.any([exec.signal, questionLifetime.signal])
       try {
         recordStatus(spine, workdir, 'waiting_user')
-        const nativeAnswer = userQuestions!.ask({
+        const nativeAnswer = questions.ask({
           questions: [{ header: 'Workflow gate', ...asked }],
           ...(exec.agent === undefined ? {} : { agent: exec.agent }),
           signal: questionSignal,
@@ -1175,21 +1201,21 @@ export function apply(ctx: Context, config: Config): void {
       return chosen
     }
 
+    // A plain-language answer is read, then confirmed by the person in a follow-up
+    // question: the recorded verdict is always an outcome they chose.
     let chosen = await pose(gateQuestion)
-    let verdict: string | undefined
+    let verdict = ''
     let feedback = ''
-    // A plain-language answer is interpreted, then confirmed by the person in a
-    // follow-up question: the recorded verdict is always an outcome they chose.
-    for (let round = 0; verdict === undefined; round += 1) {
+    for (let round = 0; ; round += 1) {
       if (chosen === undefined) return undefined
-      const typed = (chosen.selected[0] === undefined) ? (chosen.custom ?? '').trim() : undefined
-      if (typed === undefined) {
-        const picked = chosen.selected[0]!.trim()
-        if (labels.length > 0 && !labels.includes(picked)) throw new Error(`gate ${gate} does not accept ${picked}`)
-        verdict = picked
+      const [picked] = chosen.selected
+      if (picked !== undefined) {
+        if (labels.length > 0 && !labels.includes(picked.trim())) throw new Error(`gate ${gate} does not accept ${picked}`)
+        verdict = picked.trim()
         break
       }
-      const reading = interpretGateAnswer(typed, labels)
+      const typed = (chosen.custom ?? '').trim()
+      const reading = readGateAnswer(typed, labels)
       if (reading.kind === 'verdict') {
         verdict = reading.verdict
         feedback = reading.feedback
@@ -1200,20 +1226,21 @@ export function apply(ctx: Context, config: Config): void {
         recordStatus(spine, workdir, 'ready')
         return { status: 'replied', gate, text: typed }
       }
-      const confirm = await pose(confirmQuestion(gate, typed, reading, outcomeOptions))
-      if (confirm?.selected[0] === GATE_BACK_LABEL) { chosen = await pose(gateQuestion); continue }
-      if (confirm?.selected[0] === GATE_TALK_LABEL) {
+      const confirm = await pose(confirmQuestion(gate, typed, reading, outcomes))
+      const [confirmed] = confirm?.selected ?? []
+      if (confirmed === GATE_BACK) {
+        chosen = await pose(gateQuestion)
+      } else if (confirmed === GATE_TALK) {
         recordStatus(spine, workdir, 'ready')
         return { status: 'replied', gate, text: typed }
-      }
-      if (confirm !== undefined && confirm.selected[0] !== undefined) {
-        const picked = confirm.selected[0].trim()
-        if (!labels.includes(picked)) throw new Error(`gate ${gate} does not accept ${picked}`)
-        verdict = picked
-        feedback = picked === reading.verdict ? reading.feedback : ''
+      } else if (confirmed !== undefined) {
+        if (!labels.includes(confirmed.trim())) throw new Error(`gate ${gate} does not accept ${confirmed}`)
+        verdict = confirmed.trim()
+        feedback = verdict === reading.verdict ? reading.feedback : ''
         break
+      } else {
+        chosen = confirm
       }
-      chosen = confirm
     }
 
     if (gateCommand !== '' && workdir !== undefined) {
