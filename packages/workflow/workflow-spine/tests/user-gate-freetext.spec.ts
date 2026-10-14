@@ -37,7 +37,9 @@ function ids(result: unknown): string[] {
 }
 
 describe('user gate free-text answers', () => {
-  function setup(personAnswers: Array<{ selected: string[]; custom: string }>) {
+  type Asked = { question: string; detail?: string; options?: Array<{ label: string }> }
+
+  function setup(personAnswers: Array<{ selected: string[]; custom: string }>, asked: Asked[] = []) {
     const ctx = new Context()
     const pluginReady = (async () => {
       await ctx.plugin(SystemPrompt)
@@ -45,6 +47,7 @@ describe('user gate free-text answers', () => {
       await ctx.plugin(UserQuestionService)
       ctx.on('user-questions/request', request => Promise.resolve({
         answers: request.questions.map(question => {
+          asked.push(question)
           const answer = personAnswers.shift()!
           return { id: question.id, selected: answer.selected, custom: answer.custom }
         }),
@@ -89,9 +92,10 @@ describe('user gate free-text answers', () => {
     })
   })
 
-  it('returns replied for unrecognized free text, gate stays due', async () => {
+  it('returns replied when the person passes their words to the CEO, gate stays due', async () => {
     const { ctx, pluginReady } = setup([
       { selected: [], custom: 'show me the strategy' },
+      { selected: ['ask the CEO'], custom: '' },
     ])
     await pluginReady
     await advanceToGate(ctx)
@@ -100,5 +104,80 @@ describe('user gate free-text answers', () => {
     expect(result).toMatchObject({ status: 'replied', gate: 'gate', text: 'show me the strategy' })
     const state = await run(ctx, 'wf_state', {}) as { cursor: string[] }
     expect(state.cursor).toContain('gate')
+  })
+
+  it('confirms "stop" as halt before stopping the run', async () => {
+    const asked: Asked[] = []
+    const { ctx, pluginReady } = setup([
+      { selected: [], custom: 'stop' },
+      { selected: ['halt'], custom: '' },
+    ], asked)
+    await pluginReady
+    await advanceToGate(ctx)
+    expect(await run(ctx, 'wf_verdict', { gate: 'gate' }))
+      .toMatchObject({ status: 'routed', verdict: 'halt', answered_by: 'user', halted: true })
+    expect(asked[1]!.question).toBe('You answered "stop". Stop the run here?')
+    expect(asked[1]!.options!.map(option => option.label)).toEqual(['halt', 'proceed', 'reloop', 'ask the CEO', 'go back'])
+  })
+
+  it('confirms plain approval as proceed', async () => {
+    const { ctx, pluginReady } = setup([
+      { selected: [], custom: 'Looks good!' },
+      { selected: ['proceed'], custom: '' },
+    ])
+    await pluginReady
+    await advanceToGate(ctx)
+    expect(await run(ctx, 'wf_verdict', { gate: 'gate' }))
+      .toMatchObject({ status: 'routed', verdict: 'proceed', answered_by: 'user' })
+  })
+
+  it('offers a remark back as reloop feedback, routed only once confirmed', async () => {
+    const asked: Asked[] = []
+    const { ctx, pluginReady } = setup([
+      { selected: [], custom: 'also add a --keep-last flag' },
+      { selected: ['reloop'], custom: '' },
+    ], asked)
+    await pluginReady
+    await advanceToGate(ctx)
+    expect(await run(ctx, 'wf_verdict', { gate: 'gate' })).toMatchObject({
+      status: 'routed', verdict: 'reloop', answered_by: 'user', feedback: 'also add a --keep-last flag',
+    })
+    expect(asked[1]!.detail).toBe('Your note: also add a --keep-last flag')
+    expect(asked[1]!.options![0]!.label).toBe('reloop')
+  })
+
+  it('does not carry the note when the person picks a different outcome than suggested', async () => {
+    const { ctx, pluginReady } = setup([
+      { selected: [], custom: 'also add a --keep-last flag' },
+      { selected: ['proceed'], custom: '' },
+    ])
+    await pluginReady
+    await advanceToGate(ctx)
+    const routed = await run(ctx, 'wf_verdict', { gate: 'gate' }) as Record<string, unknown>
+    expect(routed).toMatchObject({ status: 'routed', verdict: 'proceed' })
+    expect(routed.feedback).toBeUndefined()
+  })
+
+  it('returns to the original question on "go back"', async () => {
+    const asked: Asked[] = []
+    const { ctx, pluginReady } = setup([
+      { selected: [], custom: 'stop' },
+      { selected: ['go back'], custom: '' },
+      { selected: ['proceed'], custom: '' },
+    ], asked)
+    await pluginReady
+    await advanceToGate(ctx)
+    expect(await run(ctx, 'wf_verdict', { gate: 'gate' })).toMatchObject({ status: 'routed', verdict: 'proceed' })
+    expect(asked.map(question => question.question)).toEqual([asked[0]!.question, 'You answered "stop". Stop the run here?', asked[0]!.question])
+  })
+
+  it('hands a question straight to the CEO without a follow-up', async () => {
+    const asked: Asked[] = []
+    const { ctx, pluginReady } = setup([{ selected: [], custom: 'what does section 3 mean?' }], asked)
+    await pluginReady
+    await advanceToGate(ctx)
+    expect(await run(ctx, 'wf_verdict', { gate: 'gate' }))
+      .toMatchObject({ status: 'replied', text: 'what does section 3 mean?' })
+    expect(asked).toHaveLength(1)
   })
 })

@@ -202,7 +202,7 @@ describe('workflow-spine real composition', () => {
     const tmp = mkdtempSync(join(tmpdir(), 'spine-gate-replied-'))
     try {
       const { ctx } = await gateRun(graphWithReads, tmp,
-        question => Promise.resolve({ answers: [{ id: question.id, selected: [], custom: 'stop' }] }))
+        question => Promise.resolve({ answers: [{ id: question.id, selected: [], custom: 'what happens next?' }] }))
       const replied = await run(ctx, 'wf_verdict', { gate: 'gate' }) as { status: string; note: string }
       expect(replied.status).toBe('replied')
       expect(replied.note).toMatch(/asked correctly/)

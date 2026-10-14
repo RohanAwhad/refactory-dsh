@@ -990,6 +990,71 @@ export function apply(ctx: Context, config: Config): void {
 
   const pendingQuestions = new WeakSet<Spine>()
 
+  /** The follow-up option that returns to the gate's own question. */
+  const GATE_BACK_LABEL = 'go back'
+  /** The follow-up option that hands the person's words to the CEO as conversation. */
+  const GATE_TALK_LABEL = 'ask the CEO'
+  /** How many follow-ups a plain-language answer gets before it is handed to the CEO. */
+  const GATE_CONFIRM_ROUNDS = 3
+  /** Plain words that mean "stop the run" or "approve", matched after lowercasing and trimming punctuation. */
+  const HALT_WORDS = new Set(['stop', 'cancel', 'abort', 'quit', 'end', 'stop the run', 'stop it'])
+  const PROCEED_WORDS = new Set(['yes', 'y', 'ok', 'okay', 'approve', 'approved', 'lgtm', 'looks good', 'go', 'go ahead',
+    'build it', 'ship it', 'sounds good', 'yes please', 'continue'])
+
+  type GateReading =
+    | { kind: 'verdict'; verdict: string; feedback: string }
+    | { kind: 'suggest'; verdict: string; feedback: string }
+    | { kind: 'talk' }
+
+  /**
+   * Read a typed gate answer. An exact outcome, or `outcome: feedback`, is a verdict.
+   * Plain words for stopping or approving, and any other remark when the gate can
+   * reloop, are suggestions the person confirms. A question is talk, for the CEO.
+   * @param text - what the person typed.
+   * @param labels - the outcomes the gate offers.
+   * @returns how the answer reads.
+   */
+  function interpretGateAnswer(text: string, labels: string[]): GateReading {
+    if (labels.length === 0) return { kind: 'verdict', verdict: text, feedback: '' }
+    const lower = text.toLowerCase()
+    const exact = labels.find(label => label.toLowerCase() === lower)
+    if (exact !== undefined) return { kind: 'verdict', verdict: exact, feedback: '' }
+    const prefixed = [...labels].sort((a, b) => b.length - a.length)
+      .find(label => lower.startsWith(label.toLowerCase() + ':'))
+    if (prefixed !== undefined) return { kind: 'verdict', verdict: prefixed, feedback: text.slice(prefixed.length + 1).trim() }
+    const words = lower.replace(/[.!,]+$/u, '').trim()
+    if (HALT_WORDS.has(words) && labels.includes(HALT_LABEL)) return { kind: 'suggest', verdict: HALT_LABEL, feedback: '' }
+    if (PROCEED_WORDS.has(words) && labels.includes('proceed')) return { kind: 'suggest', verdict: 'proceed', feedback: '' }
+    if (text.endsWith('?')) return { kind: 'talk' }
+    if (labels.includes('reloop')) return { kind: 'suggest', verdict: 'reloop', feedback: text }
+    return { kind: 'talk' }
+  }
+
+  /**
+   * The follow-up that confirms how a plain-language answer was read: the suggested
+   * outcome first, the gate's other outcomes, and a way back to the original question.
+   */
+  function confirmQuestion(
+    gate: string, typed: string, reading: { verdict: string; feedback: string },
+    outcomes: Array<{ label: string; description?: string }>,
+  ): { id: string; question: string; detail?: string; options: Array<{ label: string; description?: string }> } {
+    const question = reading.verdict === HALT_LABEL ? `You answered "${typed}". Stop the run here?`
+      : reading.verdict === 'reloop' ? 'Send this back to be redone, with your note as feedback?'
+        : `You answered "${typed}". Choose ${reading.verdict} to continue?`
+    const suggested = outcomes.find(option => option.label === reading.verdict)!
+    return {
+      id: gate,
+      question,
+      ...(reading.feedback ? { detail: `Your note: ${reading.feedback}` } : {}),
+      options: [
+        suggested,
+        ...outcomes.filter(option => option.label !== reading.verdict),
+        { label: GATE_TALK_LABEL, description: 'Not an answer: pass your words to the CEO to reply in chat.' },
+        { label: GATE_BACK_LABEL, description: 'Show the original question again.' },
+      ],
+    }
+  }
+
   /**
    * Result of a user-gate question.
    * - `{ verdict, feedback }` — a recognized verdict, optionally with parsed feedback.
@@ -1056,89 +1121,99 @@ export function apply(ctx: Context, config: Config): void {
     }
     const reads = view.reads ?? []
     const shown = reads.length > 0 ? gateDetail(reads, workdir) : undefined
-    let answer
-    const questionLifetime = new AbortController()
-    const questionSignal = exec.signal === undefined ? questionLifetime.signal : AbortSignal.any([exec.signal, questionLifetime.signal])
-    try {
-      recordStatus(spine, workdir, 'waiting_user')
-      const nativeAnswer = userQuestions.ask({
-        questions: [{
-          id: gate,
-          header: 'Workflow gate',
-          question: view.gate_prompt || `Gate ${gate}`,
-          ...(shown === undefined ? {} : { detail: shown }),
-          ...(labels.length === 0 ? {} : { options: labels.map(verdict => verdict === HALT && !request.labels.includes(HALT)
-            ? { label: verdict, description: 'Stop the run here.' } : { label: verdict }) }),
-        }],
-        ...(exec.agent === undefined ? {} : { agent: exec.agent }),
-        signal: questionSignal,
-      })
-      const panelAnswer = async (): Promise<Awaited<typeof nativeAnswer> | undefined> => {
-        if (workdir === undefined) return new Promise(() => {})
-        while (!questionSignal.aborted) {
-          await wait(500, undefined, { signal: questionSignal })
-          applyControls(spine, workdir, commandEnv, dataCommand)
-          if (spine.isPaused() || spine.isHalted() || JSON.stringify(spine.state()) !== stateBefore) return undefined
-          if (gateCommand === '') continue
-          const polled = runtimeBridge(gateCommand, workdir, commandEnv, { ...request, action: 'poll', review: prior?.review })
-          if (typeof polled.verdict === 'string' && polled.verdict !== '') {
-            return { answers: [{ id: gate, selected: [polled.verdict], custom: '' }] } as Awaited<typeof nativeAnswer>
+    type Asked = { id: string; question: string; detail?: string; options?: Array<{ label: string; description?: string }> }
+    const outcomeOptions = labels.map(verdict => verdict === HALT_LABEL && !request.labels.includes(HALT_LABEL)
+      ? { label: verdict, description: 'Stop the run here.' } : { label: verdict })
+    const gateQuestion: Asked = {
+      id: gate,
+      question: view.gate_prompt || `Gate ${gate}`,
+      ...(shown === undefined ? {} : { detail: shown }),
+      ...(labels.length === 0 ? {} : { options: outcomeOptions }),
+    }
+
+    /** Put one question to the person; undefined when a graph control interrupted it. */
+    const pose = async (asked: Asked): Promise<{ selected: string[]; custom?: string } | undefined> => {
+      let answer
+      const questionLifetime = new AbortController()
+      const questionSignal = exec.signal === undefined ? questionLifetime.signal : AbortSignal.any([exec.signal, questionLifetime.signal])
+      try {
+        recordStatus(spine, workdir, 'waiting_user')
+        const nativeAnswer = userQuestions!.ask({
+          questions: [{ header: 'Workflow gate', ...asked }],
+          ...(exec.agent === undefined ? {} : { agent: exec.agent }),
+          signal: questionSignal,
+        })
+        const panelAnswer = async (): Promise<Awaited<typeof nativeAnswer> | undefined> => {
+          if (workdir === undefined) return new Promise(() => {})
+          while (!questionSignal.aborted) {
+            await wait(500, undefined, { signal: questionSignal })
+            applyControls(spine, workdir, commandEnv, dataCommand)
+            if (spine.isPaused() || spine.isHalted() || JSON.stringify(spine.state()) !== stateBefore) return undefined
+            if (gateCommand === '') continue
+            const polled = runtimeBridge(gateCommand, workdir, commandEnv, { ...request, action: 'poll', review: prior?.review })
+            if (typeof polled.verdict === 'string' && polled.verdict !== '') {
+              return { answers: [{ id: gate, selected: [polled.verdict], custom: '' }] } as Awaited<typeof nativeAnswer>
+            }
           }
+          throw new Error('question cancelled')
         }
-        throw new Error('question cancelled')
+        answer = await Promise.race([nativeAnswer, panelAnswer()])
+      } catch (error: unknown) {
+        const detail = error instanceof Error ? error.message : String(error)
+        const message = `gate ${gate} is answered by a person and could not be asked: ${detail}`
+        recordStatus(spine, workdir, 'refused', message)
+        throw new Error(message)
+      } finally { questionLifetime.abort() }
+      if (answer === undefined) return undefined
+      if (JSON.stringify(spine.state()) !== stateBefore) {
+        throw new Error(`gate ${gate} changed while awaiting the answer; ask again`)
       }
-      answer = await Promise.race([nativeAnswer, panelAnswer()])
-    } catch (error: unknown) {
-      const detail = error instanceof Error ? error.message : String(error)
-      const message = `gate ${gate} is answered by a person and could not be asked: ${detail}`
-      recordStatus(spine, workdir, 'refused', message)
-      throw new Error(message)
-    } finally { questionLifetime.abort() }
-    if (answer === undefined) return undefined
-    const chosen = answer.answers.find(entry => entry.id === gate)
-    const rawText = (chosen?.selected[0] ?? chosen?.custom ?? '').trim()
-    if (rawText === '') {
-      throw new Error(`gate ${gate} was answered without a verdict`)
-    }
-    if (JSON.stringify(spine.state()) !== stateBefore) {
-      throw new Error(`gate ${gate} changed while awaiting the answer; ask again`)
+      const chosen = answer.answers.find(entry => entry.id === gate)
+      if ((chosen?.selected[0] ?? chosen?.custom ?? '').trim() === '') {
+        throw new Error(`gate ${gate} was answered without a verdict`)
+      }
+      return chosen
     }
 
-    // Detect whether this is a custom-text answer (user typed in "Other" box)
-    const isCustomText = (chosen?.selected.length === 0 || chosen?.selected[0] === undefined)
-      && typeof chosen?.custom === 'string' && chosen.custom.trim() !== ''
-
-    let verdict: string
+    let chosen = await pose(gateQuestion)
+    let verdict: string | undefined
     let feedback = ''
-
-    if (!isCustomText) {
-      // Normal selection path — enforce label validation as before
-      if (labels.length > 0 && !labels.includes(rawText)) {
-        throw new Error(`gate ${gate} does not accept ${rawText}`)
+    // A plain-language answer is interpreted, then confirmed by the person in a
+    // follow-up question: the recorded verdict is always an outcome they chose.
+    for (let round = 0; verdict === undefined; round += 1) {
+      if (chosen === undefined) return undefined
+      const typed = (chosen.selected[0] === undefined) ? (chosen.custom ?? '').trim() : undefined
+      if (typed === undefined) {
+        const picked = chosen.selected[0]!.trim()
+        if (labels.length > 0 && !labels.includes(picked)) throw new Error(`gate ${gate} does not accept ${picked}`)
+        verdict = picked
+        break
       }
-      verdict = rawText
-    } else if (labels.length === 0) {
-      // No labels constrain the gate; accept any text as the verdict
-      verdict = rawText
-    } else {
-      // Case-insensitive exact match, then "label: feedback" prefix match
-      const exactMatch = labels.find(l => l.toLowerCase() === rawText.toLowerCase())
-      if (exactMatch !== undefined) {
-        verdict = exactMatch
-      } else {
-        // Check for "label: feedback" pattern (longest label first to avoid prefix ambiguity)
-        const sortedLabels = [...labels].sort((a, b) => b.length - a.length)
-        const matchedLabel = sortedLabels.find(label =>
-          rawText.toLowerCase().startsWith(label.toLowerCase() + ':'),
-        )
-        if (matchedLabel === undefined) {
-          // Unrecognized free text → gate stays open, return non-error reply
-          recordStatus(spine, workdir, 'ready')
-          return { status: 'replied', gate, text: rawText }
-        }
-        verdict = matchedLabel
-        feedback = rawText.slice(matchedLabel.length + 1).trim()
+      const reading = interpretGateAnswer(typed, labels)
+      if (reading.kind === 'verdict') {
+        verdict = reading.verdict
+        feedback = reading.feedback
+        break
       }
+      if (reading.kind === 'talk' || round >= GATE_CONFIRM_ROUNDS) {
+        // A question or remark for the CEO: the gate stays open.
+        recordStatus(spine, workdir, 'ready')
+        return { status: 'replied', gate, text: typed }
+      }
+      const confirm = await pose(confirmQuestion(gate, typed, reading, outcomeOptions))
+      if (confirm?.selected[0] === GATE_BACK_LABEL) { chosen = await pose(gateQuestion); continue }
+      if (confirm?.selected[0] === GATE_TALK_LABEL) {
+        recordStatus(spine, workdir, 'ready')
+        return { status: 'replied', gate, text: typed }
+      }
+      if (confirm !== undefined && confirm.selected[0] !== undefined) {
+        const picked = confirm.selected[0].trim()
+        if (!labels.includes(picked)) throw new Error(`gate ${gate} does not accept ${picked}`)
+        verdict = picked
+        feedback = picked === reading.verdict ? reading.feedback : ''
+        break
+      }
+      chosen = confirm
     }
 
     if (gateCommand !== '' && workdir !== undefined) {
