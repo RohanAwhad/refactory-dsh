@@ -38,12 +38,23 @@ def main(argv=None):
         "--basetemp=" + str(evidence / "runs")]
     started = time.monotonic()
     timeout = False
+    prechecks = []
+    environment = {**os.environ, "PYTHONPATH": str(root / "refactory"), "PYTHONDONTWRITEBYTECODE": "1"}
     with (evidence / "pytest.log").open("w") as output:
         try:
-            completed = subprocess.run(command, cwd=root, stdout=output, stderr=subprocess.STDOUT,
-                env={**os.environ, "PYTHONPATH": str(root / "refactory"), "PYTHONDONTWRITEBYTECODE": "1"},
-                timeout=120)
-            code = completed.returncode
+            code = 0
+            for module in ("gen_api_reference", "gen_discovery"):
+                argv = [sys.executable, "-m", "refactory_dsh.tools." + module, "--check"]
+                checked = subprocess.run(argv, cwd=root, env=environment, stdout=output, stderr=subprocess.STDOUT,
+                                         timeout=max(.1, 120 - (time.monotonic() - started)))
+                prechecks.append({"command": argv, "returncode": checked.returncode})
+                code = checked.returncode
+                if code:
+                    break
+            if code == 0:
+                completed = subprocess.run(command, cwd=root, stdout=output, stderr=subprocess.STDOUT,
+                    env=environment, timeout=max(.1, 120 - (time.monotonic() - started)))
+                code = completed.returncode
         except subprocess.TimeoutExpired:
             code, timeout = 124, True
     cases = list(ET.parse(junit).getroot().iter("testcase")) if junit.is_file() else []
@@ -57,6 +68,7 @@ def main(argv=None):
               "external_model_calls": 0, "elapsed_s": time.monotonic() - started,
               "hard_timeout_s": 120, "timed_out": timeout, "returncode": code,
               "tests": len(cases), "failed": failed, "skipped": skipped,
+              "documentation_prechecks": prechecks,
               "source_graph_sha256": reference["graph_sha256"],
               "all_stage_coverage_tests": coverage_tests,
               "logical_stages_asserted_by_each_coverage_test": reference["node_count"],

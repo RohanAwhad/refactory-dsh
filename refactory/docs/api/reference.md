@@ -800,7 +800,7 @@ Worker routes and durable receipts over DSH's named-provider registry.
 | function | `account_usage` | `(budget: 'Any', receipt: 'dict[str, Any]', *, final: 'bool' = False) -> 'None'` |
 | function | `begin` | `(workdir: 'Path', route: 'dict[str, Any]', *, node: 'str' = '', role: 'str' = 'worker', effective_deadlines: 'dict[str, Any] \| None' = None) -> 'Path'` |
 | function | `capabilities` | `(backend: 'str') -> 'dict[str, Any]'` |
-| function | `dispatch_deadlines` | `(path: 'Path', *, budget: 'Any' = None, stage_stop_at: 'float \| None', stage_timeout_s: 'float', attempt: 'int', enclosing_deadlines: 'tuple[tuple[str, float], ...]' = ()) -> 'dict[str, Any]'` |
+| function | `dispatch_deadlines` | `(path: 'Path', *, budget: 'Any' = None, stage_stop_at: 'float \| None', stage_timeout_s: 'float', attempt: 'int', enclosing_deadlines: 'tuple[tuple[str, float], ...]' = (), inactivity_timeout_s: 'float \| None' = None, inactivity_timeout_policy: 'str \| None' = None) -> 'dict[str, Any]'` |
 | function | `environment` | `(context: 'dict[str, Any] \| None') -> 'dict[str, str]'` |
 | function | `event` | `(workdir: 'Path', record: 'dict[str, Any]', state: 'str', summary: 'str') -> 'None'` |
 | function | `finish` | `(path: 'Path', state: 'str', *, error: 'str \| None' = None) -> 'dict[str, Any]'` |
