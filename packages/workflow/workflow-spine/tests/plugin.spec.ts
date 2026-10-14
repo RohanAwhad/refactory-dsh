@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
-import UserQuestionService, { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
+import UserQuestionService from '@deepseek-ai/dsh-user-questions'
 import * as workflowSpine from '../src/index.ts'
 import type { WorkflowGraph } from '../src/types.ts'
 
@@ -155,62 +155,18 @@ describe('workflow-spine real composition', () => {
 
   const proceed = (question: Asked) => Promise.resolve({ answers: [{ id: question.id, selected: ['proceed'] }] })
 
-  it('presents the gate reads as a plan review the person approves by name', async () => {
+  it('shows the gate reads in the question, with every outcome offered', async () => {
+    // The question stays host-neutral: no presentation intent, so the gate's own
+    // outcomes (and free text) are what every host's question UI offers.
     const tmp = mkdtempSync(join(tmpdir(), 'spine-gate-reads-'))
     try {
       writeFileSync(join(tmp, 'design.md'), '# My Design\n\nThe plan is to do X.')
       const { ctx, asked } = await gateRun(graphWithReads, tmp, proceed)
       expect(await run(ctx, 'wf_verdict', { gate: 'gate' }))
         .toMatchObject({ status: 'routed', verdict: 'proceed', answered_by: 'user' })
-      expect(asked[0]!.detail).toContain('The plan is to do X.')
-      expect(asked[0]!.intent).toEqual({ kind: 'plan-review', approve: 'proceed' })
-    } finally { rmSync(tmp, { recursive: true, force: true }) }
-  })
-
-  it('keeps the gate open when the person sets the plan review aside to talk', async () => {
-    // The card's other button dismisses it so the person can type; that is not a
-    // failure to ask, and must not record the gate as refused.
-    const tmp = mkdtempSync(join(tmpdir(), 'spine-gate-reads-'))
-    try {
-      writeFileSync(join(tmp, 'design.md'), '# My Design')
-      const { ctx } = await gateRun(graphWithReads, tmp,
-        () => Promise.reject(new UserQuestionError('dismissed', 'ASK_CANCELLED')))
-      expect(await run(ctx, 'wf_verdict', { gate: 'gate' })).toMatchObject({ status: 'discussing', gate: 'gate' })
-      expect(await run(ctx, 'wf_next', {})).toMatchObject({ nodes: [{ id: 'gate' }] })
-    } finally { rmSync(tmp, { recursive: true, force: true }) }
-  })
-
-  it('re-asks a discussed gate with every outcome so the person can reloop', async () => {
-    // The card offers only approve and discuss: without this, `reloop` is unreachable.
-    const tmp = mkdtempSync(join(tmpdir(), 'spine-gate-reads-'))
-    try {
-      writeFileSync(join(tmp, 'design.md'), '# My Design')
-      let calls = 0
-      const { ctx, asked } = await gateRun(graphWithReads, tmp, question => ++calls === 1
-        ? Promise.reject(new UserQuestionError('dismissed', 'ASK_CANCELLED'))
-        : Promise.resolve({ answers: [{ id: question.id, selected: [], custom: 'reloop: cover the error path' }] }))
-      expect(await run(ctx, 'wf_verdict', { gate: 'gate' })).toMatchObject({ status: 'discussing' })
-      expect(await run(ctx, 'wf_verdict', { gate: 'gate' }))
-        .toMatchObject({ status: 'routed', verdict: 'reloop', feedback: 'cover the error path' })
-      expect(asked[1]!.intent).toBeUndefined()
-      expect(asked[1]!.options?.map(option => option.label)).toEqual(['proceed', 'reloop'])
-      expect(asked[1]!.detail).toBe('# My Design')
-    } finally { rmSync(tmp, { recursive: true, force: true }) }
-  })
-
-  it('keeps the option list for a gate with more outcomes than the review card offers', async () => {
-    const tmp = mkdtempSync(join(tmpdir(), 'spine-gate-reads-'))
-    try {
-      writeFileSync(join(tmp, 'design.md'), '# My Design')
-      const wide: WorkflowGraph = {
-        ...graphWithReads,
-        edges: [...graphWithReads.edges, { source: 'gate', target: 'b', condition: 'skip' }],
-      }
-      const { ctx, asked } = await gateRun(wide, tmp, proceed)
-      await run(ctx, 'wf_verdict', { gate: 'gate' })
-      expect(asked[0]!.detail).toBe('# My Design')
+      expect(asked[0]!.detail).toBe('# My Design\n\nThe plan is to do X.')
       expect(asked[0]!.intent).toBeUndefined()
-      expect(asked[0]!.options?.map(option => option.label)).toEqual(['proceed', 'reloop', 'skip'])
+      expect(asked[0]!.options?.map(option => option.label)).toEqual(['proceed', 'reloop'])
     } finally { rmSync(tmp, { recursive: true, force: true }) }
   })
 
@@ -228,18 +184,17 @@ describe('workflow-spine real composition', () => {
       const { ctx, asked } = await gateRun(escaping, run_dir, proceed)
       await run(ctx, 'wf_verdict', { gate: 'gate' })
       expect(asked[0]!.detail).not.toContain('not for the card')
-      expect(asked[0]!.intent).toBeUndefined()
     } finally { rmSync(tmp, { recursive: true, force: true }) }
   })
 
-  it('bounds the inlined reads and says where the rest is', async () => {
+  it('shows only an excerpt of long reads, so the outcomes stay in view', async () => {
     const tmp = mkdtempSync(join(tmpdir(), 'spine-gate-reads-'))
     try {
       writeFileSync(join(tmp, 'design.md'), 'x'.repeat(50_000))
       const { ctx, asked } = await gateRun(graphWithReads, tmp, proceed)
       await run(ctx, 'wf_verdict', { gate: 'gate' })
-      expect(asked[0]!.detail!.length).toBeLessThan(13_000)
-      expect(asked[0]!.detail).toMatch(/truncated; the full text is in design\.md/)
+      expect(asked[0]!.detail!.length).toBeLessThan(2_000)
+      expect(asked[0]!.detail).toMatch(/excerpt; the full text is in design\.md in the run directory/)
     } finally { rmSync(tmp, { recursive: true, force: true }) }
   })
 
