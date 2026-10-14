@@ -15,6 +15,7 @@ import type {
 } from '@deepseek-ai/dsh-subprocess'
 
 import * as tool from '../src/index.ts'
+import { presentCall, presentResult, presentationMeta } from '../src/present.ts'
 import { CHAT } from '../src/generated-help.ts'
 import { CONSOLE_DEFAULTS, Console } from '../src/console.ts'
 
@@ -265,17 +266,21 @@ describe('dsh-tool-refactory', () => {
   it('presents the call and the result under the tool tile', async () => {
     const { ctx, subprocess } = await setup()
     subprocess.handler = () => runResult(JSON.stringify([{ id: 'a/b', startable: true }]))
-    const result = await call(ctx, { action: 'modes' })
-    expect(tool.presentCall({ action: 'start', mode: 'a/b' })).toMatchObject({
-      card: 'generic', title: 'refactory start a/b',
+    await call(ctx, { action: 'modes' })
+    expect(presentCall({ action: 'start', mode: 'a/b' })).toMatchObject({
+      card: 'generic', title: 'Start optimizing a/b',
     })
-    expect(tool.presentResult({ action: 'modes' }, { action: 'modes', data: result.content })).toMatchObject({
-      card: 'generic', title: 'refactory modes',
-    })
+    // The completed card renders the payload `presentationMeta` persisted, which is
+    // where the host hands it back; there is no `data` on the completed call itself.
+    const view = presentResult({ action: 'modes' }, {
+      isError: false, meta: presentationMeta({ action: 'modes', data: [{ id: 'a/b', startable: true }] }),
+    }, data => tool.renderResult({ action: 'modes' }, data))
+    expect(view).toMatchObject({ card: 'generic', title: 'List the available modes' })
+    expect(view?.card === 'generic' ? view.content : []).toEqual(tool.renderResult({ action: 'modes' }, [{ id: 'a/b', startable: true }]))
   })
 
   it('projects the console payload for the browser card', () => {
-    const meta = tool.presentationMeta({ action: 'status', data: { run_id: 'r1', state: 'running' } })
+    const meta = presentationMeta({ action: 'status', data: { run_id: 'r1', state: 'running' } })
     expect(meta).toEqual({ action: 'status', data: { run_id: 'r1', state: 'running' } })
   })
 
@@ -330,11 +335,13 @@ describe('dsh-tool-refactory', () => {
     const { ctx } = await setup()
     const definition = ctx.tools.get('refactory')
     expect(definition?.presentCall?.({ action: 'modes' })).toMatchObject({
-      card: 'generic', title: 'refactory modes',
+      card: 'generic', title: 'List the available modes', kind: 'read',
     })
     expect(definition?.presentResult?.({ action: 'modes' }, {
-      content: [{ type: 'text', text: '0 mode(s)' }], isError: false,
-    })).toMatchObject({ card: 'generic', title: 'refactory modes' })
+      content: [{ type: 'text', text: '1 mode(s)' }], isError: false,
+      meta: { action: 'modes', data: [{ id: 'a/b', startable: true }] },
+    })).toMatchObject({ card: 'generic', title: 'List the available modes', content: [{ type: 'text', text: expect.stringContaining('a/b') }] })
+    expect(definition?.presentResult?.({ action: 'modes' }, { content: [], isError: true })).toBeUndefined()
   })
 })
 
@@ -389,16 +396,30 @@ describe('invocationFor', () => {
     expect(forwarded.options).not.toHaveProperty('headless')
   })
 
-  it('titles the pending call by whichever subject the action names', () => {
-    expect(tool.presentCall({ action: 'modes' }).title).toBe('refactory modes')
-    expect(tool.presentCall({ action: 'status', run: 'r1' }).title).toBe('refactory status r1')
-    expect(tool.presentCall({ action: 'candidate', candidate: 'abc' }).title).toBe('refactory candidate abc')
+  it('titles the pending call in plain words, naming its subject', () => {
+    const title = (args: Parameters<typeof presentCall>[0]): string => {
+      const view = presentCall(args)
+      return view.card === 'generic' ? view.title : ''
+    }
+    expect(title({ action: 'modes' })).toBe('List the available modes')
+    expect(title({ action: 'status', run: '/home/lab/.factory/loop/r1' })).toBe('Check run r1')
+    expect(title({ action: 'candidate', run: 'r1', candidate: 'abc' })).toBe('Read candidate abc of run r1')
+    expect(title({ action: 'design', name: 'linecount' })).toBe('Design and build linecount')
+    expect(title({ action: 'adopt', run: 'r1', as: 'first_tuned' })).toBe('Adopt the winner of run r1 as first_tuned')
+    expect(title({ action: 'steer', run: 'r1', note: 'no numpy', kind: 'constraint' })).toBe('Add a constraint to run r1: "no numpy"')
+    expect(title({ action: 'docs', query: 'budgets' })).toBe('Search the docs for "budgets"')
+  })
+
+  it('titles every action the tool accepts in plain words', () => {
+    for (const action of Object.keys(CHAT)) {
+      const view = presentCall({ action })
+      expect(view.card === 'generic' ? view.title : '', action).not.toMatch(/^refactory /)
+    }
   })
 
   it('renders a completed call whose result carries no payload', () => {
-    expect(tool.presentResult({ action: 'modes' }, 'nonsense')).toMatchObject({
-      card: 'generic', title: 'refactory modes', content: [{ type: 'text' }],
-    })
+    expect(presentResult({ action: 'modes' }, { isError: false }, data => tool.renderResult({ action: 'modes' }, data)))
+      .toMatchObject({ card: 'generic', title: 'List the available modes', content: [{ type: 'text' }] })
   })
 })
 
