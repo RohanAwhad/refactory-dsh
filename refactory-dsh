@@ -51,17 +51,6 @@ HELP
   esac
 done
 
-# Node 22 is required; prefer the nvm version when present, else trust PATH.
-if [ -x "$HOME/.nvm/versions/node/v22.23.2/bin/node" ]; then
-  export PATH="$HOME/.nvm/versions/node/v22.23.2/bin:$PATH"
-fi
-
-DSH="$DSH_ROOT/node_modules/.bin/dsh"
-if [ ! -x "$DSH" ]; then
-  echo "refactory-dsh: no dsh launcher at $DSH" >&2
-  echo "               run ./install.sh (or: pnpm install) first." >&2
-  exit 1
-fi
 
 # One template init (for an owned profile with no directory yet) and one
 # `dsh plugin add` per layer that is not installed. The plan is `dsh_profile`'s,
@@ -79,8 +68,26 @@ if [ ! -x "$PYTHON" ]; then
   exit 1
 fi
 
+# DSH launches the way the Python glue launches it (refactory_dsh.paths.dsh_command),
+# so the GUI and its workers run on one Node: a supported Node 22 when one is
+# installed, whatever `node` is first on PATH otherwise. `node_modules/.bin/dsh`
+# alone would take PATH's `node`, which is how the GUI came to run on a Node that
+# DSH aborts under.
+# (No mapfile or negative indexes: macOS still ships bash 3.2.)
+DSH=()
+while IFS= read -r part; do DSH+=("$part"); done < <(DSH_ROOT="$DSH_ROOT" "$PYTHON" -c '
+from refactory_dsh.paths import dsh_command
+print("\n".join(dsh_command()))')
+NODE="$(DSH_ROOT="$DSH_ROOT" "$PYTHON" -c 'from refactory_dsh.paths import node_bin; print(node_bin())')"
+DSH_ENTRY="${DSH[${#DSH[@]}-1]}"
+if [ ! -e "$DSH_ENTRY" ]; then
+  echo "refactory-dsh: no dsh at $DSH_ENTRY" >&2
+  echo "               run ./install.sh (or: pnpm install) first." >&2
+  exit 1
+fi
+
 if [ "$ADDITIVE" -eq 1 ]; then
-  node "$HERE/refactory/refactory_dsh/additive.mjs" "$DSH_ROOT"
+  "$NODE" "$HERE/refactory/refactory_dsh/additive.mjs" "$DSH_ROOT"
 fi
 
 PLAN="$(REFACTORY_ADDITIVE="$ADDITIVE" "$PYTHON" -c '
@@ -100,11 +107,11 @@ if [ -n "$PLAN" ]; then
   while IFS=$'\t' read -r kind profile value; do
     [ -n "$kind" ] || continue
     case "$kind" in
-      init)   "$DSH" --profile "$profile" --from-default-profile "$value" --dump-config >/dev/null ;;
-      add)    "$DSH" plugin --profile "$profile" add "$DSH_ROOT/packages/bundle/$value" ;;
+      init)   "${DSH[@]}" --profile "$profile" --from-default-profile "$value" --dump-config >/dev/null ;;
+      add)    "${DSH[@]}" plugin --profile "$profile" add "$DSH_ROOT/packages/bundle/$value" ;;
       remove)
         read -r -a retired <<<"$value"
-        "$DSH" plugin --profile "$profile" remove "${retired[@]}"
+        "${DSH[@]}" plugin --profile "$profile" remove "${retired[@]}"
         ;;
       clean)
         # Runs before the plugin rows for its profile, and takes the
@@ -117,4 +124,4 @@ if [ -n "$PLAN" ]; then
 fi
 
 cd "$DSH_ROOT"
-exec "$DSH" --profile "$PROFILE" "${FORWARDED[@]}"
+exec "${DSH[@]}" --profile "$PROFILE" "${FORWARDED[@]}"
