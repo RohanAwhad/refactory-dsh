@@ -24,6 +24,8 @@ overrides:
   '@deepseek-ai/cordis-plugin-timer': '1.1.6'
   '@deepseek-ai/cordis-plugin-group': '1.0.4'
   '@deepseek-ai/schemastery': '3.18.4'
+  # flock without a diagnostic report; see vendor/node-addon-system/README.md.
+  '@deepseek-ai/node-addon-system': 'file:./vendor/node-addon-system'
 
 peerDependencyRules:
   allowedVersions:
@@ -46,6 +48,8 @@ allowBuilds:
   '@google/genai': false
   protobufjs: false
   msgpackr-extract: false
+  # The vendored copy (see overrides): pnpm counts a local directory as a build; it has none.
+  '@deepseek-ai/node-addon-system': false
 patchedDependencies:
   '@deepseek-ai/dsh-client-ui-directory-picker-native@0.2.0-rc.2': patches/@deepseek-ai__dsh-client-ui-directory-picker-native@0.2.0-rc.2.patch
   '@deepseek-ai/dsh-headless@0.2.0-rc.2': patches/@deepseek-ai__dsh-headless@0.2.0-rc.2.patch

@@ -143,6 +143,13 @@ def test_real_patch_composition_dispatches_codex_provider_before_any_product_sta
     subprocess.run(['node', str(Path(__file__).with_name('worker_dispatch_test.mjs')), str(root), str(tmp_path)], check=True)
 
 
+def test_flock_takes_its_lock_without_a_diagnostic_report():
+    """Workers died with exit -6 mid-step: the pinned flock generated a diagnostic report
+    to tell glibc from musl, and a report aborts the process when a socket is closing."""
+    root = Path(__file__).resolve().parents[2]
+    subprocess.run(['node', str(Path(__file__).with_name('flock_libc_test.mjs')), str(root)], check=True)
+
+
 def test_observer_keeps_nested_external_usage_incomplete_without_model_calls():
     subprocess.run(['node', str(Path(__file__).with_name('worker_observer_test.mjs'))], check=True)
 

@@ -61,6 +61,12 @@ one pnpm patch in `patches/` supplies a model-route change, declared under
   selection the model-selection middleware's current one, so
   `refactory_dsh/model.py`'s completion client uses the model a caller named.
 
+One dependency is vendored rather than patched: `vendor/node-addon-system` replaces
+`@deepseek-ai/node-addon-system` through an override, because its `flock` generated a
+diagnostic report to tell glibc from musl, and a report aborts the process when a
+socket is closing (DSH workers died with `exit -6` mid-step). A pnpm patch did not
+reach installs whose store already held the package. Its README says when to remove it.
+
 The `ceo` preset is **not** a patch. `packages/bundle/refactory` declares it as an
 inline `@deepseek-ai/dsh-agent-preset` row in `presets/ceo.patch.yml`, the way the
 harness declares its own shipped presets, and `cordis.patch.yml` makes it the registry
