@@ -60,6 +60,10 @@ one pnpm patch in `patches/` supplies a model-route change, declared under
 - `@deepseek-ai/dsh-headless` accepts `--provider` and `--model` and makes a named
   selection the model-selection middleware's current one, so
   `refactory_dsh/model.py`'s completion client uses the model a caller named.
+- `@deepseek-ai/node-addon-system`'s `flock` tells glibc from musl by the C library
+  mapped into the process instead of `process.report.getReport()`. A report walks
+  every libuv handle and aborts the process when a socket is closing, which is how
+  DSH workers died with `exit -6` mid-step; it also takes seconds on many-CPU hosts.
 
 The `ceo` preset is **not** a patch. `packages/bundle/refactory` declares it as an
 inline `@deepseek-ai/dsh-agent-preset` row in `presets/ceo.patch.yml`, the way the

@@ -1,0 +1,41 @@
+diff --git a/lib/flock.js b/lib/flock.js
+index bf2a1b05d7a82d7f25e193dc9e06e6bb3ec9c310..668e9a4e92e56fd877aff73623243073419aa1a6 100644
+--- a/lib/flock.js
++++ b/lib/flock.js
+@@ -1,4 +1,5 @@
+ /** Lazy POSIX flock entry; importing it does not load a native addon. */
++import { readFileSync } from 'node:fs';
+ import { createRequire } from 'node:module';
+ import { dirname, join } from 'node:path';
+ import { getSystemErrorName } from 'node:util';
+@@ -15,15 +16,27 @@ function loadBinding() {
+     }
+     let filename = 'system.node';
+     if (platform === 'linux') {
+-        // Node's report types omit the libc field supplied by Linux reports.
+-        const report = process.report.getReport();
+-        filename = join(report.header.glibcVersionRuntime ? 'glibc' : 'musl', filename);
++        filename = join(linuxLibc(), filename);
+     }
+     const require = createRequire(import.meta.url);
+     const manifest = require.resolve(`@deepseek-ai/node-addon-system-${platform}-${arch}/package.json`);
+     binding = require(join(dirname(manifest), 'bin', filename));
+     return binding;
+ }
++/**
++ * glibc or musl, from the C library mapped into this process. A diagnostic report
++ * is the last resort only: generating one walks every libuv handle and aborts the
++ * process when a socket is closing, and takes seconds on many-CPU hosts.
++ */
++function linuxLibc() {
++    try {
++        return /\/(?:ld-musl|libc\.musl)/.test(readFileSync('/proc/self/maps', 'utf8')) ? 'musl' : 'glibc';
++    }
++    catch {
++        // Node's report types omit the libc field supplied by Linux reports.
++        return process.report.getReport().header.glibcVersionRuntime ? 'glibc' : 'musl';
++    }
++}
+ /**
+  * Attempt an exclusive, nonblocking POSIX flock on the caller's descriptor.
+  * The syscall runs in asynchronous work, so acquisition can occur after this

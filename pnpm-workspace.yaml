@@ -52,3 +52,4 @@ patchedDependencies:
   '@deepseek-ai/dsh-goal-round-driver@0.2.0-rc.2': patches/@deepseek-ai__dsh-goal-round-driver@0.2.0-rc.2.patch
   '@deepseek-ai/dsh-subagent-codex@0.2.0-rc.2': patches/@deepseek-ai__dsh-subagent-codex@0.2.0-rc.2.patch
   '@deepseek-ai/dsh-subagent-claude-code@0.2.0-rc.2': patches/@deepseek-ai__dsh-subagent-claude-code@0.2.0-rc.2.patch
+  '@deepseek-ai/node-addon-system@0.1.2': patches/@deepseek-ai__node-addon-system@0.1.2.patch
