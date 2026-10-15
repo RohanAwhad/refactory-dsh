@@ -42,6 +42,9 @@ allowBuilds:
   '@deepseek-ai/dsh-subprocess-local': true
   # JSONL durability calls MoveFileExW with write-through publication on Windows.
   koffi: true
+  # No install script; pnpm applies a patch as the package's build, so a patched
+  # package must be allowed to build or an existing install keeps its unpatched copy.
+  '@deepseek-ai/node-addon-system': true
   # No-ops we do not need; listed so the review is explicit rather than absent.
   '@google/genai': false
   protobufjs: false
