@@ -36,6 +36,15 @@ def three_passes(ctx: Any) -> str:
     return "retry" if visits < 3 else "proceed"
 
 
+def explained_passes(ctx: Any) -> str:
+    """`three_passes`, saying why each retry happens."""
+    from refactory_dsh.nn import Verdict
+
+    visits = int(ctx.facts.get("passes", 0)) + 1
+    ctx.set_fact("passes", visits)
+    return Verdict("retry", f"pass {visits} of 3") if visits < 3 else "proceed"
+
+
 def bogus_verdict(ctx: Any) -> str:
     return "nonsense"
 

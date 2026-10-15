@@ -19,6 +19,8 @@ import math
 import random
 from typing import Any
 
+from refactory_dsh.nn import Verdict
+
 #: The task instance. Fixed, exactly as the task defines it: the mode is a
 #: solver, so it must not be able to change the problem it is scored on.
 CIRCLES = 26
@@ -360,7 +362,9 @@ def retry_gate(ctx: Any) -> str:
     ctx.set_fact("eval_attempts", attempts)
     evaluation = ctx.read_json(EVAL, {}) or {}
     failed = not evaluation or float(evaluation.get("score", 0.0)) <= 0.0
-    return "retry" if failed and attempts <= 2 else "proceed"
+    if failed and attempts <= 2:
+        return Verdict("retry", f"the evaluation produced no score (retry {attempts} of 2)")
+    return "proceed"
 
 
 def finish(ctx: Any) -> dict[str, Any]:

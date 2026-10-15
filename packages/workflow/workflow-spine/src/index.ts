@@ -31,13 +31,13 @@ import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { HALT, Spine, validateGraph } from './spine.ts'
 import type { NodeView, SpineNext } from './spine.ts'
 import { commandOf, isDeterministic, runDataCommand, runDeterministic } from './execute.ts'
-import type { CommandFailure } from './execute.ts'
+import type { CommandFailure, CommandOutcome } from './execute.ts'
 import type { WorkflowGraph } from './types.ts'
 import { validateBuild } from './build-stamp.ts'
 import { presentCall, presentResult, presentationMeta } from './present.ts'
 
 export { Spine, validateGraph } from './spine.ts'
-export { commandOf, dataCommandOf, isDeterministic, runDataCommand, verdictOf, NODE_ENV_KEY } from './execute.ts'
+export { commandOf, dataCommandOf, isDeterministic, reasonOf, runDataCommand, verdictOf, NODE_ENV_KEY, REASON_LIMIT } from './execute.ts'
 export type { CommandFailure, CommandOutcome, CommandRunnerConfig, NodeManifest } from './execute.ts'
 export type { DataPass, GraphIssue, NodeView, PromptAmendmentMode, SpineNext } from './spine.ts'
 export type { WorkflowEdge, WorkflowGraph, WorkflowNode } from './types.ts'
@@ -259,11 +259,23 @@ function lastLine(text: string | null | undefined): string {
  * @param workdir - the run directory its command ran in.
  * @param peers - every node this dispatch boundary ran, when the cursor held
  * more than one; the boundary's last peer in cursor order is the named node.
- * @returns the node's id and type, plus the outputs and facts that exist.
+ * @param outcome - what the named node's command returned, so a gate's verdict
+ * and reason are reported with it rather than left for the CEO to infer.
+ * @returns the node's id and type, any verdict and reason, plus the outputs and
+ * facts that exist.
  */
-function recordedStep(node: NodeView, workdir: string | undefined, peers?: NodeView[]): RanStep {
+function recordedStep(
+  node: NodeView,
+  workdir: string | undefined,
+  peers?: NodeView[],
+  outcome?: CommandOutcome,
+): RanStep {
   const step: RanStep = { node: node.id, type: node._type }
   if (peers !== undefined && peers.length > 1) step.peers = peers.map(peer => peer.id)
+  if (outcome?.ok === true && outcome.verdict !== undefined) {
+    step.verdict = outcome.verdict
+    if (outcome.reason !== undefined) step.reason = outcome.reason
+  }
   if (workdir === undefined) return step
   const outputs = (node.writes ?? []).filter(rel => rel !== '' && existsSync(resolve(workdir, rel)))
   if (outputs.length > 0) step.outputs = outputs
@@ -338,6 +350,10 @@ interface RanStep {
   type: string
   /** Every node this boundary dispatched, when the cursor held more than one. */
   peers?: string[]
+  /** The verdict the node routed on, when it is a gate the runtime evaluated. */
+  verdict?: string
+  /** Why it routed that way: what its evaluator printed before the verdict. */
+  reason?: string
   /** The node's declared writes that now exist in the run directory, relative to it. */
   outputs?: string[]
   /** The run's `facts.json` as the node's command left it. */
@@ -912,15 +928,19 @@ export function apply(ctx: Context, config: Config): void {
           if (failure === undefined) failure = outcome
           continue
         }
+        // A gate's reason is the reloop target's feedback, exactly as a manual
+        // verdict's is: without it the node the run goes back to, and the CEO,
+        // see an empty string where the cause should be.
         if (outcome.verdict === undefined) spine.complete(node.id)
-        else spine.verdict(node.id, outcome.verdict)
+        else spine.verdict(node.id, outcome.verdict, outcome.reason ?? '')
       }
       recordBoundary()
       if (failure !== undefined) return { next: spine.next(), failure, ran }
       if (interactiveOpen) {
         // Preserve the one-boundary budget while allowing structural boundaries
         // and data-pass grading to settle before exposing the next ready work.
-        ran = recordedStep(automatic[automatic.length - 1]!, workdir, automatic)
+        const last = automatic.length - 1
+        ran = recordedStep(automatic[last]!, workdir, automatic, outcomes[last])
       }
     }
   }
@@ -1149,7 +1169,9 @@ export function apply(ctx: Context, config: Config): void {
       + 'boundary — every deterministic node the cursor holds at once is a fork peer the graph '
       + 'declared concurrent, dispatched together — and names one under `ran` (with `peers` for '
       + 'the whole boundary) with the outputs and facts it left in the run '
-      + `directory, so say what it produced before acting on what is due next. Open any mode this way, `
+      + 'directory, so say what it produced before acting on what is due next. When `ran` is a gate '
+      + 'that sent the run back, its `verdict` and `reason` say why: tell the person, in a sentence, '
+      + `before driving the rerun. Open any mode this way, `
       + 'including an authoring one (create/edit/design): it is the route where a person is present, and '
       + 'a gate marked `(user)` is put to them. For create/edit/design, include the full user brief as '
       + '`brief=<full text>` in the initial knobs array, alongside name/task/check knobs the mode declares. '
@@ -1323,7 +1345,7 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.tools.register(defineTool({
     name: `${toolPrefix}_next`,
-    description: 'Get the next node(s) the workflow graph says are due now. Deterministic nodes (a command an `fn` gate or an `FnNode` runs) and a data node\'s item passes are executed for you and do not appear, except that when a mode is open interactively one dispatch boundary runs per call: every deterministic node the cursor holds at once is a fork peer the graph declared concurrent, so they are dispatched together and a node that ran is named under `ran` (with its id, declared outputs, the run\'s facts, and `peers` naming the whole boundary when more than one ran), and `nodes` then names what is due next — which may itself be deterministic, in which case call this tool again rather than running it or calling `wf_done`. Returns `{ status, nodes }`: for `ready`, the node views you must act on (agent task / one-shot LLM / user gate / fork) with the fields you need, plus `item` while a data node is iterating; for `done`, the run is complete; for `failed`, a deterministic node failed; its fork peers that did run have completed, and the failure names the node that did not. With automatic execution, sole static ForkNode/JoinNode boundaries are crossed for you and returned branch prompts already have their delivery contexts. Dispatch only returned AgentNode/LLMNode prompts, never fork target ids from a state view. Pass each returned prompt in full; coordination notes must not weaken its requirements or waive the original brief/approved design without explicit user steering. A documented limitation is not a waiver. If a control node is explicitly returned (manual execution or a mixed cursor), acknowledge it with `wf_done`, then call this tool before dispatching branches. Always call this first and act only on what it returns — never skip or reorder.',
+    description: 'Get the next node(s) the workflow graph says are due now. Deterministic nodes (a command an `fn` gate or an `FnNode` runs) and a data node\'s item passes are executed for you and do not appear, except that when a mode is open interactively one dispatch boundary runs per call: every deterministic node the cursor holds at once is a fork peer the graph declared concurrent, so they are dispatched together and a node that ran is named under `ran` (with its id, declared outputs, the run\'s facts, `peers` naming the whole boundary when more than one ran, and, for a gate the runtime evaluated, its `verdict` and the `reason` it gave — when that sent the run back, `feedback` carries the same reason to the node it went back to, so tell the person why), and `nodes` then names what is due next — which may itself be deterministic, in which case call this tool again rather than running it or calling `wf_done`. Returns `{ status, nodes }`: for `ready`, the node views you must act on (agent task / one-shot LLM / user gate / fork) with the fields you need, plus `item` while a data node is iterating; for `done`, the run is complete; for `failed`, a deterministic node failed; its fork peers that did run have completed, and the failure names the node that did not. With automatic execution, sole static ForkNode/JoinNode boundaries are crossed for you and returned branch prompts already have their delivery contexts. Dispatch only returned AgentNode/LLMNode prompts, never fork target ids from a state view. Pass each returned prompt in full; coordination notes must not weaken its requirements or waive the original brief/approved design without explicit user steering. A documented limitation is not a waiver. If a control node is explicitly returned (manual execution or a mixed cursor), acknowledge it with `wf_done`, then call this tool before dispatching branches. Always call this first and act only on what it returns — never skip or reorder.',
     parameters: {},
     output: {
       schema: { type: 'json' },

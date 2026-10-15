@@ -124,6 +124,18 @@ def _stub_lean(tmp_path: Path, *, accepts: str) -> Path:
 
 
 # ── the declaration ────────────────────────────────────────────────────────
+def test_the_lean_retry_gate_says_why_the_proof_was_rejected(tmp_path):
+    """Whoever watches the run sees Lean's own error, not only that it went back."""
+    ctx = nn.RunContext(tmp_path, knobs={"attempts": 4}, facts={}, task={})
+    ctx.write_json(lean_ops.PROBLEM_FILE, lean_problems.THREE_CONSECUTIVE.to_state())
+    ctx.write_json(lean_ops.VERIFY_FILE, {"attempt": 1, "strategy": "omega", "verified": False,
+                                          "used_sorry": False, "output": "error: unsolved goals"})
+    verdict = lean_ops.retry_gate(ctx)
+    assert verdict == "reloop"
+    allowed = min(4, len(lean_problems.THREE_CONSECUTIVE.proofs))
+    assert f"attempt 1 of {allowed} (omega)" in verdict.reason and "unsolved goals" in verdict.reason
+
+
 def test_a_package_declares_what_it_needs_beside_its_manifest():
     """The requirement is data, in its own file, with the fix and the reason."""
     lean = {tool.name: tool for tool in registry.tools("lean_pack")}

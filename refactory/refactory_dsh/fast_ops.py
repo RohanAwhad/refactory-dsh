@@ -11,13 +11,21 @@ import tempfile
 from typing import Any
 
 from refactory_dsh import create_ops, design_ops, sandbox, authoring_evidence as evidence
+from refactory_dsh.nn import Verdict
+
+#: A fast mode runs no full review gate or overwatch, so the prompts that show those
+#: verdicts say so; "nothing refused yet" would read as a promise of a later review.
+FAST_UNREFUSED = {
+    "qa_gate": "(fast mode runs no full review gate)",
+    "overwatch_review": "(fast mode runs no overwatch audit)",
+}
 
 
 def prepare_package(ctx: Any) -> dict[str, Any]:
     prepared = create_ops.prepare(ctx)
     ctx.write_text("repair.txt", "(initial implementation; no repair requested)\n")
     ctx.write_text("validation.txt", "(structural admission not run)\n")
-    return {**prepared, "repair_feedback": "(initial implementation)", "repairs_used": 0}
+    return {**prepared, **FAST_UNREFUSED, "repair_feedback": "(initial implementation)", "repairs_used": 0}
 
 
 def survey_package(ctx: Any) -> dict[str, Any]:
@@ -58,7 +66,7 @@ def prepare_artifact(ctx: Any) -> dict[str, Any]:
         manifest = _source_manifest(root)
     ctx.write_json("source-manifest.json", {"source_project": source, "files": manifest})
     return {**prepared, "source_project": source, "source_files": json.dumps(sorted(manifest)),
-            "repair_feedback": "(initial implementation)", "repairs_used": 0}
+            **FAST_UNREFUSED, "repair_feedback": "(initial implementation)", "repairs_used": 0}
 
 
 def materialise_artifact(ctx: Any) -> dict[str, Any]:
@@ -128,7 +136,7 @@ def _repair(ctx: Any, findings: list[str]) -> str:
         raise ValueError(f"focused QA/admission unresolved after {used} repair(s): {feedback}")
     ctx.set_fact("repairs_used", used + 1)
     ctx.write_json("fast-report.json", _report(ctx, "repairing", findings))
-    return "reloop"
+    return Verdict("reloop", feedback)
 
 
 def validate_package(ctx: Any) -> str:

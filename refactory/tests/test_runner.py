@@ -129,6 +129,46 @@ def test_the_command_line_prints_a_verdict_as_its_last_line(tmp_path):
     assert lines[-1] == "reloop", f"the verdict must be the last line: {result.stdout!r}"
 
 
+def test_a_gate_that_says_why_prints_its_reason_before_its_verdict(tmp_path):
+    """The spine reports the lines before a gate's verdict as its reason.
+
+    The runner used to print the label alone, so a reloop reached the CEO as
+    `feedback: {"emit": ""}` although the gate knew exactly why it sent the run back.
+    """
+    (tmp_path / "reasoned_gate.py").write_text(
+        "from refactory_dsh.nn import Verdict\n\n\n"
+        "def gate(ctx):\n"
+        "    return Verdict('reloop', 'two tests failed\\nsee check.txt')\n"
+    )
+    _declare(tmp_path, "gate")
+    result = subprocess.run(
+        [_python(), "-m", "refactory_dsh.run", "reasoned_gate:gate"],
+        env=_env(tmp_path, "gate"), capture_output=True, text=True, cwd=str(tmp_path),
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["two tests failed", "see check.txt", "reloop"]
+
+
+def test_a_gate_with_a_whole_check_log_as_its_reason_keeps_its_verdict_last(tmp_path):
+    """A long reason is clipped, so the shell's capture cannot cut the verdict off."""
+    (tmp_path / "noisy_gate.py").write_text(
+        "from refactory_dsh.nn import Verdict\n\n\n"
+        "def gate(ctx):\n"
+        "    return Verdict('reloop', 'FAILED test_x\\n' * 20000)\n"
+    )
+    _declare(tmp_path, "gate")
+    result = subprocess.run(
+        [_python(), "-m", "refactory_dsh.run", "noisy_gate:gate"],
+        env=_env(tmp_path, "gate"), capture_output=True, text=True, cwd=str(tmp_path),
+    )
+    from refactory_dsh.run import REASON_LIMIT
+
+    assert result.returncode == 0, result.stderr
+    reason, _, verdict = result.stdout.rstrip("\n").rpartition("\n")
+    assert verdict == "reloop"
+    assert len(reason) <= REASON_LIMIT and "clipped from" in reason
+
+
 def test_a_node_in_a_workspace_package_runs_in_its_own_process(tmp_path):
     """A package created into `.factory/packages` must run on the DSH path.
 

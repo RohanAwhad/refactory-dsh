@@ -44,6 +44,15 @@ def _tmp() -> Path:
     return directory
 
 
+def test_the_retry_gate_says_why_it_retries(tmp_path):
+    from refactory_packages.circle_packing import ops
+
+    ctx = nn.RunContext(tmp_path, knobs={}, facts={}, task={})
+    ctx.write_json(ops.EVAL, {"id": "c1", "score": 0.0, "metrics": {}})
+    verdict = ops.retry_gate(ctx)
+    assert verdict == "retry" and "produced no score" in verdict.reason
+
+
 def test_the_package_is_discovered():
     assert "circle_packing" in registry.discover_names()
     assert PACKAGE.ids() == [MODE]

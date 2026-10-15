@@ -249,10 +249,12 @@ def test_the_check_gate_refuses_an_artifact_that_does_not_run():
     ctx.facts.update({"name": ARTIFACT, "brief": "a checked artifact", "artifact": str(workdir), "check": "python -c \"raise SystemExit(3)\""})
     import refactory_dsh.design_ops as ops
 
-    assert ops.check_artifact(ctx) == "reloop"
+    verdict = ops.check_artifact(ctx)
+    assert verdict == "reloop"
     assert "exit 3" in ctx.read_text("check.txt"), (
         "the refusal must say what the check said, or the retry is guessing"
     )
+    assert "exit 3" in verdict.reason, "the CEO is told what the retry is told"
 
 
 def test_the_check_runs_without_the_real_credentials(tmp_path):

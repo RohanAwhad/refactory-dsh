@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from refactory_dsh import toolchain
+from refactory_dsh.nn import Verdict
 
 from . import problems
 
@@ -240,7 +241,11 @@ def retry_gate(ctx: Any) -> str:
     ctx.set_fact("attempts_used", attempts)
     if verify.get("verified") or attempts >= allowed:
         return "proceed"
-    return "reloop"
+    # Lean's own error says why this strategy failed; its tail carries it.
+    why = "it used `sorry`" if verify.get("used_sorry") else "Lean rejected it"
+    reason = f"attempt {attempts} of {allowed} ({verify.get('strategy', '?')}) did not verify: {why}"
+    output = str(verify.get("output", "")).strip()
+    return Verdict("reloop", f"{reason}\n{output[-1500:]}" if output else reason)
 
 
 def finish(ctx: Any) -> dict[str, Any]:

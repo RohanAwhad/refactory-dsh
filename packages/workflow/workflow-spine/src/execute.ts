@@ -80,11 +80,19 @@ export type CommandFailure = CommandResult & { ok: false; error: string }
 
 /**
  * The outcome of one deterministic node: it completed, carrying the verdict a
- * gate's evaluator printed, or it failed with the reason it failed.
+ * gate's evaluator printed and any reason it gave, or it failed with the reason
+ * it failed.
  */
 export type CommandOutcome =
-  | (CommandResult & { ok: true; verdict?: string })
+  | (CommandResult & { ok: true; verdict?: string; reason?: string })
   | CommandFailure
+
+/**
+ * The most of a gate's reason one payload carries, marker included, so a long
+ * check log cannot crowd out the rest of the view. `refactory_dsh.run` clips to
+ * the same limit, so what it prints arrives here unchanged.
+ */
+export const REASON_LIMIT = 4_000
 
 /** The command a node runs itself, or `undefined` when a model owns the node. */
 export function commandOf(node: NodeView): string | undefined {
@@ -119,6 +127,29 @@ export function verdictOf(stdout: string): string | undefined {
   const lines = stdout.split('\n').map(line => line.trim()).filter(line => line !== '')
   const last = lines[lines.length - 1]
   return last === undefined ? undefined : last.toLowerCase()
+}
+
+/**
+ * Why a gate's evaluator routed as it did: what it printed before its verdict.
+ *
+ * The verdict stays the last line the spine routes on, so an evaluator explains
+ * itself by printing its reason first. The reason travels to the reloop target's
+ * feedback and to the CEO's `ran` step; without it a reloop reads as an empty
+ * string and nobody can say why the run went back. A reason longer than
+ * {@link REASON_LIMIT} keeps its head and its tail, where a finding list and a
+ * test summary sit, and says how long it was.
+ * @param stdout - the evaluator's captured stdout.
+ * @returns the reason, or an empty string when the evaluator printed only its verdict.
+ */
+export function reasonOf(stdout: string): string {
+  const lines = stdout.split('\n')
+  let last = lines.length - 1
+  while (last >= 0 && lines[last]!.trim() === '') last -= 1
+  const reason = lines.slice(0, Math.max(last, 0)).join('\n').trim()
+  if (reason.length <= REASON_LIMIT) return reason
+  const marker = `\n… (clipped from ${reason.length} characters) …\n`
+  const half = Math.floor((REASON_LIMIT - marker.length) / 2)
+  return `${reason.slice(0, half)}${marker}${reason.slice(-half)}`
 }
 
 /** The declaration handed to a node command. */
@@ -306,7 +337,8 @@ export async function runDeterministic(
   if (node._type === 'GateNode') {
     const verdict = verdictOf(stdout)
     if (verdict === undefined) return { ...outcome, ok: false, error: `${node.id} printed no verdict` }
-    return { ...outcome, ok: true, verdict }
+    const reason = reasonOf(stdout)
+    return { ...outcome, ok: true, verdict, ...(reason === '' ? {} : { reason }) }
   }
   return { ...outcome, ok: true }
 }

@@ -9,7 +9,10 @@ contract is: read the files you declared, write the files you declared, return t
 facts you declared, and (for a gate) print your verdict.
 
 The verdict is the **last non-empty stdout line**, which is how the spine routes a
-gate. Everything else a node prints is for a log.
+gate. A gate that says why (a :class:`~refactory_dsh.nn.Verdict` with a reason) has
+the reason printed on the lines before it, and the spine hands that to the node a
+reloop goes back to and to the CEO. So a gate logs to stderr: anything else it
+printed to stdout would be read as part of its reason.
 """
 
 from __future__ import annotations
@@ -33,6 +36,21 @@ NODE_ENV = "DSH_WORKFLOW_NODE"
 
 #: The working directory the command runs in, if the runtime says so explicitly.
 WORKDIR_ENV = "REFACTORY_WORKDIR"
+
+#: The most of a gate's reason the runner prints, marker included. It is the spine's
+#: own limit (``REASON_LIMIT`` in workflow-spine's ``execute.ts``): a whole check log
+#: printed ahead of the verdict could crowd the verdict out of the stdout the shell
+#: captures, and the spine would route on a line of the log.
+REASON_LIMIT = 4_000
+
+
+def _clipped(reason: str) -> str:
+    """``reason``, keeping its head and its tail once it is over :data:`REASON_LIMIT`."""
+    if len(reason) <= REASON_LIMIT:
+        return reason
+    marker = f"\n… (clipped from {len(reason)} characters) …\n"
+    half = (REASON_LIMIT - len(marker)) // 2
+    return reason[:half] + marker + reason[-half:]
 
 
 class RunnerError(RuntimeError):
@@ -208,9 +226,12 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # a failing node must fail loudly, and not be a traceback
         print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
-    # A gate's whole output is its verdict, and the spine routes on the last
-    # non-empty line, so a verdict is printed and nothing else is.
+    # A gate's output is its reason, then its verdict: the spine routes on the
+    # last non-empty line and reports the lines before it as why.
     if isinstance(produced, str) and produced.strip():
+        reason = str(getattr(produced, "reason", "")).strip()
+        if reason:
+            print(_clipped(reason))
         print(produced.strip())
     return 0
 

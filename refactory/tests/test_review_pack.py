@@ -101,3 +101,14 @@ def test_the_fn_gate_refuses_a_thin_draft(tmp_path):
     assert "max_iterations" in (result.error or ""), result.error
     assert not (work / "final.md").exists(), "a thin draft reached the person"
     assert not (work / "rejected.md").exists(), "a thin draft reached the person"
+
+
+def test_the_fn_gate_says_how_thin_the_draft_is(tmp_path):
+    """A refusal names the word count, so the redraft knows what is missing."""
+    from refactory_dsh.nn import RunContext
+    from refactory_packages.review_pack import ops
+
+    ctx = RunContext(tmp_path, knobs={}, facts={}, task={})
+    ctx.write_text(ops.DRAFT, "too short")
+    verdict = ops.check(ctx)
+    assert verdict == "reloop" and f"at least {ops.MIN_WORDS}" in verdict.reason

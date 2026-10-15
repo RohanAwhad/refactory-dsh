@@ -6,6 +6,7 @@ Workers read these files from their declared reads paths instead.
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 from pathlib import Path
 
@@ -14,6 +15,8 @@ import pytest
 from refactory_dsh.authoring_evidence import INLINE_LIMIT, requirements
 from refactory_dsh.create import CreateMode
 from refactory_dsh.design import DesignMode
+from refactory_dsh.edit import EditMode
+from refactory_dsh.fast import CreateFastMode, DesignFastMode, EditFastMode
 
 
 # Known large-artifact template variables that must not appear in agent prompts.
@@ -128,4 +131,54 @@ def test_runtime_evidence_fact_has_no_oversized_requirements():
         assert len(text) <= INLINE_LIMIT, (
             f"requirement {req['id']!r} has {len(text)}-char inline text; "
             f"inputs over {INLINE_LIMIT} chars must use path+sha256 (issue #320)"
+        )
+
+
+#: Every mode refactory ships, by the name a person opens it with.
+BUILT_IN_MODES = {
+    "create": CreateMode, "edit": EditMode, "create-fast": CreateFastMode,
+    "edit-fast": EditFastMode, "design": DesignMode, "design-fast": DesignFastMode,
+}
+
+
+def _available_before(graph, node_id):
+    """The facts some node upstream of ``node_id`` produces, ignoring reloop edges.
+
+    A reloop goes back to a node that has already run once without the fact, so a
+    producer reached only through one does not fill the first pass's prompt.
+    """
+    parents = {}
+    for edge in graph.edges:
+        if edge.condition != "reloop":
+            parents.setdefault(edge.target, []).append(edge.source)
+    # A fork names its branches as targets rather than as edges.
+    for fork_id, fork in graph.nodes.items():
+        for target in fork.targets:
+            parents.setdefault(target, []).append(fork_id)
+    seen, stack = set(), list(parents.get(node_id, ()))
+    while stack:
+        current = stack.pop()
+        if current not in seen:
+            seen.add(current)
+            stack.extend(parents.get(current, ()))
+    return {fact for upstream in seen for fact in graph.nodes[upstream].produces}
+
+
+@pytest.mark.parametrize("mode", BUILT_IN_MODES.values(), ids=BUILT_IN_MODES.keys())
+def test_every_prompt_placeholder_is_filled_on_the_first_pass(mode):
+    """A placeholder nothing has filled yet reaches the worker raw.
+
+    The first `emit` of a design run was handed `{{qa_gate}}` and
+    `{{overwatch_review}}` before any review gate had run, and a full graph's
+    reviewers were always handed `{{repair_feedback}}`, a fact only the fast graphs
+    produce. A worker reads a raw placeholder as text to act on, so each name must
+    be a knob or a fact some node upstream of the prompt produces.
+    """
+    graph = mode().build()
+    knobs = set(mode.declare())
+    for node_id, node in _agent_nodes(graph):
+        available = knobs | _available_before(graph, node_id)
+        names = set(re.findall(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}", node.prompt_template))
+        assert names <= available, (
+            f"{node_id} renders {sorted(names - available)} before any node has produced them"
         )
