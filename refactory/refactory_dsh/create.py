@@ -341,9 +341,9 @@ class CreateMode(Mode):
                 "## Reference package\n{{reference}}\n\n"
                 "## What went wrong last time\n{{validation}}\n\n"
                 "## What the reviews refused\n{{qa_gate}}\n{{overwatch_review}}\n\n"
-                "Answer with file blocks, each introduced by a line of exactly:\n"
+                "Write every file into emit.txt as a block introduced by a line of exactly:\n"
                 "===FILE: <relative path>===\n"
-                "followed by the file's contents. Every path is relative to the "
+                "followed by the file's full contents. Every path is relative to the "
                 "**package's own root**: the manifest is exactly `__init__.py`, not "
                 "`{{name}}/__init__.py`, not `refactory/refactory_packages/{{name}}/"
                 "__init__.py`, and not `.factory/packages/{{name}}/__init__.py`. The "
@@ -355,7 +355,9 @@ class CreateMode(Mode):
                 "that Task's per-item prompt as its input and produce what its "
                 "`verify()` scores, and the graph's start node is a `data` node whose "
                 "`subgraph_entry` and `subgraph_exit` delimit the per-item subgraph. "
-                "No prose outside the blocks.\n"
+                "No prose outside the blocks. Do not create the files themselves: the "
+                "materialise step writes them from emit.txt. Then return a short "
+                "completion message.\n"
             ),
             reads=("brief.json", "design.md", "validation.txt"),
             writes=("emit.txt",),

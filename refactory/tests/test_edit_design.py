@@ -16,7 +16,7 @@ import pytest
 from refactory_dsh import design as design_module
 from refactory_dsh import edit as edit_module
 from refactory_dsh import nn, registry, sandbox
-from refactory_dsh.create import CreateConfig, CreateError
+from refactory_dsh.create import CreateConfig, CreateError, CreateMode
 from model_credential import needs_model_credential
 from refactory_dsh.design import DesignMode
 from refactory_dsh.design_ops import ARTIFACTS
@@ -161,6 +161,17 @@ def test_a_revision_of_a_mode_that_does_not_run_is_refused(monkeypatch):
 
 
 # ── designing software ─────────────────────────────────────────────────────
+@pytest.mark.parametrize("mode", [DesignMode, CreateMode], ids=["design", "create"])
+def test_emit_writes_its_file_blocks_into_emit_txt(mode):
+    """The worker contract says not to repeat a file artifact in the final reply, so a
+    prompt that asked to *answer* with file blocks got the files written to disk and a
+    summary in emit.txt, which materialise cannot parse. The blocks belong in emit.txt."""
+    prompt = mode().build().nodes["emit"].prompt_template
+    assert "Write every file into emit.txt" in prompt
+    assert "Do not create the files themselves" in prompt
+    assert "Answer with file blocks" not in prompt
+
+
 def _design_answers(emit: list[str]) -> list[str]:
     """Every answer design-v2's agents need, in the order the graph asks."""
     return [

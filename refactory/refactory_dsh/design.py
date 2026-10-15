@@ -202,9 +202,11 @@ class DesignMode(Mode):
                 "## What went wrong last time\n{{validation}}\n\n"
                 "## What the reviews refused\n{{qa_gate}}\n{{overwatch_review}}\n\n"
                 + _ACCEPTANCE_BASELINE
-                + "Answer with file blocks, each introduced by a line of exactly:\n"
+                + "Write every file into emit.txt as a block introduced by a line of exactly:\n"
                 "===FILE: <relative path>===\n"
-                "followed by the file's contents. No prose outside the blocks.\n"
+                "followed by the file's full contents, with no prose outside the blocks. "
+                "Do not create the files themselves: the materialise step writes them from "
+                "emit.txt. Then return a short completion message.\n"
             ),
             reads=("brief.json", "design.md", "check.txt"),
             writes=("emit.txt",),
