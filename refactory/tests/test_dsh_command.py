@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from refactory_dsh import paths
-from refactory_dsh.paths import SOURCE_CLI_ENTRY, dsh_command, node_bin
+from refactory_dsh.paths import INSTALLED_CLI_ENTRY, SOURCE_CLI_ENTRY, dsh_command, node_bin
 
 #: The production modules that spawn DSH. Each must ask the resolver.
 LAUNCHERS = (
@@ -39,10 +39,23 @@ def test_a_source_checkout_launches_its_own_cli_through_the_bootstrap(tmp_path, 
     assert dsh_command() == [node_bin(), "--import", bootstrap, str(entry.resolve())]
 
 
-def test_an_install_launches_its_own_binary_when_no_source_checkout_is_there(
-    tmp_path, monkeypatch
-):
-    """Once the source copy is gone, the pinned install is the only launcher left."""
+def test_an_install_runs_its_entry_on_the_chosen_node(tmp_path, monkeypatch):
+    """Once the source copy is gone, the pinned install is the only launcher left.
+
+    Its entry runs on `node_bin()` rather than through `node_modules/.bin/dsh`,
+    which takes whichever `node` is first on PATH: that is how workers ran on a Node
+    DSH aborts under while `node_bin()` named a supported one.
+    """
+    monkeypatch.delenv("DSH_CLI", raising=False)
+    monkeypatch.setenv("DSH_ROOT", str(tmp_path))
+    entry = tmp_path / INSTALLED_CLI_ENTRY
+    entry.parent.mkdir(parents=True)
+    entry.write_text("")
+    assert dsh_command() == [node_bin(), str(entry)]
+
+
+def test_an_install_without_its_entry_falls_back_to_the_launcher(tmp_path, monkeypatch):
+    """A layout with only the `.bin` launcher still names something to run."""
     monkeypatch.delenv("DSH_CLI", raising=False)
     monkeypatch.setenv("DSH_ROOT", str(tmp_path))
     binary = tmp_path / "node_modules" / ".bin" / "dsh"
@@ -71,3 +84,64 @@ def test_every_module_that_spawns_dsh_asks_the_resolver():
         assert "dsh_command(" in text, f"{relative} does not ask dsh_command(...)"
         assert "tsx/esm" not in text, f"{relative} still hardcodes the tsx launch"
         assert "apps/cli/src/bin.ts" not in text, f"{relative} still hardcodes the entry"
+
+
+def _node_install(root: Path, relative: str) -> Path:
+    """A fake Node binary at `relative` under `root`, as a version manager lays one out."""
+    binary = root / relative
+    binary.parent.mkdir(parents=True)
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    return binary
+
+
+def _isolated_node_search(tmp_path, monkeypatch, path_node_version: str | None = None) -> None:
+    """Point the search at an empty home, no system Nodes, and a PATH whose `node` reports a version."""
+    monkeypatch.delenv("NODE_BIN", raising=False)
+    monkeypatch.delenv("NVM_DIR", raising=False)
+    monkeypatch.delenv("FNM_DIR", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(paths, "SYSTEM_NODES", ())
+    path_dir = tmp_path / "path-bin"
+    path_dir.mkdir()
+    if path_node_version is not None:
+        node = path_dir / "node"
+        node.write_text(f"#!/bin/sh\necho {path_node_version}\n")
+        node.chmod(0o755)
+    monkeypatch.setenv("PATH", str(path_dir))
+    paths._binary_version.cache_clear()
+
+
+def test_node_22_is_chosen_over_a_newer_default_node(tmp_path, monkeypatch):
+    """DSH aborts intermittently under Node 24.20 and not under 22, so a newer PATH default loses."""
+    _isolated_node_search(tmp_path, monkeypatch, path_node_version="v24.20.0")
+    _node_install(tmp_path, ".nvm/versions/node/v22.20.0/bin/node")
+    newest = _node_install(tmp_path, ".local/share/fnm/node-versions/v22.23.1/installation/bin/node")
+    assert node_bin() == str(newest)
+
+
+def test_a_node_22_older_than_dsh_supports_is_not_chosen(tmp_path, monkeypatch):
+    """DSH needs 22.19; an older 22 falls through to PATH."""
+    _isolated_node_search(tmp_path, monkeypatch, path_node_version="v24.20.0")
+    _node_install(tmp_path, ".nvm/versions/node/v22.18.0/bin/node")
+    assert node_bin() == str(tmp_path / "path-bin" / "node")
+
+
+def test_a_node_22_on_path_counts_as_installed(tmp_path, monkeypatch):
+    """A Node 22 that only PATH knows about (volta, a distro package) is still Node 22."""
+    _isolated_node_search(tmp_path, monkeypatch, path_node_version="v22.23.1")
+    assert node_bin() == str(tmp_path / "path-bin" / "node")
+
+
+def test_node_bin_still_wins_outright(tmp_path, monkeypatch):
+    """An explicit `NODE_BIN` is the operator's choice, Node 22 or not."""
+    _isolated_node_search(tmp_path, monkeypatch)
+    _node_install(tmp_path, ".nvm/versions/node/v22.23.1/bin/node")
+    monkeypatch.setenv("NODE_BIN", "/opt/node24/bin/node")
+    assert node_bin() == "/opt/node24/bin/node"
+
+
+def test_without_node_22_the_path_node_is_used(tmp_path, monkeypatch):
+    """No Node 22 anywhere: the default `node` is what there is."""
+    _isolated_node_search(tmp_path, monkeypatch, path_node_version="v24.20.0")
+    assert node_bin() == str(tmp_path / "path-bin" / "node")

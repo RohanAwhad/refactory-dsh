@@ -9,8 +9,11 @@ layouts.
 
 from __future__ import annotations
 
+import functools
 import os
+import re
 import shutil
+import subprocess
 from pathlib import Path
 
 # this package's directory: …/<repo>/refactory/refactory_dsh/paths.py
@@ -52,25 +55,87 @@ def project_for_nodes() -> Path:
     return Path(os.environ.get("REFACTORY_PROJECT") or Path.cwd())
 
 
+#: The oldest Node 22 DSH supports.
+NODE_22_MINIMUM = (22, 19)
+
+#: Node binaries a system or package manager installs outside a version manager.
+SYSTEM_NODES = (
+    Path("/usr/local/bin/node"),
+    Path("/usr/bin/node"),
+    Path("/opt/homebrew/opt/node@22/bin/node"),
+    Path("/usr/local/opt/node@22/bin/node"),
+)
+
+
 def node_bin() -> str:
-    """The Node binary that runs DSH. Resolves to an absolute path so it works
-    even under a restricted command PATH. Order: ``NODE_BIN`` override, the nvm
-    Node 22 install the launcher exports (DSH needs ^22.19), the current
-    ``PATH``, then a bare ``node``."""
+    """The Node binary that runs DSH, as an absolute path so it works under a
+    restricted command PATH. Order: ``NODE_BIN``, the newest installed Node 22 (at
+    least 22.19), the current ``PATH``, then a bare ``node``.
+
+    Node 22 is chosen even when the default ``node`` is newer: under Node 24.20 DSH
+    aborts intermittently with no output (workers fail ``exit -6``, about one call
+    in four when three run at once), and under Node 22 it does not.
+    """
     env = os.environ.get("NODE_BIN")
     if env:
         return env
-    nvm = Path.home() / ".nvm" / "versions" / "node" / "v22.23.2" / "bin" / "node"
-    if nvm.exists():
-        return str(nvm)
-    found = shutil.which("node")
-    if found:
+    found = _installed_node_22()
+    if found is not None:
         return found
+    on_path = shutil.which("node")
+    if on_path:
+        return on_path
     return "node"
+
+
+def _installed_node_22() -> str | None:
+    """The newest supported Node 22 that nvm, fnm, the system or ``PATH`` provides."""
+    home = Path.home()
+    managed = [
+        *Path(os.environ.get("NVM_DIR") or home / ".nvm").glob("versions/node/v22.*/bin/node"),
+        *Path(os.environ.get("FNM_DIR") or home / ".local" / "share" / "fnm")
+        .glob("node-versions/v22.*/installation/bin/node"),
+    ]
+    probed = [*SYSTEM_NODES, *([Path(on_path)] if (on_path := shutil.which("node")) else [])]
+    candidates = [(_installed_version(path), path) for path in managed if path.is_file()]
+    candidates += [(_installed_version(path.resolve()) or _binary_version(str(path)), path)
+                   for path in probed if path.is_file()]
+    supported = [(version, path) for version, path in candidates
+                 if version is not None and version[0] == 22 and version[:2] >= NODE_22_MINIMUM]
+    return str(max(supported)[1]) if supported else None
+
+
+def _installed_version(path: Path) -> tuple[int, int, int] | None:
+    """The version an install names its directory after (nvm, fnm, volta, Homebrew's
+    Cellar, a CI tool cache), so most Nodes are identified without being run."""
+    for part in reversed(path.parts):
+        version = _version(part)
+        if version is not None:
+            return version
+    return None
+
+
+def _version(text: str) -> tuple[int, int, int] | None:
+    """A ``MAJOR.MINOR.PATCH`` version, with or without a leading ``v``, or None."""
+    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", text.strip())
+    return (int(match[1]), int(match[2]), int(match[3])) if match else None
+
+
+@functools.lru_cache(maxsize=None)
+def _binary_version(binary: str) -> tuple[int, int, int] | None:
+    """What a Node binary reports with ``--version``; None when it cannot say."""
+    try:
+        out = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return _version(out.stdout)
 
 
 #: The CLI entry inside a DSH source checkout, relative to that checkout's root.
 SOURCE_CLI_ENTRY = Path("apps") / "cli" / "src" / "bin.ts"
+
+#: The CLI entry an install of the pinned harness provides, relative to the checkout root.
+INSTALLED_CLI_ENTRY = Path("node_modules") / "@deepseek-ai" / "dsh" / "lib" / "bin.js"
 
 
 def installed_dsh() -> Path:
@@ -90,8 +155,13 @@ def dsh_command(*, root: Path | None = None, cli: str | None = None) -> list[str
     caller drives a pinned install the checkout does not resolve on its own. A source
     checkout — one that still holds ``apps/cli/src/bin.ts`` — runs its own CLI by
     preloading ``source_bootstrap.mjs``, which installs tsx and the source
-    configuration before the entry runs. Anything else uses the installed `dsh`,
-    which is the only launcher left once the source copy is gone.
+    configuration before the entry runs. Anything else runs the installed harness's
+    entry, which is the only launcher left once the source copy is gone.
+
+    Both Node-launched answers run on :func:`node_bin`. The installed entry is run
+    directly rather than through `node_modules/.bin/dsh`: that launcher runs whichever
+    ``node`` is first on ``PATH``, which is how DSH came to run on a Node it aborts
+    under while ``node_bin`` named a supported one.
 
     The source preload resolves tsx and its source configuration from the selected
     checkout. The child's working directory remains the caller's, so an agent can
@@ -105,6 +175,9 @@ def dsh_command(*, root: Path | None = None, cli: str | None = None) -> list[str
     if source.exists():
         preload = Path(__file__).with_name("source_bootstrap.mjs").as_uri()
         return [node_bin(), "--import", preload, str(source.resolve())]
+    entry = selected_root / INSTALLED_CLI_ENTRY
+    if entry.exists():
+        return [node_bin(), str(entry)]
     return [str(selected_root / "node_modules" / ".bin" / "dsh")]
 
 

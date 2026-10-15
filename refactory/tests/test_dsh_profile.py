@@ -34,6 +34,13 @@ _RETIRED_PRESETS = "@deepseek-ai/dsh-refactory-presets"
 _RETIRED_PROFILE = next(iter(dsh_profile.RETIRED_PROFILES))
 
 
+
+@pytest.fixture(autouse=True)
+def _fixed_node(monkeypatch):
+    """These tests fake `subprocess.Popen` to watch DSH being spawned. Choosing a Node
+    may run `node --version`, which would reach the fake, so the choice is fixed."""
+    monkeypatch.setenv("NODE_BIN", "node")
+
 def _profile(home: Path, name: str, bundles: list[str]) -> Path:
     directory = home / "profiles" / name
     directory.mkdir(parents=True)
