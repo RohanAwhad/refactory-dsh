@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from refactory_dsh import lowering
+from refactory_dsh import lowering, target_guard
 from refactory_dsh.nn.executor import ITEMS_OVERRIDE
 from refactory_dsh.run_artifacts import archive_root, overlaps, owned_outputs
 from refactory_dsh.steering import LEDGER
@@ -90,7 +90,8 @@ def prepare(
                     Path('.refactory/events.jsonl'), Path('.refactory/spine-checkpoint.json'),
                     Path('.refactory/graph-controls'), Path('.refactory/graph-control-receipt.json'),
                     Path('.refactory/resource-usage.json'), Path('.refactory/workers'),
-                    Path('.refactory/resume-request.json'), Path('.refactory/run-config.json'), INVOCATION]
+                    Path('.refactory/resume-request.json'), Path('.refactory/run-config.json'),
+                    target_guard.RECORD, INVOCATION]
         for relative in metadata:
             path = workdir / relative
             if not path.exists() and not path.is_symlink():

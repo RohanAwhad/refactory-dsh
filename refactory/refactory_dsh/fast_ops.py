@@ -10,7 +10,7 @@ import shutil
 import tempfile
 from typing import Any
 
-from refactory_dsh import create_ops, design_ops, sandbox, authoring_evidence as evidence
+from refactory_dsh import create_ops, design_ops, sandbox, target_guard, authoring_evidence as evidence
 from refactory_dsh.nn import Verdict
 
 #: A fast mode runs no full review gate or overwatch, so the prompts that show those
@@ -82,6 +82,8 @@ def materialise_artifact(ctx: Any) -> dict[str, Any]:
         raise ValueError("implementation emitted no file blocks")
     checked = design_ops._artifact_files(files)
     output = design_ops._artifact_root(str(ctx.facts["name"]))
+    design_ops._claim(str(ctx.facts["name"]), ctx.workdir)
+    target_guard.warn_if_moved(ctx.workdir)
     if output == root or output in root.parents:
         raise ValueError("output artifact may not replace the source project")
     output.parent.mkdir(parents=True, exist_ok=True)

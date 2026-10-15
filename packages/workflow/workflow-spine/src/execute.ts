@@ -152,6 +152,28 @@ export function reasonOf(stdout: string): string {
   return `${reason.slice(0, half)}${marker}${reason.slice(-half)}`
 }
 
+/**
+ * A line a node addresses to the person driving the run: `run warning: …`,
+ * optionally after the program's name, as in `refactory: run warning: …`. Narrower
+ * than any `warning:` on purpose: a routine notice such as `refactory: warning:
+ * credential readiness is unverified` stays in the log, because repeating it on
+ * every run would teach the person to stop reading warnings.
+ */
+const RUN_WARNING = /^(?:[\w.-]+:\s*)?run warning:\s*\S/i
+
+/**
+ * The run warnings a node that completed printed to stderr, one per line.
+ *
+ * Nobody is shown a completed node's stderr, so a step that noticed, say, the
+ * run's target repository moving under it (#330 I1) would warn nobody. These lines
+ * travel with the `ran` step instead, for the CEO to pass on.
+ * @param stderr - the node's captured stderr.
+ * @returns each run-warning line, trimmed, in the order it was printed.
+ */
+export function runWarningsOf(stderr: string): string[] {
+  return stderr.split('\n').map(line => line.trim()).filter(line => RUN_WARNING.test(line))
+}
+
 /** The declaration handed to a node command. */
 function manifestOf(node: NodeView, command: string, promptFile?: string): NodeManifest {
   return {

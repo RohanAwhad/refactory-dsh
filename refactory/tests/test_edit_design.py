@@ -19,7 +19,7 @@ from refactory_dsh import nn, registry, sandbox
 from refactory_dsh.create import CreateConfig, CreateError, CreateMode
 from model_credential import needs_model_credential
 from refactory_dsh.design import DesignMode
-from refactory_dsh.design_ops import ARTIFACTS
+from refactory_dsh.design_ops import ARTIFACTS, OWNERS
 from refactory_dsh.edit import EditConfig, EditMode
 from refactory_dsh.run import run_node
 from tests_support import (
@@ -37,11 +37,15 @@ ARTIFACT = "designed_tool"
 
 @pytest.fixture(autouse=True)
 def _clean():
+    # The owner record too: the check tests run the gate without a prepare, so a name
+    # an earlier run claimed would otherwise refuse them.
     for root in (registry.workspace_root(Path(".")) / NAME, ARTIFACTS / ARTIFACT):
         shutil.rmtree(root, ignore_errors=True)
+    (OWNERS / f"{ARTIFACT}.json").unlink(missing_ok=True)
     yield
     for root in (registry.workspace_root(Path(".")) / NAME, ARTIFACTS / ARTIFACT):
         shutil.rmtree(root, ignore_errors=True)
+    (OWNERS / f"{ARTIFACT}.json").unlink(missing_ok=True)
 
 
 def _edit_config(**overrides) -> EditConfig:
