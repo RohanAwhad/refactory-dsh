@@ -1,6 +1,8 @@
 .env
 node_modules/
 lib/
+# A vendored dependency ships its built lib/ (see vendor/node-addon-system/README.md).
+!vendor/*/lib/
 *.tsbuildinfo
 pnpm-debug.log
 .pnpm-store/

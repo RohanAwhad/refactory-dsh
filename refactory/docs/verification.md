@@ -60,10 +60,12 @@ one pnpm patch in `patches/` supplies a model-route change, declared under
 - `@deepseek-ai/dsh-headless` accepts `--provider` and `--model` and makes a named
   selection the model-selection middleware's current one, so
   `refactory_dsh/model.py`'s completion client uses the model a caller named.
-- `@deepseek-ai/node-addon-system`'s `flock` tells glibc from musl by the C library
-  mapped into the process instead of `process.report.getReport()`. A report walks
-  every libuv handle and aborts the process when a socket is closing, which is how
-  DSH workers died with `exit -6` mid-step; it also takes seconds on many-CPU hosts.
+
+One dependency is vendored rather than patched: `vendor/node-addon-system` replaces
+`@deepseek-ai/node-addon-system` through an override, because its `flock` generated a
+diagnostic report to tell glibc from musl, and a report aborts the process when a
+socket is closing (DSH workers died with `exit -6` mid-step). A pnpm patch did not
+reach installs whose store already held the package. Its README says when to remove it.
 
 The `ceo` preset is **not** a patch. `packages/bundle/refactory` declares it as an
 inline `@deepseek-ai/dsh-agent-preset` row in `presets/ceo.patch.yml`, the way the

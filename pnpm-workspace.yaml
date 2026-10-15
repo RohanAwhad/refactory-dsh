@@ -24,6 +24,8 @@ overrides:
   '@deepseek-ai/cordis-plugin-timer': '1.1.6'
   '@deepseek-ai/cordis-plugin-group': '1.0.4'
   '@deepseek-ai/schemastery': '3.18.4'
+  # flock without a diagnostic report; see vendor/node-addon-system/README.md.
+  '@deepseek-ai/node-addon-system': 'file:./vendor/node-addon-system'
 
 peerDependencyRules:
   allowedVersions:
@@ -42,17 +44,15 @@ allowBuilds:
   '@deepseek-ai/dsh-subprocess-local': true
   # JSONL durability calls MoveFileExW with write-through publication on Windows.
   koffi: true
-  # No install script; pnpm applies a patch as the package's build, so a patched
-  # package must be allowed to build or an existing install keeps its unpatched copy.
-  '@deepseek-ai/node-addon-system': true
   # No-ops we do not need; listed so the review is explicit rather than absent.
   '@google/genai': false
   protobufjs: false
   msgpackr-extract: false
+  # The vendored copy (see overrides): pnpm counts a local directory as a build; it has none.
+  '@deepseek-ai/node-addon-system': false
 patchedDependencies:
   '@deepseek-ai/dsh-client-ui-directory-picker-native@0.2.0-rc.2': patches/@deepseek-ai__dsh-client-ui-directory-picker-native@0.2.0-rc.2.patch
   '@deepseek-ai/dsh-headless@0.2.0-rc.2': patches/@deepseek-ai__dsh-headless@0.2.0-rc.2.patch
   '@deepseek-ai/dsh-goal-round-driver@0.2.0-rc.2': patches/@deepseek-ai__dsh-goal-round-driver@0.2.0-rc.2.patch
   '@deepseek-ai/dsh-subagent-codex@0.2.0-rc.2': patches/@deepseek-ai__dsh-subagent-codex@0.2.0-rc.2.patch
   '@deepseek-ai/dsh-subagent-claude-code@0.2.0-rc.2': patches/@deepseek-ai__dsh-subagent-claude-code@0.2.0-rc.2.patch
-  '@deepseek-ai/node-addon-system@0.1.2': patches/@deepseek-ai__node-addon-system@0.1.2.patch
