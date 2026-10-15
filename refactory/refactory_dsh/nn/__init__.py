@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from . import edits, resolve
 from .declarations import DeclarationError, Memory, Port
-from .executor import ExecutionError, Executor, ModelClient, RunContext, Step, execute
+from .executor import ExecutionError, Executor, ModelClient, RunContext, Step, Verdict, execute
 from .graph import Edge, Graph, GraphError, Node
 from .knob import KINDS, Knob, KnobError
 from .mode import STATE_VERSION, Mode, RunResult, StateError
@@ -68,6 +68,7 @@ __all__ = [
     "RunResult",
     "StateError",
     "Step",
+    "Verdict",
     "declared_knobs",
     "edits",
     "execute",

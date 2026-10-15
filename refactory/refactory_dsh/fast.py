@@ -220,7 +220,8 @@ class DesignFastMode(DesignMode):
             "prepare", "op", call=f"{OPS}:prepare_artifact", resource_role="work",
             knobs=("name", "brief", "check", "source_project"),
             writes=("brief.json", "source-manifest.json", "repair.txt", "research-review.txt", "check.txt"),
-            produces=("name", "brief", "check", "validation", "source_project", "source_files", "repair_feedback", "repairs_used"),
+            produces=("name", "brief", "check", "validation", "research_review", "qa_gate", "overwatch_review",
+                      "source_project", "source_files", "repair_feedback", "repairs_used"),
             notes="read the artifact brief and capture the source project identity",
         ))
         _strategy_node(graph, artifact=True)

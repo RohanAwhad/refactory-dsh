@@ -115,6 +115,25 @@ const DATA_GRAPH: WorkflowGraph = {
   ],
 }
 
+/**
+ * A model-owned build checked by an automatic gate that can send it back, the
+ * shape of design mode's `emit` → `check`: what makes a reloop's reason visible.
+ */
+const GATED_GRAPH: WorkflowGraph = {
+  name: 'gated',
+  start_node: 'build',
+  nodes: {
+    build: { _type: 'AgentNode', id: 'build', role: 'builder', prompt_template: 'B', reads: [], writes: [] },
+    check: { _type: 'GateNode', id: 'check', evaluator_type: 'fn', evaluator_command: 'run-check', reads: [], writes: [] },
+    report: { _type: 'FnNode', id: 'report', command: 'run-report', reads: [], writes: [] },
+  },
+  edges: [
+    { source: 'build', target: 'check' },
+    { source: 'check', target: 'build', condition: 'reloop' },
+    { source: 'check', target: 'report', condition: 'proceed' },
+  ],
+}
+
 /** A lowered graph on disk, as `interactive.prepare` would leave it. */
 function lower(run: string, graph: WorkflowGraph = AGENT_GRAPH): string {
   const path = join(run, 'graphs', 't.graph.json')
@@ -190,6 +209,23 @@ function captureShell(seen: Array<Record<string, string> | undefined>): object {
           stderr: { text: '', truncated: false },
         }
       },
+    }),
+  }
+}
+
+/** A shell whose every command succeeds printing `stdout`, as a gate's evaluator would. */
+function verdictShell(workdir: string, stdout: string): object {
+  return {
+    resolve: (request: { command: string; workdir?: string; env?: Record<string, string> }) => ({
+      command: request.command, workdir: request.workdir ?? workdir, timeoutMs: 10_000,
+      onExpiry: 'kill', stdoutMaxBytes: 1_000_000, env: request.env,
+    }),
+    execute: async () => ({
+      result: async () => ({
+        exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 10_000,
+        stdout: { text: stdout, truncated: false },
+        stderr: { text: '', truncated: false },
+      }),
     }),
   }
 }
@@ -710,6 +746,26 @@ describe('one deterministic node per call when the run is opened interactively',
       status: 'done',
       ran: { node: 'n4', outputs: ['n4.out'], facts: { n1: true, n2: true, n3: true, n4: true } },
     })
+  })
+
+  it('says why an automatic gate relooped, under `ran` and as the target\'s feedback', async () => {
+    const run = scratch()
+    const graph = lower(run, GATED_GRAPH)
+    const shell = verdictShell(run, 'two tests failed: nan, inf\nreloop\n')
+    const ctx = await mount({ openCommand: openStub(run, graph), executeCommands: true }, shell)
+
+    await call(ctx, 'wf_open', { mode: 'pkg/t', workdir: run }, as('session-1'))
+    await call(ctx, 'wf_done', { node: 'build' }, as('session-1'))
+    const next = await call(ctx, 'wf_next', {}, as('session-1'))
+    expect(next).toMatchObject({
+      status: 'ready',
+      nodes: [{ id: 'build' }],
+      feedback: { build: 'two tests failed: nan, inf' },
+      ran: { node: 'check', type: 'GateNode', verdict: 'reloop', reason: 'two tests failed: nan, inf' },
+    })
+    // Once the rebuild has run, the reason has done its job and stops riding along.
+    await call(ctx, 'wf_done', { node: 'build' }, as('session-1'))
+    expect(await call(ctx, 'wf_state', {}, as('session-1'))).toMatchObject({ feedback: {} })
   })
 
   it('returns the post-drain view from wf_open, not the deterministic start node', async () => {

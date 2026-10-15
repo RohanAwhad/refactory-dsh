@@ -100,7 +100,10 @@ def prepare_design(ctx: Any) -> dict[str, Any]:
     ctx.write_json("brief.json", {"name": name, "brief": brief, "check": check})
     for feedback in ("research-review.txt", "check.txt"):
         ctx.write_text(feedback, "not run: initial authoring pass; no prior feedback\n")
-    return {"name": name, "brief": brief, "check": check, "validation": "(no check has run yet)"}
+    from refactory_dsh.create_ops import UNREFUSED
+
+    return {"name": name, "brief": brief, "check": check, "validation": "(no check has run yet)",
+            "research_review": "(no research review has run yet)", **UNREFUSED}
 
 
 def materialise_artifact(ctx: Any) -> dict[str, Any]:

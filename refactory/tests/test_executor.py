@@ -66,6 +66,15 @@ def test_the_run_reports_every_step(tmp_path):
     assert [step.node for step in executor.steps] == ["first", "second", "last"]
 
 
+def test_a_step_records_why_its_gate_sent_the_run_back(tmp_path):
+    """The walker reports a gate's reason as the spine does under `ran`."""
+    executor = nn.Executor(_loop_graph("loop_ops:explained_passes"), nn.RunContext(tmp_path, knobs={"step": 1}))
+    executor.run()
+    gates = [step for step in executor.steps if step.node == "gate"]
+    assert [(step.verdict, step.reason) for step in gates] == [
+        ("retry", "pass 1 of 3"), ("retry", "pass 2 of 3"), ("proceed", None)]
+
+
 def test_a_gate_loops_until_its_verdict_changes(tmp_path):
     result = nn.execute(_loop_graph("loop_ops:three_passes"), tmp_path, knobs={"step": 2})
     assert result.exit_ok, result.error

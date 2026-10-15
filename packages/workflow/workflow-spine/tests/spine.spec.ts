@@ -49,6 +49,28 @@ describe('linear + gate', () => {
     expect(spine.next().status).toBe('done')
     expect(spine.state().gate_verdicts).toEqual({ gate: 'halt' })
   })
+
+  it('drops a reloop target\'s feedback once the target has run again', () => {
+    const spine = new Spine(graph)
+    spine.complete('a')
+    spine.verdict('gate', 'reloop', 'try harder')
+    expect(spine.next().feedback).toEqual({ a: 'try harder' })
+    // The feedback was for the rerun. Once that has happened, later views stop
+    // carrying it, however long it was.
+    spine.complete('a')
+    expect(spine.next().feedback).toEqual({})
+  })
+
+  it('keeps feedback for a command target, which never reads it, for the driver to see', () => {
+    const spine = new Spine({
+      ...graph,
+      nodes: { ...graph.nodes, a: { _type: 'FnNode', id: 'a', command: 'run-a', reads: [], writes: [] } },
+    })
+    spine.complete('a')
+    spine.verdict('gate', 'reloop', 'try harder')
+    spine.complete('a')
+    expect(spine.next().feedback).toEqual({ a: 'try harder' })
+  })
 })
 
 describe('director expansion', () => {

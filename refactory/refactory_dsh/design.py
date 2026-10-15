@@ -70,7 +70,8 @@ class DesignMode(Mode):
             "prepare", "op", call=f"{OPS}:prepare_design",
             knobs=("name", "brief", "check"),
             writes=("brief.json", "research-review.txt", "check.txt"),
-            produces=("name", "brief", "check", "validation"),
+            produces=("name", "brief", "check", "validation", "research_review", "qa_gate",
+                      "overwatch_review"),
             notes="read the brief and the command that decides whether it is done",
         ))
 

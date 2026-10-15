@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from refactory_dsh.nn import Verdict
+
 TASK = "task.json"
 DRAFT = "draft.md"
 FINAL = "final.md"
@@ -43,7 +45,10 @@ def draft(ctx: Any) -> dict[str, Any]:
 
 def check(ctx: Any) -> str:
     """The deterministic gate: is the draft worth showing a person?"""
-    return "proceed" if len(ctx.read_text(DRAFT).split()) >= MIN_WORDS else "reloop"
+    words = len(ctx.read_text(DRAFT).split())
+    if words >= MIN_WORDS:
+        return "proceed"
+    return Verdict("reloop", f"the draft has {words} words; a person is shown at least {MIN_WORDS}")
 
 
 def publish(ctx: Any) -> dict[str, Any]:

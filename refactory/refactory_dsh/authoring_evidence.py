@@ -39,6 +39,11 @@ REVIEW_CONTEXT = (
     "dependency and exact unblock action; do not request recoding or unchanged retries.\n"
 )
 
+# A full graph's repair writes its findings to `validation` (create_ops.repair);
+# `repair_feedback` is the fast graphs' name for the same thing and is never set
+# in a full graph, so its reviewers would otherwise see a raw `{{repair_feedback}}`.
+FULL_REVIEW_CONTEXT = REVIEW_CONTEXT.replace("{{repair_feedback}}", "{{validation}}")
+
 AUDIT_INSTRUCTIONS = (
     "\nWrite intent-audit.json as {\"requirements\":[{\"id\":\"baseline id\", "
     "\"requirement\":\"the concrete ask(s) checked\", \"status\":\"pass|fail|unverified|excluded\", "
@@ -275,7 +280,7 @@ def wire_reviews(graph: Any) -> None:
         node = graph.nodes[name]
         audit = name == "overwatch"
         graph.nodes[name] = replace(
-            node, prompt_template=node.prompt_template + REVIEW_CONTEXT + (AUDIT_INSTRUCTIONS if audit else ""),
+            node, prompt_template=node.prompt_template + FULL_REVIEW_CONTEXT + (AUDIT_INSTRUCTIONS if audit else ""),
             reads=(*node.reads, EVIDENCE), writes=(*node.writes, AUDIT) if audit else node.writes,
             resource_role="final_validation",
         )

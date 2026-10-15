@@ -18,7 +18,7 @@ from typing import Any
 
 from refactory_dsh import registry
 from refactory_dsh.paths import project_root, project_for_nodes
-from refactory_dsh.nn import Package, PackageError, validate_state
+from refactory_dsh.nn import Package, PackageError, Verdict, validate_state
 
 STAGING = "staging"
 
@@ -111,6 +111,17 @@ The context offers `ctx.knob(name, default)`, `ctx.read_json(name, default)`,
 `ctx.write_json(name, payload)`, `ctx.write_text`, `ctx.append_text`,
 `ctx.read_text`, `ctx.exists`, `ctx.set_fact(name, value)`, `ctx.facts`,
 `ctx.workdir`, `ctx.iteration` and `ctx.model`.
+
+A gate is an operation that returns its verdict: one of its out-edges' conditions.
+When it sends the run back, return the verdict as `nn.Verdict(label, reason)`, so
+whoever is driving the run, and the person watching, learn why. A node that needs
+the reason on its next pass reads it from a fact or file the gate writes:
+
+    def check(ctx):
+        value = ctx.read_json("a.json", {})["value"]
+        if value >= 3:
+            return "proceed"
+        return nn.Verdict("retry", f"value {value} is below 3")
 
 Generated packages live under `.factory/packages/<name>/` and are imported as
 `refactory_packages.<name>`. Use that qualified namespace for `call`, `evaluator`
@@ -264,6 +275,7 @@ def prepare(ctx: Any) -> dict[str, Any]:
         "validation": "(no validation has run yet)",
         "design_review": "(no design has been reviewed yet)",
         "research_review": "(no research review has run yet)",
+        **UNREFUSED,
         "api": API,
         "reference": reference,
         "task_ref": task_ref,
@@ -390,7 +402,7 @@ def gate_research(ctx: Any) -> str:
             f"the research is still not usable after {used} attempt(s):\n{report}"
         )
     ctx.set_fact("research_attempts_used", used)
-    return "reloop"
+    return Verdict("reloop", report)
 
 
 def _revision_source(identifier: str) -> str:
@@ -502,6 +514,15 @@ Rules:
   the work is either done or it is not.
 """
 
+#: What the emit and review prompts show for the review gates' verdicts before any
+#: gate has refused anything. A fact no gate has produced yet would otherwise reach
+#: the worker as a raw ``{{qa_gate}}``, which reads as text to act on, not as "none".
+#: Fast modes say instead that they run no such gate (``fast_ops.FAST_UNREFUSED``).
+UNREFUSED = {
+    "qa_gate": "(no review has refused anything yet)",
+    "overwatch_review": "(no audit has refused anything yet)",
+}
+
 #: A slug a research file can be named by.
 RESEARCH_SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
@@ -576,7 +597,7 @@ def review_design(ctx: Any) -> str:
             f"the design is still not coherent after {used} attempt(s):\n{report}"
         )
     ctx.set_fact("design_attempts_used", used)
-    return "reloop"
+    return Verdict("reloop", report)
 
 
 def _review(raw: str) -> list[str]:
@@ -793,7 +814,7 @@ def validate(ctx: Any) -> str:
             f"the package {name!r} still does not work after {used} attempt(s):\n{report}"
         )
     ctx.set_fact("attempts_used", used)
-    return "reloop"
+    return Verdict("reloop", report)
 
 
 def _evict(module_name: str) -> None:
@@ -1189,7 +1210,7 @@ def repair(ctx: Any, findings: list[str]) -> str:
     ctx.set_fact("attempts_used", used)
     if used >= int(ctx.knob("attempts", ctx.knob("check_attempts", 3))):
         raise ValueError(f"authoring unresolved after {used} attempt(s): {feedback}")
-    return "reloop"
+    return Verdict("reloop", feedback)
 
 
 def gate_smoke(ctx: Any) -> str:
@@ -1632,7 +1653,7 @@ def gate_qa(ctx: Any) -> str:
     if reason:
         ctx.write_text("reviews/qa-gate.txt", reason + "\n")
         ctx.set_fact("qa_gate", reason)
-        return repair(ctx, [reason]) if ctx.exists(evidence.EVIDENCE) else "reloop"
+        return repair(ctx, [reason]) if ctx.exists(evidence.EVIDENCE) else Verdict("reloop", reason)
     ctx.write_text("reviews/qa-gate.txt", "proceed: no blocking finding\n")
     ctx.set_fact("qa_gate", "(the reviews found nothing blocking)")
     ctx.write_text("validation.txt", "(reviews passed)\n")
@@ -1667,4 +1688,4 @@ def gate_overwatch(ctx: Any) -> str:
     ctx.set_fact("overwatch_review", reason)
     ctx.write_text("validation.txt", reason + "\n")
     ctx.set_fact("validation", reason)
-    return repair(ctx, [reason]) if ctx.exists(evidence.EVIDENCE) else "reloop"
+    return repair(ctx, [reason]) if ctx.exists(evidence.EVIDENCE) else Verdict("reloop", reason)

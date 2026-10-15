@@ -54,7 +54,7 @@ export interface WorkflowNode {
   command_timeout_s?: number
   /** `GateNode`: who answers it — its evaluator, a person, or the driving agent. */
   evaluator_type?: 'fn' | 'user' | 'agent'
-  /** `GateNode` with `evaluator_type` `fn`: the command whose last stdout line is the verdict. */
+  /** `GateNode` with `evaluator_type` `fn`: the command whose last stdout line is the verdict, and any lines before it the reason. */
   evaluator_command?: string
   /** `GateNode`: what the person or the driving agent is asked. */
   gate_prompt?: string

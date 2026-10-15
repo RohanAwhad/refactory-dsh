@@ -11,8 +11,9 @@ Node mapping:
 `op`                    `FnNode` running ``python -m refactory_dsh.run <call>``
 `agent`                 `AgentNode`, which DSH runs as a subagent
 `gate`                  `GateNode`. ``fn`` runs its evaluator and routes by the
-                        last stdout line; ``user`` and ``agent`` carry no command
-                        and are answered by the person or by the driving agent
+                        last stdout line, reporting the lines before it as the
+                        reason; ``user`` and ``agent`` carry no command and are
+                        answered by the person or by the driving agent
 ======================  ==================================================
 
 The runner is told its own node through the spine's `DSH_WORKFLOW_NODE`, and the

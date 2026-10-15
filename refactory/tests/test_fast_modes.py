@@ -186,3 +186,13 @@ def test_fast_survey_keeps_selected_reference_without_discovering_other_packages
     assert "counting_pack/fixed_step" in result["survey"]
     assert ctx.read_json("survey.json")["packages"] == [
         {"package": "counting_pack", "reference": "counting_pack/fixed_step"}]
+
+
+def test_a_fast_repair_says_why_it_sends_the_build_back(tmp_path):
+    """Fast modes repair through `_repair`; its verdict carries the findings too."""
+    from refactory_dsh import fast_ops
+
+    ctx = nn.RunContext(tmp_path, knobs={"repair_attempts": 1}, facts={"name": "no_such_package_here"}, task={})
+    ctx.write_json("brief.json", {"task_refs": [], "data_node": False})
+    verdict = fast_ops.validate_package(ctx)
+    assert verdict == "reloop" and verdict.reason and verdict.reason == ctx.facts["repair_feedback"]

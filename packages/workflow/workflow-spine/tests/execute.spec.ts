@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import type { ShellExecution, ShellExecRequest, ShellExecSpec, ShellExecutor, ShellRunResult } from '@deepseek-ai/dsh-shell'
-import { commandOf, isDeterministic, NODE_ENV_KEY, runDeterministic, verdictOf } from '../src/execute.ts'
+import { commandOf, isDeterministic, NODE_ENV_KEY, REASON_LIMIT, reasonOf, runDeterministic, verdictOf } from '../src/execute.ts'
 import type { CommandFailure, CommandOutcome, CommandRunnerConfig, NodeManifest } from '../src/execute.ts'
 import type { NodeView } from '../src/spine.ts'
 
@@ -253,6 +253,26 @@ describe('reading a gate verdict', () => {
   it('ignores evaluator log lines before the verdict', async () => {
     const outcome = await runDeterministic(localShell, gate('g', 'echo "log line"; echo RELOOP'), config)
     expect(completed(outcome).verdict).toBe('reloop')
+  })
+
+  it('reports what the evaluator printed before its verdict as the reason', async () => {
+    const outcome = await runDeterministic(localShell,
+      gate('g', 'echo "two tests failed"; echo "see check.txt"; echo RELOOP'), config)
+    expect(completed(outcome)).toMatchObject({ verdict: 'reloop', reason: 'two tests failed\nsee check.txt' })
+    // A verdict with nothing before it carries no reason, rather than an empty one.
+    expect(completed(await runDeterministic(localShell, gate('g', 'echo PROCEED'), config)).reason).toBeUndefined()
+    expect(reasonOf('reloop')).toBe('')
+    expect(reasonOf('')).toBe('')
+  })
+
+  it('keeps the head and the tail of a long reason, within the limit', () => {
+    const long = `${'a'.repeat(REASON_LIMIT)}${'b'.repeat(REASON_LIMIT)}`
+    const reason = reasonOf(`${long}\nreloop`)
+    expect(reason.length).toBeLessThanOrEqual(REASON_LIMIT)
+    expect(reason.startsWith('a') && reason.endsWith('b')).toBe(true)
+    expect(reason).toContain(`(clipped from ${long.length} characters)`)
+    // A reason already within the limit, such as one the runner clipped, is kept whole.
+    expect(reasonOf(`${reason}\nreloop`)).toBe(reason)
   })
 })
 

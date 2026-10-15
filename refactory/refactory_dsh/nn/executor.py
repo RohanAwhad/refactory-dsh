@@ -48,6 +48,9 @@ class Step:
     duration_s: float
     verdict: str | None = None
     error: str | None = None
+    #: Why a gate gave its verdict, when it said: the same reason the spine reports
+    #: under ``ran``, so a headless run explains a reloop as a driven one does.
+    reason: str | None = None
 
 
 class RunContext:
@@ -172,6 +175,25 @@ class RunContext:
                 f"node {self.node_id!r} produced the fact(s) {extra}, which it does "
                 f"not declare; declared facts: {list(self._declared_facts)}"
             )
+
+
+class Verdict(str):
+    """A gate's verdict label, carrying why the gate gave it.
+
+    It *is* the label, so routing, comparisons and every caller that reads a
+    gate's return as a string are unchanged. The node runner prints ``reason``
+    before the label, which is how the spine hands a reloop's cause to the node
+    the run goes back to and to the CEO driving it. A reason that opens with its
+    own label (``"reloop: …"``, the form gate facts are written in) drops it, so
+    a reader is not told the verdict twice.
+    """
+
+    reason: str
+
+    def __new__(cls, label: str, reason: str = "") -> Verdict:
+        verdict = super().__new__(cls, label)
+        verdict.reason = reason.removeprefix(f"{label}: ")
+        return verdict
 
 
 def render(template: str, ctx: RunContext) -> str:
@@ -514,7 +536,8 @@ class Executor:
                 current = None
                 break
             self.steps.append(
-                Step(node.id, node.kind, time.time() - step_started, verdict=verdict)
+                Step(node.id, node.kind, time.time() - step_started, verdict=verdict,
+                     reason=getattr(verdict, "reason", None) or None)
             )
             if current is not None:
                 self._record(current)
@@ -585,7 +608,8 @@ class Executor:
                 )
                 return f"{node.id}: {type(exc).__name__}: {exc}"
             self.steps.append(
-                Step(node.id, node.kind, time.time() - started, verdict=verdict)
+                Step(node.id, node.kind, time.time() - started, verdict=verdict,
+                     reason=getattr(verdict, "reason", None) or None)
             )
         return None
 

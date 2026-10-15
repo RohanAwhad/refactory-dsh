@@ -17,7 +17,7 @@ export interface NodeView {
   role?: string
   resource_role?: 'work' | 'final_validation'
   evaluator_type?: string
-  /** For an `fn` gate: the command whose last stdout line is the verdict. */
+  /** For an `fn` gate: the command whose last stdout line is the verdict, and any lines before it the reason. */
   evaluator_command?: string
   gate_prompt?: string
   /**
@@ -677,6 +677,12 @@ export class Spine {
       this.completed.push(node)
       this.log.push(`completed ${node}`)
     }
+    // Feedback is what a reloop asked of an agent's next run. That run has now
+    // happened, so later views stop repeating it — a gate's reason can be a whole
+    // check log, and it would otherwise ride along in every `next()` to the end.
+    // A command or a fork never reads it, and runs inside the same drain, so its
+    // feedback stays for the driver to see until the next reloop replaces it.
+    if (body._type === 'AgentNode' || body._type === 'LLMNode') delete this.feedback[node]
 
     if (body._type === 'ForkNode') {
       const join = this.unconditionalTarget(node)

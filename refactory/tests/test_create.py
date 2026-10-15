@@ -818,7 +818,9 @@ def _research_ctx(workdir: Path, plan: str) -> object:
 
 def test_the_research_gate_refuses_prose_in_the_plan(tmp_path):
     ctx = _research_ctx(tmp_path, "research: the subagents are running in the background")
-    assert create_ops.gate_research(ctx) == "reloop"
+    verdict = create_ops.gate_research(ctx)
+    assert verdict == "reloop"
+    assert "running in the background" in verdict.reason
     review = (tmp_path / "research-review.txt").read_text()
     assert "not a JSON array" in review
     assert "running in the background" in review, (
@@ -1088,7 +1090,8 @@ def test_a_review_that_reloops_the_build_says_why_into_the_rebuild(tmp_path):
     The hard sanity run burned two full review rounds (~an hour) refusing the same
     findings, because `gate_qa` and `gate_overwatch` wrote their reasons to a file for
     a reader and set no fact the emit prompt reads: the rebuild re-emitted the same
-    design. `review_design` and `validate` already feed theirs back.
+    design. `review_design` and `validate` already feed theirs back. The verdict
+    carries the same reason, which the runner prints for the CEO driving the run.
     """
     from refactory_dsh.nn import RunContext
 
@@ -1108,13 +1111,31 @@ def test_a_review_that_reloops_the_build_says_why_into_the_rebuild(tmp_path):
     create_ops.synthesize_qa(ctx)
     ctx._declared = ("reviews/qa-gate.txt", "validation.txt")
     ctx._declared_facts = ("qa_gate", "validation")
-    assert create_ops.gate_qa(ctx) == "reloop"
+    verdict = create_ops.gate_qa(ctx)
+    assert verdict == "reloop"
     assert "adding pytest.ini" in ctx.facts["qa_gate"]
+    assert "adding pytest.ini" in verdict.reason and not verdict.reason.startswith("reloop")
 
     (tmp_path / "reviews/overwatch.md").write_text(
         "Wrote the audit.\n\nVERDICT: FAIL\n\nThe scorer can be gamed by deleting the test.\n"
     )
     ctx._declared = ("reviews/overwatch-gate.txt", "validation.txt")
     ctx._declared_facts = ("overwatch_review", "validation")
-    assert create_ops.gate_overwatch(ctx) == "reloop"
+    verdict = create_ops.gate_overwatch(ctx)
+    assert verdict == "reloop"
     assert "deleting the test" in ctx.facts["overwatch_review"]
+    assert "deleting the test" in verdict.reason
+
+
+def test_the_design_review_and_the_package_gate_say_why_they_send_work_back(tmp_path):
+    """Each reloop carries the reason its gate wrote, for the CEO as for the retry."""
+    from refactory_dsh.nn import RunContext
+
+    ctx = RunContext(tmp_path, knobs={}, facts={"name": "no_such_package_here"}, task={})
+    ctx.write_text("strategy.json", "a plan in prose, not JSON")
+    verdict = create_ops.review_design(ctx)
+    assert verdict == "reloop" and verdict.reason and verdict.reason == ctx.facts["design_review"]
+
+    ctx.write_json("brief.json", {"task_refs": [], "data_node": False})
+    verdict = create_ops.validate(ctx)
+    assert verdict == "reloop" and verdict.reason and verdict.reason == ctx.facts["validation"]

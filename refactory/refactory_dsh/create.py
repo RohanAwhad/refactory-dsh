@@ -152,7 +152,8 @@ class CreateMode(Mode):
             writes=("brief.json", "research-review.txt", "strategy-review.txt", "validation.txt"),
             produces=("name", "brief", "extends", "revision_of", "intent", "validation",
                       "design_review", "api", "reference", "task_ref", "class_of_work",
-                      "data_node", "requires_input", "research_review"),
+                      "data_node", "requires_input", "research_review", "qa_gate",
+                      "overwatch_review"),
             notes="read the brief and publish it to the prompts",
         ))
         graph.add(Node(
