@@ -30,14 +30,14 @@ import type { UserQuestionService } from '@deepseek-ai/dsh-user-questions'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { HALT, Spine, validateGraph } from './spine.ts'
 import type { NodeView, SpineNext } from './spine.ts'
-import { commandOf, isDeterministic, runDataCommand, runDeterministic } from './execute.ts'
+import { commandOf, isDeterministic, runDataCommand, runDeterministic, runWarningsOf } from './execute.ts'
 import type { CommandFailure, CommandOutcome } from './execute.ts'
 import type { WorkflowGraph } from './types.ts'
 import { validateBuild } from './build-stamp.ts'
 import { presentCall, presentResult, presentationMeta } from './present.ts'
 
 export { Spine, validateGraph } from './spine.ts'
-export { commandOf, dataCommandOf, isDeterministic, reasonOf, runDataCommand, verdictOf, NODE_ENV_KEY, REASON_LIMIT } from './execute.ts'
+export { commandOf, dataCommandOf, isDeterministic, reasonOf, runDataCommand, runWarningsOf, verdictOf, NODE_ENV_KEY, REASON_LIMIT } from './execute.ts'
 export type { CommandFailure, CommandOutcome, CommandRunnerConfig, NodeManifest } from './execute.ts'
 export type { DataPass, GraphIssue, NodeView, PromptAmendmentMode, SpineNext } from './spine.ts'
 export type { WorkflowEdge, WorkflowGraph, WorkflowNode } from './types.ts'
@@ -358,6 +358,8 @@ interface RanStep {
   outputs?: string[]
   /** The run's `facts.json` as the node's command left it. */
   facts?: JsonValue
+  /** The run warnings the boundary's nodes printed on stderr, each led by its node's id. */
+  warnings?: string[]
 }
 
 /** The item a data pass already materialised on disk, so it is begun once per item. */
@@ -941,6 +943,13 @@ export function apply(ctx: Context, config: Config): void {
         // and data-pass grading to settle before exposing the next ready work.
         const last = automatic.length - 1
         ran = recordedStep(automatic[last]!, workdir, automatic, outcomes[last])
+        // Every peer's warnings, not only the named node's: a warning is about the
+        // run, and the peers are otherwise reported by id alone.
+        const warnings = automatic.flatMap((node, index) => {
+          const outcome = outcomes[index]!
+          return outcome.ok ? runWarningsOf(outcome.stderr).map(line => `${node.id}: ${line}`) : []
+        })
+        if (warnings.length > 0) ran.warnings = warnings
       }
     }
   }
@@ -1171,7 +1180,9 @@ export function apply(ctx: Context, config: Config): void {
       + 'the whole boundary) with the outputs and facts it left in the run '
       + 'directory, so say what it produced before acting on what is due next. When `ran` is a gate '
       + 'that sent the run back, its `verdict` and `reason` say why: tell the person, in a sentence, '
-      + `before driving the rerun. Open any mode this way, `
+      + 'before driving the rerun. When `ran` carries `warnings` — for example that the target '
+      + 'repository moved under the run — tell the person what each one says before going on. '
+      + `Open any mode this way, `
       + 'including an authoring one (create/edit/design): it is the route where a person is present, and '
       + 'a gate marked `(user)` is put to them. For create/edit/design, include the full user brief as '
       + '`brief=<full text>` in the initial knobs array, alongside name/task/check knobs the mode declares. '

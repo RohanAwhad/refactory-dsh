@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import type { ShellExecution, ShellExecRequest, ShellExecSpec, ShellExecutor, ShellRunResult } from '@deepseek-ai/dsh-shell'
-import { commandOf, isDeterministic, NODE_ENV_KEY, REASON_LIMIT, reasonOf, runDeterministic, verdictOf } from '../src/execute.ts'
+import { commandOf, isDeterministic, NODE_ENV_KEY, REASON_LIMIT, reasonOf, runDeterministic, runWarningsOf, verdictOf } from '../src/execute.ts'
 import type { CommandFailure, CommandOutcome, CommandRunnerConfig, NodeManifest } from '../src/execute.ts'
 import type { NodeView } from '../src/spine.ts'
 
@@ -307,5 +307,18 @@ describe('shared resource boundaries', () => {
       expect(completed(await runDeterministic(localShell, { ...fn('validate', 'echo validated'), resource_role: 'final_validation' }, bounded)).stdout).toBe('validated')
       expect(completed(await runDeterministic(localShell, fn('report', 'echo reported'), bounded)).stdout).toBe('reported')
     } finally { rmSync(root, { recursive: true, force: true }) }
+  })
+})
+
+describe('reading the run warnings a completed node printed', () => {
+  it('keeps each run warning, with or without the program name in front', () => {
+    const stderr = 'loading\nrefactory: run warning: the target moved\n  run warning: disk nearly full  \ndone'
+    expect(runWarningsOf(stderr)).toEqual(['refactory: run warning: the target moved', 'run warning: disk nearly full'])
+  })
+
+  it('leaves routine warnings, library notices and an empty stderr in the log', () => {
+    expect(runWarningsOf('refactory: warning: credential readiness is unverified')).toEqual([])
+    expect(runWarningsOf('/x/y.py:3: DeprecationWarning: old API\nUserWarning: noisy')).toEqual([])
+    expect(runWarningsOf('')).toEqual([])
   })
 })

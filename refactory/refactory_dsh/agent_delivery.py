@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from refactory_dsh import target_guard
+
 ROOT = Path('.refactory/agent-delivery')
 CONTRACT_START = '<!-- refactory worker execution -->'
 CONTRACT_END = '<!-- end refactory worker execution -->'
@@ -92,6 +94,14 @@ def _fingerprint(workdir: Path, name: str) -> dict[str, Any] | None:
             'inode': stat.st_ino}
 
 
+def _attempt_failed(workdir: Path, record: dict[str, Any]) -> bool:
+    """Whether a finish for this pending delivery already ran and refused it."""
+    try:
+        return json.loads((workdir / record['receipt']).read_text()).get('status') == 'failed'
+    except (OSError, ValueError, KeyError):
+        return False
+
+
 def _pending(workdir: Path, node: str) -> Path:
     return workdir / ROOT / 'pending' / (hashlib.sha256(node.encode()).hexdigest() + '.json')
 
@@ -114,6 +124,12 @@ def begin(workdir: Path, node: str, prompt: str, writes: list[str], *, reuse: bo
         previous = json.loads(pending.read_text())
         if previous['writes'] != writes:
             raise ValueError(f'agent {node!r} output declarations changed during delivery')
+        if previous.get('target') is not None and _attempt_failed(workdir, previous):
+            # A refused attempt keeps its record for the retry. Judging the retry against
+            # the snapshot from before the first attempt would refuse it for changes the
+            # person already saw, and chose to keep, every time.
+            previous['target'] = target_guard.watch(workdir, node)
+            pending.write_text(json.dumps(previous, indent=2) + '\n')
     ledger = Ledger(workdir)
     ledger_text = ledger.path.read_text() if ledger.exists() else ""
     entries = parse_entries(ledger_text)
@@ -122,6 +138,10 @@ def begin(workdir: Path, node: str, prompt: str, writes: list[str], *, reuse: bo
     if previous is not None and previous['prompt'] == annotated:
         return previous
     before = previous['before'] if previous is not None else {name: _fingerprint(workdir, name) for name in writes}
+    # Taken here because every route dispatches through this bracket (walker, worker
+    # bridge, CEO subagent), so a change an output-only node makes to the target is
+    # attributed to that node alone, not to whatever ran since prepare (#319).
+    target = previous.get('target') if previous is not None else target_guard.watch(workdir, node)
     identifier = previous['id'] if previous is not None else uuid.uuid4().hex
     directory = workdir / ROOT / identifier
     directory.mkdir(parents=True, exist_ok=True)
@@ -138,10 +158,10 @@ def begin(workdir: Path, node: str, prompt: str, writes: list[str], *, reuse: bo
     record = {'id': identifier, 'node': node,
               'started': previous['started'] if previous is not None else context['at'], 'writes': writes,
               'before': before, 'prompt': annotated, 'entries': entries, 'contexts': contexts,
-              'execution': execution,
+              'execution': execution, 'target': target,
               'receipt': str(ROOT / identifier / 'receipt.json')}
     (directory / 'receipt.json').write_text(json.dumps({
-        **{key: value for key, value in record.items() if key != 'prompt'},
+        **{key: value for key, value in record.items() if key not in ('prompt', 'target')},
         'status': 'pending', 'artifacts': before,
     }, indent=2) + '\n')
     pending.parent.mkdir(parents=True, exist_ok=True)
@@ -179,13 +199,18 @@ def finish(workdir: Path, node: str, *, final_response: str | None = None,
         after[captured] = _fingerprint(workdir, captured)
         fresh.add(captured)
     missing = [name for name in writes if name not in fresh]
-    receipt = {key: value for key, value in record.items() if key != 'prompt'}
-    receipt.update(finished=_now(), status='failed' if missing else 'delivered',
+    strayed = target_guard.strayed(workdir, record.get('target'))
+    receipt = {key: value for key, value in record.items() if key not in ('prompt', 'target')}
+    receipt.update(finished=_now(), status='failed' if missing or strayed else 'delivered',
                    delivery='context supplied; semantic compliance not verified',
                    artifacts=after, captured_final=captured,
                    final_response=str(ROOT / record['id'] / 'final-response.txt') if final_response is not None else None,
-                   missing_or_unchanged=missing)
+                   missing_or_unchanged=missing, **({'target_changes': strayed} if strayed else {}))
     (directory / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+    if strayed:
+        # Refused even when the declared output arrived: the output may be a summary of
+        # edits that never pass through the step that writes the artifact.
+        raise ValueError(target_guard.refusal(node, record['target']['root'], strayed, writes))
     if missing:
         raise ValueError(f'agent {node!r} did not deliver required outputs: {", ".join(missing)} (missing or unchanged from before dispatch)')
     pending.unlink()
@@ -239,6 +264,8 @@ def main() -> int:
         if request['action'] == 'begin':
             result = begin(workdir, request['node'], request['prompt'], request['writes'], reuse=True,
                            reads=request.get('reads'))
+            # The bridge reads the prompt; the target snapshot is this module's own state.
+            result = {key: value for key, value in result.items() if key != 'target'}
         elif request['action'] == 'finish':
             result = finish(workdir, request['node'])
         elif request['action'] == 'invalidate':

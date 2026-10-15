@@ -950,3 +950,61 @@ describe('the status of an opened run', () => {
     expect(existsSync(join(configured, '.refactory', 'spine-status.json'))).toBe(false)
   })
 })
+
+/** A {@link stepShell} whose node commands also print `stderr[command]` to stderr. */
+function warningShell(workdir: string, log: string[], stderr: Record<string, string>): object {
+  const inner = stepShell(workdir, log) as {
+    resolve: unknown
+    execute: (spec: { command: string }) => Promise<{ result: () => Promise<Record<string, unknown>> }>
+  }
+  return {
+    resolve: inner.resolve,
+    execute: async (spec: { command: string }) => {
+      const execution = await inner.execute(spec)
+      return {
+        result: async () => ({ ...await execution.result(), stderr: { text: stderr[spec.command] ?? '', truncated: false } }),
+      }
+    },
+  }
+}
+
+/** What `design_ops.prepare_design` prints on every run where credentials cannot be probed. */
+const READINESS_NOTICE = 'refactory: warning: Credential diagnostic unavailable for the selected '
+  + 'runtime/configuration; credential readiness is unverified. Normal execution will perform its own checks.'
+
+/** What `target_guard.warn_if_moved` prints when the run's target changed since prepare. */
+const DRIFT_WARNING = 'refactory: run warning: the target /work/repo changed since this run recorded it '
+  + 'at prepare: the branch changed from main to other'
+
+describe('run warnings a completed node printed', () => {
+  it('travel with the ran step, named by node, and only on the step that printed them', async () => {
+    const run = scratch()
+    const graph = lower(run, CHAIN_GRAPH)
+    const log: string[] = []
+    const shell = warningShell(run, log, { 'run-n1': `checked\n${DRIFT_WARNING}\n` })
+    const ctx = await mount({ openCommand: openStub(run, graph), executeCommands: true }, shell)
+
+    const first = await call(ctx, 'wf_open', { mode: 'pkg/t', workdir: run }, as('session-1'))
+    expect(first).toMatchObject({ ran: { node: 'n1', warnings: [`n1: ${DRIFT_WARNING}`] } })
+
+    const second = await call(ctx, 'wf_next', {}, as('session-1')) as { ran?: { node: string; warnings?: string[] } }
+    expect(second.ran?.node).toBe('n2')
+    expect(second.ran?.warnings).toBeUndefined()
+  })
+
+  it('leave the routine readiness notice in the log while a drift warning reaches the CEO', async () => {
+    const run = scratch()
+    const graph = lower(run, CHAIN_GRAPH)
+    const log: string[] = []
+    const shell = warningShell(run, log, {
+      'run-n1': `${READINESS_NOTICE}\n`,
+      'run-n2': `${READINESS_NOTICE}\n${DRIFT_WARNING}\n`,
+    })
+    const ctx = await mount({ openCommand: openStub(run, graph), executeCommands: true }, shell)
+
+    const first = await call(ctx, 'wf_open', { mode: 'pkg/t', workdir: run }, as('session-1')) as { ran?: { warnings?: string[] } }
+    expect(first.ran?.warnings).toBeUndefined()
+    const second = await call(ctx, 'wf_next', {}, as('session-1'))
+    expect(second).toMatchObject({ ran: { node: 'n2', warnings: [`n2: ${DRIFT_WARNING}`] } })
+  })
+})
