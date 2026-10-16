@@ -55,6 +55,16 @@ def project_for_nodes() -> Path:
     return Path(os.environ.get("REFACTORY_PROJECT") or Path.cwd())
 
 
+def refactory_home() -> Path:
+    """Refactory's own per-user directory: global memory, the project registry, run worktrees.
+
+    Outside every project, because what lives here belongs to no one checkout.
+    ``REFACTORY_HOME`` overrides it, which is also how the tests keep it out of the real
+    home directory.
+    """
+    return Path(os.environ.get("REFACTORY_HOME") or Path.home() / ".refactory").expanduser()
+
+
 #: The oldest Node 22 DSH supports.
 NODE_22_MINIMUM = (22, 19)
 

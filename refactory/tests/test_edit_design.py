@@ -221,7 +221,8 @@ def test_designing_needs_a_check():
 @pytest.mark.toolchain("model-credential")
 @needs_model_credential
 def test_the_artifact_lands_beside_the_workspace_not_in_it():
-    ctx = nn.RunContext(Path(".factory/design-prep"))
+    """With its worktree off, a run writes the artifact directory, as before #351."""
+    ctx = nn.RunContext(Path(".factory/design-prep"), knobs={"worktree": False})
     ctx.task = {"name": ARTIFACT, "brief": "a tool", "check": "python -c 'pass'"}
     from refactory_dsh import design_ops
 
@@ -290,7 +291,12 @@ def test_a_design_run_produces_a_checked_artifact():
     payload = json.loads((workdir / "design.json").read_text())
     assert payload["name"] == ARTIFACT
     assert payload["checked"] is True
-    assert (ARTIFACTS / ARTIFACT / "tool.py").exists()
+    # With no target, the run started a new project and worked in its own worktree
+    # on its own branch (#351): the artifact is that worktree, committed there.
+    assert payload["branch"].startswith("refactory/run-")
+    assert Path(payload["artifact"], "tool.py").read_text() == "print('built')\n"
+    assert payload["head"] != payload["base"], "the attempt is a commit on the run's branch"
+    assert not (ARTIFACTS / ARTIFACT).exists(), "nothing is written under .factory/artifacts"
 
 
 def test_a_design_that_never_passes_its_check_fails_loudly():

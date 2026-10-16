@@ -323,6 +323,10 @@ def run(
             summary = run_summary(workdir)
             if summary:
                 print(summary)
+        # Whatever the exit code: a warning matters most on a run that went wrong.
+        warned = run_warnings(workdir)
+        if warned:
+            print(warned, file=sys.stderr)
         return code
 
 
@@ -358,6 +362,27 @@ def run_summary(workdir: Path) -> str:
     if not shown:
         return ""
     return "refactory: what the run recorded — " + json.dumps(shown, default=str)
+
+
+def run_warnings(workdir: Path) -> str:
+    """The run warnings this run's steps printed, as the run's journal recorded them.
+
+    The spine hands each one to the CEO, but nothing makes the CEO repeat it, and a
+    headless run's turns are read by nobody. A warning such as uncommitted changes
+    in the target that the run left out changes what its result means, so the run
+    lists them itself once it ends. Empty when no step warned.
+    """
+    from refactory_dsh import live
+
+    records, _ = live.events(Path(workdir))
+    # Once each: a step that reloops repeats the warnings it printed the first time.
+    lines = list(dict.fromkeys(
+        f"  {record.get('node_id')}: {record['summary']}" for record in records
+        if record.get("kind") == "run_warning" and record.get("summary")
+    ))
+    if not lines:
+        return ""
+    return "\n".join(["refactory: what the run warned about —", *lines])
 
 
 def main(argv: list[str] | None = None) -> int:
