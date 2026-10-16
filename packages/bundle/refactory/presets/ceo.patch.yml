@@ -206,6 +206,21 @@
               - id: tool-subagent-list-agents
                 name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
 
+              # A subagent the CEO spawns gets the content tools and no shell, so code work
+              # stays in refactory's own nodes (#347): the file tools (`write` and `edit`
+              # included, since an agent node the CEO dispatches itself writes its output
+              # with them), web research, `skill`, `todo_write`, and the `send_message` a
+              # continuable child reaches its parent with. It gets nothing that starts a run
+              # or an unfiltered child (`workflow`, `ralph`, `refactory`) and none of the
+              # CEO's own controls. A name the child cannot inherit fails every subagent
+              # call, so the list names only tools both shipped profiles mount on every
+              # platform, and a profile that drops one must drop it here too; a deny-list
+              # would have to name `bash` here and `pwsh` on Windows. The child still sees
+              # this row's `subagent`, which `modelSelectionSettings` registers on each
+              # agent's own scope where no filter reaches; the host depth limit (1 by
+              # default) refuses it, and a deeper limit hands on this filter. The fork row
+              # and the graph profile's delegation rows carry the same list. Nodes lowered to
+              # workers run in their own headless runtime instead.
               - id: tool-subagent
                 name: '@deepseek-ai/dsh-tool-subagent'
                 config:
@@ -213,9 +228,12 @@
                   toolName: subagent
                   modelSelectionSettings: true
                   backgroundMode: continuable
+                  toolFilter:
+                    allow: [read, write, edit, glob, grep, read_image, web_search, web_fetch, skill, todo_write, send_message]
 
-              # Fork omits model selection so provider/model stay equal to the parent and
-              # the inherited history remains eligible for KV Cache reuse. This preset
+              # Fork omits model selection so provider/model stay equal to the parent. Its
+              # tool list does not: `ceoDeny` narrows the CEO and the filter narrows the
+              # child, so the request prefix is not shared for KV Cache reuse. This preset
               # keeps fork continuable; parent and child inherit the same messaging tool,
               # while the parent id and return guidance follow the inherited history.
               - id: tool-subagent-fork
@@ -224,6 +242,8 @@
                   provider: fork
                   toolName: subagent_fork
                   backgroundMode: continuable
+                  toolFilter:
+                    allow: [read, write, edit, glob, grep, read_image, web_search, web_fetch, skill, todo_write, send_message]
 
               # Production dsh does not install these optional providers. Install the
               # matching Bundle in this Profile and restart the Host, then copy this
@@ -296,12 +316,13 @@
 
           # ── interactive workflow spine ─────────────────────────────────────────────
           # The CEO drives a mode's graph node by node in the Web chat. It mounts HERE,
-          # in the preset's standing scope, rather than in the host composition, because
-          # the spine denies the CEO's own coding/external tools at `agent/created` and
-          # that guard only bites when `scopeOf(ctx)` is the scope the CEO joined. A host
-          # row has no scope, so the guard returned early and the CEO kept `bash` — which
-          # it used to run a mode's deterministic nodes by hand. `tool-refactory` above is
-          # the same pattern: a preset row registering a tool for the session's agent.
+          # in the preset's standing scope, rather than in the host composition, so its
+          # `wf_*` tools, its prompt and its guard reach this preset's agents only. The guard
+          # denies the CEO's own coding/external tools at `agent/created`; without it the
+          # CEO would keep `bash` and run a mode's deterministic nodes by hand. A host row
+          # would reach every top-level agent on the host, whatever preset its session
+          # uses. `tool-refactory` above is the same pattern: a preset row
+          # registering a tool for the session's agent.
           #
           # `inject: [shell]` waits for the host `shell` executor (the base composition's
           # `bash-sandbox`), which the spine resolves with `ctx.get('shell')` to run a
