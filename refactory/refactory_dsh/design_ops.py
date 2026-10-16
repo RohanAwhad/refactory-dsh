@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
-from refactory_dsh import projects, sandbox, target_guard, worktree
+from refactory_dsh import delivery, projects, sandbox, target_guard, worktree
 from refactory_dsh.paths import project_for_nodes
 from refactory_dsh.worktree import AttemptRefused, _alive, _json
 
@@ -284,7 +284,8 @@ def prepare_design(ctx: Any, *, worktrees: bool = True) -> dict[str, Any]:
     """Read the brief, and what the brief says counts as done.
 
     A design run works in its own worktree unless its ``worktree`` knob is off
-    (`_open_worktree`). ``worktrees`` is False for design_fast, which keeps its own
+    (`_open_worktree`), and its delivery is planned here, for the approval gate to show
+    (`delivery.plan_run`). ``worktrees`` is False for design_fast, which keeps its own
     copy-and-overlay of ``source_project`` until it moves onto worktrees too.
     """
     task = dict(getattr(ctx, "task", {}) or {})
@@ -309,9 +310,11 @@ def prepare_design(ctx: Any, *, worktrees: bool = True) -> dict[str, Any]:
         )
     located: dict[str, Any] = {}
     if worktrees and ctx.knob("worktree", True) not in (False, 0, "0", "false"):
+        # A refinement starts from its pull request's head, in a clone of its repository.
+        task = delivery.refine_task(ctx, task)
         located = _open_worktree(ctx, name, task)
     else:
-        given = [knob for knob in ("target", "base", "setup")
+        given = [knob for knob in ("target", "base", "setup", "refine")
                  if str(task.get(knob) or ctx.knob(knob, "") or "").strip()]
         if given:
             raise ValueError(
@@ -358,9 +361,10 @@ def prepare_design(ctx: Any, *, worktrees: bool = True) -> dict[str, Any]:
 
     # Resolved once, as create resolves its own inputs: the check reads the fact.
     setup = str(task.get("setup") or ctx.knob("setup", "") or "").strip()
+    planned = delivery.plan_run(ctx, task=task) if worktrees else {}
     return {"name": name, "brief": brief, "check": check, "validation": "(no check has run yet)",
             "research_review": "(no research review has run yet)", **UNREFUSED, **located,
-            **({"setup": setup} if worktrees else {})}
+            **({"setup": setup} if worktrees else {}), **planned}
 
 
 def _emitted(answer: str, *, edits: bool) -> tuple[dict[Path, str], Edits, tuple[Path, ...]]:

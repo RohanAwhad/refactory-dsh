@@ -300,6 +300,34 @@ function recordedStep(
 }
 
 /**
+ * A gate's prompt with the run's facts filled in, as refactory fills `{{name}}` in an
+ * agent node's prompt (`render`): a fact the run has not produced is left as written.
+ *
+ * A user gate's question is all its card shows, so a gate that must say something only
+ * the run knows -- design mode's names the repository delivery would create -- carries
+ * it as a fact, and it is filled wherever the question is put.
+ * @param text - the gate's prompt, as lowered.
+ * @param workdir - the run directory whose `facts.json` holds the values.
+ * @returns the prompt with every known `{{name}}` replaced.
+ */
+export function withFacts(text: string, workdir: string | undefined): string {
+  if (workdir === undefined || !text.includes('{{')) return text
+  let facts: Record<string, unknown>
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(workdir, 'facts.json'), 'utf8'))
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return text
+    facts = parsed as Record<string, unknown>
+  } catch {
+    return text
+  }
+  return text.replace(/\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g, (whole: string, key: string) => {
+    if (!Object.hasOwn(facts, key)) return whole
+    const value = facts[key]
+    return typeof value === 'string' ? value : JSON.stringify(value)
+  })
+}
+
+/**
  * The run directory a session gets when the person names none.
  *
  * A chat has no terminal to name a directory, and the console's `open` verb
@@ -1045,6 +1073,12 @@ export function apply(ctx: Context, config: Config): void {
         node.prompt_template = receipt.prompt
       }
     }
+    // A user gate's question is shown as the CEO sees it here and as the card puts it.
+    if (next.status === 'ready') {
+      for (const node of next.nodes) {
+        if (node._type === 'GateNode' && node.gate_prompt !== undefined) node.gate_prompt = withFacts(node.gate_prompt, workdir)
+      }
+    }
     recordStatus(spine, workdir, spine.isHalted() ? 'halted' : spine.isPaused() ? 'paused' : next.status === 'done' ? 'done' : 'ready')
     // The item being iterated travels with the node views, so the subagent for a
     // pass is handed the item rather than being sent to find it on disk. Under
@@ -1136,7 +1170,7 @@ export function apply(ctx: Context, config: Config): void {
         questions: [{
           id: gate,
           header: 'Workflow gate',
-          question: view.gate_prompt || `Gate ${gate}`,
+          question: withFacts(view.gate_prompt ?? '', workdir) || `Gate ${gate}`,
           ...(labels.length === 0 ? {} : { options: labels.map(label => ({ label })) }),
         }],
         ...(exec.agent === undefined ? {} : { agent: exec.agent }),
@@ -1228,7 +1262,9 @@ export function apply(ctx: Context, config: Config): void {
       + 'a gate marked `(user)` is put to them. For create/edit/design, include the full user brief as '
       + '`brief=<full text>` in the initial knobs array, alongside name/task/check knobs the mode declares. '
       + 'For design, `target=<repository root>` changes an existing repository, in a worktree of its own on the '
-      + 'run\'s branch; without it the run starts a new project. '
+      + 'run\'s branch; without it the run starts a new project. Once its reviews pass, a design run opens a pull '
+      + 'request, which its approval gate names first in `delivery.md` (`pr=0` keeps the work local); to follow up '
+      + 'an open pull request, open design with `refine=<the pull request\'s URL>` and the follow-up as the brief. '
       + 'Intent records the same purpose in the authoritative ledger delivered to every agent node; '
       + 'an empty brief knob alone is not a reason to reopen a live run or edit a deterministic FnNode prompt. '
       + 'Use refactory action `runtime` when available to inspect inherited model/home context before asking setup questions. '
@@ -1259,7 +1295,7 @@ export function apply(ctx: Context, config: Config): void {
       description: `Open a mode's graph and claim it for this session, so it can be driven node by node. Pass any mode the catalogue lists as \`<package>/<name>\` — a scored mode, or an authoring one ("create", "edit", "design") — and the open command lowers it and this reads the graph it wrote. This is the route where a person is present: the runtime puts a \`user\` gate to them with the person-questions service, and routes the answer they give, so a gate marked \`(user)\` is theirs and no verdict may be passed for it. Prefer this over a headless authoring call whenever someone can answer. Returns the post-drain view, so a deterministic start node has already run and is reported under \`ran\` rather than left due. One driven run at a time is open in a session: a second open is refused until that run finishes. All the other \`${toolPrefix}_*\` tools work on the opened run, and refuse when this session has not opened one.`,
       parameters: {
         mode: { type: 'string', required: true, description: 'The mode to run, as `<package>/<name>`.' },
-        knobs: { type: 'array', items: { type: 'string' }, description: 'Knob overrides for this run, each as `NAME=VALUE` (repeatable). For create/edit/design, include `brief=<the full user brief>` on the first open, plus the other declared knobs such as name, task_ref or check; for design, `target=<repository root>` to change an existing repository (without it, the run starts a new project).' },
+        knobs: { type: 'array', items: { type: 'string' }, description: 'Knob overrides for this run, each as `NAME=VALUE` (repeatable). For create/edit/design, include `brief=<the full user brief>` on the first open, plus the other declared knobs such as name, task_ref or check; for design, `target=<repository root>` to change an existing repository (without it, the run starts a new project), `refine=<pull request URL>` to follow up an open pull request, and `pr=0` to open none.' },
         intent: { type: 'string', description: 'The user’s purpose for this run, recorded in its intent ledger. Without one the ledger records the requested mode identifier.' },
         workdir: { type: 'string', description: 'The run directory to lower into. When absent the spine derives one from this session and the mode — `<cwd>/.factory/web/<session>/<package>-<mode>` — creates it, and passes it as `--workdir`; the console\'s `open` verb requires a workdir, so one is always sent.' },
       },

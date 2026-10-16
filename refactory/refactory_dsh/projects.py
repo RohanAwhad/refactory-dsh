@@ -96,15 +96,67 @@ def record_run(path: Path, *, run: Path, branch: str, base: str, status: str) ->
                 entry = {"name": path.name, "path": str(path), "kind": "existing",
                          "created": datetime.now(timezone.utc).isoformat(), "runs": []}
                 registry["projects"].append(entry)
+            earlier = next((note for note in entry.get("runs", []) if note.get("branch") == branch), {})
             entry["runs"] = [note for note in entry.get("runs", []) if note.get("branch") != branch]
             entry["runs"].append({"run": str(run), "branch": branch, "base": base, "status": status,
-                                  "at": datetime.now(timezone.utc).isoformat()})
+                                  "at": datetime.now(timezone.utc).isoformat(),
+                                  **{key: earlier[key] for key in ("pull_request", "delivery") if earlier.get(key)}})
             worktree._write_json(registry_path(), registry)
     except OSError as error:
         from refactory_dsh.target_guard import warn
 
         warn(f"the project registry {registry_path()} could not be written ({error}); the run goes on, "
              "but `refactory projects` will not list it")
+
+
+def _update(path: Path, change: Any) -> None:
+    """Apply ``change`` to ``path``'s entry, reporting a registry that cannot be written."""
+    path = Path(path).resolve()
+    try:
+        with worktree._locked(registry_path().with_suffix(".lock")):
+            registry = load()
+            entry = _entry(registry, path)
+            if entry is not None:
+                change(entry)
+                worktree._write_json(registry_path(), registry)
+    except OSError as error:
+        from refactory_dsh.target_guard import warn
+
+        warn(f"the project registry {registry_path()} could not be written ({error}); "
+             "`refactory projects` will not show it")
+
+
+def record_delivery(path: Path, *, branch: str, pull_request: str, status: str) -> None:
+    """Note how a run's branch was delivered (#350): its pull request, if any, and how that went.
+
+    A run reported as succeeded can still deliver nothing, or a pull request that shows
+    another head, and the listing says so rather than leaving "succeeded" to stand alone.
+    """
+    def change(entry: dict[str, Any]) -> None:
+        for note in entry.get("runs", []):
+            if note.get("branch") == branch:
+                note["delivery"] = status
+                if pull_request:
+                    note["pull_request"] = pull_request
+    _update(path, change)
+
+
+def record_repository(path: Path, repository: str) -> None:
+    """Note the GitHub repository refactory created for the new project at ``path`` (#350).
+
+    It is how a later delivery tells the repository it made from one that merely has
+    the project's name, which it never pushes into.
+    """
+    _update(path, lambda entry: entry.__setitem__("github", repository))
+
+
+def record_creating(path: Path, repository: str) -> None:
+    """Note, before asking GitHub, the repository a delivery is about to create for ``path`` (#350).
+
+    A creation gh reports as failed may still have made it; this is how the delivery,
+    or its redo, tells that repository from one that merely has the project's name.
+    """
+    _update(path, lambda entry: entry.__setitem__("github_creating", repository))
 
 
 def new_project(name: str) -> Path:
@@ -174,7 +226,10 @@ def slot_record(path: Path, branch: str) -> dict[str, Any]:
 def _describe(project: dict[str, Any]) -> str:
     runs = project.get("runs", [])
     tail = f"; last run {status(project, runs[-1])} on {runs[-1].get('branch')}" if runs else ""
-    return f"{project.get('name')}  {project.get('path')}  ({project.get('kind')}, {len(runs)} run(s){tail})"
+    if runs and (runs[-1].get("pull_request") or runs[-1].get("delivery")):
+        tail += f", {runs[-1].get('delivery') or 'delivered'} {runs[-1].get('pull_request') or ''}".rstrip()
+    github = f", {project['github']}" if project.get("github") else ""
+    return f"{project.get('name')}  {project.get('path')}  ({project.get('kind')}{github}, {len(runs)} run(s){tail})"
 
 
 def main(argv: list[str] | None = None) -> int:

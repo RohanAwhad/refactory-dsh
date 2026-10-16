@@ -110,7 +110,7 @@ def _run_argv(identifier: str, args: argparse.Namespace) -> list[str]:
 
 
 def _worktree_knobs(args: argparse.Namespace) -> list[str]:
-    """`--target`, `--base`, `--no-worktree` and `--setup`, as the design mode's knobs."""
+    """`--target`, `--base`, `--no-worktree`, `--setup` and how the run is delivered, as design mode's knobs."""
     knobs = []
     if args.target:
         # Absolute, because the run resolves it from its own directory, not this shell's.
@@ -121,6 +121,12 @@ def _worktree_knobs(args: argparse.Namespace) -> list[str]:
         knobs.append("worktree=0")
     if args.setup:
         knobs.append(f"setup={args.setup}")
+    if args.no_pr:
+        knobs.append("pr=0")
+    if args.refine:
+        knobs.append(f"refine={args.refine}")
+    if args.review_comments:
+        knobs.append("review_comments=1")
     return knobs
 
 
@@ -152,14 +158,23 @@ def cmd_ceo(args: argparse.Namespace) -> int:
     mode = str(args.mode or "")
     # A flag a mode would ignore is refused, not dropped: the person meant it.
     located = [flag for flag, given in (("--target", args.target), ("--base", args.base),
-                                        ("--no-worktree", args.no_worktree), ("--setup", args.setup)) if given]
-    in_worktree = [flag for flag in located if flag != "--no-worktree"]
+                                        ("--no-worktree", args.no_worktree), ("--setup", args.setup),
+                                        ("--no-pr", args.no_pr), ("--refine", args.refine),
+                                        ("--review-comments", args.review_comments)) if given]
+    in_worktree = [flag for flag in located if flag not in ("--no-worktree", "--no-pr")]
     if args.no_worktree and in_worktree:
         print(
             f"refactory: --no-worktree cannot take {', '.join(in_worktree)}: without a worktree the "
             "artifact is written under .factory/artifacts",
             file=sys.stderr,
         )
+        return 2
+    if args.refine and args.base:
+        print("refactory: --refine starts from the pull request's head, so it takes no --base", file=sys.stderr)
+        return 2
+    if args.review_comments and not args.refine:
+        print("refactory: --review-comments goes with --refine: they are the pull request's comments",
+              file=sys.stderr)
         return 2
     runs_a_mode = "/" in mode if mode else _names_a_mode(target)
     # A named mode takes them as its knobs; one that does not declare them refuses them by name.
@@ -496,6 +511,15 @@ def build_parser() -> argparse.ArgumentParser:
                      help="design only: write the artifact under .factory/artifacts instead of a worktree")
     ceo.add_argument("--setup", default="",
                      help="design only: a command run in the worktree before each check, such as a build")
+    ceo.add_argument("--no-pr", action="store_true",
+                     help="design only: keep the work on the run's local branch instead of opening a pull "
+                          "request once the reviews pass")
+    ceo.add_argument("--refine", default="", metavar="PR",
+                     help="design only: follow up an open pull request (its URL or owner/repo#number); the "
+                          "run starts from its branch and updates it")
+    ceo.add_argument("--review-comments", action="store_true",
+                     help="design only, with --refine: add the pull request's reviews and comments to the "
+                          "run's steering")
     for key in ("worker_backend", "effort", "permission_mode"):
         ceo.add_argument("--" + key.replace("_", "-"), default="")
     for key in ("max_elapsed_s", "max_tokens", "validation_reserve_s", "validation_reserve_tokens"):

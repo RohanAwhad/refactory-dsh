@@ -201,7 +201,7 @@ def _design_answers(emit: list[str]) -> list[str]:
 def test_the_design_graph_is_a_different_shape_from_a_package_one():
     graph = DesignMode().graph()
     assert sorted(graph.nodes) == [
-        "check", "code_reviewer", "design_doc", "emit", "fork_qa", "gate_overwatch",
+        "check", "code_reviewer", "deliver", "design_doc", "emit", "fork_qa", "gate_overwatch",
         "gate_qa", "gate_research", "gate_strategy", "health_checker", "join_qa",
         "materialise", "overwatch", "prepare", "qa_director", "record_findings", "report",
         "research_director", "strategy_director", "synthesize_qa", "synthesize_strategy",

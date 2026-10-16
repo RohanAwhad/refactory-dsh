@@ -279,6 +279,14 @@ def run(
                 raise ValueError(f"--approve takes GATE=VALUE, not {pair!r}")
             # After prepare(), so the intent seed and the verdicts are both in the ledger.
             steering.Ledger(workdir).verdict(gate.strip(), value.strip(), approval=True)
+        if identifier == "default_pack/design" and not resume:
+            # The approval gate shows delivery.md; one answered up front shows nothing,
+            # so the person is told here instead (#350).
+            from refactory_dsh import delivery
+
+            approved = any(str(pair).partition("=")[0].strip() == "gate_strategy" for pair in approve or [])
+            (delivery.announce if approved else delivery.forget)(
+                dict(str(pair).split("=", 1) for pair in knobs or [] if "=" in str(pair)), workdir)
         argv = command(
             identifier, workdir=workdir, graphs=graphs, name=name, knobs=knobs, project=project,
             provider=provider if worker_backend == "dsh" else "",
@@ -332,7 +340,7 @@ def run(
 
 #: The facts worth showing a person who just ran a mode, in the order they read them.
 SUMMARY_KEYS = (
-    "name", "package_path", "files", "artifact", "check", "validation",
+    "name", "package_path", "files", "artifact", "check", "validation", "pull_request", "delivery_result",
     "smoke_score", "smoke_reason",
     "revision_of", "before_score", "after_score", "regressed", "revision_note",
 )
