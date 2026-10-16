@@ -240,6 +240,17 @@ def test_a_file_written_over_a_directory_or_inside_a_file_is_refused_not_crashed
         worktree.commit_attempt(run, {}, "attempt 2", (Path("pkg"),))
 
 
+def test_a_file_that_is_not_text_can_still_be_deleted(repo, tmp_path):
+    """It cannot be edited, which is no reason it cannot be removed."""
+    (repo / "logo.bin").write_bytes(b"\xff\xfe\x00")
+    git(repo, "add", "logo.bin")
+    git(repo, "commit", "-q", "-m", "a binary file")
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "bdbdbdbd3333", run)
+    worktree.commit_attempt(run, {}, "attempt", (Path("logo.bin"),))
+    assert "logo.bin" not in git(Path(found.path), "ls-tree", "--name-only", "HEAD").split()
+
+
 def test_an_attempt_reads_and_deletes_only_what_the_last_attempt_committed(repo, tmp_path):
     """Edits apply to the commit, whatever a check left on disk; a deletion needs a file to delete."""
     run = _run(tmp_path)

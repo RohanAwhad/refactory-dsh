@@ -319,7 +319,7 @@ def test_a_design_that_never_passes_its_check_fails_loudly():
         verdicts={"gate_strategy": "proceed"},
     )
     assert result.exit_ok is False
-    assert "authoring unresolved after 2 attempt(s)" in (result.error or "")
+    assert "authoring unresolved after 3 attempt(s)" in (result.error or "")
 
 
 def test_a_revision_records_the_state_it_came_from(tmp_path):

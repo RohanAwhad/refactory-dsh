@@ -195,8 +195,8 @@ def test_a_check_that_rewrites_a_tracked_file_does_not_wedge_the_run(repo, tmp_p
     assert result.exit_ok, result.error
     assert git(repo, "show", f"{_report(tmp_path / 'run')['branch']}:app.py") == "print('app')"
     warned = capsys.readouterr().err
-    assert "were put back before this one: app.py" in warned
-    assert "are not part of its branch" in warned
+    assert "the check changed tracked files in the run's worktree; they were put back" in warned and "app.py" in warned
+    assert "are not part of its branch" not in warned, "put back after the check, so the report finds none"
 
 
 # ── edits, and an emission materialise cannot apply (#330 I4, E5) ──────────
@@ -240,7 +240,7 @@ def test_an_emission_materialise_cannot_apply_goes_back_to_emit_with_the_reason(
 
 def test_emissions_that_never_apply_end_the_run_once_its_attempts_are_spent(repo, tmp_path):
     bad = _edit("app.py", ("print('not there')\n", "x\n"))
-    result = _design(tmp_path / "run", FakeModel(_answers(bad, bad)), target=str(repo))
+    result = _design(tmp_path / "run", FakeModel(_answers(bad, bad, bad)), target=str(repo))
     assert not result.exit_ok
     assert "materialise could not apply emit.txt" in str(result.error)
 
@@ -248,14 +248,17 @@ def test_emissions_that_never_apply_end_the_run_once_its_attempts_are_spent(repo
 def test_the_same_edits_given_again_apply_to_what_they_first_applied_to(repo, tmp_path):
     """An unchanged answer on a retry, or materialise redone, must not find its own edits gone."""
     _commit(repo, "old.py", "x = 1\n")
+    _commit(repo, "notes.py", "a = 1\nb = 2\nc = 3\n")
     tool = ("import os, pathlib\n"
             "count = pathlib.Path(os.environ['HOME']) / 'attempts'\n"
             "seen = len(count.read_text()) if count.exists() else 0\n"
             "count.write_text('x' * (seen + 1))\n"
             "if seen < 2:\n"
             "    raise SystemExit('this attempt is refused on purpose')\n")
+    # A removal leaves nothing that shows it happened, so only the record of the emission
+    # can tell this one is a repeat.
     emission = (render({"tool.py": tool}) + _edit("app.py", ("print('app')\n", "print('edited')\n"))
-                + "===DELETE: old.py===\n")
+                + _edit("notes.py", ("b = 2\n", "")) + "===DELETE: old.py===\n")
     result = _design(tmp_path / "run", FakeModel(_answers(emission, emission, emission)), _mode(check_attempts=3),
                      target=str(repo))
     assert result.exit_ok, result.error
@@ -263,7 +266,41 @@ def test_the_same_edits_given_again_apply_to_what_they_first_applied_to(repo, tm
     assert git(repo, "log", "--format=%s", f"{payload['base']}..{payload['branch']}").splitlines() == [
         f"{NAME}: attempt 3", f"{NAME}: attempt 2", f"{NAME}: attempt 1"]
     assert git(repo, "show", f"{payload['branch']}:app.py") == "print('edited')"
-    assert git(repo, "ls-tree", "--name-only", payload["branch"]).split() == ["app.py", "tool.py"]
+    assert git(repo, "show", f"{payload['branch']}:notes.py") == "a = 1\nc = 3"
+    assert git(repo, "ls-tree", "--name-only", payload["branch"]).split() == ["app.py", "notes.py", "tool.py"]
+
+
+def test_an_edit_sent_again_is_skipped_rather_than_applied_twice(repo, tmp_path, capsys):
+    """Models re-send an earlier attempt's edits beside new work; an insertion must not land twice."""
+    tool = ("import os, pathlib\n"
+            "marker = pathlib.Path(os.environ['HOME']) / 'second-attempt'\n"
+            "if not marker.exists():\n"
+            "    marker.write_text('')\n"
+            "    raise SystemExit('the first attempt is refused on purpose')\n")
+    insert = _edit("app.py", ("print('app')\n", "print('app')\nprint('inserted')\n"))
+    first = render({"tool.py": tool}) + insert
+    second = render({"tool.py": tool, "extra.py": "x = 1\n"}) + insert
+    result = _design(tmp_path / "run", FakeModel(_answers(first, second)), target=str(repo))
+    assert result.exit_ok, result.error
+    branch = _report(tmp_path / "run")["branch"]
+    assert git(repo, "show", f"{branch}:app.py") == "print('app')\nprint('inserted')"
+    assert "re-sent edits the last attempt already holds, so they were skipped" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("text, pair", [
+    ("a\nnew\nb\n", ("a\n", "a\nnew\n")),
+    ("new\na\nb\n", ("a\n", "new\na\n")),
+    ("a\nx = 2\nb\n", ("x = 1\n", "x = 2\n")),
+], ids=["inserted-after", "inserted-before", "changed"])
+def test_an_edit_whose_result_is_already_in_place_is_counted_as_applied(text, pair):
+    assert design_ops._edited(Path("a.py"), text, [pair], "git show HEAD:a.py") == (text, 1)
+
+
+@pytest.mark.parametrize("pair", [("x\n", ""), ("x\n", "\n")], ids=["removed", "blanked"])
+def test_an_edit_that_removes_lines_is_never_taken_as_already_applied(pair):
+    """Nothing shows a removal happened -- a blank line proves nothing -- so it is refused, not skipped."""
+    with pytest.raises(worktree.AttemptRefused, match="not in the file"):
+        design_ops._edited(Path("a.py"), "a\n\nb\n", [pair], "git show HEAD:a.py")
 
 
 def test_without_a_worktree_a_run_takes_whole_files_only(repo, tmp_path, monkeypatch):
@@ -291,7 +328,7 @@ def test_an_emission_whose_blocks_are_malformed_is_refused_with_the_reason(answe
 
 def test_an_edit_whose_text_is_in_its_file_twice_is_refused_rather_than_guessed():
     with pytest.raises(worktree.AttemptRefused, match="appear 2 times"):
-        design_ops._edited(Path("a.py"), "x = 1\nx = 1\n", [("x = 1\n", "x = 2\n")], "git show HEAD:a.py")
+        design_ops._edited(Path("a.py"), "x = 1\nx = 1\n", [("x = 1\n", "x = 3\n")], "git show HEAD:a.py")
 
 
 def test_an_edit_whose_lines_hold_a_divider_is_refused_rather_than_cut_short():
@@ -310,7 +347,7 @@ def test_an_edit_whose_lines_hold_a_divider_is_refused_rather_than_cut_short():
 ], ids=["whole-lines-only", "crlf-kept", "no-final-newline-kept", "lines-removed"])
 def test_an_edit_matches_whole_lines_as_the_read_tool_shows_them_and_keeps_the_files_endings(text, pairs, edited):
     """The read tool strips `\\r` and ends every line, so that is the text a search is copied from."""
-    assert design_ops._edited(Path("a.py"), text, pairs, "git show HEAD:a.py") == edited
+    assert design_ops._edited(Path("a.py"), text, pairs, "git show HEAD:a.py") == (edited, 0)
 
 
 def test_the_read_tools_paging_note_is_refused_too():
@@ -464,7 +501,7 @@ def test_a_missing_installer_stops_the_run_without_spending_its_repairs(repo, tm
 
 def test_a_setup_command_that_fails_fails_the_check_and_says_why(tmp_path):
     emit = render({"tool.py": "print('built')\n"})
-    failed_setup = _design(tmp_path / "setup", FakeModel(_answers(emit, emit)), _mode(setup="exit 3"),
+    failed_setup = _design(tmp_path / "setup", FakeModel(_answers(emit, emit, emit)), _mode(setup="exit 3"),
                            target=str(git_repo(tmp_path / "plain")))
     assert failed_setup.exit_ok is False
     assert "the setup command `exit 3` failed" in (failed_setup.error or "")

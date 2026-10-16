@@ -49,7 +49,7 @@ class DesignMode(Mode):
                             "plan is not a plan or its findings were never written",
             ),
             "check_attempts": Knob(
-                2, "int", lo=1, hi=5,
+                3, "int", lo=1, hi=5,
                 description="how many times the emit step may be retried when the "
                             "artifact does not pass its check",
             ),

@@ -429,8 +429,7 @@ def committed_text(found: Worktree, relative: Path, rev: str = "") -> str | None
     whatever a check has done to the worktree since, and byte for byte, line endings kept.
     """
     rev = rev or found.head
-    entry = git(Path(found.path), "ls-tree", rev, "--", relative.as_posix()).split()
-    if len(entry) < 2 or entry[1] != "blob":
+    if not _committed_file(found, relative, rev):
         return None
     try:
         result = subprocess.run(["git", "-C", found.path, "cat-file", "blob", f"{rev}:{relative.as_posix()}"],
@@ -444,6 +443,12 @@ def committed_text(found: Worktree, relative: Path, rev: str = "") -> str | None
     except UnicodeDecodeError:
         raise AttemptRefused(f"{relative} is not text, so it cannot be edited; leave it as it is, or remove it "
                              "with ===DELETE:") from None
+
+
+def _committed_file(found: Worktree, relative: Path, rev: str = "") -> bool:
+    """Whether commit ``rev`` (the run's last attempt) has a file at ``relative``: not a directory."""
+    entry = git(Path(found.path), "ls-tree", rev or found.head, "--", relative.as_posix()).split()
+    return len(entry) >= 2 and entry[1] == "blob"
 
 
 def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tuple[Path, ...] = ()) -> Worktree:
@@ -464,7 +469,7 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
             raise AttemptRefused(f"{relative} is inside git's own state, not a file of the artifact; leave it out")
         _inside(path, relative)
     for relative in deletes:
-        if committed_text(found, relative) is None:
+        if not _committed_file(found, relative):
             raise AttemptRefused(f"{relative} is not a file of the last attempt, so there is nothing to delete; "
                                  "leave its ===DELETE: out")
     pending = Path(run) / PENDING
@@ -483,11 +488,11 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
     for relative in files:
         if (path / relative).is_dir() and not (path / relative).is_symlink():
             raise AttemptRefused(f"{relative} is a directory of the last attempt, not a file; write the files "
-                                 "inside it, or ===DELETE: them and then write the file")
+                                 "inside it, or choose another path")
         for parent in relative.parents:
             if parent != Path(".") and (path / parent).exists() and not (path / parent).is_dir():
                 raise AttemptRefused(f"{relative} would be inside {parent}, which is a file of the last attempt; "
-                                     f"===DELETE: {parent} first, or choose another path")
+                                     "choose another path")
     _write_json(pending, {"files": sorted(str(name) for name in (*files, *deletes)), "parent": found.head})
     for relative in deletes:
         git(path, "rm", "-q", "-f", "--", str(relative))

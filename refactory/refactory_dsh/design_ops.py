@@ -15,7 +15,6 @@ import shutil
 import sys
 import tempfile
 import uuid
-from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
 from typing import Any
@@ -264,9 +263,10 @@ def _open_worktree(ctx: Any, name: str, task: dict[str, Any]) -> dict[str, Any]:
             "emit_scope": (
                 f"Paths are relative to the root of this run's worktree, {found.path}: a git worktree of "
                 f"{target} on branch {found.branch}, from the base commit {found.base[:12]}. Each attempt "
-                "builds on the last: the worktree holds the base and every earlier attempt, so read the "
-                "files there as they are now and change only what this attempt needs. Write one block "
-                "per file, introduced by a line of exactly one of:\n"
+                "builds on the last: the worktree holds the base and every earlier attempt, as committed "
+                f"(`git -C {found.path} diff {found.base[:12]}` shows the change so far), so read the files "
+                "there and change only what this attempt needs. Write one block per file, introduced by "
+                "a line of exactly one of:\n"
                 "===FILE: <relative path>=== followed by the whole file, for a new file or one you "
                 "rewrite entirely;\n"
                 "===EDIT: <relative path>=== followed by one or more edits to an existing file, each "
@@ -443,20 +443,27 @@ def _pairs(path: Path, body: str) -> list[tuple[str, str]]:
     return pairs
 
 
-def _edited(path: Path, text: str, pairs: list[tuple[str, str]], shown: str) -> str:
-    """``text`` with each edit applied in turn, refused unless its search lines are there exactly once.
+def _edited(path: Path, text: str, pairs: list[tuple[str, str]], shown: str) -> tuple[str, int]:
+    """``text`` with each edit applied in turn, and how many were already in it.
 
-    Search lines match whole lines, from a line's start. The read tool shows a file with
-    ``\r`` stripped and every line ended, so a file whose lines all end in ``\r\n``, or
-    whose last line has no newline, is matched as shown and written back as it was.
-    ``shown`` is the command that prints ``text``, so a refusal names where to copy from.
+    Each edit is refused unless its search lines are there exactly once. Search lines
+    match whole lines, from a line's start. The read tool shows a file with ``\r``
+    stripped and every line ended, so a file whose lines all end in ``\r\n``, or whose
+    last line has no newline, is matched as shown and written back as it was. An edit
+    whose result is already where it would go -- a model re-sending an earlier attempt's
+    edit -- is skipped rather than applied twice. ``shown`` is the command that prints
+    ``text``, so a refusal names where to copy from.
     """
     crlf = "\r\n" in text and text.count("\r\n") == text.count("\n")
     work = text.replace("\r\n", "\n") if crlf else text
     open_end = not work.endswith("\n")
     work += "\n" if open_end else ""
+    skipped = 0
     for search, replacement in pairs:
         starts = _line_starts(work, search)
+        if _already_applied(work, search, replacement, starts):
+            skipped += 1
+            continue
         if len(starts) != 1:
             first = next((line.strip() for line in search.splitlines() if line.strip()), "")[:80]
             raise AttemptRefused(
@@ -466,7 +473,22 @@ def _edited(path: Path, text: str, pairs: list[tuple[str, str]], shown: str) -> 
         work = work[:starts[0]] + replacement + work[starts[0] + len(search):]
     if open_end and work.endswith("\n"):
         work = work[:-1]
-    return work.replace("\n", "\r\n") if crlf else work
+    return (work.replace("\n", "\r\n") if crlf else work), skipped
+
+
+def _already_applied(text: str, search: str, replacement: str, starts: list[int]) -> bool:
+    """Whether an edit's replacement already stands where it would go, as after a re-sent edit.
+
+    Either the search lines are gone and the replacement is there once, or the search
+    lines are there once inside a copy of the replacement (an insertion sent again).
+    An edit that removes lines is never taken as applied: nothing shows it was.
+    """
+    if not replacement.strip() or len(starts) > 1:
+        return False
+    placed = _line_starts(text, replacement)
+    if not starts:
+        return len(placed) == 1
+    return any(at <= starts[0] and starts[0] + len(search) <= at + len(replacement) for at in placed)
 
 
 def _line_starts(text: str, lines: str) -> list[int]:
@@ -531,12 +553,18 @@ def _commit_emission(ctx: Any) -> dict[str, Any]:
         # text, and the files it deletes, are gone from the last attempt itself.
         rev = str(last["applied_to"])
         deletes = tuple(name for name in deletes if worktree.committed_text(found, name) is not None)
+    repeated = []
     for relative, pairs in changed.items():
         current = worktree.committed_text(found, relative, rev)
         if current is None:
             raise AttemptRefused(f"{relative} is not a file of the last attempt, so it cannot be edited; "
                                  "write it whole with ===FILE:")
-        files[relative] = _edited(relative, current, pairs, f"git -C {found.path} show {rev[:12]}:{relative}")
+        files[relative], skipped = _edited(relative, current, pairs, f"git -C {found.path} show {rev[:12]}:{relative}")
+        if skipped:
+            repeated.append(str(relative))
+    if repeated:
+        target_guard.warn(f"emit re-sent edits the last attempt already holds, so they were skipped rather than "
+                          f"applied twice: {target_guard._named(repeated)}")
     # No drift warning: the run's base is pinned, so a moving checkout changes nothing it sees.
     attempt = len(worktree.git(path, "rev-list", f"{found.base}..HEAD").split()) + 1
     advanced = worktree.commit_attempt(ctx.workdir, files, f"{ctx.facts['name']}: attempt {attempt}", deletes)
@@ -636,6 +664,13 @@ def check_artifact(ctx: Any) -> str:
                               f"back, so the check runs the committed attempt: {target_guard._named(restored)}")
         result = _check_in_worktree(ctx, found, command, timeout)
         _warn_if_shared_changed(found, "while preparing for and running the check")
+        # The reviews and the next attempt read the worktree, and edits apply to the
+        # committed attempt: a check that reformats a file must not leave them apart.
+        _, changed = worktree.restore(ctx.workdir)
+        if changed:
+            target_guard.warn(f"the check changed tracked files in the run's worktree; they were put back, so "
+                              f"the reviews and the next attempt see the committed attempt: "
+                              f"{target_guard._named(changed)}")
     detail = "\n".join((result.problem(), result.stdout or "", result.stderr or "")).strip()
     outcome = {"command": command, "status": "pass" if result.ok else evidence.failure_kind(
         detail, timed_out=result.timed_out, returncode=result.returncode),
