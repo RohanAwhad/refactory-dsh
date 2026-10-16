@@ -81,7 +81,10 @@ jobs:
       # agent-presets tree,
       # and that the refactory-web layer mounts the console and picker with a
       # checkout-resolved `repoRoot` — a unit test cannot see the layer order that
-      # decides whether a patch finds its row at all.
+      # decides whether a patch finds its row at all. It also has the CEO spawn
+      # subagents on this profile and on the graph layer, and checks each child gets
+      # its delegation row's allow-list and no shell: which tools a child inherits
+      # is only known once the composition is booted.
       - name: Web profile acceptance
         run: pnpm run test:acceptance
 

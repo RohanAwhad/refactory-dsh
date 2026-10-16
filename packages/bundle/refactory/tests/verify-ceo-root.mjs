@@ -1,5 +1,6 @@
 /**
- * The acceptance check for the re:factory GUI profile's layers.
+ * The acceptance check for the re:factory GUI profile's layers, and for the
+ * subagents the CEO spawns there and on the CLI's `graph` layer.
  *
  * It is a script, not a spec, because what it proves is a whole-profile fact: an
  * owned `refactory` profile, provisioned from the harness's `web` template
@@ -9,13 +10,18 @@
  * `refactory-web`'s console, picker and brand rows with a `repoRoot` resolved
  * from the checkout rather than the caller's working directory. The harness's
  * own `web` profile is checked alongside it: it must keep exactly the template's
- * bundle list and mount none of re:factory's rows.
+ * bundle list and mount none of re:factory's rows. A subagent the CEO spawns,
+ * through `subagent` and through `subagent_fork`, on this profile and on the
+ * CLI's `graph` profile, must get its delegation row's allow-list and no shell.
  *
  * It drives the *real* services rather than re-reading files: the same
  * `agentPresets.list()` the picker calls, the same `agents.create()` path
  * `session/create` takes through `SessionController`, and the same
- * `refactoryConsole/project` the panel reads. Nothing here is a stub, so a
- * passing run is the evidence the issue asks for.
+ * `refactoryConsole/project` the panel reads. The one stub is the model: a
+ * scripted route (`scripted-model.mjs`, added with `--patch`) answers the CEO, so
+ * it delegates on cue and no request leaves the machine. Everything it delegates
+ * through is the shipped composition, so a passing run is the evidence the issue
+ * asks for.
  *
  * The composition is the real `ceo` preset, which requires the whole host
  * composition it is normally mounted inside. The script therefore composes a
@@ -49,6 +55,18 @@ const WEB_TEMPLATE = 'web'
 /** The interpreter that renders `dsh_profile`'s plan, from the repo's venv. */
 const PYTHON = join(REPO, '.venv', 'bin', 'python')
 
+/** The model route the acceptance run answers the CEO with. */
+const SCRIPTED_MODEL = join(HERE, 'scripted-model.mjs')
+
+/** The CEO's delegation tools, in the order the scripted CEO calls them. */
+const DELEGATION = ['subagent', 'subagent_fork']
+
+/** The prompt the scripted CEO on the GUI profile delegates on. */
+const DELEGATE = 'Delegate once through each subagent tool.'
+
+/** Tools no subagent may get, whatever the delegation rows say; see `checkSubagents`. */
+const FORBIDDEN = ['bash', 'pwsh', 'workflow', 'ralph', 'refactory']
+
 /** Every fact the issue's acceptance criteria name, in the order it states them. */
 const failures = []
 function check(ok, label, detail) {
@@ -81,6 +99,24 @@ const DENIED = (() => {
   const names = [...block.matchAll(/^\s+-\s+(\S+)$/gmu)].map(match => match[1])
   if (names.length === 0) throw new Error('the composition\'s `ceoDeny:` block lists no tools')
   return names
+})()
+
+/**
+ * The `toolFilter` allow-list the delegation rows declare, read from both shipped
+ * compositions for the reason `DENIED` is. Every row names the same list, so rows
+ * that disagree throw rather than leave one of them unchecked. A row with no list
+ * at all is not caught here: its subagent gets the whole surface, `bash` with it,
+ * and the live checks report that.
+ */
+const ALLOWED = (() => {
+  const lists = [join(BUNDLE, 'presets', 'ceo.patch.yml'), join(REPO, 'packages', 'bundle', 'graph', 'cordis.patch.yml')]
+    .flatMap(file => [...readFileSync(file, 'utf8').matchAll(/^\s+allow: \[(.*)\]$/gmu)])
+    .map(match => match[1].split(',').map(name => name.trim()))
+  if (lists.length === 0) throw new Error('no delegation row declares a `toolFilter` allow-list to check against')
+  if (new Set(lists.map(list => list.join())).size > 1) {
+    throw new Error(`the delegation rows declare different allow-lists: ${lists.map(list => list.join(' ')).join(' | ')}`)
+  }
+  return lists[0]
 })()
 
 /** The bundle list a profile's manifest declares, or [] when it is absent. */
@@ -372,7 +408,9 @@ try {
 
   // 3. Boot the profile and ask its live services.
   const port = 3099 + Math.floor(Math.random() * 400)
-  web = spawn(dsh, ['--profile', PROFILE, '--port', String(port), '--no-open', '--host', '127.0.0.1'], {
+  const webSubagents = join(home, 'web-subagents.jsonl')
+  const webModel = scriptedModelPatch(home, PROFILE, webSubagents, DELEGATE)
+  web = spawn(dsh, ['--profile', PROFILE, '--patch', webModel, '--port', String(port), '--no-open', '--host', '127.0.0.1'], {
     env: { ...process.env, DSH_HOME: home },
     // Run the server from somewhere that is not the checkout. `refactory-web`
     // resolves `repoRoot` from its own module location, and when the child
@@ -446,6 +484,51 @@ try {
     const denied = DENIED.filter(name => names.has(name))
     check(denied.length === 0, 'the ceoDeny list is absent from the catalog', denied.join(', '))
   }
+
+  // 4. A subagent the CEO spawns gets the delegation rows' allow-list. `ceoDeny`
+  //    narrows the CEO's own scope only, so without the filter a child inherits
+  //    the whole surface, `bash` included. The scripted CEO calls each delegation
+  //    tool once it reads the cue, and each child's record is its own catalog.
+  const prompted = await rpc(base, cookie, 'session/prompt', {
+    request: {
+      requestId: `verify-delegate-${String(sessionId)}`,
+      sessionId,
+      mode: 'queue',
+      content: [{ type: 'text', text: DELEGATE }],
+    },
+  })
+  check(prompted?.result?.ok === true, 'the CEO accepts the delegation prompt', JSON.stringify(prompted))
+  // The preset's `subagent` row has `modelSelectionSettings`, which registers that
+  // tool (and `list_subagent_models`, when the setting is on) on each agent's own
+  // scope, and a filter never narrows a scope's own tools.
+  checkSubagents(PROFILE, await subagentRecords(webSubagents), ['subagent', 'list_subagent_models'])
+
+  // 5. The same on the CLI's `graph` profile, through its own delegation rows. The
+  //    plan's `graph` profile in this home was seeded without `dsh-base` for the
+  //    cleanup checks above, so the layer goes into a fresh profile the way the
+  //    plan's `add` installs it on a new machine: over `dsh-base`. Its runner drives
+  //    one CEO over a graph and exits; the graph is one agent node the scripted CEO
+  //    never reports, so the run ends unfinished, which is not under test here.
+  const cli = 'graph-subagents'
+  const installed = run(dsh, ['plugin', '--profile', cli, 'add', join(REPO, 'packages', 'bundle', 'graph')], {
+    env: { ...process.env, DSH_HOME: home },
+  })
+  check(installed.code === 0, `the graph layer installs into a fresh ${cli} profile`, installed.out.slice(0, 400))
+  const graphs = join(home, 'graphs')
+  mkdirSync(graphs)
+  writeFileSync(join(graphs, 'acceptance.graph.json'), JSON.stringify({
+    name: 'acceptance',
+    start_node: 'node',
+    nodes: { node: { _type: 'AgentNode', id: 'node', role: 'builder', prompt_template: 'Write a.txt.', reads: [], writes: ['a.txt'] } },
+    edges: [],
+  }))
+  const graphSubagents = join(home, 'graph-subagents.jsonl')
+  const graphRun = run(dsh, [
+    '--profile', cli, '--patch', scriptedModelPatch(home, cli, graphSubagents), 'run',
+    '--mode', 'acceptance', '--task', 'subagent-tools', '--graphs', graphs,
+    '--workdir', join(home, 'graph-run'), '--python-bin', join(REPO, '.venv', 'bin'),
+  ], { env: { ...process.env, DSH_HOME: home }, cwd: tmpdir(), input: '', timeout: 120_000 })
+  checkSubagents('graph', await subagentRecords(graphSubagents, 0), [], graphRun.out.slice(-600))
 } catch (error) {
   check(false, 'the acceptance run completed', error instanceof Error ? error.message : String(error))
 } finally {
@@ -456,6 +539,93 @@ try {
 
 process.stdout.write(failures.length === 0 ? '\nall acceptance criteria hold\n' : `\n${String(failures.length)} criteria failed\n`)
 process.exit(failures.length === 0 ? 0 : 1)
+
+/**
+ * Write the `--patch` overlay that answers a profile's CEO with the scripted model.
+ * @param home - the throwaway `DSH_HOME` the overlay lives in.
+ * @param profile - the profile it is for, which names the file.
+ * @param records - the file the scripted model appends its records to.
+ * @param marker - the text the CEO delegates on, or undefined to delegate at once.
+ * @returns the overlay's path.
+ */
+function scriptedModelPatch(home, profile, records, marker) {
+  const file = join(home, `${profile}-scripted-model.yml`)
+  writeFileSync(file, [
+    '- id: agent-default-model',
+    '  config:',
+    '    provider: scripted',
+    '    model: scripted',
+    '- insert:',
+    '    - id: acceptance-scripted-model',
+    `      name: ${JSON.stringify(SCRIPTED_MODEL)}`,
+    '      config:',
+    `        log: ${JSON.stringify(records)}`,
+    `        tools: ${JSON.stringify(DELEGATION)}`,
+    ...marker === undefined ? [] : [`        marker: ${JSON.stringify(marker)}`],
+    '',
+  ].join('\n'))
+  return file
+}
+
+/**
+ * The scripted model's records, once every delegation tool's subagent has been
+ * recorded, and answered if it tried a `subagent` of its own, or the wait runs out.
+ * A GUI delegation runs in the background, so its children land after the prompt
+ * returns; the graph run has exited before this is read.
+ * @param file - the records file.
+ * @param waitMs - how long to wait for the last child.
+ * @returns every record: `{ via, tools }` per child, `{ via, nested }` per answer to a
+ * child's own `subagent` call, and `{ result }` per tool result the CEO read.
+ */
+async function subagentRecords(file, waitMs = 60_000) {
+  const read = () => (existsSync(file) ? readFileSync(file, 'utf8') : '')
+    .split('\n').filter(Boolean).map(line => JSON.parse(line))
+  const settled = records => DELEGATION.every(tool => {
+    const child = records.find(record => record.via === tool && record.tools !== undefined)
+    return child !== undefined
+      && (!child.tools.includes('subagent') || records.some(record => record.via === tool && record.nested !== undefined))
+  })
+  for (let waited = 0; waited < waitMs && !settled(read()); waited += 500) {
+    await new Promise(resolveDelay => setTimeout(resolveDelay, 500))
+  }
+  return read()
+}
+
+/**
+ * Check what each delegation tool's subagent was given.
+ *
+ * The expected list is read from the compositions under test, so a check that
+ * only compared against it would pass a run-starting tool added to every row.
+ * `FORBIDDEN` is therefore fixed here: the shell, the tools that start a run or a
+ * child with no filter of its own, and the CEO's workflow controls.
+ * @param profile - the profile the records came from, for the labels.
+ * @param records - the scripted model's records for that profile.
+ * @param ownScope - tools a child registers on its own scope, which no filter narrows.
+ * @param output - the run's own output, shown when a child never started.
+ */
+function checkSubagents(profile, records, ownScope, output = '') {
+  for (const tool of DELEGATION) {
+    const child = records.find(record => record.via === tool && record.tools !== undefined)
+    const results = records.filter(record => record.result !== undefined).map(record => record.result)
+    check(child !== undefined, `${profile}: the CEO's ${tool} call starts a subagent`,
+      child === undefined ? `tool results: ${results.join(' | ') || 'none'}\n     ${output}` : undefined)
+    if (child === undefined) continue
+    const tools = new Set(child.tools)
+    const forbidden = child.tools.filter(name => FORBIDDEN.includes(name) || name.startsWith('wf_'))
+    check(forbidden.length === 0, `${profile}: the ${tool} child gets no shell and nothing that starts a run`,
+      child.tools.join(', '))
+    check(['read', 'write', 'edit'].every(name => tools.has(name)),
+      `${profile}: the ${tool} child keeps read, write and edit`, child.tools.join(', '))
+    const missing = ALLOWED.filter(name => !tools.has(name))
+    const extra = child.tools.filter(name => !ALLOWED.includes(name) && !ownScope.includes(name))
+    check(missing.length === 0 && extra.length === 0, `${profile}: the ${tool} child gets exactly the allow-list`,
+      `missing: ${missing.join(', ') || 'none'}; extra: ${extra.join(', ') || 'none'}`)
+    if (!tools.has('subagent')) continue
+    const nested = records.find(record => record.via === tool && record.nested !== undefined)?.nested
+    check(/exceeds maxDepth/u.test(nested ?? ''), `${profile}: the ${tool} child's own subagent call is refused`,
+      String(nested))
+  }
+}
 
 /** Whether a child has stopped — by exit or by signal. `exitCode` alone is false. */
 function stopped(child) {
@@ -530,12 +700,9 @@ async function rpc(base, cookie, method, args) {
  * request — the same array the provider call carries.
  *
  * The header is written on the request path, so there is nothing to read until
- * the agent has proposed a turn. The script prompts once to make that happen. It
- * does not assert that the completion fails: the temp `DSH_HOME` usually has no
- * provider key, so the attempt normally dies at adapter lookup right after the
- * header lands, but on a machine with ambient credentials (a `DEEPSEEK_API_KEY`
- * in the environment) the one completion really runs. That is one cheap call,
- * not a correctness dependency — the header is already written either way.
+ * the agent has proposed a turn. The script prompts once to make that happen. The
+ * scripted model answers that turn, so the completion never leaves the machine,
+ * and nothing here depends on its answer: the header is written either way.
  * @param base - the running server's origin.
  * @param cookie - the authenticated browser cookie.
  * @param sessionId - the session created without a preset.

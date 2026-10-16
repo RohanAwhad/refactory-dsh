@@ -166,7 +166,10 @@ then boots `refactory` and checks the preset reaches the roster as an inline dec
 including that the installed `@deepseek-ai/dsh-base` and `@deepseek-ai/dsh-web-app` layers
 declare no `ceo` preset of their own, and that the web bundle mounts the console, picker
 and brand rows with a `repoRoot` resolved to the checkout (`refactoryConsole/project`) and
-a live mode catalogue (`refactoryConsole/modes`).
+a live mode catalogue (`refactoryConsole/modes`). A scripted model route then makes the CEO
+spawn a subagent through `subagent` and through `subagent_fork`, on `refactory` and on a
+fresh profile carrying the `graph` layer, and checks each child's own tool catalog: the
+delegation rows' allow-list, with no shell and nothing that starts a run.
 
 The gateway discovers the console at runtime from the `@Remote` markers on the mounted
 service and binds arguments by the method parameter names, so the console answers without

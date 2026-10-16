@@ -34,6 +34,7 @@ The `agent-preset-registry` row both layers patch is inserted by the `dsh-web-ap
 - The `ceo` preset, declared with the display name `CEO` and roster `order: 1`.
 - `ceo` as the registry default, so a session created without a named preset composes from it.
 - The interactive workflow spine that the preset mounts (`wf_*` tools, `interactiveOpen`), with its `ceoDeny` list leaving the CEO on the workflow tools rather than the coding tools.
+- Subagents without a shell: the preset's `subagent` and `subagent_fork` rows set a `toolFilter` allow-list (`read`, `write`, `edit`, `glob`, `grep`, `read_image`, `web_search`, `web_fetch`, `skill`, `todo_write`, `send_message`), so a subagent started through either gets no `bash`, no `wf_*` tools, and nothing that starts a run. It still sees `subagent` (and `list_subagent_models` when subagent model selection is on), which the `subagent` row registers on each agent's own scope; the host's default depth limit (1) refuses the call. Its `write` and `edit` are not yet confined to the run directory.
 
 ### Verify it, without trusting this README
 
@@ -41,7 +42,7 @@ The `agent-preset-registry` row both layers patch is inserted by the `dsh-web-ap
 pnpm run test:acceptance     # packages/bundle/refactory/tests/verify-ceo-root.mjs
 ```
 
-The acceptance run is the one that proves the mechanism, because only it can see the layer order and the roster the harness actually builds. It runs `dsh_profile`'s provisioning plan into a throwaway `DSH_HOME`, composes the owned `refactory` profile from the harness's `web` template, checks that the harness's own `web` template keeps exactly its template bundles and mounts none of re:factory's rows, then boots `refactory` and asks its live services: the roster row (`ceo`, not broken, default), `session/create` without a preset, and the composed agent's own tool catalog (`wf_*` present, the preset's `ceoDeny` absent). It also reads the installed `dsh-base` and `dsh-web-app` layers and fails if either declares a `ceo` preset of its own — without that check a stale patched `node_modules` would satisfy every live assertion with this bundle's declaration doing nothing. CI runs it as the `Web profile acceptance` step.
+The acceptance run is the one that proves the mechanism, because only it can see the layer order and the roster the harness actually builds. It runs `dsh_profile`'s provisioning plan into a throwaway `DSH_HOME`, composes the owned `refactory` profile from the harness's `web` template, checks that the harness's own `web` template keeps exactly its template bundles and mounts none of re:factory's rows, then boots `refactory` and asks its live services: the roster row (`ceo`, not broken, default), `session/create` without a preset, and the composed agent's own tool catalog (`wf_*` present, the preset's `ceoDeny` absent). A scripted model route (`tests/scripted-model.mjs`, added with `--patch`) then makes the CEO spawn a subagent through `subagent` and through `subagent_fork`, on this profile and on a fresh profile carrying the `graph` layer, and each child's own catalog must be its row's allow-list, with no shell and nothing that starts a run. It also reads the installed `dsh-base` and `dsh-web-app` layers and fails if either declares a `ceo` preset of its own — without that check a stale patched `node_modules` would satisfy every live assertion with this bundle's declaration doing nothing. CI runs it as the `Web profile acceptance` step.
 
 ## Understand the implementation
 
@@ -67,6 +68,7 @@ That replacement rule makes the registry row's `config` **single-owner**. A laye
 
 - **The bundle carries the `ceo` composition only.** Any other refactory-owned preset added later is another `@deepseek-ai/dsh-agent-preset` declaration in this bundle's patch list.
 - **The composition's plugin packages must resolve from the profile.** A preset row's package names resolve against the base the harness was loaded from, not against this package, so the profile's install must carry the packages `ceo` names.
+- **The subagent allow-list has two gaps.** With `DSH_TOOLS_MODE` set to a PTC mode, every agent also gets `run_code`, which runs model-written code, is added after tool filters apply and cannot be named by one. A continuable subagent started before the filter keeps the tools it was started with when it is continued.
 - **Layer order is a precondition, not an assertion.** A profile that lists this bundle *before* `@deepseek-ai/dsh-web-app` gets a `patch: entry "agent-preset-registry" not found` warning and no default is set at all — not a fallback to a shipped preset. The composition still names nothing, so a session created without a named preset composes the harness's own default instead. `dsh_profile`'s target table is what `./install.sh`, `./refactory-dsh` and `refactory doctor` use to notice a profile that lacks the layer entirely.
 
 ## Dev Note

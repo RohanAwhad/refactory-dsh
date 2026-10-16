@@ -9,9 +9,10 @@
  * plugin denies the CEO's coding/external tools (bash, write, edit, web,
  * skill, …) for the CEO's own scope: the CEO is left with exactly the `wf_*`
  * tools, delegation, ask-user, and read-only tools. Node work therefore
- * happens inside the subagents the CEO spawns, which join the full `standard`
- * composition and keep every tool. Removing the coding tools from the CEO is
- * what turns "please follow the graph" into "there is no other path".
+ * happens inside the subagents the CEO spawns, which join the full composition
+ * and are out of this guard's reach: their tools are what the delegation row that
+ * spawns them allows. Removing the coding tools from the CEO is what turns "please
+ * follow the graph" into "there is no other path".
  * @module @deepseek-ai/dsh-workflow-spine
  */
 
@@ -152,7 +153,8 @@ export interface Config {
   /**
    * Global tools the CEO is not allowed to call. The guard denies these on the
    * CEO's own scope at `agent/created`, so subagents (which join the full
-   * `standard` composition as siblings) keep them. Names absent from the CEO's
+   * composition as siblings) are out of its reach; their delegation row's
+   * `toolFilter` decides what they keep. Names absent from the CEO's
    * inherited surface are skipped, so the list can name platform-gated tools
    * (e.g. `pwsh`) that are not present.
    */
