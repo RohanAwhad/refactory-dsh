@@ -27,6 +27,18 @@ pytest_plugins = ("model_credential",)
 os.environ.setdefault("FACTORY_CLAUDE_BIN", "/bin/true")
 
 
+@pytest.fixture(autouse=True)
+def _isolate_refactory_home(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the project registry, run worktrees and new projects out of the real home.
+
+    A design run with no target creates a project in the projects folder and a
+    worktree under refactory's home (#351); a test must never leave either behind.
+    """
+    home = tmp_path_factory.mktemp("refactory-home")
+    monkeypatch.setenv("REFACTORY_HOME", str(home / "home"))
+    monkeypatch.setenv("REFACTORY_PROJECTS_DIR", str(home / "projects"))
+
+
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
         "--run-integration",

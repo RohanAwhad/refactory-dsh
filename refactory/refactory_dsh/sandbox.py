@@ -173,6 +173,11 @@ def ast_check(name: str, project: Path | None = None) -> list[str]:
 
 
 # ── execution under limits ─────────────────────────────────────────────────
+def is_secret(name: str) -> bool:
+    """Whether an environment name looks like a credential, which a sandboxed run never sees."""
+    return any(marker in name.upper() for marker in _SECRET_MARKERS)
+
+
 def scrub(env: dict[str, str] | None = None) -> dict[str, str]:
     """The environment a sandboxed run sees: an allowlist, with secrets dropped.
 
@@ -187,7 +192,7 @@ def scrub(env: dict[str, str] | None = None) -> dict[str, str]:
     for name in _ALLOWED_ENV:
         if name not in source:
             continue
-        if any(marker in name.upper() for marker in _SECRET_MARKERS):
+        if is_secret(name):
             continue
         out[name] = source[name]
     bindir = str(venv_bin())
@@ -216,7 +221,7 @@ def _limits(memory_mb: int, cpu_s: int, file_mb: int):  # pragma: no cover - pos
             ("RLIMIT_DATA", memory_mb * 1024 * 1024),
         ):
             which = getattr(resource, attribute, None)
-            if which is None:
+            if which is None or memory_mb <= 0:
                 continue
             try:
                 resource.setrlimit(which, (value, value))
@@ -243,7 +248,7 @@ def _apply_forwarded(child_env: dict[str, str], forwarded: dict[str, str] | None
     and a tool that needed a credential to *run* would be a different design.
     """
     for name, value in (forwarded or {}).items():
-        if any(marker in name.upper() for marker in _SECRET_MARKERS):
+        if is_secret(name):
             continue
         child_env[name] = value
 
@@ -348,23 +353,31 @@ def run_command(
     file_mb: int = DEFAULT_FILE_MB,
     env: dict[str, str] | None = None,
     budget: Any = None,
+    home: Path | None = None,
+    exact_env: bool = False,
+    stdin: Any = None,
 ) -> SandboxResult:
     """Run a shell command under the same containment as a code snippet.
 
     A command is what a brief declares as its check ("run the tests", "build it"),
     and it is arbitrary, so it gets the same limits and the same scrubbed
-    environment as anything else we did not write.
+    environment as anything else we did not write. ``exact_env`` runs it with ``env``
+    as given instead -- a design run's worktree builds its own, without refactory's
+    interpreter or variables (`worktree.check_environment`) -- and ``home`` moves
+    HOME out of ``workdir``, so tool caches stay out of what is checked. ``stdin`` is
+    the command's standard input (inherited by default); ``memory_mb`` of 0 sets no
+    memory cap, for installs a 2 GB address space would kill.
     """
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
-    child_env = scrub(env)
-    child_env["HOME"] = str(workdir)
+    child_env = dict(env or {}) if exact_env else scrub(env)
+    child_env["HOME"] = str(home or workdir)
     kwargs: dict[str, Any] = {}
     if sys.platform != "win32":
         kwargs["preexec_fn"] = _limits(memory_mb, cpu_s, file_mb)
     started = time.monotonic()
     try:
-        options = dict(shell=True, text=True, cwd=str(workdir), env=child_env, **kwargs)
+        options = dict(shell=True, text=True, cwd=str(workdir), env=child_env, stdin=stdin, **kwargs)
         if budget is None:
             result = subprocess.run(command, capture_output=True, timeout=timeout_s, **options)
         else:

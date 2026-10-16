@@ -94,6 +94,30 @@ def _fingerprint(workdir: Path, name: str) -> dict[str, Any] | None:
             'inode': stat.st_ino}
 
 
+def _set_aside(workdir: Path, record: dict[str, Any], names: list[str]) -> str | None:
+    """Move a refused attempt's outputs out of the run, kept beside its receipt.
+
+    Left in place, a refused output is what the redo's worker finds, and it answers that
+    the file is already right rather than writing it afresh. On the CEO's route the redo
+    is judged against the snapshot from before the refused attempt, where that same file
+    would count as newly delivered.
+    """
+    if not names:
+        return None
+    refused = workdir / ROOT / record['id'] / 'refused'
+    archive = refused / str(sum(1 for _ in refused.glob('*')))
+    moved: list[Path] = []
+    for name in sorted(names, key=lambda value: len(Path(value).parts)):
+        relative = Path(name)
+        if any(parent in relative.parents for parent in moved):
+            continue
+        destination = archive / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        _path(workdir, name).rename(destination)
+        moved.append(relative)
+    return str(archive.relative_to(workdir))
+
+
 def _attempt_failed(workdir: Path, record: dict[str, Any]) -> bool:
     """Whether a finish for this pending delivery already ran and refused it."""
     try:
@@ -200,17 +224,20 @@ def finish(workdir: Path, node: str, *, final_response: str | None = None,
         fresh.add(captured)
     missing = [name for name in writes if name not in fresh]
     strayed = target_guard.strayed(workdir, record.get('target'))
+    set_aside = _set_aside(workdir, record, [name for name in writes if name in fresh]) if strayed else None
     receipt = {key: value for key, value in record.items() if key not in ('prompt', 'target')}
     receipt.update(finished=_now(), status='failed' if missing or strayed else 'delivered',
                    delivery='context supplied; semantic compliance not verified',
                    artifacts=after, captured_final=captured,
                    final_response=str(ROOT / record['id'] / 'final-response.txt') if final_response is not None else None,
-                   missing_or_unchanged=missing, **({'target_changes': strayed} if strayed else {}))
+                   missing_or_unchanged=missing, **({'target_changes': strayed} if strayed else {}),
+                   **({'set_aside': set_aside} if set_aside else {}))
     (directory / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
     if strayed:
         # Refused even when the declared output arrived: the output may be a summary of
         # edits that never pass through the step that writes the artifact.
-        raise ValueError(target_guard.refusal(node, record['target']['root'], strayed, writes))
+        raise ValueError(target_guard.refusal(node, record['target']['root'], strayed, writes,
+                                              set_aside=set_aside))
     if missing:
         raise ValueError(f'agent {node!r} did not deliver required outputs: {", ".join(missing)} (missing or unchanged from before dispatch)')
     pending.unlink()

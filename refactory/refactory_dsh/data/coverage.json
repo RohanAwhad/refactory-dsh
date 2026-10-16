@@ -149,6 +149,15 @@
             "check": "test -s hello.txt",
             "name": "tiny_example"
           }
+        },
+        {
+          "explanation": "Change an existing repository, from its HEAD, on a branch of its own; the person's checkout and their uncommitted work are left as they are.",
+          "knobs": {
+            "brief": "Add a --json flag to the report command",
+            "check": "python -m pytest -q",
+            "name": "report_json",
+            "target": "/path/to/repository"
+          }
         }
       ],
       "interfaces": {
@@ -156,8 +165,8 @@
         "cli": "refactory ceo default_pack/design",
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
-      "purpose": "Build a software artifact from a brief, name and acceptance command. The command runs before separate QA and Overwatch; final current validation and intent evidence are required.",
-      "reviewed_schema": "0cbf41c2f755b749855ccd7570697ffee8a058891e8535addc2c02e16b666918"
+      "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required.",
+      "reviewed_schema": "0cb095333597fc0afe689b91d80f0194730bb7900cad84ee01afe377ef269188"
     },
     "default_pack/design_fast": {
       "doc": "refactory/docs/budgets-fast-modes.md",
@@ -467,6 +476,15 @@
             "what": "counting_pack/fixed_step"
           },
           "explanation": "Run a named mode or author a package/artifact from a brief in the terminal; worker file defaults apply at preparation. CEO conversation and graph worker routes are distinct."
+        },
+        {
+          "arguments": {
+            "check": "python -m pytest -q",
+            "mode": "design",
+            "target": "/path/to/repository",
+            "what": "add a --json flag to the report command"
+          },
+          "explanation": "Change an existing repository: the run works on its own branch in a worktree of it, and the checkout at /path/to/repository is left as it is. Without --target, a design run starts a new project in ~/refactory-projects."
         }
       ],
       "interfaces": {
@@ -475,7 +493,7 @@
         "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
       },
       "purpose": "Run a named mode or author a package/artifact from a brief in the terminal; worker file defaults apply at preparation. CEO conversation and graph worker routes are distinct.",
-      "reviewed_schema": "452a64059dc07d4794e43907c69da6cdafa7ecf1d3dda18271e4fa5709de44ad"
+      "reviewed_schema": "1a6bac19ae91b5649cb89a11f5e989d7c1e0edf21652df645cc7920244d42833"
     },
     "cli:doctor": {
       "doc": "refactory/docs/cli.md",
@@ -549,6 +567,30 @@
       },
       "purpose": "Manage installed mode packages through registry subcommands; read their help before mutations.",
       "reviewed_schema": "be7bcd90aa83a34d63c41828e491c54b431cab1fdcea3ce59520246693aebaf0"
+    },
+    "cli:projects": {
+      "doc": "refactory/docs/cli.md",
+      "examples": [
+        {
+          "arguments": {
+            "what": "list"
+          },
+          "explanation": "Find a design run's project and branch again."
+        },
+        {
+          "arguments": {
+            "what": "prune"
+          },
+          "explanation": "Remove what ended runs no longer need now rather than at the next run. A worktree with an edited tracked file, or with a file newer than the run's last step, is kept and reported; `--succeeded` also removes succeeded runs' worktrees, keeping their branches."
+        }
+      ],
+      "interfaces": {
+        "chat": "Unavailable as a direct chat mutation; use the documented CLI route.",
+        "cli": "refactory projects",
+        "panel": "Unavailable as a dedicated panel control; use the documented CLI route."
+      },
+      "purpose": "List the projects design runs work on, with each run's branch and how it ended, or prune the worktrees and branches that ended runs no longer need.",
+      "reviewed_schema": "c9b49386ea0fb6069d301f2d96f1d0f6362abe7f2098b6585f33da847a106ed2"
     },
     "cli:ui": {
       "doc": "refactory/docs/cli.md",
@@ -660,17 +702,25 @@
         "fields": {
           "approve": "verdict",
           "attempts": "attempts",
+          "base": "base",
           "brief": "brief",
           "check": "check",
           "model": "model",
           "name": "name",
+          "noWorktree": "no_worktree",
           "provider": "provider",
-          "resume": "resume"
+          "resume": "resume",
+          "setup": "setup",
+          "target": "target"
         },
         "order": [
           "name",
           "brief",
           "check",
+          "target",
+          "base",
+          "setup",
+          "noWorktree",
           "attempts",
           "approve",
           "provider",
@@ -691,7 +741,16 @@
             "check": "test -s hello.txt",
             "name": "hello"
           },
-          "explanation": "Build and check a software artifact from a brief and a check command; no reusable mode is required. Prefer wf_open default_pack/design with user gates."
+          "explanation": "Build and check software from a brief and a check command, on its own branch in a git worktree: of the repository `target` names, or of a new project. No reusable mode is required. Prefer wf_open default_pack/design with user gates."
+        },
+        {
+          "arguments": {
+            "brief": "Add a --json flag to the report command",
+            "check": "python -m pytest -q",
+            "name": "report_json",
+            "target": "/path/to/repository"
+          },
+          "explanation": "Change an existing repository on a branch of its own; the person's checkout and their uncommitted work are left as they are."
         }
       ],
       "interfaces": {
@@ -699,8 +758,8 @@
         "cli": "python -m refactory_dsh.console design",
         "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
       },
-      "purpose": "Build and check a software artifact from a brief and a check command; no reusable mode is required. Prefer wf_open default_pack/design with user gates.",
-      "reviewed_schema": "988e6cf73c9ecdeb321f73c518c44b19998f4352f84d1f72227441ccde6c152e"
+      "purpose": "Build and check software from a brief and a check command, on its own branch in a git worktree: of the repository `target` names, or of a new project. No reusable mode is required. Prefer wf_open default_pack/design with user gates.",
+      "reviewed_schema": "5de38f1b5e3bfba6f951d697667ac3a9ab87c6207ae73047ad6b187497c5ece7"
     },
     "docs": {
       "chat": {

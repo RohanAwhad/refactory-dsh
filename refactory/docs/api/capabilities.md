@@ -682,7 +682,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 
 ## design
 
-Build and check a software artifact from a brief and a check command; no reusable mode is required. Prefer wf_open default_pack/design with user gates.
+Build and check software from a brief and a check command, on its own branch in a git worktree: of the repository `target` names, or of a new project. No reusable mode is required. Prefer wf_open default_pack/design with user gates.
 
 Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 
@@ -692,17 +692,25 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     "fields": {
       "approve": "verdict",
       "attempts": "attempts",
+      "base": "base",
       "brief": "brief",
       "check": "check",
       "model": "model",
       "name": "name",
+      "noWorktree": "no_worktree",
       "provider": "provider",
-      "resume": "resume"
+      "resume": "resume",
+      "setup": "setup",
+      "target": "target"
     },
     "order": [
       "name",
       "brief",
       "check",
+      "target",
+      "base",
+      "setup",
+      "noWorktree",
       "attempts",
       "approve",
       "provider",
@@ -724,7 +732,16 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
         "check": "test -s hello.txt",
         "name": "hello"
       },
-      "explanation": "Build and check a software artifact from a brief and a check command; no reusable mode is required. Prefer wf_open default_pack/design with user gates."
+      "explanation": "Build and check software from a brief and a check command, on its own branch in a git worktree: of the repository `target` names, or of a new project. No reusable mode is required. Prefer wf_open default_pack/design with user gates."
+    },
+    {
+      "arguments": {
+        "brief": "Add a --json flag to the report command",
+        "check": "python -m pytest -q",
+        "name": "report_json",
+        "target": "/path/to/repository"
+      },
+      "explanation": "Change an existing repository on a branch of its own; the person's checkout and their uncommitted work are left as they are."
     }
   ],
   "interfaces": {
@@ -743,6 +760,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "positional": false,
       "required": false,
       "type": "integer"
+    },
+    "base": {
+      "default": "",
+      "description": "the commit, branch or tag the run starts from",
+      "flags": [
+        "--base"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "string"
     },
     "brief": {
       "default": null,
@@ -788,6 +816,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "required": true,
       "type": "string"
     },
+    "no_worktree": {
+      "default": false,
+      "description": "write the artifact under .factory/artifacts instead of a worktree",
+      "flags": [
+        "--no-worktree"
+      ],
+      "nargs": 0,
+      "positional": false,
+      "required": false,
+      "type": "boolean"
+    },
     "provider": {
       "default": "",
       "description": "provider route for this authoring run",
@@ -804,6 +843,28 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "description": "continue a failed run from its directory",
       "flags": [
         "--resume"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "string"
+    },
+    "setup": {
+      "default": "",
+      "description": "a command run in the worktree before each check",
+      "flags": [
+        "--setup"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "string"
+    },
+    "target": {
+      "default": "",
+      "description": "the git repository to change, in a worktree of its own (default: a new project)",
+      "flags": [
+        "--target"
       ],
       "nargs": null,
       "positional": false,
@@ -836,8 +897,8 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "type": "string"
     }
   },
-  "purpose": "Build and check a software artifact from a brief and a check command; no reusable mode is required. Prefer wf_open default_pack/design with user gates.",
-  "reviewed_schema": "988e6cf73c9ecdeb321f73c518c44b19998f4352f84d1f72227441ccde6c152e"
+  "purpose": "Build and check software from a brief and a check command, on its own branch in a git worktree: of the repository `target` names, or of a new project. No reusable mode is required. Prefer wf_open default_pack/design with user gates.",
+  "reviewed_schema": "5de38f1b5e3bfba6f951d697667ac3a9ab87c6207ae73047ad6b187497c5ece7"
 }
 ```
 
@@ -4187,6 +4248,15 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
         "what": "counting_pack/fixed_step"
       },
       "explanation": "Run a named mode or author a package/artifact from a brief in the terminal; worker file defaults apply at preparation. CEO conversation and graph worker routes are distinct."
+    },
+    {
+      "arguments": {
+        "check": "python -m pytest -q",
+        "mode": "design",
+        "target": "/path/to/repository",
+        "what": "add a --json flag to the report command"
+      },
+      "explanation": "Change an existing repository: the run works on its own branch in a worktree of it, and the checkout at /path/to/repository is left as it is. Without --target, a design run starts a new project in ~/refactory-projects."
     }
   ],
   "interfaces": {
@@ -4195,6 +4265,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
   },
   "parameters": {
+    "base": {
+      "default": "",
+      "description": "design only: the commit, branch or tag to start from",
+      "flags": [
+        "--base"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "string"
+    },
     "check": {
       "default": "",
       "description": "required for design; optional focused check for create_fast/edit_fast",
@@ -4308,6 +4389,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "required": false,
       "type": "string"
     },
+    "no_worktree": {
+      "default": false,
+      "description": "design only: write the artifact under .factory/artifacts instead of a worktree",
+      "flags": [
+        "--no-worktree"
+      ],
+      "nargs": 0,
+      "positional": false,
+      "required": false,
+      "type": "boolean"
+    },
     "permission_mode": {
       "default": "",
       "description": "",
@@ -4346,6 +4438,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "description": "edit only: the mode to revise",
       "flags": [
         "--revise"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "string"
+    },
+    "setup": {
+      "default": "",
+      "description": "design only: a command run in the worktree before each check, such as a build",
+      "flags": [
+        "--setup"
       ],
       "nargs": null,
       "positional": false,
@@ -4396,6 +4499,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "description": "",
       "flags": [
         "--source-project"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "string"
+    },
+    "target": {
+      "default": "",
+      "description": "design only: the git repository to change; the run works in a worktree of it on its own branch (default: a new project in ~/refactory-projects)",
+      "flags": [
+        "--target"
       ],
       "nargs": null,
       "positional": false,
@@ -4494,7 +4608,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     }
   },
   "purpose": "Run a named mode or author a package/artifact from a brief in the terminal; worker file defaults apply at preparation. CEO conversation and graph worker routes are distinct.",
-  "reviewed_schema": "452a64059dc07d4794e43907c69da6cdafa7ecf1d3dda18271e4fa5709de44ad"
+  "reviewed_schema": "1a6bac19ae91b5649cb89a11f5e989d7c1e0edf21652df645cc7920244d42833"
 }
 ```
 
@@ -5146,6 +5260,56 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
   },
   "purpose": "Manage installed mode packages through registry subcommands; read their help before mutations.",
   "reviewed_schema": "be7bcd90aa83a34d63c41828e491c54b431cab1fdcea3ce59520246693aebaf0"
+}
+```
+
+## cli:projects
+
+List the projects design runs work on, with each run's branch and how it ended, or prune the worktrees and branches that ended runs no longer need.
+
+Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
+
+```json
+{
+  "description": "list the projects design runs work on; `projects prune` cleans up",
+  "doc": "refactory/docs/cli.md",
+  "examples": [
+    {
+      "arguments": {
+        "what": "list"
+      },
+      "explanation": "Find a design run's project and branch again."
+    },
+    {
+      "arguments": {
+        "what": "prune"
+      },
+      "explanation": "Remove what ended runs no longer need now rather than at the next run. A worktree with an edited tracked file, or with a file newer than the run's last step, is kept and reported; `--succeeded` also removes succeeded runs' worktrees, keeping their branches."
+    }
+  ],
+  "interfaces": {
+    "chat": "Unavailable as a direct chat mutation; use the documented CLI route.",
+    "cli": "refactory projects",
+    "panel": "Unavailable as a dedicated panel control; use the documented CLI route."
+  },
+  "parameters": {
+    "what": {
+      "default": null,
+      "description": "its own arguments pass through",
+      "enum": [
+        "list",
+        "prune"
+      ],
+      "flags": [],
+      "nargs": "?",
+      "position": 0,
+      "positional": true,
+      "required": false,
+      "type": "string"
+    }
+  },
+  "purpose": "List the projects design runs work on, with each run's branch and how it ended, or prune the worktrees and branches that ended runs no longer need.",
+  "reviewed_schema": "c9b49386ea0fb6069d301f2d96f1d0f6362abe7f2098b6585f33da847a106ed2"
 }
 ```
 
@@ -6950,7 +7114,7 @@ Build a small reusable package with a strategist, coder and focused QA. Canonica
 
 ## default_pack/design
 
-Build a software artifact from a brief, name and acceptance command. The command runs before separate QA and Overwatch; final current validation and intent evidence are required.
+Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required.
 
 ```json
 {
@@ -7195,7 +7359,7 @@ Build a software artifact from a brief, name and acceptance command. The command
       "id": "materialise",
       "kind": "op",
       "knobs": [],
-      "notes": "write the artifact into its own directory",
+      "notes": "commit the emitted files on the run's branch, or write the artifact directory",
       "role": "ceo"
     },
     {
@@ -7213,7 +7377,11 @@ Build a software artifact from a brief, name and acceptance command. The command
       "knobs": [
         "name",
         "brief",
-        "check"
+        "check",
+        "target",
+        "base",
+        "worktree",
+        "setup"
       ],
       "notes": "read the brief and the command that decides whether it is done",
       "role": "ceo"
@@ -7276,6 +7444,18 @@ Build a software artifact from a brief, name and acceptance command. The command
     }
   ],
   "parameters": {
+    "base": {
+      "default": "",
+      "description": "the commit, branch or tag the run starts from (default: the target's HEAD, or a new project's main)",
+      "frozen": true,
+      "kind": "str",
+      "range": [
+        null,
+        null
+      ],
+      "value": "",
+      "values": []
+    },
     "brief": {
       "default": "",
       "description": "what to build, in the asker's words",
@@ -7347,6 +7527,42 @@ Build a software artifact from a brief, name and acceptance command. The command
       ],
       "value": 3,
       "values": []
+    },
+    "setup": {
+      "default": "",
+      "description": "a command run in the worktree before each check, after its dependencies are installed, such as a build",
+      "frozen": true,
+      "kind": "str",
+      "range": [
+        null,
+        null
+      ],
+      "value": "",
+      "values": []
+    },
+    "target": {
+      "default": "",
+      "description": "the git repository to change; empty starts a new project in the projects folder",
+      "frozen": true,
+      "kind": "str",
+      "range": [
+        null,
+        null
+      ],
+      "value": "",
+      "values": []
+    },
+    "worktree": {
+      "default": true,
+      "description": "work in a worktree of the target on the run's own branch; off writes the artifact under .factory/artifacts instead",
+      "frozen": true,
+      "kind": "bool",
+      "range": [
+        null,
+        null
+      ],
+      "value": true,
+      "values": []
     }
   },
   "ports": [],
@@ -7361,6 +7577,15 @@ Build a software artifact from a brief, name and acceptance command. The command
           "check": "test -s hello.txt",
           "name": "tiny_example"
         }
+      },
+      {
+        "explanation": "Change an existing repository, from its HEAD, on a branch of its own; the person's checkout and their uncommitted work are left as they are.",
+        "knobs": {
+          "brief": "Add a --json flag to the report command",
+          "check": "python -m pytest -q",
+          "name": "report_json",
+          "target": "/path/to/repository"
+        }
       }
     ],
     "interfaces": {
@@ -7368,8 +7593,8 @@ Build a software artifact from a brief, name and acceptance command. The command
       "cli": "refactory ceo default_pack/design",
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
-    "purpose": "Build a software artifact from a brief, name and acceptance command. The command runs before separate QA and Overwatch; final current validation and intent evidence are required.",
-    "reviewed_schema": "0cbf41c2f755b749855ccd7570697ffee8a058891e8535addc2c02e16b666918"
+    "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required.",
+    "reviewed_schema": "0cb095333597fc0afe689b91d80f0194730bb7900cad84ee01afe377ef269188"
   }
 }
 ```

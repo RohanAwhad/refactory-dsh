@@ -1,0 +1,851 @@
+"""A design run's own worktree: created, committed to, checked and pruned (#351).
+
+Ported from remote-factory's `factory/worktree.py`, and so is much of what is tested
+here: where a test stands in for one of its test classes, its docstring says which.
+Real repositories throughout; only the installers (`uv`, `pnpm`) are stand-ins, on the
+PATH.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import threading
+import time
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Iterator
+
+import pytest
+
+from refactory_dsh import authoring_evidence, sandbox, worktree
+from refactory_dsh.paths import venv_bin
+from tests_support import git, git_repo, stub
+
+
+@pytest.fixture
+def repo(tmp_path) -> Path:
+    return git_repo(tmp_path / "repo")
+
+
+def _run(tmp_path: Path, name: str = "run") -> Path:
+    run = tmp_path / name
+    run.mkdir(parents=True, exist_ok=True)
+    return run
+
+
+def _spine(run: Path, status: str) -> None:
+    """Leave the status the spine writes for a run it drives."""
+    (run / ".refactory").mkdir(parents=True, exist_ok=True)
+    (run / ".refactory" / "spine-status.json").write_text(json.dumps({"status": status}))
+
+
+@contextmanager
+def _stdin(text: str) -> Iterator[None]:
+    """Put ``text`` on this process's stdin, so a child that inherited it could read it."""
+    read, write = os.pipe()
+    os.write(write, text.encode())
+    os.close(write)
+    saved = os.dup(0)
+    os.dup2(read, 0)
+    os.close(read)
+    try:
+        yield
+    finally:
+        os.dup2(saved, 0)
+        os.close(saved)
+
+
+# ── a worktree of its own, from a pinned base (#330 I1) ────────────────────
+def test_a_run_gets_its_own_worktree_on_its_own_branch_outside_the_target(repo, tmp_path):
+    """The person's checkout keeps its branch and gains nothing; the run works elsewhere."""
+    found = worktree.create(repo, "HEAD", "abcdef123456", _run(tmp_path))
+    path = Path(found.path)
+    assert path.is_relative_to(worktree.root()) and not path.is_relative_to(repo)
+    assert found.branch == "refactory/run-abcdef123456"
+    assert git(path, "branch", "--show-current") == found.branch
+    assert (path / "app.py").read_text() == "print('app')\n"
+    assert git(repo, "branch", "--show-current") == "main"
+    assert git(repo, "status", "--porcelain") == "", "nothing was added to the target"
+    assert worktree.recorded(tmp_path / "run") == found
+
+
+def test_the_base_is_a_commit_pinned_at_prepare_even_if_head_is_amended(repo, tmp_path):
+    """remote-factory's ``TestSHAResolution``."""
+    start = git(repo, "rev-parse", "HEAD")
+    found = worktree.create(repo, "HEAD", "aaaaaaaa1111", _run(tmp_path))
+    git(repo, "commit", "-q", "--amend", "-m", "amended")
+    assert found.base == start != git(repo, "rev-parse", "HEAD")
+    assert git(Path(found.path), "rev-parse", "HEAD") == start
+
+
+def test_a_base_other_than_head_is_where_the_run_starts(repo, tmp_path):
+    """remote-factory's ``test_worktree_uses_custom_base_branch``."""
+    first = git(repo, "rev-parse", "HEAD")
+    (repo / "later.py").write_text("x = 1\n")
+    git(repo, "add", "later.py")
+    git(repo, "commit", "-q", "-m", "later")
+    found = worktree.create(repo, first, "abab0000cdcd", _run(tmp_path))
+    assert found.base == first and not (Path(found.path) / "later.py").exists()
+    with pytest.raises(ValueError, match="the base 'no-such-branch' is not a commit"):
+        worktree.create(repo, "no-such-branch", "abab1111cdcd", _run(tmp_path, "other"))
+
+
+def test_a_redo_of_prepare_keeps_the_worktree_and_the_base_it_was_pinned_to(repo, tmp_path):
+    run = _run(tmp_path)
+    first = worktree.create(repo, "HEAD", "bbbbbbbb2222", run)
+    (repo / "later.py").write_text("x = 1\n")
+    git(repo, "add", "later.py")
+    git(repo, "commit", "-q", "-m", "later")
+    assert worktree.create(repo, "HEAD", "bbbbbbbb2222", run) == first
+
+
+def test_a_run_that_died_before_recording_its_worktree_finds_it_again(repo, tmp_path):
+    """The target's record is written first, so nothing is orphaned (``TestPruneStale``)."""
+    run = _run(tmp_path)
+    first = worktree.create(repo, "HEAD", "bcbcbcbc2323", run)
+    (run / worktree.RECORD).unlink()
+    assert worktree.create(repo, "HEAD", "bcbcbcbc2323", run) == first
+
+
+def test_a_resumable_run_whose_worktree_was_removed_gets_it_back_with_its_attempts(repo, tmp_path):
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "cdcdcdcd3434", run)
+    attempt = worktree.commit_attempt(run, {Path("tool.py"): "v1\n"}, "attempt 1")
+    git(repo, "worktree", "remove", found.path)
+    again = worktree.create(repo, "HEAD", "cdcdcdcd3434", run)
+    assert (again.path, again.base, again.head) == (found.path, found.base, attempt.head)
+    assert (Path(again.path) / "tool.py").read_text() == "v1\n"
+
+
+def test_a_worktree_deleted_by_hand_is_added_again_from_its_branch(repo, tmp_path):
+    import shutil
+
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "cececece3434", run)
+    attempt = worktree.commit_attempt(run, {Path("tool.py"): "v1\n"}, "attempt 1")
+    shutil.rmtree(found.path)
+    again = worktree.create(repo, "HEAD", "cececece3434", run)
+    assert again.head == attempt.head and (Path(again.path) / "tool.py").read_text() == "v1\n"
+
+
+def test_a_branch_whose_checkout_failed_is_found_again_by_the_redo(repo, tmp_path):
+    """git keeps the branch when only the checkout fails, as an offline git-lfs does."""
+    (repo / ".gitattributes").write_text("app.py filter=broken\n")
+    git(repo, "add", ".gitattributes")
+    git(repo, "commit", "-q", "-m", "a filter")
+    git(repo, "config", "filter.broken.smudge", "false")
+    git(repo, "config", "filter.broken.required", "true")
+    run = _run(tmp_path)
+    with pytest.raises(ValueError):
+        worktree.create(repo, "HEAD", "cfcfcfcf3434", run)
+    git(repo, "config", "--unset", "filter.broken.required")
+    git(repo, "config", "--unset", "filter.broken.smudge")
+    found = worktree.create(repo, "HEAD", "cfcfcfcf3434", run)
+    assert (Path(found.path) / "app.py").exists()
+
+
+def test_a_symlink_in_refactorys_home_does_not_hide_a_runs_own_worktree(repo, tmp_path, monkeypatch):
+    real = tmp_path / "real-home"
+    real.mkdir()
+    (tmp_path / "linked-home").symlink_to(real)
+    monkeypatch.setenv("REFACTORY_HOME", str(tmp_path / "linked-home"))
+    run = _run(tmp_path)
+    first = worktree.create(repo, "HEAD", "c1c1c1c13434", run)
+    (run / worktree.RECORD).unlink()
+    assert worktree.create(repo, "HEAD", "c1c1c1c13434", run) == first
+    _spine(run, "failed")
+    worktree.prune(repo, idle_hours=0)
+    assert not Path(first.path).exists()
+
+
+def test_a_branch_the_run_did_not_make_is_refused_and_left_alone(repo, tmp_path):
+    git(repo, "branch", "refactory/run-dededede4545")
+    with pytest.raises(ValueError, match="already exists and is not this run's"):
+        worktree.create(repo, "HEAD", "dededede4545", _run(tmp_path))
+    assert not (worktree.slot(repo) / "run-dededede4545.json").exists()
+    assert git(repo, "branch", "--list", "refactory/run-dededede4545")
+
+
+def test_two_runs_on_one_target_get_separate_worktrees_even_at_once(repo, tmp_path):
+    """remote-factory's ``TestFilelockConcurrency``: git keeps concurrent adds apart."""
+    made: list[worktree.Worktree] = []
+    threads = [threading.Thread(target=lambda index=index: made.append(
+        worktree.create(repo, "HEAD", f"cccccccc{index:04d}", _run(tmp_path, f"run{index}"))))
+        for index in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len({found.path for found in made}) == 4
+    assert all(Path(found.path, "app.py").exists() for found in made)
+
+
+def test_a_target_that_is_not_a_repository_root_or_has_no_commits_is_refused(repo, tmp_path):
+    (repo / "sub").mkdir()
+    with pytest.raises(ValueError, match="inside the repository"):
+        worktree.repository_root(repo / "sub")
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    with pytest.raises(ValueError, match="not a git repository"):
+        worktree.repository_root(plain)
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    git(empty, "init", "-q")
+    with pytest.raises(ValueError, match="has no commits"):
+        worktree.repository_root(empty)
+
+
+def test_none_of_the_targets_hooks_run_for_the_run(repo, tmp_path):
+    """`--no-verify` stops pre-commit only; a post-checkout or post-commit hook is the person's."""
+    log = tmp_path / "hooks.log"
+    for hook in ("post-checkout", "post-commit", "pre-commit"):
+        script = repo / ".git" / "hooks" / hook
+        script.write_text(f"#!/bin/sh\necho {hook} >> {log}\n")
+        script.chmod(0o755)
+    run = _run(tmp_path)
+    worktree.create(repo, "HEAD", "efefefef5656", run)
+    worktree.commit_attempt(run, {Path("app.py"): "changed\n"}, "attempt 1")
+    worktree.commit_attempt(run, {Path("tool.py"): "x\n"}, "attempt 2")
+    assert not log.exists()
+
+
+# ── attempts ───────────────────────────────────────────────────────────────
+def test_each_attempt_is_one_commit_whose_tree_is_the_base_plus_that_attempts_files(repo, tmp_path):
+    """A later attempt replaces an earlier one, as rewriting an artifact directory did."""
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "dddddddd3333", run)
+    first = worktree.commit_attempt(run, {Path("tool.py"): "v1\n", Path("app.py"): "changed\n"}, "attempt 1")
+    second = worktree.commit_attempt(run, {Path("other.py"): "v2\n"}, "attempt 2")
+    path = Path(found.path)
+    assert git(path, "rev-list", "--count", f"{found.base}..HEAD") == "2"
+    assert second.head != first.head != found.base
+    assert sorted(git(path, "ls-tree", "--name-only", "HEAD").splitlines()) == ["app.py", "other.py"]
+    assert (path / "app.py").read_text() == "print('app')\n", "an earlier attempt's edit is put back"
+    assert not (path / "tool.py").exists()
+    assert "other.py" in worktree.diff(second) and "tool.py" not in worktree.diff(second)
+
+
+def test_a_tracked_file_the_run_changed_on_disk_is_put_back_before_the_next_attempt(repo, tmp_path, capsys):
+    """A check that rewrites a lockfile must not wedge the run; the change is reported."""
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "eeeeeeee4444", run)
+    (Path(found.path) / "app.py").write_text("rewritten by a check\n")
+    advanced = worktree.commit_attempt(run, {Path("tool.py"): "x\n"}, "attempt")
+    assert (Path(found.path) / "app.py").read_text() == "print('app')\n"
+    assert git(Path(found.path), "show", f"{advanced.head}:app.py") == "print('app')"
+    assert "were put back before this one: app.py" in capsys.readouterr().err
+
+
+def test_a_commit_made_in_the_worktree_outside_the_run_is_refused_and_kept(repo, tmp_path):
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "e0e0e0e04444", run)
+    (Path(found.path) / "app.py").write_text("someone else's commit\n")
+    git(Path(found.path), "commit", "-q", "-am", "outside")
+    head = git(Path(found.path), "rev-parse", "HEAD")
+    with pytest.raises(ValueError, match="not at its last attempt"):
+        worktree.commit_attempt(run, {Path("tool.py"): "x\n"}, "attempt")
+    assert git(Path(found.path), "rev-parse", "HEAD") == head, "nothing is reverted"
+
+
+def test_a_check_finds_the_worktree_put_back_to_its_last_attempt(repo, tmp_path):
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "e2e2e2e24444", run)
+    (Path(found.path) / "app.py").write_text("edited after materialise\n")
+    assert worktree.restore(run) == (found, ["app.py"])
+    assert (Path(found.path) / "app.py").read_text() == "print('app')\n"
+
+
+def test_a_worktree_whose_git_link_was_replaced_is_refused(repo, tmp_path):
+    """Its `.git` file is what keeps its commits off the person's own branch."""
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "e3e3e3e34444", run)
+    (Path(found.path) / ".git").write_text(f"gitdir: {repo / '.git'}\n")
+    with pytest.raises(ValueError, match="no longer points at its own git directory"):
+        worktree.require_current(run)
+
+
+def test_a_pruned_worktree_comes_back_from_its_branch_when_the_run_goes_on(repo, tmp_path):
+    """A failed node can be retried after its idle worktree was pruned."""
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "e1e1e1e14444", run)
+    attempt = worktree.commit_attempt(run, {Path("tool.py"): "x\n"}, "attempt")
+    git(repo, "worktree", "remove", found.path)
+    assert worktree.require_current(run).head == attempt.head
+    assert (Path(found.path) / "tool.py").read_text() == "x\n"
+
+
+def test_a_run_whose_worktree_and_branch_are_both_gone_is_refused(repo, tmp_path):
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "e4e4e4e44444", run)
+    git(repo, "worktree", "remove", found.path)
+    git(repo, "branch", "-D", found.branch)
+    with pytest.raises(ValueError, match="and its branch refactory/run-e4e4e4e44444 are both gone"):
+        worktree.require_current(run)
+
+
+def test_an_attempt_that_died_before_its_commit_is_redone_cleanly(repo, tmp_path, capsys):
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "ffffffff5555", run)
+    (run / worktree.PENDING).write_text(json.dumps({"files": ["app.py", "half.py"], "parent": found.head}))
+    (Path(found.path) / "app.py").write_text("half-written\n")
+    (Path(found.path) / "half.py").write_text("half-written\n")
+    worktree.commit_attempt(run, {Path("tool.py"): "x\n"}, "attempt")
+    assert (Path(found.path) / "app.py").read_text() == "print('app')\n"
+    assert not (Path(found.path) / "half.py").exists()
+    assert not (run / worktree.PENDING).exists()
+    assert "put back" not in capsys.readouterr().err, "the attempt's own files are not someone else's edits"
+
+
+def test_an_attempt_that_died_after_its_commit_is_replaced_by_the_redo(repo, tmp_path):
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "f0f0f0f05555", run)
+    (run / worktree.PENDING).write_text(json.dumps({"files": ["half.py"], "parent": found.head}))
+    (Path(found.path) / "half.py").write_text("committed, never recorded\n")
+    git(Path(found.path), "add", "half.py")
+    git(Path(found.path), "commit", "-q", "-m", "attempt 1")
+    advanced = worktree.commit_attempt(run, {Path("tool.py"): "x\n"}, "attempt 1")
+    assert git(Path(found.path), "rev-list", "--count", f"{found.base}..{advanced.head}") == "1"
+    assert git(Path(found.path), "ls-tree", "--name-only", "HEAD").splitlines() == ["app.py", "tool.py"]
+
+
+@pytest.mark.parametrize("name", [".git/config", ".GIT", "sub/.Git/HEAD"])
+def test_an_emitted_path_inside_gits_own_state_is_refused_in_any_case(repo, tmp_path, name):
+    """A `.GIT` on a case-insensitive disk would replace the worktree's link to its repository."""
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "abababab6666", run)
+    with pytest.raises(ValueError, match="git's own state"):
+        worktree.commit_attempt(run, {Path(name): "gitdir: elsewhere\n"}, "attempt")
+    assert worktree.is_run_worktree(Path(found.path))
+
+
+def test_an_attempt_never_writes_through_a_symlink(repo, tmp_path):
+    outside = tmp_path / "outside.txt"
+    outside.write_text("theirs\n")
+    (repo / "link.txt").symlink_to(outside)
+    git(repo, "add", "link.txt")
+    git(repo, "commit", "-q", "-m", "a link")
+    run = _run(tmp_path)
+    worktree.create(repo, "HEAD", "acacacac6767", run)
+    with pytest.raises(ValueError, match="goes through the symlink link.txt"):
+        worktree.commit_attempt(run, {Path("link.txt"): "mine\n"}, "attempt")
+    assert outside.read_text() == "theirs\n"
+
+
+def test_a_refused_attempt_never_makes_the_next_one_delete_through_a_symlink(repo, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "notes.txt").write_text("theirs\n")
+    (repo / "docs").symlink_to(outside)
+    git(repo, "add", "docs")
+    git(repo, "commit", "-q", "-m", "a linked directory")
+    run = _run(tmp_path)
+    worktree.create(repo, "HEAD", "adadadad6767", run)
+    with pytest.raises(ValueError, match="goes through the symlink docs"):
+        worktree.commit_attempt(run, {Path("docs/notes.txt"): "mine\n"}, "attempt 1")
+    worktree.commit_attempt(run, {Path("tool.py"): "x\n"}, "attempt 1")
+    assert (outside / "notes.txt").read_text() == "theirs\n"
+
+
+def test_a_file_left_in_the_worktree_is_gone_before_the_next_attempt_but_installs_stay(
+        repo, tmp_path, monkeypatch, capsys):
+    """A reviewer's stray `conftest.py` must not be in a check without being on the branch.
+
+    Removed without a warning, as a check's `__pycache__` is: only a changed tracked
+    file says that a step changed the source.
+    """
+    bin_dir = tmp_path / "bin"
+    stub(bin_dir, "pnpm", "mkdir -p node_modules/pkg && echo x > node_modules/pkg/index.js")
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    for name in ("package.json", "pnpm-lock.yaml"):
+        (repo / name).write_text("{}\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "js")
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "afafafaf6767", run)
+    worktree.ensure_environment(found, run)
+    (Path(found.path) / "conftest.py").write_text("stray\n")
+    worktree.commit_attempt(run, {Path("tool.py"): "x\n"}, "attempt")
+    assert not (Path(found.path) / "conftest.py").exists()
+    assert (Path(found.path) / "node_modules" / "pkg").is_dir()
+    assert "put back" not in capsys.readouterr().err
+
+
+def test_only_what_an_install_left_untracked_is_kept_between_attempts(repo, tmp_path, monkeypatch):
+    """Found live: pnpm leaves ignored `node_modules` inside tracked package directories."""
+    (repo / ".gitignore").write_text("build/\n")
+    (repo / "pkg").mkdir()
+    (repo / "pkg" / "index.js").write_text("x\n")
+    for name in ("package.json", "pnpm-lock.yaml"):
+        (repo / name).write_text("{}\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "js")
+    stub(tmp_path / "bin", "pnpm", "mkdir -p pkg/build node_modules && echo x > pkg/build/out.js "
+                                   "&& echo x > node_modules/dep.js")
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "abcdabcd6767", run)
+    worktree.ensure_environment(found, run)
+    record = json.loads((worktree.slot(repo) / "run-abcdabcd6767.json").read_text())
+    assert record["installed"] == ["node_modules/"]
+    (Path(found.path) / "pkg" / "stray.js").write_text("left by a reviewer\n")
+    worktree.commit_attempt(run, {Path("tool.py"): "x\n"}, "attempt")
+    assert not (Path(found.path) / "pkg" / "stray.js").exists()
+    assert (Path(found.path) / "node_modules" / "dep.js").exists() and (Path(found.path) / "pkg" / "build").is_dir()
+
+
+# ── whether a run still needs its worktree ─────────────────────────────────
+def test_a_run_whose_state_cannot_be_read_counts_as_active(tmp_path):
+    """Fails closed, where remote-factory's session guard fails open."""
+    run = _run(tmp_path)
+    (run / ".refactory").mkdir()
+    (run / ".refactory" / "spine-status.json").write_text("{not json")
+    assert worktree.state(run) == "active"
+
+
+@pytest.mark.parametrize("status", ["halted", "cancelled", "paused", "waiting_user"])
+def test_a_run_that_can_still_be_resumed_counts_as_active(tmp_path, status):
+    run = _run(tmp_path)
+    _spine(run, status)
+    assert worktree.state(run) == "active"
+
+
+def test_a_held_invocation_lock_or_a_pending_delivery_keeps_a_run_active(tmp_path):
+    import fcntl
+
+    run = _run(tmp_path)
+    _spine(run, "failed")
+    lock = run / ".refactory" / "invocation.lock"
+    with open(lock, "a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        assert worktree.state(run) == "active"
+    assert worktree.state(run) == "ended"
+    pending = run / ".refactory" / "agent-delivery" / "pending"
+    pending.mkdir(parents=True)
+    (pending / "x.json").write_text("{}")
+    assert worktree.state(run) == "active"
+
+
+def test_a_walked_run_ends_with_an_error_or_with_its_walker(tmp_path):
+    run = _run(tmp_path)
+    (run / ".refactory").mkdir()
+    (run / ".refactory" / "progress.json").write_text(json.dumps({"node": "check"}))
+    assert worktree.state(run, os.getpid()) == "active"
+    walker = subprocess.Popen(["true"])
+    walker.wait()
+    assert worktree.state(run, walker.pid) == "ended"
+    (run / ".refactory" / "progress.json").write_text(json.dumps({"node": "check", "error": "boom"}))
+    assert worktree.state(run, os.getpid()) == "ended"
+
+
+def test_a_successful_run_keeps_its_worktree_after_its_directory_is_reused(repo, tmp_path):
+    """A second run in one session reuses the run directory; the first one's success stands."""
+    run = _run(tmp_path)
+    first = worktree.create(repo, "HEAD", "1a1a1a1a0000", run)
+    worktree.record_outcome(first, "succeeded")
+    second = worktree.create(repo, "HEAD", "2b2b2b2b0000", run)
+    _spine(run, "failed")
+    worktree.prune(repo, idle_hours=0)
+    assert Path(first.path).exists() and not Path(second.path).exists()
+
+
+def test_a_run_whose_directory_moved_on_to_a_later_run_has_ended(repo, tmp_path):
+    run = _run(tmp_path)
+    first = worktree.create(repo, "HEAD", "3c3c3c3c0000", run)
+    second = worktree.create(repo, "HEAD", "4d4d4d4d0000", run)
+    _spine(run, "running")
+    worktree.prune(repo, idle_hours=0)
+    assert not Path(first.path).exists() and Path(second.path).exists()
+
+
+def test_prune_removes_an_idle_ended_runs_worktree_and_keeps_active_and_succeeded_ones(repo, tmp_path):
+    ended, active, succeeded = (_run(tmp_path, name) for name in ("ended", "active", "succeeded"))
+    made = {run.name: worktree.create(repo, "HEAD", f"1234567{index}abcd", run)
+            for index, run in enumerate((ended, active, succeeded))}
+    _spine(ended, "failed")
+    _spine(active, "ready")
+    (succeeded / "design.json").write_text("{}")
+    notes = worktree.prune(repo, idle_hours=0)
+    assert not Path(made["ended"].path).exists()
+    assert Path(made["active"].path).exists() and Path(made["succeeded"].path).exists()
+    assert git(repo, "branch", "--list", made["ended"].branch), "the branch outlives the worktree"
+    assert any("removed the worktree of a run" in note for note in notes)
+
+
+def test_a_recently_ended_run_keeps_its_worktree_until_it_has_been_idle_long_enough(tmp_path):
+    """remote-factory's ``test_fresh_worktree_not_touched``, and its idle counterpart."""
+    old = time.time() - (worktree.IDLE_HOURS + 1) * 3600
+    stamp = f"@{int(old)} +0000"
+    repo = git_repo(tmp_path / "repo")
+    git(repo, "commit", "-q", "--amend", "--no-edit", "--date", stamp,
+        env={**os.environ, "GIT_COMMITTER_DATE": stamp})
+    fresh, stale = _run(tmp_path, "fresh"), _run(tmp_path, "stale")
+    kept = worktree.create(repo, "HEAD", "5e5e5e5e0000", fresh)
+    gone = worktree.create(repo, "HEAD", "6f6f6f6f0000", stale)
+    _spine(fresh, "failed")
+    _spine(stale, "failed")
+    os.utime(stale / ".refactory" / "spine-status.json", (old, old))
+    worktree.prune(repo)
+    assert Path(kept.path).exists() and not Path(gone.path).exists()
+
+
+def test_prune_keeps_a_worktree_where_a_file_appeared_after_the_runs_last_step(repo, tmp_path):
+    """Untracked files from the run's own steps go; one someone left there later keeps it."""
+    old = time.time() - 3600
+    left, later = _run(tmp_path, "left"), _run(tmp_path, "later")
+    removed = worktree.create(repo, "HEAD", "9a9a9a9a0000", left)
+    kept = worktree.create(repo, "HEAD", "9b9b9b9b0000", later)
+    for found, run in ((removed, left), (kept, later)):
+        (Path(found.path) / "__pycache__").mkdir()
+        (Path(found.path) / "__pycache__" / "app.pyc").write_text("from the check\n")
+        os.utime(Path(found.path) / "__pycache__" / "app.pyc", (old, old))
+        _spine(run, "failed")
+    (Path(kept.path) / "notes.md").write_text("written after the run ended\n")
+    future = time.time() + 2 * worktree.SLACK_S
+    os.utime(Path(kept.path) / "notes.md", (future, future))
+    notes = worktree.prune(repo, idle_hours=0)
+    assert not Path(removed.path).exists()
+    assert (Path(kept.path) / "notes.md").exists()
+    assert any(note.startswith(f"kept {kept.path}: notes.md changed there after") for note in notes)
+
+
+def test_prune_takes_a_succeeded_runs_worktree_only_when_asked_and_never_its_branch(repo, tmp_path):
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "9d9d9d9d0000", run)
+    worktree.record_outcome(found, "succeeded")
+    worktree.prune(repo, idle_hours=0)
+    assert Path(found.path).exists()
+    worktree.prune(repo, idle_hours=0, succeeded=True)
+    assert not Path(found.path).exists() and git(repo, "branch", "--list", found.branch)
+
+
+def test_a_report_left_by_another_run_in_the_directory_does_not_make_this_one_succeed(tmp_path):
+    """A walker run again in one directory finds the earlier run's `design.json` there."""
+    run = _run(tmp_path)
+    (run / "design.json").write_text(json.dumps({"branch": "refactory/run-aaaa0000aaaa"}))
+    _spine(run, "failed")
+    assert worktree.state(run, branch="refactory/run-aaaa0000aaaa") == "succeeded"
+    assert worktree.state(run, branch="refactory/run-bbbb0000bbbb") == "ended"
+
+
+def test_prune_never_forces_a_worktree_with_uncommitted_work(repo, tmp_path):
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "9999aaaa0000", run)
+    _spine(run, "failed")
+    (Path(found.path) / "app.py").write_text("unsaved work\n")
+    notes = worktree.prune(repo, idle_hours=0)
+    assert (Path(found.path) / "app.py").read_text() == "unsaved work\n"
+    assert any(note.startswith(f"kept {found.path}") and "--force" in note for note in notes)
+
+
+def test_prune_removes_a_worktree_holding_only_what_the_run_left_untracked(repo, tmp_path, monkeypatch):
+    """Found live: a check leaves `__pycache__` in a new project, which has no `.gitignore`."""
+    bin_dir = tmp_path / "bin"
+    stub(bin_dir, "pnpm", "mkdir -p node_modules/pkg && echo x > node_modules/pkg/index.js")
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    for name in ("package.json", "pnpm-lock.yaml"):
+        (repo / name).write_text("{}\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "js")
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "7a7a7a7a0000", run)
+    worktree.ensure_environment(found, run)
+    for left in ("__pycache__/app.cpython-312.pyc", ".pytest_cache/v/cache/nodeids", "dist/out.js"):
+        (Path(found.path) / left).parent.mkdir(parents=True, exist_ok=True)
+        (Path(found.path) / left).write_text("left by the check\n")
+    _spine(run, "failed")
+    worktree.prune(repo, idle_hours=0)
+    assert not Path(found.path).exists()
+
+
+def test_prune_removes_a_worktree_whose_installs_wrote_a_lockfile(repo, tmp_path, monkeypatch):
+    """`uv sync` without a `uv.lock` writes one, untracked; it is the run's, not the person's."""
+    stub(tmp_path / "bin", "uv", "mkdir -p .venv/bin && echo lock > uv.lock")
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+    _python_project(repo)
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "7c7c7c7c0000", run)
+    worktree.ensure_environment(found, run)
+    _spine(run, "failed")
+    worktree.prune(repo, idle_hours=0)
+    assert not Path(found.path).exists()
+
+
+def test_a_worktree_with_submodules_is_removed_once_nothing_in_it_is_uncommitted(tmp_path, monkeypatch):
+    """git refuses any worktree holding submodules; one that is clean throughout can go."""
+    monkeypatch.setenv("GIT_CONFIG_PARAMETERS", "'protocol.file.allow'='always'")
+    sub = git_repo(tmp_path / "sub")
+    repo = git_repo(tmp_path / "repo")
+    git(repo, "submodule", "-q", "add", str(sub), "sub")
+    git(repo, "commit", "-q", "-m", "a submodule")
+    # As a person's clone is: the submodule is declared, but nothing initialised it here.
+    git(repo, "config", "--remove-section", "submodule.sub")
+    clean, dirty = _run(tmp_path, "clean"), _run(tmp_path, "dirty")
+    removed = worktree.create(repo, "HEAD", "7d7d7d7d0000", clean)
+    kept = worktree.create(repo, "HEAD", "7e7e7e7e0000", dirty)
+    for found, run in ((removed, clean), (kept, dirty)):
+        assert worktree.ensure_environment(found, run)[1] == []
+        assert worktree.shared_changed(found) is False, "initialising submodules is refactory's own doing"
+        _spine(run, "failed")
+    (Path(kept.path) / "sub" / "app.py").write_text("work inside the submodule\n")
+    worktree.prune(repo, idle_hours=0)
+    assert not Path(removed.path).exists()
+    assert (Path(kept.path) / "sub" / "app.py").read_text() == "work inside the submodule\n"
+
+
+def test_an_ended_runs_branch_goes_after_its_idle_days_but_a_named_branch_never(repo, tmp_path, monkeypatch):
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "8888bbbb1111", run)
+    _spine(run, "failed")
+    named = worktree.slot(repo) / "run-person.json"
+    named.write_text(json.dumps({"branch": "feature/mine", "path": str(tmp_path / "nowhere"),
+                                 "run": str(tmp_path / "gone")}))
+    git(repo, "branch", "feature/mine")
+    monkeypatch.setattr(worktree, "_idle_hours", lambda *args: worktree.FAILED_BRANCH_DAYS * 24 + 1)
+    worktree.prune(repo)
+    assert not git(repo, "branch", "--list", found.branch)
+    assert git(repo, "branch", "--list", "feature/mine"), "a branch a person named is never touched"
+    assert named.exists()
+
+
+def test_prune_leaves_the_targets_own_worktrees_alone(repo, tmp_path):
+    """git's own `worktree prune` would drop a person's worktree on a disk that is not mounted."""
+    theirs = tmp_path / "theirs"
+    git(repo, "worktree", "add", "-q", "-b", "theirs", str(theirs))
+    (theirs / "app.py").write_text("their staged work\n")
+    git(theirs, "add", "app.py")
+    hidden = tmp_path / "unmounted"
+    theirs.rename(hidden)
+    run = _run(tmp_path)
+    worktree.create(repo, "HEAD", "9c9c9c9c0000", run)
+    _spine(run, "failed")
+    worktree.prune(repo, idle_hours=0)
+    hidden.rename(theirs)
+    assert git(theirs, "diff", "--cached", "--name-only") == "app.py"
+
+
+# ── the check environment (remote-factory's test_worktree_venv) ───────────
+def test_a_check_in_a_worktree_sees_none_of_refactorys_variables(repo, tmp_path, monkeypatch):
+    """`REFACTORY_KNOBS` once failed a target's own test suite (#330 E1)."""
+    monkeypatch.setenv("PYTHONPATH", "/launcher/refactory")
+    monkeypatch.setenv("REFACTORY_KNOBS", '{"x": 1}')
+    monkeypatch.setenv("DSH_WORKFLOW_NODE", "{}")
+    found = worktree.create(repo, "HEAD", "7777cccc2222", _run(tmp_path))
+    env = worktree.check_environment(Path(found.path), tmp_path / "home")
+    assert set(env) <= {"PATH", "HOME", "VIRTUAL_ENV", *worktree.CHECK_ENV}
+    assert env["HOME"] == str(tmp_path / "home")
+    assert env["PATH"].split(os.pathsep)[0] == str(venv_bin()), "none of its own, so refactory's"
+
+
+def test_a_managed_environment_comes_first_and_an_unmarked_one_is_not_adopted(repo, tmp_path):
+    found = worktree.create(repo, "HEAD", "6666dddd3333", _run(tmp_path))
+    bin_dir = Path(found.path) / ".venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    unmarked = worktree.check_environment(Path(found.path), tmp_path)
+    assert str(bin_dir) not in unmarked["PATH"] and "VIRTUAL_ENV" not in unmarked
+    (Path(found.path) / ".venv" / worktree.MARKER).write_text("")
+    marked = worktree.check_environment(Path(found.path), tmp_path)
+    assert marked["PATH"].split(os.pathsep)[0] == str(bin_dir)
+    assert marked["VIRTUAL_ENV"] == str(Path(found.path) / ".venv")
+    assert str(venv_bin()) not in marked["PATH"].split(os.pathsep)
+
+
+def _python_project(repo: Path) -> None:
+    (repo / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    git(repo, "add", "pyproject.toml")
+    git(repo, "commit", "-q", "-m", "manifest")
+
+
+def test_installs_run_once_per_manifest_content_and_again_when_it_changes(repo, tmp_path, monkeypatch):
+    bin_dir = tmp_path / "bin"
+    stub(bin_dir, "uv", "mkdir -p .venv/bin")
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    _python_project(repo)
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "5555eeee4444", run)
+    assert worktree.ensure_environment(found, run) == (found, [])
+    assert worktree.ensure_environment(found, run) == (found, [])
+    assert (bin_dir / "calls.log").read_text().count("uv sync") == 1
+    assert (Path(found.path) / ".venv" / worktree.MARKER).exists()
+    (Path(found.path) / "pyproject.toml").write_text("[project]\nname = 'y'\n")
+    worktree.ensure_environment(found, run)
+    assert (bin_dir / "calls.log").read_text().count("uv sync") == 2
+
+
+def test_what_was_installed_is_known_per_worktree_not_per_run_directory(repo, tmp_path, monkeypatch):
+    """A walker that runs again in the same directory, or a worktree added back, installs again."""
+    stub(tmp_path / "bin", "uv", "mkdir -p .venv/bin")
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+    _python_project(repo)
+    run = _run(tmp_path)
+    first = worktree.create(repo, "HEAD", "5b5b5b5b4444", run)
+    worktree.ensure_environment(first, run)
+    second = worktree.create(repo, "HEAD", "5c5c5c5c4444", run)
+    worktree.ensure_environment(second, run)
+    git(repo, "worktree", "remove", "--force", second.path)
+    worktree.ensure_environment(worktree.require_current(run), run)
+    assert (tmp_path / "bin" / "calls.log").read_text().count("uv sync") == 3
+    assert (Path(second.path) / ".venv" / worktree.MARKER).exists()
+
+
+def test_installs_run_without_the_checks_memory_cap(repo, tmp_path, monkeypatch):
+    """A package manager under a 2 GB address space is killed before it installs anything."""
+    stub(tmp_path / "bin", "uv", f'echo "cap=$(ulimit -v)" >> "{tmp_path}/bin/calls.log"; mkdir -p .venv/bin')
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+    _python_project(repo)
+    run = _run(tmp_path)
+    worktree.ensure_environment(worktree.create(repo, "HEAD", "5d5d5d5d4444", run), run)
+    assert "cap=unlimited" in (tmp_path / "bin" / "calls.log").read_text()
+
+
+def test_an_install_that_failed_is_tried_again_and_a_missing_installer_is_named(repo, tmp_path, monkeypatch):
+    bin_dir = tmp_path / "bin"
+    stub(bin_dir, "uv", f'test -e "{bin_dir}/second" || {{ touch "{bin_dir}/second"; exit 1; }}; mkdir -p .venv/bin')
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    _python_project(repo)
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "5a5a5a5a4444", run)
+    assert worktree.ensure_environment(found, run)[1][0].startswith("`uv sync --all-groups` failed")
+    assert worktree.ensure_environment(found, run)[1] == []
+    assert (bin_dir / "calls.log").read_text().count("uv sync") == 2
+    only_git = tmp_path / "only-git"
+    only_git.mkdir()
+    (only_git / "git").symlink_to(subprocess.run(["sh", "-c", "command -v git"], capture_output=True,
+                                                 text=True, check=True).stdout.strip())
+    monkeypatch.setenv("PATH", str(only_git))
+    (Path(found.path) / "pyproject.toml").write_text("[project]\nname = 'changed'\n")
+    assert worktree.ensure_environment(found, run)[1] == [
+        "UNAVAILABLE: uv is not installed, so `uv sync --all-groups` could not run"]
+
+
+def test_a_lockfile_an_install_writes_is_amended_into_the_attempt(repo, tmp_path, monkeypatch):
+    """A new JavaScript project has no lockfile; the one npm writes is part of the change."""
+    stub(tmp_path / "bin", "npm", "echo '{\"lockfileVersion\": 3}' > package-lock.json")
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "4444ffff5555", run)
+    attempt = worktree.commit_attempt(run, {Path("package.json"): "{}\n"}, "attempt 1")
+    amended, problems = worktree.ensure_environment(attempt, run)
+    assert problems == [] and amended.head != attempt.head
+    assert worktree.recorded(run) == amended
+    assert git(Path(found.path), "rev-list", "--count", f"{found.base}..HEAD") == "1", "one commit per attempt"
+    assert sorted(git(Path(found.path), "ls-tree", "--name-only", "HEAD").splitlines()) == [
+        "app.py", "package-lock.json", "package.json"]
+    assert "npm install" in (tmp_path / "bin" / "calls.log").read_text()
+
+
+def test_a_lockfile_written_before_any_attempt_never_rewrites_the_base(repo, tmp_path, monkeypatch):
+    stub(tmp_path / "bin", "npm", "echo '{\"lockfileVersion\": 3}' > package-lock.json")
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+    (repo / "package.json").write_text("{}\n")
+    git(repo, "add", "package.json")
+    git(repo, "commit", "-q", "-m", "js")
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "4646ffff5555", run)
+    amended, _problems = worktree.ensure_environment(found, run)
+    assert git(Path(found.path), "rev-parse", f"{amended.head}^") == found.base == git(repo, "rev-parse", "main")
+
+
+def test_an_install_is_frozen_only_while_the_attempt_leaves_its_manifest_alone(repo, tmp_path, monkeypatch):
+    """A change that adds a dependency must be installable (`uv sync --frozen` would ignore it)."""
+    stub(tmp_path / "bin", "uv", "mkdir -p .venv/bin")
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+    (repo / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    (repo / "uv.lock").write_text("version = 1\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "locked")
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "4545ffff5555", run)
+    worktree.ensure_environment(worktree.commit_attempt(run, {Path("tool.py"): "x\n"}, "attempt 1"), run)
+    worktree.ensure_environment(
+        worktree.commit_attempt(run, {Path("pyproject.toml"): "[project]\nname = 'x'\ndependencies = ['six']\n"},
+                                "attempt 2"), run)
+    calls = (tmp_path / "bin" / "calls.log").read_text().splitlines()
+    assert calls == ["uv sync --all-groups --frozen", "uv sync --all-groups"]
+
+
+def test_installs_run_unattended_without_hook_managers_secrets_or_refactorys_variables(repo, tmp_path, monkeypatch):
+    bin_dir = tmp_path / "bin"
+    stub(bin_dir, "pnpm", f'echo "HUSKY=$HUSKY LEFTHOOK=$LEFTHOOK CI=$CI DSH=${{DSH_HOME-unset}} '
+                          f'VENV=${{VENV_BIN-unset}} KEY=${{ANTHROPIC_API_KEY-unset}} '
+                          f'NPM=${{NPM_TOKEN-unset}}" >> "{bin_dir}/calls.log"\n'
+                          f'read answer && echo "read a prompt answer" >> "{bin_dir}/calls.log"')
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("DSH_HOME", "/launcher/dsh")
+    monkeypatch.setenv("VENV_BIN", "/launcher/.venv/bin")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "a-model-key")
+    monkeypatch.setenv("NPM_TOKEN", "a-registry-token")
+    for name in ("package.json", "pnpm-lock.yaml"):
+        (repo / name).write_text("{}\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "js")
+    run = _run(tmp_path)
+    with _stdin("y\n"):
+        worktree.ensure_environment(worktree.create(repo, "HEAD", "3333aaaa6666", run), run)
+    calls = (bin_dir / "calls.log").read_text()
+    assert "HUSKY=0 LEFTHOOK=0 CI=true DSH=unset VENV=unset KEY=unset NPM=a-registry-token" in calls
+    assert "read a prompt answer" not in calls, "an install's stdin is closed, so a prompt cannot wait on it"
+
+
+def test_a_change_to_the_hooks_shared_with_the_target_is_reported_once(repo, tmp_path):
+    """A worktree shares its target's hooks, so whatever "sets them up" changes the person's repo."""
+    found = worktree.create(repo, "HEAD", "3a3a3a3a6666", _run(tmp_path))
+    assert worktree.shared_changed(found) is False
+    hooks = Path(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")) / "hooks"
+    (hooks / "pre-commit").write_text("#!/bin/sh\n")
+    assert worktree.shared_changed(found) is True
+    assert worktree.shared_changed(found) is False
+
+
+def test_the_wrapper_runs_a_command_in_the_worktree_with_the_check_environment(repo, tmp_path, monkeypatch):
+    """Reviewers run commands through it, so a target that is refactory is not tested from the launcher."""
+    monkeypatch.setenv("PYTHONPATH", "/launcher/refactory")
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "2222bbbb7777", run)
+    script = worktree.write_wrapper(found, run)
+    shown = subprocess.run([str(script), "sh", "-c", 'pwd; echo "$HOME"; echo "${PYTHONPATH-unset}"'],
+                           capture_output=True, text=True, check=True).stdout.splitlines()
+    assert shown == [str(Path(found.path).resolve()), str(run / ".refactory" / "check-home"), "unset"]
+
+
+def test_a_check_outside_a_worktree_keeps_todays_environment(tmp_path, monkeypatch):
+    """Create, edit and design_fast checks are unchanged by #351: HOME is their directory, as before."""
+    monkeypatch.setenv("PYTHONPATH", "/kept")
+    result = sandbox.run_command('echo "$HOME"; echo "${PYTHONPATH-unset}"', workdir=tmp_path / "artifact")
+    assert result.stdout.splitlines() == [str(tmp_path / "artifact"), "/kept"]
+
+
+def test_global_memory_lives_in_refactorys_home():
+    """`REFACTORY_HOME` moves all of refactory's per-user state, not only the worktrees."""
+    from refactory_dsh.memory import MemoryStore
+    from refactory_dsh.paths import refactory_home
+
+    store = MemoryStore([], run_root=Path("run"))
+    assert store._roots["global"] == refactory_home() / "memory"
+
+
+# ── identity: what a sign-off is about ────────────────────────────────────
+def test_a_worktrees_identity_is_its_committed_attempt(repo, tmp_path):
+    """Build output and a check's rewrites leave a sign-off current; a new attempt does not.
+
+    The review comment on #330: identity must not count `lib/`, `dist/` or caches.
+    """
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "1111cccc8888", run)
+    path = Path(found.path)
+    before = authoring_evidence.source_files(path)
+    (path / "lib").mkdir()
+    (path / "lib" / "built.js").write_text("built\n")
+    (path / "app.py").write_text("rewritten on disk\n")
+    assert authoring_evidence.source_files(path) == before
+    worktree.commit_attempt(run, {Path("tool.py"): "x\n"}, "attempt")
+    assert authoring_evidence.source_files(path) != before
+
+
+def test_identity_outside_a_worktree_still_counts_every_file(tmp_path):
+    """A package's or an artifact directory's identity is what it was before #351."""
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "lib").mkdir()
+    (tmp_path / "pkg" / "lib" / "built.js").write_text("built\n")
+    assert list(authoring_evidence.source_files(tmp_path / "pkg")) == ["lib/built.js"]
