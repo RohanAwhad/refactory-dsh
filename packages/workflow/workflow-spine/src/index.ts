@@ -12,7 +12,10 @@
  * happens inside the subagents the CEO spawns, which join the full composition
  * and are out of this guard's reach: their tools are what the delegation row that
  * spawns them allows. Removing the coding tools from the CEO is what turns "please
- * follow the graph" into "there is no other path".
+ * follow the graph" into "there is no other path". The CEO is every top-level
+ * agent the plugin's tools reach: the agents of its composition when it is
+ * mounted in one (a preset), every top-level agent on the host when it is
+ * mounted at host level (the CLI graph profile).
  * @module @deepseek-ai/dsh-workflow-spine
  */
 
@@ -152,11 +155,12 @@ export interface Config {
   commandSandboxMode: string
   /**
    * Global tools the CEO is not allowed to call. The guard denies these on the
-   * CEO's own scope at `agent/created`, so subagents (which join the full
-   * composition as siblings) are out of its reach; their delegation row's
-   * `toolFilter` decides what they keep. Names absent from the CEO's
-   * inherited surface are skipped, so the list can name platform-gated tools
-   * (e.g. `pwsh`) that are not present.
+   * CEO's own scope at `agent/created`: every top-level agent of the mount's
+   * composition, or of the whole host when the plugin is mounted at host level.
+   * Subagents (which join the full composition as siblings) are out of its
+   * reach; their delegation row's `toolFilter` decides what they keep. Names
+   * absent from the CEO's inherited surface are skipped, so the list can name
+   * platform-gated tools (e.g. `pwsh`) that are not present.
    */
   ceoDeny: string[]
 }
@@ -1673,16 +1677,17 @@ export function apply(ctx: Context, config: Config): void {
 
   // The drift-free guard. At `agent/created` the CEO (a top-level agent, never
   // a subagent) of THIS composition loses the coding/external tools on its own
-  // scope only. Content subagents are siblings of the CEO under the same
-  // standing mount, so this restriction does not reach them.
+  // scope only. With no composition scope (a host-level mount, as on the CLI
+  // graph profile), every top-level agent on the host is the CEO. Content
+  // subagents are siblings of the CEO under the same standing mount, so this
+  // restriction does not reach them.
   const compositionScope = scopeOf(ctx)
   const restrictions = new WeakMap<Agent, () => void>()
   ctx.on('agent/created', ({ agent }) => {
     if (agent.session.header.origin === 'subagent') return
-    if (compositionScope === undefined) return
     const agentScope = scopeOf(agent.ctx)
     if (agentScope === undefined) return
-    if (!scopeChainOf(agentScope).includes(compositionScope)) return
+    if (compositionScope !== undefined && !scopeChainOf(agentScope).includes(compositionScope)) return
     const visible = new Set(ctx.tools.schemas(agentScope).map(schema => schema.name))
     const deny = ceoDeny.filter(name => visible.has(name))
     if (deny.length === 0) return

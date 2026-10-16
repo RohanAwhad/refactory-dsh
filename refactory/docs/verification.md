@@ -75,12 +75,15 @@ involved. The declaration mounts `tool-refactory`, the re:factory persona, and t
 **interactive workflow spine**. The spine is mounted with `interactiveOpen`, so the
 chat's CEO can open a mode with `wf_open` and drive it with `wf_next`; it runs one
 deterministic node per call, refuses a caller that is not the session that opened the
-run, and answers a `user` gate through `userQuestions`. Mounting it inside the preset
-is what makes the spine's own guard deny the CEO's coding tools, so the CEO cannot
-implement a node by hand. The patch targets the `agent-preset-registry` row that the
-`dsh-web-app` layer inserts, so this bundle must be applied after
-`@deepseek-ai/dsh-web-app`; `dsh plugin add` appends a newly installed bundle after the
-profile's template bundles, which is what an ordinary profile install relies on.
+run, and answers a `user` gate through `userQuestions`. The spine's own guard denies
+the CEO's coding tools, so the CEO cannot implement a node by hand, and mounting it
+inside the preset is what keeps its tools and that guard on the preset's own agents: a
+host row reaches every top-level agent on the host. The CLI's `graph` profile does mount
+it as a host row: there the only top-level agent is the CEO its runner boots. The patch
+targets the `agent-preset-registry` row that the `dsh-web-app` layer inserts, so this bundle
+must be applied after `@deepseek-ai/dsh-web-app`; `dsh plugin add` appends a newly
+installed bundle after the profile's template bundles, which is what an ordinary profile
+install relies on.
 
 The console resolves `repoRoot` the same way: its row reads
 `ctx.refactoryWebStartup.repoRoot`, which the `refactory-web` bundle's startup plugin
@@ -169,7 +172,9 @@ and brand rows with a `repoRoot` resolved to the checkout (`refactoryConsole/pro
 a live mode catalogue (`refactoryConsole/modes`). A scripted model route then makes the CEO
 spawn a subagent through `subagent` and through `subagent_fork`, on `refactory` and on a
 fresh profile carrying the `graph` layer, and checks each child's own tool catalog: the
-delegation rows' allow-list, with no shell and nothing that starts a run.
+delegation rows' allow-list, with no shell and nothing that starts a run. The `graph`
+CEO's own catalog is checked the same way as the GUI CEO's: the `wf_*` tools, nothing its
+`ceoDeny` names, and no shell, `write`, `edit`, `workflow` or `ralph`.
 
 The gateway discovers the console at runtime from the `@Remote` markers on the mounted
 service and binds arguments by the method parameter names, so the console answers without

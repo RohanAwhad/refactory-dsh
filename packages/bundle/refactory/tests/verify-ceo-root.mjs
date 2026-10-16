@@ -1,6 +1,6 @@
 /**
- * The acceptance check for the re:factory GUI profile's layers, and for the
- * subagents the CEO spawns there and on the CLI's `graph` layer.
+ * The acceptance check for the re:factory GUI profile's layers, and for the CEO
+ * and the subagents it spawns there and on the CLI's `graph` layer.
  *
  * It is a script, not a spec, because what it proves is a whole-profile fact: an
  * owned `refactory` profile, provisioned from the harness's `web` template
@@ -10,9 +10,11 @@
  * `refactory-web`'s console, picker and brand rows with a `repoRoot` resolved
  * from the checkout rather than the caller's working directory. The harness's
  * own `web` profile is checked alongside it: it must keep exactly the template's
- * bundle list and mount none of re:factory's rows. A subagent the CEO spawns,
- * through `subagent` and through `subagent_fork`, on this profile and on the
- * CLI's `graph` profile, must get its delegation row's allow-list and no shell.
+ * bundle list and mount none of re:factory's rows. The CLI's `graph` profile's
+ * CEO, like the GUI's, must get the `wf_*` tools and none of its own `ceoDeny`. A
+ * subagent the CEO spawns, through `subagent` and through `subagent_fork`, on this
+ * profile and on the CLI's `graph` profile, must get its delegation row's
+ * allow-list and no shell.
  *
  * It drives the *real* services rather than re-reading files: the same
  * `agentPresets.list()` the picker calls, the same `agents.create()` path
@@ -67,6 +69,9 @@ const DELEGATE = 'Delegate once through each subagent tool.'
 /** Tools no subagent may get, whatever the delegation rows say; see `checkSubagents`. */
 const FORBIDDEN = ['bash', 'pwsh', 'workflow', 'ralph', 'refactory']
 
+/** Tools no CEO may get, whatever its `ceoDeny` says; see `checkCeo`. */
+const CEO_FORBIDDEN = ['bash', 'pwsh', 'write', 'edit', 'workflow', 'ralph']
+
 /** Every fact the issue's acceptance criteria name, in the order it states them. */
 const failures = []
 function check(ok, label, detail) {
@@ -82,24 +87,36 @@ function run(command, args, options = {}) {
 }
 
 /**
- * The `ceoDeny` names the shipped composition declares, read from the preset
+ * The `ceoDeny` names a shipped composition declares, read from the composition
  * itself rather than restated here: a hand-copied list drifts the moment the
- * preset gains an entry, which is how `str_replace_editor` went unchecked.
+ * composition gains an entry, which is how `str_replace_editor` went unchecked.
  *
- * Reading it is only honest if a failed read is loud. An absent `ceoDeny:` makes
- * `indexOf` return -1, `slice(-1)` yield the last character, and the match come
- * back empty — which would make "no denied tool is present" true by vacuity. So
- * the extraction throws instead, and the run reports it as a failure.
+ * Reading it is only honest if a failed read is loud. An absent or empty block
+ * would make "no denied tool is present" true by vacuity, so the extraction throws
+ * instead, and the run reports it as a failure. Only the block's own items are
+ * read, so a later bare list item is not taken for one.
+ * @param file - the composition that declares the spine row.
+ * @returns the names its `ceoDeny:` block lists.
  */
-const DENIED = (() => {
-  const composition = readFileSync(join(BUNDLE, 'presets', 'ceo.patch.yml'), 'utf8')
-  const at = composition.indexOf('ceoDeny:')
-  if (at < 0) throw new Error("the composition declares no `ceoDeny:` block to check against")
-  const block = composition.slice(at)
-  const names = [...block.matchAll(/^\s+-\s+(\S+)$/gmu)].map(match => match[1])
-  if (names.length === 0) throw new Error('the composition\'s `ceoDeny:` block lists no tools')
+function ceoDenyOf(file) {
+  const lines = readFileSync(file, 'utf8').split('\n')
+  const at = lines.findIndex(line => line.trim() === 'ceoDeny:')
+  if (at < 0) throw new Error(`${file} declares no \`ceoDeny:\` block to check against`)
+  const names = []
+  for (const line of lines.slice(at + 1)) {
+    const item = /^\s+-\s+(\S+)$/u.exec(line)
+    if (item === null) break
+    names.push(item[1])
+  }
+  if (names.length === 0) throw new Error(`the \`ceoDeny:\` block in ${file} lists no tools`)
   return names
-})()
+}
+
+/** The GUI preset's `ceoDeny`. */
+const DENIED = ceoDenyOf(join(BUNDLE, 'presets', 'ceo.patch.yml'))
+
+/** The CLI graph layer's `ceoDeny`. */
+const GRAPH_DENIED = ceoDenyOf(join(REPO, 'packages', 'bundle', 'graph', 'cordis.patch.yml'))
 
 /**
  * The `toolFilter` allow-list the delegation rows declare, read from both shipped
@@ -474,16 +491,7 @@ try {
 
   const tools = await composedToolCatalog(base, cookie, sessionId, message => { log += message })
   check(tools !== undefined, 'the composed agent answers a tool-catalog question', String(tools ?? ''))
-  if (tools !== undefined) {
-    const names = new Set(tools)
-    const workflow = [...names].filter(name => name.startsWith('wf_'))
-    check(workflow.length > 0, 'the CEO agent gets the wf_* tools', workflow.sort().join(', '))
-    // The preset's own `ceoDeny`, read from the composition rather than restated
-    // here: a hand-copied list drifts the moment the preset gains an entry, which
-    // is how `str_replace_editor` went unchecked.
-    const denied = DENIED.filter(name => names.has(name))
-    check(denied.length === 0, 'the ceoDeny list is absent from the catalog', denied.join(', '))
-  }
+  if (tools !== undefined) checkCeo(PROFILE, [tools], DENIED)
 
   // 4. A subagent the CEO spawns gets the delegation rows' allow-list. `ceoDeny`
   //    narrows the CEO's own scope only, so without the filter a child inherits
@@ -503,7 +511,9 @@ try {
   // scope, and a filter never narrows a scope's own tools.
   checkSubagents(PROFILE, await subagentRecords(webSubagents), ['subagent', 'list_subagent_models'])
 
-  // 5. The same on the CLI's `graph` profile, through its own delegation rows. The
+  // 5. The same on the CLI's `graph` profile, through its own delegation rows, and
+  //    the CEO's own catalog: the runner creates that CEO outside any preset, under
+  //    a host-level spine row, so its `ceoDeny` is checked here too. The
   //    plan's `graph` profile in this home was seeded without `dsh-base` for the
   //    cleanup checks above, so the layer goes into a fresh profile the way the
   //    plan's `add` installs it on a new machine: over `dsh-base`. Its runner drives
@@ -528,7 +538,12 @@ try {
     '--mode', 'acceptance', '--task', 'subagent-tools', '--graphs', graphs,
     '--workdir', join(home, 'graph-run'), '--python-bin', join(REPO, '.venv', 'bin'),
   ], { env: { ...process.env, DSH_HOME: home }, cwd: tmpdir(), input: '', timeout: 120_000 })
-  checkSubagents('graph', await subagentRecords(graphSubagents, 0), [], graphRun.out.slice(-600))
+  const graphRecords = await subagentRecords(graphSubagents, 0)
+  const ceoCatalogs = graphRecords.filter(record => record.ceo !== undefined).map(record => record.ceo)
+  check(ceoCatalogs.length > 0, 'graph: the CEO\'s own catalog is recorded',
+    ceoCatalogs.length > 0 ? undefined : graphRun.out.slice(-600))
+  if (ceoCatalogs.length > 0) checkCeo('graph', ceoCatalogs, GRAPH_DENIED)
+  checkSubagents('graph', graphRecords, [], graphRun.out.slice(-600))
 } catch (error) {
   check(false, 'the acceptance run completed', error instanceof Error ? error.message : String(error))
 } finally {
@@ -574,8 +589,9 @@ function scriptedModelPatch(home, profile, records, marker) {
  * returns; the graph run has exited before this is read.
  * @param file - the records file.
  * @param waitMs - how long to wait for the last child.
- * @returns every record: `{ via, tools }` per child, `{ via, nested }` per answer to a
- * child's own `subagent` call, and `{ result }` per tool result the CEO read.
+ * @returns every record: `{ ceo }` per CEO turn, `{ via, tools }` per child,
+ * `{ via, nested }` per answer to a child's own `subagent` call, and `{ result }` per
+ * tool result the CEO read.
  */
 async function subagentRecords(file, waitMs = 60_000) {
   const read = () => (existsSync(file) ? readFileSync(file, 'utf8') : '')
@@ -589,6 +605,31 @@ async function subagentRecords(file, waitMs = 60_000) {
     await new Promise(resolveDelay => setTimeout(resolveDelay, 500))
   }
   return read()
+}
+
+/**
+ * Check what a profile's CEO was given: the `wf_*` tools, and nothing its
+ * composition's `ceoDeny` names on any request it made.
+ *
+ * `denied` is read from the composition under test, so a name dropped from it
+ * goes unchecked; `CEO_FORBIDDEN` is fixed here for the reason `FORBIDDEN` is: the
+ * shell, the file-writing tools, and what starts a child outside the delegation
+ * rows' filter.
+ * @param profile - the profile the catalogs came from, for the labels.
+ * @param catalogs - the tool names on each request the CEO made.
+ * @param denied - the profile's own `ceoDeny`.
+ */
+function checkCeo(profile, catalogs, denied) {
+  const names = new Set(catalogs.flat())
+  const workflow = catalogs.map(catalog => catalog.filter(name => name.startsWith('wf_')))
+  check(workflow.every(found => found.length > 0), `${profile}: the CEO gets the wf_* tools`,
+    [...new Set(workflow.flat())].sort().join(', '))
+  const present = denied.filter(name => names.has(name))
+  check(present.length === 0, `${profile}: the CEO's catalog has nothing its ceoDeny names`, present.join(', '))
+  const forbidden = CEO_FORBIDDEN.filter(name => names.has(name))
+  check(forbidden.length === 0,
+    `${profile}: the CEO gets no shell, no file writes and nothing that starts an unfiltered child`,
+    forbidden.join(', '))
 }
 
 /**

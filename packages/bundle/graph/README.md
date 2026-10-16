@@ -48,7 +48,7 @@ The run prints one JSON object with `mode`, `task`, `budget`, `best_score`, `ses
 
 - The `run` subcommand with its mode, task, budget, graph, Python, model, and knob options.
 - The CEO persona: `You are the CEO of an interactive refactory workflow, powered by the {{model}} model.`, with the working directory appended as the persona suffix.
-- The [workflow spine](../../workflow/workflow-spine/README.md) row: prefix `wf`, `executeCommands: true`, `maxIterations: 500`, a one-hour node-command timeout, and a `ceoDeny` list meant to leave the CEO with the `wf_*` tools (on this profile it does not apply yet; see the limitations below).
+- The [workflow spine](../../workflow/workflow-spine/README.md) row: prefix `wf`, `executeCommands: true`, `maxIterations: 500`, a one-hour node-command timeout, and a `ceoDeny` list that leaves the CEO with the `wf_*` tools. The row is host-level, so its guard covers every top-level agent on the host, which on this profile is the CEO the runner boots: agent-node workers run in processes of their own.
 - The `subagent` and `subagent_fork` rows with the `ceo` preset's `toolFilter` allow-list, so a subagent started through either gets the file and web tools, `skill`, `todo_write` and `send_message`, and no `bash`.
 - The worker-thread code runtime, so a node's Python op runs without blocking the agent loop.
 - The item loader a `DataNode` iterates through: the spine runs `python -m refactory_dsh.items list|begin|end`, so a data-driven mode's items are selected by the same code on this profile as on the walker.
@@ -96,11 +96,11 @@ Read these pages when you want the parts this layer composes rather than the run
 
 #### What the model sees
 
-The layer replaces the base persona: the prefix reads `You are the CEO of an interactive refactory workflow, powered by the {{model}} model.` and the suffix states the working directory as `Your working directory is {{cwd}}.`. The inserted workflow-spine row registers the `wf_*` tools and their prompt section, and that section plus the `ceoDeny` list are meant to leave the CEO on the `wf_*` tools, delegation, ask-user, and read-only tools; on this profile the guard does not apply yet (see the limitations below). A subagent started through `subagent` or `subagent_fork` sees only its row's allow-list. The code runtime and the two graph plugins register no model-facing text of their own.
+The layer replaces the base persona: the prefix reads `You are the CEO of an interactive refactory workflow, powered by the {{model}} model.` and the suffix states the working directory as `Your working directory is {{cwd}}.`. The inserted workflow-spine row registers the `wf_*` tools and their prompt section, and that section plus the `ceoDeny` list are what leave the CEO on the `wf_*` tools, delegation, read-only file tools, and the agent, job, goal, todo and plan-mode controls: no shell, no file writes, no web tools or `skill`, and no `workflow` or `ralph` to start a child outside the delegation rows' allow-list. A subagent started through `subagent` or `subagent_fork` sees only its row's allow-list. The code runtime and the two graph plugins register no model-facing text of their own.
 
 #### Token effect
 
-One persona prefix and suffix per request, plus the `wf_*` tool definitions and their prompt section; the graph's own node content reaches the model through the tool results the CEO reads, so a mode's prompt template costs tokens once, when that node is due.
+One persona prefix and suffix per request, plus the `wf_*` tool definitions and their prompt section; the graph's own node content reaches the model through the tool results the CEO reads, so a mode's prompt template costs tokens once, when that node is due. The `ceoDeny` guard removes the denied tools' definitions from the CEO's requests.
 
 #### KV Cache effect
 
@@ -114,7 +114,7 @@ These limits define the current headless run. They are current package constrain
 
 - **The `graph` profile is not auto-initialized** — `dsh --profile graph` stops with a create hint until `dsh plugin --profile graph add` has created the profile, and `@deepseek-ai/dsh-graph` is not in the npm registry, so `add` takes a path into a checkout.
 - **The graph is inlined at boot** — the spine reads `ctx.graphStartup.graph`, so editing `<mode>.graph.json` during a run changes nothing; restart the run to pick up an edit.
-- **Node commands run unconfined** — graph commands are trusted ops and run with full sandbox access. `ceoDeny` constrains the CEO's own tool list only, and on this profile not even that: the spine row is host-level, where its guard does not apply, so the CEO keeps every tool `ceoDeny` names, `bash` and `workflow` included, and a child started by `workflow` gets every tool (#347). A subagent started through `subagent` or `subagent_fork` gets the delegation rows' allow-list, with no `bash`, but its `write` and `edit` are not yet confined to the run directory.
+- **Node commands run unconfined** — graph commands are trusted ops and run with full sandbox access. `ceoDeny` constrains the CEO's own tool list only. A subagent started through `subagent` or `subagent_fork` gets the delegation rows' allow-list, with no `bash`, but its `write` and `edit` are not yet confined to the run directory.
 - **PTC mode is outside the allow-list** — with `DSH_TOOLS_MODE` set to a PTC mode, every agent also gets `run_code`, which runs model-written code, is added after tool filters apply and cannot be named by one.
 - **`best_score` is read from the work directory** — the runner prefers the mode's known state file and otherwise takes the first JSON file with a numeric `best_score`, so a mode that records its score elsewhere reports 0.
 - **One workflow per process** — the default low-level run is one-shot. `--chat` keeps a conversation between turns; the public `refactory ceo` command enables it by default.
