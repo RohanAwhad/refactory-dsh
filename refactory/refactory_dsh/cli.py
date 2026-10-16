@@ -124,13 +124,29 @@ def _worktree_knobs(args: argparse.Namespace) -> list[str]:
     return knobs
 
 
+def _names_a_mode(text: str) -> bool:
+    """Whether `text` is a well-formed `<package>/<mode>` identifier.
+
+    The shape decides, not the registry. A brief that mentions a path has a slash too,
+    and a mistyped mode name should be refused by the runner as an unknown package,
+    not taken as a one-word brief.
+    """
+    from refactory_dsh.nn.package import PackageError, split
+
+    try:
+        split(text)
+    except PackageError:
+        return False
+    return True
+
+
 def cmd_ceo(args: argparse.Namespace) -> int:
     """Describe what you want: an authoring mode, or a mode to run.
 
-    A positional that names a mode (`pkg/mode`) *runs* that mode; anything else is
-    what you are asking for, and `--mode` says what to do about it. That is the whole
-    contract, and it is why the default is `design`: the headline case is "I have an
-    idea", not "I have a mode".
+    A positional that is a mode identifier (`pkg/mode`) *runs* that mode; anything
+    else, a brief that mentions a path included, is what you are asking for, and
+    `--mode` says what to do about it. That is the whole contract, and it is why the
+    default is `design`: the headline case is "I have an idea", not "I have a mode".
     """
     target = str(args.what)
     mode = str(args.mode or "")
@@ -145,9 +161,10 @@ def cmd_ceo(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+    runs_a_mode = "/" in mode if mode else _names_a_mode(target)
     # A named mode takes them as its knobs; one that does not declare them refuses them by name.
-    args.knob = [*_worktree_knobs(args), *args.knob] if "/" in (mode or target) else args.knob
-    if "/" in target and not mode:
+    args.knob = [*_worktree_knobs(args), *args.knob] if runs_a_mode else args.knob
+    if runs_a_mode and not mode:
         return _forward("refactory_dsh.interactive", _run_argv(target, args))
 
     if mode == "" or mode == "design":

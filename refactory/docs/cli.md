@@ -98,7 +98,7 @@ installed copy.
 
 ## Use a mode
 
-`refactory ceo <package>/<mode>` runs a mode you already have on DSH with your terminal attached, so a gate reaches you. It is the same `ceo` verb that authors a mode; a positional that names one is what says to run it.
+`refactory ceo <package>/<mode>` runs a mode you already have on DSH with your terminal attached, so a gate reaches you. It is the same `ceo` verb that authors a mode; a positional that names one is what says to run it. Only a whole `<package>/<mode>` identifier (lower-case letters, digits and underscores on each side of one slash) counts. Anything else is a brief for the default design mode, including a brief that mentions a path, such as `"add a version flag to refactory/refactory_dsh/cli.py"`.
 
 **A run is a live session.** The CEO's turns print as they complete, each node is reported as it runs, a gate is a prompt, and a line you type between turns reaches the CEO — which can amend a node's prompt and re-run it. `--headless` builds the older one-shot argv instead, for a script or CI, and then the run prints only its final JSON.
 
