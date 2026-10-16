@@ -21,7 +21,8 @@ from refactory_dsh import cli, design_ops, interactive, nn, projects, registry, 
 from refactory_dsh.design import DesignMode
 from refactory_dsh.fast import DesignFastMode
 from refactory_dsh.paths import REPO_ROOT, projects_dir
-from tests_support import RESEARCH_ANSWER, REVIEW_ANSWERS, FakeModel, git, git_repo, render, stub
+from tests_support import (RESEARCH_ANSWER, REVIEW_ANSWERS, FakeModel, StaleEmitModel, git, git_repo,
+                           render, stub)
 
 NAME = "worktree_tool"
 
@@ -205,6 +206,21 @@ def test_an_emit_that_edits_the_worktree_or_the_checkout_is_refused(repo, tmp_pa
     found = worktree.recorded(run)
     assert (f"in {found.path}, " in (result.error or "")) == (where == "worktree")
     assert found.head == found.base, "materialise never ran"
+
+
+def test_a_refused_emit_is_redone_from_a_fresh_emit_txt(repo, tmp_path):
+    """Left in the run, the refused emit.txt read to the redo's worker as the work done."""
+    run = tmp_path / "run"
+    refused = _design(run, _EditingModel(_answers("All changes are already applied."),
+                                         lambda: Path(worktree.recorded(run).path)), target=str(repo))
+    assert "changed while agent 'emit' ran" in (refused.error or "")
+    git(worktree.recorded(run).path, "checkout", "--", "app.py")
+
+    redone = DesignMode.resume(run, model=StaleEmitModel([render({"tool.py": "print('redone')\n"}),
+                                                          *REVIEW_ANSWERS]))
+    assert redone.error is None
+    assert (run / "emit.txt").read_text() == render({"tool.py": "print('redone')\n"})
+    assert git(repo, "show", f"{_report(run)['branch']}:tool.py") == "print('redone')"
 
 
 def test_a_check_in_the_worktree_sees_none_of_refactorys_environment(repo, tmp_path, monkeypatch):

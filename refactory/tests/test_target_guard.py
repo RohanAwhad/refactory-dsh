@@ -21,7 +21,7 @@ import pytest
 
 from refactory_dsh import agent_delivery, design_ops, nn, target_guard
 from refactory_dsh.design import DesignMode
-from tests_support import RESEARCH_ANSWER, REVIEW_ANSWERS, FakeModel, render
+from tests_support import RESEARCH_ANSWER, REVIEW_ANSWERS, FakeModel, StaleEmitModel, render
 
 NAME = "guarded_tool"
 
@@ -280,6 +280,30 @@ def test_a_refused_attempt_is_retried_from_a_fresh_snapshot_on_the_ceo_route(tar
     assert agent_delivery.finish(workdir, "emit")["status"] == "delivered"
 
 
+def test_a_refused_attempts_output_is_set_aside_so_the_redo_must_write_its_own(target, tmp_path):
+    """On the CEO's route the retry is judged against the snapshot from before the refused
+    attempt, so a refused emit.txt left in place counted as the retry's delivery."""
+    workdir = tmp_path / "run"
+    target_guard.record(workdir, target, output_only=("emit",))
+    agent_delivery.begin(workdir, "emit", "Write emit.txt.", ["emit.txt"], reuse=True)
+    (target / "app.py").write_text("print('edited in place')\n")
+    (workdir / "emit.txt").write_text("All changes are already applied.\n")
+    with pytest.raises(ValueError, match="changed while agent 'emit' ran") as refused:
+        agent_delivery.finish(workdir, "emit")
+    assert not (workdir / "emit.txt").exists(), "the redo's worker must not find the refused answer"
+    receipt = agent_delivery.receipts_in(workdir)["emit"]
+    assert (workdir / receipt["set_aside"] / "emit.txt").read_text() == "All changes are already applied.\n"
+    assert receipt["set_aside"] in str(refused.value), "the refusal says where it went"
+
+    _git(target, "checkout", "--", "app.py")
+    agent_delivery.begin(workdir, "emit", "Write emit.txt.", ["emit.txt"], reuse=True)
+    with pytest.raises(ValueError, match="did not deliver required outputs: emit.txt"):
+        agent_delivery.finish(workdir, "emit")
+    agent_delivery.begin(workdir, "emit", "Write emit.txt.", ["emit.txt"], reuse=True)
+    (workdir / "emit.txt").write_text(render({"tool.py": "print('built')\n"}))
+    assert agent_delivery.finish(workdir, "emit")["status"] == "delivered"
+
+
 def test_a_target_its_enclosing_checkout_ignores_is_still_watched(tmp_path):
     outer = tmp_path / "outer"
     root = outer / "ignored" / "target"
@@ -350,3 +374,21 @@ def test_a_design_run_whose_emit_edits_the_target_fails_before_materialise(targe
     assert "changed while agent 'emit' ran" in (result.error or "")
     assert "app.py" in (result.error or "")
     assert not (target / design_ops.ARTIFACTS / NAME).exists(), "materialise never ran"
+
+
+def test_a_refused_emit_is_redone_from_a_fresh_emit_txt(target, tmp_path):
+    workdir = tmp_path / "run"
+    refused = _without_worktree().run(
+        workdir, verdicts={"gate_strategy": "proceed"},
+        model=_EditingModel([RESEARCH_ANSWER, "perspectives", "one plan", "the design document",
+                             "All changes are already applied."], target),
+        task={"name": NAME, "brief": "a tool", "check": "python tool.py"},
+    )
+    assert "changed while agent 'emit' ran" in (refused.error or "")
+    _git(target, "checkout", "--", "app.py")
+
+    redone = DesignMode.resume(workdir, model=StaleEmitModel([render({"tool.py": "print('redone')\n"}),
+                                                              *REVIEW_ANSWERS]))
+    assert redone.error is None
+    assert (workdir / "emit.txt").read_text() == render({"tool.py": "print('redone')\n"})
+    assert (target / design_ops.ARTIFACTS / NAME / "tool.py").read_text() == "print('redone')\n"

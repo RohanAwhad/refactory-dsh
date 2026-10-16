@@ -295,17 +295,21 @@ def strayed(workdir: Path, before: dict[str, Any] | None) -> list[str]:
     return changed
 
 
-def refusal(node: str, root: str, changed: list[str], writes: list[str]) -> str:
+def refusal(node: str, root: str, changed: list[str], writes: list[str], *,
+            set_aside: str | None = None) -> str:
     """Why an output-only node is refused, and what the person should do about it.
 
     The target can change while a node runs for reasons that are not the node's (another
     session in the same checkout), and nothing here can tell which, so the message says
-    what changed and when, not who changed it.
+    what changed and when, not who changed it. ``set_aside`` is where the refused
+    attempt's outputs were moved, so its redo starts without them.
     """
     outputs = ", ".join(writes) or "none"
+    moved = (f" This attempt's output was moved to {set_aside}, so the redo writes its own."
+             if set_aside else "")
     return (f"the target {root} changed while agent {node!r} ran, outside its declared "
             f"outputs ({outputs}): {'; '.join(changed)}. Its whole answer belongs in its "
             "declared output, which a later step turns into the artifact, so a direct change "
-            "skips that step, the check and the reviews (#319). Nothing was reverted. If the "
-            f"agent made the change, revert it and redo {node}; if another session or person "
-            f"did, redo {node} once they are done.")
+            "skips that step, the check and the reviews (#319). Nothing in the target was "
+            f"reverted.{moved} If the agent made the change, revert it and redo {node}; if "
+            f"another session or person did, redo {node} once they are done.")

@@ -340,6 +340,18 @@ class FakeModel:
         return answer
 
 
+class StaleEmitModel(FakeModel):
+    """The redo's emit worker: an emit.txt already in its run reads to it as the work done."""
+
+    def complete(self, prompt: str, *, system: str = "", workdir: object = None) -> str:
+        from pathlib import Path
+
+        answer = super().complete(prompt, system=system, workdir=workdir)
+        if "Write the artifact `" in prompt and (Path(str(workdir)) / "emit.txt").exists():
+            return "emit.txt already contains the correct content."
+        return answer
+
+
 def git(root, *args: str, env: dict[str, str] | None = None) -> str:
     """What a git command prints in ``root``; a failing command fails the test."""
     import subprocess
