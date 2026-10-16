@@ -294,6 +294,34 @@ function recordedStep(
 }
 
 /**
+ * A gate's prompt with the run's facts filled in, as refactory fills `{{name}}` in an
+ * agent node's prompt (`render`): a fact the run has not produced is left as written.
+ *
+ * A user gate's question is all its card shows, so a gate that must say something only
+ * the run knows -- design mode's names the repository delivery would create -- carries
+ * it as a fact, and it is filled wherever the question is put.
+ * @param text - the gate's prompt, as lowered.
+ * @param workdir - the run directory whose `facts.json` holds the values.
+ * @returns the prompt with every known `{{name}}` replaced.
+ */
+export function withFacts(text: string, workdir: string | undefined): string {
+  if (workdir === undefined || !text.includes('{{')) return text
+  let facts: Record<string, unknown>
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(workdir, 'facts.json'), 'utf8'))
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return text
+    facts = parsed as Record<string, unknown>
+  } catch {
+    return text
+  }
+  return text.replace(/\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g, (whole: string, key: string) => {
+    if (!Object.hasOwn(facts, key)) return whole
+    const value = facts[key]
+    return typeof value === 'string' ? value : JSON.stringify(value)
+  })
+}
+
+/**
  * The run directory a session gets when the person names none.
  *
  * A chat has no terminal to name a directory, and the console's `open` verb
@@ -1039,6 +1067,12 @@ export function apply(ctx: Context, config: Config): void {
         node.prompt_template = receipt.prompt
       }
     }
+    // A user gate's question is shown as the CEO sees it here and as the card puts it.
+    if (next.status === 'ready') {
+      for (const node of next.nodes) {
+        if (node._type === 'GateNode' && node.gate_prompt !== undefined) node.gate_prompt = withFacts(node.gate_prompt, workdir)
+      }
+    }
     recordStatus(spine, workdir, spine.isHalted() ? 'halted' : spine.isPaused() ? 'paused' : next.status === 'done' ? 'done' : 'ready')
     // The item being iterated travels with the node views, so the subagent for a
     // pass is handed the item rather than being sent to find it on disk. Under
@@ -1130,7 +1164,7 @@ export function apply(ctx: Context, config: Config): void {
         questions: [{
           id: gate,
           header: 'Workflow gate',
-          question: view.gate_prompt || `Gate ${gate}`,
+          question: withFacts(view.gate_prompt ?? '', workdir) || `Gate ${gate}`,
           ...(labels.length === 0 ? {} : { options: labels.map(label => ({ label })) }),
         }],
         ...(exec.agent === undefined ? {} : { agent: exec.agent }),

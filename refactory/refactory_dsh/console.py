@@ -742,6 +742,10 @@ def gates(run_root: Path) -> list[dict[str, Any]]:
     a due node that is not a gate, and for a gate a machine answers: only a `user`
     gate is a person's to route.
     """
+    from types import SimpleNamespace
+
+    from refactory_dsh.nn.executor import render
+
     spine = _spine(run_root)
     due = [str(node) for node in (spine.get("nodes") or [])]
     if not due:
@@ -774,7 +778,9 @@ def gates(run_root: Path) -> list[dict[str, Any]]:
             ]
             found[node_id] = {
                 "id": node_id,
-                "prompt": str(node.get("gate_prompt") or ""),
+                # Filled from the run's facts, as the spine fills the question it puts.
+                "prompt": render(str(node.get("gate_prompt") or ""),
+                                 SimpleNamespace(knobs={}, facts=_read_json(Path(run_root) / "facts.json"))),
                 "verdicts": verdicts,
             }
     return [found[node_id] for node_id in due if node_id in found]

@@ -7206,7 +7206,7 @@ Build a small reusable package with a strategist, coder and focused QA. Canonica
 
 ## default_pack/design
 
-Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request, which the approval gate names first (`pr=0` keeps it local; `refine` updates an open one).
+Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local; `refine` updates an open one).
 
 ```json
 {
@@ -7440,7 +7440,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "id": "gate_strategy",
       "kind": "gate",
       "knobs": [],
-      "notes": "Approve the design before the artifact is written? It is in design.md in the run directory, and delivery.md there says what happens once the reviews pass: the pull request the run opens, the repository it creates, or why it opens none. Answer proceed to build and deliver it that way, or reloop to have the plan redone.",
+      "notes": "Approve the design before the artifact is written? It is in design.md in the run directory. Then, {{delivery}}; delivery.md there says more. Answer proceed to build and deliver it that way, or reloop to have the plan redone.",
       "role": "ceo"
     },
     {
@@ -7776,8 +7776,8 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "cli": "refactory ceo default_pack/design",
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
-    "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request, which the approval gate names first (`pr=0` keeps it local; `refine` updates an open one).",
-    "reviewed_schema": "0c6b477fac6b4ae515fa40dd7d8617a2f5e007981dbb670a45850c7f5d581ca5"
+    "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local; `refine` updates an open one).",
+    "reviewed_schema": "8cea098c8c8557e495e99e0c09e343a79d5a590fb03d623f396b387e4b912ead"
   }
 }
 ```

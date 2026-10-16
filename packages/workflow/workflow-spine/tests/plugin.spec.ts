@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -61,6 +61,7 @@ async function run(ctx: Context, name: string, args: unknown): Promise<unknown> 
 /** One question as the user-questions channel received it. */
 interface AskedQuestion {
   id: string
+  question?: string
   detail?: string
   options?: Array<{ label: string }>
   intent?: unknown
@@ -158,6 +159,29 @@ describe('workflow-spine real composition', () => {
       expect(asked[0]!.intent).toBeUndefined()
       expect(asked[0]!.options).toEqual([{ label: 'proceed' }, { label: 'reloop' }, { label: 'halt' }])
     } finally { rmSync(tmp, { recursive: true, force: true }) }
+  })
+
+  it('fills the run\'s facts into the question it puts and the view the CEO gets', async () => {
+    // Design mode's approval card names the repository delivery would create, and the
+    // card shows only the gate's own question, so the fact is filled there.
+    const withFact: WorkflowGraph = {
+      ...graph,
+      nodes: { ...graph.nodes, gate: { ...graph.nodes.gate!, gate_prompt: 'Approve? Then, {{delivery}}; {{unknown}} stays.' } },
+    }
+    const tmp = mkdtempSync(join(tmpdir(), 'spine-gate-facts-'))
+    try {
+      writeFileSync(join(tmp, 'facts.json'), JSON.stringify({
+        delivery: 'once the reviews pass, this run creates the private GitHub repository octo/tool',
+      }))
+      const { ctx, asked } = await gateRun(withFact, tmp, proceed)
+      const view = await run(ctx, 'wf_next', {}) as { nodes: Array<{ id: string; gate_prompt?: string }> }
+      const filled = 'Approve? Then, once the reviews pass, this run creates the private GitHub repository '
+        + 'octo/tool; {{unknown}} stays.'
+      expect(view.nodes.find(node => node.id === 'gate')?.gate_prompt).toBe(filled)
+      await run(ctx, 'wf_verdict', { gate: 'gate' })
+      expect(asked[0]!.question).toBe(filled)
+    } finally { rmSync(tmp, { recursive: true, force: true }) }
+    expect(workflowSpine.withFacts('Then, {{delivery}}.', undefined)).toBe('Then, {{delivery}}.')
   })
 
   it('lets the person stop the run at a user gate that has no halt edge', async () => {

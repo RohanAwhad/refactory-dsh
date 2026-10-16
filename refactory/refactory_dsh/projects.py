@@ -150,6 +150,15 @@ def record_repository(path: Path, repository: str) -> None:
     _update(path, lambda entry: entry.__setitem__("github", repository))
 
 
+def record_creating(path: Path, repository: str) -> None:
+    """Note, before asking GitHub, the repository a delivery is about to create for ``path`` (#350).
+
+    A creation gh reports as failed may still have made it; this is how the delivery,
+    or its redo, tells that repository from one that merely has the project's name.
+    """
+    _update(path, lambda entry: entry.__setitem__("github_creating", repository))
+
+
 def new_project(name: str) -> Path:
     """The project called ``name`` in the projects folder, created when it does not exist.
 

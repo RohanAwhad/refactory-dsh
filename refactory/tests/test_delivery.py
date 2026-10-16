@@ -238,7 +238,8 @@ def test_no_pr_keeps_the_work_on_its_branch_and_asks_github_nothing(github, tmp_
     assert _calls(tmp_path) == ""
     assert "run warning" not in capsys.readouterr().err
     assert "`pr` is off (--no-pr)" in (run / delivery.PLAN).read_text()
-    assert result.facts["delivery"].startswith("not delivered")
+    assert result.facts["delivery_result"].startswith("not delivered")
+    assert result.facts["delivery"].startswith("once the reviews pass, this run won't open"), "the plan is kept"
 
 
 def test_a_failed_run_creates_no_repository_and_opens_no_pull_request(github, tmp_path):
@@ -619,7 +620,7 @@ def test_a_cli_run_ends_by_naming_its_pull_request(tmp_path):
     from refactory_dsh import interactive
 
     (tmp_path / "facts.json").write_text(json.dumps({"name": NAME, "pull_request": "https://github.com/a/b/pull/7",
-                                                     "delivery": "opened: https://github.com/a/b/pull/7"}))
+                                                     "delivery_result": "opened: https://github.com/a/b/pull/7"}))
     assert "https://github.com/a/b/pull/7" in interactive.run_summary(tmp_path)
 
 
@@ -869,3 +870,155 @@ def test_the_console_announces_a_run_approved_up_front_before_it_is_handed_on(gi
     assert console.main(["design", "--name", NAME, "--brief", "a tool", "--check", "true",
                          "--verdict", "gate_strategy=proceed"]) == 0
     assert f"creates the private GitHub repository {LOGIN}/{NAME}" in said_first[-1]
+
+
+# ── the second review: the approval card, the base's branch, and what is where ─
+def test_the_approval_card_itself_names_the_repository_a_run_would_create(github, tmp_path):
+    """The card shows only the gate's question, so the question carries the plan (#362 review)."""
+    run = tmp_path / "run"
+    result = _design(run)
+    assert result.exit_ok, result.error
+    said = f"creates the private GitHub repository {LOGIN}/{NAME}"
+    assert "{{delivery}}" in DesignMode().build().nodes["gate_strategy"].notes
+    # The walker's journal shows the gate as it was put, never the raw placeholder.
+    journal = [json.loads(line) for line in (run / ".refactory" / "events.jsonl").read_text().splitlines()]
+    shown = [record["summary"] for record in journal if record.get("node_id") == "gate_strategy" and record.get("summary")]
+    assert shown and all(said in summary and "{{" not in summary for summary in shown)
+    # The panel's pending-gate card, read by the console from a spine run's graph and facts.json.
+    (run / "facts.json").write_text(json.dumps(result.facts, default=str))
+    (run / ".refactory" / "spine-status.json").write_text(json.dumps({"status": "waiting_user", "nodes": ["gate_strategy"]}))
+    graphs = run / "graphs"
+    graphs.mkdir(exist_ok=True)
+    (graphs / "design.graph.json").write_text(json.dumps({"nodes": {"gate_strategy": {
+        "_type": "GateNode", "evaluator_type": "user",
+        "gate_prompt": DesignMode().build().nodes["gate_strategy"].notes}}, "edges": [
+        {"source": "gate_strategy", "target": "emit", "condition": "proceed"}]}))
+    [card] = console.gates(run)
+    assert said in card["prompt"] and "{{" not in card["prompt"]
+
+
+def _stacked(github: Path, tmp_path: Path) -> tuple[Path, str]:
+    """A repository on GitHub with a pushed branch `stack` one commit ahead of main; main is checked out."""
+    repo = git_repo(tmp_path / "repo")
+    _published(github, "acme/app", repo)
+    git(repo, "checkout", "-q", "-b", "stack")
+    (repo / "lib.py").write_text("x = 1\n")
+    git(repo, "add", "lib.py")
+    git(repo, "commit", "-q", "-m", "the stack's own commit")
+    git(repo, "push", "-q", "-u", "origin", "stack")
+    git(repo, "checkout", "-q", "main")
+    return repo, git(repo, "rev-parse", "stack")
+
+
+def test_a_run_on_a_pushed_branch_opens_its_pull_request_into_that_branch(github, tmp_path):
+    repo, stack = _stacked(github, tmp_path)
+    run = tmp_path / "run"
+    result = _design(run, target=str(repo), base="stack")
+    assert result.exit_ok, result.error
+    [pull] = _pulls(github, "acme/app")
+    assert pull["base"] == "stack", "a stack's pull request goes into the branch it builds on"
+    assert "into acme/app:stack, the branch its base came from" in (run / delivery.PLAN).read_text()
+    # It carries only the run's own commit, not the stack's.
+    branch = worktree.recorded(run).branch
+    assert git(repo, "rev-list", "--count", f"{stack}..{branch}") == "1"
+
+
+def test_a_run_from_a_checkout_on_a_pushed_branch_goes_into_its_upstream(github, tmp_path):
+    repo, _stack = _stacked(github, tmp_path)
+    git(repo, "checkout", "-q", "stack")
+    run = tmp_path / "run"
+    result = _design(run, target=str(repo))
+    assert result.exit_ok, result.error
+    assert _pulls(github, "acme/app")[0]["base"] == "stack"
+
+
+def test_a_base_branch_github_does_not_have_falls_back_to_the_default_branch(github, tmp_path):
+    repo = git_repo(tmp_path / "repo")
+    _published(github, "acme/app", repo)
+    git(repo, "branch", "topic")
+    planned = delivery.plan(repo, base=git(repo, "rev-parse", "topic"), branch="refactory/run-0123456789ab",
+                            rev="topic")
+    assert (planned["action"], planned["into"]) == ("pull_request", "main")
+    assert planned["summary"].endswith("into acme/app:main")
+
+
+def test_a_delivery_that_stopped_after_its_push_says_the_branch_is_on_github(github, tmp_path, monkeypatch, capsys):
+    real = delivery._gh
+
+    def no_pull_request(*args, **kwargs):
+        if args[:2] == ("pr", "create"):
+            raise delivery.NotDelivered("`gh pr create` failed: error connecting to api.github.com")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(delivery, "_gh", no_pull_request)
+    run = tmp_path / "run"
+    result = _design(run)
+    assert result.exit_ok, result.error
+    branch = worktree.recorded(run).branch
+    assert _remote_head(github, f"{LOGIN}/{NAME}", branch)
+    err = capsys.readouterr().err
+    assert f"the branch {branch} is already on GitHub, as {LOGIN}/{NAME}:{branch}" in err
+    assert "stays on the local branch" not in err
+    assert _record(run)["pushed"] == f"{LOGIN}/{NAME}:{branch}"
+
+
+def test_a_repository_whose_creation_lost_the_network_is_finished_by_a_redo(github, tmp_path, monkeypatch, capsys):
+    """gh reports the creation failed, the network then drops; the redo adopts the repository it made."""
+    real = delivery._gh
+
+    def creates_then_drops(*args, **kwargs):
+        said = real(*args, **kwargs)
+        if args[:2] == ("repo", "create"):
+            (github / "offline").write_text("")
+            raise delivery.NotDelivered("`gh repo create` failed: timeout")
+        return said
+
+    monkeypatch.setattr(delivery, "_gh", creates_then_drops)
+    run = tmp_path / "run"
+    result = _design(run)
+    assert result.exit_ok, result.error
+    assert _record(run)["status"] == "kept local" and (github / LOGIN / f"{NAME}.git").is_dir()
+    (github / "offline").unlink()
+    monkeypatch.setattr(delivery, "_gh", real)
+    again = delivery.deliver_design(nn.RunContext(run, facts=result.facts, enforce_writes=False))
+    assert again["pull_request"] == f"https://github.com/{LOGIN}/{NAME}/pull/1"
+    assert _calls(tmp_path).count("repo create") == 2 and len(_pulls(github, f"{LOGIN}/{NAME}")) == 1
+
+
+def test_a_repository_with_the_name_that_this_project_never_set_out_to_create_is_not_adopted(github, tmp_path):
+    first = _design(tmp_path / "one", mode=_mode(pr=False))
+    assert first.exit_ok, first.error
+    bare = github / LOGIN / f"{NAME}.git"
+    bare.parent.mkdir(parents=True, exist_ok=True)
+    git(bare.parent, "init", "-q", "--bare", "-b", "main", bare.name)
+    (github / LOGIN / f"{NAME}.json").write_text(json.dumps({"default_branch": "main"}))
+    second = _design(tmp_path / "two")
+    assert second.exit_ok, second.error
+    assert "already exists" in (tmp_path / "two" / delivery.PLAN).read_text() and _pulls(github, f"{LOGIN}/{NAME}") == []
+
+
+def test_a_run_planned_while_gh_was_logged_out_says_the_next_run_delivers(github, tmp_path):
+    (github / "login").unlink()
+    run = tmp_path / "run"
+    assert _design(run).exit_ok
+    assert "`gh auth login` signs in, for the next run" in (run / delivery.PLAN).read_text()
+
+
+def test_the_pull_request_recommends_a_squash_merge_of_the_runs_attempts(github, tmp_path):
+    assert _design(tmp_path / "run").exit_ok
+    [pull] = _pulls(github, f"{LOGIN}/{NAME}")
+    assert "squash merge is recommended" in pull["body"]
+
+
+def test_an_upstream_that_does_not_hold_the_base_is_not_where_the_pull_request_goes(github, tmp_path):
+    repo, _stack = _stacked(github, tmp_path)
+    # main moves on GitHub; a local branch at that commit still names stack as its upstream.
+    (repo / "later.py").write_text("y = 2\n")
+    git(repo, "add", "later.py")
+    git(repo, "commit", "-q", "-m", "main moves on")
+    git(repo, "push", "-q", "origin", "main")
+    git(repo, "branch", "-q", "--track", "elsewhere", "origin/stack")
+    git(repo, "branch", "-q", "-f", "elsewhere", "main")
+    planned = delivery.plan(repo, base=git(repo, "rev-parse", "main"), branch="refactory/run-0123456789ab",
+                            rev="elsewhere")
+    assert (planned["action"], planned["into"]) == ("pull_request", "main"), planned

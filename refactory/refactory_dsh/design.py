@@ -225,12 +225,14 @@ class DesignMode(Mode):
             "gate_strategy", "gate", gate_kind="user",
             reads=("design.md", "delivery.md"),
             max_iterations=4,
+            # `{{delivery}}` is filled from the run's facts wherever the question is put
+            # (the spine's question card, the panel, the CEO's view), so the card itself
+            # names the repository a run would create, and who can see it.
             notes=(
                 "Approve the design before the artifact is written? It is in design.md "
-                "in the run directory, and delivery.md there says what happens once the "
-                "reviews pass: the pull request the run opens, the repository it creates, "
-                "or why it opens none. Answer proceed to build and deliver it that way, or "
-                "reloop to have the plan redone."
+                "in the run directory. Then, {{delivery}}; delivery.md there says more. "
+                "Answer proceed to build and deliver it that way, or reloop to have the "
+                "plan redone."
             ),
         ))
         graph.add(Node(
@@ -442,7 +444,7 @@ class DesignMode(Mode):
             resource_role="final_validation",
             reads=("design.json", "delivery.md"),
             writes=("delivery.json", "pull-request.md", "design.json"),
-            produces=("delivery", "pull_request"),
+            produces=("delivery_result", "pull_request"),
             notes="push the run's branch and open its pull request, as the approval gate said",
         ))
 
@@ -595,7 +597,7 @@ def main(argv: list[str] | None = None) -> int:
         "artifact": str(result.facts.get("artifact")),
         "branch": result.facts.get("branch"),
         "pull_request": result.facts.get("pull_request"),
-        "delivery": result.facts.get("delivery"),
+        "delivery": result.facts.get("delivery_result"),
         "files": result.facts.get("files", []),
         "check": result.facts.get("check"),
         "iterations": result.iterations,

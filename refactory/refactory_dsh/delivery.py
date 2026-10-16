@@ -85,9 +85,6 @@ TITLE_LIMIT = 72
 VERIFY_ATTEMPTS = 5
 VERIFY_WAIT_S = 2.0
 
-#: How recently a repository with the new project's name must have been created to count as
-#: one gh made for this delivery and then reported as failed.
-JUST_MADE_S = 600
 
 #: A GitHub remote: HTTPS, with or without a user, or SSH in either spelling.
 _REMOTE = re.compile(r"^(?:https://(?:[^@/]+@)?github\.com/|(?:ssh://)?git@github\.com[:/])"
@@ -114,12 +111,15 @@ _PULL_FIELDS = "url,number,state,headRefName,headRefOid,baseRefName,isCrossRepos
 class NotDelivered(Exception):
     """Why a run's work stays on its local branch: a choice, or GitHub cannot be used for it.
 
-    ``pull_request`` is one GitHub already has for the branch, so the record keeps it.
+    ``pull_request`` is one GitHub already has for the branch, so the record keeps it,
+    and ``pushed`` says where the branch went when it reached GitHub before delivery stopped.
     """
 
-    def __init__(self, message: str, pull_request: str = "") -> None:
+    def __init__(self, message: str, pull_request: str = "", pushed: str = "") -> None:
         super().__init__(message)
         self.pull_request = pull_request
+        #: ``owner/repo:branch`` when the branch already reached GitHub before delivery stopped.
+        self.pushed = pushed
 
 
 class _NotFound(NotDelivered):
@@ -161,7 +161,8 @@ def _gh(*args: str, cwd: Path | None = None) -> str:
         return result.stdout
     # gh says "not logged in" with exit status 4, or, in later releases, as an HTTP 401.
     if result.returncode == 4 or "HTTP 401" in result.stderr:
-        raise NotDelivered("gh is not logged in to GitHub here (`gh auth login` signs in)")
+        raise NotDelivered("gh is not logged in to GitHub here: `gh auth login` signs in, for the next run, "
+                           "since a run delivers only what its approval gate showed")
     said = " ".join(line.strip() for line in (result.stderr or result.stdout).splitlines() if line.strip())
     said = said[:400] or f"exit status {result.returncode}"
     if "HTTP 404" in result.stderr or "Could not resolve to a" in result.stderr:
@@ -301,8 +302,8 @@ def _created(target: Path) -> dict[str, Any] | None:
 
 
 # ── the plan the approval gate shows ────────────────────────────────────────
-def plan(target: Path, *, base: str, branch: str, head: str = "", enabled: bool = True, owner: str = "",
-         visibility: str = "private", refine: dict[str, Any] | None = None) -> dict[str, Any]:
+def plan(target: Path, *, base: str, branch: str, head: str = "", rev: str = "", enabled: bool = True,
+         owner: str = "", visibility: str = "private", refine: dict[str, Any] | None = None) -> dict[str, Any]:
     """What delivery will do for a run on ``target`` from ``base`` on ``branch``.
 
     One of four actions: ``pull_request`` into an existing repository, ``create`` a new
@@ -311,10 +312,11 @@ def plan(target: Path, *, base: str, branch: str, head: str = "", enabled: bool 
     show. Asking changes nothing: it reads what GitHub has, and at most fetches a branch
     into the target's objects. ``target`` may not exist yet, for a new project that a
     run is about to create. ``head`` is the run's last commit, which a refinement asked
-    again after it delivered has already pushed.
+    again after it delivered has already pushed. ``rev`` is what the base was named as,
+    when it was (`--base`): the branch it names is the one a pull request goes into.
     """
     target = Path(target)
-    inputs = {"target": str(target), "base": base, "branch": branch, "enabled": enabled,
+    inputs = {"target": str(target), "base": base, "branch": branch, "rev": rev, "enabled": enabled,
               "owner": owner, "visibility": visibility, "refine": refine}
     try:
         if not enabled:
@@ -327,7 +329,7 @@ def plan(target: Path, *, base: str, branch: str, head: str = "", enabled: bool 
         if refine:
             planned = _refinement(target, found, refine, base, head)
         elif found is not None:
-            planned = _existing(target, found, base, branch)
+            planned = _existing(target, found, base, branch, rev)
         elif target.exists() and _created(target) is None:
             raise NotDelivered(f"{target} has no GitHub remote to open a pull request on")
         else:
@@ -348,8 +350,8 @@ def matches(planned: dict[str, Any], shown: dict[str, Any]) -> bool:
     return same and all(planned.get(key) == shown.get(key) for key in ("repo", "into"))
 
 
-def _existing(target: Path, found: tuple[str, str], base: str, branch: str) -> dict[str, Any]:
-    """A pull request from the run's branch into the default branch of the target's repository."""
+def _existing(target: Path, found: tuple[str, str], base: str, branch: str, rev: str = "") -> dict[str, Any]:
+    """A pull request from the run's branch into the branch its base came from (`_base_branch`)."""
     name, slug = found
     repository = _repository(slug)
     if repository is None:
@@ -372,8 +374,45 @@ def _existing(target: Path, found: tuple[str, str], base: str, branch: str) -> d
             f"its base {base[:12]} has {unpushed} commit(s) that are not on {slug}, and delivery "
             f"never publishes commits nobody pushed; to start from what GitHub has, fetch, then pass "
             f"--base {name}/{default} (base={name}/{default})")
-    return {"action": "pull_request", "repo": slug, "into": default, "branch": branch,
-            "summary": f"opens a pull request from {branch} into {slug}:{default}"}
+    into = _base_branch(target, name, slug, base, rev, default)
+    came = "" if into == default else f", the branch its base came from (not the default, {default})"
+    return {"action": "pull_request", "repo": slug, "into": into, "branch": branch, "default": default,
+            "summary": f"opens a pull request from {branch} into {slug}:{into}{came}"}
+
+
+def _base_branch(target: Path, remote: str, slug: str, base: str, rev: str, default: str) -> str:
+    """The branch on GitHub the run's base came from, which its pull request goes into.
+
+    The branch ``rev`` names -- a local one, by its upstream or by its own name, or a
+    remote-tracking one such as ``origin/feature`` -- or, for a run from HEAD, the branch
+    the checkout is on. It counts only when GitHub has it and it holds the base: a pull
+    request from a run on a branch of a stack, as #358's is, goes into that branch, and
+    carries only the run's own commits. Otherwise the default branch.
+    """
+    local = rev if rev and rev != "HEAD" else _git_or_empty(target, "symbolic-ref", "-q", "--short", "HEAD")
+    if not local:
+        return default
+    upstream = _git_or_empty(target, "rev-parse", "--abbrev-ref", "--symbolic-full-name", f"{local}@{{upstream}}")
+    names = [name.removeprefix(f"{remote}/") for name in (upstream, local)
+             if name and (name == local or name.startswith(f"{remote}/"))]
+    heads = _heads(target, slug)
+    for name in dict.fromkeys(names):
+        tip = heads.get(f"refs/heads/{name}")
+        if not tip:
+            continue
+        if not _present(target, {tip}):
+            _fetch(target, slug, f"refs/heads/{name}")
+        if _git_or_empty(target, "merge-base", "--is-ancestor", base, tip, quiet=True) is not None:
+            return name
+    return default
+
+
+def _git_or_empty(path: Path, *args: str, quiet: bool = False) -> str | None:
+    """What a local git command prints, stripped; empty (or None when ``quiet``) when it fails."""
+    try:
+        return worktree.git(path, *args).strip()
+    except ValueError:
+        return None if quiet else ""
 
 
 def _creation(target: Path, owner: str, visibility: str, branch: str, base: str, *,
@@ -387,6 +426,9 @@ def _creation(target: Path, owner: str, visibility: str, branch: str, base: str,
         if not _NAME.fullmatch(target.name) or target.name in (".", ".."):
             raise NotDelivered(f"{target.name!r} cannot be the name of a GitHub repository")
         repository = f"{owner}/{target.name}"
+        if target.exists() and _adoptable(target, repository):
+            # A creation of this project's that stopped part way: it goes on, not refused.
+            return _creation(target, owner, visibility, branch, base, repository=repository)
         if _repository(repository) is not None:
             raise NotDelivered(
                 f"the GitHub repository {repository} already exists, and delivery never pushes into "
@@ -435,9 +477,11 @@ def describe(planned: dict[str, Any], branch: str) -> str:
     action, repository = planned["action"], planned.get("repo", "")
     lines = ["# Delivery", "", f"Once the reviews pass, this run {planned['summary']}.", ""]
     if action == "pull_request":
+        into = planned["into"]
+        came = "" if into == planned.get("default", into) else ", the branch the run's base came from"
         lines += [f"- Repository: {repository}, as it is on GitHub.",
                   f"- Pushed: the run's branch `{branch}`, and nothing else; its base is already on GitHub.",
-                  f"- Pull request: from `{branch}` into `{planned['into']}`, opened by gh's login."]
+                  f"- Pull request: from `{branch}` into `{into}`{came}, opened by gh's login."]
     elif action == "create":
         lines += [f"- Repository: {repository}, {planned['visibility']}, created only once the reviews pass. "
                   "The `repo_owner` and `repo_visibility` knobs change where, and who can see it.",
@@ -576,7 +620,12 @@ def refine_task(ctx: Any, task: dict[str, Any]) -> dict[str, Any]:
 
 
 def plan_run(ctx: Any, *, task: dict[str, Any]) -> dict[str, Any]:
-    """Plan this run's delivery and write it where the approval gate reads it (`prepare`)."""
+    """Plan this run's delivery and write it where the approval gate reads it (`prepare`).
+
+    The fact ``delivery`` is the plan's sentence, which the gate's own question carries
+    (`{{delivery}}`); what `deliver` then did is ``delivery_result``, so the two never
+    stand in for each other.
+    """
     found = worktree.recorded(ctx.workdir)
     if found is None:
         why = "this run has no worktree (`worktree` is off), so there is no branch to deliver"
@@ -585,6 +634,7 @@ def plan_run(ctx: Any, *, task: dict[str, Any]) -> dict[str, Any]:
         branch = ""
     else:
         planned = plan(Path(found.target), base=found.base, branch=found.branch,
+                       rev="" if task.get("refining") else str(task.get("base") or ctx.knob("base", "") or ""),
                        enabled=ctx.knob("pr", True) not in (False, 0, "0", "false"),
                        owner=str(ctx.knob("repo_owner", "") or "").strip(),
                        visibility=str(ctx.knob("repo_visibility", "private") or "private"),
@@ -611,8 +661,8 @@ def preview(*, target: str, name: str, base: str, refine: str, enabled: bool,
     else:
         root, rev = projects.projects_dir() / name, base or "main"
     head = worktree.resolve_base(root, rev) if root.exists() else ""
-    return plan(root, base=head, branch="its own branch refactory/run-<id>", enabled=enabled,
-                owner=owner, visibility=visibility, refine=pull)
+    return plan(root, base=head, branch="its own branch refactory/run-<id>", rev="" if pull else base,
+                enabled=enabled, owner=owner, visibility=visibility, refine=pull)
 
 
 def forget(knobs: dict[str, Any], workdir: Path) -> None:
@@ -671,8 +721,8 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
                          f"reviews passed, {str(ctx.facts.get('commit'))[:12]}; nothing was delivered")
     inputs = approved["inputs"]
     now = plan(Path(found.target), base=found.base, branch=found.branch, head=found.head,
-               enabled=bool(inputs["enabled"]), owner=inputs["owner"], visibility=inputs["visibility"],
-               refine=inputs["refine"])
+               rev=str(inputs.get("rev") or ""), enabled=bool(inputs["enabled"]), owner=inputs["owner"],
+               visibility=inputs["visibility"], refine=inputs["refine"])
     if now["action"] == "none":
         return _kept(ctx, approved, found, str(now["why"]))
     if not matches(now, approved) or now.get("branch") != approved.get("branch"):
@@ -681,7 +731,7 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
     try:
         outcome = _deliver(ctx, found, now)
     except NotDelivered as reason:
-        return _kept(ctx, approved, found, str(reason), reason.pull_request)
+        return _kept(ctx, approved, found, str(reason), reason.pull_request, reason.pushed)
     except Unverified as error:
         _record(ctx, {"status": "unverified", "pull_request": error.url, "head": found.head, "why": str(error),
                       "plan": approved.get("summary"), "at": datetime.now(timezone.utc).isoformat()})
@@ -698,8 +748,8 @@ def _deliver(ctx: Any, found: worktree.Worktree, planned: dict[str, Any]) -> dic
         url = str(planned["pull_request"])
         before = json.loads(_gh("pr", "view", url, "--json", "headRefOid")).get("headRefOid")
         _push(path, slug, found.head, branch, default="")
-        return {"status": "already updated" if before == found.head else "updated",
-                "pull_request": _verified(url, found.head)}
+        status = "already updated" if before == found.head else "updated"
+        return {"status": status, "pull_request": _after_push(lambda: _verified(url, found.head), slug, branch, url)}
     if planned["action"] == "create":
         _create(Path(found.target), slug, str(planned["visibility"]))
     existing = _existing_pull(path, slug, branch)
@@ -715,19 +765,32 @@ def _deliver(ctx: Any, found: worktree.Worktree, planned: dict[str, Any]) -> dic
         raise NotDelivered(str(reason), str((existing or {}).get("url") or "")) from reason
     if existing is not None:
         status = "already open" if existing.get("headRefOid") == found.head else "updated"
-        return {"status": status, "pull_request": _verified(str(existing["url"]), found.head)}
+        url = str(existing["url"])
+        return {"status": status, "pull_request": _after_push(lambda: _verified(url, found.head), slug, branch, url)}
     body = ctx.write_text(BODY, _body(ctx, found))
+    opened = _after_push(lambda: _open(path, slug, branch, str(planned["into"]), _title(ctx), body), slug, branch)
+    url = next((line.strip() for line in reversed(opened.splitlines()) if "/pull/" in line), opened.strip())
+    return {"status": "opened", "pull_request": _after_push(lambda: _verified(url, found.head), slug, branch, url)}
+
+
+def _open(path: Path, slug: str, branch: str, into: str, title: str, body: Path) -> str:
+    """Open the pull request; one gh opened although it reported failing counts as opened."""
     try:
-        opened = _gh("pr", "create", "--repo", slug, "--base", str(planned["into"]), "--head", branch,
-                     "--title", _title(ctx), "--body-file", str(body), cwd=path)
+        return _gh("pr", "create", "--repo", slug, "--base", into, "--head", branch, "--title", title,
+                   "--body-file", str(body), cwd=path)
     except NotDelivered:
-        # gh can fail after GitHub opened it; the pull request is what counts.
         existing = _existing_pull(path, slug, branch)
         if existing is None or existing.get("state") != "OPEN":
             raise
-        opened = str(existing["url"])
-    url = next((line.strip() for line in reversed(opened.splitlines()) if "/pull/" in line), opened.strip())
-    return {"status": "opened", "pull_request": _verified(url, found.head)}
+        return str(existing["url"])
+
+
+def _after_push(step: Any, slug: str, branch: str, pull_request: str = "") -> Any:
+    """``step()``, which runs once the branch is on GitHub; a failure says that it is there."""
+    try:
+        return step()
+    except NotDelivered as reason:
+        raise NotDelivered(str(reason), reason.pull_request or pull_request, f"{slug}:{branch}") from reason
 
 
 def _existing_pull(path: Path, slug: str, branch: str) -> dict[str, Any] | None:
@@ -741,10 +804,13 @@ def _create(target: Path, slug: str, visibility: str) -> None:
     """Create a new project's repository, unless an earlier delivery did, and push its empty main."""
     created = _created(target) or {}
     if created.get("github") != slug:
+        # Recorded before asking, so a creation gh reports as failed, and the redo after
+        # it, find the repository as this project's own (`_adoptable`).
+        projects.record_creating(target, slug)
         try:
             _gh("repo", "create", slug, f"--{visibility}")
         except NotDelivered:
-            if not _just_made(target, slug):
+            if not _adoptable(target, slug):
                 raise
         # Recorded before anything else, so a delivery that dies after this goes on with
         # the repository it made rather than refusing it as someone else's.
@@ -756,18 +822,20 @@ def _create(target: Path, slug: str, visibility: str) -> None:
         _settled(lambda: _push(target, slug, main, "main", default="main", first=True))
 
 
-def _just_made(target: Path, slug: str) -> bool:
-    """Whether ``slug`` is a repository gh made for this delivery although it reported a failure.
+def _adoptable(target: Path, slug: str) -> bool:
+    """Whether ``slug`` is the repository a delivery of this project set out to create.
 
-    Empty, and created in the last few minutes: a timeout after GitHub created it, say.
-    Any other repository with the name is not refactory's, and is never pushed into.
+    The project's record says a delivery was creating it, and GitHub has it empty, under
+    gh's own login: a creation gh reported as failed after GitHub made it, or one a
+    redo comes back to after the network dropped. Any other repository with the name is
+    not refactory's, and is never pushed into.
     """
-    found = _repository(slug) or {}
-    try:
-        made = datetime.fromisoformat(str(found.get("created_at")).replace("Z", "+00:00"))
-    except ValueError:
+    created = _created(target) or {}
+    if created.get("github_creating") != slug:
         return False
-    return (datetime.now(timezone.utc) - made).total_seconds() < JUST_MADE_S and not _heads(target, slug)
+    found = _repository(slug) or {}
+    owner = str((found.get("owner") or {}).get("login") or slug.split("/")[0])
+    return bool(found) and owner == _login() and slug.split("/")[0] == owner and not _heads(target, slug)
 
 
 def _settled(step: Any) -> Any:
@@ -828,7 +896,9 @@ def _body(ctx: Any, found: worktree.Worktree) -> str:
             f"- **Check:** `{_public(str(ctx.facts.get('check')))}` passed in the run's worktree.\n"
             "- **Reviews:** the health check, code review and QA found nothing blocking, and the "
             "overwatch audit passed.\n"
-            f"- **Base:** `{found.base[:12]}`, with {attempts} attempt commit(s) on `{found.branch}`.\n\n"
+            f"- **Base:** `{found.base[:12]}`, with {attempts} attempt commit(s) on `{found.branch}`.\n"
+            "- **Merging:** squash merge is recommended. The branch's commits are the run's attempts, "
+            "each the base plus that attempt's files, committed by Refactory; the change is their sum.\n\n"
             f"```\n{stat}\n```\n")
 
 
@@ -848,24 +918,30 @@ def _delivered(ctx: Any, approved: dict[str, Any], found: worktree.Worktree,
               "plan": approved.get("summary"), "at": datetime.now(timezone.utc).isoformat()}
     _record(ctx, record)
     projects.record_delivery(Path(found.target), branch=found.branch, pull_request=url, status=outcome["status"])
-    return {"delivery": f"{outcome['status']}: {url}, at {found.head[:12]}", "pull_request": url}
+    return {"delivery_result": f"{outcome['status']}: {url}, at {found.head[:12]}", "pull_request": url}
 
 
 def _kept(ctx: Any, approved: dict[str, Any], found: worktree.Worktree | None, why: str,
-          pull_request: str = "") -> dict[str, Any]:
-    """Nothing delivered: say why, as a run warning unless the person chose it.
+          pull_request: str = "", pushed: str = "") -> dict[str, Any]:
+    """Nothing delivered: say why, and where the work is, as a run warning unless the person chose it.
 
-    ``pull_request`` is one GitHub already had for the branch, which stays in the record.
+    ``pull_request`` is one GitHub already had for the branch, which stays in the record;
+    ``pushed`` is where the branch already is on GitHub, when delivery stopped after it.
     """
     branch = found.branch if found is not None else ""
     record = {"status": "kept local", "why": why, "branch": branch, "head": found.head if found else "",
-              "pull_request": pull_request, "plan": approved.get("summary"),
+              "pull_request": pull_request, "pushed": pushed, "plan": approved.get("summary"),
               "at": datetime.now(timezone.utc).isoformat()}
     _record(ctx, record)
     if found is not None:
-        projects.record_delivery(Path(found.target), branch=branch, pull_request=pull_request, status="kept local")
+        projects.record_delivery(Path(found.target), branch=branch, pull_request=pull_request,
+                                 status="pushed, no pull request" if pushed and not pull_request else "kept local")
+    if pushed:
+        where = (f"; the branch {branch} is already on GitHub, as {pushed}, so a redo of deliver, or "
+                 f"`gh pr create --repo {pushed.split(':')[0]} --head {branch}`, finishes it")
+    else:
+        where = f"; the work stays on the local branch {branch} of {found.target}" if found is not None else ""
     if found is not None and not approved.get("chosen"):
-        said = (f"{pull_request} was not updated" if pull_request else "no pull request was opened")
-        target_guard.warn(f"{said}: {why}. The work stays on the local branch {branch} of {found.target}")
-    where = f"; the work stays on the local branch {branch}" if branch else ""
-    return {"delivery": f"not delivered: {why}{where}", "pull_request": pull_request}
+        said = f"{pull_request} was not updated" if pull_request else "no pull request was opened"
+        target_guard.warn(f"{said}: {why}{where}")
+    return {"delivery_result": f"not delivered: {why}{where}", "pull_request": pull_request}

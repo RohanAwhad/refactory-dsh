@@ -340,7 +340,7 @@ def run(
 
 #: The facts worth showing a person who just ran a mode, in the order they read them.
 SUMMARY_KEYS = (
-    "name", "package_path", "files", "artifact", "check", "validation", "pull_request", "delivery",
+    "name", "package_path", "files", "artifact", "check", "validation", "pull_request", "delivery_result",
     "smoke_score", "smoke_reason",
     "revision_of", "before_score", "after_score", "regressed", "revision_note",
 )

@@ -639,7 +639,7 @@ class Executor:
         self._outcome = "running"
         if self._reserve_step is None:
             self._record(node.id, outcome="running")
-        emit(self.ctx.workdir, "node_started", node_id=node.id, state="running", summary=node.notes)
+        emit(self.ctx.workdir, "node_started", node_id=node.id, state="running", summary=render(node.notes, self.ctx))
         try:
             result = self._dispatch(node)
         except BaseException as exc:
@@ -647,7 +647,7 @@ class Executor:
             raise
         self._outcome = "completed"
         self._next_after_completion = result[0]
-        emit(self.ctx.workdir, "node_completed", node_id=node.id, state="completed", summary=node.notes)
+        emit(self.ctx.workdir, "node_completed", node_id=node.id, state="completed", summary=render(node.notes, self.ctx))
         if self.ctx.budget is not None:
             self.ctx.budget.checkpoint()
         return result
