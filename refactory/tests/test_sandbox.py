@@ -9,12 +9,17 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
+import shutil
+import sys
+import time
 from pathlib import Path
 
 import pytest
 
 from refactory_dsh import registry, sandbox
 from refactory_dsh.paths import venv_bin
+from tests_support import on_stdin
 
 NAME = "sandboxed_pkg"
 
@@ -168,6 +173,74 @@ def test_a_sandboxed_run_returns_its_json_payload(tmp_path):
         "import json; print(json.dumps({'score': 1.5}))", workdir=tmp_path / "run"
     )
     assert result.ok and result.payload == {"score": 1.5}
+
+
+def test_a_check_command_is_bounded_by_its_timeout_not_by_memory(tmp_path):
+    """A 2 GB address-space cap failed every Node check that started worker threads, vitest among them (#325)."""
+    import resource
+
+    probe = ("import json, resource; print(json.dumps("
+             "[resource.getrlimit(resource.RLIMIT_AS)[0], resource.getrlimit(resource.RLIMIT_CPU)[0]]))")
+    result = sandbox.run_command(f"{shlex.quote(sys.executable)} -c {shlex.quote(probe)}",
+                                 workdir=tmp_path / "check", timeout_s=30)
+    assert result.ok, result.stderr
+    address_space, cpu = json.loads(result.stdout)
+    assert address_space == resource.getrlimit(resource.RLIMIT_AS)[0], "a check sets no address-space cap"
+    assert cpu == 30 * (os.cpu_count() or 1), "a check's CPU limit is its timeout on every core"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="this machine has no node")
+def test_a_node_check_that_starts_worker_threads_passes(tmp_path):
+    """What #325 reported: under the cap, Node aborts reserving a second worker thread's memory.
+
+    Linux enforces an address-space cap; macOS cannot set one, so there this passes either way.
+    """
+    script = ("let left = 4; for (let i = 0; i < 4; i++) new (require('worker_threads').Worker)"
+              "('', {eval: true}).on('exit', code => { if (code) process.exit(code); "
+              "if (--left === 0) process.exit(0) })")
+    result = sandbox.run_command(f"node -e {shlex.quote(script)}", workdir=tmp_path / "check")
+    assert result.ok, result.problem()
+
+
+def _running(pid: int) -> bool:
+    """Whether ``pid`` is a live process: not gone, and not a zombie waiting to be reaped."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    stat = Path(f"/proc/{pid}/stat")
+    return not (stat.exists() and stat.read_text().rsplit(")", 1)[-1].split()[0] == "Z")
+
+
+def test_a_check_that_runs_out_of_time_stops_everything_it_started(tmp_path):
+    """A process a timed-out check left behind ran on: only the shell was stopped."""
+    workdir = tmp_path / "check"
+    result = sandbox.run_command("sleep 60 & echo $! > sleep.pid; wait", workdir=workdir, timeout_s=1)
+    assert result.timed_out
+    pid = int((workdir / "sleep.pid").read_text())
+    deadline = time.monotonic() + 5
+    while _running(pid) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not _running(pid), "the check's background process outlived its timeout"
+
+
+def test_a_check_reads_no_input(tmp_path):
+    """A check runs unattended, so nothing it runs can read or wait on the launcher's stdin."""
+    with on_stdin("y\n"):
+        result = sandbox.run_command('read answer; echo "read: $answer"', workdir=tmp_path / "check")
+    assert result.ok, result.problem()
+    assert result.stdout.strip() == "read:", "a check's stdin is empty, so it cannot wait on a terminal"
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="only Linux can set an address-space cap")
+def test_generated_code_keeps_its_memory_cap(tmp_path):
+    """Lifting the cap on check commands leaves the one on snippets: smoke, verification and readiness."""
+    result = sandbox.run_sandboxed(
+        "import json, resource; print(json.dumps({'cap': resource.getrlimit(resource.RLIMIT_AS)[0]}))",
+        workdir=tmp_path / "run",
+    )
+    assert result.ok, result.stderr
+    assert result.payload == {"cap": sandbox.DEFAULT_MEMORY_MB * 1024 * 1024}
 
 
 def test_the_sandboxed_verification_imports_out_of_process(tmp_path):

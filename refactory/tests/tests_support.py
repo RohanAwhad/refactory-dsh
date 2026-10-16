@@ -7,6 +7,9 @@ package rather than two copies that drift apart.
 from __future__ import annotations
 
 import json
+import os
+from contextlib import contextmanager
+from typing import Iterator
 
 _INIT = '''\
 """A generated package."""
@@ -378,3 +381,19 @@ def stub(bin_dir, name: str, body: str) -> None:
     script = bin_dir / name
     script.write_text(f"#!/bin/sh\necho \"{name} $*\" >> \"{bin_dir}/calls.log\"\n{body}\n")
     script.chmod(0o755)
+
+
+@contextmanager
+def on_stdin(text: str) -> Iterator[None]:
+    """Put ``text`` on this process's stdin, so a child that inherited it could read it."""
+    read, write = os.pipe()
+    os.write(write, text.encode())
+    os.close(write)
+    saved = os.dup(0)
+    os.dup2(read, 0)
+    os.close(read)
+    try:
+        yield
+    finally:
+        os.dup2(saved, 0)
+        os.close(saved)

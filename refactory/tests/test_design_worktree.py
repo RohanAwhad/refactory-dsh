@@ -239,6 +239,21 @@ def test_a_check_in_the_worktree_sees_none_of_refactorys_environment(repo, tmp_p
     assert evidence["validation"]["stdout"].strip() == str(tmp_path / "run" / ".refactory" / "check-home")
 
 
+def test_a_check_in_the_worktree_is_bounded_by_its_timeout_not_by_memory(repo, tmp_path):
+    """A Node check that starts worker threads, as vitest does, failed under a 2 GB address-space cap (#325)."""
+    import resource
+
+    tool = ("import json, resource\n"
+            "print(json.dumps([resource.getrlimit(resource.RLIMIT_AS)[0], "
+            "resource.getrlimit(resource.RLIMIT_CPU)[0]]))\n")
+    result = _design(tmp_path / "run", FakeModel(_answers(render({"tool.py": tool}))), _mode(check_timeout_s=30),
+                     target=str(repo))
+    assert result.exit_ok, result.error
+    evidence = json.loads((tmp_path / "run" / "authoring-evidence.json").read_text())
+    assert json.loads(evidence["validation"]["stdout"]) == [resource.getrlimit(resource.RLIMIT_AS)[0],
+                                                            30 * (os.cpu_count() or 1)]
+
+
 def test_a_check_uses_the_environment_its_worktrees_manifests_install(repo, tmp_path, monkeypatch):
     """The worktree's interpreter, not refactory's, even though refactory's is on the launcher's PATH."""
     stub(tmp_path / "stubs", "uv", "mkdir -p .venv/bin\n"
