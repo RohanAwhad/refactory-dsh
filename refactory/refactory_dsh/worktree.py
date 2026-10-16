@@ -112,6 +112,14 @@ NO_HOOKS = ("-c", "core.hooksPath=/dev/null")
 INVOCATION = Path(".refactory") / "invocation.json"
 
 
+class AttemptRefused(ValueError):
+    """An attempt's files cannot be applied as they were emitted.
+
+    The emitting step's to fix, not the run's to end on: a design run sends the reason
+    back to ``emit`` and tries again (#330 I4).
+    """
+
+
 @dataclass(frozen=True)
 class Worktree:
     """One run's worktree: where it is, its branch, the commit it started from and its last."""
@@ -408,28 +416,57 @@ def _inside(root: Path, relative: Path) -> Path:
     for part in relative.parts:
         current = current / part
         if current.is_symlink():
-            raise ValueError(f"{relative} goes through the symlink {current.relative_to(root)}; an attempt "
-                             "writes only real files in its worktree")
+            raise AttemptRefused(f"{relative} goes through the symlink {current.relative_to(root)}; an attempt "
+                                 "writes only real files in its worktree, so change the file the link points "
+                                 "to by its own path, or leave it")
     return current
 
 
-def commit_attempt(run: Path, files: dict[Path, str], message: str) -> Worktree:
+def committed_text(found: Worktree, relative: Path, rev: str = "") -> str | None:
+    """The file at ``relative`` as commit ``rev`` (the run's last attempt) has it; None when it has none.
+
+    Read from the commit, not the disk, so an edit applies to what the last attempt left
+    whatever a check has done to the worktree since, and byte for byte, line endings kept.
+    """
+    rev = rev or found.head
+    entry = git(Path(found.path), "ls-tree", rev, "--", relative.as_posix()).split()
+    if len(entry) < 2 or entry[1] != "blob":
+        return None
+    try:
+        result = subprocess.run(["git", "-C", found.path, "cat-file", "blob", f"{rev}:{relative.as_posix()}"],
+                                capture_output=True, timeout=300)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ValueError(f"git cat-file could not run in {found.path}: {error}") from error
+    if result.returncode != 0:
+        raise ValueError(f"git cat-file failed in {found.path}: {result.stderr.decode(errors='replace').strip()}")
+    try:
+        return result.stdout.decode()
+    except UnicodeDecodeError:
+        raise AttemptRefused(f"{relative} is not text, so it cannot be edited; leave it as it is, or remove it "
+                             "with ===DELETE:") from None
+
+
+def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tuple[Path, ...] = ()) -> Worktree:
     """Make one attempt's files the run's worktree, as one commit on its branch.
 
-    Each attempt starts from the base, as an artifact directory did: the paths an
-    earlier attempt changed are put back first, so the commit's tree is the base plus
-    exactly this attempt's files. Only the named paths are staged, never ``-A``, and
-    none of the target's hooks run: the run's check is its gate. An attempt that died
-    after its commit but before recording it is dropped, and this one replaces it.
+    Each attempt builds on the last: ``files`` are written and ``deletes`` removed on top
+    of the run's last attempt, so a retry changes only what it needs to. Only the named
+    paths are staged, never ``-A``, and none of the target's hooks run: the run's check is
+    its gate. An attempt that died after its commit but before recording it is dropped,
+    and this one replaces it.
     """
     found = recorded(run)
     if found is None:
         raise ValueError("this run has no worktree")
     path = Path(found.path)
-    for relative in files:
+    for relative in (*files, *deletes):
         if any(part.lower() == ".git" for part in relative.parts):
-            raise ValueError(f"{relative} is inside git's own state, not a file of the artifact")
+            raise AttemptRefused(f"{relative} is inside git's own state, not a file of the artifact; leave it out")
         _inside(path, relative)
+    for relative in deletes:
+        if committed_text(found, relative) is None:
+            raise AttemptRefused(f"{relative} is not a file of the last attempt, so there is nothing to delete; "
+                                 "leave its ===DELETE: out")
     pending = Path(run) / PENDING
     died = _json(pending)
     if died.get("parent") == found.head and path.is_dir():
@@ -443,19 +480,23 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str) -> Worktree:
 
         target_guard.warn(f"tracked files in the run's worktree {path} had changed since its last attempt and "
                           f"were put back before this one: {target_guard._named(restored)}")
-    _write_json(pending, {"files": sorted(str(name) for name in files), "parent": found.head})
-    earlier = [name for name in git(path, "diff", "--name-only", "-z", found.base, "HEAD").split("\0") if name]
-    for name in earlier:
-        if git(path, "ls-tree", "--name-only", found.base, "--", name).strip():
-            git(path, *NO_HOOKS, "checkout", found.base, "--", name)
-        else:
-            git(path, "rm", "-q", "-f", "--ignore-unmatch", "--", name)
-            (path / name).unlink(missing_ok=True)
+    for relative in files:
+        if (path / relative).is_dir() and not (path / relative).is_symlink():
+            raise AttemptRefused(f"{relative} is a directory of the last attempt, not a file; write the files "
+                                 "inside it, or ===DELETE: them and then write the file")
+        for parent in relative.parents:
+            if parent != Path(".") and (path / parent).exists() and not (path / parent).is_dir():
+                raise AttemptRefused(f"{relative} would be inside {parent}, which is a file of the last attempt; "
+                                     f"===DELETE: {parent} first, or choose another path")
+    _write_json(pending, {"files": sorted(str(name) for name in (*files, *deletes)), "parent": found.head})
+    for relative in deletes:
+        git(path, "rm", "-q", "-f", "--", str(relative))
     for relative, content in files.items():
         destination = _inside(path, relative)
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(content)
-    git(path, "add", "-f", "--", *(str(name) for name in files))
+    if files:
+        git(path, "add", "-f", "--", *(str(name) for name in files))
     git(path, *NO_HOOKS, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", "--allow-empty",
         "-m", message, env={**os.environ, **COMMITTER})
     advanced = replace(found, head=git(path, "rev-parse", "HEAD").strip())

@@ -2,9 +2,11 @@
 
 One test per path a person takes: a new idea with no repository, a change to a
 repository they have checked out, the same idea again, a base other than HEAD, an
-attempt that fails its check and is redone, and a run with its worktree turned off. A
-fake model answers; the git repositories, the worktrees, the check and the registry
-are real.
+attempt that fails its check and is redone, and a run with its worktree turned off.
+Then the edits an attempt makes (#330 I4): a small change to a long file, a retry that
+edits what the last attempt wrote, and an emission materialise cannot apply, which goes
+back to emit rather than ending the run. A fake model answers; the git repositories,
+the worktrees, the check and the registry are real.
 """
 
 from __future__ import annotations
@@ -17,7 +19,8 @@ from typing import Callable
 
 import pytest
 
-from refactory_dsh import cli, console, design_ops, interactive, nn, projects, registry, worktree
+from refactory_dsh import cli, console, design_ops, interactive, lowering, nn, projects, registry, worktree
+from refactory_dsh import run as node_runner
 from refactory_dsh.design import DesignMode
 from refactory_dsh.fast import DesignFastMode
 from refactory_dsh.paths import REPO_ROOT
@@ -57,6 +60,19 @@ def _design(workdir: Path, model: FakeModel, mode: DesignMode | None = None, **t
 
 def _report(workdir: Path) -> dict:
     return json.loads((workdir / "design.json").read_text())
+
+
+def _edit(name: str, *pairs: tuple[str, str]) -> str:
+    """An ``===EDIT:`` block: each pair is the lines to find and the lines put in their place."""
+    body = "".join(f"{design_ops.SEARCH}\n{search}{design_ops.DIVIDER}\n{replacement}{design_ops.REPLACE}\n"
+                   for search, replacement in pairs)
+    return f"===EDIT: {name}===\n{body}"
+
+
+def _commit(repo: Path, name: str, text: str) -> None:
+    (repo / name).write_text(text)
+    git(repo, "add", name)
+    git(repo, "commit", "-q", "-m", f"add {name}")
 
 
 # ── the paths a person takes ───────────────────────────────────────────────
@@ -151,16 +167,19 @@ def test_a_target_inside_a_repository_is_refused_before_anything_is_made(repo, t
     assert not worktree.slot(repo).exists() and projects.load()["projects"] == []
 
 
-def test_an_attempt_that_fails_its_check_is_redone_as_a_second_commit_that_replaces_it(tmp_path):
-    failing = render({"tool.py": "raise SystemExit(1)\n", "draft.py": "x = 1\n"})
-    result = _design(tmp_path / "run", FakeModel(_answers(failing, render({"tool.py": "print('fixed')\n"}))))
+def test_an_attempt_that_fails_its_check_is_redone_as_a_second_commit_on_top_of_it(tmp_path):
+    """The retry changes only what it needs to; a file of the first attempt goes when it is deleted."""
+    failing = render({"tool.py": "raise SystemExit(1)\n", "draft.py": "x = 1\n", "keep.py": "y = 2\n"})
+    fixed = render({"tool.py": "print('fixed')\n"}) + "===DELETE: draft.py===\n"
+    result = _design(tmp_path / "run", FakeModel(_answers(failing, fixed)))
     assert result.exit_ok, result.error
     payload = _report(tmp_path / "run")
     project = Path(payload["target"])
     assert git(project, "log", "--format=%s", f"{payload['base']}..{payload['branch']}").splitlines() == [
         f"{NAME}: attempt 2", f"{NAME}: attempt 1"]
-    assert git(project, "ls-tree", "--name-only", payload["branch"]) == "tool.py", "draft.py went with attempt 1"
+    assert git(project, "ls-tree", "--name-only", payload["branch"]).split() == ["keep.py", "tool.py"]
     assert "draft.py" not in (tmp_path / "run" / "changes.diff").read_text()
+    assert payload["files"] == ["keep.py", "tool.py"], "the report names what the branch delivers, not one attempt"
 
 
 def test_a_check_that_rewrites_a_tracked_file_does_not_wedge_the_run(repo, tmp_path, capsys):
@@ -178,6 +197,169 @@ def test_a_check_that_rewrites_a_tracked_file_does_not_wedge_the_run(repo, tmp_p
     warned = capsys.readouterr().err
     assert "were put back before this one: app.py" in warned
     assert "are not part of its branch" in warned
+
+
+# ── edits, and an emission materialise cannot apply (#330 I4, E5) ──────────
+def test_an_edit_changes_only_the_lines_it_names_in_a_long_file(repo, tmp_path):
+    """A one-line change to a long file is a one-line diff: nothing else is retyped."""
+    _commit(repo, "long.py", "".join(f"value_{index} = {index}\n" for index in range(300)))
+    emission = (render({"tool.py": "import long\nassert long.value_150 == 'changed'\n"})
+                + _edit("long.py", ("value_150 = 150\n", "value_150 = 'changed'\n")))
+    result = _design(tmp_path / "run", FakeModel(_answers(emission)), target=str(repo))
+    assert result.exit_ok, result.error
+    branch = _report(tmp_path / "run")["branch"]
+    assert git(repo, "diff", "--numstat", f"main..{branch}", "--", "long.py").split()[:2] == ["1", "1"]
+
+
+def test_a_retry_edits_the_file_its_last_attempt_wrote(tmp_path):
+    failing = render({"tool.py": "x = 1\nraise SystemExit('not yet')\n"})
+    fixed = _edit("tool.py", ("raise SystemExit('not yet')\n", "print('fixed', x)\n"))
+    result = _design(tmp_path / "run", FakeModel(_answers(failing, fixed)))
+    assert result.exit_ok, result.error
+    payload = _report(tmp_path / "run")
+    assert git(Path(payload["target"]), "show", f"{payload['branch']}:tool.py") == "x = 1\nprint('fixed', x)"
+
+
+@pytest.mark.parametrize("emission, reason", [
+    (_edit("app.py", ("print('not there')\n", "print('x')\n")), "are not in the file the edit applies to"),
+    (render({"tool.py": "x = 'long'  # ... (line truncated to 2000 chars)\n"}), "the read tool's note that it cut"),
+    ("===EDIT: app.py===\nprint('no pairs')\n", "has text outside its"),
+    ("===FILE: ../outside.py===\nx = 1\n", "is not a file inside the artifact directory"),
+], ids=["edit-not-found", "truncated-read", "malformed-edit", "outside-path"])
+def test_an_emission_materialise_cannot_apply_goes_back_to_emit_with_the_reason(repo, tmp_path, emission, reason):
+    """It once ended the run (#330 E5); now the retry is told why, and nothing of it is committed."""
+    model = FakeModel(_answers(emission, render({"tool.py": "print('built')\n"})))
+    result = _design(tmp_path / "run", model, target=str(repo))
+    assert result.exit_ok, result.error
+    retry = [prompt for prompt in model.prompts if "Write the artifact `" in prompt][1]
+    assert reason in retry
+    payload = _report(tmp_path / "run")
+    assert git(repo, "log", "--format=%s", f"{payload['base']}..{payload['branch']}").splitlines() == [
+        f"{NAME}: attempt 1"]
+
+
+def test_emissions_that_never_apply_end_the_run_once_its_attempts_are_spent(repo, tmp_path):
+    bad = _edit("app.py", ("print('not there')\n", "x\n"))
+    result = _design(tmp_path / "run", FakeModel(_answers(bad, bad)), target=str(repo))
+    assert not result.exit_ok
+    assert "materialise could not apply emit.txt" in str(result.error)
+
+
+def test_the_same_edits_given_again_apply_to_what_they_first_applied_to(repo, tmp_path):
+    """An unchanged answer on a retry, or materialise redone, must not find its own edits gone."""
+    _commit(repo, "old.py", "x = 1\n")
+    tool = ("import os, pathlib\n"
+            "count = pathlib.Path(os.environ['HOME']) / 'attempts'\n"
+            "seen = len(count.read_text()) if count.exists() else 0\n"
+            "count.write_text('x' * (seen + 1))\n"
+            "if seen < 2:\n"
+            "    raise SystemExit('this attempt is refused on purpose')\n")
+    emission = (render({"tool.py": tool}) + _edit("app.py", ("print('app')\n", "print('edited')\n"))
+                + "===DELETE: old.py===\n")
+    result = _design(tmp_path / "run", FakeModel(_answers(emission, emission, emission)), _mode(check_attempts=3),
+                     target=str(repo))
+    assert result.exit_ok, result.error
+    payload = _report(tmp_path / "run")
+    assert git(repo, "log", "--format=%s", f"{payload['base']}..{payload['branch']}").splitlines() == [
+        f"{NAME}: attempt 3", f"{NAME}: attempt 2", f"{NAME}: attempt 1"]
+    assert git(repo, "show", f"{payload['branch']}:app.py") == "print('edited')"
+    assert git(repo, "ls-tree", "--name-only", payload["branch"]).split() == ["app.py", "tool.py"]
+
+
+def test_without_a_worktree_a_run_takes_whole_files_only(repo, tmp_path, monkeypatch):
+    monkeypatch.setenv("REFACTORY_PROJECT", str(repo))
+    model = FakeModel(_answers(_edit("tool.py", ("x\n", "y\n")), render({"tool.py": "print('built')\n"})))
+    result = _design(tmp_path / "run", model, _mode(worktree=False))
+    assert result.exit_ok, result.error
+    emits = [prompt for prompt in model.prompts if "Write the artifact `" in prompt]
+    assert "===FILE: <relative path>===" in emits[0] and "===EDIT:" not in emits[0]
+    assert "has no worktree, so its artifact directory holds only whole files" in emits[1]
+
+
+@pytest.mark.parametrize("answer, reason", [
+    ("print('no blocks')\n", "holds no ===FILE:"),
+    ("===EDIT: a path with spaces===\n", "has a block header that is not"),
+    ("===FILE: a.py===\nx\n" + _edit("a.py", ("x\n", "y\n")), "more than one block"),
+    ("===DELETE: a.py===\nleftover\n", "a deletion takes none"),
+    (f"===EDIT: a.py===\n{design_ops.SEARCH}\nx\n{design_ops.DIVIDER}\ny\n", "missing its"),
+    (_edit("a.py", ("\n", "y\n")), "nothing to search for"),
+], ids=["no-blocks", "bad-header", "two-blocks", "delete-with-text", "unclosed-edit", "empty-search"])
+def test_an_emission_whose_blocks_are_malformed_is_refused_with_the_reason(answer, reason):
+    with pytest.raises(worktree.AttemptRefused, match=reason):
+        design_ops._emitted(answer, edits=True)
+
+
+def test_an_edit_whose_text_is_in_its_file_twice_is_refused_rather_than_guessed():
+    with pytest.raises(worktree.AttemptRefused, match="appear 2 times"):
+        design_ops._edited(Path("a.py"), "x = 1\nx = 1\n", [("x = 1\n", "x = 2\n")], "git show HEAD:a.py")
+
+
+def test_an_edit_whose_lines_hold_a_divider_is_refused_rather_than_cut_short():
+    """A reStructuredText title's underline is a line of `=======`, which once ended the search early."""
+    with pytest.raises(worktree.AttemptRefused, match="unclear"):
+        design_ops._emitted(_edit("README.rst", ("License\n=======\n", "Licence\n=======\n")), edits=True)
+    with pytest.raises(worktree.AttemptRefused, match="missing; put one"):
+        design_ops._emitted(f"===EDIT: a.py===\n{design_ops.SEARCH}\nx\n{design_ops.REPLACE}\n", edits=True)
+
+
+@pytest.mark.parametrize("text, pairs, edited", [
+    ("max = 1\nx = 1\n", [("x = 1\n", "x = 2\n")], "max = 1\nx = 2\n"),
+    ("a\r\nb\r\n", [("b\n", "c\n")], "a\r\nc\r\n"),
+    ("a\nb", [("b\n", "c\n")], "a\nc"),
+    ("a\nb\nc\n", [("b\n", "")], "a\nc\n"),
+], ids=["whole-lines-only", "crlf-kept", "no-final-newline-kept", "lines-removed"])
+def test_an_edit_matches_whole_lines_as_the_read_tool_shows_them_and_keeps_the_files_endings(text, pairs, edited):
+    """The read tool strips `\\r` and ends every line, so that is the text a search is copied from."""
+    assert design_ops._edited(Path("a.py"), text, pairs, "git show HEAD:a.py") == edited
+
+
+def test_the_read_tools_paging_note_is_refused_too():
+    """What a model retyping a long file is likeliest to copy: the note where the read stopped."""
+    with pytest.raises(worktree.AttemptRefused, match="cut text short"):
+        design_ops._emitted(render({"a.py": "x = 1\n(Showing lines 1-2000 of 2637. Use offset=2001 to continue.)\n"}),
+                            edits=True)
+
+
+def test_a_worktree_a_prune_removed_is_added_back_before_an_edit_applies(repo, tmp_path):
+    run = tmp_path / "run"
+    found = worktree.create(repo, "HEAD", "abcdef123456", run)
+    git(repo, "worktree", "remove", "--force", found.path)
+    ctx = nn.RunContext(run, model=FakeModel([]), task={})
+    ctx.facts.update({"name": NAME})
+    ctx.write_text("emit.txt", _edit("app.py", ("print('app')\n", "print('edited')\n")))
+    facts = design_ops.materialise_artifact(ctx)
+    assert "emission_refused" not in facts and facts["files"] == ["app.py"]
+    assert (Path(found.path) / "app.py").read_text() == "print('edited')\n"
+
+
+def test_on_the_spines_route_a_refusal_reaches_the_check_and_a_later_attempt_clears_it(repo, tmp_path, monkeypatch):
+    """The spine runs each op in its own process; the refusal has to survive in facts.json."""
+    run = tmp_path / "run"
+    worktree.create(repo, "HEAD", "abcdef654321", run)
+    lowering.write_declarations(DesignMode().state_dict(), run)
+    (run / "facts.json").write_text(json.dumps({"name": NAME, "brief": "a tool", "check": "true"}))
+    monkeypatch.setenv("REFACTORY_KNOBS", json.dumps({"check_attempts": 3}))
+    (run / "emit.txt").write_text(_edit("app.py", ("print('not there')\n", "x\n")))
+    node_runner.run_node(f"{design_ops.__name__}:materialise_artifact", workdir=run, node_id="materialise")
+    verdict = node_runner.run_node(f"{design_ops.__name__}:check_artifact", workdir=run, node_id="check")
+    assert verdict == "reloop" and "not in the file the edit applies to" in verdict.reason
+    (run / "emit.txt").write_text(render({"tool.py": "print(1)\n"}))
+    node_runner.run_node(f"{design_ops.__name__}:materialise_artifact", workdir=run, node_id="materialise")
+    assert json.loads((run / "facts.json").read_text())["emission_refused"] == ""
+
+
+def test_a_run_whose_graph_predates_the_refusal_fact_still_materialises(repo, tmp_path):
+    """A spine run started before this fact existed has it in no declaration; succeeding must not need it."""
+    run = tmp_path / "run"
+    worktree.create(repo, "HEAD", "abcdef112233", run)
+    lowering.write_declarations(DesignMode().state_dict(), run)
+    declarations = json.loads((run / lowering.DECLARATIONS).read_text())
+    declarations["materialise"]["produces"].remove("emission_refused")
+    (run / lowering.DECLARATIONS).write_text(json.dumps(declarations))
+    (run / "facts.json").write_text(json.dumps({"name": NAME, "check": "python tool.py"}))
+    (run / "emit.txt").write_text(render({"tool.py": "print(1)\n"}))
+    node_runner.run_node(f"{design_ops.__name__}:materialise_artifact", workdir=run, node_id="materialise")
+    assert json.loads((run / "facts.json").read_text())["files"] == ["tool.py"]
 
 
 # ── the boundaries a run keeps ─────────────────────────────────────────────
@@ -360,6 +542,7 @@ def test_the_agents_are_told_the_worktree_and_the_reviewers_the_diff_and_the_wra
     assert any(f"answerable by reading {found.path}" in prompt for prompt in model.prompts)
     emit = next(prompt for prompt in model.prompts if "Write the artifact `" in prompt)
     assert f"relative to the root of this run's worktree, {found.path}" in emit
+    assert "Each attempt builds on the last" in emit and "===EDIT: <relative path>===" in emit
     reviews = [prompt for prompt in model.prompts if "do not infer it from your working directory" in prompt]
     assert reviews
     for prompt in reviews:
@@ -408,6 +591,16 @@ def test_design_fast_keeps_its_own_copy_and_makes_no_worktree(tmp_path, monkeypa
                                   task={"name": "small", "brief": "x", "check": f"{sys.executable} answer.py"})
     assert result.exit_ok, result.error
     assert not worktree.root().exists() and projects.load()["projects"] == []
+
+
+def test_design_fast_refuses_text_copied_from_a_truncated_read(tmp_path, monkeypatch):
+    """design_fast has no retry for it, so the run ends and says why, rather than ship a file cut short."""
+    monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path / "project"))
+    emission = "===FILE: answer.py===\nx = 1  # ... (line truncated to 2000 chars)\n"
+    result = DesignFastMode().run(tmp_path / "run", model=FakeModel(["Change only the requested file.", emission]),
+                                  task={"name": "small", "brief": "x", "check": f"{sys.executable} answer.py"})
+    assert not result.exit_ok
+    assert "the read tool's note that it cut text short" in str(result.error)
 
 
 def test_ceo_passes_the_worktree_flags_to_design_and_refuses_them_where_they_cannot_apply(

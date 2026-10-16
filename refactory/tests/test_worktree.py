@@ -212,19 +212,43 @@ def test_none_of_the_targets_hooks_run_for_the_run(repo, tmp_path):
 
 
 # ── attempts ───────────────────────────────────────────────────────────────
-def test_each_attempt_is_one_commit_whose_tree_is_the_base_plus_that_attempts_files(repo, tmp_path):
-    """A later attempt replaces an earlier one, as rewriting an artifact directory did."""
+def test_each_attempt_is_one_commit_that_builds_on_the_last(repo, tmp_path):
+    """A retry changes only what it needs to: an earlier attempt's files stay until one deletes them."""
     run = _run(tmp_path)
     found = worktree.create(repo, "HEAD", "dddddddd3333", run)
     first = worktree.commit_attempt(run, {Path("tool.py"): "v1\n", Path("app.py"): "changed\n"}, "attempt 1")
-    second = worktree.commit_attempt(run, {Path("other.py"): "v2\n"}, "attempt 2")
+    second = worktree.commit_attempt(run, {Path("other.py"): "v2\n"}, "attempt 2", (Path("tool.py"),))
     path = Path(found.path)
     assert git(path, "rev-list", "--count", f"{found.base}..HEAD") == "2"
     assert second.head != first.head != found.base
     assert sorted(git(path, "ls-tree", "--name-only", "HEAD").splitlines()) == ["app.py", "other.py"]
-    assert (path / "app.py").read_text() == "print('app')\n", "an earlier attempt's edit is put back"
-    assert not (path / "tool.py").exists()
-    assert "other.py" in worktree.diff(second) and "tool.py" not in worktree.diff(second)
+    assert (path / "app.py").read_text() == "changed\n", "an earlier attempt's edit is kept"
+    assert not (path / "tool.py").exists(), "and a file it wrote goes only when an attempt deletes it"
+    assert "other.py" in worktree.diff(second) and "app.py" in worktree.diff(second)
+
+
+def test_a_file_written_over_a_directory_or_inside_a_file_is_refused_not_crashed_on(repo, tmp_path):
+    """An earlier attempt's files now stay, so a later one can collide with them."""
+    run = _run(tmp_path)
+    worktree.create(repo, "HEAD", "fefefefe3333", run)
+    worktree.commit_attempt(run, {Path("pkg/a.py"): "x\n"}, "attempt 1")
+    with pytest.raises(worktree.AttemptRefused, match="is a directory of the last attempt"):
+        worktree.commit_attempt(run, {Path("pkg"): "x\n"}, "attempt 2")
+    with pytest.raises(worktree.AttemptRefused, match="inside app.py, which is a file"):
+        worktree.commit_attempt(run, {Path("app.py/x"): "x\n"}, "attempt 2")
+    with pytest.raises(worktree.AttemptRefused, match="nothing to delete"):
+        worktree.commit_attempt(run, {}, "attempt 2", (Path("pkg"),))
+
+
+def test_an_attempt_reads_and_deletes_only_what_the_last_attempt_committed(repo, tmp_path):
+    """Edits apply to the commit, whatever a check left on disk; a deletion needs a file to delete."""
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "dededede3333", run)
+    (Path(found.path) / "app.py").write_text("rewritten by a check\n")
+    assert worktree.committed_text(found, Path("app.py")) == "print('app')\n"
+    assert worktree.committed_text(found, Path("missing.py")) is None
+    with pytest.raises(worktree.AttemptRefused, match="nothing to delete"):
+        worktree.commit_attempt(run, {}, "attempt", (Path("missing.py"),))
 
 
 def test_a_tracked_file_the_run_changed_on_disk_is_put_back_before_the_next_attempt(repo, tmp_path, capsys):
