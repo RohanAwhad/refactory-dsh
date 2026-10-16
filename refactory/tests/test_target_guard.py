@@ -4,6 +4,10 @@ Three failures from shared checkouts: a run's baseline moved under it with nobod
 (I1), two runs with one artifact name overwrote each other's artifact (K4), and the
 `emit` worker edited the repository directly instead of answering through `emit.txt`,
 so its changes skipped materialise, the check and the reviews (#319).
+
+These runs have their ``worktree`` knob off: that is the path where this guard is the
+whole protection. A run with its own worktree (#351) keeps it as a backstop, and
+`test_design_worktree.py` covers that.
 """
 
 from __future__ import annotations
@@ -44,10 +48,19 @@ def target(tmp_path, monkeypatch) -> Path:
 
 def _prepare(workdir: Path, name: str = NAME) -> nn.RunContext:
     """Prepare a design run in ``workdir``; a stand-in model skips the readiness probe."""
-    ctx = nn.RunContext(workdir, model=FakeModel([]),
+    ctx = nn.RunContext(workdir, model=FakeModel([]), knobs={"worktree": False},
                         task={"name": name, "brief": "a tool", "check": "python tool.py"})
     ctx.facts.update(design_ops.prepare_design(ctx))
     return ctx
+
+
+def _without_worktree() -> DesignMode:
+    """Design mode with its ``worktree`` knob off: the artifact directory, as before #351."""
+    mode = DesignMode()
+    state = mode.state_dict()
+    state["knobs"]["worktree"]["value"] = False
+    mode.load_state_dict(state)
+    return mode
 
 
 def _spine(workdir: Path, status: str, owner: int | None = None) -> None:
@@ -104,7 +117,8 @@ def test_the_routine_readiness_notice_stays_a_log_warning(target, tmp_path, caps
 
     notice = "credential readiness is unverified"
     monkeypatch.setattr(sandbox, "model_readiness", lambda *args, **kwargs: {"warning": notice})
-    ctx = nn.RunContext(tmp_path / "run", task={"name": NAME, "brief": "a tool", "check": "true"})
+    ctx = nn.RunContext(tmp_path / "run", knobs={"worktree": False},
+                        task={"name": NAME, "brief": "a tool", "check": "true"})
     design_ops.prepare_design(ctx)
     err = capsys.readouterr().err
     assert f"refactory: warning: {notice}" in err
@@ -328,7 +342,7 @@ def test_a_design_run_whose_emit_edits_the_target_fails_before_materialise(targe
         RESEARCH_ANSWER, "perspectives", "one plan", "the design document",
         render({"tool.py": "print('built')\n"}), *REVIEW_ANSWERS,
     ], target)
-    result = DesignMode().run(
+    result = _without_worktree().run(
         tmp_path / "run", model=model, verdicts={"gate_strategy": "proceed"},
         task={"name": NAME, "brief": "a tool", "check": "python tool.py"},
     )

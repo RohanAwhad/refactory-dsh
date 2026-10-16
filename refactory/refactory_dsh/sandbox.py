@@ -348,17 +348,22 @@ def run_command(
     file_mb: int = DEFAULT_FILE_MB,
     env: dict[str, str] | None = None,
     budget: Any = None,
+    home: Path | None = None,
+    exact_env: bool = False,
 ) -> SandboxResult:
     """Run a shell command under the same containment as a code snippet.
 
     A command is what a brief declares as its check ("run the tests", "build it"),
     and it is arbitrary, so it gets the same limits and the same scrubbed
-    environment as anything else we did not write.
+    environment as anything else we did not write. ``exact_env`` runs it with ``env``
+    as given instead -- a design run's worktree builds its own, without refactory's
+    interpreter or variables (`worktree.check_environment`) -- and ``home`` moves
+    HOME out of ``workdir``, so tool caches stay out of what is checked.
     """
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
-    child_env = scrub(env)
-    child_env["HOME"] = str(workdir)
+    child_env = dict(env or {}) if exact_env else scrub(env)
+    child_env["HOME"] = str(home or workdir)
     kwargs: dict[str, Any] = {}
     if sys.platform != "win32":
         kwargs["preexec_fn"] = _limits(memory_mb, cpu_s, file_mb)

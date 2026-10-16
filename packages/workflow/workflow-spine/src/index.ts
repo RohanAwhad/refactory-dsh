@@ -1186,6 +1186,8 @@ export function apply(ctx: Context, config: Config): void {
       + 'including an authoring one (create/edit/design): it is the route where a person is present, and '
       + 'a gate marked `(user)` is put to them. For create/edit/design, include the full user brief as '
       + '`brief=<full text>` in the initial knobs array, alongside name/task/check knobs the mode declares. '
+      + 'For design, `target=<repository root>` changes an existing repository, in a worktree of its own on the '
+      + 'run\'s branch; without it the run starts a new project. '
       + 'Intent records the same purpose in the authoritative ledger delivered to every agent node; '
       + 'an empty brief knob alone is not a reason to reopen a live run or edit a deterministic FnNode prompt. '
       + 'Use refactory action `runtime` when available to inspect inherited model/home context before asking setup questions. '
@@ -1209,7 +1211,7 @@ export function apply(ctx: Context, config: Config): void {
       description: `Open a mode's graph and claim it for this session, so it can be driven node by node. Pass any mode the catalogue lists as \`<package>/<name>\` — a scored mode, or an authoring one ("create", "edit", "design") — and the open command lowers it and this reads the graph it wrote. This is the route where a person is present: the runtime puts a \`user\` gate to them with the person-questions service, and routes the answer they give, so a gate marked \`(user)\` is theirs and no verdict may be passed for it. Prefer this over a headless authoring call whenever someone can answer. Returns the post-drain view, so a deterministic start node has already run and is reported under \`ran\` rather than left due. One driven run at a time is open in a session: a second open is refused until that run finishes. All the other \`${toolPrefix}_*\` tools work on the opened run, and refuse when this session has not opened one.`,
       parameters: {
         mode: { type: 'string', required: true, description: 'The mode to run, as `<package>/<name>`.' },
-        knobs: { type: 'array', items: { type: 'string' }, description: 'Knob overrides for this run, each as `NAME=VALUE` (repeatable). For create/edit/design, include `brief=<the full user brief>` on the first open, plus the other declared knobs such as name, task_ref or check.' },
+        knobs: { type: 'array', items: { type: 'string' }, description: 'Knob overrides for this run, each as `NAME=VALUE` (repeatable). For create/edit/design, include `brief=<the full user brief>` on the first open, plus the other declared knobs such as name, task_ref or check; for design, `target=<repository root>` to change an existing repository (without it, the run starts a new project).' },
         intent: { type: 'string', description: 'The user’s purpose for this run, recorded in its intent ledger. Without one the ledger records the requested mode identifier.' },
         workdir: { type: 'string', description: 'The run directory to lower into. When absent the spine derives one from this session and the mode — `<cwd>/.factory/web/<session>/<package>-<mode>` — creates it, and passes it as `--workdir`; the console\'s `open` verb requires a workdir, so one is always sent.' },
       },

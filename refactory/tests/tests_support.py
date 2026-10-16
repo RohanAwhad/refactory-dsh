@@ -338,3 +338,31 @@ class FakeModel:
                 for item in baseline["requirements"]
             ]}))
         return answer
+
+
+def git(root, *args: str, env: dict[str, str] | None = None) -> str:
+    """What a git command prints in ``root``; a failing command fails the test."""
+    import subprocess
+
+    return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True,
+                          text=True, env=env).stdout.strip()
+
+
+def git_repo(root):
+    """A person's checkout: a repository on `main` whose one commit holds `app.py`."""
+    root.mkdir(parents=True)
+    git(root, "init", "-q", "-b", "main")
+    git(root, "config", "user.email", "test@example.com")
+    git(root, "config", "user.name", "test")
+    (root / "app.py").write_text("print('app')\n")
+    git(root, "add", "app.py")
+    git(root, "commit", "-q", "-m", "base")
+    return root
+
+
+def stub(bin_dir, name: str, body: str) -> None:
+    """A stand-in for a tool on the PATH, which logs each call to `calls.log` beside it."""
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    script = bin_dir / name
+    script.write_text(f"#!/bin/sh\necho \"{name} $*\" >> \"{bin_dir}/calls.log\"\n{body}\n")
+    script.chmod(0o755)

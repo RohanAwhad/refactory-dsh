@@ -1,12 +1,14 @@
 """Watch the target a run works on: say when it moves, refuse writes nobody declared.
 
-The target is the project a design run builds for (`project_for_nodes()`). Today it is
-also the checkout other sessions work in and the source the runtime imports, so a run
-can find its baseline moved under it (#330 I1), and a worker with full write access can
-edit it directly instead of answering through its declared output (#319). Nothing here
-isolates the target -- that is a worktree's job (#351). It makes both visible: the
-baseline is recorded at `prepare`, later steps warn when the target differs from it,
-and an output-only agent node fails when the target changed while it ran.
+The target is the repository a design run changes: the one it names in `target`, the
+new project it created, or -- for a run without a worktree -- the project it runs from
+(`project_for_nodes()`). A checkout other sessions work in can move under a run (#330
+I1), and a worker with full write access can edit files directly instead of answering
+through its declared output (#319). A run with its own worktree (`worktree.py`, #351)
+never works in the target, so this module is its backstop rather than its isolation:
+the baseline is recorded at `prepare`, later steps warn when the target differs from
+it, and an output-only agent node fails when the target -- or the run's own worktree --
+changed while it ran.
 """
 
 from __future__ import annotations
@@ -203,14 +205,19 @@ def _compare(before: dict[str, Any], after: dict[str, Any], *, commits: bool = T
     return found
 
 
-def record(workdir: Path, root: Path, *, output_only: tuple[str, ...] = ()) -> dict[str, Any]:
+def record(workdir: Path, root: Path, *, output_only: tuple[str, ...] = (),
+           also: tuple[Path, ...] = ()) -> dict[str, Any]:
     """Record the target's baseline for this run, and which nodes may not touch it.
 
     ``output_only`` names agent nodes whose only output is their declared file: the
     agent-delivery bracket refuses one of them that changed the target while it ran.
+    ``also`` names further directories those nodes may not change either -- the run's
+    own worktree (#351), where an output-only node's direct edits would bypass the
+    commit that materialise makes of its answer.
     """
     workdir = Path(workdir).resolve()
     baseline = {**state(root, exclude=(workdir,)), "output_only": list(output_only),
+                "also": [str(Path(path).resolve()) for path in also],
                 "recorded": datetime.now(timezone.utc).isoformat()}
     path = workdir / RECORD
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -256,19 +263,36 @@ def warn_if_moved(workdir: Path) -> str | None:
     return message
 
 
+def _also_state(path: str, workdir: Path) -> dict[str, Any]:
+    """A further watched directory's state, without the environments installs create there."""
+    root = Path(path)
+    return state(root, exclude=(Path(workdir), root / ".venv", root / "node_modules"))
+
+
 def watch(workdir: Path, node: str) -> dict[str, Any] | None:
     """The target's state before an output-only node runs; None when it is not watched."""
     baseline = _read(workdir)
     if baseline is None or node not in baseline.get("output_only", ()):
         return None
-    return state(Path(baseline["root"]), exclude=(Path(workdir),))
+    found = state(Path(baseline["root"]), exclude=(Path(workdir),))
+    found["also"] = {path: _also_state(path, workdir) for path in baseline.get("also", [])}
+    return found
 
 
 def strayed(workdir: Path, before: dict[str, Any] | None) -> list[str]:
-    """What changed in the target since :func:`watch` took ``before``."""
+    """What changed in the target, or in a further watched directory, since :func:`watch`.
+
+    A watched worktree is held to its commits as well as its files: an output-only node
+    that committed there, or checked out another branch, changed it as surely as one
+    that edited a file.
+    """
     if before is None:
         return []
-    return _compare(before, state(Path(before["root"]), exclude=(Path(workdir),)), commits=False)
+    changed = _compare(before, state(Path(before["root"]), exclude=(Path(workdir),)), commits=False)
+    for path, earlier in (before.get("also") or {}).items():
+        changed.extend(f"in {path}, {difference}"
+                       for difference in _compare(earlier, _also_state(path, workdir)))
+    return changed
 
 
 def refusal(node: str, root: str, changed: list[str], writes: list[str]) -> str:

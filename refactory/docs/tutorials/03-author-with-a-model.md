@@ -56,11 +56,11 @@ uv run refactory ceo \
   --mode design --name wordcount --check "python wordcount.py sample.txt"
 ```
 
-Design researches and prepares a design document for your approval, implements the artifact, executes the check and runs reviews. The check executes from the artifact directory. Its exit status establishes only what the command checks; correct semantics may need additional evidence. Visual deliverables need a rendered inspection, and exchange files need a suitable independent consumer.
+Design researches and prepares a design document for your approval, implements the artifact, executes the check and runs reviews. The check executes in the run's worktree. Its exit status establishes only what the command checks; correct semantics may need additional evidence. Visual deliverables need a rendered inspection, and exchange files need a suitable independent consumer.
 
 The original brief, approved design and explicit steering remain the acceptance baseline. A README limitation or reviewer summary cannot silently waive requested behavior. If an external validation dependency is missing, preserve the artifact and report the unmet requirement honestly.
 
-The artifact is published under `.factory/artifacts/<name>`, with its exact absolute path in the run report. Design does not register a mode or produce a numeric optimization objective. Use it when the deliverable is the artifact itself.
+With no `--target`, the run starts a new project, `~/refactory-projects/wordcount`, and the artifact is the run's branch of it, `refactory/run-<id>`. To change a repository you already have, pass `--target <its root>`: the run gets a branch and a worktree of its own, and your checkout stays as it is. The run report names the branch, its base commit and its diff. Design does not register a mode or produce a numeric optimization objective. Use it when the deliverable is the artifact itself.
 
 ## Approval, time and evidence
 

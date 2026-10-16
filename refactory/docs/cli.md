@@ -27,9 +27,13 @@ its legacy `task_ref` field is populated when there is exactly one distinct Task
 |---|---|
 | `--mode <mode>` | `design` (the default), `create`, `edit`, `design_fast`, `create_fast`, `edit_fast`, or `<package>/<mode>`. |
 | `--name <name>` | the package or artifact name; without it your words become the name. |
-| `--check "<command>"` | run inside the Design artifact; fast Create/Edit also accept a focused package check. Failures enter the bounded repair path. |
+| `--check "<command>"` | run in the Design run's worktree, or its artifact directory; fast Create/Edit also accept a focused package check. Failures enter the bounded repair path. |
 | `--repair-attempts <n>` | fast authoring repairs after the first implementation, from 0 to 3 (default 1). |
 | `--source-project <dir>` | fast Design: copy an existing project into the output artifact before applying a change. |
+| `--target <repo>` | Design: the git repository to change, given by its root. The run works in a worktree of it on its own branch, `refactory/run-<id>`, and your checkout is left as it is. Without it, the run starts a new project in `~/refactory-projects/<name>`. |
+| `--base <rev>` | Design: the commit, branch or tag to start from (default: the target's HEAD, or a new project's `main`). |
+| `--setup "<command>"` | Design: run in the worktree before each check, for example a build. |
+| `--no-worktree` | Design: write the artifact under `.factory/artifacts/<name>` instead of a worktree. |
 | `--worker-backend dsh\|codex\|claude_code` | the explicit coding-worker runtime; DSH is the default. |
 | `--effort <value>` | DSH reasoning-effort override; external workers use native product settings. |
 | `--permission-mode <value>` | New workers default to `skip` (full native permission bypass). Choose `default` for native checks, or a supported backend-specific policy. Saved runs/profiles retain their policies; see [worker permissions](models.md#model-provider-versus-coding-agent). |
@@ -186,6 +190,8 @@ The read verbs pass through the console's own `--project`, `--runs-root`, `--aft
 | `refactory docs [--page <page>]` | search and read the documentation shipped with this checkout. |
 | `refactory workers` | the coding-agent worker configuration and the capabilities each backend reports. |
 | `refactory runtime` | the resolved runtime and model route a run would use. |
+| `refactory projects [--json]` | the projects Design runs work on, with each run's branch and how it ended. |
+| `refactory projects prune [<name>]` | remove the worktrees and branches that ended runs no longer need. |
 | `refactory profile-save --name <name> --spec <JSON>` | save an immutable configuration version. |
 | `refactory graph-control [--node <id>]` | control a graph run through the spine: pause, resume or stop it. |
 | `refactory ui --port <n> --no-open` | start the [browser GUI](interfaces.md) without opening a browser. |

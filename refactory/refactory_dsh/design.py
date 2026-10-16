@@ -62,16 +62,31 @@ class DesignMode(Mode):
             "name": Knob("", "str", description="the artifact to design (empty takes the name from the brief)"),
             "brief": Knob("", "str", description="what to build, in the asker's words"),
             "check": Knob("", "str", description="the command that decides whether the artifact works"),
+            # Where the run works (#351). Frozen: they say what is being built, so no
+            # search may move them.
+            "target": Knob("", "str", frozen=True,
+                           description="the git repository to change; empty starts a new project "
+                                       "in the projects folder"),
+            "base": Knob("", "str", frozen=True,
+                         description="the commit, branch or tag the run starts from (default: the "
+                                     "target's HEAD, or a new project's main)"),
+            "worktree": Knob(True, "bool", frozen=True,
+                             description="work in a worktree of the target on the run's own branch; "
+                                         "off writes the artifact under .factory/artifacts instead"),
+            "setup": Knob("", "str", frozen=True,
+                          description="a command run in the worktree before each check, after its "
+                                      "dependencies are installed, such as a build"),
         }
 
     def build(self) -> Graph:
         graph = Graph()
         graph.add(Node(
             "prepare", "op", call=f"{OPS}:prepare_design",
-            knobs=("name", "brief", "check"),
+            knobs=("name", "brief", "check", "target", "base", "worktree"),
             writes=("brief.json", "research-review.txt", "check.txt"),
             produces=("name", "brief", "check", "validation", "research_review", "qa_gate",
-                      "overwatch_review"),
+                      "overwatch_review", "target", "worktree", "branch", "base", "source",
+                      "emit_scope"),
             notes="read the brief and the command that decides whether it is done",
         ))
 
@@ -84,7 +99,7 @@ class DesignMode(Mode):
                 "    {{check}}\n\n"
                 "You are the research director. Decide what has to be learned before "
                 "this artifact can be designed: between three and five questions, each "
-                "answerable by reading this checkout or by running something here. Spawn "
+                "answerable by reading {{source}} or by running something there. Spawn "
                 "one subagent per question and have each write its findings to "
                 "`research/<slug>.md` under the run directory, then write "
                 "`research-plan.json` yourself.\n\n"
@@ -203,7 +218,8 @@ class DesignMode(Mode):
                 "## What went wrong last time\n{{validation}}\n\n"
                 "## What the reviews refused\n{{qa_gate}}\n{{overwatch_review}}\n\n"
                 + _ACCEPTANCE_BASELINE
-                + "Write every file into emit.txt as a block introduced by a line of exactly:\n"
+                + "{{emit_scope}}\n\n"
+                "Write every file into emit.txt as a block introduced by a line of exactly:\n"
                 "===FILE: <relative path>===\n"
                 "followed by the file's full contents, with no prose outside the blocks. "
                 "Do not create the files themselves: the materialise step writes them from "
@@ -217,8 +233,9 @@ class DesignMode(Mode):
         graph.add(Node(
             "materialise", "op", call=f"{OPS}:materialise_artifact",
             reads=("emit.txt",),
-            produces=("artifact", "files"),
-            notes="write the artifact into its own directory",
+            writes=("changes.diff",),
+            produces=("artifact", "files", "commit", "change"),
+            notes="commit the emitted files on the run's branch, or write the artifact directory",
         ))
         graph.add(Node(
             "check", "gate", evaluator=f"{OPS}:check_artifact", role="validation",
@@ -226,7 +243,7 @@ class DesignMode(Mode):
             reads=("brief.json",),
             writes=("check.txt", "validation.txt", "authoring-evidence.json"),
             produces=("validation", "check_attempts_used", "attempts_used", "runtime_evidence"),
-            knobs=("check_attempts", "check_timeout_s"),
+            knobs=("check_attempts", "check_timeout_s", "setup"),
             max_iterations=8,
             notes="run the brief's check, in a sandbox",
         ))
@@ -240,7 +257,7 @@ class DesignMode(Mode):
             prompt_template=(
                 "Artifact directory (absolute): {{artifact}}\n"
                 "Read and run the delivered files at this exact path; do not infer it "
-                "from your working directory.\n\n"
+                "from your working directory. {{change}}\n\n"
                 "Brief: {{brief}}\nThe check it must pass: {{check}}\n\n"
                 "## The design\nRead the approved design from `design.md` in the run directory.\n\n"
                 + _ACCEPTANCE_BASELINE
@@ -277,7 +294,7 @@ class DesignMode(Mode):
             prompt_template=(
                 "Artifact directory (absolute): {{artifact}}\n"
                 "Read and run the delivered files at this exact path; do not infer it "
-                "from your working directory.\n\n"
+                "from your working directory. {{change}}\n\n"
                 "Brief: {{brief}}\n\n"
                 "## The design\nRead the approved design from `design.md` in the run directory.\n\n"
                 "## The emitted source\nRead the emitted source from `emit.txt` in the run directory.\n\n"
@@ -302,7 +319,7 @@ class DesignMode(Mode):
             prompt_template=(
                 "Artifact directory (absolute): {{artifact}}\n"
                 "Read and run the delivered files at this exact path; do not infer it "
-                "from your working directory.\n\n"
+                "from your working directory. {{change}}\n\n"
                 "Brief: {{brief}}\nThe check it must pass: {{check}}\n\n"
                 "## The approved design\nRead the approved design from `design.md` in the run directory.\n\n"
                 "## The plan\nRead the synthesis strategy from `strategy.json` in the run directory.\n\n"
@@ -349,7 +366,7 @@ class DesignMode(Mode):
             prompt_template=(
                 "Artifact directory (absolute): {{artifact}}\n"
                 "Read and run the delivered files at this exact path; do not infer it "
-                "from your working directory.\n\n"
+                "from your working directory. {{change}}\n\n"
                 "Brief: {{brief}}\nThe check it must pass: {{check}}\n\n"
                 "## The design\nRead the approved design from `design.md` in the run directory.\n\n"
                 "## The merged reviews\nRead the file `reviews/qa-synthesized.md` in the run directory. It contains the merged reviews from the health checker, code reviewer, and QA director.\n\n"
@@ -442,6 +459,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fast", action="store_true", help="use the inspectable design_fast graph with focused QA")
     parser.add_argument("--repair-attempts", type=int, default=1, help="fast graph repair limit (0..3)")
     parser.add_argument("--source-project", default="", help="fast design: copy this existing project before applying the feature")
+    parser.add_argument("--target", default="", help="the git repository to change (default: a new project)")
+    parser.add_argument("--base", default="", help="the commit the run starts from (default: the target's HEAD)")
+    parser.add_argument("--no-worktree", action="store_true",
+                        help="write the artifact under .factory/artifacts instead of a worktree")
     from refactory_dsh.budgets import add_arguments, arguments
 
     add_arguments(parser)
@@ -494,6 +515,8 @@ def main(argv: list[str] | None = None) -> int:
     mode = DesignFastMode() if args.fast else DesignMode()
     state = mode.state_dict()
     state["knobs"]["repair_attempts" if args.fast else "check_attempts"]["value"] = int(args.repair_attempts if args.fast else args.attempts)
+    if args.no_worktree and not args.fast:
+        state["knobs"]["worktree"]["value"] = False
     mode.load_state_dict(state)
     from refactory_dsh.create import parse_verdicts
 
@@ -503,7 +526,8 @@ def main(argv: list[str] | None = None) -> int:
             project=None if args.resume else project_root(),
             timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
         ),
-        task={"name": args.name, "brief": args.brief, "check": args.check, "source_project": args.source_project},
+        task={"name": args.name, "brief": args.brief, "check": args.check, "source_project": args.source_project,
+              "target": args.target, "base": args.base},
         verdicts=parse_verdicts(args.verdict),
         resource_limits=arguments(args),
     )
@@ -512,6 +536,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     print(json.dumps({
         "artifact": str(result.facts.get("artifact")),
+        "branch": result.facts.get("branch"),
         "files": result.facts.get("files", []),
         "check": result.facts.get("check"),
         "iterations": result.iterations,

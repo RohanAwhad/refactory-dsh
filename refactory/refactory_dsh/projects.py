@@ -1,0 +1,195 @@
+"""The projects design runs work on, and where to find them again.
+
+A design run works on a **target**: an existing git repository, or a new project
+refactory creates for it. New projects live in one discoverable folder
+(:func:`~refactory_dsh.paths.projects_dir`, `~/refactory-projects` by default) rather
+than under a checkout's git-ignored `.factory/`, and every target a run worked on is
+listed in a registry beside refactory's other per-user state, with the run's branch
+and how it ended. `refactory projects` reads it; `refactory projects prune` removes
+what ended runs no longer need (:func:`refactory_dsh.worktree.prune`).
+
+Ported from remote-factory's `~/factory-projects` and `factory/registry.py`. The
+registry is written under a file lock as well as atomically, because two runs can end
+at the same moment.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import sys
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from refactory_dsh import worktree
+from refactory_dsh.paths import projects_dir, refactory_home
+
+#: The registry's file name, under :func:`~refactory_dsh.paths.refactory_home`.
+REGISTRY = "projects.json"
+
+#: The registry's format version.
+SCHEMA = 1
+
+
+def registry_path() -> Path:
+    """Where the registry of projects and their runs lives."""
+    return refactory_home() / REGISTRY
+
+
+def load() -> dict[str, Any]:
+    """The registry, or an empty one when there is none to read yet."""
+    try:
+        loaded = json.loads(registry_path().read_text())
+    except (OSError, ValueError):
+        loaded = {}
+    if not isinstance(loaded, dict) or not isinstance(loaded.get("projects"), list):
+        return {"schema": SCHEMA, "projects": []}
+    return loaded
+
+
+def _entry(registry: dict[str, Any], path: Path) -> dict[str, Any] | None:
+    return next((project for project in registry["projects"] if project.get("path") == str(path)), None)
+
+
+def register(path: Path, *, kind: str) -> dict[str, Any]:
+    """List ``path`` as a project; ``kind`` says whether refactory created it (``new``)."""
+    path = Path(path).resolve()
+    with worktree._locked(registry_path().with_suffix(".lock")):
+        registry = load()
+        entry = _entry(registry, path)
+        if entry is None:
+            entry = {"name": path.name, "path": str(path), "kind": kind,
+                     "created": datetime.now(timezone.utc).isoformat(), "runs": []}
+            registry["projects"].append(entry)
+            worktree._write_json(registry_path(), registry)
+        return entry
+
+
+def record_run(path: Path, *, run: Path, branch: str, base: str, status: str) -> None:
+    """Note a run on ``path`` and how it stands, replacing that run's earlier note.
+
+    A run is its branch: a run directory can hold several runs one after another. A
+    registry that cannot be written is reported and the run goes on: the registry is how
+    a person finds a project again, not part of the run's own record (remote-factory's
+    ``TestEventEmissionFailure``).
+    """
+    path, run = Path(path).resolve(), Path(run).resolve()
+    try:
+        with worktree._locked(registry_path().with_suffix(".lock")):
+            registry = load()
+            entry = _entry(registry, path)
+            if entry is None:
+                entry = {"name": path.name, "path": str(path), "kind": "existing",
+                         "created": datetime.now(timezone.utc).isoformat(), "runs": []}
+                registry["projects"].append(entry)
+            entry["runs"] = [note for note in entry.get("runs", []) if note.get("branch") != branch]
+            entry["runs"].append({"run": str(run), "branch": branch, "base": base, "status": status,
+                                  "at": datetime.now(timezone.utc).isoformat()})
+            worktree._write_json(registry_path(), registry)
+    except OSError as error:
+        print(f"refactory: warning: the project registry {registry_path()} could not be written "
+              f"({error}); the run goes on, but `refactory projects` will not list it", file=sys.stderr)
+
+
+def new_project(name: str) -> Path:
+    """The project called ``name`` in the projects folder, created when it does not exist.
+
+    A new project is a git repository whose first commit is empty, so a run's first
+    pull request holds all of its code (#350). A name refactory already created is the
+    same project again: the next run branches from its default branch. A directory
+    there that refactory did not create is refused rather than adopted. The project is
+    made under a temporary name and moved into place once it is registered, so a run
+    that dies part way leaves nothing a later run is refused over, and two runs that
+    create it at once share one project.
+    """
+    path = projects_dir() / name
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(prefix=f".{name}.", suffix=".new", dir=path.parent))
+        try:
+            worktree.git(staging, "init", "-q", "-b", "main")
+            worktree.git(staging, *worktree.NO_HOOKS, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify",
+                         "--allow-empty", "-m", f"Start {name}", env={**os.environ, **worktree.COMMITTER})
+            register(path, kind="new")
+            try:
+                staging.rename(path)
+            except OSError:
+                if not (path / ".git").exists():
+                    raise
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging)
+        return path.resolve()
+    entry = _entry(load(), path.resolve())
+    if entry is None or entry.get("kind") != "new":
+        raise ValueError(
+            f"{path} already exists and is not a project refactory created. Choose another "
+            f"name, or pass target={path} if it is a git repository you want this run to change."
+        )
+    return worktree.repository_root(path)
+
+
+def status(project: dict[str, Any], note: dict[str, Any]) -> str:
+    """How a run stands now: its note, unless it ended without saying so.
+
+    A run notes only that it is running and that it succeeded; one that failed, or was
+    stopped and never resumed, is read from the target's record of it.
+    """
+    if note.get("status") != "running":
+        return str(note.get("status"))
+    record = slot_record(Path(str(project.get("path"))), str(note.get("branch")))
+    if not record:
+        return "ended"
+    return {"active": "running"}.get(worktree.run_state(record), worktree.run_state(record))
+
+
+def slot_record(path: Path, branch: str) -> dict[str, Any]:
+    """The target's record of the run on ``branch``; empty once pruning removed it."""
+    return worktree._json(worktree.slot(path) / f"run-{branch.removeprefix(worktree.BRANCH_PREFIX)}.json")
+
+
+def _describe(project: dict[str, Any]) -> str:
+    runs = project.get("runs", [])
+    tail = f"; last run {status(project, runs[-1])} on {runs[-1].get('branch')}" if runs else ""
+    return f"{project.get('name')}  {project.get('path')}  ({project.get('kind')}, {len(runs)} run(s){tail})"
+
+
+def main(argv: list[str] | None = None) -> int:
+    """`refactory projects [--json]` lists; `refactory projects prune [name]` cleans up."""
+    parser = argparse.ArgumentParser(prog="refactory projects",
+                                     description="the projects design runs work on, and their runs")
+    parser.add_argument("action", nargs="?", choices=("list", "prune"), default="list")
+    parser.add_argument("name", nargs="?", default="", help="prune only this project")
+    parser.add_argument("--json", action="store_true", help="print the registry as JSON")
+    args = parser.parse_args(argv)
+    registry = load()
+    if args.action == "list":
+        if args.json:
+            for project in registry["projects"]:
+                for note in project.get("runs", []):
+                    note["now"] = status(project, note)
+            print(json.dumps(registry, indent=2))
+        elif not registry["projects"]:
+            print(f"no projects yet; new ones are created in {projects_dir()}")
+        else:
+            for project in registry["projects"]:
+                print(_describe(project))
+        return 0
+    chosen = [project for project in registry["projects"] if not args.name or project.get("name") == args.name]
+    if args.name and not chosen:
+        print(f"refactory: no project called {args.name!r}", file=sys.stderr)
+        return 2
+    for project in chosen:
+        path = Path(str(project.get("path")))
+        notes = worktree.prune(path) if path.is_dir() else [f"{path} is gone; nothing to prune"]
+        for note in notes or [f"{project.get('name')}: nothing to prune"]:
+            print(note)
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover - the entry point
+    raise SystemExit(main())

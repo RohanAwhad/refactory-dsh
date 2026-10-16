@@ -72,7 +72,25 @@ def digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()
 
 
+def _committed_source(root: Path) -> dict[str, str]:
+    """A run worktree's identity: the attempt it holds, as committed (#351).
+
+    What the run delivers is its branch, so build output, installed environments, tool
+    caches and anything a check rewrites on disk leave a sign-off current, while a new
+    attempt -- a new commit -- makes it stale (the review comment on #330: identity
+    must not count `lib/`, `dist/`, ...).
+    """
+    from refactory_dsh import worktree
+
+    return {name: blob for name, blob in worktree.committed(root).items()
+            if not any(part.startswith(".env") for part in Path(name).parts)}
+
+
 def source_files(root: Path) -> dict[str, str]:
+    from refactory_dsh import worktree
+
+    if worktree.is_run_worktree(root):
+        return _committed_source(Path(root))
     ignored = {".git", ".factory", ".venv", "node_modules", "__pycache__", ".pytest_cache", ".origin.json"}
     files = {}
     for path in sorted(root.rglob("*")):
