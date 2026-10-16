@@ -49,7 +49,7 @@ class DesignMode(Mode):
                             "plan is not a plan or its findings were never written",
             ),
             "check_attempts": Knob(
-                2, "int", lo=1, hi=5,
+                3, "int", lo=1, hi=5,
                 description="how many times the emit step may be retried when the "
                             "artifact does not pass its check",
             ),
@@ -212,7 +212,7 @@ class DesignMode(Mode):
         graph.add(Node(
             "emit", "agent",
             prompt_template=(
-                "Write the artifact `{{name}}` as complete, runnable files.\n\n"
+                "Write the artifact `{{name}}` so that it is complete and runnable.\n\n"
                 "Brief: {{brief}}\n"
                 "It will be checked by running: {{check}}\n\n"
                 "## The design\nRead the approved design from `design.md` in the run directory.\n\n"
@@ -220,11 +220,9 @@ class DesignMode(Mode):
                 "## What the reviews refused\n{{qa_gate}}\n{{overwatch_review}}\n\n"
                 + _ACCEPTANCE_BASELINE
                 + "{{emit_scope}}\n\n"
-                "Write every file into emit.txt as a block introduced by a line of exactly:\n"
-                "===FILE: <relative path>===\n"
-                "followed by the file's full contents, with no prose outside the blocks. "
-                "Do not create the files themselves: the materialise step writes them from "
-                "emit.txt. Then return a short completion message.\n"
+                "Write those blocks into emit.txt, with no prose outside them. Do not create "
+                "or change the files themselves: the materialise step applies emit.txt, and "
+                "tells the next attempt if it could not. Then return a short completion message.\n"
             ),
             reads=("brief.json", "design.md", "check.txt"),
             writes=("emit.txt",),
@@ -235,7 +233,7 @@ class DesignMode(Mode):
             "materialise", "op", call=f"{OPS}:materialise_artifact",
             reads=("emit.txt",),
             writes=("changes.diff",),
-            produces=("artifact", "files", "commit", "change"),
+            produces=("artifact", "files", "commit", "change", "emission_refused"),
             notes="commit the emitted files on the run's branch, or write the artifact directory",
         ))
         graph.add(Node(
@@ -298,9 +296,11 @@ class DesignMode(Mode):
                 "from your working directory. {{change}}\n\n"
                 "Brief: {{brief}}\n\n"
                 "## The design\nRead the approved design from `design.md` in the run directory.\n\n"
-                "## The emitted source\nRead the emitted source from `emit.txt` in the run directory.\n\n"
+                "## The emitted source\nRead what was emitted from `emit.txt` in the run directory. "
+                "In a worktree it may edit or delete files rather than write them whole, so judge "
+                "the result: the files at the artifact path, and the diff named above.\n\n"
                 + _ACCEPTANCE_BASELINE
-                + "You are the code reviewer. Read the emitted files against the design "
+                + "You are the code reviewer. Read the delivered files against the design "
                 "and the brief: is every file the design names present, does it do what "
                 "the design says, and would it run? Trace input values through parsing "
                 "to the delivered artifact: count/role binding, signs, units, and "

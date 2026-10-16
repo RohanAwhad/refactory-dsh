@@ -78,10 +78,7 @@ def materialise_artifact(ctx: Any) -> dict[str, Any]:
     expected = ctx.read_json("source-manifest.json", {}).get("files", {})
     if _source_manifest(root) != expected:
         raise ValueError("source project changed; restart preparation to invalidate dependent results")
-    files = create_ops.parse_files(ctx.read_text("emit.txt"))
-    if not files:
-        raise ValueError("implementation emitted no file blocks")
-    checked = design_ops._artifact_files(files)
+    checked, _, _ = design_ops._emitted(ctx.read_text("emit.txt"), edits=False)
     output = design_ops._artifact_root(str(ctx.facts["name"]))
     design_ops._claim(str(ctx.facts["name"]), ctx.workdir)
     target_guard.warn_if_moved(ctx.workdir)

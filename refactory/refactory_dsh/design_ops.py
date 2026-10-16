@@ -7,6 +7,7 @@ and the check differ, and so does where the output lands.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -19,9 +20,8 @@ from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from refactory_dsh import projects, sandbox, target_guard, worktree
-from refactory_dsh.create_ops import FILE_MARKER, parse_files
 from refactory_dsh.paths import project_for_nodes
-from refactory_dsh.worktree import _alive, _json
+from refactory_dsh.worktree import AttemptRefused, _alive, _json
 
 STAGING = "staging"
 
@@ -42,6 +42,29 @@ FINISHED = frozenset({"done", "halted", "failed"})
 #: from it, so a change it makes to the target directly bypasses materialise, the
 #: check and the reviews (#319); the agent-delivery bracket refuses that.
 OUTPUT_ONLY = ("emit",)
+
+#: The blocks `emit.txt` is written in: a whole file, edits to an existing one, or its
+#: removal. Edits are what keep a small change to a long file small (#330 I4).
+BLOCK = re.compile(r"^===(FILE|EDIT|DELETE):\s*([A-Za-z0-9_./-]+)\s*===\s*$", re.MULTILINE)
+
+#: The lines that frame one edit in an `===EDIT:` block: text copied from the file, and
+#: what replaces it.
+SEARCH, DIVIDER, REPLACE = "<<<<<<< SEARCH", "=======", ">>>>>>> REPLACE"
+
+#: What the read tool leaves where it cut text short. Copied into a file, it cuts the
+#: file short too: one such file passed every gate because nothing ran it (#330 I4).
+TRUNCATED = re.compile(r"\.\.\. \(line truncated to \d+ chars\)$"
+                       r"|^\(Output capped\. Showing lines \d+-\d+\. Use offset=\d+ to continue\.\)$"
+                       r"|^\(Showing lines \d+-\d+ of \d+\. Use offset=\d+ to continue\.\)$",
+                       re.MULTILINE)
+
+#: One emission's edits: for each file, the lines to find and the lines put in their place.
+Edits = dict[Path, list[tuple[str, str]]]
+
+#: Which emission the run's last attempt applied, on top of which commit and to which
+#: commit's files, so the same emission given again applies to those files rather than
+#: to its own result.
+EMISSION = Path(".refactory") / "emission.json"
 
 #: What a run's facts say in place of a worktree, so a prompt that names one never shows
 #: a raw placeholder when the run has none.
@@ -150,19 +173,26 @@ def _require_owner(name: str, run: Path) -> None:
 
 
 def _artifact_files(files: dict[str, str]) -> dict[Path, str]:
-    checked: dict[Path, str] = {}
-    for relative, content in files.items():
+    return dict(zip(_artifact_paths(list(files)), files.values()))
+
+
+def _artifact_paths(names: list[str]) -> list[Path]:
+    """The emitted paths, refused unless each names a distinct file inside the artifact."""
+    checked: list[Path] = []
+    for relative in names:
         path = Path(relative)
         if (path.is_absolute() or PureWindowsPath(relative).drive
                 or "\\" in relative or ".." in path.parts or not path.parts
                 or relative.endswith("/") or any(ord(char) < 32 for char in relative)):
-            raise ValueError(f"{relative!r} is not a file inside the artifact directory")
+            raise AttemptRefused(f"{relative!r} is not a file inside the artifact directory; name it by its "
+                                 "path from the artifact's root")
         if path in checked:
-            raise ValueError(f"{relative!r} duplicates an artifact file")
-        checked[path] = content
+            raise AttemptRefused(f"{relative!r} duplicates an artifact file; write it once")
+        checked.append(path)
     for path in checked:
         if any(parent in checked for parent in path.parents):
-            raise ValueError(f"{str(path)!r} conflicts with an artifact file used as its directory")
+            raise AttemptRefused(f"{str(path)!r} conflicts with an artifact file used as its directory; "
+                                 "rename one of them")
     return checked
 
 
@@ -232,10 +262,21 @@ def _open_worktree(ctx: Any, name: str, task: dict[str, Any]) -> dict[str, Any]:
             "source": found.path, "check_root": f"the root of the run's worktree, {found.path}",
             "emit_scope": (
                 f"Paths are relative to the root of this run's worktree, {found.path}: a git worktree of "
-                f"{target} on branch {found.branch}. Every attempt starts again from the base commit, "
-                f"{found.base[:12]}: write every file this change adds or changes, each one in full, "
-                "including any an earlier attempt wrote -- a file you leave out is back as the base has "
-                "it. Read the current ones there first. Files cannot be deleted or renamed this way."
+                f"{target} on branch {found.branch}, from the base commit {found.base[:12]}. Each attempt "
+                "builds on the last: the worktree holds the base and every earlier attempt, as committed "
+                f"(`git -C {found.path} diff {found.base[:12]}` shows the change so far), so read the files "
+                "there and change only what this attempt needs. Write one block per file, introduced by "
+                "a line of exactly one of:\n"
+                "===FILE: <relative path>=== followed by the whole file, for a new file or one you "
+                "rewrite entirely;\n"
+                "===EDIT: <relative path>=== followed by one or more edits to an existing file, each "
+                f"written as\n{SEARCH}\n<lines copied exactly from the file as it is now>\n{DIVIDER}\n"
+                f"<the lines that replace them>\n{REPLACE}\nwhere the copied lines appear in the file "
+                "exactly once;\n"
+                "===DELETE: <relative path>=== on its own, to remove a file.\n"
+                "Prefer ===EDIT: for a file that exists: retyping a long file risks changing lines you "
+                "did not mean to. Never copy the read tool's line numbers, or a note such as "
+                "'(line truncated to 2000 chars)', into a block."
             )}
 
 
@@ -293,7 +334,9 @@ def prepare_design(ctx: Any, *, worktrees: bool = True) -> dict[str, Any]:
             located = {"target": str(project), "worktree": NO_WORKTREE, "branch": NO_WORKTREE,
                        "base": NO_WORKTREE, "source": str(project), "check_root": "the artifact's own directory",
                        "emit_scope": "Paths are relative to the artifact's own directory, which holds "
-                                     "only the files you write here."}
+                                     "only the files you write here. Write each file as a block "
+                                     "introduced by a line of exactly ===FILE: <relative path>=== "
+                                     "followed by its full contents."}
     # Match create/edit: inspect the exact nested route before launching research.
     # Other ModelClient implementations retain their own readiness contract.
     from refactory_dsh.model import DshModelClient
@@ -320,40 +363,218 @@ def prepare_design(ctx: Any, *, worktrees: bool = True) -> dict[str, Any]:
             **({"setup": setup} if worktrees else {})}
 
 
-def _emitted(ctx: Any) -> dict[Path, str]:
-    """The files `emit` wrote into emit.txt, refused when its blocks are malformed."""
-    answer = ctx.read_text("emit.txt")
-    headers = [line for line in answer.splitlines() if line.startswith("===FILE:")]
-    if any(FILE_MARKER.fullmatch(line) is None for line in headers):
-        raise ValueError("invalid artifact file header; use ===FILE: <relative path>=== with letters, digits, '_', '.', '/' or '-'")
-    paths = [match.group(1) for match in FILE_MARKER.finditer(answer)]
-    if len(paths) != len(set(paths)):
-        raise ValueError("the artifact emission repeats a file path")
-    files = parse_files(answer)
-    if not files:
-        raise ValueError("the answer contained no '===FILE: <name>===' blocks")
-    return _artifact_files(files)
+def _emitted(answer: str, *, edits: bool) -> tuple[dict[Path, str], Edits, tuple[Path, ...]]:
+    """emit.txt as whole files, edits to existing files and deletions; refused when malformed.
+
+    ``edits`` says whether this run takes edits and deletions at all: only a worktree has
+    a last attempt for them to apply to.
+    """
+    kinds = "===FILE:, ===EDIT: or ===DELETE:" if edits else "===FILE:"
+    headers = [line for line in answer.splitlines() if line.startswith(("===FILE:", "===EDIT:", "===DELETE:"))]
+    if any(BLOCK.fullmatch(line) is None for line in headers):
+        raise AttemptRefused(f"emit.txt has a block header that is not {kinds} followed by <relative path>===; "
+                             "write each one on its own line, with a path of letters, digits, '_', '.', '/' or '-'")
+    matches = list(BLOCK.finditer(answer))
+    if not matches:
+        raise AttemptRefused(f"emit.txt holds no {kinds} blocks; write each file's change as one, as the "
+                             "prompt describes, with no other text")
+    names = [match.group(2) for match in matches]
+    if len(names) != len(set(names)):
+        raise AttemptRefused("emit.txt names a file in more than one block; put all of a file's change in one block")
+    files: dict[Path, str] = {}
+    changed: Edits = {}
+    deletes: list[Path] = []
+    for index, (match, path) in enumerate(zip(matches, _artifact_paths(names))):
+        kind = match.group(1)
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(answer)
+        body = answer[match.end():end].strip("\n")
+        if kind != "FILE" and not edits:
+            raise AttemptRefused(f"{path}: this run has no worktree, so its artifact directory holds only "
+                                 "whole files; write every file with ===FILE:")
+        if kind == "FILE":
+            _refuse_truncated(path, body)
+            files[path] = body + "\n"
+        elif kind == "EDIT":
+            changed[path] = _pairs(path, body)
+        elif body.strip():
+            raise AttemptRefused(f"the ===DELETE: block for {path} has text after it; a deletion takes none, "
+                                 "so leave the line after the header empty")
+        else:
+            deletes.append(path)
+    return files, changed, tuple(deletes)
+
+
+def _pairs(path: Path, body: str) -> list[tuple[str, str]]:
+    """The edits of one ``===EDIT:`` block, as (lines to find, lines to put in their place)."""
+    lines = body.split("\n")
+    pairs: list[tuple[str, str]] = []
+    index = 0
+    while index < len(lines):
+        if not lines[index].strip():
+            index += 1
+            continue
+        if lines[index] != SEARCH:
+            raise AttemptRefused(f"the edit to {path} has text outside its {SEARCH} ... {REPLACE} pairs: "
+                                 f"{lines[index][:80]!r}; put every line inside a pair")
+        try:
+            end = lines.index(REPLACE, index + 1)
+        except ValueError:
+            raise AttemptRefused(f"an edit to {path} is missing its {REPLACE} line; close every {SEARCH} "
+                                 f"with {DIVIDER} and {REPLACE}") from None
+        dividers = [at for at in range(index + 1, end) if lines[at] == DIVIDER]
+        if len(dividers) != 1:
+            raise AttemptRefused(
+                f"an edit to {path} has {len(dividers)} {DIVIDER} lines, so where its search text ends is "
+                + ("missing; put one between the search and the replacement lines" if not dividers else
+                   f"unclear; leave a line of exactly {DIVIDER} out of the edit, searching for the lines next "
+                   "to it, or write the file whole with ===FILE:"))
+        divider = dividers[0]
+        search = "".join(line + "\n" for line in lines[index + 1:divider])
+        replacement = "".join(line + "\n" for line in lines[divider + 1:end])
+        if not search.strip():
+            raise AttemptRefused(f"an edit to {path} has nothing to search for; to add a file, write it with "
+                                 "===FILE:, and to add lines, search for the lines next to them")
+        _refuse_truncated(path, replacement)
+        pairs.append((search, replacement))
+        index = end + 1
+    if not pairs:
+        raise AttemptRefused(f"the ===EDIT: block for {path} holds no {SEARCH} ... {REPLACE} edits; give it "
+                             "at least one, or leave the file out")
+    return pairs
+
+
+def _edited(path: Path, text: str, pairs: list[tuple[str, str]], shown: str) -> tuple[str, int]:
+    """``text`` with each edit applied in turn, and how many were already in it.
+
+    Each edit is refused unless its search lines are there exactly once. Search lines
+    match whole lines, from a line's start. The read tool shows a file with ``\r``
+    stripped and every line ended, so a file whose lines all end in ``\r\n``, or whose
+    last line has no newline, is matched as shown and written back as it was. An edit
+    whose result is already where it would go -- a model re-sending an earlier attempt's
+    edit -- is skipped rather than applied twice. ``shown`` is the command that prints
+    ``text``, so a refusal names where to copy from.
+    """
+    crlf = "\r\n" in text and text.count("\r\n") == text.count("\n")
+    work = text.replace("\r\n", "\n") if crlf else text
+    open_end = not work.endswith("\n")
+    work += "\n" if open_end else ""
+    skipped = 0
+    for search, replacement in pairs:
+        starts = _line_starts(work, search)
+        if _already_applied(work, search, replacement, starts):
+            skipped += 1
+            continue
+        if len(starts) != 1:
+            first = next((line.strip() for line in search.splitlines() if line.strip()), "")[:80]
+            raise AttemptRefused(
+                f"an edit to {path} searches for lines beginning {first!r}, which "
+                + (f"are not in the file the edit applies to; copy them exactly from `{shown}`"
+                   if not starts else f"appear {len(starts)} times; add lines around them until they appear once"))
+        work = work[:starts[0]] + replacement + work[starts[0] + len(search):]
+    if open_end and work.endswith("\n"):
+        work = work[:-1]
+    return (work.replace("\n", "\r\n") if crlf else work), skipped
+
+
+def _already_applied(text: str, search: str, replacement: str, starts: list[int]) -> bool:
+    """Whether an edit's replacement already stands where it would go, as after a re-sent edit.
+
+    Either the search lines are gone and the replacement is there once, or the search
+    lines are there once inside a copy of the replacement (an insertion sent again).
+    An edit that removes lines is never taken as applied: nothing shows it was.
+    """
+    if not replacement.strip() or len(starts) > 1:
+        return False
+    placed = _line_starts(text, replacement)
+    if not starts:
+        return len(placed) == 1
+    return any(at <= starts[0] and starts[0] + len(search) <= at + len(replacement) for at in placed)
+
+
+def _line_starts(text: str, lines: str) -> list[int]:
+    """Where ``lines`` occur in ``text`` starting at a line's start."""
+    found: list[int] = []
+    at = text.find(lines)
+    while at != -1:
+        if at == 0 or text[at - 1] == "\n":
+            found.append(at)
+        at = text.find(lines, at + 1)
+    return found
+
+
+def _refuse_truncated(path: Path, text: str) -> None:
+    """Refuse text copied from a read that the read tool cut short, before it is written anywhere."""
+    match = TRUNCATED.search(text)
+    if match:
+        line = text.count("\n", 0, match.start()) + 1
+        raise AttemptRefused(
+            f"{path} would contain, on line {line}, the read tool's note that it cut text short: "
+            f"{match.group(0)!r}. Text copied from that read is incomplete, so the file would be too. Write "
+            "only text that was shown in full; in a worktree, change the file with ===EDIT: blocks that "
+            "leave out the lines you could not read whole.")
 
 
 def materialise_artifact(ctx: Any) -> dict[str, Any]:
     """Make the emitted files the run's artifact: a commit in its worktree, when it has one.
 
-    Each attempt is one commit on the run's branch (`worktree.commit_attempt`), and
-    ``changes.diff`` holds the branch's diff from its base, which is what the reviewers
-    judge. A run without a worktree writes the artifact directory, as it always has.
+    Each attempt is one commit on the run's branch (`worktree.commit_attempt`), building
+    on the last: whole files, edits to files as the last attempt committed them, and
+    deletions. ``changes.diff`` holds the branch's diff from its base, which is what the
+    reviewers judge. A run without a worktree writes the artifact directory, as it always
+    has. An emission that cannot be applied -- a malformed block, an edit whose text is
+    not in its file, text copied from a truncated read -- does not end the run: it is
+    recorded as ``emission_refused``, and the check sends the reason back to emit.
     """
-    found = worktree.recorded(ctx.workdir)
-    if found is None:
-        return {**materialise_directory(ctx), "commit": NO_WORKTREE,
-                "change": "The artifact directory holds only the files this run wrote."}
-    checked = _emitted(ctx)
+    try:
+        found = worktree.recorded(ctx.workdir)
+        # Cleared only once set, so a run whose graph predates the fact still materialises.
+        cleared = {"emission_refused": ""} if ctx.facts.get("emission_refused") else {}
+        if found is None:
+            return {**materialise_directory(ctx), "commit": NO_WORKTREE, **cleared,
+                    "change": "The artifact directory holds only the files this run wrote."}
+        return {**_commit_emission(ctx), **cleared}
+    except AttemptRefused as refused:
+        return {"emission_refused": str(refused)}
+
+
+def _commit_emission(ctx: Any) -> dict[str, Any]:
+    """Apply emit.txt to the run's worktree as its next attempt; one a prune removed is added back."""
+    found = worktree.require_current(ctx.workdir)
+    answer = ctx.read_text("emit.txt")
+    files, changed, deletes = _emitted(answer, edits=True)
+    path = Path(found.path)
+    digest = hashlib.sha256(answer.encode()).hexdigest()
+    rev = found.head
+    last = _json(Path(ctx.workdir) / EMISSION)
+    if (found.head != found.base and last.get("digest") == digest
+            and worktree.git(path, "rev-parse", f"{found.head}^").strip() == last.get("attempt_on")):
+        # The last attempt is this emission already -- materialise redone, or the same
+        # answer given again -- so it applies to what it applied to then: its edits'
+        # text, and the files it deletes, are gone from the last attempt itself.
+        rev = str(last["applied_to"])
+        deletes = tuple(name for name in deletes if worktree.committed_text(found, name) is not None)
+    repeated = []
+    for relative, pairs in changed.items():
+        current = worktree.committed_text(found, relative, rev)
+        if current is None:
+            raise AttemptRefused(f"{relative} is not a file of the last attempt, so it cannot be edited; "
+                                 "write it whole with ===FILE:")
+        files[relative], skipped = _edited(relative, current, pairs, f"git -C {found.path} show {rev[:12]}:{relative}")
+        if skipped:
+            repeated.append(str(relative))
+    if repeated:
+        target_guard.warn(f"emit re-sent edits the last attempt already holds, so they were skipped rather than "
+                          f"applied twice: {target_guard._named(repeated)}")
     # No drift warning: the run's base is pinned, so a moving checkout changes nothing it sees.
-    attempt = len(worktree.git(Path(found.path), "rev-list", f"{found.base}..HEAD").split()) + 1
-    advanced = worktree.commit_attempt(ctx.workdir, checked, f"{ctx.facts['name']}: attempt {attempt}")
+    attempt = len(worktree.git(path, "rev-list", f"{found.base}..HEAD").split()) + 1
+    advanced = worktree.commit_attempt(ctx.workdir, files, f"{ctx.facts['name']}: attempt {attempt}", deletes)
+    worktree._write_json(Path(ctx.workdir) / EMISSION, {"digest": digest, "attempt_on": found.head,
+                                                         "applied_to": rev})
     _warn_if_shared_changed(advanced, "since the last check")
     ctx.write_text("changes.diff", worktree.diff(advanced))
     wrapper = Path(ctx.workdir).resolve() / worktree.WRAPPER
-    return {"artifact": advanced.path, "files": sorted(str(path) for path in checked),
+    delivered = worktree.git(path, "diff", "--name-only", "--diff-filter=d", advanced.base, advanced.head)
+    return {"artifact": advanced.path, "files": sorted(delivered.splitlines()),
             "commit": advanced.head,
             "change": (
                 f"The artifact is a git worktree of {advanced.target} on branch {advanced.branch}. "
@@ -365,7 +586,7 @@ def materialise_artifact(ctx: Any) -> dict[str, Any]:
 
 def materialise_directory(ctx: Any) -> dict[str, Any]:
     """Write the emitted files into the artifact directory, replacing an earlier attempt's."""
-    checked = _emitted(ctx)
+    checked, _, _ = _emitted(ctx.read_text("emit.txt"), edits=False)
     root = _artifact_root(str(ctx.facts["name"]))
     _claim(str(ctx.facts["name"]), ctx.workdir)
     target_guard.warn_if_moved(ctx.workdir)
@@ -410,7 +631,19 @@ def check_artifact(ctx: Any) -> str:
     In a worktree, the check runs there with the worktree's own environment: its
     dependencies installed when its manifests call for them, then the ``setup`` knob's
     command, and nothing of refactory's own on the path (`worktree.check_environment`).
+    An emission materialise could not apply is sent back to emit with the reason, as a
+    failed check is, rather than ending the run (#330 E5).
     """
+    from refactory_dsh import authoring_evidence as evidence
+    from refactory_dsh.create_ops import repair
+
+    refused = str(ctx.facts.get("emission_refused") or "")
+    if refused:
+        # Nothing was materialised, so there is nothing to record runtime evidence about;
+        # the attempt the retry makes records its own.
+        detail = f"materialise could not apply emit.txt, so nothing was checked: {refused}"
+        ctx.write_text("check.txt", detail + "\n")
+        return repair(ctx, [detail])
     command = str(ctx.facts["check"])
     timeout = int(ctx.knob("check_timeout_s", 180))
     found = worktree.recorded(ctx.workdir)
@@ -431,9 +664,13 @@ def check_artifact(ctx: Any) -> str:
                               f"back, so the check runs the committed attempt: {target_guard._named(restored)}")
         result = _check_in_worktree(ctx, found, command, timeout)
         _warn_if_shared_changed(found, "while preparing for and running the check")
-    from refactory_dsh import authoring_evidence as evidence
-    from refactory_dsh.create_ops import repair
-
+        # The reviews and the next attempt read the worktree, and edits apply to the
+        # committed attempt: a check that reformats a file must not leave them apart.
+        _, changed = worktree.restore(ctx.workdir)
+        if changed:
+            target_guard.warn(f"the check changed tracked files in the run's worktree; they were put back, so "
+                              f"the reviews and the next attempt see the committed attempt: "
+                              f"{target_guard._named(changed)}")
     detail = "\n".join((result.problem(), result.stdout or "", result.stderr or "")).strip()
     outcome = {"command": command, "status": "pass" if result.ok else evidence.failure_kind(
         detail, timed_out=result.timed_out, returncode=result.returncode),
