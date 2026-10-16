@@ -13,15 +13,13 @@ import os
 import subprocess
 import threading
 import time
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
 import pytest
 
 from refactory_dsh import authoring_evidence, sandbox, worktree
 from refactory_dsh.paths import venv_bin
-from tests_support import git, git_repo, stub
+from tests_support import git, git_repo, on_stdin, stub
 
 
 @pytest.fixture
@@ -39,22 +37,6 @@ def _spine(run: Path, status: str) -> None:
     """Leave the status the spine writes for a run it drives."""
     (run / ".refactory").mkdir(parents=True, exist_ok=True)
     (run / ".refactory" / "spine-status.json").write_text(json.dumps({"status": status}))
-
-
-@contextmanager
-def _stdin(text: str) -> Iterator[None]:
-    """Put ``text`` on this process's stdin, so a child that inherited it could read it."""
-    read, write = os.pipe()
-    os.write(write, text.encode())
-    os.close(write)
-    saved = os.dup(0)
-    os.dup2(read, 0)
-    os.close(read)
-    try:
-        yield
-    finally:
-        os.dup2(saved, 0)
-        os.close(saved)
 
 
 # ── a worktree of its own, from a pinned base (#330 I1) ────────────────────
@@ -651,6 +633,18 @@ def test_a_managed_environment_comes_first_and_an_unmarked_one_is_not_adopted(re
     assert str(venv_bin()) not in marked["PATH"].split(os.pathsep)
 
 
+def test_a_check_uses_the_pnpm_store_its_install_used(repo, tmp_path):
+    """pnpm finds its store through HOME: under the check's own it saw another store and tried to reinstall."""
+    found = worktree.create(repo, "HEAD", "5e5e5e5e3333", _run(tmp_path))
+    assert "pnpm_config_store_dir" not in worktree.check_environment(Path(found.path), tmp_path / "home")
+    (Path(found.path) / "node_modules").mkdir()
+    (Path(found.path) / "node_modules" / ".modules.yaml").write_text(
+        json.dumps({"storeDir": "/home/someone/.local/share/pnpm/store/v11"}))
+    env = worktree.check_environment(Path(found.path), tmp_path / "home")
+    assert env["pnpm_config_store_dir"] == "/home/someone/.local/share/pnpm/store/v11"
+    assert env["HOME"] == str(tmp_path / "home"), "only the store is shared; caches stay out of the worktree"
+
+
 def _python_project(repo: Path) -> None:
     (repo / "pyproject.toml").write_text("[project]\nname = 'x'\n")
     git(repo, "add", "pyproject.toml")
@@ -689,7 +683,7 @@ def test_what_was_installed_is_known_per_worktree_not_per_run_directory(repo, tm
     assert (Path(second.path) / ".venv" / worktree.MARKER).exists()
 
 
-def test_installs_run_without_the_checks_memory_cap(repo, tmp_path, monkeypatch):
+def test_installs_run_without_a_memory_cap(repo, tmp_path, monkeypatch):
     """A package manager under a 2 GB address space is killed before it installs anything."""
     stub(tmp_path / "bin", "uv", f'echo "cap=$(ulimit -v)" >> "{tmp_path}/bin/calls.log"; mkdir -p .venv/bin')
     monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
@@ -781,7 +775,7 @@ def test_installs_run_unattended_without_hook_managers_secrets_or_refactorys_var
     git(repo, "add", ".")
     git(repo, "commit", "-q", "-m", "js")
     run = _run(tmp_path)
-    with _stdin("y\n"):
+    with on_stdin("y\n"):
         worktree.ensure_environment(worktree.create(repo, "HEAD", "3333aaaa6666", run), run)
     calls = (bin_dir / "calls.log").read_text()
     assert "HUSKY=0 LEFTHOOK=0 CI=true DSH=unset VENV=unset KEY=unset NPM=a-registry-token" in calls

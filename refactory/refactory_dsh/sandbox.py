@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import ast
 import json
+import math
 import os
 import signal
 import subprocess
@@ -35,7 +36,8 @@ from typing import Any
 from refactory_dsh import registry
 from refactory_dsh.paths import project_root, project_for_nodes
 
-#: Ceilings for one sandboxed run.
+#: Ceilings for one sandboxed run. A shell command (`run_command`) is bounded by its
+#: time rather than by the memory and CPU ceilings, which hold for code snippets (#325).
 DEFAULT_TIMEOUT_S = 180
 #: Whole-mode smoke budget when model calls are required; independently configurable.
 DEFAULT_MODEL_SMOKE_TIMEOUT_S = 3600
@@ -348,8 +350,8 @@ def run_command(
     *,
     workdir: Path,
     timeout_s: int = DEFAULT_TIMEOUT_S,
-    memory_mb: int = DEFAULT_MEMORY_MB,
-    cpu_s: int = DEFAULT_CPU_S,
+    memory_mb: int = 0,
+    cpu_s: int | None = None,
     file_mb: int = DEFAULT_FILE_MB,
     env: dict[str, str] | None = None,
     budget: Any = None,
@@ -357,16 +359,22 @@ def run_command(
     exact_env: bool = False,
     stdin: Any = None,
 ) -> SandboxResult:
-    """Run a shell command under the same containment as a code snippet.
+    """Run a shell command in the sandbox, bounded by time rather than memory.
 
     A command is what a brief declares as its check ("run the tests", "build it"),
-    and it is arbitrary, so it gets the same limits and the same scrubbed
-    environment as anything else we did not write. ``exact_env`` runs it with ``env``
-    as given instead -- a design run's worktree builds its own, without refactory's
-    interpreter or variables (`worktree.check_environment`) -- and ``home`` moves
-    HOME out of ``workdir``, so tool caches stay out of what is checked. ``stdin`` is
-    the command's standard input (inherited by default); ``memory_mb`` of 0 sets no
-    memory cap, for installs a 2 GB address space would kill.
+    and it is arbitrary, so it gets the same scrubbed environment and file limit as
+    anything else we did not write. What bounds it is ``timeout_s``. It has no memory cap
+    unless ``memory_mb`` sets one, because V8 reserves far more address space than it
+    uses, so Node fails under any practical address-space limit once it starts worker
+    threads, as vitest does (#325).
+    Its CPU limit, unless ``cpu_s`` sets one, is that time on every core, so a test
+    runner's worker threads are not stopped before the timeout. When the time runs out,
+    everything the command started is stopped with it, not only its shell. ``exact_env``
+    runs it with ``env`` as given instead -- a design run's worktree builds its own,
+    without refactory's interpreter or variables (`worktree.check_environment`) -- and
+    ``home`` moves HOME out of ``workdir``, so tool caches stay out of what is checked.
+    ``stdin`` is the command's standard input, empty unless given: a check runs
+    unattended, so nothing it runs can read or wait on the launcher's stdin.
     """
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
@@ -374,45 +382,47 @@ def run_command(
     child_env["HOME"] = str(home or workdir)
     kwargs: dict[str, Any] = {}
     if sys.platform != "win32":
-        kwargs["preexec_fn"] = _limits(memory_mb, cpu_s, file_mb)
+        cpu = cpu_s if cpu_s is not None else math.ceil(timeout_s) * (os.cpu_count() or 1)
+        kwargs["preexec_fn"] = _limits(memory_mb, cpu, file_mb)
     started = time.monotonic()
     try:
-        options = dict(shell=True, text=True, cwd=str(workdir), env=child_env, stdin=stdin, **kwargs)
-        if budget is None:
-            result = subprocess.run(command, capture_output=True, timeout=timeout_s, **options)
-        else:
+        options = dict(shell=True, text=True, cwd=str(workdir), env=child_env,
+                       stdin=subprocess.DEVNULL if stdin is None else stdin, **kwargs)
+        if budget is not None:
             budget.checkpoint()
-            proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                    start_new_session=os.name == "posix", **options)
-            deadline = time.monotonic() + timeout_s
-            try:
-                while True:
+        proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                start_new_session=os.name == "posix", **options)
+        deadline = time.monotonic() + timeout_s
+        try:
+            while True:
+                if budget is not None:
                     budget.checkpoint()
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        raise subprocess.TimeoutExpired(command, timeout_s)
-                    try:
-                        stdout, stderr = proc.communicate(timeout=min(remaining, 0.1))
-                        result = subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
-                        break
-                    except subprocess.TimeoutExpired:
-                        pass
-            except BaseException:
-                # This session was created by this call and contains only this
-                # check's shell/tools. No descendant discovery or name matching.
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, timeout_s)
                 try:
-                    os.killpg(proc.pid, signal.SIGTERM) if os.name == "posix" else proc.terminate()
+                    # A budget is checked between short waits; without one, wait out the time.
+                    stdout, stderr = proc.communicate(timeout=remaining if budget is None else min(remaining, 0.1))
+                    result = subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
+                    break
+                except subprocess.TimeoutExpired:
+                    pass
+        except BaseException:
+            # This session was created by this call and contains only this
+            # check's shell/tools. No descendant discovery or name matching.
+            try:
+                os.killpg(proc.pid, signal.SIGTERM) if os.name == "posix" else proc.terminate()
+            except ProcessLookupError:
+                pass
+            try:
+                proc.communicate(timeout=2)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL) if os.name == "posix" else proc.kill()
                 except ProcessLookupError:
                     pass
-                try:
-                    proc.communicate(timeout=2)
-                except subprocess.TimeoutExpired:
-                    try:
-                        os.killpg(proc.pid, signal.SIGKILL) if os.name == "posix" else proc.kill()
-                    except ProcessLookupError:
-                        pass
-                    proc.communicate(timeout=2)
-                raise
+                proc.communicate(timeout=2)
+            raise
     except subprocess.TimeoutExpired:
         return SandboxResult(
             ok=False, timed_out=True, returncode=124, timeout_s=timeout_s,
