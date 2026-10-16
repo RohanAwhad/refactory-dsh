@@ -316,12 +316,13 @@
 
           # ── interactive workflow spine ─────────────────────────────────────────────
           # The CEO drives a mode's graph node by node in the Web chat. It mounts HERE,
-          # in the preset's standing scope, rather than in the host composition, because
-          # the spine denies the CEO's own coding/external tools at `agent/created` and
-          # that guard only bites when `scopeOf(ctx)` is the scope the CEO joined. A host
-          # row has no scope, so the guard returned early and the CEO kept `bash` — which
-          # it used to run a mode's deterministic nodes by hand. `tool-refactory` above is
-          # the same pattern: a preset row registering a tool for the session's agent.
+          # in the preset's standing scope, rather than in the host composition, so its
+          # `wf_*` tools, its prompt and its guard reach this preset's agents only. The guard
+          # denies the CEO's own coding/external tools at `agent/created`; without it the
+          # CEO would keep `bash` and run a mode's deterministic nodes by hand. A host row
+          # would reach every top-level agent on the host, whatever preset its session
+          # uses. `tool-refactory` above is the same pattern: a preset row
+          # registering a tool for the session's agent.
           #
           # `inject: [shell]` waits for the host `shell` executor (the base composition's
           # `bash-sandbox`), which the spine resolves with `ctx.get('shell')` to run a

@@ -1,19 +1,21 @@
 /**
  * A scripted model for the acceptance run: the CEO it answers spawns one subagent
- * through each delegation tool, and each subagent's tool catalog is recorded.
+ * through each delegation tool, and the CEO's and each subagent's tool catalogs are
+ * recorded.
  *
  * It is one plugin row the acceptance run adds with `--patch`, registering the
  * `scripted` provider route, so the rest of the profile is the one that ships: the
  * subagent is created by the real delegation row, joins the real preset and gets the
- * real `toolFilter`. The tools a model request carries are the catalog the child
+ * real `toolFilter`. The tools a model request carries are the catalog the agent
  * itself was given, which is the fact under test, so the record is that list.
  *
- * Config: `log` is the JSON-lines file that gets a `{ via, tools }` record per
- * subagent, a `{ via, nested }` record for the answer to a subagent's own
- * `subagent` call, and a `{ result }` record per tool result the CEO reads, so a
- * delegation that failed says why; `tools` are the delegation tools the CEO calls,
- * once each, in order; `marker`, when set, is text the conversation must contain
- * before the CEO delegates.
+ * Config: `log` is the JSON-lines file that gets a `{ ceo }` record of the tools on
+ * each turn's request the CEO makes, a `{ via, tools }` record per subagent, a
+ * `{ via, nested }` record for the answer to a subagent's own `subagent` call, and a
+ * `{ result }` record per tool result the CEO reads, so a delegation that failed
+ * says why; `tools` are the delegation tools the CEO calls, once each, in order;
+ * `marker`, when set, is text the conversation must contain before the CEO
+ * delegates.
  */
 import { appendFileSync } from 'node:fs'
 
@@ -86,6 +88,8 @@ class ScriptedModel {
       yield* reply({ type: 'text', text: 'done' })
       return
     }
+    // A request with no tools is a side call such as the session title, not a turn.
+    if (tools.length > 0) appendFileSync(this.config.log, `${JSON.stringify({ ceo: tools })}\n`)
     if (result !== undefined) appendFileSync(this.config.log, `${JSON.stringify({ result })}\n`)
     const called = options.messages
       .filter(message => message.role === 'assistant')

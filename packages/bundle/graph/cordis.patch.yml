@@ -61,6 +61,10 @@
     - id: graph-startup
       name: '@deepseek-ai/dsh-graph/startup'
 
+    # A host row, unlike the GUI's preset row: its `wf_*` tools, its prompt and its
+    # `ceoDeny` guard reach every top-level agent on this host, which here is the one
+    # CEO the runner boots. Subagents are out of the guard's reach; the delegation
+    # rows above filter them.
     - id: workflow-spine
       name: '@deepseek-ai/dsh-workflow-spine'
       inject: [graphStartup]

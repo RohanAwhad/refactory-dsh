@@ -52,10 +52,10 @@
         repoRoot: !!js ctx.refactoryWebStartup.repoRoot
 
     # The interactive workflow spine is NOT mounted here. It lives in the `ceo`
-    # preset's `agent.cordis.yml` so the CEO it guards is in the mount's scope:
-    # a host row has no scope, and the spine's deny-guard needs one to restrict
-    # the CEO's own tools. That preset ships from
-    # `packages/bundle/refactory`, which is applied after this layer.
+    # preset (`packages/bundle/refactory/presets/ceo.patch.yml`) so its tools and
+    # its deny-guard reach that preset's agents only: a host row would reach every
+    # top-level agent on the host, whatever preset its session uses. That bundle is
+    # applied after this layer.
 
     # The right Sidebar's refactory picker: the console's described choices,
     # started and read through the refactoryConsole endpoint.
