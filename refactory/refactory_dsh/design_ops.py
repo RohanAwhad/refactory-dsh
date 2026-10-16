@@ -175,14 +175,20 @@ def _run_id(workdir: Path) -> str:
 def _open_worktree(ctx: Any, name: str, task: dict[str, Any]) -> dict[str, Any]:
     """Give the run its own worktree of its target, and say what that means (#351).
 
-    The target is the repository ``target`` names, or a new project in the projects
-    folder when it names none. The run branches from ``base`` -- the target's HEAD, or
-    a new project's ``main`` -- pinned to a commit here, and never works in the target
-    itself: what the person has there, committed or not, stays theirs.
+    The target is the repository ``target`` names -- relative to the project the run
+    belongs to, not to the run directory a node starts in -- or a new project in the
+    projects folder when it names none. The run branches from ``base`` -- the target's
+    HEAD, or a new project's ``main`` -- pinned to a commit here, and never works in the
+    target itself: what the person has there, committed or not, stays theirs.
     """
+    launcher = project_for_nodes().expanduser().resolve()
     named = str(task.get("target") or ctx.knob("target", "") or "").strip()
-    target = worktree.repository_root(Path(named)) if named else projects.new_project(name)
-    rev = str(task.get("base") or ctx.knob("base", "") or "").strip() or ("HEAD" if named else "main")
+    given = str(task.get("base") or ctx.knob("base", "") or "").strip()
+    if not named and given and not (projects.projects_dir() / name).exists():
+        raise ValueError(f"base {given!r} names a commit, but this run starts a new project, which has only "
+                         "its empty main; pass target=<repository> with it, or leave base empty")
+    target = worktree.repository_root(launcher / Path(named).expanduser()) if named else projects.new_project(name)
+    rev = given or ("HEAD" if named else "main")
     # Pinned before anything else is touched, so a base that names nothing is refused
     # before an earlier run's worktree is pruned or this one's is made. A redo keeps
     # the base it pinned the first time, even if that branch has moved or gone since.
@@ -193,26 +199,43 @@ def _open_worktree(ctx: Any, name: str, task: dict[str, Any]) -> dict[str, Any]:
     else:
         base = worktree.resolve_base(target, rev)
     for note in worktree.prune(target):
-        print(f"refactory: {note}", file=sys.stderr)
+        # A worktree kept is one the person may want to look at; one removed is routine.
+        if note.startswith("kept "):
+            target_guard.warn(note)
+        else:
+            print(f"refactory: {note}", file=sys.stderr)
     found = worktree.create(target, base, run_id, ctx.workdir)
-    # The person's checkout is still watched, as a backstop: drift there is reported,
-    # and `emit` may change neither it nor the run's own worktree (#319).
-    baseline = target_guard.record(ctx.workdir, target, output_only=OUTPUT_ONLY, also=(Path(found.path),))
+    # The checkouts a worker could still write to directly are watched while `emit`
+    # runs, which may change none of them: the target, the run's own worktree, and the
+    # checkout the run starts from, whose run directories hold the workers (#319).
+    watched = [Path(found.path)]
+    if launcher != target and (launcher / ".git").exists():
+        watched.append(launcher)
+    baseline = target_guard.record(ctx.workdir, target, output_only=OUTPUT_ONLY, also=tuple(watched))
     if baseline["changes"]:
         target_guard.warn(f"{len(baseline['changes'])} uncommitted change(s) in {target} are not part of "
                           f"this run, which starts from commit {found.base[:12]}: "
                           f"{target_guard._named(sorted(baseline['changes']))}")
     elif baseline["changes"] is None:
         target_guard.warn(f"the target {target} has more than {target_guard.LIMIT} uncommitted paths, "
-                          "so this run cannot tell whether it moves")
+                          "so this run cannot tell whether emit writes to it directly")
+    if not named:
+        entry = next((project for project in projects.load()["projects"]
+                      if project.get("path") == str(target)), {})
+        others = [note["branch"] for note in entry.get("runs", []) if note.get("branch") != found.branch]
+        if others and not given:
+            target_guard.warn(f"{target} has earlier runs, whose work is on their branches, not on main: "
+                              f"{target_guard._named(others)}. This run starts from main; pass "
+                              "base=<branch> to build on one of them instead.")
     projects.record_run(target, run=ctx.workdir, branch=found.branch, base=found.base, status="running")
     return {"target": str(target), "worktree": found.path, "branch": found.branch, "base": found.base,
-            "source": found.path,
+            "source": found.path, "check_root": f"the root of the run's worktree, {found.path}",
             "emit_scope": (
                 f"Paths are relative to the root of this run's worktree, {found.path}: a git worktree of "
-                f"{target} on branch {found.branch}. Files you do not write stay as they are at the "
-                "base commit, so write only the files you add or change, each one in full, and read "
-                "the current ones there first."
+                f"{target} on branch {found.branch}. Every attempt starts again from the base commit, "
+                f"{found.base[:12]}: write every file this change adds or changes, each one in full, "
+                "including any an earlier attempt wrote -- a file you leave out is back as the base has "
+                "it. Read the current ones there first. Files cannot be deleted or renamed this way."
             )}
 
 
@@ -250,8 +273,10 @@ def prepare_design(ctx: Any, *, worktrees: bool = True) -> dict[str, Any]:
         given = [knob for knob in ("target", "base", "setup")
                  if str(task.get(knob) or ctx.knob(knob, "") or "").strip()]
         if given:
-            raise ValueError(f"{', '.join(given)} need the run's worktree, which is off; turn it on, or "
-                             "leave them empty to write the artifact under .factory/artifacts")
+            raise ValueError(
+                f"{', '.join(given)} need the run's worktree, which is off; turn it on, or leave them empty "
+                "to write the artifact under .factory/artifacts" if worktrees else
+                f"design_fast does not take {', '.join(given)}: it works on a copy of source_project")
         # A run without a worktree must not inherit one an earlier run left in this
         # directory; that worktree's own record (`worktree.slot`) still tracks it.
         (Path(ctx.workdir) / worktree.RECORD).unlink(missing_ok=True)
@@ -266,7 +291,7 @@ def prepare_design(ctx: Any, *, worktrees: bool = True) -> dict[str, Any]:
                               "whether emit writes to it directly")
         if worktrees:
             located = {"target": str(project), "worktree": NO_WORKTREE, "branch": NO_WORKTREE,
-                       "base": NO_WORKTREE, "source": str(project),
+                       "base": NO_WORKTREE, "source": str(project), "check_root": "the artifact's own directory",
                        "emit_scope": "Paths are relative to the artifact's own directory, which holds "
                                      "only the files you write here."}
     # Match create/edit: inspect the exact nested route before launching research.
@@ -288,8 +313,11 @@ def prepare_design(ctx: Any, *, worktrees: bool = True) -> dict[str, Any]:
         ctx.write_text(feedback, "not run: initial authoring pass; no prior feedback\n")
     from refactory_dsh.create_ops import UNREFUSED
 
+    # Resolved once, as create resolves its own inputs: the check reads the fact.
+    setup = str(task.get("setup") or ctx.knob("setup", "") or "").strip()
     return {"name": name, "brief": brief, "check": check, "validation": "(no check has run yet)",
-            "research_review": "(no research review has run yet)", **UNREFUSED, **located}
+            "research_review": "(no research review has run yet)", **UNREFUSED, **located,
+            **({"setup": setup} if worktrees else {})}
 
 
 def _emitted(ctx: Any) -> dict[Path, str]:
@@ -319,12 +347,12 @@ def materialise_artifact(ctx: Any) -> dict[str, Any]:
         return {**materialise_directory(ctx), "commit": NO_WORKTREE,
                 "change": "The artifact directory holds only the files this run wrote."}
     checked = _emitted(ctx)
-    target_guard.warn_if_moved(ctx.workdir)
+    # No drift warning: the run's base is pinned, so a moving checkout changes nothing it sees.
     attempt = len(worktree.git(Path(found.path), "rev-list", f"{found.base}..HEAD").split()) + 1
     advanced = worktree.commit_attempt(ctx.workdir, checked, f"{ctx.facts['name']}: attempt {attempt}")
     _warn_if_shared_changed(advanced, "since the last check")
     ctx.write_text("changes.diff", worktree.diff(advanced))
-    wrapper = Path(ctx.workdir) / worktree.WRAPPER
+    wrapper = Path(ctx.workdir).resolve() / worktree.WRAPPER
     return {"artifact": advanced.path, "files": sorted(str(path) for path in checked),
             "commit": advanced.head,
             "change": (
@@ -401,7 +429,6 @@ def check_artifact(ctx: Any) -> str:
         if restored:
             target_guard.warn(f"tracked files in the run's worktree had changed since materialise and were put "
                               f"back, so the check runs the committed attempt: {target_guard._named(restored)}")
-        target_guard.warn_if_moved(ctx.workdir)
         result = _check_in_worktree(ctx, found, command, timeout)
         _warn_if_shared_changed(found, "while preparing for and running the check")
     from refactory_dsh import authoring_evidence as evidence
@@ -429,16 +456,25 @@ def _warn_if_shared_changed(found: worktree.Worktree, when: str) -> None:
 
 
 def _check_in_worktree(ctx: Any, found: worktree.Worktree, command: str, timeout: int) -> Any:
-    """Run the check in the run's worktree, after preparing the environment it needs."""
-    home = Path(ctx.workdir) / ".refactory" / "check-home"
+    """Run the check in the run's worktree, after preparing the environment it needs.
+
+    An install that writes a lockfile amends the attempt (`worktree.ensure_environment`),
+    so the commit fact and the reviewers' diff follow it to its new head.
+    """
+    home = Path(ctx.workdir).resolve() / worktree.CHECK_HOME
     home.mkdir(parents=True, exist_ok=True)
-    problems = worktree.ensure_environment(found, ctx.workdir)
+    budget = getattr(ctx, "budget", None)
+    amended, problems = worktree.ensure_environment(found, ctx.workdir, budget)
+    if amended.head != found.head:
+        found = amended
+        ctx.set_fact("commit", found.head)
+        ctx.write_text("changes.diff", worktree.diff(found))
     worktree.write_wrapper(found, ctx.workdir)
     env = worktree.check_environment(Path(found.path), home)
-    setup = str(ctx.knob("setup", "") or "").strip()
+    setup = str(ctx.facts.get("setup") or "").strip()
     if not problems and setup:
         prepared = sandbox.run_command(setup, workdir=Path(found.path), timeout_s=timeout,
-                                       budget=getattr(ctx, "budget", None), env=env, home=home, exact_env=True)
+                                       budget=budget, env=env, home=home, exact_env=True)
         if not prepared.ok:
             problems.append(f"the setup command `{setup}` failed: "
                             + "\n".join((prepared.problem(), prepared.stdout or "", prepared.stderr or "")).strip())
@@ -446,25 +482,28 @@ def _check_in_worktree(ctx: Any, found: worktree.Worktree, command: str, timeout
         return sandbox.SandboxResult(ok=False, returncode=1, elapsed_s=0.0, stderr=(
             "the worktree's environment could not be prepared:\n" + "\n".join(problems)))
     return sandbox.run_command(command, workdir=Path(found.path), timeout_s=timeout,
-                               budget=getattr(ctx, "budget", None), env=env, home=home, exact_env=True)
+                               budget=budget, env=env, home=home, exact_env=True)
 
 
 def report_artifact(ctx: Any) -> dict[str, Any]:
     """Say what was produced, so a run's output is discoverable rather than inferred."""
     from refactory_dsh.authoring_evidence import require_completion
 
-    require_completion(ctx)
     found = worktree.recorded(ctx.workdir)
     if found is None:
+        require_completion(ctx)
         _require_owner(str(ctx.facts["name"]), ctx.workdir)
+        target_guard.warn_if_moved(ctx.workdir)
     else:
+        # Where the worktree stands first, so a moved HEAD is named as such and not as a
+        # stale sign-off.
         found = worktree.require_current(ctx.workdir)
+        require_completion(ctx)
         edited = worktree.tracked_edits(found)
         if edited:
             target_guard.warn(f"tracked files in the run's worktree differ from its last attempt and are not "
                               f"part of its branch {found.branch}: {target_guard._named(edited)}")
         _warn_if_shared_changed(found, "during the reviews")
-    target_guard.warn_if_moved(ctx.workdir)
     payload = {
         "name": ctx.facts.get("name"),
         "artifact": ctx.facts.get("artifact"),

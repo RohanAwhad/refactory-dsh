@@ -172,6 +172,19 @@ def test_audit_rejects_directory_reference_with_actionable_path(tmp_path):
     assert "individual file" in evidence.audit_problems(ctx)[0]
 
 
+def test_audit_accepts_a_path_relative_to_the_delivered_artifact(tmp_path):
+    """Found live: a reviewer of a run in a worktree cites `datesum.py`, not an absolute path."""
+    ctx = audit_context(tmp_path)
+    deliver_audit(ctx)
+    audit = ctx.read_json(evidence.AUDIT)
+    audit["requirements"][0]["evidence"][0]["path"] = "answer.txt"
+    ctx.write_json(evidence.AUDIT, audit)
+    assert evidence.audit_problems(ctx) == []
+    audit["requirements"][0]["evidence"][0]["path"] = "nowhere.txt"
+    ctx.write_json(evidence.AUDIT, audit)
+    assert "nowhere.txt" in evidence.audit_problems(ctx)[0]
+
+
 def test_audit_instructions_tell_probing_reviewers_to_stage_fixtures_in_the_run():
     """A reviewer told to probe but not where to put fixtures cites /tmp and loses the cycle.
 

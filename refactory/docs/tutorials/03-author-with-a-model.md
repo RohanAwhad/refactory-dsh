@@ -60,7 +60,7 @@ Design researches and prepares a design document for your approval, implements t
 
 The original brief, approved design and explicit steering remain the acceptance baseline. A README limitation or reviewer summary cannot silently waive requested behavior. If an external validation dependency is missing, preserve the artifact and report the unmet requirement honestly.
 
-With no `--target`, the run starts a new project, `~/refactory-projects/wordcount`, and the artifact is the run's branch of it, `refactory/run-<id>`. To change a repository you already have, pass `--target <its root>`: the run gets a branch and a worktree of its own, and your checkout stays as it is. The run report names the branch, its base commit and its diff. Design does not register a mode or produce a numeric optimization objective. Use it when the deliverable is the artifact itself.
+With no `--target`, the run starts a new project, `~/refactory-projects/wordcount`, and the artifact is the run's branch of it, `refactory/run-<id>`: the files are in the worktree the report names as `artifact`, while the project's `main` stays empty until the work is delivered. A second run on the project starts from that empty `main` unless you pass `--base refactory/run-<id>`. To change a repository you already have, pass `--target <its root>`: the run gets a branch and a worktree of its own, and your checkout stays as it is. The run report names the branch, its base commit and a `diff_stat`; the full diff is `changes.diff` in the run directory. Design does not register a mode or produce a numeric optimization objective. Use it when the deliverable is the artifact itself.
 
 ## Approval, time and evidence
 

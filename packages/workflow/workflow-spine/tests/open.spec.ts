@@ -1092,6 +1092,17 @@ describe('run warnings on a configured graph', () => {
     })])
   })
 
+  it('are journalled from a step that failed too, though its view leaves them to the failure', async () => {
+    const run = scratch()
+    const shell = warningShell(run, [], { 'run-n2': `${DRIFT_WARNING}\n` }, ['run-n2'])
+    const ctx = await mount({ interactiveOpen: false, graph: CHAIN_GRAPH, executeCommands: true, workdir: run }, shell)
+
+    const view = await call(ctx, 'wf_next', {}) as { status: string; warnings?: string[] }
+    expect(view.status).toBe('failed')
+    expect(view.warnings).toBeUndefined()
+    expect(journalledWarnings(run)).toEqual([expect.objectContaining({ node_id: 'n2', summary: DRIFT_WARNING })])
+  })
+
   it('are something the CEO is told to pass on', async () => {
     const configured = await mount({ interactiveOpen: false, graph: AGENT_GRAPH })
     const section = (await configured.systemPrompt.assemble()).sections.find(s => s.name === 'tool:wf-spine')

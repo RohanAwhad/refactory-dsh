@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from refactory_dsh import cli, projects, worktree
-from refactory_dsh.paths import projects_dir
+from refactory_dsh.projects import projects_dir
 from tests_support import git, git_repo
 
 
@@ -107,6 +107,8 @@ def test_a_run_that_ended_without_saying_so_is_listed_as_ended(tmp_path):
     assert [projects.status(entry, note) for note in entry["runs"]] == ["running", "ended"]
     gone = {**entry["runs"][0], "branch": "refactory/run-ffff0000ffff"}
     assert projects.status(entry, gone) == "ended", "pruning removed its record"
+    _spine(running, "halted")
+    assert projects.status(entry, entry["runs"][0]) == "halted", "a run that can be resumed says why it waits"
 
 
 def test_a_run_on_an_existing_repository_lists_it_as_existing(tmp_path):
@@ -174,7 +176,12 @@ def test_projects_prune_cleans_up_ended_runs_and_refuses_an_unknown_name(tmp_pat
     _spine(run, "failed")
     monkeypatch.setenv("REFACTORY_WORKTREE_IDLE_HOURS", "0")
     assert cli.main(["projects", "prune", "tool"]) == 0
-    assert "removed the worktree of an ended run" in capsys.readouterr().out
+    assert "removed the worktree of a run" in capsys.readouterr().out
     assert not Path(found.path).exists()
+    kept = worktree.create(path, "main", "abcdef543210", run)
+    worktree.record_outcome(kept, "succeeded")
+    assert cli.main(["projects", "prune", "tool"]) == 0 and Path(kept.path).exists()
+    assert cli.main(["projects", "prune", "tool", "--succeeded"]) == 0 and not Path(kept.path).exists()
+    capsys.readouterr()
     assert cli.main(["projects", "prune", "nothing-here"]) == 2
     assert "no project called 'nothing-here'" in capsys.readouterr().err

@@ -567,11 +567,12 @@ Running code we did not write.
 | class | `SandboxResult` | `(ok: 'bool', payload: 'dict[str, Any]' = <factory>, returncode: 'int' = 0, stdout: 'str' = '', stderr: 'str' = '', timed_out: 'bool' = False, timeout_s: 'int \| None' = None, elapsed_s: 'float \| None' = None, progress: 'dict[str, Any]' = <factory>) -> None` |
 | function | `ast_check` | `(name: 'str', project: 'Path \| None' = None) -> 'list[str]'` |
 | function | `describe_package` | `(name: 'str', *, project: 'Path \| None' = None, include_contracts: 'bool' = False, **kwargs: 'Any') -> 'SandboxResult'` |
+| function | `is_secret` | `(name: 'str') -> 'bool'` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
 | function | `missing_init` | `(root: 'Path') -> 'str'` |
 | function | `model_readiness` | `(workdir: 'Path', *, model_context: 'dict[str, str] \| None' = None, require_ready: 'bool' = True) -> 'dict[str, Any]'` |
 | function | `promote` | `(project: 'Path', name: 'str', *, note: 'str' = '') -> 'dict[str, Any]'` |
-| function | `run_command` | `(command: 'str', *, workdir: 'Path', timeout_s: 'int' = 180, memory_mb: 'int' = 2048, cpu_s: 'int' = 120, file_mb: 'int' = 64, env: 'dict[str, str] \| None' = None, budget: 'Any' = None, home: 'Path \| None' = None, exact_env: 'bool' = False) -> 'SandboxResult'` |
+| function | `run_command` | `(command: 'str', *, workdir: 'Path', timeout_s: 'int' = 180, memory_mb: 'int' = 2048, cpu_s: 'int' = 120, file_mb: 'int' = 64, env: 'dict[str, str] \| None' = None, budget: 'Any' = None, home: 'Path \| None' = None, exact_env: 'bool' = False, stdin: 'Any' = None) -> 'SandboxResult'` |
 | function | `run_sandboxed` | `(code: 'str', *, workdir: 'Path', timeout_s: 'int' = 180, memory_mb: 'int' = 2048, cpu_s: 'int' = 120, file_mb: 'int' = 64, env: 'dict[str, str] \| None' = None, forwarded: 'dict[str, str] \| None' = None) -> 'SandboxResult'` |
 | function | `scrub` | `(env: 'dict[str, str] \| None' = None) -> 'dict[str, str]'` |
 | function | `smoke` | `(identifier: 'str', workdir: 'Path', *, project: 'Path \| None' = None, model: 'bool' = False, knobs: 'dict[str, Any] \| None' = None, model_context: 'dict[str, str] \| None' = None, **kwargs: 'Any') -> 'SandboxResult'` |
@@ -582,6 +583,7 @@ Running code we did not write.
 - **`SandboxResult`** — What a sandboxed run produced.
 - **`ast_check`** — Everything wrong with a package that can be seen without importing it.
 - **`describe_package`** — A package's manifest and mode ids, read without importing it here.
+- **`is_secret`** — Whether an environment name looks like a credential, which a sandboxed run never sees.
 - **`main`** — ``python -m refactory_dsh.sandbox --ast <pkg> | --smoke <pkg>/<mode>``.
 - **`missing_init`** — Why a package root has no `__init__.py`, and what it holds instead.
 - **`model_readiness`** — Check the model path after the same scrub/HOME rewrite as real smoke.

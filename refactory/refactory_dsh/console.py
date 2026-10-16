@@ -1369,6 +1369,12 @@ def _parser() -> argparse.ArgumentParser:
     artifact.add_argument("--attempts", type=int, default=3)
     artifact.add_argument("--workdir", default="", help="the run directory (default: .factory/design/<name>)")
     artifact.add_argument("--resume", default="", metavar="RUN_DIR", help="continue a failed run from its directory")
+    artifact.add_argument("--target", default="",
+                          help="the git repository to change, in a worktree of its own (default: a new project)")
+    artifact.add_argument("--base", default="", help="the commit, branch or tag the run starts from")
+    artifact.add_argument("--setup", default="", help="a command run in the worktree before each check")
+    artifact.add_argument("--no-worktree", action="store_true",
+                          help="write the artifact under .factory/artifacts instead of a worktree")
     artifact.add_argument(
         "--verdict", action="append", default=[], metavar="GATE=VALUE",
         help="answer a gate a person owns, as <gate>=<value> (repeatable)",
@@ -1757,6 +1763,12 @@ def main(argv: list[str] | None = None) -> int:
                 forwarded += ["--resume", args.resume]
             if args.check:
                 forwarded += ["--check", args.check]
+            for flag, value in (("--target", args.target), ("--base", args.base), ("--setup", args.setup)):
+                if value:
+                    # Absolute, because the run resolves it from its own directory.
+                    forwarded += [flag, str(Path(value).expanduser().resolve()) if flag == "--target" else value]
+            if args.no_worktree:
+                forwarded += ["--no-worktree"]
             for pair in args.verdict:
                 forwarded += ["--verdict", pair]
             if args.provider:

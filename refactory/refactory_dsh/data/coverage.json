@@ -166,7 +166,7 @@
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
       "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required.",
-      "reviewed_schema": "6a00c54a7e3d85269a7c3177800a82840996cfe7a3065a59c9c9f1c91a5a2eb8"
+      "reviewed_schema": "0cb095333597fc0afe689b91d80f0194730bb7900cad84ee01afe377ef269188"
     },
     "default_pack/design_fast": {
       "doc": "refactory/docs/budgets-fast-modes.md",
@@ -581,7 +581,7 @@
           "arguments": {
             "what": "prune"
           },
-          "explanation": "Remove what ended runs no longer need now rather than at the next run; a worktree with uncommitted work is kept and reported."
+          "explanation": "Remove what ended runs no longer need now rather than at the next run. A worktree with an edited tracked file, or with a file newer than the run's last step, is kept and reported; `--succeeded` also removes succeeded runs' worktrees, keeping their branches."
         }
       ],
       "interfaces": {
@@ -702,17 +702,25 @@
         "fields": {
           "approve": "verdict",
           "attempts": "attempts",
+          "base": "base",
           "brief": "brief",
           "check": "check",
           "model": "model",
           "name": "name",
+          "noWorktree": "no_worktree",
           "provider": "provider",
-          "resume": "resume"
+          "resume": "resume",
+          "setup": "setup",
+          "target": "target"
         },
         "order": [
           "name",
           "brief",
           "check",
+          "target",
+          "base",
+          "setup",
+          "noWorktree",
           "attempts",
           "approve",
           "provider",
@@ -733,7 +741,16 @@
             "check": "test -s hello.txt",
             "name": "hello"
           },
-          "explanation": "Build and check a software artifact from a brief and a check command; no reusable mode is required. Prefer wf_open default_pack/design with user gates."
+          "explanation": "Build and check software from a brief and a check command, on its own branch in a git worktree: of the repository `target` names, or of a new project. No reusable mode is required. Prefer wf_open default_pack/design with user gates."
+        },
+        {
+          "arguments": {
+            "brief": "Add a --json flag to the report command",
+            "check": "python -m pytest -q",
+            "name": "report_json",
+            "target": "/path/to/repository"
+          },
+          "explanation": "Change an existing repository on a branch of its own; the person's checkout and their uncommitted work are left as they are."
         }
       ],
       "interfaces": {
@@ -741,8 +758,8 @@
         "cli": "python -m refactory_dsh.console design",
         "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
       },
-      "purpose": "Build and check a software artifact from a brief and a check command; no reusable mode is required. Prefer wf_open default_pack/design with user gates.",
-      "reviewed_schema": "988e6cf73c9ecdeb321f73c518c44b19998f4352f84d1f72227441ccde6c152e"
+      "purpose": "Build and check software from a brief and a check command, on its own branch in a git worktree: of the repository `target` names, or of a new project. No reusable mode is required. Prefer wf_open default_pack/design with user gates.",
+      "reviewed_schema": "5de38f1b5e3bfba6f951d697667ac3a9ab87c6207ae73047ad6b187497c5ece7"
     },
     "docs": {
       "chat": {

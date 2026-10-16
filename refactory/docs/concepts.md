@@ -16,7 +16,7 @@ Refactory makes an agentic workflow explicit, interactive and searchable. A mode
 
 Shipped packages live in `refactory/refactory_packages/`. Created, imported and adopted packages live in the project's `.factory/packages/`. Both use the same registry. A package may be disabled without deleting it.
 
-Create produces a reusable package; Edit produces a revised package and records where it came from. Design produces software: commits on its own branch, in a git worktree of the repository it changes or of a new project in `~/refactory-projects/`. Create and Design are deliberately unscored authoring modes: successful completion is governed by their graph's checks, not a numeric search objective. Standalone Design artifacts are not optimizer candidates.
+Create produces a reusable package; Edit produces a revised package and records where it came from. Design produces software: commits on its own branch, in a git worktree of the repository it changes or of a new project in `~/refactory-projects/` (design_fast, and a run with its worktree off, write `.factory/artifacts/` instead). Create and Design are deliberately unscored authoring modes: successful completion is governed by their graph's checks, not a numeric search objective. Standalone Design artifacts are not optimizer candidates.
 
 ## What a graph contains
 

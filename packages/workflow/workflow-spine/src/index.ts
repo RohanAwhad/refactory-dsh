@@ -962,13 +962,15 @@ export function apply(ctx: Context, config: Config): void {
       }
       recordBoundary()
       // Every peer's warnings, not only a named node's: a warning is about the
-      // run, and the peers are otherwise reported by id alone.
+      // run, and the peers are otherwise reported by id alone. The journal keeps a
+      // failed node's too -- a warning matters most on a run that went wrong -- while
+      // this call's view leaves them to the failure, whose stderr already carries them.
       const printed = automatic.flatMap((node, index) => {
         const outcome = outcomes[index]!
-        return outcome.ok ? runWarningsOf(outcome.stderr).map(line => ({ node: node.id, line })) : []
+        return runWarningsOf(outcome.stderr).map(line => ({ node: node.id, line, ok: outcome.ok }))
       })
       recordWarnings(workdir, printed)
-      const boundaryWarnings = printed.map(({ node, line }) => `${node}: ${line}`)
+      const boundaryWarnings = printed.filter(({ ok }) => ok).map(({ node, line }) => `${node}: ${line}`)
       warnings.push(...boundaryWarnings)
       if (failure !== undefined) return { next: spine.next(), failure, ran }
       if (interactiveOpen) {

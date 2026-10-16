@@ -11,8 +11,9 @@ way. Three things differ on purpose. Worktrees live under refactory's own home r
 than inside the target, because the target may be someone else's repository and a
 checkout nested in it confuses its tests and package managers. A run whose state cannot
 be read counts as active, where remote-factory assumes the opposite, so a worktree is
-never taken from a run that may still need it. And removal never forces: a worktree
-with uncommitted work is kept and reported, not discarded.
+never taken from a run that may still need it. And removal never discards what someone
+did after the run: a worktree with an edited tracked file, or with an untracked file
+newer than the run's last step, is kept and reported, not forced.
 """
 
 from __future__ import annotations
@@ -33,8 +34,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from refactory_dsh.paths import refactory_home, venv_bin
-from refactory_dsh.run_ownership import LOCK
-from refactory_dsh.sandbox import _SECRET_MARKERS
+from refactory_dsh.run_ownership import held
 
 #: Where a run records the worktree it works in: runtime metadata, beside the spine's own.
 RECORD = Path(".refactory") / "worktree.json"
@@ -70,10 +70,6 @@ MANIFESTS = ("pyproject.toml", "uv.lock", "package.json", "pnpm-lock.yaml",
 #: environment it knows the provenance of (remote-factory's ``WORKTREE_VENV_MARKER``).
 MARKER = ".refactory-managed"
 
-#: Where a run keeps what its installs recorded, so the next check reinstalls only when
-#: a manifest changed.
-ENVIRONMENT = Path(".refactory") / "worktree-env.json"
-
 #: The script reviewers run commands through, so they see the worktree's own
 #: environment and not the launcher's.
 WRAPPER = Path(".refactory") / "in-worktree"
@@ -83,11 +79,25 @@ WRAPPER = Path(".refactory") / "in-worktree"
 #: reaches a target's tests (#330 E1).
 CHECK_ENV = ("LANG", "LC_ALL", "TMPDIR", "SYSTEMROOT")
 
+#: The HOME a check, its setup command and the reviewers' wrapper run with: the run's
+#: own, so tool caches stay out of the worktree and its diff (#330 E6).
+CHECK_HOME = Path(".refactory") / "check-home"
+
 #: How long one install may take before it is reported as failed.
 INSTALL_TIMEOUT_S = 1800
 
+#: The largest file an install may write, in MB: native packages exceed a check's limit.
+INSTALL_FILE_MB = 16384
+
 #: Credential-like variables an install keeps: a package registry's own sign-in.
 REGISTRY_ENV = ("NPM_", "NODE_AUTH_", "UV_", "PIP_", "YARN_", "PNPM_")
+
+#: The lockfiles an install writes. One it creates or changes is part of the attempt.
+LOCKFILES = ("uv.lock", "pnpm-lock.yaml", "package-lock.json", "yarn.lock")
+
+#: How far an untracked file's time may run past the run's last step and still be the
+#: run's own, for filesystems that keep times coarsely.
+SLACK_S = 60
 
 #: Spine statuses after which a run cannot be resumed (`recovery`): it failed, or it
 #: finished, which a design run does only after it reported.
@@ -240,10 +250,7 @@ def create(target: Path, rev: str, run_id: str, run: Path) -> Worktree:
     if earlier.get("run") == str(run) and _branch_exists(target, branch):
         base = str(earlier["base"])
         if not path.exists():
-            if _registered(target, path, branch):
-                # Deleted by hand: git still lists it, and would refuse to add it again.
-                git(target, "worktree", "remove", str(path))
-            git(target, *NO_HOOKS, "worktree", "add", "-q", str(path), branch)
+            _readd(target, path, branch)
         elif not _registered(target, path, branch):
             raise ValueError(f"{path} already exists and is not this run's worktree; it is kept as it is")
     elif path.exists() or _branch_exists(target, branch):
@@ -274,6 +281,17 @@ def resolve_base(target: Path, rev: str) -> str:
         return git(target, "rev-parse", "-q", "--verify", f"{rev}^{{commit}}").strip()
     except ValueError as error:
         raise ValueError(f"the base {rev!r} is not a commit in {target}") from error
+
+
+def _readd(target: Path, path: Path, branch: str) -> None:
+    """Add ``path`` back as the worktree of ``branch``, whose commits hold every attempt.
+
+    git still lists a worktree deleted by hand, and refuses to add it again until that
+    stale entry, which nothing else needs, is removed.
+    """
+    if _registered(target, path, branch):
+        git(target, "worktree", "remove", str(path))
+    git(target, *NO_HOOKS, "worktree", "add", "-q", str(path), branch)
 
 
 def _branch_exists(target: Path, branch: str) -> bool:
@@ -335,10 +353,17 @@ def _tracked_edits(path: Path) -> list[str]:
 
 
 def _require_current(found: Worktree) -> None:
-    """Refuse a worktree that is gone, or whose HEAD moved outside the run's own steps."""
+    """Refuse a worktree whose HEAD moved outside the run's own steps; add back one pruned.
+
+    A run whose node failed can still be retried, and an idle one may have been pruned
+    meanwhile (:func:`prune`), so a missing worktree is added back from its branch.
+    """
     path = Path(found.path)
     if not path.is_dir():
-        raise ValueError(f"the run's worktree {path} is gone; its branch {found.branch} still holds every attempt")
+        if not _branch_exists(Path(found.target), found.branch):
+            raise ValueError(f"the run's worktree {path} and its branch {found.branch} are both gone, "
+                             "so its attempts are too; start the run again")
+        _readd(Path(found.target), path, found.branch)
     common = Path(git(Path(found.target), "rev-parse", "--path-format=absolute", "--git-common-dir").strip())
     if Path(git(path, "rev-parse", "--absolute-git-dir").strip()).parent != common / "worktrees":
         raise ValueError(f"the run's worktree {path} no longer points at its own git directory; "
@@ -348,18 +373,21 @@ def _require_current(found: Worktree) -> None:
         raise ValueError(
             f"the run's worktree {path} is at {head[:12]}, not at its last attempt "
             f"{found.head[:12]}: something committed or checked out there outside the run. "
-            "Nothing was reverted; restore it, or redo emit."
+            f"Nothing was reverted. If that work is not needed, `git -C {path} reset --hard "
+            f"{found.head[:12]}` puts the run back where it was."
         )
 
 
 def _restore(found: Worktree, written: frozenset[str] = frozenset()) -> list[str]:
-    """Put the run's worktree back to its last attempt; name what had to go.
+    """Put the run's worktree back to its last attempt; name the tracked files that had changed.
 
     The worktree is the run's own, so whatever changed it since -- the check, its setup,
     a reviewer -- did so for the run, and is undone rather than refused: a check that
     rewrites a lockfile must not wedge the run, and a file a reviewer left must not be
-    in the next check without being on the branch. Tracked files are reset and other
-    untracked files removed; what the run installed, and what git ignores, stay.
+    in the next check without being on the branch. Tracked files are reset, and are
+    worth reporting: a step changed the source. Untracked files are removed without a
+    word -- a check's `__pycache__` in a project with no `.gitignore` would otherwise be
+    reported on every reloop -- and what the run installed, and what git ignores, stay.
     ``written`` are the files an attempt that died had written, which are undone
     without being reported.
     """
@@ -371,8 +399,7 @@ def _restore(found: Worktree, written: frozenset[str] = frozenset()) -> list[str
     stray = [line.removeprefix("Would remove ") for line in git(path, "clean", "-fdn", *keep).splitlines() if line]
     if stray:
         git(path, "clean", "-fdq", *keep)
-    return [name for name in [*edited, *stray]
-            if not any(written_name == name or written_name.startswith(name) for written_name in written)]
+    return [name for name in edited if name not in written]
 
 
 def _inside(root: Path, relative: Path) -> Path:
@@ -474,25 +501,6 @@ def committed(path: Path) -> dict[str, str]:
 
 
 # ── whether a run still needs its worktree ─────────────────────────────────
-def _lock_held(run: Path) -> bool:
-    """Whether some process holds the run's invocation lock (`run_ownership`).
-
-    Asking takes the lock for an instant, as a probe of an flock can only do; a resume
-    that starts in that instant is refused and can be retried.
-    """
-    path = run / LOCK
-    if not path.exists() or sys.platform == "win32":
-        return False
-    import fcntl
-
-    with open(path, "a") as handle:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            return True
-    return False
-
-
 def _alive(pid: Any) -> bool:
     """Whether process ``pid`` still exists; True when that cannot be told."""
     if not isinstance(pid, int) or pid <= 0:
@@ -506,7 +514,16 @@ def _alive(pid: Any) -> bool:
     return True
 
 
-def state(run: Path, claimant: Any = None) -> str:
+def _marks() -> tuple[Path, Path, Path]:
+    """Where a run directory says how its run stands: spine status, walker progress, deliveries."""
+    from refactory_dsh.agent_delivery import ROOT as DELIVERIES
+    from refactory_dsh.console import SPINE_STATUS
+    from refactory_dsh.nn.executor import PROGRESS
+
+    return SPINE_STATUS, Path(PROGRESS), DELIVERIES / "pending"
+
+
+def state(run: Path, claimant: Any = None, *, branch: str = "") -> str:
     """Where ``run`` stands: ``succeeded``, ``ended`` (failed), or ``active``.
 
     Fails closed. A run whose state cannot be read counts as active, so its worktree is
@@ -514,22 +531,26 @@ def state(run: Path, claimant: Any = None) -> str:
     over only once its status says it failed or finished: a halted, cancelled or paused
     run can be resumed (`recovery`), and so can one whose GUI restarted. That is
     stricter than `design_ops._still_open`, which releases an artifact name once the
-    owner exits: a name released early costs a refusal, a worktree removed early loses
-    the run's work. A walked run is over once its progress records an error, or once
-    ``claimant``, the walking process, has exited.
+    owner exits: a name released early costs a refusal, a worktree removed early costs
+    adding it back from its branch. A walked run is over once its progress records an
+    error, or once ``claimant``, the walking process, has exited. ``branch`` names the
+    run when its directory may hold a later run's report: `design.json` then counts only
+    if it reports that branch.
     """
     run = Path(run)
+    spine_status, progress_path, pending = _marks()
     try:
         if not run.is_dir():
             return "ended"
-        if (run / "design.json").exists():
+        report = _json(run / "design.json")
+        if report and (not branch or report.get("branch") == branch):
             return "succeeded"
-        if _lock_held(run) or any((run / ".refactory" / "agent-delivery" / "pending").glob("*.json")):
+        if held(run) or any((run / pending).glob("*.json")):
             return "active"
-        spine = run / ".refactory" / "spine-status.json"
+        spine = run / spine_status
         if spine.exists():
             return "ended" if _json(spine).get("status") in ENDED else "active"
-        progress = _json(run / ".refactory" / "progress.json")
+        progress = _json(run / progress_path)
         if progress.get("error") or not _alive(claimant):
             return "ended"
         return "active"
@@ -563,43 +584,65 @@ def run_state(found: dict[str, Any]) -> str:
         return "succeeded"
     if _superseded(found):
         return "ended"
-    return state(Path(str(found.get("run") or "")), found.get("pid"))
+    return state(Path(str(found.get("run") or "")), found.get("pid"), branch=str(found.get("branch") or ""))
+
+
+def _last_active(target: Path, found: dict[str, Any]) -> float | None:
+    """When the run last did anything: its last commit, or the last status it recorded.
+
+    A run whose directory moved on to a later one stopped by the time that one began,
+    so the directory's newer records date its end instead. None when nothing says.
+    """
+    times = []
+    try:
+        times.append(float(git(target, "log", "-1", "--format=%ct", str(found.get("branch"))).strip()))
+    except ValueError:
+        pass
+    run = Path(str(found.get("run") or ""))
+    spine_status, progress_path, _pending = _marks()
+    for mark in (RECORD, INVOCATION) if _superseded(found) else (spine_status, progress_path):
+        try:
+            times.append((run / mark).stat().st_mtime)
+        except OSError:
+            pass
+    return max(times) if times else None
 
 
 def _idle_hours(target: Path, found: dict[str, Any]) -> float:
-    """How long the run has been idle: since its last commit, or the last status it recorded.
+    """How long the run has been idle; 0 when that cannot be told, so nothing is pruned on a guess.
 
-    Uncommitted work in the worktree does not count, and need not: removal never forces,
-    so a worktree holding it is kept whatever its age. (remote-factory's
-    ``_compute_idle_seconds`` reads the worktree's mtime instead, which an edit to a
-    file in it does not change.)
+    remote-factory's ``_compute_idle_seconds`` reads the worktree's mtime instead, which
+    an edit to a file in it does not change; what someone did there after the run is
+    judged file by file when the worktree is removed (:func:`_remove`).
     """
-    now = time.time()
-    ages = []
-    try:
-        ages.append(now - float(git(target, "log", "-1", "--format=%ct", str(found.get("branch"))).strip()))
-    except ValueError:
-        pass
-    if not _superseded(found):
-        run = Path(str(found.get("run") or ""))
-        for status in (run / ".refactory" / "spine-status.json", run / ".refactory" / "progress.json"):
-            try:
-                ages.append(now - status.stat().st_mtime)
-            except OSError:
-                pass
-    return min(ages) / 3600 if ages else 0.0
+    last = _last_active(target, found)
+    return (time.time() - last) / 3600 if last is not None else 0.0
 
 
-def _remove(target: Path, path: Path) -> str:
-    """Remove an ended run's worktree, never discarding an edit; say what happened.
+def _untracked(path: Path) -> list[str]:
+    """Every file git neither tracks nor ignores in the worktree at ``path``."""
+    listing = git(path, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+    return sorted(entry[3:] for entry in listing.split("\0") if entry.startswith("?? "))
 
-    Untracked files there are the run's -- what it installed, what its check left, such
-    as `__pycache__` in a project with no `.gitignore` -- and are cleared first, as
-    before every attempt (:func:`_restore`), or `git worktree remove` would never
-    succeed. An edited tracked file keeps the worktree. git refuses any worktree that
-    holds submodules, so one whose status shows nothing uncommitted, submodules
-    included, is removed with ``--force``.
+
+def _remove(target: Path, found: dict[str, Any], path: Path) -> str:
+    """Remove a run's worktree, never discarding what someone did there after the run; say what happened.
+
+    Untracked files from before the run's last step are the run's -- what it installed,
+    what its check left, such as `__pycache__` in a project with no `.gitignore` -- and
+    are cleared, as before every attempt (:func:`_restore`); one changed since keeps the
+    worktree, as does an edited tracked file, which `git worktree remove` refuses. git
+    refuses any worktree that holds submodules, so one whose status shows nothing
+    uncommitted, submodules included, is removed with ``--force``.
     """
+    from refactory_dsh.target_guard import _named
+
+    last = _last_active(target, found)
+    later = [name for name in _untracked(path)
+             if last is None or (path / name).lstat().st_mtime > last + SLACK_S]
+    if later:
+        return (f"kept {path}: {_named(later)} changed there after the run's last step. Remove it yourself "
+                f"with `git -C {target} worktree remove --force {path}` once nothing in it is needed")
     git(path, "clean", "-fdq")
     try:
         git(target, "worktree", "remove", str(path))
@@ -610,20 +653,22 @@ def _remove(target: Path, path: Path) -> str:
             return (f"kept {path}: {error}. It holds work no run committed; remove it yourself with "
                     f"`git -C {target} worktree remove --force {path}` once nothing in it is needed")
         git(target, "worktree", "remove", "--force", str(path))
-    return f"removed the worktree of an ended run: {path}"
+    return f"removed the worktree of a run: {path}"
 
 
-def prune(target: Path, *, idle_hours: float | None = None) -> list[str]:
+def prune(target: Path, *, idle_hours: float | None = None, succeeded: bool = False) -> list[str]:
     """Remove what runs on ``target`` no longer need, and say what was removed or kept.
 
     Only runs that ended without success are pruned. A successful run keeps its
-    worktree and branch until its work is delivered (#350), and an active or resumable
-    one is never touched. An ended run loses its worktree after :data:`IDLE_HOURS` idle
-    -- through `git worktree remove`, never forced, so a worktree holding uncommitted
-    work is kept and reported -- and its branch after :data:`FAILED_BRANCH_DAYS`. Only
-    branches matching :data:`STANDARD_BRANCH` are ever deleted, and nothing of the
-    target's own worktrees is touched: git's own `worktree prune` would drop the records
-    of a person's worktree on a disk that is not mounted.
+    worktree and branch until its work is delivered (#350), unless ``succeeded`` asks
+    for its worktree -- never its branch -- to go too; an active or resumable one is
+    never touched. An ended run loses its worktree after :data:`IDLE_HOURS` idle, never
+    discarding what someone did there after it (:func:`_remove`), and its branch after
+    :data:`FAILED_BRANCH_DAYS`, with `git branch -D`: a failed run's commits were never
+    merged. Only branches matching :data:`STANDARD_BRANCH` are ever deleted, and nothing
+    of the target's own worktrees is touched: git's own `worktree prune` would drop the
+    records of a person's worktree on a disk that is not mounted. A pruned run that goes
+    on gets its worktree back from its branch (:func:`_require_current`).
     """
     target = Path(target).resolve()
     limit = float(os.environ.get("REFACTORY_WORKTREE_IDLE_HOURS", IDLE_HOURS)) if idle_hours is None else idle_hours
@@ -635,12 +680,15 @@ def prune(target: Path, *, idle_hours: float | None = None) -> list[str]:
         for record_path in sorted(here.glob("run-*.json")):
             found = _json(record_path)
             branch, path = str(found.get("branch") or ""), Path(str(found.get("path") or ""))
-            if not STANDARD_BRANCH.match(branch) or run_state(found) != "ended":
+            if not STANDARD_BRANCH.match(branch):
+                continue
+            outcome = run_state(found)
+            if outcome == "active" or (outcome == "succeeded" and not succeeded):
                 continue
             idle = _idle_hours(target, found)
-            if path.is_dir() and idle >= limit:
-                notes.append(_remove(target, path))
-            if not path.is_dir() and idle >= FAILED_BRANCH_DAYS * 24:
+            if path.is_dir() and (outcome == "succeeded" or idle >= limit):
+                notes.append(_remove(target, found, path))
+            if outcome == "ended" and not path.is_dir() and idle >= FAILED_BRANCH_DAYS * 24:
                 try:
                     if _registered(target, path, branch):
                         git(target, "worktree", "remove", str(path))
@@ -693,25 +741,6 @@ def _shared_state(target: Path) -> str:
     return digest.hexdigest()
 
 
-def _install_env() -> dict[str, str]:
-    """Installs run with the person's real HOME, for its caches, and nothing of refactory's.
-
-    An install runs the project's build backend and install scripts, which a model
-    wrote, so credentials are dropped as they are from a check (`sandbox.scrub`) --
-    except a package registry's own. The real HOME keeps `~/.npmrc`, `~/.netrc`, uv's
-    configuration and keyrings, which is how most private indexes sign in anyway.
-    """
-    env = {name: value for name, value in os.environ.items()
-           if not name.startswith(("REFACTORY_", "DSH_"))
-           and name not in ("PYTHONPATH", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "VENV_BIN", "NODE_BIN")
-           and (not any(marker in name.upper() for marker in _SECRET_MARKERS) or name.upper().startswith(REGISTRY_ENV))}
-    # A worktree shares the target's git configuration and hooks, so an install script
-    # that "sets up" hooks would change the person's own repository. Nobody answers an
-    # install's prompts either, so it is told it runs unattended.
-    env.update(HUSKY="0", LEFTHOOK="0", CI="true")
-    return env
-
-
 def _loose(path: Path) -> set[str]:
     """What git neither tracks nor ignores in the worktree at ``path``, as git names it.
 
@@ -723,68 +752,129 @@ def _loose(path: Path) -> set[str]:
     return {entry[3:] for entry in listing.split("\0") if entry.startswith("?? ")}
 
 
-def _installs(path: Path) -> list[list[str]]:
-    """The installs the worktree's manifests call for, in the order they run."""
+def _install_env() -> dict[str, str]:
+    """The environment a dependency install runs with: the person's, less refactory's and secrets.
+
+    An install runs the project's build backend and install scripts, which a model may
+    have written, so credentials are dropped as a check drops them (`sandbox.is_secret`)
+    -- except a package registry's own. Unlike a check it keeps the rest of the person's
+    environment and their real HOME, whose `~/.npmrc`, `~/.netrc`, uv configuration and
+    keyrings are how most private indexes sign in.
+    """
+    from refactory_dsh.sandbox import is_secret
+
+    env = {name: value for name, value in os.environ.items()
+           if not name.startswith(("REFACTORY_", "DSH_"))
+           and name not in ("PYTHONPATH", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "VENV_BIN", "NODE_BIN")
+           and (not is_secret(name) or name.upper().startswith(REGISTRY_ENV))}
+    # A worktree shares the target's git configuration and hooks, so hook managers are
+    # told not to "set up" hooks there; nobody answers an install's prompts either, so
+    # it is told it runs unattended.
+    env.update(HUSKY="0", LEFTHOOK="0", CI="true")
+    return env
+
+
+def _node_manager(path: Path) -> str:
+    """The package manager a JavaScript project uses: its lockfile's, its `packageManager`'s, or npm."""
+    for lockfile, manager in (("pnpm-lock.yaml", "pnpm"), ("yarn.lock", "yarn"), ("package-lock.json", "npm")):
+        if (path / lockfile).is_file():
+            return manager
+    declared = str(_json(path / "package.json").get("packageManager") or "").split("@")[0]
+    return declared if declared in ("pnpm", "yarn", "npm") else "npm"
+
+
+def _installs(found: Worktree) -> list[list[str]]:
+    """The installs the worktree's manifests call for, in the order they run.
+
+    Frozen only while the attempt leaves a manifest as the base has it. One that adds a
+    dependency must be installable, and the lockfile the install then writes is part
+    of the change (:func:`ensure_environment`).
+    """
+    path = Path(found.path)
+    changed = set(git(path, "diff", "--name-only", found.base, "HEAD").split())
     commands: list[list[str]] = []
     if (path / "pyproject.toml").is_file():
-        commands.append(["uv", "sync", *(["--frozen"] if (path / "uv.lock").is_file() else [])])
+        frozen = (path / "uv.lock").is_file() and "pyproject.toml" not in changed
+        # Every dependency group, so the project's own test tools are there for its check.
+        commands.append(["uv", "sync", "--all-groups", *(["--frozen"] if frozen else [])])
     if (path / "package.json").is_file():
-        if (path / "pnpm-lock.yaml").is_file():
-            commands.append(["pnpm", "install", "--frozen-lockfile"])
-        elif (path / "package-lock.json").is_file():
-            commands.append(["npm", "ci"])
-        elif (path / "yarn.lock").is_file():
-            commands.append(["yarn", "install", "--frozen-lockfile"])
+        manager = _node_manager(path)
+        frozen = "package.json" not in changed and any(
+            (path / name).is_file() for name in ("pnpm-lock.yaml", "yarn.lock", "package-lock.json"))
+        commands.append({
+            "pnpm": ["pnpm", "install", "--frozen-lockfile" if frozen else "--no-frozen-lockfile"],
+            "npm": ["npm", "ci"] if frozen else ["npm", "install"],
+            "yarn": ["yarn", "install", *(["--frozen-lockfile"] if frozen else [])],
+        }[manager])
     if (path / ".gitmodules").is_file():
         commands.append(["git", *NO_HOOKS, "submodule", "update", "--init", "--recursive"])
     return commands
 
 
-def ensure_environment(found: Worktree, run: Path) -> list[str]:
-    """Install what the worktree's manifests declare, once per their content.
+def ensure_environment(found: Worktree, run: Path, budget: Any = None) -> tuple[Worktree, list[str]]:
+    """Install what the worktree's manifests declare, once per their content; say what went wrong.
 
-    Lazily: before the first check, and again only when a manifest or lockfile changed
-    or the last install failed, so most attempts install nothing. A Python environment
-    refactory created is marked, so :func:`check_environment` adopts only that one, and
-    what was installed is noted in the target's record of the run, so it outlives the
-    clean-up before each attempt. A JavaScript project without a lockfile is not installed, because
-    installing would write a lockfile into the diff. Returns the problems, as text a
-    failed check reports.
+    Lazily: before the first check, and again only when a manifest changed, the last
+    install failed, or what it made is gone (a worktree added back from its branch).
+    The record lives with the worktree, in the target's record of the run, not in the
+    run directory, which a later run may reuse. Installs run through the sandbox, under
+    the run's budget, without its memory cap: an install runs a package manager, which
+    a 2 GB address space kills. A lockfile an install creates or changes is amended into
+    the attempt, so the change and its reviewers include it; anything else an install
+    leaves untracked is recorded, so the clean-up before each attempt keeps it. A
+    Python environment refactory created is marked, so :func:`check_environment` adopts
+    only that one. Returns the worktree, whose head an amended lockfile moves, and the
+    problems, as text a failed check reports; an installer that is missing is reported
+    as unavailable, which no code repair can fix.
     """
+    from refactory_dsh import sandbox
+
     path = Path(found.path)
     manifests = {name: hashlib.sha256((path / name).read_bytes()).hexdigest()
                  for name in MANIFESTS if (path / name).is_file()}
     key = hashlib.sha256(json.dumps(manifests, sort_keys=True).encode()).hexdigest()
-    receipt = Path(run) / ENVIRONMENT
-    if _json(receipt).get("key") == key and not _json(receipt).get("problems"):
-        return []
+    record_path = _record_path(found)
+    done = _json(record_path).get("environment") or {}
+    if (done.get("key") == key and not done.get("problems")
+            and all((path / name).exists() for name in done.get("made", []))):
+        return found, []
     problems: list[str] = []
-    if (path / "package.json").is_file() and not any(
-            (path / name).is_file() for name in ("pnpm-lock.yaml", "package-lock.json", "yarn.lock")):
-        problems.append("package.json has no lockfile, so its dependencies were not installed")
     before = _loose(path)
-    for command in _installs(path):
+    for command in _installs(found):
+        shown = " ".join(command)
         if shutil.which(command[0]) is None:
-            problems.append(f"{command[0]} is not installed, so `{' '.join(command)}` could not run")
+            problems.append(f"UNAVAILABLE: {command[0]} is not installed, so `{shown}` could not run")
             continue
-        try:
-            result = subprocess.run(command, cwd=path, env=_install_env(), stdin=subprocess.DEVNULL,
-                                    capture_output=True, text=True, timeout=INSTALL_TIMEOUT_S)
-        except subprocess.TimeoutExpired:
-            problems.append(f"`{' '.join(command)}` took longer than {INSTALL_TIMEOUT_S}s")
-            continue
-        if result.returncode != 0:
-            problems.append(f"`{' '.join(command)}` failed: {(result.stderr or result.stdout).strip()[-2000:]}")
+        result = sandbox.run_command(
+            shlex.join(command), workdir=path, timeout_s=INSTALL_TIMEOUT_S, memory_mb=0,
+            cpu_s=INSTALL_TIMEOUT_S * (os.cpu_count() or 1), file_mb=INSTALL_FILE_MB,
+            env=_install_env(), home=Path.home(), exact_env=True, budget=budget,
+            stdin=subprocess.DEVNULL)
+        if not result.ok:
+            detail = "\n".join((result.problem(), result.stderr or "", result.stdout or "")).strip()
+            problems.append(f"`{shown}` failed: {detail[-2000:]}")
         elif command[0] == "uv" and (path / ".venv").is_dir():
             (path / ".venv" / MARKER).write_text("created by refactory for this run's checks\n")
-    installed = _loose(path) - before
-    if installed:
-        record_path = _record_path(found)
-        record = _json(record_path)
-        _write_json(record_path, {**record, "installed": sorted(installed | set(record.get("installed", [])))})
-    _write_json(receipt, {"key": key, "manifests": manifests, "problems": problems,
-                          "installed": datetime.now(timezone.utc).isoformat()})
-    return problems
+    left = _loose(path) - before
+    lockfiles = sorted(name for name in {*_tracked_edits(path), *left} if name in LOCKFILES)
+    if lockfiles:
+        git(path, "add", "-f", "--", *lockfiles)
+        # Amended into the attempt; before there is one, a commit of its own, so the base
+        # the run was pinned to is never rewritten.
+        amend = ("--amend", "--no-edit") if found.head != found.base else ("-m", "lockfile written by an install")
+        git(path, *NO_HOOKS, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", *amend,
+            env={**os.environ, **COMMITTER})
+        found = replace(found, head=git(path, "rev-parse", "HEAD").strip())
+        _write_json(Path(run) / RECORD, asdict(found))
+    record = _json(record_path)
+    _write_json(record_path, {
+        **record,
+        "installed": sorted((left - set(lockfiles)) | set(record.get("installed", []))),
+        "environment": {"key": key, "manifests": manifests, "problems": problems,
+                        "made": [name for name in (".venv", "node_modules") if (path / name).is_dir()],
+                        "at": datetime.now(timezone.utc).isoformat()},
+    })
+    return found, problems
 
 
 def write_wrapper(found: Worktree, run: Path) -> Path:
@@ -793,8 +883,9 @@ def write_wrapper(found: Worktree, run: Path) -> Path:
     Workers inherit refactory's own ``PATH`` and ``PYTHONPATH``, so a reviewer that ran
     a target's tests directly would import the launcher's code, not the worktree's.
     """
-    script = Path(run) / WRAPPER
-    home = Path(run) / ".refactory" / "check-home"
+    run = Path(run).resolve()
+    script = run / WRAPPER
+    home = run / CHECK_HOME
     home.mkdir(parents=True, exist_ok=True)
     env = check_environment(Path(found.path), home)
     assignments = " ".join(f"{name}={shlex.quote(value)}" for name, value in sorted(env.items()))

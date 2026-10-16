@@ -82,11 +82,11 @@ class DesignMode(Mode):
         graph = Graph()
         graph.add(Node(
             "prepare", "op", call=f"{OPS}:prepare_design",
-            knobs=("name", "brief", "check", "target", "base", "worktree"),
+            knobs=("name", "brief", "check", "target", "base", "worktree", "setup"),
             writes=("brief.json", "research-review.txt", "check.txt"),
             produces=("name", "brief", "check", "validation", "research_review", "qa_gate",
                       "overwatch_review", "target", "worktree", "branch", "base", "source",
-                      "emit_scope"),
+                      "check_root", "emit_scope", "setup"),
             notes="read the brief and the command that decides whether it is done",
         ))
 
@@ -95,7 +95,7 @@ class DesignMode(Mode):
             "research_director", "agent",
             prompt_template=(
                 "Artifact name: {{name}}\nBrief: {{brief}}\n"
-                "It will be checked by running, from the artifact's own directory:\n"
+                "It will be checked by running, from {{check_root}}:\n"
                 "    {{check}}\n\n"
                 "You are the research director. Decide what has to be learned before "
                 "this artifact can be designed: between three and five questions, each "
@@ -133,7 +133,8 @@ class DesignMode(Mode):
         graph.add(Node(
             "strategy_director", "agent",
             prompt_template=(
-                "Artifact name: {{name}}\nBrief: {{brief}}\n\n"
+                "Artifact name: {{name}}\nBrief: {{brief}}\n"
+                "It is built in {{source}}; read what is there before choosing.\n\n"
                 "## What the research found\n{{research}}\n\n"
                 "You are the strategy director. From the research, choose between two "
                 "and five perspectives on how this artifact could be built — including "
@@ -152,8 +153,8 @@ class DesignMode(Mode):
         graph.add(Node(
             "synthesize_strategy", "agent",
             prompt_template=(
-                "Artifact name: {{name}}\nBrief: {{brief}}\n"
-                "The check, run from the artifact's own directory:\n    {{check}}\n\n"
+                "Artifact name: {{name}}\nBrief: {{brief}}\nIt is built in {{source}}.\n"
+                "The check, run from {{check_root}}:\n    {{check}}\n\n"
                 "## What the research found\n{{research}}\n\n"
                 "## The perspectives\n{{strategy_plan}}\n\n"
                 + _ACCEPTANCE_BASELINE
@@ -178,12 +179,12 @@ class DesignMode(Mode):
         graph.add(Node(
             "design_doc", "agent",
             prompt_template=(
-                "Artifact name: {{name}}\nBrief: {{brief}}\n"
-                "The check, run from the artifact's own directory:\n    {{check}}\n\n"
+                "Artifact name: {{name}}\nBrief: {{brief}}\nIt is built in {{source}}.\n"
+                "The check, run from {{check_root}}:\n    {{check}}\n\n"
                 "## The plan\n{{strategy}}\n\n"
                 + _ACCEPTANCE_BASELINE
                 + "Write the design document for this artifact: every file it will "
-                "contain, what each one does, the interfaces between them, and how the "
+                "add or change, what each one does, the interfaces between them, and how the "
                 "check exercises them. Be concrete — the next step writes the code from "
                 "this document and the brief. Specify accepted input syntax and unambiguous "
                 "rejection behavior: unsupported counts, signs, units, or other values "
@@ -241,9 +242,9 @@ class DesignMode(Mode):
             "check", "gate", evaluator=f"{OPS}:check_artifact", role="validation",
             resource_role="final_validation",
             reads=("brief.json",),
-            writes=("check.txt", "validation.txt", "authoring-evidence.json"),
-            produces=("validation", "check_attempts_used", "attempts_used", "runtime_evidence"),
-            knobs=("check_attempts", "check_timeout_s", "setup"),
+            writes=("check.txt", "validation.txt", "authoring-evidence.json", "changes.diff"),
+            produces=("validation", "check_attempts_used", "attempts_used", "runtime_evidence", "commit"),
+            knobs=("check_attempts", "check_timeout_s"),
             max_iterations=8,
             notes="run the brief's check, in a sandbox",
         ))
@@ -463,6 +464,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--base", default="", help="the commit the run starts from (default: the target's HEAD)")
     parser.add_argument("--no-worktree", action="store_true",
                         help="write the artifact under .factory/artifacts instead of a worktree")
+    parser.add_argument("--setup", default="", help="a command run in the worktree before each check, such as a build")
     from refactory_dsh.budgets import add_arguments, arguments
 
     add_arguments(parser)
@@ -527,7 +529,7 @@ def main(argv: list[str] | None = None) -> int:
             timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
         ),
         task={"name": args.name, "brief": args.brief, "check": args.check, "source_project": args.source_project,
-              "target": args.target, "base": args.base},
+              "target": args.target, "base": args.base, "setup": args.setup},
         verdicts=parse_verdicts(args.verdict),
         resource_limits=arguments(args),
     )

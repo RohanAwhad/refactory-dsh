@@ -56,23 +56,13 @@ def project_for_nodes() -> Path:
 
 
 def refactory_home() -> Path:
-    """Refactory's own per-user directory: the project registry and run worktrees.
+    """Refactory's own per-user directory: global memory, the project registry, run worktrees.
 
-    Beside the global memory store (`memory.py`), and outside every project, because
-    what lives here belongs to no one checkout. ``REFACTORY_HOME`` overrides it, which
-    is also how the tests keep it out of the real home directory.
+    Outside every project, because what lives here belongs to no one checkout.
+    ``REFACTORY_HOME`` overrides it, which is also how the tests keep it out of the real
+    home directory.
     """
     return Path(os.environ.get("REFACTORY_HOME") or Path.home() / ".refactory").expanduser()
-
-
-def projects_dir() -> Path:
-    """Where design mode creates a new project: one git repository per name.
-
-    Discoverable on purpose -- a person looks here for what refactory built -- rather
-    than under a checkout's git-ignored `.factory/`. ``REFACTORY_PROJECTS_DIR``
-    overrides it, as remote-factory's ``FACTORY_PROJECTS_DIR`` does its own.
-    """
-    return Path(os.environ.get("REFACTORY_PROJECTS_DIR") or Path.home() / "refactory-projects").expanduser()
 
 
 #: The oldest Node 22 DSH supports.

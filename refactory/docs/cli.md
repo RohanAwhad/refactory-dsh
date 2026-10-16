@@ -98,7 +98,7 @@ installed copy.
 
 ## Use a mode
 
-`refactory ceo <package>/<mode>` runs a mode you already have on DSH with your terminal attached, so a gate reaches you. It is the same `ceo` verb that authors a mode; a positional that names one is what says to run it. Only a whole `<package>/<mode>` identifier (lower-case letters, digits and underscores on each side of one slash) counts. Anything else is a brief for the default design mode, including a brief that mentions a path, such as `"add a version flag to refactory/refactory_dsh/cli.py"`.
+`refactory ceo <package>/<mode>` runs a mode you already have on DSH with your terminal attached, so a gate reaches you. It is the same `ceo` verb that authors a mode; a positional that names one is what says to run it. Only a whole `<package>/<mode>` identifier (lower-case letters, digits and underscores, each side starting with a letter, around one slash) counts. Anything else is a brief for the default design mode, including a brief that mentions a path, such as `"add a version flag to refactory/refactory_dsh/cli.py"`.
 
 **A run is a live session.** The CEO's turns print as they complete, each node is reported as it runs, a gate is a prompt, and a line you type between turns reaches the CEO — which can amend a node's prompt and re-run it. `--headless` builds the older one-shot argv instead, for a script or CI, and then the run prints only its final JSON.
 
@@ -191,7 +191,7 @@ The read verbs pass through the console's own `--project`, `--runs-root`, `--aft
 | `refactory workers` | the coding-agent worker configuration and the capabilities each backend reports. |
 | `refactory runtime` | the resolved runtime and model route a run would use. |
 | `refactory projects [--json]` | the projects Design runs work on, with each run's branch and how it ended. |
-| `refactory projects prune [<name>]` | remove the worktrees and branches that ended runs no longer need. |
+| `refactory projects prune [<name>] [--succeeded]` | remove the worktrees and branches that ended runs no longer need; `--succeeded` also removes succeeded runs' worktrees, keeping their branches. |
 | `refactory profile-save --name <name> --spec <JSON>` | save an immutable configuration version. |
 | `refactory graph-control [--node <id>]` | control a graph run through the spine: pause, resume or stop it. |
 | `refactory ui --port <n> --no-open` | start the [browser GUI](interfaces.md) without opening a browser. |

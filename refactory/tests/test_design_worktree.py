@@ -17,10 +17,11 @@ from typing import Callable
 
 import pytest
 
-from refactory_dsh import cli, design_ops, interactive, nn, projects, registry, worktree
+from refactory_dsh import cli, console, design_ops, interactive, nn, projects, registry, worktree
 from refactory_dsh.design import DesignMode
 from refactory_dsh.fast import DesignFastMode
-from refactory_dsh.paths import REPO_ROOT, projects_dir
+from refactory_dsh.paths import REPO_ROOT
+from refactory_dsh.projects import projects_dir
 from tests_support import (RESEARCH_ANSWER, REVIEW_ANSWERS, FakeModel, StaleEmitModel, git, git_repo,
                            render, stub)
 
@@ -261,19 +262,94 @@ def test_the_setup_command_runs_in_the_worktree_before_each_check(repo, tmp_path
     assert result.exit_ok, result.error
 
 
-def test_an_environment_that_cannot_be_prepared_fails_the_check_and_says_why(repo, tmp_path):
-    """Running the check anyway would test it against refactory's interpreter, not the target's."""
-    (repo / "package.json").write_text("{}\n")
-    git(repo, "add", "package.json")
-    git(repo, "commit", "-q", "-m", "js")
+def test_a_missing_installer_stops_the_run_without_spending_its_repairs(repo, tmp_path, monkeypatch):
+    """No code change can install uv; the run says so instead of asking emit to try again."""
+    only_git = tmp_path / "only-git"
+    only_git.mkdir()
+    (only_git / "git").symlink_to(next(Path(entry) / "git" for entry in os.environ["PATH"].split(os.pathsep)
+                                       if (Path(entry) / "git").is_file()))
+    monkeypatch.setenv("PATH", str(only_git))
+    (repo / "pyproject.toml").write_text("[project]\nname = 'app'\n")
+    git(repo, "add", "pyproject.toml")
+    git(repo, "commit", "-q", "-m", "manifest")
     emit = render({"tool.py": "print('built')\n"})
-    failed_install = _design(tmp_path / "install", FakeModel(_answers(emit, emit)), target=str(repo))
-    assert failed_install.exit_ok is False
-    assert "package.json has no lockfile" in (failed_install.error or "")
+    result = _design(tmp_path / "run", FakeModel(_answers(emit, emit)), target=str(repo))
+    assert result.exit_ok is False
+    assert "UNAVAILABLE: uv is not installed" in (result.error or "")
+    found = worktree.recorded(tmp_path / "run")
+    assert git(repo, "rev-list", "--count", f"{found.base}..{found.branch}") == "1", "no repair was attempted"
+
+
+def test_a_setup_command_that_fails_fails_the_check_and_says_why(tmp_path):
+    emit = render({"tool.py": "print('built')\n"})
     failed_setup = _design(tmp_path / "setup", FakeModel(_answers(emit, emit)), _mode(setup="exit 3"),
                            target=str(git_repo(tmp_path / "plain")))
     assert failed_setup.exit_ok is False
     assert "the setup command `exit 3` failed" in (failed_setup.error or "")
+
+
+def test_a_lockfile_the_install_writes_is_part_of_the_attempt_the_reviewers_see(repo, tmp_path, monkeypatch):
+    """A new Node project has no lockfile: the one its install writes is committed, not refused."""
+    stub(tmp_path / "bin", "npm", "echo '{\"lockfileVersion\": 3}' > package-lock.json")
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+    emit = render({"package.json": "{}\n", "tool.py": "print('built')\n"})
+    result = _design(tmp_path / "run", FakeModel(_answers(emit)), target=str(repo))
+    assert result.exit_ok, result.error
+    payload = _report(tmp_path / "run")
+    assert "package-lock.json" in git(repo, "ls-tree", "--name-only", payload["branch"]).splitlines()
+    assert payload["head"] == git(repo, "rev-parse", payload["branch"]) == result.facts["commit"]
+    assert "package-lock.json" in (tmp_path / "run" / "changes.diff").read_text()
+
+
+def test_a_relative_target_names_a_repository_beside_the_project_not_the_run_directory(repo, tmp_path,
+                                                                                    monkeypatch):
+    """A node starts in its run directory; `target=repo` from the GUI means the project's `repo`."""
+    monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
+    result = _design(tmp_path / "runs" / "one", FakeModel(_answers(render({"tool.py": "print(1)\n"}))),
+                     target="repo")
+    assert result.exit_ok, result.error
+    assert _report(tmp_path / "runs" / "one")["target"] == str(repo.resolve())
+
+
+def test_a_base_for_a_project_that_does_not_exist_yet_is_refused_before_it_is_made(tmp_path):
+    result = _design(tmp_path / "run", FakeModel(_answers()), base="v1")
+    assert result.exit_ok is False
+    assert "this run starts a new project, which has only its empty main" in (result.error or "")
+    assert not (projects_dir() / NAME).exists()
+
+
+def test_a_second_run_on_a_project_names_the_earlier_runs_branches(tmp_path, capsys):
+    """A new project's main stays empty until #350 delivers, so the work is on the branches."""
+    first = _design(tmp_path / "one", FakeModel(_answers(render({"tool.py": "print(1)\n"}))))
+    assert first.exit_ok, first.error
+    capsys.readouterr()
+    second = _design(tmp_path / "two", FakeModel(_answers(render({"tool.py": "print(2)\n"}))))
+    assert second.exit_ok, second.error
+    warned = capsys.readouterr().err
+    assert f"has earlier runs, whose work is on their branches, not on main: {_report(tmp_path / 'one')['branch']}" in warned
+
+
+def test_an_emit_that_edits_the_checkout_the_run_started_from_is_refused(repo, tmp_path, monkeypatch):
+    """Workers start in the run directory inside that checkout, so it is watched too (#319)."""
+    launcher = git_repo(tmp_path / "launcher")
+    monkeypatch.setenv("REFACTORY_PROJECT", str(launcher))
+    result = _design(tmp_path / "run", _EditingModel(_answers(render({"tool.py": "print(1)\n"})), lambda: launcher),
+                     target=str(repo))
+    assert result.exit_ok is False
+    assert f"in {launcher.resolve()}, " in (result.error or "")
+
+
+def test_a_worktree_run_does_not_warn_that_the_persons_checkout_moved(repo, tmp_path, capsys):
+    """Its base is pinned, so the person working in their checkout meanwhile changes nothing it sees."""
+    class Moving(FakeModel):
+        def complete(self, prompt: str, *, system: str = "", workdir: object = None) -> str:
+            if "You are the research director" in prompt:
+                (repo / "app.py").write_text("print('the person kept working')\n")
+            return super().complete(prompt, system=system, workdir=workdir)
+
+    result = _design(tmp_path / "run", Moving(_answers(render({"tool.py": "print(1)\n"}))), target=str(repo))
+    assert result.exit_ok, result.error
+    assert "changed since this run recorded it" not in capsys.readouterr().err
 
 
 def test_the_agents_are_told_the_worktree_and_the_reviewers_the_diff_and_the_wrapper(repo, tmp_path):
@@ -351,6 +427,17 @@ def test_ceo_passes_the_worktree_flags_to_design_and_refuses_them_where_they_can
     assert len(seen) == 2, "a refused flag forwards nothing"
     assert cli.main(["ceo", "default_pack/design", "--target", "."]) == 0
     assert f"target={tmp_path.resolve()}" in seen[2], "a named mode takes them as knobs"
+
+
+def test_the_console_design_verb_takes_a_target_too(monkeypatch, tmp_path):
+    """The GUI chat's headless route and the refactory tool's `design` action go through it."""
+    seen: list[list[str]] = []
+    monkeypatch.setattr(console, "_forward", lambda module, argv: seen.append(argv) or {})
+    monkeypatch.chdir(tmp_path)
+    console.main(["design", "--name", "x", "--brief", "b", "--check", "true", "--target", ".",
+                  "--base", "v1", "--setup", "make"])
+    assert seen[0][seen[0].index("--target") + 1] == str(tmp_path.resolve())
+    assert {"--base", "v1", "--setup", "make"} <= set(seen[0])
 
 
 def test_the_design_mode_declares_the_knobs_the_ceo_passes():

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from refactory_dsh.nn.declarations import Memory
+from refactory_dsh.paths import refactory_home
 
 #: Where each retention lives, relative to its root.
 _LAYOUT = {
@@ -52,7 +53,7 @@ class MemoryStore:
         self._roots: dict[str, Path] = {
             "run": Path(run_root) / _LAYOUT["run"],
             "project": Path(project_root or Path(".factory")) / "memory",
-            "global": Path(global_root or (Path.home() / ".refactory" / "memory")),
+            "global": Path(global_root or (refactory_home() / "memory")),
         }
 
     # ── what is declared ───────────────────────────────────────────────────

@@ -231,6 +231,13 @@ def test_run_warnings_lists_what_the_steps_warned_and_nothing_else(tmp_path):
     ])
 
 
+def test_run_warnings_lists_each_warning_once_however_often_a_reloop_repeated_it(tmp_path):
+    warning = {"kind": "run_warning", "node_id": "check", "state": "warning", "summary": UNCOMMITTED}
+    _journal(tmp_path, warning, warning, warning)
+    assert interactive.run_warnings(tmp_path) == "\n".join(["refactory: what the run warned about —",
+                                                           f"  check: {UNCOMMITTED}"])
+
+
 def test_run_warnings_says_nothing_when_no_step_warned(tmp_path):
     assert interactive.run_warnings(tmp_path) == ""
     _journal(tmp_path, {"kind": "graph_state", "status": "done", "nodes": []})

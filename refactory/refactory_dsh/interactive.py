@@ -375,10 +375,11 @@ def run_warnings(workdir: Path) -> str:
     from refactory_dsh import live
 
     records, _ = live.events(Path(workdir))
-    lines = [
+    # Once each: a step that reloops repeats the warnings it printed the first time.
+    lines = list(dict.fromkeys(
         f"  {record.get('node_id')}: {record['summary']}" for record in records
         if record.get("kind") == "run_warning" and record.get("summary")
-    ]
+    ))
     if not lines:
         return ""
     return "\n".join(["refactory: what the run warned about —", *lines])

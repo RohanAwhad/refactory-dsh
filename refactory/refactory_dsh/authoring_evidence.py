@@ -251,9 +251,12 @@ def audit_problems(ctx: Any) -> list[str]:
             problems.append(f"{key}: required evidence is failed or unverified: {row.get('reason', 'no supporting evidence')}")
             continue
         for ref in refs:
-            path = Path(str(ref.get("path", ""))) if isinstance(ref, dict) else Path()
-            path = (ctx.workdir / path).resolve()
+            cited = Path(str(ref.get("path", ""))) if isinstance(ref, dict) else Path()
             roots = (ctx.workdir.resolve(), Path(evidence["identity"]["root"]).resolve())
+            # A relative path names a file in the run directory or in the artifact: a
+            # reviewer of a run in a worktree cites the repository's files as `src/x.py`.
+            path = next((candidate for candidate in ((root / cited).resolve() for root in roots)
+                         if candidate.is_file()), (ctx.workdir / cited).resolve())
             if (not isinstance(ref, dict) or not ref.get("detail") or not path.is_file()
                     or not any(path.is_relative_to(root) for root in roots)
                     or path.name == AUDIT):

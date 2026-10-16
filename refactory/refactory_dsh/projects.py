@@ -2,7 +2,7 @@
 
 A design run works on a **target**: an existing git repository, or a new project
 refactory creates for it. New projects live in one discoverable folder
-(:func:`~refactory_dsh.paths.projects_dir`, `~/refactory-projects` by default) rather
+(:func:`projects_dir`, `~/refactory-projects` by default) rather
 than under a checkout's git-ignored `.factory/`, and every target a run worked on is
 listed in a registry beside refactory's other per-user state, with the run's branch
 and how it ended. `refactory projects` reads it; `refactory projects prune` removes
@@ -26,13 +26,23 @@ from pathlib import Path
 from typing import Any
 
 from refactory_dsh import worktree
-from refactory_dsh.paths import projects_dir, refactory_home
+from refactory_dsh.paths import refactory_home
 
 #: The registry's file name, under :func:`~refactory_dsh.paths.refactory_home`.
 REGISTRY = "projects.json"
 
 #: The registry's format version.
 SCHEMA = 1
+
+
+def projects_dir() -> Path:
+    """Where design mode creates a new project: one git repository per name.
+
+    Discoverable on purpose -- a person looks here for what refactory built -- rather
+    than under a checkout's git-ignored `.factory/`. ``REFACTORY_PROJECTS_DIR``
+    overrides it, as remote-factory's ``FACTORY_PROJECTS_DIR`` does its own.
+    """
+    return Path(os.environ.get("REFACTORY_PROJECTS_DIR") or Path.home() / "refactory-projects").expanduser()
 
 
 def registry_path() -> Path:
@@ -91,8 +101,10 @@ def record_run(path: Path, *, run: Path, branch: str, base: str, status: str) ->
                                   "at": datetime.now(timezone.utc).isoformat()})
             worktree._write_json(registry_path(), registry)
     except OSError as error:
-        print(f"refactory: warning: the project registry {registry_path()} could not be written "
-              f"({error}); the run goes on, but `refactory projects` will not list it", file=sys.stderr)
+        from refactory_dsh.target_guard import warn
+
+        warn(f"the project registry {registry_path()} could not be written ({error}); the run goes on, "
+             "but `refactory projects` will not list it")
 
 
 def new_project(name: str) -> Path:
@@ -137,14 +149,21 @@ def status(project: dict[str, Any], note: dict[str, Any]) -> str:
     """How a run stands now: its note, unless it ended without saying so.
 
     A run notes only that it is running and that it succeeded; one that failed, or was
-    stopped and never resumed, is read from the target's record of it.
+    stopped and never resumed, is read from the target's record of it. A run that can
+    still go on says how it stands: running, or the spine's word for why it waits.
     """
     if note.get("status") != "running":
         return str(note.get("status"))
     record = slot_record(Path(str(project.get("path"))), str(note.get("branch")))
     if not record:
         return "ended"
-    return {"active": "running"}.get(worktree.run_state(record), worktree.run_state(record))
+    now = worktree.run_state(record)
+    if now != "active":
+        return now
+    from refactory_dsh.console import SPINE_STATUS
+
+    waiting = str(worktree._json(Path(str(record.get("run"))) / SPINE_STATUS).get("status") or "")
+    return waiting if waiting in ("paused", "halted", "cancelled", "waiting_user", "refused") else "running"
 
 
 def slot_record(path: Path, branch: str) -> dict[str, Any]:
@@ -159,12 +178,14 @@ def _describe(project: dict[str, Any]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """`refactory projects [--json]` lists; `refactory projects prune [name]` cleans up."""
+    """`refactory projects [--json]` lists; `refactory projects prune [name] [--succeeded]` cleans up."""
     parser = argparse.ArgumentParser(prog="refactory projects",
                                      description="the projects design runs work on, and their runs")
     parser.add_argument("action", nargs="?", choices=("list", "prune"), default="list")
     parser.add_argument("name", nargs="?", default="", help="prune only this project")
     parser.add_argument("--json", action="store_true", help="print the registry as JSON")
+    parser.add_argument("--succeeded", action="store_true",
+                        help="prune: also remove succeeded runs' worktrees; their branches keep the work")
     args = parser.parse_args(argv)
     registry = load()
     if args.action == "list":
@@ -185,7 +206,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     for project in chosen:
         path = Path(str(project.get("path")))
-        notes = worktree.prune(path) if path.is_dir() else [f"{path} is gone; nothing to prune"]
+        notes = (worktree.prune(path, succeeded=args.succeeded) if path.is_dir()
+                 else [f"{path} is gone; nothing to prune"])
         for note in notes or [f"{project.get('name')}: nothing to prune"]:
             print(note)
     return 0
