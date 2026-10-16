@@ -210,6 +210,10 @@ class DesignFastMode(DesignMode):
         knobs = super().declare()
         knobs.pop("research_attempts")
         knobs.pop("check_attempts")
+        # Fast design keeps copying `source_project` until it moves onto worktrees (#351),
+        # so the knobs that place a run in one are not its own yet.
+        for name in ("target", "base", "worktree", "setup"):
+            knobs.pop(name)
         knobs["repair_attempts"] = Knob(1, "int", lo=0, hi=3, description="total repair attempts after focused QA")
         knobs["source_project"] = Knob("", "str", description="existing project copied into the output artifact before applying the change")
         return knobs

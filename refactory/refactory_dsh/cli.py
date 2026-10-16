@@ -109,17 +109,62 @@ def _run_argv(identifier: str, args: argparse.Namespace) -> list[str]:
     return forwarded
 
 
+def _worktree_knobs(args: argparse.Namespace) -> list[str]:
+    """`--target`, `--base`, `--no-worktree` and `--setup`, as the design mode's knobs."""
+    knobs = []
+    if args.target:
+        # Absolute, because the run resolves it from its own directory, not this shell's.
+        knobs.append(f"target={Path(args.target).expanduser().resolve()}")
+    if args.base:
+        knobs.append(f"base={args.base}")
+    if args.no_worktree:
+        knobs.append("worktree=0")
+    if args.setup:
+        knobs.append(f"setup={args.setup}")
+    return knobs
+
+
+def _names_a_mode(text: str) -> bool:
+    """Whether `text` is a well-formed `<package>/<mode>` identifier.
+
+    The shape decides, not the registry. A brief that mentions a path has a slash too,
+    and a mistyped mode name should be refused by the runner as an unknown package,
+    not taken as a one-word brief.
+    """
+    from refactory_dsh.nn.package import PackageError, split
+
+    try:
+        split(text)
+    except PackageError:
+        return False
+    return True
+
+
 def cmd_ceo(args: argparse.Namespace) -> int:
     """Describe what you want: an authoring mode, or a mode to run.
 
-    A positional that names a mode (`pkg/mode`) *runs* that mode; anything else is
-    what you are asking for, and `--mode` says what to do about it. That is the whole
-    contract, and it is why the default is `design`: the headline case is "I have an
-    idea", not "I have a mode".
+    A positional that is a mode identifier (`pkg/mode`) *runs* that mode; anything
+    else, a brief that mentions a path included, is what you are asking for, and
+    `--mode` says what to do about it. That is the whole contract, and it is why the
+    default is `design`: the headline case is "I have an idea", not "I have a mode".
     """
     target = str(args.what)
     mode = str(args.mode or "")
-    if "/" in target and not mode:
+    # A flag a mode would ignore is refused, not dropped: the person meant it.
+    located = [flag for flag, given in (("--target", args.target), ("--base", args.base),
+                                        ("--no-worktree", args.no_worktree), ("--setup", args.setup)) if given]
+    in_worktree = [flag for flag in located if flag != "--no-worktree"]
+    if args.no_worktree and in_worktree:
+        print(
+            f"refactory: --no-worktree cannot take {', '.join(in_worktree)}: without a worktree the "
+            "artifact is written under .factory/artifacts",
+            file=sys.stderr,
+        )
+        return 2
+    runs_a_mode = "/" in mode if mode else _names_a_mode(target)
+    # A named mode takes them as its knobs; one that does not declare them refuses them by name.
+    args.knob = [*_worktree_knobs(args), *args.knob] if runs_a_mode else args.knob
+    if runs_a_mode and not mode:
         return _forward("refactory_dsh.interactive", _run_argv(target, args))
 
     if mode == "" or mode == "design":
@@ -154,6 +199,14 @@ def cmd_ceo(args: argparse.Namespace) -> int:
         )
         return 2
 
+    if located and identifier != AUTHORING["design"]:
+        print(
+            f"refactory: --mode {mode} does not take {', '.join(located)}: only --mode design works "
+            "in a worktree of its target (design_fast takes --source-project instead)",
+            file=sys.stderr,
+        )
+        return 2
+
     knobs = [f"brief={target}", f"name={args.name or slug(target)}"]
     if authoring == "create" and not args.revise:
         # The mode refuses this at its own first node, which is a profile boot later; a
@@ -174,6 +227,8 @@ def cmd_ceo(args: argparse.Namespace) -> int:
         knobs.append(f"repair_attempts={args.repair_attempts}")
     if getattr(args, "source_project", ""):
         knobs.append(f"source_project={args.source_project}")
+    if identifier == AUTHORING["design"]:
+        knobs.extend(_worktree_knobs(args))
     if args.revise:
         knobs.append(f"revision_of={args.revise}")
     # Last, so a person's own setting wins over the one derived from the flags above.
@@ -433,6 +488,14 @@ def build_parser() -> argparse.ArgumentParser:
     ceo.add_argument("--workdir", default="", help="the run directory")
     ceo.add_argument("--repair-attempts", type=int, default=None)
     ceo.add_argument("--source-project", default="")
+    ceo.add_argument("--target", default="", metavar="REPO",
+                     help="design only: the git repository to change; the run works in a worktree "
+                          "of it on its own branch (default: a new project in ~/refactory-projects)")
+    ceo.add_argument("--base", default="", help="design only: the commit, branch or tag to start from")
+    ceo.add_argument("--no-worktree", action="store_true",
+                     help="design only: write the artifact under .factory/artifacts instead of a worktree")
+    ceo.add_argument("--setup", default="",
+                     help="design only: a command run in the worktree before each check, such as a build")
     for key in ("worker_backend", "effort", "permission_mode"):
         ceo.add_argument("--" + key.replace("_", "-"), default="")
     for key in ("max_elapsed_s", "max_tokens", "validation_reserve_s", "validation_reserve_tokens"):
@@ -498,6 +561,9 @@ def build_parser() -> argparse.ArgumentParser:
         # The console owns these; `refactory status --help` shows the console's help.
         sub.add_parser(verb, help=f"`refactory {verb}` — the console's own verb, arguments pass through")
 
+    projects = sub.add_parser("projects", help="list the projects design runs work on; `projects prune` cleans up")
+    projects.add_argument("what", nargs="?", choices=("list", "prune"), help="its own arguments pass through")
+
     package = sub.add_parser("package", help="manage packages of modes")
     package.add_argument(
         "what", nargs="?", choices=PACKAGE_VERBS,
@@ -523,6 +589,8 @@ def main(argv: list[str] | None = None) -> int:
     # before argparse, which would otherwise try to claim `--run` for itself.
     if argv and argv[0] in READ_VERBS:
         return _forward("refactory_dsh.console", argv)
+    if argv and argv[0] == "projects":
+        return _forward("refactory_dsh.projects", argv[1:])
     if argv and argv[0] == "package" and len(argv) >= 2:
         if argv[1] == "smoke" and len(argv) >= 3 and "--model" not in argv:
             problem = _smoke_without_a_model(argv[2])

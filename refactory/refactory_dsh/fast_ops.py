@@ -54,7 +54,8 @@ def _source_manifest(root: Path) -> dict[str, str]:
 
 
 def prepare_artifact(ctx: Any) -> dict[str, Any]:
-    prepared = design_ops.prepare_design(ctx)
+    # Fast design keeps copying `source_project` until it moves onto worktrees (#351).
+    prepared = design_ops.prepare_design(ctx, worktrees=False)
     ctx.write_text("repair.txt", "(initial implementation; no repair requested)\n")
     source = str(getattr(ctx, "task", {}).get("source_project") or ctx.knob("source_project", "") or "").strip()
     manifest: dict[str, str] = {}
@@ -72,7 +73,7 @@ def prepare_artifact(ctx: Any) -> dict[str, Any]:
 def materialise_artifact(ctx: Any) -> dict[str, Any]:
     source = str(ctx.facts.get("source_project") or "")
     if not source:
-        return design_ops.materialise_artifact(ctx)
+        return design_ops.materialise_directory(ctx)
     root = Path(source)
     expected = ctx.read_json("source-manifest.json", {}).get("files", {})
     if _source_manifest(root) != expected:

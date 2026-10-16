@@ -216,6 +216,64 @@ def test_the_model_a_run_names_is_passed_to_the_runtime(monkeypatch):
     assert "--provider" in authored and "deepseek-official" in authored
 
 
+#: Briefs that contain a slash without being a `<package>/<mode>` identifier.
+_BRIEFS_WITH_A_SLASH = (
+    "Add a --version flag to refactory/refactory_dsh/cli.py",
+    "make ./scripts/run.sh fail fast",
+    "compare the v1/v2 outputs",
+)
+
+
+@pytest.mark.parametrize("brief", _BRIEFS_WITH_A_SLASH)
+def test_ceo_designs_a_brief_that_mentions_a_path(monkeypatch, brief):
+    """A slash in what someone asked for does not make it a mode name.
+
+    Any `/` used to mean "run this mode", so a brief that mentioned a path failed with
+    `PackageError: package 'Add a --version flag to … (refactory' must be lower-case
+    letters…`, about a package nobody named, unless `--mode design` was spelled out
+    for what is already the default.
+    """
+    seen: list[list[str]] = []
+    monkeypatch.setattr(cli, "_forward", lambda module, argv: seen.append(argv) or 0)
+    assert cli.main(["ceo", brief, "--check", "pytest -q"]) == 0
+    forwarded = seen[0]
+    assert forwarded[0] == "default_pack/design", "a brief must be designed, not run as a mode"
+    assert forwarded[forwarded.index("--intent") + 1] == brief
+
+
+def test_ceo_refuses_a_brief_that_mentions_a_path_as_design_would(monkeypatch, capsys):
+    """Without `--check`, such a brief gets design's own refusal, not a package error."""
+    seen: list[list[str]] = []
+    monkeypatch.setattr(cli, "_forward", lambda module, argv: seen.append(argv) or 0)
+    assert cli.main(["ceo", _BRIEFS_WITH_A_SLASH[0]]) == 2
+    assert seen == [], "a refused design must not reach the runtime"
+    assert "design needs --check" in capsys.readouterr().err
+
+
+def test_ceo_gives_a_brief_that_mentions_a_path_its_target_once(monkeypatch, tmp_path):
+    """`--target` on such a brief is design's knob, not also a named mode's."""
+    seen: list[list[str]] = []
+    monkeypatch.setattr(cli, "_forward", lambda module, argv: seen.append(argv) or 0)
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["ceo", _BRIEFS_WITH_A_SLASH[0], "--check", "pytest -q", "--target", "."]) == 0
+    assert seen[0][0] == "default_pack/design"
+    assert seen[0].count(f"target={tmp_path.resolve()}") == 1
+
+
+@pytest.mark.parametrize("identifier", ["counting_pack/fixed_step", "countng_pack/fixed_step"])
+def test_ceo_runs_a_well_formed_mode_name(monkeypatch, identifier):
+    """`<package>/<mode>` still runs, including one this checkout does not have.
+
+    The identifier's shape decides, not the registry: a mistyped mode name reaches the
+    runner and is refused there as an unknown package, rather than being taken as a
+    one-word brief and refused for a missing `--check`.
+    """
+    seen: list[list[str]] = []
+    monkeypatch.setattr(cli, "_forward", lambda module, argv: seen.append(argv) or 0)
+    assert cli.main(["ceo", identifier]) == 0
+    assert seen[0][0] == identifier, "a named mode must run, not be authored"
+
+
 def test_ceo_refuses_a_creation_that_names_no_class_of_work(monkeypatch, capsys):
     """Neither `--task` nor `--single` is a decision nobody made.
 

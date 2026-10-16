@@ -67,3 +67,32 @@ def ownership(workdir: Path) -> Iterator[int]:
     finally:
         # LOCK_UN would also unlock the child's duplicate. Close only our copy.
         os.close(fd)
+
+
+def held(workdir: Path) -> bool:
+    """Whether some invocation owns ``workdir`` now, asked without keeping its lock.
+
+    An advisory lock can only be asked about by trying it, so this takes the lock for an
+    instant; an invocation that starts in that instant is refused and can be retried.
+    """
+    lock = Path(workdir).expanduser() / LOCK
+    if lock.is_symlink() or not lock.is_file():
+        return False
+    fd = os.open(lock, os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0))
+    try:
+        try:
+            if os.name == 'nt':
+                import msvcrt
+
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, PermissionError):
+            return True
+        return False
+    finally:
+        os.close(fd)

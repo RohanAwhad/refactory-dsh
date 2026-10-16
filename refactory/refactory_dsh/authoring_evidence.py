@@ -72,7 +72,25 @@ def digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()
 
 
+def _committed_source(root: Path) -> dict[str, str]:
+    """A run worktree's identity: the attempt it holds, as committed (#351).
+
+    What the run delivers is its branch, so build output, installed environments, tool
+    caches and anything a check rewrites on disk leave a sign-off current, while a new
+    attempt -- a new commit -- makes it stale (the review comment on #330: identity
+    must not count `lib/`, `dist/`, ...).
+    """
+    from refactory_dsh import worktree
+
+    return {name: blob for name, blob in worktree.committed(root).items()
+            if not any(part.startswith(".env") for part in Path(name).parts)}
+
+
 def source_files(root: Path) -> dict[str, str]:
+    from refactory_dsh import worktree
+
+    if worktree.is_run_worktree(root):
+        return _committed_source(Path(root))
     ignored = {".git", ".factory", ".venv", "node_modules", "__pycache__", ".pytest_cache", ".origin.json"}
     files = {}
     for path in sorted(root.rglob("*")):
@@ -233,9 +251,12 @@ def audit_problems(ctx: Any) -> list[str]:
             problems.append(f"{key}: required evidence is failed or unverified: {row.get('reason', 'no supporting evidence')}")
             continue
         for ref in refs:
-            path = Path(str(ref.get("path", ""))) if isinstance(ref, dict) else Path()
-            path = (ctx.workdir / path).resolve()
+            cited = Path(str(ref.get("path", ""))) if isinstance(ref, dict) else Path()
             roots = (ctx.workdir.resolve(), Path(evidence["identity"]["root"]).resolve())
+            # A relative path names a file in the run directory or in the artifact: a
+            # reviewer of a run in a worktree cites the repository's files as `src/x.py`.
+            path = next((candidate for candidate in ((root / cited).resolve() for root in roots)
+                         if candidate.is_file()), (ctx.workdir / cited).resolve())
             if (not isinstance(ref, dict) or not ref.get("detail") or not path.is_file()
                     or not any(path.is_relative_to(root) for root in roots)
                     or path.name == AUDIT):
