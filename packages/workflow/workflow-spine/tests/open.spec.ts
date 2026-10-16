@@ -951,8 +951,11 @@ describe('the status of an opened run', () => {
   })
 })
 
-/** A {@link stepShell} whose node commands also print `stderr[command]` to stderr. */
-function warningShell(workdir: string, log: string[], stderr: Record<string, string>): object {
+/**
+ * A {@link stepShell} whose node commands also print `stderr[command]` to stderr,
+ * and whose `failing` commands exit 1.
+ */
+function warningShell(workdir: string, log: string[], stderr: Record<string, string>, failing: string[] = []): object {
   const inner = stepShell(workdir, log) as {
     resolve: unknown
     execute: (spec: { command: string }) => Promise<{ result: () => Promise<Record<string, unknown>> }>
@@ -962,10 +965,23 @@ function warningShell(workdir: string, log: string[], stderr: Record<string, str
     execute: async (spec: { command: string }) => {
       const execution = await inner.execute(spec)
       return {
-        result: async () => ({ ...await execution.result(), stderr: { text: stderr[spec.command] ?? '', truncated: false } }),
+        result: async () => ({
+          ...await execution.result(),
+          stderr: { text: stderr[spec.command] ?? '', truncated: false },
+          ...(failing.includes(spec.command) ? { exitCode: 1 } : {}),
+        }),
       }
     },
   }
+}
+
+/** The `run_warning` records a run's journal holds, in the order they were written. */
+function journalledWarnings(run: string): Array<Record<string, unknown>> {
+  const path = join(run, '.refactory', 'events.jsonl')
+  if (!existsSync(path)) return []
+  return readFileSync(path, 'utf8').split('\n').filter(line => line.trim() !== '')
+    .map(line => JSON.parse(line) as Record<string, unknown>)
+    .filter(record => record.kind === 'run_warning')
 }
 
 /** What `design_ops.prepare_design` prints on every run where credentials cannot be probed. */
@@ -1006,6 +1022,81 @@ describe('run warnings a completed node printed', () => {
     expect(first.ran?.warnings).toBeUndefined()
     const second = await call(ctx, 'wf_next', {}, as('session-1'))
     expect(second).toMatchObject({ ran: { node: 'n2', warnings: [`n2: ${DRIFT_WARNING}`] } })
+  })
+
+  it('are journalled on the open route, so the run outlives the turn that saw them', async () => {
+    const run = scratch()
+    const graph = lower(run, CHAIN_GRAPH)
+    const shell = warningShell(run, [], { 'run-n1': `${READINESS_NOTICE}\n${DRIFT_WARNING}\n` })
+    const ctx = await mount({ openCommand: openStub(run, graph), executeCommands: true }, shell)
+
+    await call(ctx, 'wf_open', { mode: 'pkg/t', workdir: run }, as('session-1'))
+    await call(ctx, 'wf_next', {}, as('session-1'))
+    expect(journalledWarnings(run)).toEqual([expect.objectContaining({
+      schema_version: 1, run_id: resolve(run), node_id: 'n1', state: 'warning', summary: DRIFT_WARNING,
+    })])
+  })
+})
+
+describe('run warnings on a configured graph', () => {
+  // `refactory ceo`, live or headless, runs the configured graph: no `wf_open`, and
+  // one `wf_next` drains every deterministic node without naming any under `ran`.
+  // Its warnings must reach the CEO and the run's final report all the same.
+  it('travel on the wf_next view, named by node, while the routine notice stays in the log', async () => {
+    const run = scratch()
+    const log: string[] = []
+    const shell = warningShell(run, log, {
+      'run-n1': `${READINESS_NOTICE}\n`,
+      'run-n2': `${DRIFT_WARNING}\n`,
+      'run-n4': `refactory: run warning: 2 uncommitted change(s) in /work/repo are not part of this run\n`,
+    })
+    const ctx = await mount({ interactiveOpen: false, graph: CHAIN_GRAPH, executeCommands: true, workdir: run }, shell)
+
+    const view = await call(ctx, 'wf_next', {}) as { status: string; ran?: unknown; warnings?: string[] }
+    expect(log).toEqual(['run-n1', 'run-n2', 'run-n3', 'run-n4'])
+    expect(view.status).toBe('done')
+    expect(view.ran).toBeUndefined()
+    expect(view.warnings).toEqual([
+      `n2: ${DRIFT_WARNING}`,
+      'n4: refactory: run warning: 2 uncommitted change(s) in /work/repo are not part of this run',
+    ])
+  })
+
+  it('carry nothing when no step warned', async () => {
+    const run = scratch()
+    const shell = warningShell(run, [], { 'run-n1': `${READINESS_NOTICE}\n` })
+    const ctx = await mount({ interactiveOpen: false, graph: CHAIN_GRAPH, executeCommands: true, workdir: run }, shell)
+
+    const view = await call(ctx, 'wf_next', {}) as { warnings?: string[] }
+    expect(view.warnings).toBeUndefined()
+    expect(journalledWarnings(run)).toEqual([])
+  })
+
+  it('survive a later step failing in the same call', async () => {
+    const run = scratch()
+    const shell = warningShell(run, [], { 'run-n1': `${DRIFT_WARNING}\n` }, ['run-n2'])
+    const ctx = await mount({ interactiveOpen: false, graph: CHAIN_GRAPH, executeCommands: true, workdir: run }, shell)
+
+    const view = await call(ctx, 'wf_next', {})
+    expect(view).toMatchObject({ status: 'failed', node: 'run-n2', warnings: [`n1: ${DRIFT_WARNING}`] })
+  })
+
+  it('are journalled for the run\'s final report', async () => {
+    const run = scratch()
+    const shell = warningShell(run, [], { 'run-n2': `${DRIFT_WARNING}\n` })
+    const ctx = await mount({ interactiveOpen: false, graph: CHAIN_GRAPH, executeCommands: true, workdir: run }, shell)
+
+    await call(ctx, 'wf_next', {})
+    expect(journalledWarnings(run)).toEqual([expect.objectContaining({
+      schema_version: 1, run_id: resolve(run), kind: 'run_warning', node_id: 'n2', state: 'warning', summary: DRIFT_WARNING,
+    })])
+  })
+
+  it('are something the CEO is told to pass on', async () => {
+    const configured = await mount({ interactiveOpen: false, graph: AGENT_GRAPH })
+    const section = (await configured.systemPrompt.assemble()).sections.find(s => s.name === 'tool:wf-spine')
+    expect(section?.text).toMatch(/When a wf_next result carries `warnings`/)
+    expect(section?.text).toMatch(/final report/)
   })
 })
 

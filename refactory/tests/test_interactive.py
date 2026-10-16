@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from refactory_dsh import dsh_runtime, interactive, registry, steering
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -197,3 +199,66 @@ def test_the_graph_argv_names_the_route_the_context_resolved(monkeypatch, tmp_pa
     argv = seen[-1]
     assert argv[argv.index("--provider") + 1] == "gateway"
     assert argv[argv.index("--model") + 1] == "gateway-model"
+
+
+#: What `target_guard` prints when the run's target has changes the run leaves out.
+UNCOMMITTED = ("refactory: run warning: 2 uncommitted change(s) in /work/repo are not "
+               "part of this run")
+
+
+def _journal(workdir: Path, *records: dict) -> None:
+    """Append records to the run's journal, as the spine and the console write it."""
+    path = workdir / ".refactory" / "events.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as stream:
+        for record in records:
+            stream.write(json.dumps({"schema_version": 1, "run_id": str(workdir), **record}) + "\n")
+
+
+def test_run_warnings_lists_what_the_steps_warned_and_nothing_else(tmp_path):
+    _journal(
+        tmp_path,
+        {"kind": "graph_state", "status": "ready", "nodes": ["prepare"]},
+        {"kind": "run_warning", "node_id": "prepare", "state": "warning", "summary": UNCOMMITTED},
+        {"kind": "control", "state": "applied", "summary": "Stopped at graph boundary"},
+        {"kind": "run_warning", "node_id": "materialise", "state": "warning",
+         "summary": "refactory: run warning: tracked files under /work/repo were put back"},
+    )
+    assert interactive.run_warnings(tmp_path) == "\n".join([
+        "refactory: what the run warned about —",
+        f"  prepare: {UNCOMMITTED}",
+        "  materialise: refactory: run warning: tracked files under /work/repo were put back",
+    ])
+
+
+def test_run_warnings_says_nothing_when_no_step_warned(tmp_path):
+    assert interactive.run_warnings(tmp_path) == ""
+    _journal(tmp_path, {"kind": "graph_state", "status": "done", "nodes": []})
+    assert interactive.run_warnings(tmp_path) == ""
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_a_cli_run_lists_its_warnings_when_it_ends(monkeypatch, tmp_path, capsys, returncode):
+    """`refactory ceo` runs the configured graph, where nobody is made to read `ran`.
+
+    The CEO is told to pass a warning on, but a headless run's turns go unread, so
+    the run itself lists what its steps warned about, whether or not it succeeded.
+    """
+    from refactory_dsh import workers
+
+    workdir = tmp_path / "run"
+
+    class _Run:
+        pass
+
+    def _graph(argv, **kwargs):
+        # What the spine journals when a step it ran printed a run warning.
+        _journal(workdir, {"kind": "run_warning", "node_id": "prepare", "state": "warning",
+                           "summary": UNCOMMITTED})
+        ran = _Run()
+        ran.returncode = returncode
+        return ran
+
+    monkeypatch.setattr(workers, "run_graph_command", _graph)
+    assert interactive.run(WITH_A_GATE, workdir=workdir, project=ROOT, headless=True) == returncode
+    assert f"refactory: what the run warned about —\n  prepare: {UNCOMMITTED}\n" in capsys.readouterr().err
