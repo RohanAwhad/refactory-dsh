@@ -33,17 +33,38 @@
 # finishes its turn abandons the graph, and the run ends with a cursor still due.
 # Foreground-only is the enforcement; the spine's prompt asks, and this is what makes
 # asking unnecessary.
+#
+# Both delegation rows carry the `ceo` preset's allow-list, so a subagent here also
+# gets the content tools and no shell; the refactory bundle's `presets/ceo.patch.yml`
+# says what is kept and why. The fork row comes from dsh-base, and a patch replaces a
+# row's whole `config`, so it restates the base row's provider, name and mode as they
+# were; like the base row it still offers `run_in_background`. Its child's tool list now
+# differs from the CEO's, so a fork no longer reuses the CEO's cached request prefix.
 - id: tool-subagent
   config:
     provider: spawn
     toolName: subagent
     backgroundMode: one-shot
     enableRunInBackground: false
+    toolFilter:
+      allow: [read, write, edit, glob, grep, read_image, web_search, web_fetch, skill, todo_write, send_message]
+
+- id: tool-subagent-fork
+  config:
+    provider: fork
+    toolName: subagent_fork
+    backgroundMode: one-shot
+    toolFilter:
+      allow: [read, write, edit, glob, grep, read_image, web_search, web_fetch, skill, todo_write, send_message]
 
 - insert:
     - id: graph-startup
       name: '@deepseek-ai/dsh-graph/startup'
 
+    # A host row, unlike the GUI's preset row: its `wf_*` tools, its prompt and its
+    # `ceoDeny` guard reach every top-level agent on this host, which here is the one
+    # CEO the runner boots. Subagents are out of the guard's reach; the delegation
+    # rows above filter them.
     - id: workflow-spine
       name: '@deepseek-ai/dsh-workflow-spine'
       inject: [graphStartup]

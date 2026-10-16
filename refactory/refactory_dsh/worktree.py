@@ -757,6 +757,8 @@ def check_environment(path: Path, home: Path) -> dict[str, str]:
     environment of its own, and never with ``PYTHONPATH``, so a target that is
     refactory itself is tested from its worktree and not from the launcher's checkout.
     ``home`` keeps tool caches a check writes out of the worktree and its diff (#330 E6).
+    pnpm finds its store through HOME, so it is pointed at the store the install used;
+    otherwise it takes the installed packages for another store's and tries to reinstall.
     """
     path = Path(path)
     managed = (path / ".venv" / MARKER).exists()
@@ -770,6 +772,9 @@ def check_environment(path: Path, home: Path) -> dict[str, str]:
     env.update({name: os.environ[name] for name in CHECK_ENV if name in os.environ})
     if managed:
         env["VIRTUAL_ENV"] = str(path / ".venv")
+    store = _json(path / "node_modules" / ".modules.yaml").get("storeDir")
+    if isinstance(store, str) and store:
+        env["pnpm_config_store_dir"] = store
     return env
 
 
@@ -864,8 +869,7 @@ def ensure_environment(found: Worktree, run: Path, budget: Any = None) -> tuple[
     install failed, or what it made is gone (a worktree added back from its branch).
     The record lives with the worktree, in the target's record of the run, not in the
     run directory, which a later run may reuse. Installs run through the sandbox, under
-    the run's budget, without its memory cap: an install runs a package manager, which
-    a 2 GB address space kills. A lockfile an install creates or changes is amended into
+    the run's budget. A lockfile an install creates or changes is amended into
     the attempt, so the change and its reviewers include it; anything else an install
     leaves untracked is recorded, so the clean-up before each attempt keeps it. A
     Python environment refactory created is marked, so :func:`check_environment` adopts
@@ -892,10 +896,8 @@ def ensure_environment(found: Worktree, run: Path, budget: Any = None) -> tuple[
             problems.append(f"UNAVAILABLE: {command[0]} is not installed, so `{shown}` could not run")
             continue
         result = sandbox.run_command(
-            shlex.join(command), workdir=path, timeout_s=INSTALL_TIMEOUT_S, memory_mb=0,
-            cpu_s=INSTALL_TIMEOUT_S * (os.cpu_count() or 1), file_mb=INSTALL_FILE_MB,
-            env=_install_env(), home=Path.home(), exact_env=True, budget=budget,
-            stdin=subprocess.DEVNULL)
+            shlex.join(command), workdir=path, timeout_s=INSTALL_TIMEOUT_S, file_mb=INSTALL_FILE_MB,
+            env=_install_env(), home=Path.home(), exact_env=True, budget=budget)
         if not result.ok:
             detail = "\n".join((result.problem(), result.stderr or "", result.stdout or "")).strip()
             problems.append(f"`{shown}` failed: {detail[-2000:]}")
