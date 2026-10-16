@@ -37,6 +37,11 @@ def _isolate_refactory_home(tmp_path_factory: pytest.TempPathFactory, monkeypatc
     home = tmp_path_factory.mktemp("refactory-home")
     monkeypatch.setenv("REFACTORY_HOME", str(home / "home"))
     monkeypatch.setenv("REFACTORY_PROJECTS_DIR", str(home / "projects"))
+    # A design run that passes delivers a pull request, and may create a repository
+    # (#350), so no test may reach the person's own gh login: gh starts logged out.
+    monkeypatch.setenv("GH_CONFIG_DIR", str(home / "gh"))
+    for name in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

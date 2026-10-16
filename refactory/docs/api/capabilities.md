@@ -682,7 +682,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 
 ## design
 
-Build and check software from a brief and a check command, on its own branch in a git worktree: of the repository `target` names, or of a new project. No reusable mode is required. Prefer wf_open default_pack/design with user gates.
+Build and check software from a brief and a check command, on its own branch in a git worktree: of the repository `target` names, or of a new project. Once its reviews pass it opens a pull request (a new project's private GitHub repository is created then), unless noPr. No reusable mode is required. Prefer wf_open default_pack/design with user gates.
 
 Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 
@@ -697,9 +697,12 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "check": "check",
       "model": "model",
       "name": "name",
+      "noPr": "no_pr",
       "noWorktree": "no_worktree",
       "provider": "provider",
+      "refine": "refine",
       "resume": "resume",
+      "reviewComments": "review_comments",
       "setup": "setup",
       "target": "target"
     },
@@ -711,6 +714,9 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "base",
       "setup",
       "noWorktree",
+      "noPr",
+      "refine",
+      "reviewComments",
       "attempts",
       "approve",
       "provider",
@@ -732,7 +738,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
         "check": "test -s hello.txt",
         "name": "hello"
       },
-      "explanation": "Build and check software from a brief and a check command, on its own branch in a git worktree: of the repository `target` names, or of a new project. No reusable mode is required. Prefer wf_open default_pack/design with user gates."
+      "explanation": "Build and check software from a brief and a check command, on its own branch in a git worktree: of the repository `target` names, or of a new project. Once its reviews pass it opens a pull request (a new project's private GitHub repository is created then), unless noPr. No reusable mode is required. Prefer wf_open default_pack/design with user gates."
     },
     {
       "arguments": {
@@ -742,6 +748,16 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
         "target": "/path/to/repository"
       },
       "explanation": "Change an existing repository on a branch of its own; the person's checkout and their uncommitted work are left as they are."
+    },
+    {
+      "arguments": {
+        "brief": "Rename the --json flag to --format json, as the review asked",
+        "check": "python -m pytest -q",
+        "name": "report_format",
+        "refine": "https://github.com/owner/repository/pull/12",
+        "review_comments": true
+      },
+      "explanation": "Follow up an open pull request: the run starts from its branch, goes through the full review, and pushes onto that branch, fast-forward only. The pull request's title and description are left as they are."
     }
   ],
   "interfaces": {
@@ -816,6 +832,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "required": true,
       "type": "string"
     },
+    "no_pr": {
+      "default": false,
+      "description": "keep the work on the run's local branch instead of opening a pull request",
+      "flags": [
+        "--no-pr"
+      ],
+      "nargs": 0,
+      "positional": false,
+      "required": false,
+      "type": "boolean"
+    },
     "no_worktree": {
       "default": false,
       "description": "write the artifact under .factory/artifacts instead of a worktree",
@@ -838,6 +865,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "required": false,
       "type": "string"
     },
+    "refine": {
+      "default": "",
+      "description": "an open pull request to follow up (its URL or owner/repo#number); the run starts from its branch and updates it",
+      "flags": [
+        "--refine"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "string"
+    },
     "resume": {
       "default": "",
       "description": "continue a failed run from its directory",
@@ -848,6 +886,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "positional": false,
       "required": false,
       "type": "string"
+    },
+    "review_comments": {
+      "default": false,
+      "description": "with --refine: add the pull request's reviews and comments to the steering",
+      "flags": [
+        "--review-comments"
+      ],
+      "nargs": 0,
+      "positional": false,
+      "required": false,
+      "type": "boolean"
     },
     "setup": {
       "default": "",
@@ -897,8 +946,8 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "type": "string"
     }
   },
-  "purpose": "Build and check software from a brief and a check command, on its own branch in a git worktree: of the repository `target` names, or of a new project. No reusable mode is required. Prefer wf_open default_pack/design with user gates.",
-  "reviewed_schema": "5de38f1b5e3bfba6f951d697667ac3a9ab87c6207ae73047ad6b187497c5ece7"
+  "purpose": "Build and check software from a brief and a check command, on its own branch in a git worktree: of the repository `target` names, or of a new project. Once its reviews pass it opens a pull request (a new project's private GitHub repository is created then), unless noPr. No reusable mode is required. Prefer wf_open default_pack/design with user gates.",
+  "reviewed_schema": "e8c493814b2d2642a419a8fc84da0ae1bf74e2fed3c897eb52e26229555016ae"
 }
 ```
 
@@ -4256,7 +4305,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
         "target": "/path/to/repository",
         "what": "add a --json flag to the report command"
       },
-      "explanation": "Change an existing repository: the run works on its own branch in a worktree of it, and the checkout at /path/to/repository is left as it is. Without --target, a design run starts a new project in ~/refactory-projects."
+      "explanation": "Change an existing repository: the run works on its own branch in a worktree of it, and the checkout at /path/to/repository is left as it is. Once its reviews pass it opens a pull request into the repository's default branch, which its approval gate names first (a run approved up front with --approve says it when it starts); --no-pr keeps the branch local. Without --target, a design run starts a new project in ~/refactory-projects, whose private GitHub repository is created at delivery."
+    },
+    {
+      "arguments": {
+        "check": "python -m pytest -q",
+        "mode": "design",
+        "refine": "https://github.com/owner/repository/pull/12",
+        "review_comments": true,
+        "what": "rename the --json flag to --format json, as the review asked"
+      },
+      "explanation": "Follow up an open pull request: a new run starts from its branch, goes through the full review, and pushes onto that branch, fast-forward only, leaving its title and description alone."
     }
   ],
   "interfaces": {
@@ -4389,6 +4448,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "required": false,
       "type": "string"
     },
+    "no_pr": {
+      "default": false,
+      "description": "design only: keep the work on the run's local branch instead of opening a pull request once the reviews pass",
+      "flags": [
+        "--no-pr"
+      ],
+      "nargs": 0,
+      "positional": false,
+      "required": false,
+      "type": "boolean"
+    },
     "no_worktree": {
       "default": false,
       "description": "design only: write the artifact under .factory/artifacts instead of a worktree",
@@ -4422,6 +4492,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "required": false,
       "type": "string"
     },
+    "refine": {
+      "default": "",
+      "description": "design only: follow up an open pull request (its URL or owner/repo#number); the run starts from its branch and updates it",
+      "flags": [
+        "--refine"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "string"
+    },
     "repair_attempts": {
       "default": null,
       "description": "",
@@ -4432,6 +4513,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "positional": false,
       "required": false,
       "type": "integer"
+    },
+    "review_comments": {
+      "default": false,
+      "description": "design only, with --refine: add the pull request's reviews and comments to the run's steering",
+      "flags": [
+        "--review-comments"
+      ],
+      "nargs": 0,
+      "positional": false,
+      "required": false,
+      "type": "boolean"
     },
     "revise": {
       "default": "",
@@ -4608,7 +4700,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     }
   },
   "purpose": "Run a named mode or author a package/artifact from a brief in the terminal; worker file defaults apply at preparation. CEO conversation and graph worker routes are distinct.",
-  "reviewed_schema": "1a6bac19ae91b5649cb89a11f5e989d7c1e0edf21652df645cc7920244d42833"
+  "reviewed_schema": "7facc6fc5c6b3490ebacdf4e3b69b1ba5f341a0aca3d8627aeba2d6fdc6f7ecb"
 }
 ```
 
@@ -7114,7 +7206,7 @@ Build a small reusable package with a strategist, coder and focused QA. Canonica
 
 ## default_pack/design
 
-Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required.
+Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request, which the approval gate names first (`pr=0` keeps it local; `refine` updates an open one).
 
 ```json
 {
@@ -7212,6 +7304,11 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     },
     {
       "condition": null,
+      "source": "report",
+      "target": "deliver"
+    },
+    {
+      "condition": null,
       "source": "research_director",
       "target": "record_findings"
     },
@@ -7277,6 +7374,14 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "role": "ceo"
     },
     {
+      "call": "refactory_dsh.delivery:deliver_design",
+      "id": "deliver",
+      "kind": "op",
+      "knobs": [],
+      "notes": "push the run's branch and open its pull request, as the approval gate said",
+      "role": "ceo"
+    },
+    {
       "call": "",
       "id": "design_doc",
       "kind": "agent",
@@ -7335,7 +7440,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "id": "gate_strategy",
       "kind": "gate",
       "knobs": [],
-      "notes": "Approve the design before the artifact is written? It is in design.md in the run directory. Answer proceed to build it, or reloop to have the plan redone.",
+      "notes": "Approve the design before the artifact is written? It is in design.md in the run directory, and delivery.md there says what happens once the reviews pass: the pull request the run opens, the repository it creates, or why it opens none. Answer proceed to build and deliver it that way, or reloop to have the plan redone.",
       "role": "ceo"
     },
     {
@@ -7381,7 +7486,12 @@ Build a software artifact from a brief, name and acceptance command, as commits 
         "target",
         "base",
         "worktree",
-        "setup"
+        "setup",
+        "pr",
+        "repo_owner",
+        "repo_visibility",
+        "refine",
+        "review_comments"
       ],
       "notes": "read the brief and the command that decides whether it is done",
       "role": "ceo"
@@ -7516,6 +7626,58 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "value": "",
       "values": []
     },
+    "pr": {
+      "default": true,
+      "description": "open a pull request once the reviews pass: into the target's default branch, or a new project's own GitHub repository; off keeps the work on the run's local branch",
+      "frozen": true,
+      "kind": "bool",
+      "range": [
+        null,
+        null
+      ],
+      "value": true,
+      "values": []
+    },
+    "refine": {
+      "default": "",
+      "description": "an open pull request to follow up, as its URL or owner/repo#number: the run starts from its branch and its result updates it",
+      "frozen": true,
+      "kind": "str",
+      "range": [
+        null,
+        null
+      ],
+      "value": "",
+      "values": []
+    },
+    "repo_owner": {
+      "default": "",
+      "description": "the GitHub account or organisation a new project's repository is created under (default: the account gh is logged in to)",
+      "frozen": true,
+      "kind": "str",
+      "range": [
+        null,
+        null
+      ],
+      "value": "",
+      "values": []
+    },
+    "repo_visibility": {
+      "default": "private",
+      "description": "who can see a new project's GitHub repository",
+      "frozen": true,
+      "kind": "str",
+      "range": [
+        null,
+        null
+      ],
+      "value": "private",
+      "values": [
+        "private",
+        "internal",
+        "public"
+      ]
+    },
     "research_attempts": {
       "default": 3,
       "description": "how many times the research step may be retried when its plan is not a plan or its findings were never written",
@@ -7526,6 +7688,18 @@ Build a software artifact from a brief, name and acceptance command, as commits 
         8
       ],
       "value": 3,
+      "values": []
+    },
+    "review_comments": {
+      "default": false,
+      "description": "with refine: add the pull request's reviews and comments to the run's steering",
+      "frozen": true,
+      "kind": "bool",
+      "range": [
+        null,
+        null
+      ],
+      "value": false,
       "values": []
     },
     "setup": {
@@ -7586,6 +7760,15 @@ Build a software artifact from a brief, name and acceptance command, as commits 
           "name": "report_json",
           "target": "/path/to/repository"
         }
+      },
+      {
+        "explanation": "Follow up an open pull request: start from its branch, run the full review, and push onto it, fast-forward only.",
+        "knobs": {
+          "brief": "Rename the --json flag to --format json, as the review asked",
+          "check": "python -m pytest -q",
+          "name": "report_format",
+          "refine": "https://github.com/owner/repository/pull/12"
+        }
       }
     ],
     "interfaces": {
@@ -7593,8 +7776,8 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "cli": "refactory ceo default_pack/design",
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
-    "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required.",
-    "reviewed_schema": "0cb095333597fc0afe689b91d80f0194730bb7900cad84ee01afe377ef269188"
+    "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request, which the approval gate names first (`pr=0` keeps it local; `refine` updates an open one).",
+    "reviewed_schema": "0c6b477fac6b4ae515fa40dd7d8617a2f5e007981dbb670a45850c7f5d581ca5"
   }
 }
 ```

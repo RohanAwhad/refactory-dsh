@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from refactory_dsh.create_ops import API, RESEARCH_SCHEMA
+from refactory_dsh.delivery import VISIBILITIES
 from refactory_dsh.model import DEFAULT_TIMEOUT_S
 from refactory_dsh.nn import Graph, Knob, Mode, Node, RunResult
 
@@ -76,17 +77,35 @@ class DesignMode(Mode):
             "setup": Knob("", "str", frozen=True,
                           description="a command run in the worktree before each check, after its "
                                       "dependencies are installed, such as a build"),
+            # How the run is delivered once its reviews pass (#350). Frozen too: each is
+            # what the person approves at the gate, not something a search may move.
+            "pr": Knob(True, "bool", frozen=True,
+                       description="open a pull request once the reviews pass: into the target's default "
+                                   "branch, or a new project's own GitHub repository; off keeps the work "
+                                   "on the run's local branch"),
+            "repo_owner": Knob("", "str", frozen=True,
+                               description="the GitHub account or organisation a new project's repository "
+                                           "is created under (default: the account gh is logged in to)"),
+            "repo_visibility": Knob("private", "str", values=VISIBILITIES, frozen=True,
+                                    description="who can see a new project's GitHub repository"),
+            "refine": Knob("", "str", frozen=True,
+                           description="an open pull request to follow up, as its URL or owner/repo#number: "
+                                       "the run starts from its branch and its result updates it"),
+            "review_comments": Knob(False, "bool", frozen=True,
+                                    description="with refine: add the pull request's reviews and comments to "
+                                                "the run's steering"),
         }
 
     def build(self) -> Graph:
         graph = Graph()
         graph.add(Node(
             "prepare", "op", call=f"{OPS}:prepare_design",
-            knobs=("name", "brief", "check", "target", "base", "worktree", "setup"),
-            writes=("brief.json", "research-review.txt", "check.txt"),
+            knobs=("name", "brief", "check", "target", "base", "worktree", "setup", "pr", "repo_owner",
+                   "repo_visibility", "refine", "review_comments"),
+            writes=("brief.json", "research-review.txt", "check.txt", "delivery.md"),
             produces=("name", "brief", "check", "validation", "research_review", "qa_gate",
                       "overwatch_review", "target", "worktree", "branch", "base", "source",
-                      "check_root", "emit_scope", "setup"),
+                      "check_root", "emit_scope", "setup", "delivery", "delivery_plan"),
             notes="read the brief and the command that decides whether it is done",
         ))
 
@@ -199,14 +218,19 @@ class DesignMode(Mode):
         ))
         # design-v2 puts the person's approval on the design document, after the plan
         # exists and before any code does.
+        # The approval covers delivery too, which is the only step that reaches outside
+        # the run: delivery.md says which pull request it opens, or which repository it
+        # creates, and the approval is scoped to that file as it is to design.md.
         graph.add(Node(
             "gate_strategy", "gate", gate_kind="user",
-            reads=("design.md",),
+            reads=("design.md", "delivery.md"),
             max_iterations=4,
             notes=(
                 "Approve the design before the artifact is written? It is in design.md "
-                "in the run directory. Answer proceed to build it, or reloop to have the "
-                "plan redone."
+                "in the run directory, and delivery.md there says what happens once the "
+                "reviews pass: the pull request the run opens, the repository it creates, "
+                "or why it opens none. Answer proceed to build and deliver it that way, or "
+                "reloop to have the plan redone."
             ),
         ))
         graph.add(Node(
@@ -411,6 +435,16 @@ class DesignMode(Mode):
             produces=("designed",),
             notes="summarise what was designed",
         ))
+        # After the report, so only a run whose reviews passed and whose sign-offs held
+        # reaches anything outside it (#350).
+        graph.add(Node(
+            "deliver", "op", call="refactory_dsh.delivery:deliver_design",
+            resource_role="final_validation",
+            reads=("design.json", "delivery.md"),
+            writes=("delivery.json", "pull-request.md", "design.json"),
+            produces=("delivery", "pull_request"),
+            notes="push the run's branch and open its pull request, as the approval gate said",
+        ))
 
         graph.connect("prepare", "research_director")
         graph.connect("research_director", "record_findings")
@@ -434,6 +468,7 @@ class DesignMode(Mode):
         graph.connect("overwatch", "gate_overwatch")
         graph.connect("gate_overwatch", "emit", condition="reloop")
         graph.connect("gate_overwatch", "report", condition="proceed")
+        graph.connect("report", "deliver")
         from refactory_dsh.authoring_evidence import wire_reviews
         wire_reviews(graph)
         return graph
@@ -465,6 +500,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-worktree", action="store_true",
                         help="write the artifact under .factory/artifacts instead of a worktree")
     parser.add_argument("--setup", default="", help="a command run in the worktree before each check, such as a build")
+    parser.add_argument("--no-pr", action="store_true",
+                        help="keep the work on the run's local branch instead of opening a pull request")
+    parser.add_argument("--refine", default="", metavar="PR",
+                        help="follow up an open pull request: start from its branch and update it")
+    parser.add_argument("--review-comments", action="store_true",
+                        help="with --refine: add the pull request's reviews and comments to the steering")
     from refactory_dsh.budgets import add_arguments, arguments
 
     add_arguments(parser)
@@ -519,18 +560,32 @@ def main(argv: list[str] | None = None) -> int:
     state["knobs"]["repair_attempts" if args.fast else "check_attempts"]["value"] = int(args.repair_attempts if args.fast else args.attempts)
     if args.no_worktree and not args.fast:
         state["knobs"]["worktree"]["value"] = False
+    if args.no_pr and not args.fast:
+        state["knobs"]["pr"]["value"] = False
+    if args.review_comments and not args.fast:
+        state["knobs"]["review_comments"]["value"] = True
     mode.load_state_dict(state)
     from refactory_dsh.create import parse_verdicts
 
+    verdicts = parse_verdicts(args.verdict)
+    workdir = Path(args.workdir or f".factory/design/{args.name}")
+    if not args.fast:
+        # A gate answered up front shows nobody delivery.md, so the plan is said here (#350).
+        from refactory_dsh import delivery
+
+        knobs = {"name": args.name, "brief": args.brief, "target": args.target, "base": args.base,
+                 "refine": args.refine, **{name: state["knobs"][name]["value"]
+                                           for name in ("worktree", "pr", "repo_owner", "repo_visibility")}}
+        (delivery.announce if "gate_strategy" in verdicts else delivery.forget)(knobs, workdir)
     result = mode.run(
-        Path(args.workdir or f".factory/design/{args.name}"),
+        workdir,
         model=DshModelClient(
             project=None if args.resume else project_root(),
             timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
         ),
         task={"name": args.name, "brief": args.brief, "check": args.check, "source_project": args.source_project,
-              "target": args.target, "base": args.base, "setup": args.setup},
-        verdicts=parse_verdicts(args.verdict),
+              "target": args.target, "base": args.base, "setup": args.setup, "refine": args.refine},
+        verdicts=verdicts,
         resource_limits=arguments(args),
     )
     if not result.exit_ok:
@@ -539,6 +594,8 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps({
         "artifact": str(result.facts.get("artifact")),
         "branch": result.facts.get("branch"),
+        "pull_request": result.facts.get("pull_request"),
+        "delivery": result.facts.get("delivery"),
         "files": result.facts.get("files", []),
         "check": result.facts.get("check"),
         "iterations": result.iterations,

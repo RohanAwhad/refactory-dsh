@@ -25,3 +25,19 @@ describe('generated chat adapters against the actual Python parser', () => {
     })
   }
 })
+
+describe('how a chat design run is delivered reaches the console', () => {
+  it('maps noPr, refine and reviewComments onto the design verb\'s flags', () => {
+    const invocation = invocationFor({
+      action: 'design', name: 'report_format', brief: 'rename the flag', check: 'pytest',
+      noPr: true, refine: 'https://github.com/owner/repository/pull/12', reviewComments: true,
+    } as unknown as Parameters<typeof invocationFor>[0])
+    const console = new Console(null as never, { repoRoot: root, pythonBin: resolve(root, '.venv/bin'), timeoutMs: 1000, collectBytes: 1000 })
+    const argv = console.argv(invocation).slice(3)
+    const parsed = spawnSync(resolve(root, '.venv/bin/python'), ['-c', 'import sys,json; from refactory_dsh.console import _parser; print(json.dumps(vars(_parser().parse_args(sys.argv[1:]))))', ...argv], { cwd: root, encoding: 'utf8' })
+    expect(parsed.status, parsed.stderr).toBe(0)
+    expect(JSON.parse(parsed.stdout)).toMatchObject({
+      verb: 'design', no_pr: true, refine: 'https://github.com/owner/repository/pull/12', review_comments: true,
+    })
+  })
+})

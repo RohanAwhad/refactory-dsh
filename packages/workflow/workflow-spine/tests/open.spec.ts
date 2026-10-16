@@ -1120,4 +1120,13 @@ describe('what the CEO is told about a design run\'s target', () => {
     expect(spine?.text).toMatch(/without it the run starts a new project/)
     expect(JSON.stringify(ctx.tools.get('wf_open'))).toContain('`target=<repository root>` to change an existing repository')
   })
+
+  it('says a passing design run opens a pull request, and how to follow one up', async () => {
+    const ctx = await mount()
+    const assembly = await ctx.systemPrompt.assemble()
+    const spine = assembly.sections.find(section => section.name === 'tool:wf-spine')
+    expect(spine?.text).toMatch(/a design run opens a pull request, which its approval gate names first in `delivery.md`/)
+    expect(spine?.text).toMatch(/open design with `refine=<the pull request's URL>` and the follow-up as the brief/)
+    expect(JSON.stringify(ctx.tools.get('wf_open'))).toContain('`refine=<pull request URL>` to follow up an open pull request')
+  })
 })

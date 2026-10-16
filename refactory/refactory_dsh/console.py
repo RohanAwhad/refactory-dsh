@@ -1375,6 +1375,13 @@ def _parser() -> argparse.ArgumentParser:
     artifact.add_argument("--setup", default="", help="a command run in the worktree before each check")
     artifact.add_argument("--no-worktree", action="store_true",
                           help="write the artifact under .factory/artifacts instead of a worktree")
+    artifact.add_argument("--no-pr", action="store_true",
+                          help="keep the work on the run's local branch instead of opening a pull request")
+    artifact.add_argument("--refine", default="", metavar="PR",
+                          help="an open pull request to follow up (its URL or owner/repo#number); the run "
+                               "starts from its branch and updates it")
+    artifact.add_argument("--review-comments", action="store_true",
+                          help="with --refine: add the pull request's reviews and comments to the steering")
     artifact.add_argument(
         "--verdict", action="append", default=[], metavar="GATE=VALUE",
         help="answer a gate a person owns, as <gate>=<value> (repeatable)",
@@ -1763,18 +1770,29 @@ def main(argv: list[str] | None = None) -> int:
                 forwarded += ["--resume", args.resume]
             if args.check:
                 forwarded += ["--check", args.check]
-            for flag, value in (("--target", args.target), ("--base", args.base), ("--setup", args.setup)):
+            for flag, value in (("--target", args.target), ("--base", args.base), ("--setup", args.setup),
+                                ("--refine", args.refine)):
                 if value:
                     # Absolute, because the run resolves it from its own directory.
                     forwarded += [flag, str(Path(value).expanduser().resolve()) if flag == "--target" else value]
-            if args.no_worktree:
-                forwarded += ["--no-worktree"]
+            for flag, on in (("--no-worktree", args.no_worktree), ("--no-pr", args.no_pr),
+                             ("--review-comments", args.review_comments)):
+                if on:
+                    forwarded += [flag]
             for pair in args.verdict:
                 forwarded += ["--verdict", pair]
             if args.provider:
                 forwarded += ["--provider", args.provider]
             if args.model:
                 forwarded += ["--model", args.model]
+            if any(pair.partition("=")[0] == "gate_strategy" for pair in args.verdict):
+                # The forwarded run's stderr is captured until it ends, so a gate answered
+                # up front is announced here, before anything is built (#350).
+                from refactory_dsh import delivery
+
+                delivery.announce({"name": args.name, "brief": args.brief, "target": args.target,
+                                   "base": args.base, "refine": args.refine, "worktree": not args.no_worktree,
+                                   "pr": not args.no_pr}, Path(args.workdir or f".factory/design/{args.name}"))
             payload = _forward("design", forwarded)
         else:  # pragma: no cover - argparse rejects an unknown verb first
             raise ConsoleError(f"unknown verb {args.verb!r}")

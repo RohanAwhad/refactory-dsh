@@ -158,6 +158,15 @@
             "name": "report_json",
             "target": "/path/to/repository"
           }
+        },
+        {
+          "explanation": "Follow up an open pull request: start from its branch, run the full review, and push onto it, fast-forward only.",
+          "knobs": {
+            "brief": "Rename the --json flag to --format json, as the review asked",
+            "check": "python -m pytest -q",
+            "name": "report_format",
+            "refine": "https://github.com/owner/repository/pull/12"
+          }
         }
       ],
       "interfaces": {
@@ -165,8 +174,8 @@
         "cli": "refactory ceo default_pack/design",
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
-      "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required.",
-      "reviewed_schema": "0cb095333597fc0afe689b91d80f0194730bb7900cad84ee01afe377ef269188"
+      "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request, which the approval gate names first (`pr=0` keeps it local; `refine` updates an open one).",
+      "reviewed_schema": "0c6b477fac6b4ae515fa40dd7d8617a2f5e007981dbb670a45850c7f5d581ca5"
     },
     "default_pack/design_fast": {
       "doc": "refactory/docs/budgets-fast-modes.md",
@@ -484,7 +493,17 @@
             "target": "/path/to/repository",
             "what": "add a --json flag to the report command"
           },
-          "explanation": "Change an existing repository: the run works on its own branch in a worktree of it, and the checkout at /path/to/repository is left as it is. Without --target, a design run starts a new project in ~/refactory-projects."
+          "explanation": "Change an existing repository: the run works on its own branch in a worktree of it, and the checkout at /path/to/repository is left as it is. Once its reviews pass it opens a pull request into the repository's default branch, which its approval gate names first (a run approved up front with --approve says it when it starts); --no-pr keeps the branch local. Without --target, a design run starts a new project in ~/refactory-projects, whose private GitHub repository is created at delivery."
+        },
+        {
+          "arguments": {
+            "check": "python -m pytest -q",
+            "mode": "design",
+            "refine": "https://github.com/owner/repository/pull/12",
+            "review_comments": true,
+            "what": "rename the --json flag to --format json, as the review asked"
+          },
+          "explanation": "Follow up an open pull request: a new run starts from its branch, goes through the full review, and pushes onto that branch, fast-forward only, leaving its title and description alone."
         }
       ],
       "interfaces": {
@@ -493,7 +512,7 @@
         "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
       },
       "purpose": "Run a named mode or author a package/artifact from a brief in the terminal; worker file defaults apply at preparation. CEO conversation and graph worker routes are distinct.",
-      "reviewed_schema": "1a6bac19ae91b5649cb89a11f5e989d7c1e0edf21652df645cc7920244d42833"
+      "reviewed_schema": "7facc6fc5c6b3490ebacdf4e3b69b1ba5f341a0aca3d8627aeba2d6fdc6f7ecb"
     },
     "cli:doctor": {
       "doc": "refactory/docs/cli.md",
@@ -707,9 +726,12 @@
           "check": "check",
           "model": "model",
           "name": "name",
+          "noPr": "no_pr",
           "noWorktree": "no_worktree",
           "provider": "provider",
+          "refine": "refine",
           "resume": "resume",
+          "reviewComments": "review_comments",
           "setup": "setup",
           "target": "target"
         },
@@ -721,6 +743,9 @@
           "base",
           "setup",
           "noWorktree",
+          "noPr",
+          "refine",
+          "reviewComments",
           "attempts",
           "approve",
           "provider",
@@ -741,7 +766,7 @@
             "check": "test -s hello.txt",
             "name": "hello"
           },
-          "explanation": "Build and check software from a brief and a check command, on its own branch in a git worktree: of the repository `target` names, or of a new project. No reusable mode is required. Prefer wf_open default_pack/design with user gates."
+          "explanation": "Build and check software from a brief and a check command, on its own branch in a git worktree: of the repository `target` names, or of a new project. Once its reviews pass it opens a pull request (a new project's private GitHub repository is created then), unless noPr. No reusable mode is required. Prefer wf_open default_pack/design with user gates."
         },
         {
           "arguments": {
@@ -751,6 +776,16 @@
             "target": "/path/to/repository"
           },
           "explanation": "Change an existing repository on a branch of its own; the person's checkout and their uncommitted work are left as they are."
+        },
+        {
+          "arguments": {
+            "brief": "Rename the --json flag to --format json, as the review asked",
+            "check": "python -m pytest -q",
+            "name": "report_format",
+            "refine": "https://github.com/owner/repository/pull/12",
+            "review_comments": true
+          },
+          "explanation": "Follow up an open pull request: the run starts from its branch, goes through the full review, and pushes onto that branch, fast-forward only. The pull request's title and description are left as they are."
         }
       ],
       "interfaces": {
@@ -758,8 +793,8 @@
         "cli": "python -m refactory_dsh.console design",
         "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
       },
-      "purpose": "Build and check software from a brief and a check command, on its own branch in a git worktree: of the repository `target` names, or of a new project. No reusable mode is required. Prefer wf_open default_pack/design with user gates.",
-      "reviewed_schema": "5de38f1b5e3bfba6f951d697667ac3a9ab87c6207ae73047ad6b187497c5ece7"
+      "purpose": "Build and check software from a brief and a check command, on its own branch in a git worktree: of the repository `target` names, or of a new project. Once its reviews pass it opens a pull request (a new project's private GitHub repository is created then), unless noPr. No reusable mode is required. Prefer wf_open default_pack/design with user gates.",
+      "reviewed_schema": "e8c493814b2d2642a419a8fc84da0ae1bf74e2fed3c897eb52e26229555016ae"
     },
     "docs": {
       "chat": {
