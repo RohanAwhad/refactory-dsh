@@ -165,14 +165,22 @@ def test_a_revision_of_a_mode_that_does_not_run_is_refused(monkeypatch):
 
 
 # ── designing software ─────────────────────────────────────────────────────
-@pytest.mark.parametrize("mode", [DesignMode, CreateMode], ids=["design", "create"])
-def test_emit_writes_its_file_blocks_into_emit_txt(mode):
+def test_emit_writes_its_file_blocks_into_emit_txt():
     """The worker contract says not to repeat a file artifact in the final reply, so a
     prompt that asked to *answer* with file blocks got the files written to disk and a
     summary in emit.txt, which materialise cannot parse. The blocks belong in emit.txt."""
-    prompt = mode().build().nodes["emit"].prompt_template
+    prompt = CreateMode().build().nodes["emit"].prompt_template
     assert "Write every file into emit.txt" in prompt
     assert "Do not create the files themselves" in prompt
+    assert "Answer with file blocks" not in prompt
+
+
+def test_design_emit_writes_the_blocks_its_scope_describes_into_emit_txt():
+    """Design's blocks depend on the run -- edits only where a worktree has a last
+    attempt to apply them to -- so `emit_scope` describes them and the prompt places them."""
+    prompt = DesignMode().build().nodes["emit"].prompt_template
+    assert "{{emit_scope}}" in prompt and "Write those blocks into emit.txt" in prompt
+    assert "Do not create or change the files themselves" in prompt
     assert "Answer with file blocks" not in prompt
 
 
@@ -311,7 +319,7 @@ def test_a_design_that_never_passes_its_check_fails_loudly():
         verdicts={"gate_strategy": "proceed"},
     )
     assert result.exit_ok is False
-    assert "authoring unresolved after 2 attempt(s)" in (result.error or "")
+    assert "authoring unresolved after 3 attempt(s)" in (result.error or "")
 
 
 def test_a_revision_records_the_state_it_came_from(tmp_path):

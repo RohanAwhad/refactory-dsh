@@ -53,8 +53,9 @@ deletion is not part of this small-change emission contract.
 
 `repair_attempts` is one shared bound across structural admission, canonical runtime validation and focused QA,
 from zero to three. It counts repairs after the first implementation, so one
-permits at most two implementations. The required Design `check` runs as a bounded
-command against the materialized artifact. Create/Edit can also name an explicit
+permits at most two implementations. The required Design `check` runs against the
+materialized artifact as a command bounded by `check_timeout_s` rather than by
+memory, as every check is (see [models](models.md)). Create/Edit can also name an explicit
 `check`; an empty check is reported as not requested, not passed. Focused QA asks
 the worker to inspect the emitted or changed files, requested behavior and relevant
 regressions, using the actual command result already supplied. It records evidence

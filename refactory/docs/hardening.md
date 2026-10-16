@@ -204,7 +204,8 @@ is what the runtime we ship executes.
 **Not adopted, stated rather than skipped.** `AgentNode.post_checks` and refactory's
 `ForkNode`/`JoinNode` are still unused. `post_checks` would duplicate a check the
 executor already performs; adopting fork/join is a real design change, not a
-fidelity fix, and is not done.
+fidelity fix, and is not done. Design's `emit` still needs none: an `emit.txt`
+`materialise` cannot apply is sent back to `emit` by the check (#361).
 
 ---
 

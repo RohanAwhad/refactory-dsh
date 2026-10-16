@@ -13,15 +13,13 @@ import os
 import subprocess
 import threading
 import time
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
 import pytest
 
 from refactory_dsh import authoring_evidence, sandbox, worktree
 from refactory_dsh.paths import venv_bin
-from tests_support import git, git_repo, stub
+from tests_support import git, git_repo, on_stdin, stub
 
 
 @pytest.fixture
@@ -39,22 +37,6 @@ def _spine(run: Path, status: str) -> None:
     """Leave the status the spine writes for a run it drives."""
     (run / ".refactory").mkdir(parents=True, exist_ok=True)
     (run / ".refactory" / "spine-status.json").write_text(json.dumps({"status": status}))
-
-
-@contextmanager
-def _stdin(text: str) -> Iterator[None]:
-    """Put ``text`` on this process's stdin, so a child that inherited it could read it."""
-    read, write = os.pipe()
-    os.write(write, text.encode())
-    os.close(write)
-    saved = os.dup(0)
-    os.dup2(read, 0)
-    os.close(read)
-    try:
-        yield
-    finally:
-        os.dup2(saved, 0)
-        os.close(saved)
 
 
 # ── a worktree of its own, from a pinned base (#330 I1) ────────────────────
@@ -212,19 +194,54 @@ def test_none_of_the_targets_hooks_run_for_the_run(repo, tmp_path):
 
 
 # ── attempts ───────────────────────────────────────────────────────────────
-def test_each_attempt_is_one_commit_whose_tree_is_the_base_plus_that_attempts_files(repo, tmp_path):
-    """A later attempt replaces an earlier one, as rewriting an artifact directory did."""
+def test_each_attempt_is_one_commit_that_builds_on_the_last(repo, tmp_path):
+    """A retry changes only what it needs to: an earlier attempt's files stay until one deletes them."""
     run = _run(tmp_path)
     found = worktree.create(repo, "HEAD", "dddddddd3333", run)
     first = worktree.commit_attempt(run, {Path("tool.py"): "v1\n", Path("app.py"): "changed\n"}, "attempt 1")
-    second = worktree.commit_attempt(run, {Path("other.py"): "v2\n"}, "attempt 2")
+    second = worktree.commit_attempt(run, {Path("other.py"): "v2\n"}, "attempt 2", (Path("tool.py"),))
     path = Path(found.path)
     assert git(path, "rev-list", "--count", f"{found.base}..HEAD") == "2"
     assert second.head != first.head != found.base
     assert sorted(git(path, "ls-tree", "--name-only", "HEAD").splitlines()) == ["app.py", "other.py"]
-    assert (path / "app.py").read_text() == "print('app')\n", "an earlier attempt's edit is put back"
-    assert not (path / "tool.py").exists()
-    assert "other.py" in worktree.diff(second) and "tool.py" not in worktree.diff(second)
+    assert (path / "app.py").read_text() == "changed\n", "an earlier attempt's edit is kept"
+    assert not (path / "tool.py").exists(), "and a file it wrote goes only when an attempt deletes it"
+    assert "other.py" in worktree.diff(second) and "app.py" in worktree.diff(second)
+
+
+def test_a_file_written_over_a_directory_or_inside_a_file_is_refused_not_crashed_on(repo, tmp_path):
+    """An earlier attempt's files now stay, so a later one can collide with them."""
+    run = _run(tmp_path)
+    worktree.create(repo, "HEAD", "fefefefe3333", run)
+    worktree.commit_attempt(run, {Path("pkg/a.py"): "x\n"}, "attempt 1")
+    with pytest.raises(worktree.AttemptRefused, match="is a directory of the last attempt"):
+        worktree.commit_attempt(run, {Path("pkg"): "x\n"}, "attempt 2")
+    with pytest.raises(worktree.AttemptRefused, match="inside app.py, which is a file"):
+        worktree.commit_attempt(run, {Path("app.py/x"): "x\n"}, "attempt 2")
+    with pytest.raises(worktree.AttemptRefused, match="nothing to delete"):
+        worktree.commit_attempt(run, {}, "attempt 2", (Path("pkg"),))
+
+
+def test_a_file_that_is_not_text_can_still_be_deleted(repo, tmp_path):
+    """It cannot be edited, which is no reason it cannot be removed."""
+    (repo / "logo.bin").write_bytes(b"\xff\xfe\x00")
+    git(repo, "add", "logo.bin")
+    git(repo, "commit", "-q", "-m", "a binary file")
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "bdbdbdbd3333", run)
+    worktree.commit_attempt(run, {}, "attempt", (Path("logo.bin"),))
+    assert "logo.bin" not in git(Path(found.path), "ls-tree", "--name-only", "HEAD").split()
+
+
+def test_an_attempt_reads_and_deletes_only_what_the_last_attempt_committed(repo, tmp_path):
+    """Edits apply to the commit, whatever a check left on disk; a deletion needs a file to delete."""
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "dededede3333", run)
+    (Path(found.path) / "app.py").write_text("rewritten by a check\n")
+    assert worktree.committed_text(found, Path("app.py")) == "print('app')\n"
+    assert worktree.committed_text(found, Path("missing.py")) is None
+    with pytest.raises(worktree.AttemptRefused, match="nothing to delete"):
+        worktree.commit_attempt(run, {}, "attempt", (Path("missing.py"),))
 
 
 def test_a_tracked_file_the_run_changed_on_disk_is_put_back_before_the_next_attempt(repo, tmp_path, capsys):
@@ -651,6 +668,18 @@ def test_a_managed_environment_comes_first_and_an_unmarked_one_is_not_adopted(re
     assert str(venv_bin()) not in marked["PATH"].split(os.pathsep)
 
 
+def test_a_check_uses_the_pnpm_store_its_install_used(repo, tmp_path):
+    """pnpm finds its store through HOME: under the check's own it saw another store and tried to reinstall."""
+    found = worktree.create(repo, "HEAD", "5e5e5e5e3333", _run(tmp_path))
+    assert "pnpm_config_store_dir" not in worktree.check_environment(Path(found.path), tmp_path / "home")
+    (Path(found.path) / "node_modules").mkdir()
+    (Path(found.path) / "node_modules" / ".modules.yaml").write_text(
+        json.dumps({"storeDir": "/home/someone/.local/share/pnpm/store/v11"}))
+    env = worktree.check_environment(Path(found.path), tmp_path / "home")
+    assert env["pnpm_config_store_dir"] == "/home/someone/.local/share/pnpm/store/v11"
+    assert env["HOME"] == str(tmp_path / "home"), "only the store is shared; caches stay out of the worktree"
+
+
 def _python_project(repo: Path) -> None:
     (repo / "pyproject.toml").write_text("[project]\nname = 'x'\n")
     git(repo, "add", "pyproject.toml")
@@ -689,7 +718,7 @@ def test_what_was_installed_is_known_per_worktree_not_per_run_directory(repo, tm
     assert (Path(second.path) / ".venv" / worktree.MARKER).exists()
 
 
-def test_installs_run_without_the_checks_memory_cap(repo, tmp_path, monkeypatch):
+def test_installs_run_without_a_memory_cap(repo, tmp_path, monkeypatch):
     """A package manager under a 2 GB address space is killed before it installs anything."""
     stub(tmp_path / "bin", "uv", f'echo "cap=$(ulimit -v)" >> "{tmp_path}/bin/calls.log"; mkdir -p .venv/bin')
     monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
@@ -781,7 +810,7 @@ def test_installs_run_unattended_without_hook_managers_secrets_or_refactorys_var
     git(repo, "add", ".")
     git(repo, "commit", "-q", "-m", "js")
     run = _run(tmp_path)
-    with _stdin("y\n"):
+    with on_stdin("y\n"):
         worktree.ensure_environment(worktree.create(repo, "HEAD", "3333aaaa6666", run), run)
     calls = (bin_dir / "calls.log").read_text()
     assert "HUSKY=0 LEFTHOOK=0 CI=true DSH=unset VENV=unset KEY=unset NPM=a-registry-token" in calls

@@ -7591,7 +7591,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "values": []
     },
     "check_attempts": {
-      "default": 2,
+      "default": 3,
       "description": "how many times the emit step may be retried when the artifact does not pass its check",
       "frozen": false,
       "kind": "int",
@@ -7599,7 +7599,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
         1,
         5
       ],
-      "value": 2,
+      "value": 3,
       "values": []
     },
     "check_timeout_s": {
@@ -7777,7 +7777,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local; `refine` updates an open one).",
-    "reviewed_schema": "8cea098c8c8557e495e99e0c09e343a79d5a590fb03d623f396b387e4b912ead"
+    "reviewed_schema": "097fc5d295938eff3f21a71a13471ba892d669c1d0d4c5b015c266bdadd340db"
   }
 }
 ```

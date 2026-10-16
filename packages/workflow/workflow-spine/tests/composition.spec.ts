@@ -11,7 +11,7 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
-import ToolRuntime from '@deepseek-ai/dsh-tools'
+import ToolRuntime, { defineTool } from '@deepseek-ai/dsh-tools'
 import UserQuestionService from '@deepseek-ai/dsh-user-questions'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { afterEach, describe, expect, it, vi, type MockInstance } from 'vitest'
@@ -440,8 +440,8 @@ describe('the CEO deny guard', () => {
    * context does not carry that injection, and the proxy supplies the service the
    * guard reads from the agent's side.
    */
-  function agentCtxIn(root: Context, parent: object): Context {
-    const scoped = createScope(root, {}, { parent }).ctx
+  function agentCtxIn(root: Context, parent?: object): Context {
+    const scoped = createScope(root, {}, parent === undefined ? {} : { parent }).ctx
     return new Proxy(scoped, {
       get: (target, prop, receiver): unknown => (prop === 'tools' ? root.tools : Reflect.get(target, prop, receiver)),
     })
@@ -465,6 +465,19 @@ describe('the CEO deny guard', () => {
     return { root, composition, compositionKey, restrict }
   }
 
+  /** A root with the injected services and the plugin mounted at host level, as the CLI profile mounts it. */
+  async function hostLevel(deny: string[]): Promise<{
+    root: Context
+    restrict: MockInstance<typeof ToolRuntime.prototype.restrict>
+  }> {
+    const root = new Context()
+    await root.plugin(SystemPrompt)
+    await root.plugin(ToolRuntime)
+    await root.plugin(spinePlugin, config({ ceoDeny: deny }))
+    const restrict = vi.spyOn(root.tools, 'restrict')
+    return { root, restrict }
+  }
+
   it('denies a named tool the CEO can actually reach, and disposes with the agent', async () => {
     const { root, composition, compositionKey, restrict } = await composed(['wf_next', 'ghost-tool'])
     const disposed: number[] = []
@@ -486,18 +499,40 @@ describe('the CEO deny guard', () => {
   })
 
   it('leaves an agent outside the composition alone', async () => {
-    const { root, composition, restrict } = await composed(['wf_next'])
-    const elsewhere = createScope(root, {}).ctx
-    composition.emit('agent/created', { agent: agentWith(elsewhere), source: 'startup' })
+    const { root, composition, restrict } = await composed(['wf_next', 'host-tool'])
+    // A host tool the outside agent does see, so only the composition check spares it.
+    root.tools.register(defineTool({
+      name: 'host-tool',
+      description: 'A tool every agent on the host sees.',
+      parameters: {},
+      output: { schema: { type: 'json' }, render: () => [] },
+      execute: () => Promise.resolve(null),
+    }))
+    composition.emit('agent/created', { agent: agentWith(agentCtxIn(root)), source: 'startup' })
     expect(restrict).not.toHaveBeenCalled()
   })
 
-  it('skips the guard when the composition is unscoped', async () => {
-    const root = new Context()
-    await root.plugin(SystemPrompt)
-    await root.plugin(ToolRuntime)
-    await root.plugin(spinePlugin, config({ ceoDeny: ['wf_next'] }))
-    const restrict = vi.spyOn(root.tools, 'restrict')
+  it('denies a named tool the CEO can actually reach when the spine is mounted at host level, and disposes with the agent', async () => {
+    const { root, restrict } = await hostLevel(['wf_next', 'ghost-tool'])
+    const disposed: number[] = []
+    restrict.mockImplementation(() => () => { disposed.push(1) })
+    const agent = agentWith(agentCtxIn(root))
+
+    root.emit('agent/created', { agent, source: 'startup' })
+    expect(restrict).toHaveBeenCalledWith({ deny: ['wf_next'] })
+
+    root.emit('agent/disposed', { agent })
+    expect(disposed).toHaveLength(1)
+  })
+
+  it('leaves a subagent alone when the spine is mounted at host level', async () => {
+    const { root, restrict } = await hostLevel(['wf_next'])
+    root.emit('agent/created', { agent: agentWith(agentCtxIn(root), 'subagent'), source: 'startup' })
+    expect(restrict).not.toHaveBeenCalled()
+  })
+
+  it('leaves an unscoped agent alone when the spine is mounted at host level', async () => {
+    const { root, restrict } = await hostLevel(['wf_next'])
     root.emit('agent/created', { agent: agentWith(root), source: 'startup' })
     expect(restrict).not.toHaveBeenCalled()
   })
