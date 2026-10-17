@@ -4,7 +4,7 @@ A mode that writes code into a repository -- design and design_fast, or one you 
 attaches these rather than wiring its own (#351):
 
 - `knobs`, `knob_names` and `produces` are what the mode's prepare node declares, so a run
-  names its `target`, `base`, `worktree` and `setup`.
+  names its `target`, `base`, `worktree`, `setup` and `generate`.
 - `locate`, called from the mode's own prepare op, gives the run a git worktree of its
   target on its own branch, from a pinned base -- a new project when there is no target --
   or, with `worktree` off, the artifact directory. Its `emit_scope` fact is the text the
@@ -94,8 +94,9 @@ EMISSION = Path(".refactory") / "emission.json"
 NO_WORKTREE = "(this run has no worktree: `worktree` is off)"
 
 #: What a node that calls `run_check` writes and returns besides its own: an install that
-#: writes a lockfile amends the attempt (`worktree.ensure_environment`), so the check
-#: rewrites ``changes.diff`` and moves the ``commit`` and ``files`` facts to the amended one.
+#: writes a lockfile amends the attempt (`worktree.ensure_environment`), and a generate
+#: command amends its tracked-file changes too, so the check rewrites ``changes.diff``
+#: and moves the ``commit`` and ``files`` facts to the amended one.
 CHECK_WRITES = ("changes.diff",)
 CHECK_PRODUCES = ("commit", "files")
 
@@ -119,6 +120,9 @@ def knobs() -> dict[str, Knob]:
         "setup": Knob("", "str", frozen=True,
                       description="a command run in the worktree before each check, after its "
                                   "dependencies are installed, such as a build"),
+        "generate": Knob("", "str", frozen=True,
+                         description="a command run in the worktree after setup, before each check; "
+                                     "whatever it changes in tracked files is amended into the attempt"),
     }
 
 
@@ -129,7 +133,7 @@ def knob_names() -> tuple[str, ...]:
 
 def produces() -> tuple[str, ...]:
     """The facts `locate` returns, for the prepare node's ``produces``."""
-    return ("target", "worktree", "branch", "base", "source", "check_root", "emit_scope", "setup")
+    return ("target", "worktree", "branch", "base", "source", "check_root", "emit_scope", "setup", "generate")
 
 
 def materialise_node(**fields: Any) -> Node:
@@ -271,7 +275,8 @@ def _run_id(workdir: Path) -> str:
     return found[:12] if re.fullmatch(r"[0-9a-f]{12,}", found) else uuid.uuid4().hex[:12]
 
 
-def _open_worktree(ctx: Any, name: str, task: dict[str, Any]) -> dict[str, Any]:
+def _open_worktree(ctx: Any, name: str, task: dict[str, Any],
+                   output_only: tuple[str, ...] = ()) -> dict[str, Any]:
     """Give the run its own worktree of its target, and say what that means (#351).
 
     The target is the repository ``target`` names -- relative to the project the run
@@ -304,13 +309,16 @@ def _open_worktree(ctx: Any, name: str, task: dict[str, Any]) -> dict[str, Any]:
         else:
             print(f"refactory: {note}", file=sys.stderr)
     found = worktree.create(target, base, run_id, ctx.workdir)
-    # The checkouts a worker could still write to directly are watched while `emit`
-    # runs, which may change none of them: the target, the run's own worktree, and the
-    # checkout the run starts from, whose run directories hold the workers (#319).
-    watched = [Path(found.path)]
+    # Every step of a worktree run is held to its own worktree (#319, #347).
+    # Changes to the target or the launcher checkout are warnings: another
+    # session or person may be working there.
+    warn_dirs: tuple[Path, ...] = ()
     if launcher != target and (launcher / ".git").exists():
-        watched.append(launcher)
-    baseline = target_guard.record(ctx.workdir, target, output_only=OUTPUT_ONLY, also=tuple(watched))
+        warn_dirs = (launcher,)
+    baseline = target_guard.record(ctx.workdir, target,
+                                   output_only=(*OUTPUT_ONLY, *output_only),
+                                   also=(Path(found.path),),
+                                   warn_also=warn_dirs)
     if baseline["changes"]:
         target_guard.warn(f"{len(baseline['changes'])} uncommitted change(s) in {target} are not part of "
                           f"this run, which starts from commit {found.base[:12]}: "
@@ -334,13 +342,14 @@ def _open_worktree(ctx: Any, name: str, task: dict[str, Any]) -> dict[str, Any]:
                 f"{target} on branch {found.branch}, from the base commit {found.base[:12]}. Each attempt "
                 "builds on the last: the worktree holds the base and every earlier attempt, as committed "
                 f"(`git -C {found.path} diff {found.base[:12]}` shows the change so far), so read the files "
-                "there and change only what this attempt needs. Write one block per file, introduced by "
-                "a line of exactly one of:\n"
+                "there and change only what this attempt needs. For each file, write one ===FILE: or "
+                "===DELETE: block, or one or more ===EDIT: blocks; each block starts with a line of "
+                "exactly one of:\n"
                 "===FILE: <relative path>=== followed by the whole file, for a new file or one you "
                 "rewrite entirely;\n"
                 "===EDIT: <relative path>=== followed by one or more edits to an existing file, each "
-                f"written as\n{SEARCH}\n<lines copied exactly from the file as it is now>\n{DIVIDER}\n"
-                f"<the lines that replace them>\n{REPLACE}\nwhere the copied lines appear in the file "
+                f"written as\n{SEARCH}\n<text copied exactly from the file as it is now>\n{DIVIDER}\n"
+                f"<the text that replaces it>\n{REPLACE}\nwhere the copied text appears in the file "
                 "exactly once;\n"
                 "===DELETE: <relative path>=== on its own, to remove a file.\n"
                 "Prefer ===EDIT: for a file that exists: retyping a long file risks changing lines you "
@@ -355,22 +364,27 @@ def wants_worktree(ctx: Any) -> bool:
 
 
 def locate(ctx: Any, name: str, task: dict[str, Any], *, in_worktree: bool | None = None,
-           needs_worktree: tuple[str, ...] = ()) -> dict[str, Any]:
+           needs_worktree: tuple[str, ...] = (), output_only: tuple[str, ...] = ()) -> dict[str, Any]:
     """Where the run works, as facts for the mode's prepare op to return.
 
     ``name`` is the run's artifact, and a new project's name. In a worktree unless
     ``in_worktree`` -- by default the ``worktree`` knob -- says otherwise (`_open_worktree`).
     Without one, the run writes the artifact directory, which it claims, and watches the
-    project instead; ``target``, ``base`` and ``setup`` are refused then, with
+    project instead; ``target``, ``base``, ``setup`` and ``generate`` are refused then, with
     ``needs_worktree``, the mode's own knobs that only a worktree gives a meaning to.
+
+    ``output_only`` names further agent nodes -- besides ``emit`` -- whose only
+    output is their declared file.  The agent-delivery bracket refuses one that
+    changed the run's worktree while it ran; in a worktree run, changes to the
+    target or the launcher checkout become warnings rather than failures.
     """
     _artifact_name(name)
     if in_worktree is None:
         in_worktree = wants_worktree(ctx)
     if in_worktree:
-        located = _open_worktree(ctx, name, task)
+        located = _open_worktree(ctx, name, task, output_only=output_only)
     else:
-        given = [knob for knob in ("target", "base", "setup", *needs_worktree)
+        given = [knob for knob in ("target", "base", "setup", "generate", *needs_worktree)
                  if str(task.get(knob) or ctx.knob(knob, "") or "").strip()]
         if given:
             raise ValueError(f"{', '.join(given)} need the run's worktree, which is off; turn it on, or leave "
@@ -382,7 +396,8 @@ def locate(ctx: Any, name: str, task: dict[str, Any], *, in_worktree: bool | Non
         # The baseline every later step compares with (#330 I1), and the bracket that
         # holds `emit` to its declared output (#319).
         project = project_for_nodes().expanduser()
-        baseline = target_guard.record(ctx.workdir, project, output_only=OUTPUT_ONLY)
+        baseline = target_guard.record(ctx.workdir, project,
+                                       output_only=(*OUTPUT_ONLY, *output_only))
         if baseline["changes"] is None:
             target_guard.warn(f"the target {baseline['root']} has more than {target_guard.LIMIT} "
                               "files to watch, so this run cannot tell whether it moves or "
@@ -395,7 +410,8 @@ def locate(ctx: Any, name: str, task: dict[str, Any], *, in_worktree: bool | Non
                                  "followed by its full contents."}
     # Resolved once, as create resolves its own inputs: the check reads the fact.
     setup = str(task.get("setup") or ctx.knob("setup", "") or "").strip()
-    return {**located, "setup": setup}
+    generate = str(task.get("generate") or ctx.knob("generate", "") or "").strip()
+    return {**located, "setup": setup, "generate": generate}
 
 
 # ── what lands: emit.txt, applied ─────────────────────────────────────────────
@@ -415,12 +431,26 @@ def _emitted(answer: str, *, edits: bool) -> tuple[dict[Path, str], Edits, tuple
         raise AttemptRefused(f"emit.txt holds no {kinds} blocks; write each file's change as one, as the "
                              "prompt describes, with no other text")
     names = [match.group(2) for match in matches]
-    if len(names) != len(set(names)):
-        raise AttemptRefused("emit.txt names a file in more than one block; put all of a file's change in one block")
+    # Several ===EDIT: blocks for the same file are merged; a file named by an
+    # ===EDIT: and a ===FILE: or ===DELETE:, or by two ===FILE: blocks, is refused.
+    kinds_by_name: dict[str, set[str]] = {}
+    for match in matches:
+        kinds_by_name.setdefault(match.group(2), set()).add(match.group(1))
+    for name, used in kinds_by_name.items():
+        if used == {"EDIT"}:
+            continue  # several ===EDIT: blocks for one file are applied in order
+        if names.count(name) > 1:
+            blocks = " and a ".join(f"==={k}:" for k in sorted(used))
+            raise AttemptRefused(
+                f"emit.txt names {name} in more than one block ({blocks}); "
+                "a file may appear in several ===EDIT: blocks, but not in a mix with ===FILE: or ===DELETE:")
+    unique_names = list(dict.fromkeys(names))
+    paths = {name: path for name, path in zip(unique_names, _artifact_paths(unique_names))}
     files: dict[Path, str] = {}
     changed: Edits = {}
     deletes: list[Path] = []
-    for index, (match, path) in enumerate(zip(matches, _artifact_paths(names))):
+    for index, match in enumerate(matches):
+        path = paths[match.group(2)]
         kind = match.group(1)
         end = matches[index + 1].start() if index + 1 < len(matches) else len(answer)
         body = answer[match.end():end].strip("\n")
@@ -431,7 +461,7 @@ def _emitted(answer: str, *, edits: bool) -> tuple[dict[Path, str], Edits, tuple
             _refuse_truncated(path, body)
             files[path] = body + "\n"
         elif kind == "EDIT":
-            changed[path] = _pairs(path, body)
+            changed.setdefault(path, []).extend(_pairs(path, body))
         elif body.strip():
             raise AttemptRefused(f"the ===DELETE: block for {path} has text after it; a deletion takes none, "
                                  "so leave the line after the header empty")
@@ -479,16 +509,27 @@ def _pairs(path: Path, body: str) -> list[tuple[str, str]]:
     return pairs
 
 
+def _occurrences(text: str, search: str) -> list[int]:
+    """Every position where ``search`` occurs in ``text``, regardless of line boundaries."""
+    found: list[int] = []
+    at = text.find(search)
+    while at != -1:
+        found.append(at)
+        at = text.find(search, at + 1)
+    return found
+
+
 def _edited(path: Path, text: str, pairs: list[tuple[str, str]], shown: str) -> tuple[str, int]:
     """``text`` with each edit applied in turn, and how many were already in it.
 
-    Each edit is refused unless its search lines are there exactly once. Search lines
-    match whole lines, from a line's start. The read tool shows a file with ``\r``
-    stripped and every line ended, so a file whose lines all end in ``\r\n``, or whose
-    last line has no newline, is matched as shown and written back as it was. An edit
-    whose result is already where it would go -- a model re-sending an earlier attempt's
-    edit -- is skipped rather than applied twice. ``shown`` is the command that prints
-    ``text``, so a refusal names where to copy from.
+    Each edit is refused unless its search text is there exactly once. Search text
+    is matched as exact text anywhere in the file, like the dsh edit tool's old_string.
+    The read tool shows a file with ``\r`` stripped and every line ended, so a file
+    whose lines all end in ``\r\n``, or whose last line has no newline, is matched as
+    shown and written back as it was. An edit whose result is already where it would go
+    -- a model re-sending an earlier attempt's edit -- is skipped rather than applied
+    twice. ``shown`` is the command that prints ``text``, so a refusal names where to
+    copy from.
     """
     crlf = "\r\n" in text and text.count("\r\n") == text.count("\n")
     work = text.replace("\r\n", "\n") if crlf else text
@@ -496,16 +537,16 @@ def _edited(path: Path, text: str, pairs: list[tuple[str, str]], shown: str) -> 
     work += "\n" if open_end else ""
     skipped = 0
     for search, replacement in pairs:
-        starts = _line_starts(work, search)
+        starts = _occurrences(work, search)
         if _already_applied(work, search, replacement, starts):
             skipped += 1
             continue
         if len(starts) != 1:
             first = next((line.strip() for line in search.splitlines() if line.strip()), "")[:80]
             raise AttemptRefused(
-                f"an edit to {path} searches for lines beginning {first!r}, which "
-                + (f"are not in the file the edit applies to; copy them exactly from `{shown}`"
-                   if not starts else f"appear {len(starts)} times; add lines around them until they appear once"))
+                f"an edit to {path} searches for text beginning {first!r}, which "
+                + (f"is not in the file the edit applies to; copy it exactly from `{shown}`"
+                   if not starts else f"appears {len(starts)} times; include more text around it until it appears once"))
         work = work[:starts[0]] + replacement + work[starts[0] + len(search):]
     if open_end and work.endswith("\n"):
         work = work[:-1]
@@ -560,8 +601,9 @@ def materialise(ctx: Any, *, source: Path | None = None, files: tuple[str, ...] 
     has: from the emitted files alone, or, given ``source``, from its ``files`` with the
     emitted files over them (design_fast's `source_project`). An emission that cannot be
     applied -- a malformed block, an edit whose text is not in its file, text copied from a
-    truncated read -- does not end the run: it is recorded as ``emission_refused``, and the
-    check sends the reason back to emit.
+    truncated read, or an emission that changes nothing because every file and edit is
+    already in the last attempt -- does not end the run: it is recorded as
+    ``emission_refused``, and the check sends the reason back to emit.
     """
     try:
         found = worktree.recorded(ctx.workdir)
@@ -687,17 +729,16 @@ def _check_in_worktree(ctx: Any, found: worktree.Worktree, command: str, timeout
     """Run the check in the run's worktree, after preparing the environment it needs.
 
     An install that writes a lockfile amends the attempt (`worktree.ensure_environment`),
-    so the commit fact and the reviewers' diff follow it to its new head.
+    and a generate command amends its tracked-file changes too, so the commit fact and
+    the reviewers' diff follow them to their new head.
     """
     home = Path(ctx.workdir).resolve() / worktree.CHECK_HOME
     home.mkdir(parents=True, exist_ok=True)
     budget = getattr(ctx, "budget", None)
+    head_before = found.head
     amended, problems = worktree.ensure_environment(found, ctx.workdir, budget)
     if amended.head != found.head:
         found = amended
-        ctx.set_fact("commit", found.head)
-        ctx.set_fact("files", _branch_files(found))
-        ctx.write_text("changes.diff", worktree.diff(found))
     worktree.write_wrapper(found, ctx.workdir)
     env = worktree.check_environment(Path(found.path), home)
     setup = str(ctx.facts.get("setup") or "").strip()
@@ -707,6 +748,22 @@ def _check_in_worktree(ctx: Any, found: worktree.Worktree, command: str, timeout
         if not prepared.ok:
             problems.append(f"the setup command `{setup}` failed: "
                             + "\n".join((prepared.problem(), prepared.stdout or "", prepared.stderr or "")).strip())
+    # ── generate: run and amend tracked-file changes into the attempt ──
+    generate = str(ctx.facts.get("generate") or "").strip()
+    if not problems and generate:
+        prepared = sandbox.run_command(generate, workdir=Path(found.path), timeout_s=timeout,
+                                       budget=budget, env=env, home=home, exact_env=True)
+        if not prepared.ok:
+            problems.append(f"the generate command `{generate}` failed: "
+                            + "\n".join((prepared.problem(), prepared.stdout or "", prepared.stderr or "")).strip())
+        else:
+            edits = worktree.tracked_edits(found)
+            if edits:
+                found = worktree.amend(found, ctx.workdir, edits, "files written by the generate command")
+    if found.head != head_before:
+        ctx.set_fact("commit", found.head)
+        ctx.set_fact("files", _branch_files(found))
+        ctx.write_text("changes.diff", worktree.diff(found))
     if problems:
         return sandbox.SandboxResult(ok=False, returncode=1, elapsed_s=0.0, stderr=(
             "the worktree's environment could not be prepared:\n" + "\n".join(problems)))
@@ -724,7 +781,8 @@ def run_check(ctx: Any, command: str, timeout: float) -> Any:
 
     In the run's worktree it runs on the committed attempt -- what a check or reviewer
     changed is put back first -- in the worktree's own environment: its dependencies
-    installed when its manifests call for them, then the ``setup`` fact's command, and
+    installed when its manifests call for them, then the ``setup`` fact's command, then the
+    ``generate`` fact's command, whose tracked-file changes are amended into the attempt, and
     nothing of refactory's own on the path (`worktree.check_environment`). Afterwards the
     worktree is put back again, so the reviews and the next attempt see what edits apply
     to. Without a worktree it runs in the artifact directory the run claimed.

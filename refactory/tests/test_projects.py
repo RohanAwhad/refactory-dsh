@@ -56,6 +56,27 @@ def test_runs_creating_one_project_at_once_share_it():
     assert [item.name for item in projects_dir().iterdir()] == ["busy"]
 
 
+def test_staging_commit_disables_automatic_maintenance():
+    """The staging commit must not start background maintenance that races with cleanup."""
+    calls: list[tuple[str, ...]] = []
+    original_git = worktree.git
+
+    def recording_git(repo, *args, **kwargs):
+        calls.append(args)
+        return original_git(repo, *args, **kwargs)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(worktree, "git", recording_git)
+        projects.new_project("probe")
+
+    commit_calls = [args for args in calls if "commit" in args]
+    assert len(commit_calls) == 1, f"expected exactly one commit call, got {len(commit_calls)}"
+    commit_args = commit_calls[0]
+    joined = " ".join(commit_args)
+    assert "gc.auto=0" in joined, f"gc.auto=0 not found in {commit_args}"
+    assert "maintenance.auto=false" in joined, f"maintenance.auto=false not found in {commit_args}"
+
+
 def test_a_creation_that_died_part_way_does_not_refuse_the_next_run():
     projects_dir().mkdir(parents=True)
     (projects_dir() / ".tool.abc123.new").mkdir()

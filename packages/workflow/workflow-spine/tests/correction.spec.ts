@@ -9,14 +9,30 @@
  * graph: the spine holds the node bodies it was given, so an amendment mutates
  * the graph object itself.
  */
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import * as spinePlugin from '../src/index.ts'
 import { Spine } from '../src/spine.ts'
 import type { Config } from '../src/index.ts'
 import type { WorkflowGraph } from '../src/types.ts'
+
+const scratchDirs: string[] = []
+
+afterEach(() => {
+  for (const dir of scratchDirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+})
+
+function scratch(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-spine-correction-'))
+  scratchDirs.push(dir)
+  return dir
+}
 
 function ids(spine: Spine): string[] {
   const next = spine.next()
@@ -84,9 +100,9 @@ describe('redo', () => {
       .toThrow(/node b has not completed, so there is nothing to redo/)
   })
 
-  it('refuses a gate, naming the verdict route instead', () => {
+  it('refuses a gate, naming the upstream agent to replay', () => {
     expect(() => new Spine(redoGraph()).redo('gate'))
-      .toThrow(/node gate is a gate; redo a completed upstream agent, then run the gate when due/)
+      .toThrow(/gate is a gate; replay b instead/)
   })
 
   it('refuses a data node, whose passes are the runner\'s', () => {
@@ -199,7 +215,7 @@ function agentGraph(): WorkflowGraph {
   }
 }
 
-function config(graph: WorkflowGraph = agentGraph()): Config {
+function config(graph: WorkflowGraph = agentGraph(), overrides: Partial<Config> = {}): Config {
   return {
     graph,
     toolPrefix: 'wf',
@@ -215,15 +231,16 @@ function config(graph: WorkflowGraph = agentGraph()): Config {
     steerCommand: '',
     steerArgs: [],
     ceoDeny: [],
+    ...overrides,
   }
 }
 
 /** A context with the two services the plugin injects, and the plugin mounted. */
-async function mount(graph: WorkflowGraph = agentGraph()): Promise<Context> {
+async function mount(graph: WorkflowGraph = agentGraph(), overrides: Partial<Config> = {}): Promise<Context> {
   const root = new Context()
   await root.plugin(SystemPrompt)
   await root.plugin(ToolRuntime)
-  await root.plugin(spinePlugin, config(graph))
+  await root.plugin(spinePlugin, config(graph, overrides))
   return root
 }
 
@@ -232,6 +249,306 @@ async function call(ctx: Context, name: string, args: unknown = {}): Promise<unk
   if (definition === undefined) throw new Error(`tool ${name} not registered`)
   return definition.execute(args, {} as never)
 }
+
+/** A graph with a reloop from gate back to a. */
+function reloopGraph(): WorkflowGraph {
+  return {
+    name: 't',
+    start_node: 'a',
+    nodes: {
+      a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', reads: [], writes: [] },
+      b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', reads: [], writes: [] },
+      gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'fn', evaluator_command: 'true', reads: [] },
+      c: { _type: 'AgentNode', id: 'c', role: 'builder', prompt_template: 'C', reads: [], writes: [] },
+    },
+    edges: [
+      { source: 'a', target: 'b' },
+      { source: 'b', target: 'gate' },
+      { source: 'gate', target: 'a', condition: 'reloop' },
+      { source: 'gate', target: 'c', condition: 'proceed' },
+    ],
+  }
+}
+
+describe('forward-only invalidation', () => {
+  it('redo of a node before a gate with reloop invalidates only forward descendants', () => {
+    const spine = new Spine(reloopGraph())
+    spine.complete('a')
+    spine.complete('b')
+    spine.verdict('gate', 'proceed')
+    spine.complete('c')
+    const plan = spine.planRedo('a')
+    const nodes = new Set(plan.nodes)
+    expect(nodes).toContain('a')
+    expect(nodes).toContain('b')
+    expect(nodes).toContain('gate')
+    expect(nodes).toContain('c')
+    // No extra nodes reachable only through reloop back-edge.
+    expect(plan.nodes.length).toBe(4)
+  })
+
+  it('redo of overwatch-pattern graph excludes loop body reached via back-edge', () => {
+    const graph: WorkflowGraph = {
+      name: 't',
+      start_node: 'emit',
+      nodes: {
+        emit: { _type: 'AgentNode', id: 'emit', role: 'builder', prompt_template: 'E', reads: [], writes: [] },
+        materialise: { _type: 'FnNode', id: 'materialise', command: 'true', reads: [], writes: [] },
+        check: { _type: 'FnNode', id: 'check', command: 'true', reads: [], writes: [] },
+        fork_qa: { _type: 'ForkNode', id: 'fork_qa', targets: ['review_a', 'review_b', 'review_c'] },
+        review_a: { _type: 'AgentNode', id: 'review_a', role: 'reviewer', prompt_template: 'RA', reads: [], writes: [] },
+        review_b: { _type: 'AgentNode', id: 'review_b', role: 'reviewer', prompt_template: 'RB', reads: [], writes: [] },
+        review_c: { _type: 'AgentNode', id: 'review_c', role: 'reviewer', prompt_template: 'RC', reads: [], writes: [] },
+        join_qa: { _type: 'JoinNode', id: 'join_qa', sources: ['review_a', 'review_b', 'review_c'] },
+        synth: { _type: 'AgentNode', id: 'synth', role: 'builder', prompt_template: 'S', reads: [], writes: [] },
+        gate_qa: { _type: 'GateNode', id: 'gate_qa', evaluator_type: 'fn', evaluator_command: 'true', reads: [] },
+        overwatch: { _type: 'AgentNode', id: 'overwatch', role: 'reviewer', prompt_template: 'O', reads: [], writes: [] },
+        gate_overwatch: { _type: 'GateNode', id: 'gate_overwatch', evaluator_type: 'fn', evaluator_command: 'true', reads: [] },
+        report: { _type: 'AgentNode', id: 'report', role: 'builder', prompt_template: 'R', reads: [], writes: [] },
+        deliver: { _type: 'AgentNode', id: 'deliver', role: 'builder', prompt_template: 'D', reads: [], writes: [] },
+      },
+      edges: [
+        { source: 'emit', target: 'materialise' },
+        { source: 'materialise', target: 'check' },
+        { source: 'check', target: 'fork_qa' },
+        { source: 'fork_qa', target: 'join_qa' },
+        { source: 'join_qa', target: 'synth' },
+        { source: 'synth', target: 'gate_qa' },
+        { source: 'gate_qa', target: 'emit', condition: 'reloop' },
+        { source: 'gate_qa', target: 'overwatch', condition: 'proceed' },
+        { source: 'overwatch', target: 'gate_overwatch' },
+        { source: 'gate_overwatch', target: 'emit', condition: 'reloop' },
+        { source: 'gate_overwatch', target: 'report', condition: 'proceed' },
+        { source: 'report', target: 'deliver' },
+      ],
+    }
+    const spine = new Spine(graph)
+    // Complete all through the proceed path
+    spine.complete('emit')
+    spine.complete('materialise')
+    spine.complete('check')
+    spine.complete('fork_qa')
+    spine.complete('review_a')
+    spine.complete('review_b')
+    spine.complete('review_c')
+    spine.complete('join_qa')
+    spine.complete('synth')
+    spine.verdict('gate_qa', 'proceed')
+    spine.complete('overwatch')
+    spine.verdict('gate_overwatch', 'proceed')
+    spine.complete('report')
+    spine.complete('deliver')
+
+    const plan = spine.planRedo('overwatch')
+    const nodes = new Set(plan.nodes)
+    expect(nodes).toContain('overwatch')
+    expect(nodes).toContain('gate_overwatch')
+    expect(nodes).toContain('report')
+    expect(nodes).toContain('deliver')
+    // Must NOT contain loop body nodes
+    expect(nodes).not.toContain('emit')
+    expect(nodes).not.toContain('materialise')
+    expect(nodes).not.toContain('check')
+    expect(nodes).not.toContain('fork_qa')
+    expect(nodes).not.toContain('review_a')
+    expect(nodes).not.toContain('review_b')
+    expect(nodes).not.toContain('review_c')
+    expect(nodes).not.toContain('join_qa')
+    expect(nodes).not.toContain('synth')
+    expect(nodes).not.toContain('gate_qa')
+  })
+
+  it('node reachable via both forward and back paths is still invalidated', () => {
+    // a → x → gate → (reloop→a, proceed→c)
+    // x is forward-reachable from a
+    const graph: WorkflowGraph = {
+      name: 't',
+      start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', reads: [], writes: [] },
+        x: { _type: 'AgentNode', id: 'x', role: 'builder', prompt_template: 'X', reads: [], writes: [] },
+        gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'fn', evaluator_command: 'true', reads: [] },
+        c: { _type: 'AgentNode', id: 'c', role: 'builder', prompt_template: 'C', reads: [], writes: [] },
+      },
+      edges: [
+        { source: 'a', target: 'x' },
+        { source: 'x', target: 'gate' },
+        { source: 'gate', target: 'a', condition: 'reloop' },
+        { source: 'gate', target: 'c', condition: 'proceed' },
+      ],
+    }
+    const spine = new Spine(graph)
+    spine.complete('a')
+    spine.complete('x')
+    spine.verdict('gate', 'proceed')
+    spine.complete('c')
+    const plan = spine.planRedo('a')
+    expect(new Set(plan.nodes)).toContain('x')
+  })
+})
+
+describe('setFeedback', () => {
+  it('sets per-visit feedback that appears in next()', () => {
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', reads: [], writes: [] },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', reads: [], writes: [] },
+      },
+      edges: [{ source: 'a', target: 'b' }],
+    }
+    const spine = new Spine(graph)
+    spine.setFeedback('a', 'fix this')
+    const next = spine.next()
+    expect(next.feedback?.a).toBe('fix this')
+  })
+
+  it('rerun text as feedback is scoped to one visit and cleared on complete', () => {
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', reads: [], writes: [] },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', reads: [], writes: [] },
+      },
+      edges: [{ source: 'a', target: 'b' }],
+    }
+    const spine = new Spine(graph)
+    spine.complete('a')
+    spine.redo('a')
+    spine.setFeedback('a', 'one-shot fix')
+    expect(spine.next().feedback?.a).toBe('one-shot fix')
+    spine.complete('a')
+    expect(spine.next().feedback).not.toHaveProperty('a')
+    // Redo again — the one-shot text is gone
+    spine.redo('a')
+    expect(spine.next().feedback).not.toHaveProperty('a')
+  })
+
+  it('gate reloop replaces rerun feedback with gate findings', () => {
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', reads: [], writes: [] },
+        gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'fn', evaluator_command: 'true', reads: [] },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', reads: [], writes: [] },
+      },
+      edges: [
+        { source: 'a', target: 'gate' },
+        { source: 'gate', target: 'a', condition: 'reloop' },
+        { source: 'gate', target: 'b', condition: 'proceed' },
+      ],
+    }
+    const spine = new Spine(graph)
+    spine.complete('a')
+    spine.redo('a')
+    spine.setFeedback('a', 'one-shot')
+    spine.complete('a')
+    spine.verdict('gate', 'reloop', 'gate findings')
+    expect(spine.state().feedback).toHaveProperty('a', 'gate findings')
+  })
+
+  it('refuses an unknown node', () => {
+    const spine = new Spine(reloopGraph())
+    expect(() => spine.setFeedback('ghost', 'x')).toThrow('unknown node ghost')
+  })
+
+  it('rerun feedback survives checkpoint restore', () => {
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', reads: [], writes: [] },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', reads: [], writes: [] },
+      },
+      edges: [{ source: 'a', target: 'b' }],
+    }
+    const spine = new Spine(graph)
+    spine.complete('a')
+    spine.redo('a')
+    spine.setFeedback('a', 'fix')
+    const saved = JSON.parse(JSON.stringify(spine.checkpoint()))
+    const restored = new Spine(graph)
+    restored.restore(saved)
+    expect(restored.state().feedback).toHaveProperty('a', 'fix')
+    restored.complete('a')
+    expect(restored.state().feedback).not.toHaveProperty('a')
+  })
+})
+
+describe('gate refusal message', () => {
+  it('names the upstream agent in the error', () => {
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', reads: [], writes: [] },
+        gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'fn', evaluator_command: 'true', reads: [] },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', reads: [], writes: [] },
+      },
+      edges: [
+        { source: 'a', target: 'gate' },
+        { source: 'gate', target: 'a', condition: 'reloop' },
+        { source: 'gate', target: 'b', condition: 'proceed' },
+      ],
+    }
+    const spine = new Spine(graph)
+    expect(() => spine.planRedo('gate')).toThrow(/gate is a gate; replay a instead/)
+  })
+})
+
+describe('deferred redo', () => {
+  function forkGraph(): WorkflowGraph {
+    return {
+      name: 't', start_node: 'start',
+      nodes: {
+        start: { _type: 'AgentNode', id: 'start', role: 'builder', prompt_template: 'S', reads: [], writes: [] },
+        fork: { _type: 'ForkNode', id: 'fork', targets: ['p', 'q'] },
+        p: { _type: 'AgentNode', id: 'p', role: 'builder', prompt_template: 'P', reads: [], writes: [] },
+        q: { _type: 'AgentNode', id: 'q', role: 'builder', prompt_template: 'Q', reads: [], writes: [] },
+        join: { _type: 'JoinNode', id: 'join', sources: ['p', 'q'] },
+        end: { _type: 'AgentNode', id: 'end', role: 'builder', prompt_template: 'E', reads: [], writes: [] },
+      },
+      edges: [
+        { source: 'start', target: 'fork' },
+        { source: 'fork', target: 'join' },
+        { source: 'join', target: 'end' },
+      ],
+    }
+  }
+
+  it('planRedo with deferred flag returns plan during concurrent work', () => {
+    const spine = new Spine(forkGraph())
+    spine.complete('start')
+    spine.complete('fork')
+    spine.complete('p')
+    // q is still due, concurrent work running
+    expect(spine.hasConcurrentWork()).toBe(true)
+    expect(() => spine.planRedo('p')).toThrow(/concurrent branches/)
+    const plan = spine.planRedo('p', { deferred: true })
+    expect(plan.nodes).toContain('p')
+  })
+
+  it('checkpoint includes deferred_redo_plans for concurrency-blocked nodes', () => {
+    const spine = new Spine(forkGraph())
+    spine.complete('start')
+    spine.complete('fork')
+    spine.complete('p')
+    const cp = spine.checkpoint()
+    expect(cp.deferred_redo_plans).toHaveProperty('p')
+    expect(cp.redo_plans).not.toHaveProperty('p')
+  })
+
+  it('hasConcurrentWork returns false when no fork is active', () => {
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', reads: [], writes: [] },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', reads: [], writes: [] },
+      },
+      edges: [{ source: 'a', target: 'b' }],
+    }
+    const spine = new Spine(graph)
+    expect(spine.hasConcurrentWork()).toBe(false)
+  })
+})
 
 describe('the correction tools', () => {
   it('registers wf_redo', async () => {
@@ -301,5 +618,237 @@ describe('the correction tools', () => {
     expect(await call(ctx, 'wf_state')).toMatchObject({ skipped: ['a'] })
     await call(ctx, 'wf_edit', { node: 'a', action: 'unskip' })
     expect(await call(ctx, 'wf_state')).toMatchObject({ skipped: [] })
+  })
+})
+
+describe('applyControls integration', () => {
+  /** Write a rerun control file into the workdir. */
+  function writeRerunControl(workdir: string, target: string, opts: {
+    revision: string, text?: string, deferredNodes?: string[]
+  }): void {
+    const directory = join(workdir, '.refactory', 'graph-controls')
+    mkdirSync(directory, { recursive: true })
+    const control: Record<string, unknown> = {
+      id: '1', action: 'rerun', target, text: opts.text ?? '',
+      revision: opts.revision, run_id: resolve(workdir), invocation: null,
+      status: 'queued',
+    }
+    if (opts.deferredNodes) control.deferred_nodes = opts.deferredNodes
+    writeFileSync(join(directory, '1.json'), JSON.stringify(control))
+  }
+
+  it('uses setFeedback not amendPrompt for rerun text', async () => {
+    const workdir = scratch()
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', reads: [], writes: [] },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', reads: [], writes: [] },
+      },
+      edges: [{ source: 'a', target: 'b' }],
+    }
+    const ctx = await mount(graph, { workdir })
+    // wf_next writes the first checkpoint.
+    await call(ctx, 'wf_next')
+    // Complete 'a'.
+    await call(ctx, 'wf_done', { node: 'a' })
+    // Read the checkpoint (written by the first wf_next) and compute its revision.
+    const cpBytes = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
+    const revision = createHash('sha256').update(cpBytes).digest('hex')
+    // Queue a rerun control with text.
+    writeRerunControl(workdir, 'a', { revision, text: 'one-shot fix' })
+    // The next wf_next triggers applyControls at its first boundary.
+    const next = await call(ctx, 'wf_next') as { status: string; nodes: Array<{ id: string; prompt_template: string }>; feedback: Record<string, string> }
+    // The node is reopened, prompt is unchanged, and feedback carries the text.
+    expect(next.nodes.find(n => n.id === 'a')?.prompt_template).toBe('A')
+    expect(next.feedback?.a).toBe('one-shot fix')
+    // The control file was consumed.
+    expect(existsSync(join(workdir, '.refactory', 'graph-controls', '1.json'))).toBe(false)
+  })
+
+  it('deferred rerun control survives concurrent work and applies after join', async () => {
+    const workdir = scratch()
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'start',
+      nodes: {
+        start: { _type: 'AgentNode', id: 'start', role: 'builder', prompt_template: 'S', reads: [], writes: [] },
+        fork: { _type: 'ForkNode', id: 'fork', targets: ['p', 'q'] },
+        p: { _type: 'AgentNode', id: 'p', role: 'builder', prompt_template: 'P', reads: [], writes: [] },
+        q: { _type: 'AgentNode', id: 'q', role: 'builder', prompt_template: 'Q', reads: [], writes: [] },
+        join: { _type: 'JoinNode', id: 'join', sources: ['p', 'q'] },
+        end: { _type: 'AgentNode', id: 'end', role: 'builder', prompt_template: 'E', reads: [], writes: [] },
+      },
+      edges: [
+        { source: 'start', target: 'fork' },
+        { source: 'fork', target: 'join' },
+        { source: 'join', target: 'end' },
+      ],
+    }
+    const ctx = await mount(graph, { workdir })
+    // wf_next writes checkpoint, returns 'start' as due.
+    await call(ctx, 'wf_next')
+    await call(ctx, 'wf_done', { node: 'start' })
+    // wf_next returns fork as due (executeCommands is false).
+    await call(ctx, 'wf_next')
+    await call(ctx, 'wf_done', { node: 'fork' })
+    // wf_next returns p and q as due concurrently.
+    await call(ctx, 'wf_next')
+    // Complete p; q still pending.
+    await call(ctx, 'wf_done', { node: 'p' })
+    // wf_next writes a checkpoint with p completed and q still pending.
+    await call(ctx, 'wf_next')
+    // Read checkpoint to get revision and deferred plan.
+    const cpBytes = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
+    const revision = createHash('sha256').update(cpBytes).digest('hex')
+    const cp = JSON.parse(cpBytes.toString())
+    const deferredNodes = cp.deferred_redo_plans?.p?.nodes as string[]
+    expect(deferredNodes).toBeDefined()
+    // Queue a deferred rerun control for 'p'.
+    writeRerunControl(workdir, 'p', { revision, deferredNodes })
+    // wf_next — q is still due with join in afters, so hasConcurrentWork() is
+    // true and applyControls defers the control.
+    await call(ctx, 'wf_next')
+    // The control file should still exist (deferred, not consumed).
+    expect(existsSync(join(workdir, '.refactory', 'graph-controls', '1.json'))).toBe(true)
+    // Complete q — the join becomes sole cursor, afters empty.
+    await call(ctx, 'wf_done', { node: 'q' })
+    // wf_next — concurrent work finished (cursor=['join'], afters=[]).
+    // report() calls applyControls which applies the deferred control:
+    // hasConcurrentWork() returns false, redo('p') reopens p, cursor → ['p'].
+    const result = await call(ctx, 'wf_next') as { status: string; nodes: Array<{ id: string }> }
+    // The control file should have been consumed.
+    expect(existsSync(join(workdir, '.refactory', 'graph-controls', '1.json'))).toBe(false)
+    // The receipt should say applied.
+    const receipt = JSON.parse(readFileSync(join(workdir, '.refactory', 'graph-control-receipt.json'), 'utf8'))
+    expect(receipt.status).toBe('applied')
+    // Node 'p' should be back in due nodes (uncompleted).
+    expect(result.nodes.some(n => n.id === 'p')).toBe(true)
+    const state = await call(ctx, 'wf_state') as { completed: string[] }
+    expect(state.completed).not.toContain('p')
+  })
+
+  it('deferred rerun applies after three branches complete at separate boundaries', async () => {
+    const workdir = scratch()
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'start',
+      nodes: {
+        start: { _type: 'AgentNode', id: 'start', role: 'builder', prompt_template: 'S', reads: [], writes: [] },
+        fork: { _type: 'ForkNode', id: 'fork', targets: ['p', 'q', 'r'] },
+        p: { _type: 'AgentNode', id: 'p', role: 'builder', prompt_template: 'P', reads: [], writes: [] },
+        q: { _type: 'AgentNode', id: 'q', role: 'builder', prompt_template: 'Q', reads: [], writes: [] },
+        r: { _type: 'AgentNode', id: 'r', role: 'builder', prompt_template: 'R', reads: [], writes: [] },
+        join: { _type: 'JoinNode', id: 'join', sources: ['p', 'q', 'r'] },
+        end: { _type: 'AgentNode', id: 'end', role: 'builder', prompt_template: 'E', reads: [], writes: [] },
+      },
+      edges: [
+        { source: 'start', target: 'fork' },
+        { source: 'fork', target: 'join' },
+        { source: 'join', target: 'end' },
+      ],
+    }
+    const ctx = await mount(graph, { workdir })
+    // 1. wf_next writes checkpoint, returns 'start' as due.
+    await call(ctx, 'wf_next')
+    await call(ctx, 'wf_done', { node: 'start' })
+    // 2. wf_next returns fork as due.
+    await call(ctx, 'wf_next')
+    await call(ctx, 'wf_done', { node: 'fork' })
+    // 3. wf_next returns p, q, r as due concurrently.
+    await call(ctx, 'wf_next')
+    // 4. Complete p; q and r still pending.
+    await call(ctx, 'wf_done', { node: 'p' })
+    // 5. wf_next writes checkpoint with p completed, q and r still due.
+    await call(ctx, 'wf_next')
+    // 6. Read checkpoint to get revision and deferred plan.
+    const cpBytes1 = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
+    const revision = createHash('sha256').update(cpBytes1).digest('hex')
+    const cp = JSON.parse(cpBytes1.toString())
+    const deferredNodes = cp.deferred_redo_plans?.p?.nodes as string[]
+    expect(deferredNodes).toBeDefined()
+    // 7. Queue a deferred rerun control for 'p' with this revision.
+    writeRerunControl(workdir, 'p', { revision, deferredNodes })
+    // 8. wf_next — q and r still due, concurrent work running, control deferred.
+    await call(ctx, 'wf_next')
+    expect(existsSync(join(workdir, '.refactory', 'graph-controls', '1.json'))).toBe(true)
+    // 9. Complete q.
+    await call(ctx, 'wf_done', { node: 'q' })
+    // 10. wf_next — checkpoint rewritten (q completed), r still due, control deferred.
+    await call(ctx, 'wf_next')
+    expect(existsSync(join(workdir, '.refactory', 'graph-controls', '1.json'))).toBe(true)
+    // 11. Capture the checkpoint revision after q finished. It must differ from
+    //     the original revision, proving the revision check would have rejected.
+    const cpBytes2 = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
+    const revisionAfterQ = createHash('sha256').update(cpBytes2).digest('hex')
+    expect(revisionAfterQ).not.toBe(revision)
+    // 12. Complete r.
+    await call(ctx, 'wf_done', { node: 'r' })
+    // 13. wf_next — join drains, concurrent work ends. applyControls applies the
+    //     deferred control: plan check passes, revision check skipped, redo('p').
+    const result = await call(ctx, 'wf_next') as { status: string; nodes: Array<{ id: string }> }
+    // 14. Assertions.
+    // The control file was consumed.
+    expect(existsSync(join(workdir, '.refactory', 'graph-controls', '1.json'))).toBe(false)
+    // The receipt says applied.
+    const receipt = JSON.parse(readFileSync(join(workdir, '.refactory', 'graph-control-receipt.json'), 'utf8'))
+    expect(receipt.status).toBe('applied')
+    // Node 'p' is back in the due nodes.
+    expect(result.nodes.some(n => n.id === 'p')).toBe(true)
+    // p is no longer completed.
+    const state = await call(ctx, 'wf_state') as { completed: string[] }
+    expect(state.completed).not.toContain('p')
+  })
+
+  it('deferred rerun fails when invalidation plan changed after join', async () => {
+    const workdir = scratch()
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'start',
+      nodes: {
+        start: { _type: 'AgentNode', id: 'start', role: 'builder', prompt_template: 'S', reads: [], writes: [] },
+        fork: { _type: 'ForkNode', id: 'fork', targets: ['p', 'q'] },
+        p: { _type: 'AgentNode', id: 'p', role: 'builder', prompt_template: 'P', reads: [], writes: [] },
+        q: { _type: 'AgentNode', id: 'q', role: 'builder', prompt_template: 'Q', reads: [], writes: [] },
+        join: { _type: 'JoinNode', id: 'join', sources: ['p', 'q'] },
+        end: { _type: 'AgentNode', id: 'end', role: 'builder', prompt_template: 'E', reads: [], writes: [] },
+      },
+      edges: [
+        { source: 'start', target: 'fork' },
+        { source: 'fork', target: 'join' },
+        { source: 'join', target: 'end' },
+      ],
+    }
+    const ctx = await mount(graph, { workdir })
+    // Advance through start, fork, and complete one branch.
+    await call(ctx, 'wf_next')
+    await call(ctx, 'wf_done', { node: 'start' })
+    await call(ctx, 'wf_next')
+    await call(ctx, 'wf_done', { node: 'fork' })
+    await call(ctx, 'wf_next')
+    await call(ctx, 'wf_done', { node: 'p' })
+    // wf_next writes checkpoint with p completed, q still pending.
+    await call(ctx, 'wf_next')
+    const cpBytes = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
+    const revision = createHash('sha256').update(cpBytes).digest('hex')
+    // Queue a deferred rerun control with a stale deferred_nodes list that
+    // does NOT match what planRedo('p') will return after the join — simulating
+    // the scenario where the graph expanded between preview and apply.
+    writeRerunControl(workdir, 'p', { revision, deferredNodes: ['p', 'join', 'end', 'phantom'] })
+    // wf_next — q still due, concurrent work running, control deferred.
+    await call(ctx, 'wf_next')
+    expect(existsSync(join(workdir, '.refactory', 'graph-controls', '1.json'))).toBe(true)
+    // Complete q so the join drains and concurrent work ends.
+    await call(ctx, 'wf_done', { node: 'q' })
+    // wf_next — hasConcurrentWork() is now false. applyControls compares the
+    // deferred_nodes to the current planRedo('p').nodes, finds a mismatch, and
+    // writes a failed receipt.
+    await call(ctx, 'wf_next')
+    // The control file should have been consumed (removed after failure).
+    expect(existsSync(join(workdir, '.refactory', 'graph-controls', '1.json'))).toBe(false)
+    // The receipt should report plan-changed failure.
+    const receipt = JSON.parse(readFileSync(join(workdir, '.refactory', 'graph-control-receipt.json'), 'utf8'))
+    expect(receipt.status).toBe('failed')
+    expect(receipt.message).toContain('plan changed')
+    // The node should NOT have been redone — p stays completed.
+    const state = await call(ctx, 'wf_state') as { completed: string[] }
+    expect(state.completed).toContain('p')
   })
 })

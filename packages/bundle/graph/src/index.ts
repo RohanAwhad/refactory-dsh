@@ -54,15 +54,79 @@ function bestScore(workdir: string, mode: string): number | null {
 }
 
 /** What the spine last recorded about the cursor, or `undefined` when it recorded nothing. */
-function spineStatus(workdir: string): { status: string; nodes?: string[]; error?: string } | undefined {
+function spineStatus(workdir: string): { status: string; nodes?: string[]; completed?: string[]; error?: string } | undefined {
   const path = join(workdir, '.refactory', 'spine-status.json')
   if (!existsSync(path)) return undefined
   try {
-    return JSON.parse(readFileSync(path, 'utf8')) as { status: string; nodes?: string[]; error?: string }
+    return JSON.parse(readFileSync(path, 'utf8')) as { status: string; nodes?: string[]; completed?: string[]; error?: string }
   } catch {
     // A status file that is not JSON is a status this runner cannot read; the run's
     // own report stands rather than being replaced by a parse error.
     return undefined
+  }
+}
+
+/**
+ * Print step transitions and new CEO messages during a turn, by polling the
+ * spine-status file and the session log on a short interval. Returns when the
+ * agent reaches quiescence.
+ *
+ * This is what makes "print progress during a turn, not after it" work: one CEO
+ * turn can drive several nodes for many minutes, and printing transitions only
+ * after `agent.whenIdle()` would leave the terminal silent the whole time.
+ */
+async function whenIdleWithProgress(
+  agent: Agent,
+  startup: GraphStartupValues,
+  io: Io,
+  seqBefore: SessionLogOffset,
+): Promise<void> {
+  let lastCompleted: string[] = []
+  let lastNodes: string[] = []
+  let lastSeq = seqBefore
+  const poll = setInterval(() => {
+    // Print step transitions.
+    const status = spineStatus(startup.workdir)
+    if (status !== undefined) {
+      const completed = status.completed ?? []
+      for (const node of completed) {
+        if (!lastCompleted.includes(node)) io.stderr.write(`⟩ ${node} done\n`)
+      }
+      lastCompleted = completed
+      const nodes = status.nodes ?? []
+      for (const node of nodes) {
+        if (!lastNodes.includes(node)) io.stderr.write(`⟩ ${node} started\n`)
+      }
+      lastNodes = nodes
+    }
+    // Print new assistant messages as they appear.
+    for (let seq = lastSeq; seq < agent.session.seq; seq++) {
+      const event = agent.session.eventAt(SessionSeq(seq))
+      if (event?.type === 'assistant/message') {
+        const text = event.data.message.content
+          .filter(block => block.type === 'text')
+          .map(block => block.text)
+          .join('')
+        if (text !== '') io.stdout.write(`${text}\n`)
+      }
+    }
+    lastSeq = agent.session.seq
+  }, 500)
+  try {
+    await agent.whenIdle()
+  } finally {
+    clearInterval(poll)
+  }
+  // Flush any remaining events after the turn ends.
+  for (let seq = lastSeq; seq < agent.session.seq; seq++) {
+    const event = agent.session.eventAt(SessionSeq(seq))
+    if (event?.type === 'assistant/message') {
+      const text = event.data.message.content
+        .filter(block => block.type === 'text')
+        .map(block => block.text)
+        .join('')
+      if (text !== '') io.stdout.write(`${text}\n`)
+    }
   }
 }
 
@@ -132,12 +196,9 @@ function readLine(stdin: Io['stdin'], out: Io['stdout']): Promise<string | undef
 /**
  * The live session: print each turn, then let the person say something back.
  *
- * The first turn is the driving task the runner already sent. After it reaches
- * quiescence this prints the turn's assistant text and offers the terminal, so the
- * CEO's report of a node, a question or a summary appears while the graph is still
- * running rather than only in the final JSON. A line typed here is a follow-up user
- * message: the CEO can act on it with `wf_edit` + `wf_redo`, skip a node, or route a
- * gate. `/quit`, an empty line and end of input all end the conversation.
+ * The first turn is the driving task the runner already sent. Progress and
+ * assistant messages are printed as they happen during each turn (by polling
+ * spine-status.json), not only between turns.
  *
  * It reads the terminal only while the agent is idle, and closes its reader before
  * handing the turn back, so a `user` gate's own prompt owns stdin while the answerer
@@ -146,8 +207,7 @@ function readLine(stdin: Io['stdin'], out: Io['stdout']): Promise<string | undef
 async function chat(agent: Agent, startup: GraphStartupValues, io: Io, firstSeq: SessionLogOffset): Promise<void> {
   let seqBefore = firstSeq
   for (;;) {
-    const turn = finalText(agent.session, seqBefore)
-    if (turn !== '') io.stdout.write(`${turn}\n`)
+    // Messages were already printed incrementally by whenIdleWithProgress.
     const failure = turnError(agent.session, seqBefore)
     if (failure !== undefined) io.stderr.write(`dsh: ${failure}\n`)
     // Quiescence is not completion: the cursor's own status on disk is what says the
@@ -162,7 +222,7 @@ async function chat(agent: Agent, startup: GraphStartupValues, io: Io, firstSeq:
       content: [{ type: 'text', text: typed }],
       source: { kind: 'user' },
     }))
-    await agent.whenIdle()
+    await whenIdleWithProgress(agent, startup, io, seqBefore)
   }
 }
 
@@ -239,10 +299,12 @@ async function run(ctx: Context, io: Io): Promise<void> {
       content: [{ type: 'text', text: startup.task }],
       source: { kind: 'user' },
     }))
-    await agent.whenIdle()
-    // The first turn is the driving task. In chat mode the turn's own text is printed
-    // now, while the graph is still running, and the person may answer it.
-    if (startup.chat) await chat(agent, startup, io, firstSeq)
+    if (startup.chat) {
+      await whenIdleWithProgress(agent, startup, io, firstSeq)
+      await chat(agent, startup, io, firstSeq)
+    } else {
+      await agent.whenIdle()
+    }
   } catch (error: unknown) {
     caughtError = error instanceof Error ? error.message : String(error)
   }

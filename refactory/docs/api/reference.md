@@ -667,7 +667,7 @@ The steps a mode uses to change a repository: where it works, what lands, how it
 |---|---|---|
 | function | `knob_names` | `() -> 'tuple[str, ...]'` |
 | function | `knobs` | `() -> 'dict[str, Knob]'` |
-| function | `locate` | `(ctx: 'Any', name: 'str', task: 'dict[str, Any]', *, in_worktree: 'bool \| None' = None, needs_worktree: 'tuple[str, ...]' = ()) -> 'dict[str, Any]'` |
+| function | `locate` | `(ctx: 'Any', name: 'str', task: 'dict[str, Any]', *, in_worktree: 'bool \| None' = None, needs_worktree: 'tuple[str, ...]' = (), output_only: 'tuple[str, ...]' = ()) -> 'dict[str, Any]'` |
 | function | `materialise` | `(ctx: 'Any', *, source: 'Path \| None' = None, files: 'tuple[str, ...]' = ()) -> 'dict[str, Any]'` |
 | function | `materialise_node` | `(**fields: 'Any') -> 'Node'` |
 | function | `produces` | `() -> 'tuple[str, ...]'` |

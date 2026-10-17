@@ -540,6 +540,11 @@ def main() -> int:
             if verdict not in labels:
                 raise SteeringError(f"gate {gate!r} does not accept {verdict!r}")
             result = ledger.verdict(gate, verdict, review=review, answered=True)
+            # Record feedback as steering in the intent ledger.
+            feedback = str(request.get("feedback") or "").strip()
+            if feedback:
+                kind = "correction" if verdict == "reloop" else "constraint" if verdict == "proceed" else "info"
+                ledger.note(kind, feedback)
         else:
             raise SteeringError("unknown user-gate decision action")
         print(json.dumps(result))
