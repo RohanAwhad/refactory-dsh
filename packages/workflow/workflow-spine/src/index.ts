@@ -549,8 +549,6 @@ export function apply(ctx: Context, config: Config): void {
   // header.parentSession, so a direct child is confined even if its
   // agent/created event was not observed. Subsequent steps use the
   // childToParent map.
-  const sandboxPolicyService: { resolve(opts: { session?: unknown }): { workspaceRoot: string } } | undefined =
-    ctx.get('sandboxPolicy')
   ctx.on('tools/pre-execute', (exec, next) => {
     // 1. Only intercept 'write' and 'edit' tool calls
     if (exec.name !== 'write' && exec.name !== 'edit') return next()
@@ -592,6 +590,8 @@ export function apply(ctx: Context, config: Config): void {
     //    sandbox policy's workspaceRoot when available, else session.header.cwd.
     const filePath = (exec.arguments as Record<string, unknown>)?.file_path
     if (typeof filePath !== 'string') return next()
+    const sandboxPolicyService: { resolve(opts: { session?: unknown }): { workspaceRoot: string } } | undefined =
+      ctx.get('sandboxPolicy')
     const policyCwd = sandboxPolicyService !== undefined
       ? sandboxPolicyService.resolve({ session }).workspaceRoot
       : undefined

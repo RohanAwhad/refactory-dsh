@@ -585,6 +585,76 @@ describe('subagent write confinement', () => {
     })
   })
 
+  describe('late-provided sandbox policy', () => {
+    it('picks up sandboxPolicy provided after mount (workspaceRoot inside run dir → allowed)', async () => {
+      const workdir = scratch()
+      const insideRoot = join(workdir, 'sandbox-root')
+      mkdirSync(insideRoot, { recursive: true })
+
+      const root = new Context()
+      await root.plugin(SystemPrompt)
+      await root.plugin(ToolRuntime)
+      registerStubs(root)
+      await root.plugin(spinePlugin, configuredConfig({ workdir }))
+
+      // Late-provide sandboxPolicy AFTER mount
+      root.provide('sandboxPolicy', {
+        resolve(_opts: { session?: unknown }) {
+          return { workspaceRoot: insideRoot }
+        },
+      })
+
+      // Session cwd is outside the run dir — without the policy, this would deny
+      const outsideCwd = scratch()
+      const child = mockAgent('child-late-1', {
+        delegationDepth: 1,
+        parentSession: 'ceo-1',
+        cwd: outsideCwd,
+      })
+
+      const result = await executeTool(root, 'write', {
+        file_path: 'output.txt',
+        content: 'ok',
+      }, child)
+      expect(result.isError).toBe(false)
+    })
+
+    it('picks up sandboxPolicy provided after mount (workspaceRoot outside run dir → denied)', async () => {
+      const workdir = scratch()
+      const insideCwd = join(workdir, 'sub')
+      mkdirSync(insideCwd, { recursive: true })
+      const outsideRoot = scratch()
+
+      const root = new Context()
+      await root.plugin(SystemPrompt)
+      await root.plugin(ToolRuntime)
+      registerStubs(root)
+      await root.plugin(spinePlugin, configuredConfig({ workdir }))
+
+      // Late-provide sandboxPolicy AFTER mount
+      root.provide('sandboxPolicy', {
+        resolve(_opts: { session?: unknown }) {
+          return { workspaceRoot: outsideRoot }
+        },
+      })
+
+      // Session cwd is inside the run dir — without the policy, this would allow
+      const child = mockAgent('child-late-2', {
+        delegationDepth: 1,
+        parentSession: 'ceo-1',
+        cwd: insideCwd,
+      })
+
+      const result = await executeTool(root, 'write', {
+        file_path: 'output.txt',
+        content: 'bad',
+      }, child)
+      expect(result.isError).toBe(true)
+      const text = result.content.map(c => c.text).join('')
+      expect(text).toContain('this subagent may only write inside the run directory')
+    })
+  })
+
   describe('deny message', () => {
     it('contains the run directory path', async () => {
       const workdir = scratch()
