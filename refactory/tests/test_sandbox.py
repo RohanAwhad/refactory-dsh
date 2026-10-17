@@ -250,12 +250,12 @@ def test_signal_killed_twice_names_the_signal(tmp_path):
 def test_ordinary_failure_not_retried(tmp_path):
     """An ordinary failing check (returncode > 0) is unchanged by the retry logic."""
     marker = tmp_path / "marker"
-    cmd = f'touch {shlex.quote(str(marker))}; exit 1'
+    cmd = f'echo run >> {shlex.quote(str(marker))}; exit 1'
     result = sandbox.run_command(cmd, workdir=tmp_path / "w", timeout_s=30)
     assert not result.ok
     assert result.returncode == 1
-    # The marker file should exist only once (no retry)
-    assert marker.exists()
+    # Each run appends a line; more than one means the retry logic misfired.
+    assert marker.read_text().count("run") == 1
 
 
 def test_timeout_does_not_retry(tmp_path):

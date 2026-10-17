@@ -399,12 +399,15 @@ def run_command(
                 if remaining <= 0:
                     raise subprocess.TimeoutExpired(command, timeout_s)
                 try:
+                    # A budget is checked between short waits; without one, wait out the time.
                     stdout, stderr = proc.communicate(
                         timeout=remaining if budget is None else min(remaining, 0.1))
                     return subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
                 except subprocess.TimeoutExpired:
                     pass
         except BaseException:
+            # This session was created by this call and contains only this
+            # check's shell/tools. No descendant discovery or name matching.
             try:
                 os.killpg(proc.pid, signal.SIGTERM) if os.name == "posix" else proc.terminate()
             except ProcessLookupError:
