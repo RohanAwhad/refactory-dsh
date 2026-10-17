@@ -28,7 +28,7 @@ from typing import Any, Callable
 
 from refactory_dsh import lowering
 from refactory_dsh.nn import RunResult
-from refactory_dsh.paths import REPO_ROOT, dsh_command, venv_bin
+from refactory_dsh.paths import REPO_ROOT, dsh_command, require_build, venv_bin
 from refactory_dsh.run import FACTS
 
 #: What the CEO is asked to do. A deterministic mode needs the CEO only to advance
@@ -90,6 +90,8 @@ def run_on_dsh(
         # missing profile, which reads as a packaging bug. The profile is machine
         # state, and this is the one place that knows the command that creates it.
         return DshRun(facts={}, workdir=workdir, returncode=2, stderr=problem)
+
+    require_build(root=Path(context["runtime_root"]) if context else None)
 
     graphs = workdir / "graphs"
     # The steering layer, on the runtime that ships. A run a person steered has a

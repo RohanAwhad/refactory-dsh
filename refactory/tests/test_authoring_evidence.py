@@ -9,6 +9,7 @@ from refactory_dsh.agent_delivery import begin, finish
 from refactory_dsh.create import CreateMode
 from refactory_dsh.edit import EditMode
 from refactory_dsh.fast import CreateFastMode, EditFastMode
+from refactory_dsh.nn import Verdict
 from refactory_dsh.steering import Ledger
 from tests_support import FakeModel, create_script, good_files, render
 from test_fast_modes import PLAN, QA_PASS
@@ -132,10 +133,13 @@ def deliver_audit(ctx, *, omitted=(), exclusion=None):
 def test_missing_requirement_and_reviewer_waiver_cannot_pass(tmp_path):
     ctx = audit_context(tmp_path)
     deliver_audit(ctx, omitted={"criterion-2"})
-    assert create_ops.gate_overwatch(ctx) == "reloop"
+    # Audit-only problems with VERDICT: PASS return the "audit" label, not "reloop".
+    result = create_ops.gate_overwatch(ctx)
+    assert str(result) == "audit"
     assert "criterion-2: no requirement evidence" in ctx.facts["validation"]
     deliver_audit(ctx, exclusion="reviewer says out of scope")
-    assert create_ops.gate_overwatch(ctx) == "reloop"
+    result = create_ops.gate_overwatch(ctx)
+    assert str(result) == "audit"
     assert "reviewers cannot waive" in ctx.facts["validation"]
 
 
@@ -231,6 +235,216 @@ def test_code_findings_about_timeout_and_local_modules_remain_repairable():
     assert evidence.failure_kind("Missing required timeout setting") == "code_failure"
     assert evidence.failure_kind("ModuleNotFoundError: No module named 'refactory_packages.new.ops'") == "code_failure"
     assert evidence.failure_kind("ModuleNotFoundError: No module named 'external_renderer'") == "unavailable"
+
+
+def test_signal_death_classified_as_uncertain():
+    assert evidence.failure_kind("killed by SIGABRT") == "uncertain"
+
+
+def test_signal_death_stops_check_artifact_without_attempt(tmp_path, monkeypatch):
+    """A signal-killed environment install stops the run as uncertain, not as a code failure."""
+    from refactory_dsh import design_ops, repo_change
+
+    # Set up a RunContext with the minimum facts check_artifact needs.
+    root = tmp_path / "artifact"
+    root.mkdir()
+    (root / "tool.py").write_text("print(1)\n")
+    ctx = nn.RunContext(tmp_path, facts={
+        "name": "signal_probe",
+        "brief": "a tool that gets killed",
+        "artifact": str(root),
+        "check": "python tool.py",
+    })
+    ctx.write_json("brief.json", {"brief": ctx.facts["brief"]})
+    Ledger.seed(tmp_path, ctx.facts["brief"])
+
+    # Monkeypatch repo_change so check_artifact never touches the real filesystem
+    # or worktree machinery: it sees the signal-death SandboxResult directly.
+    monkeypatch.setattr(repo_change, "refused", lambda ctx: "")
+    monkeypatch.setattr(repo_change, "run_check", lambda ctx, cmd, timeout: sandbox.SandboxResult(
+        ok=False, returncode=1, stderr="the worktree's environment could not be prepared:\n"
+        "`pnpm install --frozen-lockfile` failed: killed by SIGABRT", stdout=""))
+
+    # check_artifact must raise ValueError matching "uncertain" — stop_unrepairable's
+    # message — proving the run does not reloop into emit or spend an attempt.
+    with pytest.raises(ValueError, match="uncertain"):
+        design_ops.check_artifact(ctx)
+
+    # No attempt was spent: repair() is never reached because stop_unrepairable raises first.
+    assert not ctx.facts.get("attempts_used")
+
+
+# ── asks 2 and 3: Initial Idea and info are not requirements ──────────────
+
+
+def test_initial_idea_is_not_a_separate_requirement(tmp_path):
+    """The Initial Idea duplicates the brief; it is not a second requirement."""
+    ctx = audit_context(tmp_path)
+    reqs = evidence.requirements(ctx)
+    assert not any(r.get("kind") == "Initial Idea" for r in reqs), "Initial Idea should not be a requirement"
+    # But intent() still includes it for identity tracking.
+    entries = evidence.intent(ctx.workdir)
+    assert any(e["kind"] == "Initial Idea" for e in entries), "intent() must still include Initial Idea"
+
+
+def test_info_notes_are_not_requirements_but_corrections_are(tmp_path):
+    """Info notes are context, not testable requirements."""
+    ctx = audit_context(tmp_path)
+    Ledger(tmp_path).note("info", "This is context about the process")
+    Ledger(tmp_path).note("correction", "Fix the explanation too")
+    reqs = evidence.requirements(ctx)
+    assert not any(r.get("kind") == "info" for r in reqs), "info notes should not be requirements"
+    assert any(r.get("kind") == "correction" for r in reqs), "corrections must remain requirements"
+    entries = evidence.intent(ctx.workdir)
+    assert any(e["kind"] == "info" for e in entries), "intent() must still include info entries"
+    assert any(e["kind"] == "correction" for e in entries)
+
+
+# ── ask 1: gate_overwatch says what actually failed ───────────────────────
+
+
+def test_gate_overwatch_labels_evidence_problems(tmp_path):
+    """When current_problems exist (stale evidence), the reason names them."""
+    ctx = audit_context(tmp_path)
+    deliver_audit(ctx)
+    # Modify the artifact so evidence is stale.
+    (tmp_path / "artifact" / "answer.txt").write_text("changed")
+    result = create_ops.gate_overwatch(ctx)
+    assert result == "reloop"
+    assert "evidence problems" in ctx.facts["validation"]
+
+
+def test_gate_overwatch_audit_only_returns_audit_label(tmp_path):
+    """When VERDICT: PASS, no evidence problems, no blocking findings, but audit
+    problems exist, the gate returns Verdict('audit', ...) not 'reloop'."""
+    ctx = audit_context(tmp_path)
+    deliver_audit(ctx, omitted={"criterion-2"})
+    result = create_ops.gate_overwatch(ctx)
+    assert isinstance(result, Verdict)
+    assert str(result) == "audit"
+    assert "intent audit problems" in result.reason
+    assert not ctx.facts.get("attempts_used"), "audit-only path must not spend an attempt"
+
+
+def test_gate_overwatch_labels_blocking_findings(tmp_path):
+    """Blocking findings in overwatch.md are labeled 'blocking review findings'."""
+    ctx = audit_context(tmp_path)
+    deliver_audit(ctx)
+    ctx.write_text("reviews/overwatch.md",
+                   "BLOCKING: test failure\nVERDICT: FAIL")
+    result = create_ops.gate_overwatch(ctx)
+    assert result == "reloop"
+    assert "blocking review findings" in ctx.facts["validation"]
+
+
+def test_gate_overwatch_labels_missing_verdict(tmp_path):
+    """A missing verdict is labeled 'overwatch verdict is missing'."""
+    ctx = audit_context(tmp_path)
+    deliver_audit(ctx)
+    ctx.write_text("reviews/overwatch.md", "The review looks good but no verdict line")
+    result = create_ops.gate_overwatch(ctx)
+    assert result == "reloop"
+    assert "overwatch verdict is missing" in ctx.facts["validation"]
+
+
+def test_gate_overwatch_code_reloop_spends_attempt(tmp_path):
+    """A reloop caused by blocking findings calls repair() and increments attempts_used."""
+    ctx = audit_context(tmp_path)
+    deliver_audit(ctx)
+    ctx.write_text("reviews/overwatch.md",
+                   "BLOCKING: test failure\nVERDICT: FAIL")
+    result = create_ops.gate_overwatch(ctx)
+    assert result == "reloop"
+    assert ctx.facts.get("attempts_used", 0) >= 1
+
+
+# ── ask 4: failure message count matches attempts_used ────────────────────
+
+
+def test_failure_message_count_matches_attempts_used(tmp_path):
+    """repair()'s message and saved attempts_used agree for a run that exhausts its attempts."""
+    root = tmp_path / "artifact"
+    root.mkdir()
+    (root / "answer.txt").write_text("42")
+    ctx = nn.RunContext(tmp_path, facts={"brief": "count", "artifact": str(root)},
+                        knobs={"attempts": 3})
+    ctx.write_json("brief.json", {"brief": ctx.facts["brief"]})
+    Ledger.seed(tmp_path, ctx.facts["brief"])
+    evidence.record(ctx, {"status": "pass"})
+    # Simulate three repair calls: first two return Verdict, third raises.
+    result1 = create_ops.repair(ctx, ["problem 1"])
+    assert str(result1) == "reloop"
+    assert ctx.facts["attempts_used"] == 1
+    result2 = create_ops.repair(ctx, ["problem 2"])
+    assert str(result2) == "reloop"
+    assert ctx.facts["attempts_used"] == 2
+    with pytest.raises(ValueError, match=r"after 3 attempt\(s\)"):
+        create_ops.repair(ctx, ["problem 3"])
+    assert ctx.facts["attempts_used"] == 3, (
+        "the saved attempts_used must match the number in the failure message"
+    )
+    # repair() no longer writes facts.json (that is run_node's job in spine mode);
+    # the in-memory value is what run_node would persist.
+
+
+# ── ask 4: audit reloop end-to-end ───────────────────────────────────────
+
+
+def test_audit_reloop_through_design_graph(tmp_path, monkeypatch):
+    """A design run whose first audit leaves a requirement uncovered goes back to
+    overwatch rather than emit, keeps attempts_used unchanged, shows overwatch the
+    problems, and proceeds after the second audit."""
+    from refactory_dsh.design import DesignMode
+    from test_edit_design import _design_answers
+    from tests_support import REVIEW_ANSWERS
+
+    monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
+
+    overwatch_call = [0]
+    saw_problems_in_prompt = [False]
+
+    class AuditModel(FakeModel):
+        def complete(self, prompt, *, system="", workdir=None):
+            text = super().complete(prompt, system=system, workdir=workdir)
+            if "You are the overwatch" in prompt:
+                overwatch_call[0] += 1
+                run_dir = tmp_path / "run"
+                if overwatch_call[0] > 1 and "intent audit problems" in prompt:
+                    saw_problems_in_prompt[0] = True
+                ev_path = run_dir / evidence.EVIDENCE
+                if ev_path.exists():
+                    ev = json.loads(ev_path.read_text())
+                    rows = []
+                    for item in ev["requirements"]:
+                        if overwatch_call[0] == 1 and item["id"] == "design":
+                            continue  # omit on first call to trigger audit reloop
+                        rows.append({"id": item["id"], "requirement": item.get("text", ""),
+                                     "status": "pass",
+                                     "evidence": [{"path": "brief.json",
+                                                   "detail": "verified requirement"}]})
+                    run_dir.joinpath(evidence.AUDIT).write_text(
+                        json.dumps({"requirements": rows}))
+            return text
+
+    answers = _design_answers([render({"answer.py": "print(42)"})])
+    # Add a second overwatch answer for the audit reloop.
+    answers.append("VERDICT: PASS")
+    model = AuditModel(answers)
+    result = DesignMode().run(
+        tmp_path / "run", model=model,
+        verdicts={"gate_strategy": "proceed"},
+        task={"name": "audit_reloop",
+              "brief": "Deliver the answer and explanation",
+              "check": "python answer.py"},
+    )
+    assert result.exit_ok, result.error
+    assert overwatch_call[0] == 2, "overwatch should have been called twice"
+    assert result.facts.get("attempts_used", 0) == 0, (
+        "audit-only reloop must not spend an attempt"
+    )
+    assert saw_problems_in_prompt[0], (
+        "overwatch must see the audit problems on its reloop"
+    )
 
 
 @pytest.mark.parametrize("cls", [CreateMode, EditMode, CreateFastMode, EditFastMode])

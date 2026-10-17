@@ -72,6 +72,45 @@ def test_failed_status_accepted_with_acknowledge_flag(tmp_path):
     assert request['acknowledge_failed'] is True
 
 
+def test_child_prepare_honours_acknowledged_failed_from_file(tmp_path):
+    saved_run(tmp_path, 'failed')
+    # Parent's call: writes resume-request.json with acknowledge_failed: true
+    recovery.prepare(tmp_path, 'demo-run', acknowledge_failed=True)
+    request_path = tmp_path / '.refactory/resume-request.json'
+    assert request_path.exists()
+    parent_request = json.loads(request_path.read_text())
+    assert parent_request['acknowledge_failed'] is True
+
+    # Child's call: no acknowledge_failed argument, reads from file
+    recovery.prepare(tmp_path, 'demo-run')
+    child_request = json.loads(request_path.read_text())
+    assert child_request['acknowledge_failed'] is True
+    checkpoint = tmp_path / '.refactory/spine-checkpoint.json'
+    assert child_request['checkpoint_sha256'] == hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+
+
+def test_child_prepare_refuses_failed_without_file_acknowledgement(tmp_path):
+    saved_run(tmp_path, 'failed')
+    # No pre-existing resume-request.json, no acknowledge_failed argument
+    with pytest.raises(ValueError, match='unknown or failed'):
+        recovery.prepare(tmp_path, 'demo-run')
+    assert not (tmp_path / '.refactory/resume-request.json').exists()
+
+
+def test_child_prepare_refuses_stale_acknowledgement(tmp_path):
+    """A resume-request.json whose checkpoint_sha256 does not match the current
+    checkpoint bytes is not honoured — the request belongs to a different checkpoint."""
+    saved_run(tmp_path, 'failed')
+    # Write a resume-request.json with acknowledge_failed but a wrong sha256
+    request_path = tmp_path / '.refactory/resume-request.json'
+    request_path.write_text(json.dumps({
+        'checkpoint_sha256': 'stale-sha256-that-does-not-match',
+        'acknowledge_failed': True,
+    }))
+    with pytest.raises(ValueError, match='unknown or failed'):
+        recovery.prepare(tmp_path, 'demo-run')
+
+
 def test_changed_source_and_unknown_worker_refuse_recovery(tmp_path):
     source = saved_run(tmp_path)
     source.write_text('answer = 0\n')
@@ -91,6 +130,28 @@ def test_recovery_request_binds_validated_bytes(tmp_path):
     checkpoint = tmp_path / '.refactory/spine-checkpoint.json'
     request = json.loads((tmp_path / '.refactory/resume-request.json').read_text())
     assert request['checkpoint_sha256'] == hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+
+
+def test_receipt_with_no_pending_marker_does_not_block_recovery(tmp_path):
+    """A refused step whose receipt was written does not block recovery.
+
+    Only a dispatch with no receipt at all (a pending marker with no corresponding
+    finished receipt) is 'unknown'. A refused step has both a receipt and — after the
+    fix — no pending marker, so recovery proceeds.
+    """
+    saved_run(tmp_path)
+    # Create a delivery record WITH a receipt but WITHOUT a pending marker
+    delivery_dir = tmp_path / '.refactory' / 'agent-delivery' / 'test-step-id'
+    delivery_dir.mkdir(parents=True)
+    (delivery_dir / 'receipt.json').write_text(json.dumps({
+        'id': 'test-step-id', 'node': 'design_doc', 'status': 'failed',
+        'started': '2026-10-17T00:00:00+00:00',
+        'finished': '2026-10-17T00:01:00+00:00',
+        'artifacts': {}, 'writes': [],
+    }))
+    # No pending marker exists — recovery should succeed
+    recovery.prepare(tmp_path, 'demo-run')
+    assert (tmp_path / '.refactory/resume-request.json').exists()
 
 
 def test_configuration_fingerprints_ignore_only_interpreter_cache(monkeypatch, tmp_path):

@@ -384,15 +384,13 @@ def run_command(
     if sys.platform != "win32":
         cpu = cpu_s if cpu_s is not None else math.ceil(timeout_s) * (os.cpu_count() or 1)
         kwargs["preexec_fn"] = _limits(memory_mb, cpu, file_mb)
-    started = time.monotonic()
-    try:
-        options = dict(shell=True, text=True, cwd=str(workdir), env=child_env,
-                       stdin=subprocess.DEVNULL if stdin is None else stdin, **kwargs)
-        if budget is not None:
-            budget.checkpoint()
+    options = dict(shell=True, text=True, cwd=str(workdir), env=child_env,
+                   stdin=subprocess.DEVNULL if stdin is None else stdin, **kwargs)
+
+    def _once(deadline: float) -> subprocess.CompletedProcess[str]:
+        """Run the command once, bounded by *deadline*; raise on timeout or budget."""
         proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 start_new_session=os.name == "posix", **options)
-        deadline = time.monotonic() + timeout_s
         try:
             while True:
                 if budget is not None:
@@ -402,9 +400,9 @@ def run_command(
                     raise subprocess.TimeoutExpired(command, timeout_s)
                 try:
                     # A budget is checked between short waits; without one, wait out the time.
-                    stdout, stderr = proc.communicate(timeout=remaining if budget is None else min(remaining, 0.1))
-                    result = subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
-                    break
+                    stdout, stderr = proc.communicate(
+                        timeout=remaining if budget is None else min(remaining, 0.1))
+                    return subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
                 except subprocess.TimeoutExpired:
                     pass
         except BaseException:
@@ -423,6 +421,30 @@ def run_command(
                     pass
                 proc.communicate(timeout=2)
             raise
+
+    started = time.monotonic()
+    try:
+        if budget is not None:
+            budget.checkpoint()
+        result = _once(time.monotonic() + timeout_s)
+        if result.returncode < 0:
+            # Killed by a signal — retry once; the first death is transient.
+            result = _once(time.monotonic() + timeout_s)
+            if result.returncode < 0:
+                sig_num = -result.returncode
+                try:
+                    sig_name = signal.Signals(sig_num).name
+                except (ValueError, KeyError):
+                    sig_name = f"signal {sig_num}"
+                sig_label = f"killed by {sig_name}"
+                return SandboxResult(
+                    ok=False,
+                    timeout_s=timeout_s,
+                    elapsed_s=round(time.monotonic() - started, 3),
+                    returncode=result.returncode,
+                    stdout=result.stdout,
+                    stderr=f"{sig_label}\n{result.stderr}" if result.stderr else sig_label,
+                )
     except subprocess.TimeoutExpired:
         return SandboxResult(
             ok=False, timed_out=True, returncode=124, timeout_s=timeout_s,

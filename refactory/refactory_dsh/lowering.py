@@ -182,6 +182,8 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
                 if not 1 <= budget <= 86400:
                     raise LoweringError("smoke_timeout_s must be between 1 and 86400 seconds")
                 command_timeout_s = 3 * budget + 600
+            elif _is_check_node(node):
+                command_timeout_s = _check_envelope_s(state)
             nodes[node_id] = FnNode(
                 command_timeout_s=command_timeout_s,
                 **common,
@@ -225,6 +227,8 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
                     # Revised execution, optional original comparison, and discovery.
                     # Moving smoke into a gate must retain its bounded shell envelope.
                     gate["command_timeout_s"] = 2 * budget + 600
+                elif _is_check_node(node):
+                    gate["command_timeout_s"] = _check_envelope_s(state)
             nodes[node_id] = GateNode(**common, **gate)
         elif node.kind == "fork":
             # The branches are reached through `targets`, not edges: one out-edge
@@ -277,6 +281,48 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
             for knob_name, entry in (state.get("knobs") or {}).items()
         },
     )
+
+
+def _is_check_node(node: Any) -> bool:
+    """Whether this node runs repo_change's check and needs the check envelope.
+
+    Every mode that uses ``repo_change.run_check`` declares
+    ``*repo_change.CHECK_PRODUCES`` on the gate or op that calls it, and
+    declares ``check_timeout_s`` in its knobs so the budget travels to the
+    operation. Both conditions are required: ``materialise`` also produces
+    ``commit`` and ``files`` (the check rewrites them after an install
+    amends the attempt), but it does not declare the knob because it does
+    not run the check. No fact-level discriminator (CHECK_WRITES or
+    CHECK_PRODUCES alone) can exclude materialise, because materialise
+    writes ``changes.diff`` and produces both ``commit`` and ``files``.
+    """
+    from refactory_dsh.repo_change import CHECK_PRODUCES
+
+    return (
+        set(CHECK_PRODUCES).issubset(set(node.produces))
+        and "check_timeout_s" in node.knobs
+    )
+
+
+def _check_envelope_s(state: dict[str, Any]) -> int:
+    """The command_timeout_s a check node needs, in seconds.
+
+    Covers every sub-operation ``run_check`` and ``_check_in_worktree`` perform
+    sequentially: three dependency installs (each ``INSTALL_TIMEOUT_S``), setup,
+    generate and the check command (each ``check_timeout_s``), and the dispatch
+    overhead.
+    """
+    from refactory_dsh.model import NODE_DISPATCH_OVERHEAD_S
+    from refactory_dsh.worktree import INSTALL_TIMEOUT_S
+
+    knob_entry = (state.get("knobs") or {}).get("check_timeout_s", {})
+    budget = int(knob_entry.get(
+        "value",
+        (knob_entry.get("spec") or {}).get("default", 180),
+    ))
+    if not 1 <= budget <= 86400:
+        raise LoweringError("check_timeout_s must be between 1 and 86400 seconds")
+    return 3 * INSTALL_TIMEOUT_S + 3 * budget + NODE_DISPATCH_OVERHEAD_S
 
 
 def _ir_knobs(knobs: dict[str, Any]) -> dict[str, str | float]:

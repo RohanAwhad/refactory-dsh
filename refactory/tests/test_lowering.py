@@ -153,6 +153,190 @@ def test_a_seed_state_with_no_ports_lowers_without_them():
     assert lowering.to_workflow(state, name=MODE).name == MODE
 
 
+# ── check envelope ─────────────────────────────────────────────────────────
+#
+# The check step runs dependency installs, setup, generate and the check
+# itself.  Its spine envelope must cover all of them, or the spine kills it.
+
+
+def _check_gate_state(*, check_timeout_s: int = 180) -> dict:
+    """A minimal state with one fn gate whose produces include repo_change's check facts."""
+    from refactory_dsh.repo_change import CHECK_PRODUCES, CHECK_WRITES
+
+    graph = Graph()
+    graph.add(Node(
+        "check", "gate", evaluator="somepackage.ops:check_artifact",
+        knobs=("check_timeout_s",),
+        writes=("check.txt", *CHECK_WRITES),
+        produces=("validation", *CHECK_PRODUCES),
+        max_iterations=4,
+    ))
+    return {
+        "version": 1,
+        "graph": graph.to_state(),
+        "knobs": {"check_timeout_s": {"value": check_timeout_s, "spec": {"default": 180}}},
+        "ports": [],
+        "memory": [],
+    }
+
+
+def _check_op_state(*, check_timeout_s: int = 60) -> dict:
+    """A minimal state with one op whose produces include repo_change's check facts."""
+    from refactory_dsh.repo_change import CHECK_PRODUCES, CHECK_WRITES
+
+    graph = Graph()
+    graph.add(Node(
+        "focused_check", "op", call="somepackage.ops:focused_check",
+        knobs=("check_timeout_s",),
+        writes=("focused-check.json", *CHECK_WRITES),
+        produces=("focused_check", *CHECK_PRODUCES),
+    ))
+    return {
+        "version": 1,
+        "graph": graph.to_state(),
+        "knobs": {"check_timeout_s": {"value": check_timeout_s, "spec": {"default": 60}}},
+        "ports": [],
+        "memory": [],
+    }
+
+
+def _fix_pack_state(*, check_timeout_s: int = 300) -> dict:
+    """A minimal state with fix_pack's check gate that produces repo_change's check facts."""
+    from refactory_dsh.repo_change import CHECK_PRODUCES, CHECK_WRITES
+
+    graph = Graph()
+    graph.add(Node(
+        "check", "gate", evaluator="refactory_packages.fix_pack.ops:check",
+        knobs=("attempts", "check_timeout_s"),
+        writes=("feedback.txt", *CHECK_WRITES),
+        produces=("feedback", "attempts_used", *CHECK_PRODUCES),
+        max_iterations=5,
+    ))
+    return {
+        "version": 1,
+        "graph": graph.to_state(),
+        "knobs": {
+            "attempts": {"value": 3, "spec": {"default": 3}},
+            "check_timeout_s": {"value": check_timeout_s, "spec": {"default": 300}},
+        },
+        "ports": [],
+        "memory": [],
+    }
+
+
+def test_check_gate_envelope_grows_with_check_timeout_s():
+    from refactory_dsh.worktree import INSTALL_TIMEOUT_S
+    from refactory_dsh.model import NODE_DISPATCH_OVERHEAD_S
+
+    for timeout in (180, 600, 1500):
+        state = _check_gate_state(check_timeout_s=timeout)
+        workflow = lowering.to_workflow(state, name="design")
+        lowered = workflow.nodes["check"]
+        expected = 3 * INSTALL_TIMEOUT_S + 3 * timeout + NODE_DISPATCH_OVERHEAD_S
+        assert lowered.command_timeout_s == expected, (
+            f"check_timeout_s={timeout}: expected {expected}, got {lowered.command_timeout_s}"
+        )
+        assert lowered.command_timeout_s > timeout, (
+            "the envelope must exceed the check's own budget"
+        )
+
+    # Increasing check_timeout_s must increase command_timeout_s.
+    w1 = lowering.to_workflow(_check_gate_state(check_timeout_s=180), name="d")
+    w2 = lowering.to_workflow(_check_gate_state(check_timeout_s=600), name="d")
+    assert w2.nodes["check"].command_timeout_s > w1.nodes["check"].command_timeout_s
+
+
+def test_focused_check_op_gets_check_envelope():
+    from refactory_dsh.worktree import INSTALL_TIMEOUT_S
+    from refactory_dsh.model import NODE_DISPATCH_OVERHEAD_S
+
+    timeout = 60
+    state = _check_op_state(check_timeout_s=timeout)
+    workflow = lowering.to_workflow(state, name="design_fast")
+    lowered = workflow.nodes["focused_check"]
+    expected = 3 * INSTALL_TIMEOUT_S + 3 * timeout + NODE_DISPATCH_OVERHEAD_S
+    assert lowered.command_timeout_s == expected
+    assert lowered.command_timeout_s > timeout
+
+
+def test_fix_pack_check_gate_gets_check_envelope():
+    from refactory_dsh.worktree import INSTALL_TIMEOUT_S
+    from refactory_dsh.model import NODE_DISPATCH_OVERHEAD_S
+
+    timeout = 300
+    state = _fix_pack_state(check_timeout_s=timeout)
+    workflow = lowering.to_workflow(state, name="fix_pack")
+    lowered = workflow.nodes["check"]
+    expected = 3 * INSTALL_TIMEOUT_S + 3 * timeout + NODE_DISPATCH_OVERHEAD_S
+    assert lowered.command_timeout_s == expected
+    assert lowered.command_timeout_s > timeout
+
+
+def test_non_check_gate_keeps_default_timeout():
+    workflow = lowering.to_workflow(_state(), name=MODE)
+    assert workflow.nodes["budget_check"].command_timeout_s is None
+
+
+def test_check_timeout_s_out_of_range_is_refused():
+    for bad_value in (0, 100000):
+        state = _check_gate_state(check_timeout_s=bad_value)
+        with pytest.raises(lowering.LoweringError, match="check_timeout_s must be between 1 and 86400"):
+            lowering.to_workflow(state, name="design")
+
+
+@pytest.mark.parametrize("mode_cls, check_node_id, expected_envelope_s", [
+    ("design", "check", 6540),
+    ("design_fast", "focused_check", 6540),
+    ("make_pass", "check", 6900),
+])
+def test_real_modes_get_check_envelope(mode_cls, check_node_id, expected_envelope_s):
+    """The real modes' check nodes get the envelope from their own check_timeout_s default.
+
+    This test instantiates the actual mode classes — not synthetic graphs —
+    so it catches regressions where a real mode's check node stops declaring
+    the facts or knobs the predicate needs.
+    """
+    from refactory_dsh.design import DesignMode
+    from refactory_dsh.fast import DesignFastMode
+    from refactory_packages.fix_pack.mode import MakePass
+
+    classes = {"design": DesignMode, "design_fast": DesignFastMode, "make_pass": MakePass}
+    mode = classes[mode_cls]()
+    state = mode.state_dict()
+    workflow = lowering.to_workflow(state, name=mode_cls)
+
+    lowered_check = workflow.nodes[check_node_id]
+    assert lowered_check.command_timeout_s == expected_envelope_s, (
+        f"{mode_cls}'s {check_node_id}: expected {expected_envelope_s}, "
+        f"got {lowered_check.command_timeout_s}"
+    )
+
+    lowered_mat = workflow.nodes["materialise"]
+    assert lowered_mat.command_timeout_s is None, (
+        f"{mode_cls}'s materialise should not get the check envelope, "
+        f"but got command_timeout_s={lowered_mat.command_timeout_s}"
+    )
+
+
+def test_op_without_check_produces_keeps_default_timeout():
+    """An op whose produces do not include CHECK_PRODUCES keeps command_timeout_s=None."""
+    graph = Graph()
+    graph.add(Node("work", "op", call="refactory_dsh.fast_ops:focused_check",
+                    produces=("focused_check", "output_path"),
+                    writes=("focused-check.json",)))
+    state = {
+        "version": 1,
+        "graph": graph.to_state(),
+        "knobs": {"check_timeout_s": {"value": 60, "spec": {"default": 60}}},
+        "ports": [],
+        "memory": [],
+    }
+    wf = lowering.to_workflow(state, name="fast_no_artifact")
+    assert wf.nodes["work"].command_timeout_s is None, (
+        "an op without CHECK_PRODUCES should not get the check envelope"
+    )
+
+
 # ── fidelity to refactory's IR ─────────────────────────────────────────────
 #
 # Issue #21 said not to invent a command string, because `FnNode.callable_name`
