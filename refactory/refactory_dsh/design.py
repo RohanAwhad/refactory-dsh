@@ -217,9 +217,10 @@ class DesignMode(Mode):
                 "## What the reviews refused\n{{qa_gate}}\n{{overwatch_review}}\n\n"
                 + _ACCEPTANCE_BASELINE
                 + "{{emit_scope}}\n\n"
-                "Write those blocks into emit.txt, with no prose outside them. Do not create "
-                "or change the files themselves: the materialise step applies emit.txt, and "
-                "tells the next attempt if it could not. Then return a short completion message.\n"
+                "Write those blocks into emit.txt, with no prose outside them. Write nothing "
+                "but emit.txt: do not apply or test your change anywhere — the target, the "
+                "run's worktree or a copy — because materialise and the check do that after "
+                "you answer and send you the result. Then return a short completion message.\n"
             ),
             reads=("brief.json", "design.md", "check.txt"),
             writes=("emit.txt",),

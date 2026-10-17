@@ -827,7 +827,8 @@ def _install_env() -> dict[str, str]:
            and name not in ("PYTHONPATH", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "VENV_BIN", "NODE_BIN")
            and (not is_secret(name) or name.upper().startswith(REGISTRY_ENV))}
     # Suppress git hook managers so installs in the worktree do not rewrite the
-    # shared repository's hooks (#347).
+    # shared repository's hooks (#347).  Nobody answers an install's prompts
+    # either, so it is told it runs unattended.
     env.update(**HOOK_SUPPRESS, CI="true")
     return env
 

@@ -305,15 +305,16 @@ def _open_worktree(ctx: Any, name: str, task: dict[str, Any],
         else:
             print(f"refactory: {note}", file=sys.stderr)
     found = worktree.create(target, base, run_id, ctx.workdir)
-    # The checkouts a worker could still write to directly are watched while `emit`
-    # runs, which may change none of them: the target, the run's own worktree, and the
-    # checkout the run starts from, whose run directories hold the workers (#319).
-    watched = [Path(found.path)]
+    # Every step of a worktree run is held to its own worktree (#319, #347).
+    # Changes to the target or the launcher checkout are warnings: another
+    # session or person may be working there.
+    warn_dirs: tuple[Path, ...] = ()
     if launcher != target and (launcher / ".git").exists():
-        watched.append(launcher)
+        warn_dirs = (launcher,)
     baseline = target_guard.record(ctx.workdir, target,
                                    output_only=(*OUTPUT_ONLY, *output_only),
-                                   also=tuple(watched))
+                                   also=(Path(found.path),),
+                                   warn_also=warn_dirs)
     if baseline["changes"]:
         target_guard.warn(f"{len(baseline['changes'])} uncommitted change(s) in {target} are not part of "
                           f"this run, which starts from commit {found.base[:12]}: "
@@ -366,6 +367,11 @@ def locate(ctx: Any, name: str, task: dict[str, Any], *, in_worktree: bool | Non
     Without one, the run writes the artifact directory, which it claims, and watches the
     project instead; ``target``, ``base`` and ``setup`` are refused then, with
     ``needs_worktree``, the mode's own knobs that only a worktree gives a meaning to.
+
+    ``output_only`` names further agent nodes -- besides ``emit`` -- whose only
+    output is their declared file.  The agent-delivery bracket refuses one that
+    changed the run's worktree while it ran; in a worktree run, changes to the
+    target or the launcher checkout become warnings rather than failures.
     """
     _artifact_name(name)
     if in_worktree is None:

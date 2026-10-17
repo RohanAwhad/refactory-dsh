@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from refactory_dsh import target_guard
+from refactory_dsh import target_guard, worktree
 
 ROOT = Path('.refactory/agent-delivery')
 CONTRACT_START = '<!-- refactory worker execution -->'
@@ -223,29 +223,46 @@ def finish(workdir: Path, node: str, *, final_response: str | None = None,
         after[captured] = _fingerprint(workdir, captured)
         fresh.add(captured)
     missing = [name for name in writes if name not in fresh]
-    strayed = target_guard.strayed(workdir, record.get('target'))
-    set_aside = _set_aside(workdir, record, [name for name in writes if name in fresh]) if strayed else None
-    receipt = {key: value for key, value in record.items() if key not in ('prompt', 'target')}
-    receipt.update(finished=_now(), status='failed' if missing or strayed else 'delivered',
-                   delivery='context supplied; semantic compliance not verified',
-                   artifacts=after, captured_final=captured,
-                   final_response=str(ROOT / record['id'] / 'final-response.txt') if final_response is not None else None,
-                   missing_or_unchanged=missing, **({'target_changes': strayed} if strayed else {}),
-                   **({'set_aside': set_aside} if set_aside else {}))
-    (directory / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
-    if strayed:
-        # Refused even when the declared output arrived: the output may be a summary of
-        # edits that never pass through the step that writes the artifact.
-        raise ValueError(target_guard.refusal(node, record['target']['root'], strayed, writes,
-                                              set_aside=set_aside))
+    fail_changes, warn_changes = target_guard.strayed(
+        workdir, record.get('target'))
+    set_aside = (_set_aside(workdir, record,
+                            [name for name in writes if name in fresh])
+                 if fail_changes else None)
+    all_changes = fail_changes + warn_changes
+    receipt = {key: value for key, value in record.items()
+               if key not in ('prompt', 'target')}
+    receipt.update(
+        finished=_now(),
+        status='failed' if missing or fail_changes else 'delivered',
+        delivery='context supplied; semantic compliance not verified',
+        artifacts=after, captured_final=captured,
+        final_response=(str(ROOT / record['id'] / 'final-response.txt')
+                        if final_response is not None else None),
+        missing_or_unchanged=missing,
+        **({'target_changes': all_changes} if all_changes else {}),
+        **({'set_aside': set_aside} if set_aside else {}),
+    )
+    (directory / 'receipt.json').write_text(
+        json.dumps(receipt, indent=2) + '\n')
+    if warn_changes:
+        target_guard.warn(
+            f"while agent {record['node']!r} ran, files outside its "
+            f"worktree changed: {'; '.join(warn_changes)}. The run works "
+            "in its own worktree, so these changes are not its result; "
+            "check whether another session or person made them.")
+    if fail_changes:
+        raise ValueError(target_guard.refusal(
+            record['node'], record['target']['root'],
+            fail_changes, writes, set_aside=set_aside))
     if missing:
-        raise ValueError(f'agent {node!r} did not deliver required outputs: {", ".join(missing)} (missing or unchanged from before dispatch)')
+        raise ValueError(
+            f'agent {record["node"]!r} did not deliver required outputs: '
+            f'{", ".join(missing)} (missing or unchanged from before dispatch)')
     # Check whether the git configuration or hooks the run's worktree shares
-    # with its target changed during this step (#347). Beside the existing
-    # target-guard bracket, not in executor.py.
-    from refactory_dsh import worktree as _wt
-    _found = _wt.recorded(workdir)
-    if _found is not None and _wt.shared_changed(_found):
+    # with its target changed during this step (#347).  Beside the existing
+    # target-guard bracket.
+    _found = worktree.recorded(workdir)
+    if _found is not None and worktree.shared_changed(_found):
         _msg = (f"the git configuration or hooks the run's worktree shares "
                 f"with {_found.target} changed during {node}; check them "
                 f"before your next commit there")
