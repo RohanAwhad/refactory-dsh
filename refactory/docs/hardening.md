@@ -575,7 +575,7 @@ the subagent may write to instead.
 - **Workers.** Workers run in their own headless runtime, not through the spine plugin's
   tool pipeline.
 
-**Held by.** `packages/workflow/workflow-spine/tests/confine-writes.spec.ts`: thirteen
+**Held by.** `packages/workflow/workflow-spine/tests/confine-writes.spec.ts`: nineteen
 test cases covering both configured-graph and interactiveOpen modes, path traversal,
 relative-path cwd resolution, fork children, grandchildren, the deny message content,
 and the fail-open case when no run is open.
