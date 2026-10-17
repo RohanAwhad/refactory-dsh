@@ -334,8 +334,9 @@ def _open_worktree(ctx: Any, name: str, task: dict[str, Any]) -> dict[str, Any]:
                 f"{target} on branch {found.branch}, from the base commit {found.base[:12]}. Each attempt "
                 "builds on the last: the worktree holds the base and every earlier attempt, as committed "
                 f"(`git -C {found.path} diff {found.base[:12]}` shows the change so far), so read the files "
-                "there and change only what this attempt needs. Write each file's change as one or more "
-                "blocks, introduced by a line of exactly one of:\n"
+                "there and change only what this attempt needs. For each file, write one ===FILE: or "
+                "===DELETE: block, or one or more ===EDIT: blocks; each block starts with a line of "
+                "exactly one of:\n"
                 "===FILE: <relative path>=== followed by the whole file, for a new file or one you "
                 "rewrite entirely;\n"
                 "===EDIT: <relative path>=== followed by one or more edits to an existing file, each "
@@ -522,7 +523,7 @@ def _edited(path: Path, text: str, pairs: list[tuple[str, str]], shown: str) -> 
     skipped = 0
     for search, replacement in pairs:
         starts = _occurrences(work, search)
-        if _already_applied(work, search, replacement, _line_starts(work, search)):
+        if _already_applied(work, search, replacement, starts):
             skipped += 1
             continue
         if len(starts) != 1:

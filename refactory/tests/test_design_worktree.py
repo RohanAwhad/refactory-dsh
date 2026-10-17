@@ -399,6 +399,16 @@ def test_an_absent_search_with_short_replacement_mid_line_is_refused_not_skipped
             [("GONE\n", "REPL")], "git show HEAD:a.py")
 
 
+def test_a_mid_line_search_is_not_falsely_skipped_when_replacement_starts_a_line():
+    """An edit whose search is mid-line applies even when the replacement starts another line."""
+    result, skipped = repo_change._edited(
+        Path("a.py"),
+        "def f():\n    return compute(a)\ncompute(b)\n",
+        [("compute(a)", "compute(b)")],
+        "git show HEAD:a.py")
+    assert result == "def f():\n    return compute(b)\ncompute(b)\n" and skipped == 0
+
+
 def test_multiple_edit_blocks_for_the_same_file_are_merged():
     """Several ===EDIT: blocks naming the same file are applied in order, as if one block."""
     answer = (_edit("a.py", ("aaa\n", "AAA\n"))
