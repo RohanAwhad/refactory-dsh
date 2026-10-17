@@ -170,7 +170,10 @@ def format_graph_control(payload: dict[str, Any]) -> str:
         fm = last_failed.get('message', '')
         lines.append(f"Last failed control: {fa} — {fm}.")
 
-    if action == 'resume' and payload.get('owner'):
-        lines.append(f"Started a new owner for {run_id}.")
+    # Name an owner this call started -- a resume of a run whose owner is gone, or a
+    # rerun of a failed run -- so it reads apart from a control queued for a live one.
+    owner = payload['owner'] if isinstance(payload.get('owner'), dict) else payload
+    if isinstance(owner.get('pid'), int):
+        lines.append(f"Started a new owner for {run_id} (pid {owner['pid']}).")
 
     return '\n'.join(lines)

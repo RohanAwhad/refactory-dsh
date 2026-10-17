@@ -2,10 +2,11 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from refactory_dsh import console, graph_control, live
+from refactory_dsh import console, graph_control, live, readable
 
 
 def test_cursor_does_not_acknowledge_partial_write(tmp_path):
@@ -264,6 +265,25 @@ def test_rerun_of_failed_run_queues_control_then_starts_owner(monkeypatch, tmp_p
     assert start_calls[0]['acknowledge_failed'] is True
     assert start_calls[0]['controls_existed'] is True
     assert result['owner']['pid'] == 999
+    assert 'Started a new owner' in readable.format_graph_control(result)
+
+
+def test_resume_says_whether_it_started_an_owner(monkeypatch, tmp_path):
+    """A resume that starts an owner names it; one queued for the live owner does not."""
+    from refactory_dsh import recovery
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    (directory / 'run-config.json').write_text(json.dumps({'mode': 'demo/run', 'project': str(tmp_path)}))
+    (directory / 'invocation.json').write_text(json.dumps({'id': 'inv1'}))
+    checkpoint = directory / 'spine-checkpoint.json'
+    checkpoint.write_text(json.dumps({'status': 'halted'}))
+    monkeypatch.setattr(recovery, 'prepare', lambda *args, **kwargs: None)
+    monkeypatch.setattr('subprocess.Popen', lambda *args, **kwargs: SimpleNamespace(pid=4242))
+    started = readable.format_graph_control(graph_control.request(tmp_path, 'resume'))
+    assert 'Started a new owner' in started and 'pid 4242' in started
+    checkpoint.write_text(json.dumps({'status': 'ready', 'owner_pid': os.getpid()}))
+    queued = readable.format_graph_control(graph_control.request(tmp_path, 'resume'))
+    assert 'Queued resume' in queued and 'Started a new owner' not in queued
 
 
 def test_acknowledged_rerun_child_gets_past_validation(tmp_path):
