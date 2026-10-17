@@ -5,7 +5,7 @@
  *
  * These are the parts a run depends on but a single tool call does not reach.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -217,6 +217,37 @@ describe('the cursor status a run leaves behind', () => {
     ctx.provide('shell', shell(executed))
     await expect(call(ctx, 'wf_next')).rejects.toThrow(/Cannot persist graph recovery checkpoint/)
     expect(executed).not.toHaveBeenCalled()
+  })
+})
+
+describe('graph control warnings', () => {
+  it('journals a failed control as a run_warning event', async () => {
+    const workdir = scratch()
+    const { ctx } = await mount({ workdir, executeCommands: true, graph: {
+      name: 'control-fail', start_node: 'a', nodes: {
+        a: { id: 'a', _type: 'AgentNode', prompt_template: 'A', writes: [], reads: [] },
+      }, edges: [],
+    } })
+    // Queue a rerun control with a stale revision — it will fail validation
+    const directory = join(workdir, '.refactory/graph-controls')
+    mkdirSync(directory, { recursive: true })
+    writeFileSync(join(workdir, '.refactory/invocation.json'), JSON.stringify({ id: null }))
+    writeFileSync(join(directory, '1.json'), JSON.stringify({
+      action: 'rerun', target: 'a', revision: 'stale-revision',
+      run_id: workdir, invocation: null,
+    }))
+    await call(ctx, 'wf_next')
+    // The receipt should say failed
+    const receipt = JSON.parse(readFileSync(join(workdir, '.refactory/graph-control-receipt.json'), 'utf8'))
+    expect(receipt.status).toBe('failed')
+    // events.jsonl should have a run_warning entry
+    const eventsPath = join(workdir, '.refactory/events.jsonl')
+    expect(existsSync(eventsPath)).toBe(true)
+    const events = readFileSync(eventsPath, 'utf8')
+      .split('\n').filter(Boolean).map(line => JSON.parse(line))
+    const warnings = events.filter(e => e.kind === 'run_warning')
+    expect(warnings.length).toBeGreaterThanOrEqual(1)
+    expect(warnings[0].summary).toContain('graph control rerun failed')
   })
 })
 

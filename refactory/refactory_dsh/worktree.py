@@ -507,7 +507,19 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
         destination.write_text(content)
     if files:
         git(path, "add", "-f", "--", *(str(name) for name in files))
-    git(path, *NO_HOOKS, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", "--allow-empty",
+    # An emission that changes nothing — every file and edit already in the last
+    # attempt — is refused before committing, so the run loops back to emit
+    # rather than through the check and reviews on identical code.
+    try:
+        git(path, "diff", "--cached", "--quiet")
+    except ValueError:
+        pass  # exit 1 means something is staged — the normal path
+    else:
+        pending.unlink(missing_ok=True)
+        raise AttemptRefused(
+            "the emission changed nothing: every file and edit in it is already in the last attempt"
+        )
+    git(path, *NO_HOOKS, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify",
         "-m", message, env={**os.environ, **COMMITTER})
     advanced = replace(found, head=git(path, "rev-parse", "HEAD").strip())
     _write_json(Path(run) / RECORD, asdict(advanced))

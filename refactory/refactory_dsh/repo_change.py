@@ -575,8 +575,9 @@ def materialise(ctx: Any, *, source: Path | None = None, files: tuple[str, ...] 
     has: from the emitted files alone, or, given ``source``, from its ``files`` with the
     emitted files over them (design_fast's `source_project`). An emission that cannot be
     applied -- a malformed block, an edit whose text is not in its file, text copied from a
-    truncated read -- does not end the run: it is recorded as ``emission_refused``, and the
-    check sends the reason back to emit.
+    truncated read, or an emission that changes nothing because every file and edit is
+    already in the last attempt -- does not end the run: it is recorded as
+    ``emission_refused``, and the check sends the reason back to emit.
     """
     try:
         found = worktree.recorded(ctx.workdir)

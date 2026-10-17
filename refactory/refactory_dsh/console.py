@@ -482,7 +482,9 @@ def status(run_root: Path, *, after: int = 0) -> dict[str, Any]:
     resources = activity.get('resources') or {}
     checkpoint = _read_json(run_root / '.refactory/spine-checkpoint.json')
     owner = checkpoint.get('owner_pid')
-    running = _running(run_root, console) or (isinstance(owner, int) and _alive(owner))
+    owner_alive = (True if (isinstance(owner, int) and _alive(owner)) else
+                   False if isinstance(owner, int) else None)
+    running = _running(run_root, console) or owner_alive is True
     if resources.get('exhausted') and not finished:
         state = 'failed'
         activity['wait_reason'] = resources.get('reason') or 'resource budget exhausted'
@@ -501,6 +503,7 @@ def status(run_root: Path, *, after: int = 0) -> dict[str, Any]:
         "best_score": _best(run_root, events),
         "finished": finished,
         "running": not finished and state not in ("failed", "died", "paused", "halted") and bool(running),
+        "owner_alive": owner_alive,
         "authoring": _authoring(run_root, spine) if spine else None,
         "item_results": _item_results(run_root),
         "activity": activity,

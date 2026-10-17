@@ -191,8 +191,9 @@ def test_a_check_that_rewrites_a_tracked_file_does_not_wedge_the_run(repo, tmp_p
             "if not marker.exists():\n"
             "    marker.write_text('')\n"
             "    raise SystemExit('the first attempt is refused on purpose')\n")
-    emit = render({"tool.py": tool})
-    result = _design(tmp_path / "run", FakeModel(_answers(emit, emit)), target=str(repo))
+    emit1 = render({"tool.py": tool})
+    emit2 = render({"tool.py": tool, "note.txt": "retry\n"})
+    result = _design(tmp_path / "run", FakeModel(_answers(emit1, emit2)), target=str(repo))
     assert result.exit_ok, result.error
     assert git(repo, "show", f"{_report(tmp_path / 'run')['branch']}:app.py") == "print('app')"
     warned = capsys.readouterr().err
@@ -246,29 +247,57 @@ def test_emissions_that_never_apply_end_the_run_once_its_attempts_are_spent(repo
     assert "materialise could not apply emit.txt" in str(result.error)
 
 
-def test_the_same_edits_given_again_apply_to_what_they_first_applied_to(repo, tmp_path):
-    """An unchanged answer on a retry, or materialise redone, must not find its own edits gone."""
+def test_the_same_edits_given_again_are_recognised_as_already_applied(repo, tmp_path):
+    """The same edits given again are recognised as already applied: the refusal says the emission
+    changed nothing, not that an edit's text is missing.  The branch holds one attempt per answer
+    that changed something."""
     _commit(repo, "old.py", "x = 1\n")
     _commit(repo, "notes.py", "a = 1\nb = 2\nc = 3\n")
-    tool = ("import os, pathlib\n"
-            "count = pathlib.Path(os.environ['HOME']) / 'attempts'\n"
-            "seen = len(count.read_text()) if count.exists() else 0\n"
-            "count.write_text('x' * (seen + 1))\n"
-            "if seen < 2:\n"
-            "    raise SystemExit('this attempt is refused on purpose')\n")
+    tool_fail = ("import os, pathlib\n"
+                 "marker = pathlib.Path(os.environ['HOME']) / 'second-attempt'\n"
+                 "if not marker.exists():\n"
+                 "    marker.write_text('')\n"
+                 "    raise SystemExit('the first attempt is refused on purpose')\n")
     # A removal leaves nothing that shows it happened, so only the record of the emission
     # can tell this one is a repeat.
-    emission = (render({"tool.py": tool}) + _edit("app.py", ("print('app')\n", "print('edited')\n"))
+    emission = (render({"tool.py": tool_fail}) + _edit("app.py", ("print('app')\n", "print('edited')\n"))
                 + _edit("notes.py", ("b = 2\n", "")) + "===DELETE: old.py===\n")
-    result = _design(tmp_path / "run", FakeModel(_answers(emission, emission, emission)), _mode(check_attempts=3),
+    # The second identical emission is refused ("changed nothing"), so a different
+    # third emission must be given for the run to succeed.
+    different = render({"tool.py": tool_fail, "extra.py": "y = 1\n"})
+    result = _design(tmp_path / "run", FakeModel(_answers(emission, emission, different)), _mode(check_attempts=3),
                      target=str(repo))
     assert result.exit_ok, result.error
     payload = _report(tmp_path / "run")
+    # First attempt commits, second is refused (changed nothing), third commits (adds extra.py).
     assert git(repo, "log", "--format=%s", f"{payload['base']}..{payload['branch']}").splitlines() == [
-        f"{NAME}: attempt 3", f"{NAME}: attempt 2", f"{NAME}: attempt 1"]
+        f"{NAME}: attempt 2", f"{NAME}: attempt 1"]
     assert git(repo, "show", f"{payload['branch']}:app.py") == "print('edited')"
     assert git(repo, "show", f"{payload['branch']}:notes.py") == "a = 1\nc = 3"
-    assert git(repo, "ls-tree", "--name-only", payload["branch"]).split() == ["app.py", "notes.py", "tool.py"]
+    assert "extra.py" in git(repo, "ls-tree", "--name-only", payload["branch"]).split()
+
+
+def test_an_empty_emission_is_refused_and_the_worktree_is_unchanged(repo, tmp_path):
+    """An emission identical to the last attempt is refused at materialise, not committed."""
+    run = tmp_path / "run"
+    tool_code = "print('built')\n"
+    emit_text = render({"tool.py": tool_code})
+
+    # First attempt: set up worktree and commit
+    ctx = nn.RunContext(run, model=FakeModel([]),
+                        task={"name": NAME, "brief": "a tool", "check": "true", "target": str(repo)})
+    ctx.facts.update(design_ops.prepare_design(ctx))
+    ctx.write_text("emit.txt", emit_text)
+    result1 = repo_change.materialise(ctx)
+    assert "emission_refused" not in result1
+    head_after_first = worktree.recorded(run).head
+
+    # Second attempt: identical emission
+    ctx.write_text("emit.txt", emit_text)
+    result2 = repo_change.materialise(ctx)
+    assert "emission_refused" in result2
+    assert "changed nothing" in result2["emission_refused"]
+    assert worktree.recorded(run).head == head_after_first
 
 
 def test_an_edit_sent_again_is_skipped_rather_than_applied_twice(repo, tmp_path, capsys):
@@ -563,8 +592,10 @@ def test_a_missing_installer_stops_the_run_without_spending_its_repairs(repo, tm
 
 
 def test_a_setup_command_that_fails_fails_the_check_and_says_why(tmp_path):
-    emit = render({"tool.py": "print('built')\n"})
-    failed_setup = _design(tmp_path / "setup", FakeModel(_answers(emit, emit, emit)), _mode(setup="exit 3"),
+    emit1 = render({"tool.py": "print('built')\n"})
+    emit2 = render({"tool.py": "print('built')\n", "note.txt": "r1\n"})
+    emit3 = render({"tool.py": "print('built')\n", "note.txt": "r2\n"})
+    failed_setup = _design(tmp_path / "setup", FakeModel(_answers(emit1, emit2, emit3)), _mode(setup="exit 3"),
                            target=str(git_repo(tmp_path / "plain")))
     assert failed_setup.exit_ok is False
     assert "the setup command `exit 3` failed" in (failed_setup.error or "")
