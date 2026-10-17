@@ -493,7 +493,7 @@ def test_gate_research_reads_facts_not_knobs(tmp_path):
 
 
 def test_interactive_run_refuses_when_the_profile_links_to_another_checkout(
-    tmp_path, monkeypatch, capsys
+    tmp_path, monkeypatch
 ):
     """The interactive path refuses before spawning when the profile is mismatched."""
     from refactory_dsh import workers
@@ -510,13 +510,12 @@ def test_interactive_run_refuses_when_the_profile_links_to_another_checkout(
         raise AssertionError("DSH was spawned with a mismatched profile")
 
     monkeypatch.setattr(workers, "run_graph_command", _no_spawn)
-    code = interactive.run(
-        WITH_A_GATE, workdir=tmp_path / "run", project=ROOT, headless=True,
-    )
-    assert code == 2
-    captured = capsys.readouterr()
-    assert "other" in captured.err
-    assert dsh_profile.add_command() in captured.err
+    with pytest.raises(dsh_profile.ProfileError, match="other") as exc_info:
+        interactive.run(
+            WITH_A_GATE, workdir=tmp_path / "run", project=ROOT, headless=True,
+        )
+    assert dsh_profile.add_command() in str(exc_info.value)
+    assert not (tmp_path / "run").exists(), "a refused start must leave no run directory behind"
 
 
 @pytest.mark.parametrize("returncode", [0, 1])

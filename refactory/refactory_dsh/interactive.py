@@ -229,11 +229,7 @@ def run(
     # the .refactory directory.
     require_build()
     from refactory_dsh import dsh_profile
-    try:
-        dsh_profile.require()
-    except dsh_profile.ProfileError as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
+    dsh_profile.require()
     with ownership(workdir) as owner:
         if resume:
             if source or source_format not in ('', 'directory') or approve or knobs or intent or model_context or provider or model or bool(worker_backend) or effort or permission_mode or role_routes or node_routes:
