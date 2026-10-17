@@ -42,6 +42,10 @@ class Counter(nn.Mode):
 - **`nn.Package`** — the manifest that makes the mode discoverable
   (`Package(name, modes=(Counter,), ops=("mypkg.ops",))`).
 - **`registry.resolve(project, "mypkg/counter")`** — `(Package, Mode class)`.
+- **`repo_change`** — the steps a mode whose agent changes code attaches: a worktree
+  of its target, `emit.txt` applied as one commit per attempt, and its check in the
+  worktree's own environment
+  ([how](../tutorials/01-write-a-mode.md#if-your-mode-changes-a-repository)).
 
 Run it, then validate the state it produced:
 

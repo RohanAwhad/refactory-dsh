@@ -19,7 +19,7 @@ from refactory_dsh import nn, registry, sandbox
 from refactory_dsh.create import CreateConfig, CreateError, CreateMode
 from model_credential import needs_model_credential
 from refactory_dsh.design import DesignMode
-from refactory_dsh.design_ops import ARTIFACTS, OWNERS
+from refactory_dsh.repo_change import ARTIFACTS, OWNERS
 from refactory_dsh.edit import EditConfig, EditMode
 from refactory_dsh.run import run_node
 from tests_support import (
@@ -232,12 +232,12 @@ def test_the_artifact_lands_beside_the_workspace_not_in_it():
     """With its worktree off, a run writes the artifact directory, as before #351."""
     ctx = nn.RunContext(Path(".factory/design-prep"), knobs={"worktree": False})
     ctx.task = {"name": ARTIFACT, "brief": "a tool", "check": "python -c 'pass'"}
-    from refactory_dsh import design_ops
+    from refactory_dsh import design_ops, repo_change
 
     design_ops.prepare_design(ctx)
     ctx.facts["name"] = ARTIFACT
     ctx.write_text("emit.txt", render({"tool.py": "print('hi')\n"}))
-    facts = design_ops.materialise_artifact(ctx)
+    facts = repo_change.materialise(ctx)
     assert Path(facts["artifact"]).is_relative_to(ARTIFACTS.resolve())
     assert not Path(facts["artifact"]).is_relative_to(registry.workspace_root(Path(".")))
 

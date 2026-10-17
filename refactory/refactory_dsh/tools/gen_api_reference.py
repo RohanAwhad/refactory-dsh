@@ -50,6 +50,7 @@ MODULES: tuple[str, ...] = (
     "refactory_dsh.create",
     "refactory_dsh.edit",
     "refactory_dsh.design",
+    "refactory_dsh.repo_change",
     "refactory_dsh.observe",
     "refactory_dsh.cli",
     "refactory_dsh.console",

@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from refactory_dsh import agent_delivery, design_ops, nn, target_guard
+from refactory_dsh import agent_delivery, design_ops, nn, repo_change, target_guard
 from refactory_dsh.design import DesignMode
 from tests_support import RESEARCH_ANSWER, REVIEW_ANSWERS, FakeModel, StaleEmitModel, render
 
@@ -93,7 +93,7 @@ def test_prepare_records_the_targets_commit_branch_and_uncommitted_changes(targe
 def test_a_later_step_warns_when_the_target_moved_since_prepare(target, tmp_path, capsys):
     ctx = _prepare(tmp_path / "run")
     ctx.write_text("emit.txt", render({"tool.py": "print('built')\n"}))
-    design_ops.materialise_artifact(ctx)
+    repo_change.materialise(ctx)
     assert "warning" not in capsys.readouterr().err, "an unchanged target is not worth a warning"
 
     _git(target, "checkout", "-q", "-b", "other")
@@ -101,7 +101,7 @@ def test_a_later_step_warns_when_the_target_moved_since_prepare(target, tmp_path
     _git(target, "add", "notes.txt")
     _git(target, "commit", "-q", "-m", "elsewhere")
     (target / "app.py").write_text("print('dirty')\n")
-    design_ops.materialise_artifact(ctx)
+    repo_change.materialise(ctx)
     warning = capsys.readouterr().err
     assert warning.startswith("refactory: run warning: the target"), (
         "the marker is what sends it to the CEO rather than only to the log"
@@ -154,8 +154,8 @@ def test_the_runs_own_writes_and_the_artifact_never_count_as_the_target_moving(t
     """A run directory inside the target, outside `.factory`, is still the run's own."""
     ctx = _prepare(target / "runs" / "one")
     ctx.write_text("emit.txt", render({"tool.py": "print('built')\n"}))
-    design_ops.materialise_artifact(ctx)
-    assert (target / design_ops.ARTIFACTS / NAME / "tool.py").exists()
+    repo_change.materialise(ctx)
+    assert (target / repo_change.ARTIFACTS / NAME / "tool.py").exists()
     assert target_guard.moved(ctx.workdir) is None
     assert "warning" not in capsys.readouterr().err
 
@@ -189,7 +189,7 @@ def test_a_walked_run_whose_process_exited_no_longer_holds_its_name(target, tmp_
     (walked / ".refactory" / "progress.json").write_text(json.dumps({"node": "emit", "error": None}))
     with pytest.raises(ValueError, match="walking"):
         _prepare(tmp_path / "second")
-    owners = target / design_ops.OWNERS / f"{NAME}.json"
+    owners = target / repo_change.OWNERS / f"{NAME}.json"
     claim = json.loads(owners.read_text())
     owners.write_text(json.dumps({**claim, "pid": _exited_pid()}))
     _prepare(tmp_path / "third")
@@ -199,11 +199,11 @@ def test_a_resumed_run_cannot_check_an_artifact_a_later_run_replaced(target, tmp
     first, second = tmp_path / "first", tmp_path / "second"
     old = _prepare(first)
     old.write_text("emit.txt", render({"tool.py": "print('first')\n"}))
-    old.facts.update(design_ops.materialise_artifact(old))
+    old.facts.update(repo_change.materialise(old))
     _spine(first, "failed")
     new = _prepare(second)
     new.write_text("emit.txt", render({"tool.py": "print('second')\n"}))
-    design_ops.materialise_artifact(new)
+    repo_change.materialise(new)
     (second / "design.json").write_text("{}\n")
 
     with pytest.raises(ValueError, match="was claimed by another run"):
@@ -220,8 +220,8 @@ def test_a_finished_run_releases_its_name_and_a_resumed_one_cannot_take_it_back(
     _spine(first, "executing")
     old.write_text("emit.txt", render({"tool.py": "print('stale')\n"}))
     with pytest.raises(ValueError, match="belongs to another open run"):
-        design_ops.materialise_artifact(old)
-    assert not (target / design_ops.ARTIFACTS / NAME).exists(), "nothing was overwritten"
+        repo_change.materialise(old)
+    assert not (target / repo_change.ARTIFACTS / NAME).exists(), "nothing was overwritten"
 
 
 # ── #319: emit answers through emit.txt, or it is refused ──────────────────
@@ -373,7 +373,7 @@ def test_a_design_run_whose_emit_edits_the_target_fails_before_materialise(targe
     assert result.exit_ok is False
     assert "changed while agent 'emit' ran" in (result.error or "")
     assert "app.py" in (result.error or "")
-    assert not (target / design_ops.ARTIFACTS / NAME).exists(), "materialise never ran"
+    assert not (target / repo_change.ARTIFACTS / NAME).exists(), "materialise never ran"
 
 
 def test_a_refused_emit_is_redone_from_a_fresh_emit_txt(target, tmp_path):
@@ -391,4 +391,4 @@ def test_a_refused_emit_is_redone_from_a_fresh_emit_txt(target, tmp_path):
                                                               *REVIEW_ANSWERS]))
     assert redone.error is None
     assert (workdir / "emit.txt").read_text() == render({"tool.py": "print('redone')\n"})
-    assert (target / design_ops.ARTIFACTS / NAME / "tool.py").read_text() == "print('redone')\n"
+    assert (target / repo_change.ARTIFACTS / NAME / "tool.py").read_text() == "print('redone')\n"

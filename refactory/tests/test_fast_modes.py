@@ -8,7 +8,7 @@ import pytest
 
 from refactory_dsh import nn, registry
 from refactory_dsh.fast import CreateFastMode, DesignFastMode, EditFastMode
-from tests_support import FakeModel, good_files, render
+from tests_support import FakeModel, git, good_files, render
 
 
 PLAN = "Change only the requested file, preserve its public behavior, and review the required check result."
@@ -111,6 +111,7 @@ def test_create_fast_keeps_admission_and_canonical_smoke(tmp_path, monkeypatch):
 
 
 def test_qa_cannot_silently_repair_or_invalidate_checked_source(tmp_path, monkeypatch):
+    """With its worktree off, the checked files are the artifact directory's."""
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
     class MutatingQA(FakeModel):
         def complete(self, *args, workdir=None, **kwargs):
@@ -121,6 +122,7 @@ def test_qa_cannot_silently_repair_or_invalidate_checked_source(tmp_path, monkey
     mode = DesignFastMode()
     state = mode.state_dict()
     state["knobs"]["repair_attempts"]["value"] = 0
+    state["knobs"]["worktree"]["value"] = False
     mode.load_state_dict(state)
     run = mode.run(tmp_path / "run", model=MutatingQA([PLAN, "===FILE: answer.py===\nassert True\n", QA_PASS]),
                    task={"name": "immutable_qa", "brief": "assert true", "check": f"{sys.executable} answer.py"})
@@ -128,6 +130,60 @@ def test_qa_cannot_silently_repair_or_invalidate_checked_source(tmp_path, monkey
     assert json.loads((tmp_path / "run/focused-check.json").read_text())["status"] == "pass"
     assert json.loads((tmp_path / "run/fast-report.json").read_text())["status"] == "unresolved"
     assert not (tmp_path / "run/design.json").exists()
+
+
+def test_qa_cannot_rewrite_even_a_provenance_record_of_an_output_directory_unnoticed(tmp_path, monkeypatch):
+    """Outside a worktree the checked files are every file of the output, provenance included."""
+    monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
+
+    class ProvenanceQA(FakeModel):
+        def complete(self, *args, workdir=None, **kwargs):
+            if len(self.prompts) == 2:
+                (tmp_path / ".factory/artifacts/provenance_qa/.origin.json").write_text("{}\n")
+            return super().complete(*args, workdir=workdir, **kwargs)
+    mode = DesignFastMode()
+    state = mode.state_dict()
+    state["knobs"]["repair_attempts"]["value"] = 0
+    state["knobs"]["worktree"]["value"] = False
+    mode.load_state_dict(state)
+    model = ProvenanceQA([PLAN, "===FILE: answer.py===\nassert True\n", QA_PASS])
+    run = mode.run(tmp_path / "run", model=model, task={
+        "name": "provenance_qa", "brief": "assert true", "check": f"{sys.executable} answer.py"})
+    assert not run.exit_ok and "focused QA changed the checked output" in run.error
+
+def test_qa_cannot_move_the_branch_it_reviews(tmp_path):
+    """In a worktree the checked files are the committed attempt, so a commit QA makes is refused."""
+    class CommittingQA(FakeModel):
+        def complete(self, *args, workdir=None, **kwargs):
+            if len(self.prompts) == 2:
+                path = Path(json.loads((tmp_path / "run/focused-source.json").read_text())["root"])
+                (path / "answer.py").write_text("assert False\n")
+                git(path, "-c", "user.email=qa@example.com", "-c", "user.name=qa", "commit", "-qam", "qa")
+            return super().complete(*args, workdir=workdir, **kwargs)
+    mode = DesignFastMode()
+    state = mode.state_dict()
+    state["knobs"]["repair_attempts"]["value"] = 0
+    mode.load_state_dict(state)
+    model = CommittingQA([PLAN, "===FILE: answer.py===\nassert True\n", QA_PASS])
+    run = mode.run(tmp_path / "run", model=model, task={
+        "name": "immutable_branch", "brief": "assert true", "check": f"{sys.executable} answer.py"})
+    assert not run.exit_ok and "focused QA changed the checked output" in run.error
+    assert not (tmp_path / "run/design.json").exists()
+
+
+def test_qa_build_output_does_not_invalidate_the_checked_attempt(tmp_path):
+    """In a worktree the checked files are the committed attempt, not whatever a command leaves on disk."""
+    class BuildingQA(FakeModel):
+        def complete(self, *args, workdir=None, **kwargs):
+            if len(self.prompts) == 2:
+                root = Path(json.loads((tmp_path / "run/focused-source.json").read_text())["root"])
+                (root / "dist").mkdir()
+                (root / "dist" / "out.txt").write_text("built\n")
+            return super().complete(*args, workdir=workdir, **kwargs)
+    model = BuildingQA([PLAN, "===FILE: answer.py===\nassert True\n", QA_PASS])
+    run = DesignFastMode().run(tmp_path / "run", model=model, task={
+        "name": "built_by_qa", "brief": "assert true", "check": f"{sys.executable} answer.py"})
+    assert run.exit_ok, run.error
 
 
 @pytest.mark.parametrize("needs_repair,qa_tokens", [(True, 25), (False, 25), (False, 40)])

@@ -38,6 +38,19 @@ def test_every_installed_package_mode_validates():
             assert mode.parameters(), f"{identifier} exposes no knob"
 
 
+def test_every_module_a_node_calls_is_one_its_package_names():
+    """A resumed run pins the modules `ops` names (`recovery`), so one a node calls but
+    `ops` leaves out could change under it. design's `delivery` was, until it was listed."""
+    for name in registry.discover_names():
+        package = registry.load(name)
+        for mode_class in package.modes:
+            for node in mode_class().graph().nodes.values():
+                for called in filter(None, (node.call, node.evaluator)):
+                    assert called.split(":")[0] in package.ops, (
+                        f"{name}/{mode_class.name}: node {node.id!r} calls {called}, whose module "
+                        "the package's ops do not name")
+
+
 def test_a_package_cannot_be_named_outside_the_convention():
     for bad in ("CirclePacking", "1bad", "", "with-dash"):
         with pytest.raises(nn.PackageError):

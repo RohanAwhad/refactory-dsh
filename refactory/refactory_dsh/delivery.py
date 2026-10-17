@@ -59,6 +59,7 @@ from pathlib import Path
 from typing import Any
 
 from refactory_dsh import projects, target_guard, worktree
+from refactory_dsh.nn import Knob
 from refactory_dsh.paths import project_for_nodes
 
 #: What the approval gate reads: the delivery this run will make, in words.
@@ -132,6 +133,30 @@ class Unverified(ValueError):
     def __init__(self, message: str, url: str) -> None:
         super().__init__(message)
         self.url = url
+
+
+def knobs() -> dict[str, Knob]:
+    """The knobs that say how a design run is delivered once its reviews pass (#350).
+
+    Frozen: each is what the person approves at the gate, not something a search may move.
+    """
+    return {
+        "pr": Knob(True, "bool", frozen=True,
+                   description="open a pull request once the reviews pass: into the target's default "
+                               "branch, or a new project's own GitHub repository; off keeps the work "
+                               "on the run's local branch"),
+        "repo_owner": Knob("", "str", frozen=True,
+                           description="the GitHub account or organisation a new project's repository "
+                                       "is created under (default: the account gh is logged in to)"),
+        "repo_visibility": Knob("private", "str", values=VISIBILITIES, frozen=True,
+                                description="who can see a new project's GitHub repository"),
+        "refine": Knob("", "str", frozen=True,
+                       description="an open pull request to follow up, as its URL or owner/repo#number: "
+                                   "the run starts from its branch and its result updates it"),
+        "review_comments": Knob(False, "bool", frozen=True,
+                                description="with refine: add the pull request's reviews and comments to "
+                                            "the run's steering"),
+    }
 
 
 # ── reaching GitHub ─────────────────────────────────────────────────────────

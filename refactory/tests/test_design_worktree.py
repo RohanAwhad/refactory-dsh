@@ -5,21 +5,22 @@ repository they have checked out, the same idea again, a base other than HEAD, a
 attempt that fails its check and is redone, and a run with its worktree turned off.
 Then the edits an attempt makes (#330 I4): a small change to a long file, a retry that
 edits what the last attempt wrote, and an emission materialise cannot apply, which goes
-back to emit rather than ending the run. A fake model answers; the git repositories,
-the worktrees, the check and the registry are real.
+back to emit rather than ending the run. Last, design_fast, which takes the same steps
+(`repo_change`) and delivers nothing. A fake model answers; the git repositories, the
+worktrees, the check and the registry are real.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import sys
 from pathlib import Path
 from typing import Callable
 
 import pytest
 
-from refactory_dsh import cli, console, design_ops, interactive, lowering, nn, projects, registry, worktree
+from refactory_dsh import (cli, console, design_ops, interactive, lowering, nn, projects, registry, repo_change,
+                           worktree)
 from refactory_dsh import run as node_runner
 from refactory_dsh.design import DesignMode
 from refactory_dsh.fast import DesignFastMode
@@ -64,7 +65,7 @@ def _report(workdir: Path) -> dict:
 
 def _edit(name: str, *pairs: tuple[str, str]) -> str:
     """An ``===EDIT:`` block: each pair is the lines to find and the lines put in their place."""
-    body = "".join(f"{design_ops.SEARCH}\n{search}{design_ops.DIVIDER}\n{replacement}{design_ops.REPLACE}\n"
+    body = "".join(f"{repo_change.SEARCH}\n{search}{repo_change.DIVIDER}\n{replacement}{repo_change.REPLACE}\n"
                    for search, replacement in pairs)
     return f"===EDIT: {name}===\n{body}"
 
@@ -293,14 +294,14 @@ def test_an_edit_sent_again_is_skipped_rather_than_applied_twice(repo, tmp_path,
     ("a\nx = 2\nb\n", ("x = 1\n", "x = 2\n")),
 ], ids=["inserted-after", "inserted-before", "changed"])
 def test_an_edit_whose_result_is_already_in_place_is_counted_as_applied(text, pair):
-    assert design_ops._edited(Path("a.py"), text, [pair], "git show HEAD:a.py") == (text, 1)
+    assert repo_change._edited(Path("a.py"), text, [pair], "git show HEAD:a.py") == (text, 1)
 
 
 @pytest.mark.parametrize("pair", [("x\n", ""), ("x\n", "\n")], ids=["removed", "blanked"])
 def test_an_edit_that_removes_lines_is_never_taken_as_already_applied(pair):
     """Nothing shows a removal happened -- a blank line proves nothing -- so it is refused, not skipped."""
     with pytest.raises(worktree.AttemptRefused, match="not in the file"):
-        design_ops._edited(Path("a.py"), "a\n\nb\n", [pair], "git show HEAD:a.py")
+        repo_change._edited(Path("a.py"), "a\n\nb\n", [pair], "git show HEAD:a.py")
 
 
 def test_without_a_worktree_a_run_takes_whole_files_only(repo, tmp_path, monkeypatch):
@@ -318,25 +319,25 @@ def test_without_a_worktree_a_run_takes_whole_files_only(repo, tmp_path, monkeyp
     ("===EDIT: a path with spaces===\n", "has a block header that is not"),
     ("===FILE: a.py===\nx\n" + _edit("a.py", ("x\n", "y\n")), "more than one block"),
     ("===DELETE: a.py===\nleftover\n", "a deletion takes none"),
-    (f"===EDIT: a.py===\n{design_ops.SEARCH}\nx\n{design_ops.DIVIDER}\ny\n", "missing its"),
+    (f"===EDIT: a.py===\n{repo_change.SEARCH}\nx\n{repo_change.DIVIDER}\ny\n", "missing its"),
     (_edit("a.py", ("\n", "y\n")), "nothing to search for"),
 ], ids=["no-blocks", "bad-header", "two-blocks", "delete-with-text", "unclosed-edit", "empty-search"])
 def test_an_emission_whose_blocks_are_malformed_is_refused_with_the_reason(answer, reason):
     with pytest.raises(worktree.AttemptRefused, match=reason):
-        design_ops._emitted(answer, edits=True)
+        repo_change._emitted(answer, edits=True)
 
 
 def test_an_edit_whose_text_is_in_its_file_twice_is_refused_rather_than_guessed():
     with pytest.raises(worktree.AttemptRefused, match="appear 2 times"):
-        design_ops._edited(Path("a.py"), "x = 1\nx = 1\n", [("x = 1\n", "x = 3\n")], "git show HEAD:a.py")
+        repo_change._edited(Path("a.py"), "x = 1\nx = 1\n", [("x = 1\n", "x = 3\n")], "git show HEAD:a.py")
 
 
 def test_an_edit_whose_lines_hold_a_divider_is_refused_rather_than_cut_short():
     """A reStructuredText title's underline is a line of `=======`, which once ended the search early."""
     with pytest.raises(worktree.AttemptRefused, match="unclear"):
-        design_ops._emitted(_edit("README.rst", ("License\n=======\n", "Licence\n=======\n")), edits=True)
+        repo_change._emitted(_edit("README.rst", ("License\n=======\n", "Licence\n=======\n")), edits=True)
     with pytest.raises(worktree.AttemptRefused, match="missing; put one"):
-        design_ops._emitted(f"===EDIT: a.py===\n{design_ops.SEARCH}\nx\n{design_ops.REPLACE}\n", edits=True)
+        repo_change._emitted(f"===EDIT: a.py===\n{repo_change.SEARCH}\nx\n{repo_change.REPLACE}\n", edits=True)
 
 
 @pytest.mark.parametrize("text, pairs, edited", [
@@ -347,13 +348,13 @@ def test_an_edit_whose_lines_hold_a_divider_is_refused_rather_than_cut_short():
 ], ids=["whole-lines-only", "crlf-kept", "no-final-newline-kept", "lines-removed"])
 def test_an_edit_matches_whole_lines_as_the_read_tool_shows_them_and_keeps_the_files_endings(text, pairs, edited):
     """The read tool strips `\\r` and ends every line, so that is the text a search is copied from."""
-    assert design_ops._edited(Path("a.py"), text, pairs, "git show HEAD:a.py") == (edited, 0)
+    assert repo_change._edited(Path("a.py"), text, pairs, "git show HEAD:a.py") == (edited, 0)
 
 
 def test_the_read_tools_paging_note_is_refused_too():
     """What a model retyping a long file is likeliest to copy: the note where the read stopped."""
     with pytest.raises(worktree.AttemptRefused, match="cut text short"):
-        design_ops._emitted(render({"a.py": "x = 1\n(Showing lines 1-2000 of 2637. Use offset=2001 to continue.)\n"}),
+        repo_change._emitted(render({"a.py": "x = 1\n(Showing lines 1-2000 of 2637. Use offset=2001 to continue.)\n"}),
                             edits=True)
 
 
@@ -364,7 +365,7 @@ def test_a_worktree_a_prune_removed_is_added_back_before_an_edit_applies(repo, t
     ctx = nn.RunContext(run, model=FakeModel([]), task={})
     ctx.facts.update({"name": NAME})
     ctx.write_text("emit.txt", _edit("app.py", ("print('app')\n", "print('edited')\n")))
-    facts = design_ops.materialise_artifact(ctx)
+    facts = repo_change.materialise(ctx)
     assert "emission_refused" not in facts and facts["files"] == ["app.py"]
     assert (Path(found.path) / "app.py").read_text() == "print('edited')\n"
 
@@ -377,11 +378,11 @@ def test_on_the_spines_route_a_refusal_reaches_the_check_and_a_later_attempt_cle
     (run / "facts.json").write_text(json.dumps({"name": NAME, "brief": "a tool", "check": "true"}))
     monkeypatch.setenv("REFACTORY_KNOBS", json.dumps({"check_attempts": 3}))
     (run / "emit.txt").write_text(_edit("app.py", ("print('not there')\n", "x\n")))
-    node_runner.run_node(f"{design_ops.__name__}:materialise_artifact", workdir=run, node_id="materialise")
+    node_runner.run_node(f"{repo_change.OPS}:materialise", workdir=run, node_id="materialise")
     verdict = node_runner.run_node(f"{design_ops.__name__}:check_artifact", workdir=run, node_id="check")
     assert verdict == "reloop" and "not in the file the edit applies to" in verdict.reason
     (run / "emit.txt").write_text(render({"tool.py": "print(1)\n"}))
-    node_runner.run_node(f"{design_ops.__name__}:materialise_artifact", workdir=run, node_id="materialise")
+    node_runner.run_node(f"{repo_change.OPS}:materialise", workdir=run, node_id="materialise")
     assert json.loads((run / "facts.json").read_text())["emission_refused"] == ""
 
 
@@ -395,7 +396,7 @@ def test_a_run_whose_graph_predates_the_refusal_fact_still_materialises(repo, tm
     (run / lowering.DECLARATIONS).write_text(json.dumps(declarations))
     (run / "facts.json").write_text(json.dumps({"name": NAME, "check": "python tool.py"}))
     (run / "emit.txt").write_text(render({"tool.py": "print(1)\n"}))
-    node_runner.run_node(f"{design_ops.__name__}:materialise_artifact", workdir=run, node_id="materialise")
+    node_runner.run_node(f"{repo_change.OPS}:materialise", workdir=run, node_id="materialise")
     assert json.loads((run / "facts.json").read_text())["files"] == ["tool.py"]
 
 
@@ -533,6 +534,7 @@ def test_a_lockfile_the_install_writes_is_part_of_the_attempt_the_reviewers_see(
     assert "package-lock.json" in git(repo, "ls-tree", "--name-only", payload["branch"]).splitlines()
     assert payload["head"] == git(repo, "rev-parse", payload["branch"]) == result.facts["commit"]
     assert "package-lock.json" in (tmp_path / "run" / "changes.diff").read_text()
+    assert "package-lock.json" in result.facts["files"], "the files the branch delivers follow the amendment"
 
 
 def test_a_relative_target_names_a_repository_beside_the_project_not_the_run_directory(repo, tmp_path,
@@ -609,7 +611,7 @@ def test_with_its_worktree_off_a_run_writes_the_artifact_directory_and_makes_no_
     result = _design(tmp_path / "run", FakeModel(_answers(render({"tool.py": "print('built')\n"}))),
                      _mode(worktree=False))
     assert result.exit_ok, result.error
-    assert Path(_report(tmp_path / "run")["artifact"]) == (repo / design_ops.ARTIFACTS / NAME).resolve()
+    assert Path(_report(tmp_path / "run")["artifact"]) == (repo / repo_change.ARTIFACTS / NAME).resolve()
     assert git(repo, "branch", "--list", "refactory/*") == ""
     assert not worktree.root().exists() and projects.load()["projects"] == []
 
@@ -619,6 +621,17 @@ def test_with_its_worktree_off_a_run_refuses_what_only_a_worktree_can_use(repo, 
     result = _design(tmp_path / "run", FakeModel(_answers()), _mode(worktree=False), target=str(repo))
     assert result.exit_ok is False
     assert "target need the run's worktree, which is off" in (result.error or "")
+    # Following up a pull request is design's own (#350), and needs a worktree as much.
+    result = _design(tmp_path / "again", FakeModel(_answers()), _mode(worktree=False), refine="acme/app#3")
+    assert result.exit_ok is False
+    assert "refine need the run's worktree, which is off" in (result.error or "")
+
+
+def test_a_design_run_lowered_before_materialise_moved_still_finds_it():
+    """A run waiting at its approval gate across an upgrade calls the name its graph was lowered with."""
+    from refactory_dsh.nn.resolve import resolve
+
+    assert resolve("refactory_dsh.design_ops:materialise_artifact") is repo_change.materialise
 
 
 def test_a_run_without_a_worktree_never_inherits_one_an_earlier_run_left_in_its_directory(
@@ -630,29 +643,150 @@ def test_a_run_without_a_worktree_never_inherits_one_an_earlier_run_left_in_its_
                             task={"name": NAME, "brief": "a tool", "check": "python tool.py", "target": target})
         ctx.facts.update(design_ops.prepare_design(ctx))
     assert worktree.recorded(run) is None
-    assert ctx.facts["worktree"] == design_ops.NO_WORKTREE
+    assert ctx.facts["worktree"] == repo_change.NO_WORKTREE
 
 
-def test_design_fast_keeps_its_own_copy_and_makes_no_worktree(tmp_path, monkeypatch):
-    monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path / "project"))
-    plan = "Change only the requested file."
-    qa = json.dumps({"status": "pass", "checks": [{"name": "runs", "command": "python answer.py",
-                                                   "status": "pass", "evidence": "exit 0"}],
-                     "findings": [], "not_run": []})
-    result = DesignFastMode().run(tmp_path / "run", model=FakeModel([plan, "===FILE: answer.py===\nx = 1\n", qa]),
-                                  task={"name": "small", "brief": "x", "check": f"{sys.executable} answer.py"})
+# ── design_fast, on the same steps (`repo_change`) ─────────────────────────────
+#: What design_fast's strategist and focused QA answer; the coder's answers are each test's own.
+FAST_PLAN = "Change only the requested file."
+FAST_QA = json.dumps({"status": "pass", "checks": [{"name": "runs", "command": "python tool.py",
+                                                    "status": "pass", "evidence": "exit 0"}],
+                      "findings": [], "not_run": []})
+
+
+def _fast(workdir: Path, *emits: str, refused: int = 0, knobs: dict | None = None, **task: str):
+    """A design_fast run: the strategist, then each emission and, once one applies, its focused QA.
+
+    The first ``refused`` emissions are ones materialise cannot apply, so no QA follows them.
+    """
+    mode = DesignFastMode()
+    state = mode.state_dict()
+    for name, value in (knobs or {}).items():
+        state["knobs"][name]["value"] = value
+    mode.load_state_dict(state)
+    answers = [FAST_PLAN] + [answer for index, emit in enumerate(emits)
+                             for answer in ((emit,) if index < refused else (emit, FAST_QA))]
+    return mode.run(workdir, model=FakeModel(answers),
+                    task={"name": NAME, "brief": "a tool", "check": "python tool.py", **task})
+
+
+def test_design_fast_changes_a_repository_in_a_worktree_and_delivers_nothing(repo, tmp_path):
+    """It works where design works, and its work stays on the run's branch: it has no gate to approve a PR."""
+    (repo / "app.py").write_text("print('mine, not committed')\n")
+    head = git(repo, "rev-parse", "HEAD")
+    # Passes only where app.py is as committed and the setup command has run: the worktree, prepared.
+    tool = ("import pathlib\nassert pathlib.Path('app.py').read_text() == \"print('app')\\n\"\n"
+            "assert pathlib.Path('built.txt').exists()\n")
+    model = FakeModel([FAST_PLAN, render({"tool.py": tool}), FAST_QA])
+    result = DesignFastMode().run(tmp_path / "run", model=model, task={
+        "name": NAME, "brief": "a tool", "check": "python tool.py", "target": str(repo),
+        "setup": "python -c \"open('built.txt', 'w').write('built')\""})
     assert result.exit_ok, result.error
+    assert "===EDIT: <relative path>===" in model.prompts[1], "emit is told it may edit the last attempt"
+    assert str(worktree.WRAPPER) in model.prompts[2], "focused QA is told how to run a command in the worktree"
+    assert (git(repo, "rev-parse", "HEAD"), (repo / "app.py").read_text()) == (head, "print('mine, not committed')\n")
+    payload = _report(tmp_path / "run")
+    assert (payload["target"], payload["base"]) == (str(repo.resolve()), head)
+    assert git(repo, "ls-tree", "--name-only", payload["branch"]).splitlines() == ["app.py", "tool.py"]
+    assert "fast" in payload and payload["source_project"] is None
+    assert not (tmp_path / "run" / "delivery.json").exists() and not (tmp_path / "run" / "delivery.md").exists()
+    [entry] = projects.load()["projects"]
+    assert entry["runs"][-1]["status"] == "succeeded"
+
+
+def test_design_fast_with_no_target_starts_a_new_project(tmp_path):
+    result = _fast(tmp_path / "run", render({"tool.py": "print('built')\n"}))
+    assert result.exit_ok, result.error
+    project = (projects_dir() / NAME).resolve()
+    payload = _report(tmp_path / "run")
+    assert payload["target"] == str(project)
+    assert git(project, "ls-tree", "--name-only", payload["branch"]) == "tool.py"
+
+
+def test_design_fast_edits_its_last_attempt_and_reviews_the_whole_branch(tmp_path):
+    """A repair is the next commit, made with an edit, and focused QA is shown every file the branch changes."""
+    failing = render({"tool.py": "raise SystemExit(1)\n", "helper.py": "x = 1\n"})
+    fixed = _edit("tool.py", ("raise SystemExit(1)\n", "print('fixed')\n"))
+    result = _fast(tmp_path / "run", failing, fixed)
+    assert result.exit_ok, result.error
+    payload = _report(tmp_path / "run")
+    project = Path(payload["target"])
+    assert git(project, "rev-list", "--count", f"{payload['base']}..{payload['branch']}") == "2"
+    assert git(project, "show", f"{payload['branch']}:tool.py") == "print('fixed')"
+    assert json.loads(result.facts["review_files"]) == ["helper.py", "tool.py"]
+    assert payload["fast"]["repairs_used"] == 1
+
+
+def test_design_fast_carries_the_lockfile_its_install_writes(repo, tmp_path, monkeypatch):
+    """The check's install amends the attempt, and focused QA is shown that file too."""
+    stub(tmp_path / "bin", "npm", "echo '{\"lockfileVersion\": 3}' > package-lock.json")
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+    result = _fast(tmp_path / "run", render({"package.json": "{}\n", "tool.py": "print('built')\n"}),
+                   target=str(repo))
+    assert result.exit_ok, result.error
+    payload = _report(tmp_path / "run")
+    assert "package-lock.json" in git(repo, "ls-tree", "--name-only", payload["branch"]).splitlines()
+    assert payload["head"] == git(repo, "rev-parse", payload["branch"]) == result.facts["commit"]
+    assert "package-lock.json" in json.loads(result.facts["review_files"])
+
+def test_design_fast_sends_an_emission_it_cannot_apply_back_to_emit(tmp_path):
+    """Within its repair bound, as a failed check is; with no repair left, the run ends and says why."""
+    truncated = "===FILE: tool.py===\nx = 1  # ... (line truncated to 2000 chars)\n"
+    result = _fast(tmp_path / "run", truncated, render({"tool.py": "print('whole')\n"}), refused=1)
+    assert result.exit_ok, result.error
+    assert "the read tool's note that it cut text short" in (tmp_path / "run" / "repair.txt").read_text()
+    assert _report(tmp_path / "run")["fast"]["repairs_used"] == 1
+    ended = _fast(tmp_path / "ended", truncated, refused=1, knobs={"repair_attempts": 0}, name="other_tool")
+    assert not ended.exit_ok
+    assert "after 0 repair(s): materialise could not apply emit.txt" in str(ended.error)
+    assert "cut text short" in str(ended.error)
+
+
+def test_design_fast_with_its_worktree_off_keeps_its_own_copy_and_makes_no_worktree(tmp_path, monkeypatch):
+    monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path / "project"))
+    result = _fast(tmp_path / "run", "===FILE: tool.py===\nx = 1\n", knobs={"worktree": False})
+    assert result.exit_ok, result.error
+    assert result.facts["artifact"] == str((tmp_path / "project" / repo_change.ARTIFACTS / NAME).resolve())
     assert not worktree.root().exists() and projects.load()["projects"] == []
 
 
-def test_design_fast_refuses_text_copied_from_a_truncated_read(tmp_path, monkeypatch):
-    """design_fast has no retry for it, so the run ends and says why, rather than ship a file cut short."""
+def test_design_fast_copies_a_source_project_and_refuses_a_target_with_it(repo, tmp_path, monkeypatch):
+    """`source_project` is the other way to start from existing code, so a run takes one of the two."""
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path / "project"))
-    emission = "===FILE: answer.py===\nx = 1  # ... (line truncated to 2000 chars)\n"
-    result = DesignFastMode().run(tmp_path / "run", model=FakeModel(["Change only the requested file.", emission]),
-                                  task={"name": "small", "brief": "x", "check": f"{sys.executable} answer.py"})
-    assert not result.exit_ok
-    assert "the read tool's note that it cut text short" in str(result.error)
+    truncated = "===FILE: tool.py===\nx = 1  # ... (line truncated to 2000 chars)\n"
+    copied = _fast(tmp_path / "run", truncated, "===FILE: tool.py===\nx = 1\n", refused=1,
+                   source_project=str(repo))
+    assert copied.exit_ok, copied.error
+    assert "cut text short" in (tmp_path / "run" / "repair.txt").read_text(), "a refusal is repaired here too"
+    assert sorted(path.name for path in Path(copied.facts["artifact"]).iterdir()) == ["app.py", "tool.py"]
+    assert not worktree.root().exists()
+    refused = _fast(tmp_path / "both", source_project=str(repo), target=str(repo))
+    assert not refused.exit_ok
+    assert "source_project copies a directory into the artifact, and target" in str(refused.error)
+
+
+def test_design_fast_refuses_to_follow_up_a_pull_request(tmp_path):
+    """Following one up updates it, and design_fast delivers nothing, so it is refused, not ignored."""
+    result = _fast(tmp_path / "run", refine="acme/app#3")
+    assert not result.exit_ok and "design_fast delivers nothing" in str(result.error)
+
+
+def test_the_direct_entry_point_passes_the_worktree_flags_to_design_fast(monkeypatch, tmp_path, capsys):
+    from refactory_dsh import design
+
+    seen: dict = {}
+
+    def run(self, workdir, **kwargs):
+        seen.update(knobs=self.values(), task=kwargs["task"])
+        return nn.RunResult(exit_ok=True, facts={})
+
+    monkeypatch.setattr(DesignFastMode, "run", run)
+    monkeypatch.chdir(tmp_path)
+    assert design.main(["--name", NAME, "--brief", "b", "--check", "true", "--fast", "--no-worktree"]) == 0
+    assert seen["knobs"]["worktree"] is False
+    with pytest.raises(SystemExit) as refused:
+        design.main(["--name", NAME, "--brief", "b", "--check", "true", "--fast", "--no-pr"])
+    assert refused.value.code == 2 and "--fast does not take --no-pr" in capsys.readouterr().err
 
 
 def test_ceo_passes_the_worktree_flags_to_design_and_refuses_them_where_they_cannot_apply(
@@ -664,14 +798,18 @@ def test_ceo_passes_the_worktree_flags_to_design_and_refuses_them_where_they_can
     assert {f"target={tmp_path.resolve()}", "base=v1", "setup=make"} <= set(seen[0])
     assert cli.main(["ceo", "a tool", "--check", "true", "--no-worktree"]) == 0
     assert "worktree=0" in seen[1]
-    for refused in (["--mode", "design_fast", "--target", "."], ["--mode", "create", "--single", "--target", "."],
-                    ["--no-worktree", "--target", "."]):
+    assert cli.main(["ceo", "a tool", "--check", "true", "--mode", "design_fast", "--target", ".",
+                     "--setup", "make"]) == 0
+    assert {f"target={tmp_path.resolve()}", "setup=make"} <= set(seen[2]), "design_fast takes them too"
+    for refused in (["--mode", "create", "--single", "--target", "."], ["--no-worktree", "--target", "."],
+                    ["--mode", "design_fast", "--source-project", ".", "--target", "."]):
         assert cli.main(["ceo", "a tool", "--check", "true", *refused]) == 2
     err = capsys.readouterr().err
-    assert err.count("does not take --target") == 2 and "--no-worktree cannot take --target" in err
-    assert len(seen) == 2, "a refused flag forwards nothing"
+    assert "does not take --target" in err and "--no-worktree cannot take --target" in err
+    assert "--source-project cannot take --target" in err
+    assert len(seen) == 3, "a refused flag forwards nothing"
     assert cli.main(["ceo", "default_pack/design", "--target", "."]) == 0
-    assert f"target={tmp_path.resolve()}" in seen[2], "a named mode takes them as knobs"
+    assert f"target={tmp_path.resolve()}" in seen[3], "a named mode takes them as knobs"
 
 
 def test_the_console_design_verb_takes_a_target_too(monkeypatch, tmp_path):

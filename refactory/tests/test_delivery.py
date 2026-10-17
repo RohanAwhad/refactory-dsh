@@ -508,10 +508,12 @@ def test_the_command_line_refuses_delivery_flags_that_cannot_apply(capsys):
     assert cli.main(["ceo", "a tool", "--check", "true", "--refine", "acme/app#3", "--base", "main"]) == 2
     assert cli.main(["ceo", "a tool", "--check", "true", "--review-comments"]) == 2
     assert cli.main(["ceo", "a tool", "--check", "true", "--mode", "design_fast", "--no-pr"]) == 2
+    assert cli.main(["ceo", "a tool", "--check", "true", "--mode", "design_fast", "--refine", "acme/app#3"]) == 2
     assert cli.main(["ceo", "a tool", "--check", "true", "--no-worktree", "--refine", "acme/app#3"]) == 2
     err = capsys.readouterr().err
     assert "takes no --base" in err and "goes with --refine" in err
     assert "does not take --no-pr" in err and "--no-worktree cannot take --refine" in err
+    assert "--mode design_fast does not take --refine" in err
 
 
 def test_the_console_design_verb_forwards_how_the_run_is_delivered(monkeypatch):

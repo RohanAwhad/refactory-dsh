@@ -371,7 +371,10 @@ is a declaration rather than a special case in the library:
   work".
 - **Their ops live in the library.** `create_ops` and `design_ops` ship with
   `refactory_dsh`, because a mode that writes a package needs the validator and the
-  registry. A package may name any importable ops module.
+  registry. A package may name any importable ops module. Where a design run works,
+  and how its change lands and is checked, is `repo_change`'s, which any mode that
+  changes a repository attaches (`fix_pack` is one); design and design_fast are two
+  such modes, not special cases of the engine.
 - **They need a model.** No knob makes them run without one, so a run with no client
   fails at the first agent node rather than producing nothing.
 
