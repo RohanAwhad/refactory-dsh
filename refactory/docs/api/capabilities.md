@@ -695,6 +695,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "base": "base",
       "brief": "brief",
       "check": "check",
+      "generate": "generate",
       "model": "model",
       "name": "name",
       "noPr": "no_pr",
@@ -713,6 +714,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "target",
       "base",
       "setup",
+      "generate",
       "noWorktree",
       "noPr",
       "refine",
@@ -804,6 +806,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "description": "the command that proves the artifact works",
       "flags": [
         "--check"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "string"
+    },
+    "generate": {
+      "default": "",
+      "description": "a command run in the worktree after setup, before each check; tracked-file changes are amended into the attempt",
+      "flags": [
+        "--generate"
       ],
       "nargs": null,
       "positional": false,
@@ -947,7 +960,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     }
   },
   "purpose": "Build and check software from a brief and a check command, on its own branch in a git worktree: of the repository `target` names, or of a new project. Once its reviews pass it opens a pull request (a new project's private GitHub repository is created then), unless noPr. No reusable mode is required. Prefer wf_open default_pack/design with user gates.",
-  "reviewed_schema": "e8c493814b2d2642a419a8fc84da0ae1bf74e2fed3c897eb52e26229555016ae"
+  "reviewed_schema": "e291dd097cbae3d200acc7c992fcc95085eabba6fd90bf7b67baee86eaf8d729"
 }
 ```
 
@@ -4366,6 +4379,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "required": false,
       "type": "string"
     },
+    "generate": {
+      "default": "",
+      "description": "design and design_fast: a command run in the worktree after setup, before each check; its tracked-file changes are amended into the attempt",
+      "flags": [
+        "--generate"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "string"
+    },
     "headless": {
       "default": false,
       "description": "run without a conversation: one task, one report, then exit, for scripts and CI; without it the run is live and a line you type between turns reaches the CEO",
@@ -4709,7 +4733,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     }
   },
   "purpose": "Run a named mode or author a package/artifact from a brief in the terminal; worker file defaults apply at preparation. CEO conversation and graph worker routes are distinct.",
-  "reviewed_schema": "f5ba8c57638462354ae4fe3174085ac5d8506889e34d830eeb893a8f17cb7f7f"
+  "reviewed_schema": "491e399e27bc1cceab42001b29d8ecb490fea9822c5b7149510d322ad7cf1710"
 }
 ```
 
@@ -7496,6 +7520,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
         "base",
         "worktree",
         "setup",
+        "generate",
         "pr",
         "repo_owner",
         "repo_visibility",
@@ -7621,6 +7646,18 @@ Build a software artifact from a brief, name and acceptance command, as commits 
         1800
       ],
       "value": 180,
+      "values": []
+    },
+    "generate": {
+      "default": "",
+      "description": "a command run in the worktree after setup, before each check; whatever it changes in tracked files is amended into the attempt",
+      "frozen": true,
+      "kind": "str",
+      "range": [
+        null,
+        null
+      ],
+      "value": "",
       "values": []
     },
     "name": {
@@ -7786,7 +7823,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local; `refine` updates an open one).",
-    "reviewed_schema": "a58201e57f7189d6c42f80693273770fd0e4b8958b61eac43c191c21605594f9"
+    "reviewed_schema": "4413ea24f798407008e220210e8c00f80053cb9e9f0fc2abc2429cf904e549f1"
   }
 }
 ```
@@ -7932,7 +7969,8 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
         "target",
         "base",
         "worktree",
-        "setup"
+        "setup",
+        "generate"
       ],
       "notes": "read the artifact brief, and say where the run works",
       "role": "ceo"
@@ -8001,6 +8039,18 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
         1800
       ],
       "value": 180,
+      "values": []
+    },
+    "generate": {
+      "default": "",
+      "description": "a command run in the worktree after setup, before each check; whatever it changes in tracked files is amended into the attempt",
+      "frozen": true,
+      "kind": "str",
+      "range": [
+        null,
+        null
+      ],
+      "value": "",
       "values": []
     },
     "name": {
@@ -8105,7 +8155,7 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a small artifact with one sequential strategist, coder and QA agent, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none (`worktree=0` writes .factory/artifacts instead; `source_project` copies a directory there). The check runs in that worktree before focused QA. It has no approval gate, so it opens no pull request: the branch is left for you to push.",
-    "reviewed_schema": "b13b257a2450ab2809c58eeb0e3ee98bbd68dff66d04f87b5457cd9298aff638"
+    "reviewed_schema": "093f085dd3078e2d74e037ecdf54bcdbdc77d35511b91a0858da07cdb5935f36"
   }
 }
 ```
@@ -9172,7 +9222,8 @@ Change a repository until a failing check passes, on a branch of its own, throug
         "target",
         "base",
         "worktree",
-        "setup"
+        "setup",
+        "generate"
       ],
       "notes": "read the check, and give the run its worktree",
       "role": "ceo"
@@ -9247,6 +9298,18 @@ Change a repository until a failing check passes, on a branch of its own, throug
       "value": 300,
       "values": []
     },
+    "generate": {
+      "default": "",
+      "description": "a command run in the worktree after setup, before each check; whatever it changes in tracked files is amended into the attempt",
+      "frozen": true,
+      "kind": "str",
+      "range": [
+        null,
+        null
+      ],
+      "value": "",
+      "values": []
+    },
     "name": {
       "default": "",
       "description": "what the run is called; a new project is named after it",
@@ -9316,7 +9379,7 @@ Change a repository until a failing check passes, on a branch of its own, throug
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Change a repository until a failing check passes, on a branch of its own, through the steps any mode that changes a repository attaches (`repo_change`): the example mode authors copy. It opens no pull request; unscored, so not an optimization target.",
-    "reviewed_schema": "5874d9a8fb9aff131b6c0e935692bae99b8c9133b892652b06f37b6c083b62ea"
+    "reviewed_schema": "083a14b9ec35c161734536bde6ec38fe184bce337428190f8670aa7768fbbc4c"
   }
 }
 ```

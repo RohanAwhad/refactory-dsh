@@ -108,6 +108,11 @@ ENDED = ("failed", "done")
 #: post-commit hook would still run on the run's behalf.
 NO_HOOKS = ("-c", "core.hooksPath=/dev/null")
 
+#: Suppress git hook managers (lefthook, husky) so installs and commands in the
+#: worktree do not rewrite the shared repository's hooks (#347). Defined once
+#: and used in _install_env, check_environment and model._environment.
+HOOK_SUPPRESS: dict[str, str] = {"LEFTHOOK": "0", "HUSKY": "0"}
+
 #: Where the spine records the invocation that owns a run directory (`invocations`).
 INVOCATION = Path(".refactory") / "invocation.json"
 
@@ -787,6 +792,9 @@ def check_environment(path: Path, home: Path) -> dict[str, str]:
     store = _json(path / "node_modules" / ".modules.yaml").get("storeDir")
     if isinstance(store, str) and store:
         env["pnpm_config_store_dir"] = store
+    # Suppress git hook managers so commands run through the worktree's
+    # environment do not rewrite the shared repository's hooks (#347).
+    env.update(HOOK_SUPPRESS)
     return env
 
 
@@ -830,10 +838,10 @@ def _install_env() -> dict[str, str]:
            if not name.startswith(("REFACTORY_", "DSH_"))
            and name not in ("PYTHONPATH", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "VENV_BIN", "NODE_BIN")
            and (not is_secret(name) or name.upper().startswith(REGISTRY_ENV))}
-    # A worktree shares the target's git configuration and hooks, so hook managers are
-    # told not to "set up" hooks there; nobody answers an install's prompts either, so
-    # it is told it runs unattended.
-    env.update(HUSKY="0", LEFTHOOK="0", CI="true")
+    # Suppress git hook managers so installs in the worktree do not rewrite the
+    # shared repository's hooks (#347).  Nobody answers an install's prompts
+    # either, so it is told it runs unattended.
+    env.update(**HOOK_SUPPRESS, CI="true")
     return env
 
 
@@ -918,14 +926,7 @@ def ensure_environment(found: Worktree, run: Path, budget: Any = None) -> tuple[
     left = _loose(path) - before
     lockfiles = sorted(name for name in {*_tracked_edits(path), *left} if name in LOCKFILES)
     if lockfiles:
-        git(path, "add", "-f", "--", *lockfiles)
-        # Amended into the attempt; before there is one, a commit of its own, so the base
-        # the run was pinned to is never rewritten.
-        amend = ("--amend", "--no-edit") if found.head != found.base else ("-m", "lockfile written by an install")
-        git(path, *NO_HOOKS, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", *amend,
-            env={**os.environ, **COMMITTER})
-        found = replace(found, head=git(path, "rev-parse", "HEAD").strip())
-        _write_json(Path(run) / RECORD, asdict(found))
+        found = amend(found, run, lockfiles, "lockfile written by an install")
     record = _json(record_path)
     _write_json(record_path, {
         **record,
@@ -935,6 +936,23 @@ def ensure_environment(found: Worktree, run: Path, budget: Any = None) -> tuple[
                         "at": datetime.now(timezone.utc).isoformat()},
     })
     return found, problems
+
+
+def amend(found: Worktree, run: Path, paths: list[str], message: str) -> Worktree:
+    """Stage ``paths`` and amend them into the attempt, or commit with ``message`` when there is none.
+
+    One code path for every amendment -- a lockfile an install writes and a file a
+    generate command rewrites -- so the git add, the amend-or-commit, the new head
+    and the record write are never duplicated.
+    """
+    path = Path(found.path)
+    git(path, "add", "-f", "--", *paths)
+    how = ("--amend", "--no-edit") if found.head != found.base else ("-m", message)
+    git(path, *NO_HOOKS, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", *how,
+        env={**os.environ, **COMMITTER})
+    found = replace(found, head=git(path, "rev-parse", "HEAD").strip())
+    _write_json(Path(run) / RECORD, asdict(found))
+    return found
 
 
 def write_wrapper(found: Worktree, run: Path) -> Path:

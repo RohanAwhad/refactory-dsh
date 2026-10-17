@@ -180,7 +180,7 @@ def test_design_emit_writes_the_blocks_its_scope_describes_into_emit_txt():
     attempt to apply them to -- so `emit_scope` describes them and the prompt places them."""
     prompt = DesignMode().build().nodes["emit"].prompt_template
     assert "{{emit_scope}}" in prompt and "Write those blocks into emit.txt" in prompt
-    assert "Do not create or change the files themselves" in prompt
+    assert "Write nothing but emit.txt" in prompt
     assert "Answer with file blocks" not in prompt
 
 
