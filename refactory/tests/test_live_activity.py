@@ -493,6 +493,78 @@ def test_warn_tokens_validation_rejects_invalid_values():
     assert limits.warn_tokens is None
 
 
+def test_resume_waits_for_exiting_owner_then_starts_fresh(monkeypatch, tmp_path):
+    """A resume of a terminal-status run whose owner exits during the wait starts a fresh owner."""
+    import subprocess
+    import sys
+    from refactory_dsh import recovery
+
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    # Spawn a real child that exits after 0.5s — within the 3s timeout.
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(0.5)'])
+    try:
+        (directory / 'spine-checkpoint.json').write_text(
+            json.dumps({'owner_pid': child.pid})
+        )
+        (directory / 'spine-status.json').write_text(
+            json.dumps({'status': 'refused'})
+        )
+        (directory / 'invocation.json').write_text(json.dumps({'id': 'inv1'}))
+        start_calls = []
+        monkeypatch.setattr(recovery, 'start', lambda root: (
+            start_calls.append(root),
+            {'status': 'queued', 'action': 'resume', 'run_id': str(root), 'pid': 9999},
+        )[1])
+        result = graph_control.request(tmp_path, 'resume')
+        assert len(start_calls) == 1, "recovery.start must be called when the owner exits"
+        assert result['pid'] == 9999
+        # No stale control file should be queued.
+        controls = list((directory / 'graph-controls').glob('*.json'))
+        assert len(controls) == 0, "no control file should be queued when a fresh owner was started"
+    finally:
+        try:
+            child.kill()
+        except OSError:
+            pass
+        child.wait()
+
+
+def test_resume_reports_owner_still_alive_after_timeout(monkeypatch, tmp_path):
+    """A resume at a terminal status where the owner outlives the timeout says so."""
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    (directory / 'spine-checkpoint.json').write_text(
+        json.dumps({'owner_pid': os.getpid()})
+    )
+    (directory / 'spine-status.json').write_text(
+        json.dumps({'status': 'refused'})
+    )
+    (directory / 'invocation.json').write_text(json.dumps({'id': 'inv1'}))
+    monkeypatch.setattr(graph_control, '_OWNER_EXIT_TIMEOUT', 0.3)
+    result = graph_control.request(tmp_path, 'resume')
+    assert result['status'] == 'queued'
+    assert result.get('owner_exiting') is True
+    formatted = readable.format_graph_control(result)
+    assert 'Its owner is still finishing; run resume again once it has exited.' in formatted
+
+
+def test_resume_queued_for_paused_live_owner(tmp_path):
+    """A live owner paused at a boundary gets a queued resume — today's behaviour."""
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    (directory / 'spine-checkpoint.json').write_text(
+        json.dumps({'owner_pid': os.getpid()})
+    )
+    (directory / 'spine-status.json').write_text(
+        json.dumps({'status': 'paused'})
+    )
+    (directory / 'invocation.json').write_text(json.dumps({'id': 'inv1'}))
+    result = graph_control.request(tmp_path, 'resume')
+    assert result['status'] == 'queued'
+    assert 'owner_exiting' not in result
+
+
 def test_graph_snapshot_tolerates_old_and_partial_checkpoints(tmp_path):
     assert live.snapshot(tmp_path)['graph'] is None
     checkpoint = tmp_path / '.refactory/spine-checkpoint.json'

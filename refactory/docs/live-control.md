@@ -65,7 +65,7 @@ uv run refactory graph-control resume --run /absolute/run
 uv run refactory graph-control stop --run /absolute/run
 ```
 
-Process cancellation is separate: `refactory stop --run RUN_DIR` requests interruption of its recorded owned process. Inspect the receipt and subsequent activity for confirmation; sending a signal is not proof that every worker terminated. Stopping a reader does not issue either kind of stop.
+Process cancellation is separate: `refactory stop --run RUN_DIR` requests interruption of the run's current owner process (from the console launch record, or from the spine checkpoint when the launch record is absent or stale, matching how `refactory status` determines `owner_alive`). Inspect the receipt and subsequent activity for confirmation; sending a signal is not proof that every worker terminated. Stopping a reader does not issue either kind of stop.
 
 A control that cannot be applied — a stale revision, an unsupported action, a node that is not safely replayable — is recorded with `status: failed` in the receipt. The failure reason is also journaled as a run warning, visible in `refactory status` and in the receipt shown by `refactory graph-control`'s own output. The owner removes the control file once it applies or refuses the control. A deferred rerun stays queued until concurrent work joins.
 
@@ -75,7 +75,7 @@ To change completed work, choose a completed node and prompt correction, press *
 
 The run's status includes whether its owner process is alive. A failed run with a live owner may still apply queued controls and does not need recovery — wait for it or send another control. A failed run whose owner is not alive cannot apply pending controls; explicit recovery (resume) is needed to start a fresh owner from the saved checkpoint.
 
-A live owner's resume control releases its boundary pause. If the old graph owner is gone, explicit resume can start a fresh owned process from the saved checkpoint. It preserves the run identity, completed work, route configuration and consumed resources. Larger resource limits are explicit allocations, not a reset of usage. `refactory graph-control resume --run <dir>` is the recovery command:
+A live owner's resume control releases its boundary pause. If the old graph owner is gone, explicit resume can start a fresh owned process from the saved checkpoint. When the run's status is terminal (done, halted, failed, refused, or cancelled) and the recorded owner is still alive, resume waits briefly for it to exit. If the owner exits during the wait, a fresh owner is started automatically. If the owner is still alive after the wait, the resume is queued and the response notes that the owner is still finishing — run resume again once it has exited. It preserves the run identity, completed work, route configuration and consumed resources. Larger resource limits are explicit allocations, not a reset of usage. `refactory graph-control resume --run <dir>` is the recovery command:
 
 ```bash
 uv run refactory graph-control resume --run /absolute/run
