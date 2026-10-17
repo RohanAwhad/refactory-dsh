@@ -108,8 +108,19 @@ def intent(workdir: Path) -> list[dict[str, Any]]:
     from refactory_dsh.steering import Ledger
 
     # Gate visits/consumption are bookkeeping, not later user instructions.
-    return [entry for entry in Ledger(workdir).entries()
-            if entry["kind"] in ("Initial Idea", "info", "correction", "constraint", "verdict")]
+    result = []
+    for entry in Ledger(workdir).entries():
+        if entry["kind"] not in ("Initial Idea", "info", "correction", "constraint", "verdict"):
+            continue
+        if entry["kind"] == "verdict":
+            # Strip the consumed field so marking a verdict used does not change
+            # the identity digest (which current_problems compares).
+            entry = {**entry, "text": "\n".join(
+                line for line in entry["text"].splitlines()
+                if not line.startswith("consumed:")
+            )}
+        result.append(entry)
+    return result
 
 
 def identity(workdir: Path, root: str) -> dict[str, Any]:
@@ -141,7 +152,7 @@ def requirements(ctx: Any) -> list[dict[str, str]]:
                     result.extend({"id": f"criterion-{index + 1}", "text": str(item)}
                                   for index, item in enumerate(criteria))
     for index, entry in enumerate(intent(ctx.workdir)):
-        if entry["kind"] in ("Initial Idea", "info", "correction", "constraint"):
+        if entry["kind"] in ("correction", "constraint"):
             result.append({"id": f"ledger-{index + 1}", "text": entry["text"], "kind": entry["kind"]})
     return result
 
@@ -229,7 +240,7 @@ def audit_problems(ctx: Any) -> list[str]:
         audit = {}
     rows = audit.get("requirements", []) if isinstance(audit, dict) else []
     baseline = {item["id"]: item for item in evidence.get("requirements", [])}
-    changes = {key for key, value in baseline.items() if value.get("kind") in ("Initial Idea", "correction", "constraint")}
+    changes = {key for key, value in baseline.items() if value.get("kind") in ("correction", "constraint")}
     changes.add("brief")
     covered = set()
     problems = []
