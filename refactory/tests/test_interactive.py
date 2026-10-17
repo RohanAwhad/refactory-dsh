@@ -312,18 +312,7 @@ def test_brief_echo_shortened_to_first_line(monkeypatch, capsys):
     long_brief = "First line of the brief\nSecond paragraph with details\nThird paragraph"
     # Mock _forward to avoid actually running anything
     monkeypatch.setattr(cli, "_forward", lambda *a, **k: 0)
-    cli.cmd_ceo(type("Args", (), {
-        "what": long_brief, "mode": "design", "name": "test", "check": "echo ok",
-        "revise": "", "task_ref": "", "single_shot": False, "knob": [],
-        "workdir": "", "repair_attempts": None, "source_project": "",
-        "target": "", "base": "", "no_worktree": False, "setup": "",
-        "no_pr": False, "refine": "", "review_comments": False,
-        "verdict": [], "timeout": 0, "provider": "", "model": "",
-        "headless": False, "intent": "",
-        "worker_backend": "", "effort": "", "permission_mode": "",
-        "max_elapsed_s": None, "max_tokens": None,
-        "validation_reserve_s": None, "validation_reserve_tokens": None,
-    })())
+    assert cli.main(["ceo", long_brief, "--mode", "design", "--check", "echo ok"]) == 0
     captured = capsys.readouterr()
     assert "First line of the brief" in captured.err
     assert "Second paragraph" not in captured.err
