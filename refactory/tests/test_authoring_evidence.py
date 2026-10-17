@@ -346,9 +346,8 @@ def test_failure_message_count_matches_attempts_used(tmp_path):
     assert ctx.facts["attempts_used"] == 3, (
         "the saved attempts_used must match the number in the failure message"
     )
-    # The persisted facts.json must agree.
-    saved = json.loads((tmp_path / "facts.json").read_text())
-    assert saved["attempts_used"] == 3
+    # repair() no longer writes facts.json (that is run_node's job in spine mode);
+    # the in-memory value is what run_node would persist.
 
 
 # ── ask 4: audit reloop end-to-end ───────────────────────────────────────
