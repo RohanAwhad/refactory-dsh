@@ -58,6 +58,11 @@ class DesignMode(Mode):
                 180, "int", lo=10, hi=1800,
                 description="how long the brief's check may run",
             ),
+            "design_review_attempts": Knob(
+                2, "int", lo=1, hi=4,
+                description="how many times the design review may reloop before proceeding "
+                            "to the approval gate with its remaining findings",
+            ),
             # As in create: the walker passes these in the run's task, and a run on
             # DSH carries them as knobs.
             "name": Knob("", "str", description="the artifact to design (empty takes the name from the brief)"),
@@ -74,9 +79,11 @@ class DesignMode(Mode):
         graph.add(Node(
             "prepare", "op", call=f"{OPS}:prepare_design",
             knobs=("name", "brief", "check", *repo_change.knob_names(), *delivery.knobs()),
-            writes=("brief.json", "research-review.txt", "check.txt", "delivery.md"),
+            writes=("brief.json", "research-review.txt", "check.txt", "delivery.md",
+                    "reviews/design-review-feedback.txt"),
             produces=("name", "brief", "check", "validation", "research_review", "research_scope", "qa_gate",
-                      "overwatch_review", *repo_change.produces(), "delivery", "delivery_plan"),
+                      "overwatch_review", "design_review_feedback", "design_review_findings",
+                      *repo_change.produces(), "delivery", "delivery_plan"),
             notes="read the brief and the command that decides whether it is done",
         ))
 
@@ -92,7 +99,9 @@ class DesignMode(Mode):
                 "this artifact can be designed: between three and five questions for "
                 "a full design, or one to three focused questions for a scoped "
                 "change. Each must be "
-                "answerable by reading {{source}} or by running something there. Spawn "
+                "answerable by reading {{source}} — including the source code of tools "
+                "and libraries the change depends on, not only the files it changes — "
+                "or by running something there. Spawn "
                 "one subagent per question and have each write its findings to "
                 "`research/<slug>.md` under the run directory, then write "
                 "`research-plan.json` yourself.\n\n"
@@ -175,6 +184,7 @@ class DesignMode(Mode):
                 "Artifact name: {{name}}\nBrief: {{brief}}\nIt is built in {{source}}.\n"
                 "The check, run from {{check_root}}:\n    {{check}}\n\n"
                 "## The plan\n{{strategy}}\n\n"
+                "## What the design review found\n{{design_review_feedback}}\n\n"
                 + _ACCEPTANCE_BASELINE
                 + "Write the design document for this artifact: every file it will "
                 "add or change, what each one does, the interfaces between them, and how the "
@@ -183,9 +193,17 @@ class DesignMode(Mode):
                 "rejection behavior: unsupported counts, signs, units, or other values "
                 "must not silently become different valid requests. For visual output, "
                 "plan a rendered inspection as well as format/geometry checks, including "
-                "labels, margins, clipping, and agreement with the requested dimensions."
+                "labels, margins, clipping, and agreement with the requested dimensions.\n\n"
+                "Make exactly one decision for each design choice — do not present "
+                "alternatives, do not end a choice with 'a simpler alternative…' or leave "
+                "it open. A choice left open here becomes an unreviewed decision in the "
+                "code. Cite every claim about existing code with its file path and line "
+                "number or range (e.g. `path/to/file.py:42` or `path/to/file.py:42-58`). "
+                "When claiming what the brief says, quote the brief's words verbatim. "
+                "The document holds only the final result — no 'Wait—', 'Actually', "
+                "'Let me reconsider' or other working-out."
             ),
-            reads=("brief.json", "strategy.json"),
+            reads=("brief.json", "strategy.json", "reviews/design-review-feedback.txt"),
             writes=("design.md",),
             produces=("design",),
             notes="write the design document the code is written from",
@@ -195,6 +213,54 @@ class DesignMode(Mode):
         # The approval covers delivery too, which is the only step that reaches outside
         # the run: delivery.md says which pull request it opens, or which repository it
         # creates, and the approval is scoped to that file as it is to design.md.
+        graph.add(Node(
+            "design_review", "agent",
+            prompt_template=(
+                "Artifact name: {{name}}\nBrief: {{brief}}\n"
+                "Source: {{source}}\n\n"
+                "## Previous feedback\n{{design_review_feedback}}\n\n"
+                "Read the design document from `design.md` in the run directory. "
+                "Read the brief from `brief.json` in the run directory.\n\n"
+                "For every claim the design makes about existing code, read the "
+                "cited file and line range in {{source}} and confirm the claim "
+                "matches what is there. For every claim the design makes about "
+                "what the brief says, find the quoted text verbatim in the brief. "
+                "For every design choice, confirm that exactly one decision is made "
+                "and no alternative is left open.\n\n"
+                "Report as BLOCKING:\n"
+                "- An open alternative or a choice left undecided.\n"
+                "- A claim about code you cannot confirm in the cited file.\n"
+                "- A claim about the brief the brief does not say.\n"
+                "- A command, flag or file the design tells a person or the builder "
+                "to use that does not exist.\n"
+                "- A piece the design adds that nothing in the design uses or starts.\n"
+                "- A planned test that cannot fail when the code is wrong, such as one "
+                "that asserts on values it built itself, or reads through a stand-in "
+                "the real code would not provide.\n"
+                "- A new mechanism where the code already has one that does the job, "
+                "naming the existing one.\n\n"
+                "List each finding as a line starting with `BLOCKING:` followed "
+                "by what is wrong.\n\n"
+                "End with a line that is exactly `VERDICT: PASS` when there are "
+                "no blocking findings, or `VERDICT: FAIL` when there are any."
+            ),
+            reads=("brief.json", "design.md", "reviews/design-review-feedback.txt"),
+            writes=("reviews/design-review.md",),
+            produces=("design_review_text",),
+            notes="review the design for open alternatives and unconfirmed claims",
+        ))
+        graph.add(Node(
+            "gate_design_review", "gate",
+            evaluator=f"{OPS}:gate_design_review",
+            reads=("reviews/design-review.md", "design.md", "brief.json"),
+            writes=("reviews/design-review-feedback.txt",),
+            produces=("design_review_feedback", "design_review_attempts_used",
+                      "design_review_findings"),
+            knobs=("design_review_attempts",),
+            max_iterations=4,
+            notes="proceed on PASS with no findings; reloop to design_doc otherwise; "
+                  "never fail the run",
+        ))
         graph.add(Node(
             "gate_strategy", "gate", gate_kind="user",
             reads=("design.md", "delivery.md"),
@@ -206,7 +272,8 @@ class DesignMode(Mode):
                 "Approve the design before the artifact is written? It is in design.md "
                 "in the run directory. Then, {{delivery}}; delivery.md there says more. "
                 "Answer proceed to build and deliver it that way, or reloop to have the "
-                "plan redone."
+                "plan redone.\n\n"
+                "## Unresolved design review findings\n{{design_review_findings}}"
             ),
         ))
         graph.add(Node(
@@ -425,7 +492,10 @@ class DesignMode(Mode):
         graph.connect("gate_research", "strategy_director", condition="proceed")
         graph.connect("strategy_director", "synthesize_strategy")
         graph.connect("synthesize_strategy", "design_doc")
-        graph.connect("design_doc", "gate_strategy")
+        graph.connect("design_doc", "design_review")
+        graph.connect("design_review", "gate_design_review")
+        graph.connect("gate_design_review", "design_doc", condition="reloop")
+        graph.connect("gate_design_review", "gate_strategy", condition="proceed")
         graph.connect("gate_strategy", "synthesize_strategy", condition="reloop")
         graph.connect("gate_strategy", "emit", condition="proceed")
         graph.connect("emit", "materialise")
