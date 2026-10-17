@@ -570,6 +570,44 @@ def test_a_setup_command_that_fails_fails_the_check_and_says_why(tmp_path):
     assert "the setup command `exit 3` failed" in (failed_setup.error or "")
 
 
+def test_a_generate_command_amends_tracked_file_changes_into_the_attempt(repo, tmp_path):
+    """Whatever a generate command changes in tracked files is committed with the attempt."""
+    _commit(repo, "generated.txt", "old\n")
+    emit = render({"tool.py": "print('built')\n"})
+    result = _design(tmp_path / "run", FakeModel(_answers(emit)),
+                     _mode(generate="echo new > generated.txt"), target=str(repo))
+    assert result.exit_ok, result.error
+    payload = _report(tmp_path / "run")
+    assert "generated.txt" in git(repo, "ls-tree", "--name-only", payload["branch"]).splitlines()
+    assert git(repo, "show", f"{payload['branch']}:generated.txt") == "new"
+    assert payload["head"] == git(repo, "rev-parse", payload["branch"]) == result.facts["commit"]
+    assert "generated.txt" in (tmp_path / "run" / "changes.diff").read_text()
+    assert "generated.txt" in result.facts["files"]
+    # The amendment amends the attempt, not a separate commit.
+    assert git(repo, "rev-list", "--count", f"{payload['base']}..{payload['branch']}") == "1"
+
+
+def test_a_generate_command_that_changes_nothing_adds_no_commit(repo, tmp_path):
+    """A generate that touches nothing leaves the attempt as the one commit on the branch."""
+    emit = render({"tool.py": "print('built')\n"})
+    result = _design(tmp_path / "run", FakeModel(_answers(emit)),
+                     _mode(generate="true"), target=str(repo))
+    assert result.exit_ok, result.error
+    payload = _report(tmp_path / "run")
+    assert git(repo, "rev-list", "--count", f"{payload['base']}..{payload['branch']}") == "1"
+
+
+def test_a_generate_command_that_fails_fails_the_check_and_says_why(tmp_path):
+    emit1 = render({"tool.py": "print('built')\n"})
+    emit2 = render({"tool.py": "print('built')\n", "note.txt": "r1\n"})
+    emit3 = render({"tool.py": "print('built')\n", "note.txt": "r2\n"})
+    failed_generate = _design(tmp_path / "run", FakeModel(_answers(emit1, emit2, emit3)),
+                              _mode(generate="exit 3"),
+                              target=str(git_repo(tmp_path / "plain")))
+    assert failed_generate.exit_ok is False
+    assert "the generate command `exit 3` failed" in (failed_generate.error or "")
+
+
 def test_a_lockfile_the_install_writes_is_part_of_the_attempt_the_reviewers_see(repo, tmp_path, monkeypatch):
     """A new Node project has no lockfile: the one its install writes is committed, not refused."""
     stub(tmp_path / "bin", "npm", "echo '{\"lockfileVersion\": 3}' > package-lock.json")
@@ -791,6 +829,18 @@ def test_design_fast_carries_the_lockfile_its_install_writes(repo, tmp_path, mon
     assert payload["head"] == git(repo, "rev-parse", payload["branch"]) == result.facts["commit"]
     assert "package-lock.json" in json.loads(result.facts["review_files"])
 
+def test_design_fast_carries_generate_changes(repo, tmp_path):
+    """The generate command amends the attempt, and focused QA is shown that file too."""
+    _commit(repo, "generated.txt", "old\n")
+    result = _fast(tmp_path / "run", render({"tool.py": "print('built')\n"}),
+                   target=str(repo), generate="echo new > generated.txt")
+    assert result.exit_ok, result.error
+    payload = _report(tmp_path / "run")
+    assert "generated.txt" in git(repo, "ls-tree", "--name-only", payload["branch"]).splitlines()
+    assert payload["head"] == git(repo, "rev-parse", payload["branch"]) == result.facts["commit"]
+    assert "generated.txt" in json.loads(result.facts["review_files"])
+
+
 def test_design_fast_sends_an_emission_it_cannot_apply_back_to_emit(tmp_path):
     """Within its repair bound, as a failed check is; with no repair left, the run ends and says why."""
     truncated = "===FILE: tool.py===\nx = 1  # ... (line truncated to 2000 chars)\n"
@@ -856,19 +906,22 @@ def test_ceo_passes_the_worktree_flags_to_design_and_refuses_them_where_they_can
     seen: list[list[str]] = []
     monkeypatch.setattr(cli, "_forward", lambda module, argv: seen.append(argv) or 0)
     monkeypatch.chdir(tmp_path)
-    assert cli.main(["ceo", "a tool", "--check", "true", "--target", ".", "--base", "v1", "--setup", "make"]) == 0
-    assert {f"target={tmp_path.resolve()}", "base=v1", "setup=make"} <= set(seen[0])
+    assert cli.main(["ceo", "a tool", "--check", "true", "--target", ".", "--base", "v1", "--setup", "make",
+                     "--generate", "make"]) == 0
+    assert {f"target={tmp_path.resolve()}", "base=v1", "setup=make", "generate=make"} <= set(seen[0])
     assert cli.main(["ceo", "a tool", "--check", "true", "--no-worktree"]) == 0
     assert "worktree=0" in seen[1]
     assert cli.main(["ceo", "a tool", "--check", "true", "--mode", "design_fast", "--target", ".",
-                     "--setup", "make"]) == 0
-    assert {f"target={tmp_path.resolve()}", "setup=make"} <= set(seen[2]), "design_fast takes them too"
+                     "--setup", "make", "--generate", "make"]) == 0
+    assert {f"target={tmp_path.resolve()}", "setup=make", "generate=make"} <= set(seen[2]), "design_fast takes them too"
     for refused in (["--mode", "create", "--single", "--target", "."], ["--no-worktree", "--target", "."],
-                    ["--mode", "design_fast", "--source-project", ".", "--target", "."]):
+                    ["--mode", "design_fast", "--source-project", ".", "--target", "."],
+                    ["--mode", "design_fast", "--source-project", ".", "--generate", "make"]):
         assert cli.main(["ceo", "a tool", "--check", "true", *refused]) == 2
     err = capsys.readouterr().err
     assert "does not take --target" in err and "--no-worktree cannot take --target" in err
     assert "--source-project cannot take --target" in err
+    assert "--source-project cannot take --generate" in err
     assert len(seen) == 3, "a refused flag forwards nothing"
     assert cli.main(["ceo", "default_pack/design", "--target", "."]) == 0
     assert f"target={tmp_path.resolve()}" in seen[3], "a named mode takes them as knobs"
@@ -880,15 +933,17 @@ def test_the_console_design_verb_takes_a_target_too(monkeypatch, tmp_path):
     monkeypatch.setattr(console, "_forward", lambda module, argv: seen.append(argv) or {})
     monkeypatch.chdir(tmp_path)
     console.main(["design", "--name", "x", "--brief", "b", "--check", "true", "--target", ".",
-                  "--base", "v1", "--setup", "make"])
+                  "--base", "v1", "--setup", "make", "--generate", "make"])
     assert seen[0][seen[0].index("--target") + 1] == str(tmp_path.resolve())
-    assert {"--base", "v1", "--setup", "make"} <= set(seen[0])
+    assert {"--base", "v1", "--setup", "make", "--generate", "make"} <= set(seen[0])
 
 
 def test_the_design_mode_declares_the_knobs_the_ceo_passes():
     """`--target` reaches a knob the graph consumes, not one the runtime would refuse."""
     state = registry.resolve(REPO_ROOT, "default_pack/design")[1]().state_dict()
-    state = interactive.with_knobs(state, ["target=/somewhere", "base=v1", "worktree=0", "setup=make"])
+    state = interactive.with_knobs(state, ["target=/somewhere", "base=v1", "worktree=0", "setup=make",
+                                           "generate=make"])
     assert (state["knobs"]["target"]["value"], state["knobs"]["base"]["value"],
-            state["knobs"]["worktree"]["value"], state["knobs"]["setup"]["value"]) == (
-        "/somewhere", "v1", False, "make")
+            state["knobs"]["worktree"]["value"], state["knobs"]["setup"]["value"],
+            state["knobs"]["generate"]["value"]) == (
+        "/somewhere", "v1", False, "make", "make")

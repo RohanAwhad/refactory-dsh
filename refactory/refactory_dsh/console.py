@@ -1379,6 +1379,9 @@ def _parser() -> argparse.ArgumentParser:
                           help="the git repository to change, in a worktree of its own (default: a new project)")
     artifact.add_argument("--base", default="", help="the commit, branch or tag the run starts from")
     artifact.add_argument("--setup", default="", help="a command run in the worktree before each check")
+    artifact.add_argument("--generate", default="",
+                          help="a command run in the worktree after setup, before each check; "
+                               "tracked-file changes are amended into the attempt")
     artifact.add_argument("--no-worktree", action="store_true",
                           help="write the artifact under .factory/artifacts instead of a worktree")
     artifact.add_argument("--no-pr", action="store_true",
@@ -1777,7 +1780,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.check:
                 forwarded += ["--check", args.check]
             for flag, value in (("--target", args.target), ("--base", args.base), ("--setup", args.setup),
-                                ("--refine", args.refine)):
+                                ("--generate", args.generate), ("--refine", args.refine)):
                 if value:
                     # Absolute, because the run resolves it from its own directory.
                     forwarded += [flag, str(Path(value).expanduser().resolve()) if flag == "--target" else value]

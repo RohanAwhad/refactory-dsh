@@ -82,6 +82,21 @@ def test_the_lockfile_an_install_writes_is_part_of_the_fix(repo, tmp_path, monke
     assert "package-lock.json" in git(repo, "ls-tree", "--name-only", payload["branch"]).splitlines()
     assert payload["head"] == result.facts["commit"]
 
+def test_the_generate_command_amends_its_changes_into_the_fix(repo, tmp_path):
+    """A generate command that rewrites a tracked file sees it amended into the attempt."""
+    (repo / "generated.txt").write_text("old\n")
+    git(repo, "add", "generated.txt")
+    git(repo, "commit", "-q", "-m", "add generated file")
+    fix = _edit("app.py", "    return 41\n", "    return 42\n")
+    result, _ = _run(tmp_path / "run", fix, target=str(repo),
+                     generate="echo new > generated.txt")
+    assert result.exit_ok, result.error
+    payload = json.loads((tmp_path / "run" / "result.json").read_text())
+    assert "generated.txt" in git(repo, "ls-tree", "--name-only", payload["branch"]).splitlines()
+    assert git(repo, "show", f"{payload['branch']}:generated.txt") == "new"
+    assert payload["head"] == result.facts["commit"]
+
+
 def test_an_emission_that_cannot_be_applied_goes_back_to_emit(repo, tmp_path):
     result, model = _run(tmp_path / "run", _edit("app.py", "    return 40\n", "    return 42\n"),
                          _edit("app.py", "    return 41\n", "    return 42\n"), target=str(repo))
