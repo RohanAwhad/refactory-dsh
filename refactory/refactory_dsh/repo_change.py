@@ -637,7 +637,7 @@ def materialise(ctx: Any, *, source: Path | None = None, files: tuple[str, ...] 
 def _commit_emission(ctx: Any) -> dict[str, Any]:
     """Apply emit.txt to the run's worktree as its next attempt; one a prune removed is added back."""
     found = worktree.require_current(ctx.workdir)
-    answer = ctx.read_text("emit.txt")
+    answer = ctx.read_text(EMIT_FILE)
     files, changed, deletes = _emitted(answer, edits=True)
     path = Path(found.path)
     digest = hashlib.sha256(answer.encode()).hexdigest()
@@ -691,7 +691,7 @@ def _materialise_directory(ctx: Any, source: Path | None, files: tuple[str, ...]
 
     Given ``source``, its ``files`` are copied in first; the artifact may not replace it.
     """
-    checked, _, _ = _emitted(ctx.read_text("emit.txt"), edits=False)
+    checked, _, _ = _emitted(ctx.read_text(EMIT_FILE), edits=False)
     root = _artifact_root(str(ctx.facts["name"]))
     _claim(str(ctx.facts["name"]), ctx.workdir)
     target_guard.warn_if_moved(ctx.workdir)
