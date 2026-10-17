@@ -365,10 +365,6 @@ export function renderResult(args: Args, value: unknown): ContentBlock[] {
       lines.push(reason)
       break
     }
-    case 'graph-control': {
-      lines.push(JSON.stringify(value, null, 2))
-      break
-    }
     default:
       lines.push(data.stopped === true
         ? 'The run was asked to stop.'
