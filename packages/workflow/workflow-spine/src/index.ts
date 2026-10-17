@@ -527,6 +527,94 @@ export function apply(ctx: Context, config: Config): void {
   // Keep each claim until that same session successfully opens its next run.
   const openedBySession = new Map<string, OpenRun>()
 
+  // Child-to-parent session map for the write-confinement listener (#347, C0).
+  // Populated at `agent/created` when the created agent has a parentSession,
+  // cleaned at `agent/disposed`. The map makes the parent-chain walk possible:
+  // from a grandchild to the session that opened the run.
+  const childToParent = new Map<string, string>()
+
+  // Subagent write confinement (#347, C0). A `tools/pre-execute` listener that
+  // denies `write` and `edit` calls whose resolved path falls outside the open
+  // run's directory, when the calling session is a delegated child of a session
+  // that has an open run.
+  //
+  // Path resolution mirrors dsh-tool-fs: the sandbox policy's workspaceRoot
+  // (when a sandboxPolicy service is mounted) takes precedence over
+  // session.header.cwd, which is how the write/edit tools themselves resolve
+  // file_path. Both the run directory and the target are normalised with
+  // canonicalWorkdir (realpathSync for existing ancestors, resolve for new
+  // segments), so /var vs /private/var discrepancies are handled.
+  //
+  // The first step up the chain comes from the calling session's own
+  // header.parentSession, so a direct child is confined even if its
+  // agent/created event was not observed. Subsequent steps use the
+  // childToParent map.
+  ctx.on('tools/pre-execute', (exec, next) => {
+    // 1. Only intercept 'write' and 'edit' tool calls
+    if (exec.name !== 'write' && exec.name !== 'edit') return next()
+
+    // 2. Get the calling session
+    const session = exec.agent?.session
+    if (session === undefined) return next()
+
+    // 3. Identify a delegated child by structural lineage
+    const depth = session.header.delegationDepth
+    const parent = session.header.parentSession
+    if ((depth === undefined || depth === 0) && parent === undefined) return next()
+
+    // 4. Walk the parent chain to find the run directory.
+    //    First step: the session's own header.parentSession (so a direct child
+    //    is confined even if its agent/created event was not seen).
+    //    Subsequent steps: the childToParent map.
+    let runDir: string | undefined
+    let current: string | undefined = parent !== undefined ? String(parent) : undefined
+
+    for (let steps = 0; steps < 20 && current !== undefined; steps += 1) {
+      const opened = openedBySession.get(current)
+      if (opened !== undefined) {
+        runDir = opened.workdir
+        break
+      }
+      current = childToParent.get(current)
+    }
+
+    // 5. Fallback to config.workdir for configured-graph mode
+    if (runDir === undefined && configuredSpine !== undefined) {
+      runDir = config.workdir
+    }
+
+    // 6. No confinement boundary found — allow freely
+    if (runDir === undefined) return next()
+
+    // 7. Resolve the target file_path exactly as dsh-tool-fs does:
+    //    sandbox policy's workspaceRoot when available, else session.header.cwd.
+    const filePath = (exec.arguments as Record<string, unknown>)?.file_path
+    if (typeof filePath !== 'string') return next()
+    const sandboxPolicyService: { resolve(opts: { session?: unknown }): { workspaceRoot: string } } | undefined =
+      ctx.get('sandboxPolicy')
+    const policyCwd = sandboxPolicyService !== undefined
+      ? sandboxPolicyService.resolve({ session }).workspaceRoot
+      : undefined
+    const sessionCwd = policyCwd ?? session.header.cwd
+    const resolvedTarget = canonicalWorkdir(
+      sessionCwd !== undefined ? resolve(sessionCwd, filePath) : resolve(filePath),
+    )
+
+    // 8. Normalise the run directory the same way
+    const resolvedRun = canonicalWorkdir(runDir)
+
+    // 9. Compare: target must be inside or equal to the run directory
+    if (resolvedTarget !== resolvedRun
+        && !resolvedTarget.startsWith(resolvedRun.endsWith(sep) ? resolvedRun : resolvedRun + sep)) {
+      return Promise.resolve({
+        kind: 'deny' as const,
+        reason: `this subagent may only write inside the run directory ${resolvedRun}`,
+      })
+    }
+
+    return next()
+  })
+
   /** The id of the session an execution belongs to, when it has an agent. */
   function sessionIdOf(exec: ToolExec): string | undefined {
     const session = exec.agent?.session
@@ -731,7 +819,11 @@ export function apply(ctx: Context, config: Config): void {
           if (plan.resetPass) materialised.delete(spine)
           receipt.message = `Reopened ${target}; invalidated ${plan.nodes.join(', ')}; prior evidence archived.`
         } else throw new Error('unsupported graph control')
-      } catch (error) { receipt.status = 'failed'; receipt.message = error instanceof Error ? error.message : String(error) }
+      } catch (error) {
+        receipt.status = 'failed'
+        receipt.message = error instanceof Error ? error.message : String(error)
+        recordWarnings(workdir, [{ node: '__graph_control__', line: `graph control ${String(request.action)} failed: ${receipt.message}` }])
+      }
       if (receipt.status === 'applied') recordStatus(spine, workdir,
         spine.isHalted() ? 'halted' : spine.isPaused() ? 'paused' : spine.next().status)
       writeFileSync(join(workdir, '.refactory', 'graph-control-receipt.json'), JSON.stringify(receipt))
@@ -1715,6 +1807,18 @@ export function apply(ctx: Context, config: Config): void {
       },
     }))
   }
+
+  // Populate childToParent for write-confinement (#347, C0). Registered before
+  // the CEO deny guard so the map is ready before any restriction is applied.
+  ctx.on('agent/created', ({ agent }) => {
+    const parentId = agent.session.header.parentSession
+    if (parentId !== undefined) {
+      childToParent.set(String(agent.session.id), String(parentId))
+    }
+  })
+  ctx.on('agent/disposed', ({ agent }) => {
+    childToParent.delete(String(agent.session.id))
+  })
 
   // The drift-free guard. At `agent/created` the CEO (a top-level agent, never
   // a subagent) of THIS composition loses the coding/external tools on its own

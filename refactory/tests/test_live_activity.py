@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -91,12 +92,68 @@ def test_exhausted_or_exited_graph_never_claims_running(tmp_path):
     directory.mkdir()
     (directory / 'spine-status.json').write_text(json.dumps({'status': 'executing', 'nodes': ['work']}))
     (directory / 'spine-checkpoint.json').write_text(json.dumps({'owner_pid': 99999999}))
-    assert console.status(tmp_path)['state'] == 'died'
+    result = console.status(tmp_path)
+    assert result['state'] == 'died'
+    assert result['owner_alive'] is False
     (directory / 'resource-usage.json').write_text(json.dumps({'exhausted': True, 'reason': 'token budget exhausted'}))
     result = console.status(tmp_path)
     assert result['state'] == 'failed'
     assert not result['running']
     assert result['activity']['wait_reason'] == 'token budget exhausted'
+
+
+def test_owner_alive_reflects_pid_liveness(tmp_path):
+    """owner_alive=True for a live PID, False for a dead one, None when absent."""
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    (directory / 'spine-status.json').write_text(json.dumps({'status': 'executing', 'nodes': []}))
+
+    # Live PID
+    (directory / 'spine-checkpoint.json').write_text(json.dumps({'owner_pid': os.getpid()}))
+    result = console.status(tmp_path)
+    assert result['owner_alive'] is True
+
+    # Dead PID
+    (directory / 'spine-checkpoint.json').write_text(json.dumps({'owner_pid': 99999999}))
+    result = console.status(tmp_path)
+    assert result['owner_alive'] is False
+
+    # No owner PID
+    (directory / 'spine-checkpoint.json').write_text(json.dumps({}))
+    result = console.status(tmp_path)
+    assert result['owner_alive'] is None
+
+
+def test_status_surfaces_failed_control_in_activity(tmp_path):
+    """console.status() includes failed graph control receipt from activity.control."""
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    (directory / 'spine-status.json').write_text(json.dumps({'status': 'executing', 'nodes': ['work']}))
+    (directory / 'spine-checkpoint.json').write_text(json.dumps({'owner_pid': os.getpid()}))
+    (directory / 'graph-control-receipt.json').write_text(json.dumps({
+        'action': 'rerun', 'status': 'failed',
+        'message': 'graph changed since preview; preview invalidation again',
+    }))
+    result = console.status(tmp_path)
+    control = result['activity'].get('control')
+    assert control is not None
+    assert control['status'] == 'failed'
+    assert 'graph changed since preview' in control['message']
+
+
+def test_graph_control_shows_last_failed_receipt(tmp_path):
+    """graph_control.request() returns the last failed receipt when one exists."""
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    (directory / 'spine-checkpoint.json').write_text(json.dumps({}))
+    (directory / 'graph-control-receipt.json').write_text(json.dumps({
+        'action': 'rerun', 'status': 'failed',
+        'message': 'graph changed since preview; preview invalidation again',
+    }))
+    result = graph_control.request(tmp_path, 'pause')
+    assert result['status'] == 'queued'
+    assert result['last_failed_receipt']['status'] == 'failed'
+    assert 'graph changed since preview' in result['last_failed_receipt']['message']
 
 
 def test_graph_snapshot_reads_saved_topology_without_commands_or_mutations(tmp_path):

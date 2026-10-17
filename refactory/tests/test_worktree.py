@@ -650,7 +650,7 @@ def test_a_check_in_a_worktree_sees_none_of_refactorys_variables(repo, tmp_path,
     monkeypatch.setenv("DSH_WORKFLOW_NODE", "{}")
     found = worktree.create(repo, "HEAD", "7777cccc2222", _run(tmp_path))
     env = worktree.check_environment(Path(found.path), tmp_path / "home")
-    assert set(env) <= {"PATH", "HOME", "VIRTUAL_ENV", *worktree.CHECK_ENV}
+    assert set(env) <= {"PATH", "HOME", "VIRTUAL_ENV", *worktree.CHECK_ENV, *worktree.HOOK_SUPPRESS}
     assert env["HOME"] == str(tmp_path / "home")
     assert env["PATH"].split(os.pathsep)[0] == str(venv_bin()), "none of its own, so refactory's"
 
@@ -825,6 +825,26 @@ def test_a_change_to_the_hooks_shared_with_the_target_is_reported_once(repo, tmp
     (hooks / "pre-commit").write_text("#!/bin/sh\n")
     assert worktree.shared_changed(found) is True
     assert worktree.shared_changed(found) is False
+
+
+def test_check_environment_suppresses_hook_managers(repo, tmp_path):
+    """HOOK_SUPPRESS is merged into check_environment's output (#347)."""
+    found = worktree.create(repo, "HEAD", "hook0000aaaa", _run(tmp_path))
+    home = tmp_path / "home"
+    home.mkdir()
+    env = worktree.check_environment(Path(found.path), home)
+    assert env["LEFTHOOK"] == "0", "LEFTHOOK must be suppressed"
+    assert env["HUSKY"] == "0", "HUSKY must be suppressed"
+
+
+def test_the_wrapper_suppresses_hook_managers(repo, tmp_path):
+    """HOOK_SUPPRESS flows into the wrapper script via check_environment (#347)."""
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "hook1111bbbb", run)
+    script = worktree.write_wrapper(found, run)
+    text = script.read_text()
+    assert "LEFTHOOK=" in text, "LEFTHOOK must appear in the wrapper"
+    assert "HUSKY=" in text, "HUSKY must appear in the wrapper"
 
 
 def test_the_wrapper_runs_a_command_in_the_worktree_with_the_check_environment(repo, tmp_path, monkeypatch):

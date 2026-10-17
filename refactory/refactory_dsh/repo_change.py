@@ -4,7 +4,7 @@ A mode that writes code into a repository -- design and design_fast, or one you 
 attaches these rather than wiring its own (#351):
 
 - `knobs`, `knob_names` and `produces` are what the mode's prepare node declares, so a run
-  names its `target`, `base`, `worktree` and `setup`.
+  names its `target`, `base`, `worktree`, `setup` and `generate`.
 - `locate`, called from the mode's own prepare op, gives the run a git worktree of its
   target on its own branch, from a pinned base -- a new project when there is no target --
   or, with `worktree` off, the artifact directory. Its `emit_scope` fact is the text the
@@ -94,8 +94,9 @@ EMISSION = Path(".refactory") / "emission.json"
 NO_WORKTREE = "(this run has no worktree: `worktree` is off)"
 
 #: What a node that calls `run_check` writes and returns besides its own: an install that
-#: writes a lockfile amends the attempt (`worktree.ensure_environment`), so the check
-#: rewrites ``changes.diff`` and moves the ``commit`` and ``files`` facts to the amended one.
+#: writes a lockfile amends the attempt (`worktree.ensure_environment`), and a generate
+#: command amends its tracked-file changes too, so the check rewrites ``changes.diff``
+#: and moves the ``commit`` and ``files`` facts to the amended one.
 CHECK_WRITES = ("changes.diff",)
 CHECK_PRODUCES = ("commit", "files")
 
@@ -119,6 +120,9 @@ def knobs() -> dict[str, Knob]:
         "setup": Knob("", "str", frozen=True,
                       description="a command run in the worktree before each check, after its "
                                   "dependencies are installed, such as a build"),
+        "generate": Knob("", "str", frozen=True,
+                         description="a command run in the worktree after setup, before each check; "
+                                     "whatever it changes in tracked files is amended into the attempt"),
     }
 
 
@@ -129,7 +133,7 @@ def knob_names() -> tuple[str, ...]:
 
 def produces() -> tuple[str, ...]:
     """The facts `locate` returns, for the prepare node's ``produces``."""
-    return ("target", "worktree", "branch", "base", "source", "check_root", "emit_scope", "setup")
+    return ("target", "worktree", "branch", "base", "source", "check_root", "emit_scope", "setup", "generate")
 
 
 def materialise_node(**fields: Any) -> Node:
@@ -271,7 +275,8 @@ def _run_id(workdir: Path) -> str:
     return found[:12] if re.fullmatch(r"[0-9a-f]{12,}", found) else uuid.uuid4().hex[:12]
 
 
-def _open_worktree(ctx: Any, name: str, task: dict[str, Any]) -> dict[str, Any]:
+def _open_worktree(ctx: Any, name: str, task: dict[str, Any],
+                   output_only: tuple[str, ...] = ()) -> dict[str, Any]:
     """Give the run its own worktree of its target, and say what that means (#351).
 
     The target is the repository ``target`` names -- relative to the project the run
@@ -304,13 +309,16 @@ def _open_worktree(ctx: Any, name: str, task: dict[str, Any]) -> dict[str, Any]:
         else:
             print(f"refactory: {note}", file=sys.stderr)
     found = worktree.create(target, base, run_id, ctx.workdir)
-    # The checkouts a worker could still write to directly are watched while `emit`
-    # runs, which may change none of them: the target, the run's own worktree, and the
-    # checkout the run starts from, whose run directories hold the workers (#319).
-    watched = [Path(found.path)]
+    # Every step of a worktree run is held to its own worktree (#319, #347).
+    # Changes to the target or the launcher checkout are warnings: another
+    # session or person may be working there.
+    warn_dirs: tuple[Path, ...] = ()
     if launcher != target and (launcher / ".git").exists():
-        watched.append(launcher)
-    baseline = target_guard.record(ctx.workdir, target, output_only=OUTPUT_ONLY, also=tuple(watched))
+        warn_dirs = (launcher,)
+    baseline = target_guard.record(ctx.workdir, target,
+                                   output_only=(*OUTPUT_ONLY, *output_only),
+                                   also=(Path(found.path),),
+                                   warn_also=warn_dirs)
     if baseline["changes"]:
         target_guard.warn(f"{len(baseline['changes'])} uncommitted change(s) in {target} are not part of "
                           f"this run, which starts from commit {found.base[:12]}: "
@@ -355,22 +363,27 @@ def wants_worktree(ctx: Any) -> bool:
 
 
 def locate(ctx: Any, name: str, task: dict[str, Any], *, in_worktree: bool | None = None,
-           needs_worktree: tuple[str, ...] = ()) -> dict[str, Any]:
+           needs_worktree: tuple[str, ...] = (), output_only: tuple[str, ...] = ()) -> dict[str, Any]:
     """Where the run works, as facts for the mode's prepare op to return.
 
     ``name`` is the run's artifact, and a new project's name. In a worktree unless
     ``in_worktree`` -- by default the ``worktree`` knob -- says otherwise (`_open_worktree`).
     Without one, the run writes the artifact directory, which it claims, and watches the
-    project instead; ``target``, ``base`` and ``setup`` are refused then, with
+    project instead; ``target``, ``base``, ``setup`` and ``generate`` are refused then, with
     ``needs_worktree``, the mode's own knobs that only a worktree gives a meaning to.
+
+    ``output_only`` names further agent nodes -- besides ``emit`` -- whose only
+    output is their declared file.  The agent-delivery bracket refuses one that
+    changed the run's worktree while it ran; in a worktree run, changes to the
+    target or the launcher checkout become warnings rather than failures.
     """
     _artifact_name(name)
     if in_worktree is None:
         in_worktree = wants_worktree(ctx)
     if in_worktree:
-        located = _open_worktree(ctx, name, task)
+        located = _open_worktree(ctx, name, task, output_only=output_only)
     else:
-        given = [knob for knob in ("target", "base", "setup", *needs_worktree)
+        given = [knob for knob in ("target", "base", "setup", "generate", *needs_worktree)
                  if str(task.get(knob) or ctx.knob(knob, "") or "").strip()]
         if given:
             raise ValueError(f"{', '.join(given)} need the run's worktree, which is off; turn it on, or leave "
@@ -382,7 +395,8 @@ def locate(ctx: Any, name: str, task: dict[str, Any], *, in_worktree: bool | Non
         # The baseline every later step compares with (#330 I1), and the bracket that
         # holds `emit` to its declared output (#319).
         project = project_for_nodes().expanduser()
-        baseline = target_guard.record(ctx.workdir, project, output_only=OUTPUT_ONLY)
+        baseline = target_guard.record(ctx.workdir, project,
+                                       output_only=(*OUTPUT_ONLY, *output_only))
         if baseline["changes"] is None:
             target_guard.warn(f"the target {baseline['root']} has more than {target_guard.LIMIT} "
                               "files to watch, so this run cannot tell whether it moves or "
@@ -395,7 +409,8 @@ def locate(ctx: Any, name: str, task: dict[str, Any], *, in_worktree: bool | Non
                                  "followed by its full contents."}
     # Resolved once, as create resolves its own inputs: the check reads the fact.
     setup = str(task.get("setup") or ctx.knob("setup", "") or "").strip()
-    return {**located, "setup": setup}
+    generate = str(task.get("generate") or ctx.knob("generate", "") or "").strip()
+    return {**located, "setup": setup, "generate": generate}
 
 
 # ── what lands: emit.txt, applied ─────────────────────────────────────────────
@@ -560,8 +575,9 @@ def materialise(ctx: Any, *, source: Path | None = None, files: tuple[str, ...] 
     has: from the emitted files alone, or, given ``source``, from its ``files`` with the
     emitted files over them (design_fast's `source_project`). An emission that cannot be
     applied -- a malformed block, an edit whose text is not in its file, text copied from a
-    truncated read -- does not end the run: it is recorded as ``emission_refused``, and the
-    check sends the reason back to emit.
+    truncated read, or an emission that changes nothing because every file and edit is
+    already in the last attempt -- does not end the run: it is recorded as
+    ``emission_refused``, and the check sends the reason back to emit.
     """
     try:
         found = worktree.recorded(ctx.workdir)
@@ -687,17 +703,16 @@ def _check_in_worktree(ctx: Any, found: worktree.Worktree, command: str, timeout
     """Run the check in the run's worktree, after preparing the environment it needs.
 
     An install that writes a lockfile amends the attempt (`worktree.ensure_environment`),
-    so the commit fact and the reviewers' diff follow it to its new head.
+    and a generate command amends its tracked-file changes too, so the commit fact and
+    the reviewers' diff follow them to their new head.
     """
     home = Path(ctx.workdir).resolve() / worktree.CHECK_HOME
     home.mkdir(parents=True, exist_ok=True)
     budget = getattr(ctx, "budget", None)
+    head_before = found.head
     amended, problems = worktree.ensure_environment(found, ctx.workdir, budget)
     if amended.head != found.head:
         found = amended
-        ctx.set_fact("commit", found.head)
-        ctx.set_fact("files", _branch_files(found))
-        ctx.write_text("changes.diff", worktree.diff(found))
     worktree.write_wrapper(found, ctx.workdir)
     env = worktree.check_environment(Path(found.path), home)
     setup = str(ctx.facts.get("setup") or "").strip()
@@ -707,6 +722,22 @@ def _check_in_worktree(ctx: Any, found: worktree.Worktree, command: str, timeout
         if not prepared.ok:
             problems.append(f"the setup command `{setup}` failed: "
                             + "\n".join((prepared.problem(), prepared.stdout or "", prepared.stderr or "")).strip())
+    # ── generate: run and amend tracked-file changes into the attempt ──
+    generate = str(ctx.facts.get("generate") or "").strip()
+    if not problems and generate:
+        prepared = sandbox.run_command(generate, workdir=Path(found.path), timeout_s=timeout,
+                                       budget=budget, env=env, home=home, exact_env=True)
+        if not prepared.ok:
+            problems.append(f"the generate command `{generate}` failed: "
+                            + "\n".join((prepared.problem(), prepared.stdout or "", prepared.stderr or "")).strip())
+        else:
+            edits = worktree.tracked_edits(found)
+            if edits:
+                found = worktree.amend(found, ctx.workdir, edits, "files written by the generate command")
+    if found.head != head_before:
+        ctx.set_fact("commit", found.head)
+        ctx.set_fact("files", _branch_files(found))
+        ctx.write_text("changes.diff", worktree.diff(found))
     if problems:
         return sandbox.SandboxResult(ok=False, returncode=1, elapsed_s=0.0, stderr=(
             "the worktree's environment could not be prepared:\n" + "\n".join(problems)))
@@ -724,7 +755,8 @@ def run_check(ctx: Any, command: str, timeout: float) -> Any:
 
     In the run's worktree it runs on the committed attempt -- what a check or reviewer
     changed is put back first -- in the worktree's own environment: its dependencies
-    installed when its manifests call for them, then the ``setup`` fact's command, and
+    installed when its manifests call for them, then the ``setup`` fact's command, then the
+    ``generate`` fact's command, whose tracked-file changes are amended into the attempt, and
     nothing of refactory's own on the path (`worktree.check_environment`). Afterwards the
     worktree is put back again, so the reviews and the next attempt see what edits apply
     to. Without a worktree it runs in the artifact directory the run claimed.

@@ -509,6 +509,51 @@ serialized. Verified both ways — restoring the hardcoded `fn` fails the first.
 
 ---
 
+## 10. Planning steps changed the person's git hooks (#347)
+
+**What happened.** In a design run, while `design_doc` ran, an install in the
+run's worktree re-ran the repository's `lefthook install` postinstall. The hooks
+in `.git/hooks/` (pre-commit, pre-merge-commit, pre-push) are shared by every
+worktree of the repository, so the person's checkout changed before anything was
+approved. The target guard held only `emit` to its declared output; the run
+reported the change only at materialise, 45 minutes later.
+
+**The three-part fix.**
+
+1. **Suppress hook managers.** `HOOK_SUPPRESS` in `worktree.py` sets
+   `LEFTHOOK=0` and `HUSKY=0` in every environment a run uses: `_install_env`,
+   `check_environment` (and therefore the wrapper), and `model._environment`
+   (every agent worker). An install or command cannot trigger a hook manager.
+2. **Per-step shared-state detection.** `agent_delivery.finish`, beside the
+   existing target-guard bracket, checks `worktree.shared_changed` after every
+   agent step. A change to the shared hooks or configuration is a run warning
+   naming the step; for output-only steps (planning steps and emit), it fails
+   the step.
+3. **Planning guard.** Design's `prepare_design` passes its planning steps
+   (`research_director`, `strategy_director`, `synthesize_strategy`,
+   `design_doc`) to `repo_change.locate` as `output_only`, which merges them
+   with `OUTPUT_ONLY = ("emit",)` at `target_guard.record`. The watch/strayed
+   bracket that catches emit editing the target now catches a planning step
+   doing so. `OUTPUT_ONLY` stays `("emit",)` — design's steps are design's own.
+
+**Held by.**
+
+- `test_worktree.py`: `test_check_environment_suppresses_hook_managers`,
+  `test_the_wrapper_suppresses_hook_managers`.
+- `test_agent_delivery.py`: per-step shared-state check for output-only and
+  non-output-only steps, mode isolation between design and plain `locate`.
+- `test_target_guard.py`: a planning step registered as output-only that
+  changes the target is refused.
+- `test_design_worktree.py`: end-to-end — a planning step that changes shared
+  hooks fails the design run.
+
+**Known limit.** The hook suppression relies on each hook manager honouring its
+own disable variable. A hook manager that ignores `LEFTHOOK=0` or `HUSKY=0`
+would still install hooks. The per-step `shared_changed` check catches that
+case and names the step.
+
+---
+
 ## Two probes that came back clean
 
 Recorded because the point of an audit is accuracy in both directions.
@@ -524,6 +569,61 @@ Recorded because the point of an audit is accuracy in both directions.
   first probe of mine was inconclusive — the off-path node I built was caught by
   `V2` for being unreachable, which is a different rule — and the probe was the
   thing that was wrong.)
+
+---
+
+## 10. Subagent write confinement (#347, C0)
+
+**What the gap was.** Subagents the CEO spawns (via `subagent` and `subagent_fork`)
+had no shell (#360) but could `write` or `edit` any path. A subagent could change
+the person's checkout or the run's worktree directly, bypassing materialise, the
+check, and the reviews.
+
+**The mechanism.** A `tools/pre-execute` listener in `packages/workflow/workflow-spine`
+intercepts every `write` and `edit` call. When the calling session is a delegated
+child — identified by `delegationDepth > 0` or the presence of `parentSession` in
+the session header (NOT by `header.origin`, which the session types document as
+presentation metadata only) — the listener walks the parent chain via `parentSession`
+to find the session that opened the run (in `openedBySession` for the GUI CEO preset,
+or the configured graph's `config.workdir` for the CLI graph profile).
+
+The target path is resolved against the calling session's sandbox policy workspace
+root (when a sandboxPolicy service is mounted), falling back to `header.cwd`, exactly
+as dsh-tool-fs does. Both the run directory and the resolved target are normalised with
+`realpathSync` (where the path exists) via the existing `canonicalWorkdir` helper,
+handling discrepancies such as `/var` vs `/private/var`.
+
+If the normalised target does not start with the normalised run directory (plus a path
+separator, or equal to it), the call is denied with a message naming the run directory
+the subagent may write to instead.
+
+**Behaviour matrix.**
+
+| Scenario | Result |
+|---|---|
+| Subagent writes inside the run directory | Allowed |
+| Subagent writes outside the run directory | Denied |
+| Subagent edits outside the run directory | Denied |
+| Non-subagent (top-level CEO) writes anywhere | Allowed (the CEO's own `write`/`edit` are separately denied by `ceoDeny`) |
+| Subagent whose parent has no open run | Allowed freely |
+| Non-write/edit tool from a subagent | Allowed |
+| Grandchild subagent (helper's own helper) | Confined; the parent chain is walked |
+| `subagent_fork` child | Confined; identified by `parentSession` |
+
+**What it does not cover.**
+
+- **Symlinks.** The listener uses `realpathSync` where paths exist, but a non-existent
+  target being written can only resolve its parent directory. A symlink created after
+  the check (TOCTOU) is not caught. dsh-tool-fs's own backend owns deeper symlink policy.
+- **The CEO's own tools.** Unchanged; `ceoDeny` removes `write` and `edit` from the
+  CEO's own scope.
+- **Workers.** Workers run in their own headless runtime, not through the spine plugin's
+  tool pipeline.
+
+**Held by.** `packages/workflow/workflow-spine/tests/confine-writes.spec.ts`: nineteen
+test cases covering both configured-graph and interactiveOpen modes, path traversal,
+relative-path cwd resolution, fork children, grandchildren, the deny message content,
+and the fail-open case when no run is open.
 
 ---
 

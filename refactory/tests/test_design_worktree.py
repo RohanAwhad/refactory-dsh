@@ -191,8 +191,9 @@ def test_a_check_that_rewrites_a_tracked_file_does_not_wedge_the_run(repo, tmp_p
             "if not marker.exists():\n"
             "    marker.write_text('')\n"
             "    raise SystemExit('the first attempt is refused on purpose')\n")
-    emit = render({"tool.py": tool})
-    result = _design(tmp_path / "run", FakeModel(_answers(emit, emit)), target=str(repo))
+    emit1 = render({"tool.py": tool})
+    emit2 = render({"tool.py": tool, "note.txt": "retry\n"})
+    result = _design(tmp_path / "run", FakeModel(_answers(emit1, emit2)), target=str(repo))
     assert result.exit_ok, result.error
     assert git(repo, "show", f"{_report(tmp_path / 'run')['branch']}:app.py") == "print('app')"
     warned = capsys.readouterr().err
@@ -246,29 +247,57 @@ def test_emissions_that_never_apply_end_the_run_once_its_attempts_are_spent(repo
     assert "materialise could not apply emit.txt" in str(result.error)
 
 
-def test_the_same_edits_given_again_apply_to_what_they_first_applied_to(repo, tmp_path):
-    """An unchanged answer on a retry, or materialise redone, must not find its own edits gone."""
+def test_the_same_edits_given_again_are_recognised_as_already_applied(repo, tmp_path):
+    """The same edits given again are recognised as already applied: the refusal says the emission
+    changed nothing, not that an edit's text is missing.  The branch holds one attempt per answer
+    that changed something."""
     _commit(repo, "old.py", "x = 1\n")
     _commit(repo, "notes.py", "a = 1\nb = 2\nc = 3\n")
-    tool = ("import os, pathlib\n"
-            "count = pathlib.Path(os.environ['HOME']) / 'attempts'\n"
-            "seen = len(count.read_text()) if count.exists() else 0\n"
-            "count.write_text('x' * (seen + 1))\n"
-            "if seen < 2:\n"
-            "    raise SystemExit('this attempt is refused on purpose')\n")
+    tool_fail = ("import os, pathlib\n"
+                 "marker = pathlib.Path(os.environ['HOME']) / 'second-attempt'\n"
+                 "if not marker.exists():\n"
+                 "    marker.write_text('')\n"
+                 "    raise SystemExit('the first attempt is refused on purpose')\n")
     # A removal leaves nothing that shows it happened, so only the record of the emission
     # can tell this one is a repeat.
-    emission = (render({"tool.py": tool}) + _edit("app.py", ("print('app')\n", "print('edited')\n"))
+    emission = (render({"tool.py": tool_fail}) + _edit("app.py", ("print('app')\n", "print('edited')\n"))
                 + _edit("notes.py", ("b = 2\n", "")) + "===DELETE: old.py===\n")
-    result = _design(tmp_path / "run", FakeModel(_answers(emission, emission, emission)), _mode(check_attempts=3),
+    # The second identical emission is refused ("changed nothing"), so a different
+    # third emission must be given for the run to succeed.
+    different = render({"tool.py": tool_fail, "extra.py": "y = 1\n"})
+    result = _design(tmp_path / "run", FakeModel(_answers(emission, emission, different)), _mode(check_attempts=3),
                      target=str(repo))
     assert result.exit_ok, result.error
     payload = _report(tmp_path / "run")
+    # First attempt commits, second is refused (changed nothing), third commits (adds extra.py).
     assert git(repo, "log", "--format=%s", f"{payload['base']}..{payload['branch']}").splitlines() == [
-        f"{NAME}: attempt 3", f"{NAME}: attempt 2", f"{NAME}: attempt 1"]
+        f"{NAME}: attempt 2", f"{NAME}: attempt 1"]
     assert git(repo, "show", f"{payload['branch']}:app.py") == "print('edited')"
     assert git(repo, "show", f"{payload['branch']}:notes.py") == "a = 1\nc = 3"
-    assert git(repo, "ls-tree", "--name-only", payload["branch"]).split() == ["app.py", "notes.py", "tool.py"]
+    assert "extra.py" in git(repo, "ls-tree", "--name-only", payload["branch"]).split()
+
+
+def test_an_empty_emission_is_refused_and_the_worktree_is_unchanged(repo, tmp_path):
+    """An emission identical to the last attempt is refused at materialise, not committed."""
+    run = tmp_path / "run"
+    tool_code = "print('built')\n"
+    emit_text = render({"tool.py": tool_code})
+
+    # First attempt: set up worktree and commit
+    ctx = nn.RunContext(run, model=FakeModel([]),
+                        task={"name": NAME, "brief": "a tool", "check": "true", "target": str(repo)})
+    ctx.facts.update(design_ops.prepare_design(ctx))
+    ctx.write_text("emit.txt", emit_text)
+    result1 = repo_change.materialise(ctx)
+    assert "emission_refused" not in result1
+    head_after_first = worktree.recorded(run).head
+
+    # Second attempt: identical emission
+    ctx.write_text("emit.txt", emit_text)
+    result2 = repo_change.materialise(ctx)
+    assert "emission_refused" in result2
+    assert "changed nothing" in result2["emission_refused"]
+    assert worktree.recorded(run).head == head_after_first
 
 
 def test_an_edit_sent_again_is_skipped_rather_than_applied_twice(repo, tmp_path, capsys):
@@ -415,18 +444,32 @@ class _EditingModel(FakeModel):
         return answer
 
 
-@pytest.mark.parametrize("where", ["worktree", "target"])
-def test_an_emit_that_edits_the_worktree_or_the_checkout_is_refused(repo, tmp_path, where):
+def test_an_emit_that_edits_the_worktree_is_refused(repo, tmp_path):
     """The worktree is the run's own, but only materialise writes it (#319)."""
     run = tmp_path / "run"
-    edit = (lambda: Path(worktree.recorded(run).path)) if where == "worktree" else (lambda: repo)
-    result = _design(run, _EditingModel(_answers(render({"tool.py": "print('built')\n"})), edit),
-                     target=str(repo))
+    edit = lambda: Path(worktree.recorded(run).path)
+    result = _design(run, _EditingModel(
+        _answers(render({"tool.py": "print('built')\n"})), edit),
+        target=str(repo))
     assert result.exit_ok is False
     assert "changed while agent 'emit' ran" in (result.error or "")
     found = worktree.recorded(run)
-    assert (f"in {found.path}, " in (result.error or "")) == (where == "worktree")
+    assert f"in {found.path}, " in (result.error or "")
     assert found.head == found.base, "materialise never ran"
+
+
+def test_an_emit_during_which_the_target_moves_warns_but_succeeds(
+        repo, tmp_path, capsys):
+    """In a worktree run the target is not where the run works; a change
+    there is a warning, not a failure."""
+    run = tmp_path / "run"
+    result = _design(run, _EditingModel(
+        _answers(render({"tool.py": "print('built')\n"})), lambda: repo),
+        target=str(repo))
+    assert result.exit_ok is True, result.error
+    warned = capsys.readouterr().err
+    assert "files outside its worktree changed" in warned
+    assert "app.py" in warned
 
 
 def test_a_refused_emit_is_redone_from_a_fresh_emit_txt(repo, tmp_path):
@@ -442,6 +485,39 @@ def test_a_refused_emit_is_redone_from_a_fresh_emit_txt(repo, tmp_path):
     assert redone.error is None
     assert (run / "emit.txt").read_text() == render({"tool.py": "print('redone')\n"})
     assert git(repo, "show", f"{_report(run)['branch']}:tool.py") == "print('redone')"
+
+
+class _HookChangingModel(FakeModel):
+    """An agent that rewrites a shared hook while a planning step runs (#347)."""
+
+    def __init__(self, answers: list[str], target_fn) -> None:
+        super().__init__(answers)
+        self._target_fn = target_fn
+
+    def complete(self, prompt: str, *, system: str = "", workdir: object = None) -> str:
+        answer = super().complete(prompt, system=system, workdir=workdir)
+        if "You are the research director" in prompt:
+            import subprocess
+            target = self._target_fn()
+            hooks = Path(subprocess.run(
+                ['git', '-C', str(target), 'rev-parse', '--path-format=absolute',
+                 '--git-common-dir'], capture_output=True, text=True,
+                check=True).stdout.strip()) / 'hooks'
+            hooks.mkdir(parents=True, exist_ok=True)
+            (hooks / 'pre-commit').write_text('#!/bin/sh\nexit 0\n')
+        return answer
+
+
+def test_a_planning_step_that_changes_shared_hooks_fails_the_step(repo, tmp_path):
+    """End-to-end: full design run, planning step changes hooks -> run fails (#347)."""
+    model = _HookChangingModel(
+        _answers(render({"tool.py": "print('built')\n"})),
+        lambda: repo,
+    )
+    result = _design(tmp_path / "run", model, target=str(repo))
+    assert result.exit_ok is False
+    assert "changed shared git state" in (result.error or "")
+    assert "research_director" in (result.error or "")
 
 
 def test_a_check_in_the_worktree_sees_none_of_refactorys_environment(repo, tmp_path, monkeypatch):
@@ -516,11 +592,51 @@ def test_a_missing_installer_stops_the_run_without_spending_its_repairs(repo, tm
 
 
 def test_a_setup_command_that_fails_fails_the_check_and_says_why(tmp_path):
-    emit = render({"tool.py": "print('built')\n"})
-    failed_setup = _design(tmp_path / "setup", FakeModel(_answers(emit, emit, emit)), _mode(setup="exit 3"),
+    emit1 = render({"tool.py": "print('built')\n"})
+    emit2 = render({"tool.py": "print('built')\n", "note.txt": "r1\n"})
+    emit3 = render({"tool.py": "print('built')\n", "note.txt": "r2\n"})
+    failed_setup = _design(tmp_path / "setup", FakeModel(_answers(emit1, emit2, emit3)), _mode(setup="exit 3"),
                            target=str(git_repo(tmp_path / "plain")))
     assert failed_setup.exit_ok is False
     assert "the setup command `exit 3` failed" in (failed_setup.error or "")
+
+
+def test_a_generate_command_amends_tracked_file_changes_into_the_attempt(repo, tmp_path):
+    """Whatever a generate command changes in tracked files is committed with the attempt."""
+    _commit(repo, "generated.txt", "old\n")
+    emit = render({"tool.py": "print('built')\n"})
+    result = _design(tmp_path / "run", FakeModel(_answers(emit)),
+                     _mode(generate="echo new > generated.txt"), target=str(repo))
+    assert result.exit_ok, result.error
+    payload = _report(tmp_path / "run")
+    assert "generated.txt" in git(repo, "ls-tree", "--name-only", payload["branch"]).splitlines()
+    assert git(repo, "show", f"{payload['branch']}:generated.txt") == "new"
+    assert payload["head"] == git(repo, "rev-parse", payload["branch"]) == result.facts["commit"]
+    assert "generated.txt" in (tmp_path / "run" / "changes.diff").read_text()
+    assert "generated.txt" in result.facts["files"]
+    # The amendment amends the attempt, not a separate commit.
+    assert git(repo, "rev-list", "--count", f"{payload['base']}..{payload['branch']}") == "1"
+
+
+def test_a_generate_command_that_changes_nothing_adds_no_commit(repo, tmp_path):
+    """A generate that touches nothing leaves the attempt as the one commit on the branch."""
+    emit = render({"tool.py": "print('built')\n"})
+    result = _design(tmp_path / "run", FakeModel(_answers(emit)),
+                     _mode(generate="true"), target=str(repo))
+    assert result.exit_ok, result.error
+    payload = _report(tmp_path / "run")
+    assert git(repo, "rev-list", "--count", f"{payload['base']}..{payload['branch']}") == "1"
+
+
+def test_a_generate_command_that_fails_fails_the_check_and_says_why(tmp_path):
+    emit1 = render({"tool.py": "print('built')\n"})
+    emit2 = render({"tool.py": "print('built')\n", "note.txt": "r1\n"})
+    emit3 = render({"tool.py": "print('built')\n", "note.txt": "r2\n"})
+    failed_generate = _design(tmp_path / "run", FakeModel(_answers(emit1, emit2, emit3)),
+                              _mode(generate="exit 3"),
+                              target=str(git_repo(tmp_path / "plain")))
+    assert failed_generate.exit_ok is False
+    assert "the generate command `exit 3` failed" in (failed_generate.error or "")
 
 
 def test_a_lockfile_the_install_writes_is_part_of_the_attempt_the_reviewers_see(repo, tmp_path, monkeypatch):
@@ -565,18 +681,30 @@ def test_a_second_run_on_a_project_names_the_earlier_runs_branches(tmp_path, cap
     assert f"has earlier runs, whose work is on their branches, not on main: {_report(tmp_path / 'one')['branch']}" in warned
 
 
-def test_an_emit_that_edits_the_checkout_the_run_started_from_is_refused(repo, tmp_path, monkeypatch):
-    """Workers start in the run directory inside that checkout, so it is watched too (#319)."""
+def test_an_emit_during_which_the_launcher_checkout_moves_warns_but_succeeds(
+        repo, tmp_path, monkeypatch, capsys):
+    """Workers start in the run directory inside that checkout; in a worktree
+    run a change there is a warning, not a failure (#319)."""
     launcher = git_repo(tmp_path / "launcher")
     monkeypatch.setenv("REFACTORY_PROJECT", str(launcher))
-    result = _design(tmp_path / "run", _EditingModel(_answers(render({"tool.py": "print(1)\n"})), lambda: launcher),
-                     target=str(repo))
-    assert result.exit_ok is False
-    assert f"in {launcher.resolve()}, " in (result.error or "")
+    result = _design(
+        tmp_path / "run",
+        _EditingModel(_answers(render({"tool.py": "print(1)\n"})),
+                      lambda: launcher),
+        target=str(repo))
+    assert result.exit_ok is True, result.error
+    warned = capsys.readouterr().err
+    assert f"in {launcher.resolve()}" in warned
+    assert "files outside its worktree changed" in warned
 
 
 def test_a_worktree_run_does_not_warn_that_the_persons_checkout_moved(repo, tmp_path, capsys):
-    """Its base is pinned, so the person working in their checkout meanwhile changes nothing it sees."""
+    """Its base is pinned, so the person working in their checkout meanwhile changes nothing it sees.
+
+    A person's edit during a planning step (an output-only step that watches
+    only the worktree for failure) gives the "files outside its worktree
+    changed" run warning and the run succeeds.
+    """
     class Moving(FakeModel):
         def complete(self, prompt: str, *, system: str = "", workdir: object = None) -> str:
             if "You are the research director" in prompt:
@@ -585,7 +713,10 @@ def test_a_worktree_run_does_not_warn_that_the_persons_checkout_moved(repo, tmp_
 
     result = _design(tmp_path / "run", Moving(_answers(render({"tool.py": "print(1)\n"}))), target=str(repo))
     assert result.exit_ok, result.error
-    assert "changed since this run recorded it" not in capsys.readouterr().err
+    warned = capsys.readouterr().err
+    assert "changed since this run recorded it" not in warned
+    assert "app.py" in warned
+    assert "files outside its worktree changed" in warned
 
 
 def test_the_agents_are_told_the_worktree_and_the_reviewers_the_diff_and_the_wrapper(repo, tmp_path):
@@ -729,6 +860,18 @@ def test_design_fast_carries_the_lockfile_its_install_writes(repo, tmp_path, mon
     assert payload["head"] == git(repo, "rev-parse", payload["branch"]) == result.facts["commit"]
     assert "package-lock.json" in json.loads(result.facts["review_files"])
 
+def test_design_fast_carries_generate_changes(repo, tmp_path):
+    """The generate command amends the attempt, and focused QA is shown that file too."""
+    _commit(repo, "generated.txt", "old\n")
+    result = _fast(tmp_path / "run", render({"tool.py": "print('built')\n"}),
+                   target=str(repo), generate="echo new > generated.txt")
+    assert result.exit_ok, result.error
+    payload = _report(tmp_path / "run")
+    assert "generated.txt" in git(repo, "ls-tree", "--name-only", payload["branch"]).splitlines()
+    assert payload["head"] == git(repo, "rev-parse", payload["branch"]) == result.facts["commit"]
+    assert "generated.txt" in json.loads(result.facts["review_files"])
+
+
 def test_design_fast_sends_an_emission_it_cannot_apply_back_to_emit(tmp_path):
     """Within its repair bound, as a failed check is; with no repair left, the run ends and says why."""
     truncated = "===FILE: tool.py===\nx = 1  # ... (line truncated to 2000 chars)\n"
@@ -794,19 +937,22 @@ def test_ceo_passes_the_worktree_flags_to_design_and_refuses_them_where_they_can
     seen: list[list[str]] = []
     monkeypatch.setattr(cli, "_forward", lambda module, argv: seen.append(argv) or 0)
     monkeypatch.chdir(tmp_path)
-    assert cli.main(["ceo", "a tool", "--check", "true", "--target", ".", "--base", "v1", "--setup", "make"]) == 0
-    assert {f"target={tmp_path.resolve()}", "base=v1", "setup=make"} <= set(seen[0])
+    assert cli.main(["ceo", "a tool", "--check", "true", "--target", ".", "--base", "v1", "--setup", "make",
+                     "--generate", "make"]) == 0
+    assert {f"target={tmp_path.resolve()}", "base=v1", "setup=make", "generate=make"} <= set(seen[0])
     assert cli.main(["ceo", "a tool", "--check", "true", "--no-worktree"]) == 0
     assert "worktree=0" in seen[1]
     assert cli.main(["ceo", "a tool", "--check", "true", "--mode", "design_fast", "--target", ".",
-                     "--setup", "make"]) == 0
-    assert {f"target={tmp_path.resolve()}", "setup=make"} <= set(seen[2]), "design_fast takes them too"
+                     "--setup", "make", "--generate", "make"]) == 0
+    assert {f"target={tmp_path.resolve()}", "setup=make", "generate=make"} <= set(seen[2]), "design_fast takes them too"
     for refused in (["--mode", "create", "--single", "--target", "."], ["--no-worktree", "--target", "."],
-                    ["--mode", "design_fast", "--source-project", ".", "--target", "."]):
+                    ["--mode", "design_fast", "--source-project", ".", "--target", "."],
+                    ["--mode", "design_fast", "--source-project", ".", "--generate", "make"]):
         assert cli.main(["ceo", "a tool", "--check", "true", *refused]) == 2
     err = capsys.readouterr().err
     assert "does not take --target" in err and "--no-worktree cannot take --target" in err
     assert "--source-project cannot take --target" in err
+    assert "--source-project cannot take --generate" in err
     assert len(seen) == 3, "a refused flag forwards nothing"
     assert cli.main(["ceo", "default_pack/design", "--target", "."]) == 0
     assert f"target={tmp_path.resolve()}" in seen[3], "a named mode takes them as knobs"
@@ -818,15 +964,17 @@ def test_the_console_design_verb_takes_a_target_too(monkeypatch, tmp_path):
     monkeypatch.setattr(console, "_forward", lambda module, argv: seen.append(argv) or {})
     monkeypatch.chdir(tmp_path)
     console.main(["design", "--name", "x", "--brief", "b", "--check", "true", "--target", ".",
-                  "--base", "v1", "--setup", "make"])
+                  "--base", "v1", "--setup", "make", "--generate", "make"])
     assert seen[0][seen[0].index("--target") + 1] == str(tmp_path.resolve())
-    assert {"--base", "v1", "--setup", "make"} <= set(seen[0])
+    assert {"--base", "v1", "--setup", "make", "--generate", "make"} <= set(seen[0])
 
 
 def test_the_design_mode_declares_the_knobs_the_ceo_passes():
     """`--target` reaches a knob the graph consumes, not one the runtime would refuse."""
     state = registry.resolve(REPO_ROOT, "default_pack/design")[1]().state_dict()
-    state = interactive.with_knobs(state, ["target=/somewhere", "base=v1", "worktree=0", "setup=make"])
+    state = interactive.with_knobs(state, ["target=/somewhere", "base=v1", "worktree=0", "setup=make",
+                                           "generate=make"])
     assert (state["knobs"]["target"]["value"], state["knobs"]["base"]["value"],
-            state["knobs"]["worktree"]["value"], state["knobs"]["setup"]["value"]) == (
-        "/somewhere", "v1", False, "make")
+            state["knobs"]["worktree"]["value"], state["knobs"]["setup"]["value"],
+            state["knobs"]["generate"]["value"]) == (
+        "/somewhere", "v1", False, "make", "make")
