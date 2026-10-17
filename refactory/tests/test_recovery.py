@@ -93,6 +93,28 @@ def test_recovery_request_binds_validated_bytes(tmp_path):
     assert request['checkpoint_sha256'] == hashlib.sha256(checkpoint.read_bytes()).hexdigest()
 
 
+def test_receipt_with_no_pending_marker_does_not_block_recovery(tmp_path):
+    """A refused step whose receipt was written does not block recovery.
+
+    Only a dispatch with no receipt at all (a pending marker with no corresponding
+    finished receipt) is 'unknown'. A refused step has both a receipt and — after the
+    fix — no pending marker, so recovery proceeds.
+    """
+    saved_run(tmp_path)
+    # Create a delivery record WITH a receipt but WITHOUT a pending marker
+    delivery_dir = tmp_path / '.refactory' / 'agent-delivery' / 'test-step-id'
+    delivery_dir.mkdir(parents=True)
+    (delivery_dir / 'receipt.json').write_text(json.dumps({
+        'id': 'test-step-id', 'node': 'design_doc', 'status': 'failed',
+        'started': '2026-10-17T00:00:00+00:00',
+        'finished': '2026-10-17T00:01:00+00:00',
+        'artifacts': {}, 'writes': [],
+    }))
+    # No pending marker exists — recovery should succeed
+    recovery.prepare(tmp_path, 'demo-run')
+    assert (tmp_path / '.refactory/resume-request.json').exists()
+
+
 def test_configuration_fingerprints_ignore_only_interpreter_cache(monkeypatch, tmp_path):
     from refactory_dsh import registry, lowering
     package = tmp_path / 'package'

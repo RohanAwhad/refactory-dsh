@@ -244,6 +244,7 @@ def finish(workdir: Path, node: str, *, final_response: str | None = None,
     )
     (directory / 'receipt.json').write_text(
         json.dumps(receipt, indent=2) + '\n')
+    pending.unlink()
     if warn_changes:
         target_guard.warn(
             f"while agent {record['node']!r} ran, files outside its "
@@ -272,7 +273,6 @@ def finish(workdir: Path, node: str, *, final_response: str | None = None,
             raise ValueError(f"agent {node!r} changed shared git state: {_msg}")
         else:
             target_guard.warn(_msg)
-    pending.unlink()
     return receipt
 
 

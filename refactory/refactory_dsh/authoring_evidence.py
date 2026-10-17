@@ -272,7 +272,7 @@ def failure_kind(detail: str, *, timed_out: bool = False, returncode: int | None
         return "resource_exhausted"
     if "cancelled" in lowered or "canceled" in lowered:
         return "cancelled"
-    if timed_out or "timed out" in lowered or "timeouterror" in lowered or returncode is not None and returncode < 0:
+    if timed_out or "timed out" in lowered or "timeouterror" in lowered or "killed by sig" in lowered or returncode is not None and returncode < 0:
         return "uncertain"
     if re.search(r"ModuleNotFoundError: No module named ['\"]refactory_packages\.", detail):
         return "code_failure"

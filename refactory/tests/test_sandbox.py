@@ -224,6 +224,47 @@ def test_a_check_that_runs_out_of_time_stops_everything_it_started(tmp_path):
     assert not _running(pid), "the check's background process outlived its timeout"
 
 
+def test_signal_killed_once_retry_succeeds(tmp_path):
+    """A command killed by a signal once passes on the retry; no attempt spent."""
+    marker = tmp_path / "marker"
+    # First run: kill self with SIGABRT.  Second run: the marker exists, so exit 0.
+    cmd = (
+        f'if [ -f {shlex.quote(str(marker))} ]; then exit 0; fi; '
+        f'touch {shlex.quote(str(marker))}; kill -ABRT $$'
+    )
+    result = sandbox.run_command(cmd, workdir=tmp_path / "w", timeout_s=30)
+    assert result.ok
+    assert result.returncode == 0
+    assert marker.exists()
+
+
+def test_signal_killed_twice_names_the_signal(tmp_path):
+    """A command killed by a signal twice: infrastructure failure naming the signal."""
+    cmd = 'kill -ABRT $$'
+    result = sandbox.run_command(cmd, workdir=tmp_path / "w", timeout_s=30)
+    assert not result.ok
+    assert result.returncode < 0
+    assert "killed by SIGABRT" in result.stderr
+
+
+def test_ordinary_failure_not_retried(tmp_path):
+    """An ordinary failing check (returncode > 0) is unchanged by the retry logic."""
+    marker = tmp_path / "marker"
+    cmd = f'touch {shlex.quote(str(marker))}; exit 1'
+    result = sandbox.run_command(cmd, workdir=tmp_path / "w", timeout_s=30)
+    assert not result.ok
+    assert result.returncode == 1
+    # The marker file should exist only once (no retry)
+    assert marker.exists()
+
+
+def test_timeout_does_not_retry(tmp_path):
+    """A timed-out command keeps today's handling (no retry)."""
+    result = sandbox.run_command("sleep 60", workdir=tmp_path / "w", timeout_s=1)
+    assert result.timed_out
+    assert result.returncode == 124
+
+
 def test_a_check_reads_no_input(tmp_path):
     """A check runs unattended, so nothing it runs can read or wait on the launcher's stdin."""
     with on_stdin("y\n"):
