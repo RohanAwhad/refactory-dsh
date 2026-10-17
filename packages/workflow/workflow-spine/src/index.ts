@@ -731,7 +731,11 @@ export function apply(ctx: Context, config: Config): void {
           if (plan.resetPass) materialised.delete(spine)
           receipt.message = `Reopened ${target}; invalidated ${plan.nodes.join(', ')}; prior evidence archived.`
         } else throw new Error('unsupported graph control')
-      } catch (error) { receipt.status = 'failed'; receipt.message = error instanceof Error ? error.message : String(error) }
+      } catch (error) {
+        receipt.status = 'failed'
+        receipt.message = error instanceof Error ? error.message : String(error)
+        recordWarnings(workdir, [{ node: '__graph_control__', line: `graph control ${String(request.action)} failed: ${receipt.message}` }])
+      }
       if (receipt.status === 'applied') recordStatus(spine, workdir,
         spine.isHalted() ? 'halted' : spine.isPaused() ? 'paused' : spine.next().status)
       writeFileSync(join(workdir, '.refactory', 'graph-control-receipt.json'), JSON.stringify(receipt))
