@@ -249,7 +249,6 @@ describe('graph runner', () => {
       chat: true,
       workdir: dir,
       statuses: [
-        { status: 'executing', nodes: ['survey'], completed: [] },
         { status: 'done', completed: ['survey'] },
       ],
       chatTurns: ['all done'],

@@ -148,6 +148,19 @@ async function whenIdleWithProgress(
   } finally {
     clearInterval(poll)
   }
+  // Flush step transitions the poll may not have reached.
+  const finalStatus = spineStatus(startup.workdir)
+  if (finalStatus !== undefined) {
+    const completed = finalStatus.completed ?? []
+    for (const node of completed) {
+      if (!lastCompleted.includes(node)) {
+        const tokens = stepTokens(startup.workdir, node)
+        io.stderr.write(tokens > 0
+          ? `⟩ ${node} done (${tokens.toLocaleString()} tokens)\n`
+          : `⟩ ${node} done\n`)
+      }
+    }
+  }
   // Flush any remaining events after the turn ends.
   lastSeq = flushMessages(agent, lastSeq, io)
 }

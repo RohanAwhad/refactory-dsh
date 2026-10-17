@@ -229,8 +229,7 @@ def finish(workdir: Path, node: str, *, final_response: str | None = None,
                             [name for name in writes if name in fresh])
                  if fail_changes else None)
     all_changes = fail_changes + warn_changes
-    receipt = {key: value for key, value in record.items()
-               if key not in ('prompt', 'target')}
+    receipt = {key: value for key, value in record.items() if key not in ('prompt', 'target')}
     receipt.update(finished=_now(), status='failed' if missing or fail_changes else 'delivered',
                    delivery='context supplied; semantic compliance not verified',
                    artifacts=after, captured_final=captured,
