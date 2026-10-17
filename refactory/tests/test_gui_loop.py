@@ -13,6 +13,8 @@ is wrong wherever it is rendered.
 from __future__ import annotations
 
 import json
+import os
+import signal
 import shutil
 import subprocess
 import sys
@@ -274,6 +276,97 @@ def test_a_run_in_flight_is_listed_too(tmp_path):
     run = _start(tmp_path, run_id="watching", epochs=2, batch_size=4)
     assert "watching" in {item["run_id"] for item in console.runs(project=Path("."), runs_root=root)}
     console.stop(run)
+
+
+def test_stop_finds_checkpoint_owner_when_console_record_is_absent(monkeypatch, tmp_path):
+    """A resumed run's owner is recorded in console.json by recovery.start.
+
+    When recovery.start starts a new launcher, it writes the child's PID into
+    the console record. If that record is absent or has no live PID, stop falls
+    back to the checkpoint's owner_pid. This test verifies the full path:
+    recovery.start spawns a real child (monkeypatched to sleep instead of the
+    interactive entry point), records its PID in console.json, and console.stop
+    kills that child.
+    """
+    import subprocess as real_subprocess
+    from contextlib import contextmanager
+    from refactory_dsh import recovery
+
+    run = tmp_path / "resumed-run"
+    (run / ".refactory").mkdir(parents=True)
+    (run / ".refactory" / "run-config.json").write_text(
+        json.dumps({"mode": "demo/run", "project": str(tmp_path)})
+    )
+
+    # Monkeypatch prepare and ownership to skip validation
+    monkeypatch.setattr(recovery, "prepare", lambda *args, **kwargs: None)
+
+    @contextmanager
+    def fake_ownership(root):
+        yield 0
+    monkeypatch.setattr("refactory_dsh.run_ownership.ownership", fake_ownership)
+
+    # Monkeypatch subprocess.Popen to launch a long-lived sleep instead of interactive
+    real_popen = real_subprocess.Popen
+
+    def sleep_popen(args, **kwargs):
+        return real_popen(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            **kwargs,
+        )
+    monkeypatch.setattr(real_subprocess, "Popen", sleep_popen)
+
+    result = recovery.start(run)
+    child_pid = result["pid"]
+    try:
+        # Verify the PID was recorded in console.json
+        recorded = json.loads((run / console.CONSOLE_FILE).read_text())
+        assert recorded["pid"] == child_pid
+
+        # Now stop the run through console.stop
+        stop_result = console.stop(run)
+        assert stop_result["stopped"] is True, stop_result
+
+        # The child must be dead
+        import os as _os
+        try:
+            _os.kill(child_pid, 0)
+            raise AssertionError("child process should be dead")
+        except ProcessLookupError:
+            pass  # expected
+    finally:
+        try:
+            import os as _os
+            _os.kill(child_pid, signal.SIGKILL)
+        except (OSError, ProcessLookupError):
+            pass
+
+
+def test_stop_falls_back_to_checkpoint_owner(tmp_path):
+    """When console.json has no PID, stop falls back to the checkpoint's owner_pid."""
+    run = tmp_path / "fallback-run"
+    (run / ".refactory").mkdir(parents=True)
+
+    # Spawn a real child process in its own session
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        start_new_session=True,
+    )
+    try:
+        # Write only the checkpoint — no console.json with a pid.
+        (run / ".refactory" / "spine-checkpoint.json").write_text(
+            json.dumps({"owner_pid": child.pid})
+        )
+        result = console.stop(run)
+        assert result["stopped"] is True, result
+        # The child must be dead.
+        child.wait(timeout=5)
+    finally:
+        try:
+            child.kill()
+        except OSError:
+            pass
+        child.wait()
 
 
 # ── the artifacts a GUI renders ────────────────────────────────────────────
