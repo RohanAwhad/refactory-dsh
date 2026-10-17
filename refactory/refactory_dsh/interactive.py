@@ -224,9 +224,8 @@ def run(
     if workdir is None:
         workdir = default_workdir(identifier)
     workdir = Path(workdir).expanduser().resolve()
-    # Pre-flight: refuse before the run directory is prepared, so a refused
-    # start leaves nothing behind.  Placed before ownership() which creates
-    # the .refactory directory.
+    # Pre-flight: both checks raise on failure before ownership() creates
+    # the run directory, so a refused start leaves nothing behind.
     require_build()
     from refactory_dsh import dsh_profile
     dsh_profile.require()
