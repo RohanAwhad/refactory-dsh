@@ -942,7 +942,9 @@ export class Spine {
   }
 
   /** All branches reachable from a node, including data bodies and fork targets. */
-  private descendants(start: string, stop?: string): Set<string> {
+  private descendants(start: string, stop?: string, opts?: { skipRetryEdges?: boolean }): Set<string> {
+    const skip = opts?.skipRetryEdges === true
+    const retrySet = skip ? this.retryEdges() : undefined
     const found = new Set<string>()
     const visited = new Set<string>()
     const queue = [{ id: start, stop }]
@@ -953,7 +955,9 @@ export class Spine {
       visited.add(key)
       found.add(id)
       if (id === next.stop) continue
-      const targets = this.outgoing(id).map(edge => edge.target)
+      const targets = this.outgoing(id)
+        .filter(edge => !skip || !retrySet!.has(retryKey(edge.source, edge.target, edge.condition)))
+        .map(edge => edge.target)
       const successor = this.successors[id]
       if (successor !== undefined) targets.push(successor)
       const body = this.nodes.get(id)
@@ -977,13 +981,35 @@ export class Spine {
     }
   }
 
+  /** Whether concurrent work (a fork's parallel branches) is in progress. */
+  hasConcurrentWork(): boolean {
+    return this.cursor.length > 1 || this.afters.length > 0
+  }
+
+  /** Set per-visit feedback for a node, visible in next() and cleared on complete. */
+  setFeedback(node: string, text: string): void {
+    if (!this.nodes.has(node)) throw new Error(`unknown node ${node}`)
+    this.feedback[node] = text
+    this.log.push(`feedback ${node}`)
+  }
+
   /** Describe invalidation before the runtime archives and clears current facts. */
-  planRedo(node: string): RedoPlan {
+  planRedo(node: string, opts?: { deferred?: boolean }): RedoPlan {
     if (this.isPaused()) throw new Error(`run paused before ${this.pausedAt().join(', ')}; explicitly unpause before reopening work`)
     const body = this.nodes.get(node)
     if (body === undefined) throw new Error(`unknown node ${node}`)
     if (body._type === 'GateNode') {
-      throw new Error(`node ${node} is a gate; redo a completed upstream agent, then run the gate when due`)
+      // Find the agent whose edge leads into this gate.
+      const incoming = this.edges.filter(edge => edge.target === node && edge.condition == null)
+      const upstream = incoming.length === 1 ? incoming[0]!.source : undefined
+      if (upstream !== undefined) {
+        throw new Error(
+          `${node} is a gate; replay ${upstream} instead, which re-runs ${upstream}, this gate and what follows, not the loop body`
+        )
+      }
+      throw new Error(
+        `${node} is a gate; replay the upstream agent instead, which re-runs that agent, this gate and what follows, not the loop body`
+      )
     }
     if (body._type === 'DataNode') {
       throw new Error(`node ${node} iterates its items; redo a completed node in its body or upstream`)
@@ -991,8 +1017,10 @@ export class Spine {
     if (!this.completed.includes(node)) {
       throw new Error(`node ${node} has not completed, so there is nothing to redo`)
     }
-    if (this.cursor.length > 1 || this.afters.length > 0) {
-      throw new Error('redo cannot discard concurrent branches; finish the fork before reopening completed work')
+    if (this.hasConcurrentWork()) {
+      if (!opts?.deferred) {
+        throw new Error('redo cannot discard concurrent branches; finish the fork before reopening completed work')
+      }
     }
     const owners = [...this.nodes.entries()].filter(([, candidate]) =>
       candidate._type === 'DataNode' && candidate.subgraph_entry !== undefined
@@ -1003,10 +1031,10 @@ export class Spine {
     // A finished dataset no longer has a current item. Reopening a body node
     // therefore restarts its owning dataset, rather than running an orphan pass.
     const start = owner !== undefined && !currentItem ? owner[0] : node
-    const affected = this.descendants(start, currentItem ? this.pass?.exit : undefined)
+    const affected = this.descendants(start, currentItem ? this.pass?.exit : undefined, { skipRetryEdges: true })
     if (currentItem && owner !== undefined) {
       for (const edge of this.outgoing(owner[0])) {
-        for (const id of this.descendants(edge.target)) affected.add(id)
+        for (const id of this.descendants(edge.target, undefined, { skipRetryEdges: true })) affected.add(id)
       }
     }
     const resetPass = this.pass !== undefined && affected.has(this.pass.node)
@@ -1066,10 +1094,15 @@ export class Spine {
     for (const node of this.completed) {
       try { redo_plans[node] = this.planRedo(node) } catch { /* unsafe replay stays unavailable */ }
     }
+    const deferred_redo_plans: Record<string, RedoPlan> = {}
+    for (const node of this.completed) {
+      if (node in redo_plans) continue
+      try { deferred_redo_plans[node] = this.planRedo(node, { deferred: true }) } catch { /* unsafe replay stays unavailable */ }
+    }
     return { schema_version: 1, source_graph: this.sourceGraph, state: this.state(),
       graph: { name: this.workflow, project_dir: this.projectDir, start_node: this.cursor[0] ?? '',
         nodes: Object.fromEntries(this.nodes), edges: this.edges },
-      afters: [...this.afters], successors: { ...this.successors }, redo_plans }
+      afters: [...this.afters], successors: { ...this.successors }, redo_plans, deferred_redo_plans }
   }
 
   /** Restore only an explicit checkpoint of this exact source graph. */

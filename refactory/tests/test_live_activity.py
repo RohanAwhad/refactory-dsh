@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -33,6 +34,7 @@ def test_rerun_requires_exact_preview_and_never_executes_work(tmp_path):
     directory.mkdir()
     checkpoint = directory / 'spine-checkpoint.json'
     checkpoint.write_text(json.dumps({'redo_plans': {'a': {'nodes': ['a', 'qa']}}}))
+    (directory / 'invocation.json').write_text(json.dumps({'id': 'inv1'}))
     preview = graph_control.request(tmp_path, 'preview', node='a')
     assert preview['invalidated'] == ['a', 'qa']
     assert not (directory / 'graph-controls').exists()
@@ -125,6 +127,113 @@ def test_graph_snapshot_reads_saved_topology_without_commands_or_mutations(tmp_p
     assert 'DO NOT EXECUTE' not in json.dumps(result)
     assert checkpoint.read_bytes() == before
     assert not (tmp_path / live.EVENTS).exists()
+
+
+def test_preview_returns_deferred_when_concurrent_work_blocks(tmp_path):
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    checkpoint = directory / 'spine-checkpoint.json'
+    checkpoint.write_text(json.dumps({
+        'deferred_redo_plans': {'a': {'nodes': ['a', 'join', 'end']}},
+        'redo_plans': {},
+    }))
+    preview = graph_control.request(tmp_path, 'preview', node='a')
+    assert preview['status'] == 'deferred'
+    assert preview['invalidated'] == ['a', 'join', 'end']
+
+
+def test_rerun_from_deferred_preview_records_deferred_nodes(tmp_path):
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    (directory / 'invocation.json').write_text(json.dumps({'id': 'inv1'}))
+    checkpoint = directory / 'spine-checkpoint.json'
+    checkpoint.write_text(json.dumps({
+        'deferred_redo_plans': {'a': {'nodes': ['a', 'join', 'end']}},
+        'redo_plans': {},
+    }))
+    revision = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    receipt = graph_control.request(tmp_path, 'rerun', node='a', revision=revision)
+    assert receipt['status'] == 'queued'
+    assert receipt['deferred_nodes'] == ['a', 'join', 'end']
+    # Verify the control file on disk
+    controls = list((directory / 'graph-controls').glob('*.json'))
+    assert len(controls) == 1
+    control = json.loads(controls[0].read_text())
+    assert control['deferred_nodes'] == ['a', 'join', 'end']
+
+
+def test_rerun_of_failed_run_refused_without_acknowledge(tmp_path):
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    checkpoint = directory / 'spine-checkpoint.json'
+    checkpoint.write_text(json.dumps({
+        'status': 'failed',
+        'redo_plans': {'a': {'nodes': ['a']}},
+    }))
+    revision = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    with pytest.raises(ValueError, match='acknowledge_failure'):
+        graph_control.request(tmp_path, 'rerun', node='a', revision=revision)
+
+
+def test_rerun_of_failed_run_queues_control_then_starts_owner(monkeypatch, tmp_path):
+    from refactory_dsh import recovery
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    (directory / 'invocation.json').write_text(json.dumps({'id': 'inv1'}))
+    checkpoint = directory / 'spine-checkpoint.json'
+    checkpoint.write_text(json.dumps({
+        'status': 'failed',
+        'redo_plans': {'a': {'nodes': ['a']}},
+    }))
+    revision = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    start_calls = []
+    def mock_start(root, *, acknowledge_failed=False):
+        # Verify control file exists BEFORE start is called
+        controls = list((root / '.refactory/graph-controls').glob('*.json'))
+        start_calls.append({
+            'root': root,
+            'acknowledge_failed': acknowledge_failed,
+            'controls_existed': len(controls) > 0,
+        })
+        return {'status': 'queued', 'pid': 999}
+    monkeypatch.setattr(recovery, 'start', mock_start)
+    result = graph_control.request(
+        tmp_path, 'rerun', node='a', revision=revision,
+        acknowledge_failure=True,
+    )
+    assert result['status'] == 'queued'
+    assert result['target'] == 'a'
+    assert len(start_calls) == 1
+    assert start_calls[0]['acknowledge_failed'] is True
+    assert start_calls[0]['controls_existed'] is True
+    assert result['owner']['pid'] == 999
+
+
+def test_console_main_graph_control_acknowledge_failure(monkeypatch, tmp_path):
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    (directory / 'invocation.json').write_text(json.dumps({'id': 'inv1'}))
+    checkpoint = directory / 'spine-checkpoint.json'
+    checkpoint.write_text(json.dumps({
+        'status': 'failed',
+        'redo_plans': {'a': {'nodes': ['a']}},
+    }))
+    revision = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    captured = {}
+    def mock_request(root, action, **kwargs):
+        captured.update(kwargs)
+        captured['action'] = action
+        return {'status': 'queued', 'target': 'a'}
+    monkeypatch.setattr(graph_control, 'request', mock_request)
+    console.main([
+        'graph-control', 'rerun',
+        '--run', str(tmp_path),
+        '--node', 'a',
+        '--revision', revision,
+        '--acknowledge-failure',
+    ])
+    assert captured.get('acknowledge_failure') is True
+    assert captured.get('node') == 'a'
 
 
 def test_graph_snapshot_tolerates_old_and_partial_checkpoints(tmp_path):

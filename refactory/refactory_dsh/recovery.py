@@ -49,7 +49,8 @@ def configuration_fingerprints(root: Path, identifier: str, project: Path) -> di
     return {str(path.resolve()): _configuration_fingerprint(path) for path in paths}
 
 
-def prepare(root: Path, name: str, *, resource_limits: dict[str, Any] | None = None) -> Path:
+def prepare(root: Path, name: str, *, resource_limits: dict[str, Any] | None = None,
+            acknowledge_failed: bool = False) -> Path:
     root = Path(root).resolve()
     checkpoint = root / '.refactory/spine-checkpoint.json'
     payload = checkpoint.read_bytes()
@@ -64,7 +65,10 @@ def prepare(root: Path, name: str, *, resource_limits: dict[str, Any] | None = N
             pass
         else:
             raise ValueError('the graph owner is still alive; use its boundary resume control')
-    if saved.get('status') not in ('ready', 'paused', 'halted', 'done', 'cancelled', 'waiting_user', 'refused'):
+    allowed = {'ready', 'paused', 'halted', 'done', 'cancelled', 'waiting_user', 'refused'}
+    if acknowledge_failed:
+        allowed.add('failed')
+    if saved.get('status') not in allowed:
         raise ValueError('last node outcome is unknown or failed; inspect side effects before any explicit rerun')
     for pending in (root / '.refactory/agent-delivery/pending').glob('*.json'):
         if pending.is_file():
@@ -84,12 +88,15 @@ def prepare(root: Path, name: str, *, resource_limits: dict[str, Any] | None = N
         RunBudget.from_path(root / '.refactory/resource-usage.json').resume(ResourceLimits.from_dict(resource_limits))
     request = root / '.refactory/resume-request.json'
     temporary = request.with_suffix('.tmp')
-    temporary.write_text(json.dumps({'checkpoint_sha256': hashlib.sha256(payload).hexdigest()}))
+    request_data: dict[str, Any] = {'checkpoint_sha256': hashlib.sha256(payload).hexdigest()}
+    if acknowledge_failed:
+        request_data['acknowledge_failed'] = True
+    temporary.write_text(json.dumps(request_data))
     temporary.replace(request)
     return root / 'graphs'
 
 
-def start(root: Path) -> dict[str, Any]:
+def start(root: Path, *, acknowledge_failed: bool = False) -> dict[str, Any]:
     """Resume a known stopped boundary in a fresh owned process, same identity."""
     import subprocess
     import sys
@@ -101,7 +108,7 @@ def start(root: Path) -> dict[str, Any]:
         # acquires its own nonblocking lock. Otherwise a fast child can reject
         # its parent as the still-active owner. The child repeats validation;
         # an intervening invocation can refuse this queued request safely.
-        prepare(root, config['mode'].replace('/', '-'))
+        prepare(root, config['mode'].replace('/', '-'), acknowledge_failed=acknowledge_failed)
     with (root / 'recovery.log').open('ab') as output:
         child = subprocess.Popen([sys.executable, '-m', 'refactory_dsh.interactive', config['mode'],
             '--workdir', str(root), '--headless', '--resume'], cwd=config['project'],

@@ -53,6 +53,56 @@ Recovery requires a recognized checkpoint, a stopped owner, matching prepared co
 
 Inspect side effects and outputs when continuation is refused. Use explicit invalidation where a valid replay plan exists, or start a new run deliberately. Reopening the mode is not an implicit retry. No mechanism here can infer whether an unacknowledged external side effect happened before a crash.
 
+### Replay a failed run
+
+When a run's owner has exited after a failure, `--resume` refuses the
+checkpoint. To replay a specific node, preview and confirm the rerun with the
+failure acknowledged:
+
+```bash
+uv run refactory graph-control preview --run /absolute/run --node NODE
+uv run refactory graph-control rerun --run /absolute/run \
+  --node NODE --text "CORRECTION" --revision REVISION --acknowledge-failure
+```
+
+The `--acknowledge-failure` flag confirms that the person has inspected the
+failed node's side effects. The command queues the rerun control file, then
+starts a new owner process. The owner restores the failed checkpoint, applies
+the queued rerun at its first boundary, and continues the run.
+
+`--resume` continues to refuse failed checkpoints. Only `graph-control rerun`
+with `--acknowledge-failure` starts an owner for a failed run.
+
+### Forward-only invalidation
+
+Replaying a node invalidates only its forward path. Nodes reached exclusively
+through a gate's reloop back-edge are not invalidated or archived. Example:
+replaying `overwatch` invalidates `{overwatch, gate_overwatch, report,
+deliver}` but not `{emit, materialise, check, reviews, synth}`.
+
+### Scoped corrections
+
+The `--text` on a rerun sets per-visit feedback, not a permanent prompt
+amendment. The feedback is shown to the driver, cleared when the agent
+completes, and superseded when a gate reloops with its own findings. A
+one-shot correction ("emit these two files and change nothing else") applies
+to that visit only and does not override a later review's repair.
+
+### Deferred replay
+
+When concurrent work (a fork's parallel branches) blocks a replay, preview
+returns status `deferred` with the invalidation plan. Confirm the deferred
+preview to queue the replay. It stays queued until concurrent work joins,
+then applies if the invalidation plan still matches, or fails with "plan
+changed" if it does not.
+
+### Gate replay
+
+Gate replay is not needed. Forward-only invalidation limits the blast radius:
+replaying the upstream agent (e.g. `overwatch` for `gate_overwatch`) re-runs
+only that agent, this gate and what follows, not the loop body. The refusal
+message names this alternative.
+
 Release checks exercised live CLI observation and native gate answers, pause/resume, reviewed replay and owned stop. Separate registered dead-owner recovery checks passed through public CLI resume and the native Resume control, preserving completed artifacts, saved configuration and accumulated resources while executing only the remaining node. An unavailable-provider guard prevented model execution. See the [validation record](release-validation-20260926.md).
 
 [Profiles and candidate evidence](optimization-profiles.md) · [Fast modes and resource recovery](budgets-fast-modes.md) · [Worker capabilities](models.md#model-provider-versus-coding-agent)
