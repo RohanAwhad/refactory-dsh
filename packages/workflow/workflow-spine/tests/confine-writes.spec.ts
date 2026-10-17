@@ -482,6 +482,109 @@ describe('subagent write confinement', () => {
     })
   })
 
+  describe('sandbox policy workspaceRoot precedence', () => {
+    it('resolves relative file_path against sandbox policy workspaceRoot (inside run dir → allowed)', async () => {
+      const workdir = scratch()
+      const insideRoot = join(workdir, 'sandbox-root')
+      mkdirSync(insideRoot, { recursive: true })
+
+      // Provide sandboxPolicy service before mounting the spine plugin
+      const root = new Context()
+      await root.plugin(SystemPrompt)
+      await root.plugin(ToolRuntime)
+      registerStubs(root)
+      root.provide('sandboxPolicy', {
+        resolve(_opts: { session?: unknown }) {
+          return { workspaceRoot: insideRoot }
+        },
+      })
+      await root.plugin(spinePlugin, configuredConfig({ workdir }))
+
+      // Session cwd is OUTSIDE the run dir, but the policy root is inside
+      const outsideCwd = scratch()
+      const child = mockAgent('child-policy-1', {
+        delegationDepth: 1,
+        parentSession: 'ceo-1',
+        cwd: outsideCwd,
+      })
+
+      // Relative path — resolved against insideRoot (inside workdir), so allowed
+      const result = await executeTool(root, 'write', {
+        file_path: 'output.txt',
+        content: 'ok',
+      }, child)
+      expect(result.isError).toBe(false)
+    })
+
+    it('resolves relative file_path against sandbox policy workspaceRoot (outside run dir → denied)', async () => {
+      const workdir = scratch()
+      const outsideRoot = scratch() // a different directory, outside workdir
+
+      // Provide sandboxPolicy service before mounting the spine plugin
+      const root = new Context()
+      await root.plugin(SystemPrompt)
+      await root.plugin(ToolRuntime)
+      registerStubs(root)
+      root.provide('sandboxPolicy', {
+        resolve(_opts: { session?: unknown }) {
+          return { workspaceRoot: outsideRoot }
+        },
+      })
+      await root.plugin(spinePlugin, configuredConfig({ workdir }))
+
+      // Session cwd is INSIDE the run dir, but the policy root is outside
+      const child = mockAgent('child-policy-2', {
+        delegationDepth: 1,
+        parentSession: 'ceo-1',
+        cwd: workdir,
+      })
+
+      // Relative path — resolved against outsideRoot (outside workdir), so denied
+      const result = await executeTool(root, 'write', {
+        file_path: 'output.txt',
+        content: 'bad',
+      }, child)
+      expect(result.isError).toBe(true)
+      const text = result.content.map(c => c.text).join('')
+      expect(text).toContain('this subagent may only write inside the run directory')
+    })
+
+    it('falls back to session cwd when no sandbox policy service is mounted', async () => {
+      // This is the baseline: no sandboxPolicy service, so session cwd is used.
+      // Session cwd inside run dir → relative path allowed.
+      const workdir = scratch()
+      const subDir = join(workdir, 'sub')
+      mkdirSync(subDir, { recursive: true })
+      const ctx = await mountConfigured({ workdir })
+
+      const child = mockAgent('child-no-policy', {
+        delegationDepth: 1,
+        parentSession: 'ceo-1',
+        cwd: subDir,
+      })
+
+      const result = await executeTool(ctx, 'write', {
+        file_path: 'file.txt',
+        content: 'ok',
+      }, child)
+      expect(result.isError).toBe(false)
+
+      // And session cwd outside run dir → denied
+      const outsideCwd = scratch()
+      const child2 = mockAgent('child-no-policy-2', {
+        delegationDepth: 1,
+        parentSession: 'ceo-1',
+        cwd: outsideCwd,
+      })
+
+      const result2 = await executeTool(ctx, 'write', {
+        file_path: 'file.txt',
+        content: 'bad',
+      }, child2)
+      expect(result2.isError).toBe(true)
+    })
+  })
+
   describe('deny message', () => {
     it('contains the run directory path', async () => {
       const workdir = scratch()
