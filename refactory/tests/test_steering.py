@@ -19,6 +19,8 @@ from pathlib import Path
 import pytest
 
 from refactory_dsh import registry, steering
+from refactory_dsh import authoring_evidence as evidence
+from refactory_dsh import nn
 from refactory_dsh.steering import Ledger, SteeringError
 
 from reference_ir import needs_factory, validate_reference
@@ -576,6 +578,99 @@ def test_outputs_in_reads_what_the_agent_nodes_wrote(tmp_path):
     assert "the work" in outputs[node_id]
     assert all(declared[nid].get("kind") == "agent" for nid in outputs), (
         "a deterministic node was treated as an agent node"
+    )
+
+
+# ── ask 5: verdict consumed display ───────────────────────────────────────
+
+
+def test_verdict_consumed_after_use(tmp_path):
+    """After take_verdict uses a verdict, the original entry shows consumed: yes."""
+    ledger = Ledger.seed(tmp_path, "build a mode")
+    (tmp_path / "design.md").write_text("the design")
+    review = ledger.visit("gate_check", ["design.md"])
+    entry = ledger.verdict("gate_check", "proceed")
+    verdict_id = entry["id"]
+    review = ledger.visit("gate_check", ["design.md"])
+    result = ledger.take_verdict("gate_check", review, ["proceed", "reloop"])
+    assert result == "proceed"
+    text = ledger.path.read_text()
+    assert f"id: {verdict_id}" in text
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip() == f"id: {verdict_id}":
+            found_consumed = False
+            for j in range(i, min(i + 10, len(lines))):
+                if lines[j].strip() == "consumed: yes":
+                    found_consumed = True
+                    break
+            assert found_consumed, f"verdict {verdict_id} should show consumed: yes"
+            break
+
+
+def test_verdict_consumed_after_expiry(tmp_path):
+    """An expired verdict (scope mismatch) is also marked consumed: yes."""
+    ledger = Ledger.seed(tmp_path, "build a mode")
+    (tmp_path / "design.md").write_text("the design")
+    review = ledger.visit("gate_check", ["design.md"])
+    entry = ledger.verdict("gate_check", "proceed")
+    verdict_id = entry["id"]
+    (tmp_path / "design.md").write_text("changed design")
+    new_review = ledger.visit("gate_check", ["design.md"])
+    result = ledger.take_verdict("gate_check", new_review, ["proceed", "reloop"])
+    assert result == "", "expired verdict should return empty string"
+    text = ledger.path.read_text()
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip() == f"id: {verdict_id}":
+            found_consumed = False
+            for j in range(i, min(i + 10, len(lines))):
+                if lines[j].strip() == "consumed: yes":
+                    found_consumed = True
+                    break
+            assert found_consumed, "expired verdict should also show consumed: yes"
+            break
+
+
+def test_unused_verdict_keeps_consumed_no(tmp_path):
+    """A verdict that was never taken keeps consumed: no."""
+    ledger = Ledger.seed(tmp_path, "build a mode")
+    (tmp_path / "design.md").write_text("the design")
+    ledger.visit("gate_check", ["design.md"])
+    entry = ledger.verdict("gate_check", "proceed")
+    verdict_id = entry["id"]
+    text = ledger.path.read_text()
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip() == f"id: {verdict_id}":
+            found = False
+            for j in range(i, min(i + 10, len(lines))):
+                if lines[j].strip() == "consumed: no":
+                    found = True
+                    break
+            assert found, "untaken verdict should keep consumed: no"
+            break
+
+
+def test_marking_consumed_is_identity_safe(tmp_path):
+    """Marking a verdict consumed after evidence is recorded does not trigger
+    current_problems, because consumed is excluded from the identity digest."""
+    root = tmp_path / "artifact"
+    root.mkdir()
+    (root / "answer.txt").write_text("42")
+    ctx = nn.RunContext(tmp_path, facts={"brief": "Deliver the answer", "artifact": str(root)})
+    ctx.write_json("brief.json", {"brief": ctx.facts["brief"]})
+    ledger = Ledger.seed(tmp_path, ctx.facts["brief"])
+    (tmp_path / "design.md").write_text("the design")
+    review = ledger.visit("gate_check", ["design.md"])
+    entry = ledger.verdict("gate_check", "proceed")
+    evidence.record(ctx, {"status": "pass", "command": "test", "stdout": "42"})
+    review = ledger.visit("gate_check", ["design.md"])
+    ledger.take_verdict("gate_check", review, ["proceed", "reloop"])
+    problems = evidence.current_problems(ctx)
+    identity_problem = [p for p in problems if "intent changed" in p]
+    assert not identity_problem, (
+        f"marking consumed must not change identity: {identity_problem}"
     )
 
 
