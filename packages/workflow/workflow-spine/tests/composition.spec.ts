@@ -5,9 +5,10 @@
  *
  * These are the parts a run depends on but a single tool call does not reach.
  */
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
@@ -217,6 +218,133 @@ describe('the cursor status a run leaves behind', () => {
     ctx.provide('shell', shell(executed))
     await expect(call(ctx, 'wf_next')).rejects.toThrow(/Cannot persist graph recovery checkpoint/)
     expect(executed).not.toHaveBeenCalled()
+  })
+})
+
+describe('a run that stops short of its end', () => {
+  it('halts naming the nodes it never reached, and records that for refactory status', async () => {
+    const workdir = scratch()
+    const graph: WorkflowGraph = {
+      name: 'incomplete',
+      start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', writes: [], reads: [] },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', writes: [], reads: [] },
+      },
+      edges: [{ source: 'a', target: 'b' }],
+    }
+    const { ctx } = await mount({ workdir, graph })
+    await call(ctx, 'wf_next')
+    await call(ctx, 'wf_done', { node: 'a' })
+    await call(ctx, 'wf_next')
+    // A cursor that empties with `b` never run, restored the way a resume restores
+    // a saved checkpoint.
+    const saved = join(workdir, '.refactory', 'spine-checkpoint.json')
+    const checkpoint = JSON.parse(readFileSync(saved, 'utf8'))
+    checkpoint.state.cursor = []
+    checkpoint.state.completed = ['a']
+    writeFileSync(saved, JSON.stringify(checkpoint))
+    const sha = createHash('sha256').update(readFileSync(saved)).digest('hex')
+    writeFileSync(join(workdir, '.refactory', 'resume-request.json'), JSON.stringify({ checkpoint_sha256: sha }))
+    const { ctx: resumed } = await mount({ workdir, graph })
+    const result = await call(resumed, 'wf_next') as { status: string; halted?: { reason: string; unreached?: string[] } }
+    expect(result).toMatchObject({ status: 'done', halted: { reason: 'incomplete', unreached: ['b'] } })
+    const recorded = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8'))
+    expect(recorded).toMatchObject({ status: 'halted', error: 'never reached: b' })
+  })
+})
+
+describe('gate reason composition through applyControls', () => {
+  it('rerun without text shows the gate reason; with text, reason then text; after proceed, no reason', async () => {
+    const workdir = scratch()
+    const graph: WorkflowGraph = {
+      name: 'gate-reason',
+      start_node: 'emit',
+      nodes: {
+        emit: { _type: 'AgentNode', id: 'emit', role: 'builder', prompt_template: 'E', writes: [], reads: [] },
+        check: { _type: 'GateNode', id: 'check', evaluator_type: 'fn', evaluator_command: 'true', reads: [], max_iterations: 1 },
+        done_node: { _type: 'FnNode', id: 'done_node', writes: [], command: '' },
+      },
+      edges: [
+        { source: 'emit', target: 'check' },
+        { source: 'check', target: 'emit', condition: 'reloop' },
+        { source: 'check', target: 'done_node', condition: 'proceed' },
+      ],
+    }
+    const { ctx } = await mount({ workdir, graph })
+    // Drive to halt: emit → check reloop → emit → check reloop (halts at max_iterations)
+    await call(ctx, 'wf_next')     // emit is due
+    await call(ctx, 'wf_done', { node: 'emit' })
+    await call(ctx, 'wf_next')     // check is due
+    await call(ctx, 'wf_verdict', { gate: 'check', verdict: 'reloop', feedback: 'fix the formatting' })
+    await call(ctx, 'wf_next')     // emit is due (reloop)
+    await call(ctx, 'wf_done', { node: 'emit' })
+    await call(ctx, 'wf_next')     // check is due
+    await call(ctx, 'wf_verdict', { gate: 'check', verdict: 'reloop', feedback: 'still wrong' })
+    // Now halted at max_iterations
+    const halted = await call(ctx, 'wf_next') as { status: string; halted?: { reason: string } }
+    expect(halted.status).toBe('done')
+    expect(halted.halted?.reason).toBe('max_iterations')
+    // Write a checkpoint for the revision
+    const cpBytes = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
+    const revision = createHash('sha256').update(cpBytes).digest('hex')
+    // Queue a rerun control without text
+    const directory = join(workdir, '.refactory', 'graph-controls')
+    mkdirSync(directory, { recursive: true })
+    writeFileSync(join(workdir, '.refactory', 'invocation.json'), JSON.stringify({ id: null }))
+    writeFileSync(join(directory, '1.json'), JSON.stringify({
+      id: '1', action: 'rerun', target: 'emit', text: '',
+      revision, run_id: resolve(workdir), invocation: null,
+      status: 'queued',
+    }))
+    // Call wf_next — applyControls should apply the rerun and compose the gate reason
+    const result = await call(ctx, 'wf_next') as { status: string; nodes: Array<{ id: string }>; feedback?: Record<string, string> }
+    expect(result.status).toBe('ready')
+    expect(result.nodes.some(n => n.id === 'emit')).toBe(true)
+    // Without rerun text, the gate's reason alone is the feedback
+    expect(result.feedback?.emit).toBe('still wrong')
+    // Now test with rerun text: drive to halt again (iterations were reset by the
+    // person's rerun, so two reloops are needed to exceed cap=1 again), then rerun
+    // with text.
+    await call(ctx, 'wf_done', { node: 'emit' })
+    await call(ctx, 'wf_next')     // check is due
+    await call(ctx, 'wf_verdict', { gate: 'check', verdict: 'reloop', feedback: 'third refusal' })
+    // count=1, cap=1: 1 > 1 is false → loops back to emit
+    await call(ctx, 'wf_done', { node: 'emit' })
+    await call(ctx, 'wf_next')     // check is due again
+    await call(ctx, 'wf_verdict', { gate: 'check', verdict: 'reloop', feedback: 'fourth refusal' })
+    // count=2, cap=1: 2 > 1 → halts at max_iterations
+    const cpBytes2 = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
+    const revision2 = createHash('sha256').update(cpBytes2).digest('hex')
+    writeFileSync(join(directory, '2.json'), JSON.stringify({
+      id: '2', action: 'rerun', target: 'emit', text: 'try a different approach',
+      revision: revision2, run_id: resolve(workdir), invocation: null,
+      status: 'queued',
+    }))
+    const result2 = await call(ctx, 'wf_next') as { status: string; feedback?: Record<string, string> }
+    // With rerun text, gate reason first then rerun text
+    const fb = result2.feedback?.emit ?? ''
+    expect(fb).toContain('fourth refusal')
+    expect(fb).toContain('try a different approach')
+    expect(fb.indexOf('fourth refusal')).toBeLessThan(fb.indexOf('try a different approach'))
+
+    // Now test after gate proceeded: complete emit, check proceeds, rerun should show no old reason
+    await call(ctx, 'wf_done', { node: 'emit' })
+    await call(ctx, 'wf_next')     // check is due
+    await call(ctx, 'wf_verdict', { gate: 'check', verdict: 'proceed' })
+    await call(ctx, 'wf_next')     // done_node
+    await call(ctx, 'wf_done', { node: 'done_node' })
+    // Now done. Redo emit after gate proceeded.
+    const cpBytes3 = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
+    const revision3 = createHash('sha256').update(cpBytes3).digest('hex')
+    writeFileSync(join(directory, '3.json'), JSON.stringify({
+      id: '3', action: 'rerun', target: 'emit', text: '',
+      revision: revision3, run_id: resolve(workdir), invocation: null,
+      status: 'queued',
+    }))
+    const result3 = await call(ctx, 'wf_next') as { status: string; feedback?: Record<string, string> }
+    // After gate proceeded, no old reason
+    expect(result3.feedback?.emit).toBeUndefined()
   })
 })
 
