@@ -1544,8 +1544,16 @@ def blocking_findings(text: str) -> list[str]:
         without_mentions = re.sub(r"`BLOCKING`(?![*_]*\s*[:—–-])", "", without_mentions, flags=re.I)
         if not re.search(r"BLOCKING", without_mentions, re.I):
             continue
-        cleaned = stripped.lstrip("*-+>#` \t")
-        cleaned = re.sub(r"^\d+[.)]\s+", "", cleaned).lstrip("*_` ")
+        cleaned = stripped.lstrip("*-+>#\t ")
+        cleaned = re.sub(r"^\d+[.)]\s+", "", cleaned).lstrip("*_ ")
+        # A line that opens with a code span marks a finding only when the span
+        # holds the marker itself (`BLOCKING`, `BLOCKING:`). A span that quotes
+        # more, as a review quoting an example does (`- **BLOCKING** x`), is a
+        # quotation however its text begins.
+        if cleaned.startswith("`"):
+            if not re.match(r"`BLOCKING(?:[*_]*\s*[:—–-])?`", cleaned, re.I):
+                continue
+            cleaned = cleaned[1:]
         # A numbered finding is still a finding, including when its marker is
         # a heading: "### BLOCKING 1: ..." is not an empty section title.
         cleaned = re.sub(
@@ -1555,6 +1563,12 @@ def blocking_findings(text: str) -> list[str]:
         # heading or a 'Blocking findings' section title carries no finding.
         marked = re.match(r"^BLOCKING(?:(?:[*_`]*\s*[:—–-][*_`]*\s*)|(?:[*_`]+\s+)|\s+)(.*)$", cleaned, re.I)
         if marked is None:
+            continue
+        # Bare-space/decoration-only match (no separator) requires uppercase BLOCKING.
+        # "Blocking finding: `x`" and "**Blocking** finding: `x`" are prose,
+        # not findings; "BLOCKING foo" and "**BLOCKING** foo" still are.
+        gap = cleaned[8:marked.start(1)]
+        if not re.search(r'[:—–\-]', gap) and cleaned[:8] != 'BLOCKING':
             continue
         content = marked[1].strip()
         if heading and not re.match(r"^BLOCKING[*_`]*\s*[:—–-]", cleaned, re.I):
