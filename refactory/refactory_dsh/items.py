@@ -246,6 +246,8 @@ def command_reset(workdir: Path, request: dict[str, Any]) -> dict[str, Any]:
     if not declarations:
         raise ItemsError('reset requires the run declarations; re-lower this mode before redoing work')
     names = {name for node in nodes for name in declarations.get(node, {}).get('produces', [])}
+    if request.get('preserveAttemptFacts'):
+        names = {n for n in names if not n.endswith('_used')}
     path = workdir / FACTS
     prior = path.read_text() if path.exists() else '{}'
     facts = json.loads(prior)

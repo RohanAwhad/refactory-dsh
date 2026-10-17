@@ -1755,6 +1755,31 @@ export function apply(ctx: Context, config: Config): void {
     presentResult: (args, result) => presentResult('redo', args as Record<string, unknown>, result),
     execute(args, exec) {
       const { spine, workdir, commandEnv, dataCommand } = requireRun(exec)
+      // Refuse once a gate's iteration limit has halted the run or a node has failed
+      const state = spine.state()
+      if ((state.halted as { reason?: string } | undefined)?.reason === 'max_iterations') {
+        const gate = (state.halted as { gate: string }).gate
+        throw new Error(
+          `run halted at gate ${gate} after reaching its iteration limit; ` +
+          `a CEO redo cannot spend more attempts. Use \`refactory graph-control rerun --acknowledge-failure\` to have a person spend more attempts.`
+        )
+      }
+      if (workdir !== undefined) {
+        const statusPath = join(workdir, '.refactory', 'spine-status.json')
+        if (existsSync(statusPath)) {
+          try {
+            const recorded = JSON.parse(readFileSync(statusPath, 'utf8'))
+            if (recorded.status === 'failed') {
+              throw new Error(
+                `run has failed; a CEO redo cannot spend more attempts. ` +
+                `Use \`refactory graph-control rerun --acknowledge-failure\` to have a person spend more attempts.`
+              )
+            }
+          } catch (error) {
+            if (error instanceof Error && error.message.includes('CEO redo cannot')) throw error
+          }
+        }
+      }
       const plan = spine.planRedo(args.node)
       if (dataCommand !== '' && workdir === undefined) {
         throw new Error('redo needs the run workdir to invalidate its data facts safely')
@@ -1762,9 +1787,9 @@ export function apply(ctx: Context, config: Config): void {
       // Bookkeeping must succeed before the live cursor is changed. This bridge
       // uses the existing data loader because it owns the run's Task facts.
       const receipt = dataCommand !== '' && workdir !== undefined
-        ? runtimeBridge(`${dataCommand} reset`, workdir, commandEnv, { ...plan, state: spine.state() })
+        ? runtimeBridge(`${dataCommand} reset`, workdir, commandEnv, { ...plan, state, preserveAttemptFacts: true })
         : undefined
-      spine.redo(args.node)
+      spine.redo(args.node, { preserveIterations: true })
       if (plan.resetPass) materialised.delete(spine)
       recordStatus(spine, workdir, spine.isPaused() ? 'paused' : 'ready')
       return sync(json({ status: 'redone', node: args.node, ...plan, ...(receipt === undefined ? {} : { receipt }) }))
