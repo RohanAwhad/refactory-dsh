@@ -524,6 +524,9 @@ def _edited(path: Path, text: str, pairs: list[tuple[str, str]], shown: str) -> 
 
     Each edit is refused unless its search text is there exactly once. Search text
     is matched as exact text anywhere in the file, like the dsh edit tool's old_string.
+    :func:`_pairs` ends a search's last line with a newline; when the text with that
+    newline is not in the file, it is matched without it, so a search may stop inside
+    a line -- a sentence in a paragraph kept on one line.
     The read tool shows a file with ``\r`` stripped and every line ended, so a file
     whose lines all end in ``\r\n``, or whose last line has no newline, is matched as
     shown and written back as it was. An edit whose result is already where it would go
@@ -538,7 +541,13 @@ def _edited(path: Path, text: str, pairs: list[tuple[str, str]], shown: str) -> 
     skipped = 0
     for search, replacement in pairs:
         starts = _occurrences(work, search)
-        if _already_applied(work, search, replacement, starts):
+        within_line = False
+        if not starts and search.endswith("\n") and not _already_applied(work, search, replacement, starts):
+            inline = _occurrences(work, search[:-1])
+            if inline:
+                search, starts, within_line = search[:-1], inline, True
+                replacement = replacement.removesuffix("\n")
+        if _already_applied(work, search, replacement, starts, within_line=within_line):
             skipped += 1
             continue
         if len(starts) != 1:
@@ -553,16 +562,18 @@ def _edited(path: Path, text: str, pairs: list[tuple[str, str]], shown: str) -> 
     return (work.replace("\n", "\r\n") if crlf else work), skipped
 
 
-def _already_applied(text: str, search: str, replacement: str, starts: list[int]) -> bool:
+def _already_applied(text: str, search: str, replacement: str, starts: list[int], *,
+                     within_line: bool = False) -> bool:
     """Whether an edit's replacement already stands where it would go, as after a re-sent edit.
 
     Either the search lines are gone and the replacement is there once, or the search
     lines are there once inside a copy of the replacement (an insertion sent again).
-    An edit that removes lines is never taken as applied: nothing shows it was.
+    An edit that removes lines is never taken as applied: nothing shows it was. A
+    search matched ``within_line`` looks for its replacement inside lines too.
     """
     if not replacement.strip() or len(starts) > 1:
         return False
-    placed = _line_starts(text, replacement)
+    placed = (_occurrences if within_line else _line_starts)(text, replacement)
     if not starts:
         return len(placed) == 1
     return any(at <= starts[0] and starts[0] + len(search) <= at + len(replacement) for at in placed)
