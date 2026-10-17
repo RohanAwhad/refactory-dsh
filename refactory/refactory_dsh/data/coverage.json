@@ -175,7 +175,7 @@
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
       "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local; `refine` updates an open one).",
-      "reviewed_schema": "097fc5d295938eff3f21a71a13471ba892d669c1d0d4c5b015c266bdadd340db"
+      "reviewed_schema": "a58201e57f7189d6c42f80693273770fd0e4b8958b61eac43c191c21605594f9"
     },
     "default_pack/design_fast": {
       "doc": "refactory/docs/budgets-fast-modes.md",
@@ -187,6 +187,15 @@
             "check": "test -s hello.txt",
             "name": "tiny_example"
           }
+        },
+        {
+          "explanation": "Change an existing repository on a branch of its own, in a worktree of it; the checkout at /path/to/repository is left as it is, and the branch is not pushed.",
+          "knobs": {
+            "brief": "Add a --json flag to the report command",
+            "check": "python -m pytest -q",
+            "name": "report_json",
+            "target": "/path/to/repository"
+          }
         }
       ],
       "interfaces": {
@@ -194,8 +203,8 @@
         "cli": "refactory ceo default_pack/design_fast",
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
-      "purpose": "build a small artifact with one sequential strategist, coder and QA agent. Produces a checked software artifact; supply a brief, name and acceptance check.",
-      "reviewed_schema": "da2a471f0e1bc360bbdb1231712eb53b16da0ee5ddbff053358138e7d5aeacfb"
+      "purpose": "Build a small artifact with one sequential strategist, coder and QA agent, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none (`worktree=0` writes .factory/artifacts instead; `source_project` copies a directory there). The check runs in that worktree before focused QA. It has no approval gate, so it opens no pull request: the branch is left for you to push.",
+      "reviewed_schema": "b13b257a2450ab2809c58eeb0e3ee98bbd68dff66d04f87b5457cd9298aff638"
     },
     "default_pack/edit": {
       "doc": "refactory/docs/authoring-validation.md",
@@ -236,6 +245,26 @@
       },
       "purpose": "Revise a small mode package with a coder and focused QA after canonical validation. Supply revision_of, name and brief. allow_regression=true skips original execution/comparison but still requires revised validation and intent evidence.",
       "reviewed_schema": "f87d2ec83e6c8b2fc7c318b4119429dfe80f0c2ef84aee04da57b12fb79cb8a1"
+    },
+    "fix_pack/make_pass": {
+      "doc": "refactory/docs/tutorials/01-write-a-mode.md",
+      "examples": [
+        {
+          "explanation": "Make a failing check pass in an existing repository: each fix is a commit on the run's own branch in a worktree of it, retried with what the check said, and the checkout is left as it is.",
+          "knobs": {
+            "check": "python -m pytest -q",
+            "name": "fix_tests",
+            "target": "/path/to/repository"
+          }
+        }
+      ],
+      "interfaces": {
+        "chat": "wf_open mode=fix_pack/make_pass; use refactory help topic=fix_pack/make_pass first",
+        "cli": "refactory ceo fix_pack/make_pass",
+        "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
+      },
+      "purpose": "Change a repository until a failing check passes, on a branch of its own, through the steps any mode that changes a repository attaches (`repo_change`): the example mode authors copy. It opens no pull request; unscored, so not an optimization target.",
+      "reviewed_schema": "5874d9a8fb9aff131b6c0e935692bae99b8c9133b892652b06f37b6c083b62ea"
     },
     "java_build_pack/build": {
       "doc": "refactory/docs/concepts.md",
@@ -504,6 +533,15 @@
             "what": "rename the --json flag to --format json, as the review asked"
           },
           "explanation": "Follow up an open pull request: a new run starts from its branch, goes through the full review, and pushes onto that branch, fast-forward only, leaving its title and description alone."
+        },
+        {
+          "arguments": {
+            "check": "python -m pytest -q",
+            "mode": "design_fast",
+            "target": "/path/to/repository",
+            "what": "add a --json flag to the report command"
+          },
+          "explanation": "The same change with one strategist, coder and focused QA agent: it works in a worktree of the repository on its own branch, as design does, but has no approval gate, so it opens no pull request and takes no --no-pr, --refine or --review-comments; its work stays on the run's branch, which its report names."
         }
       ],
       "interfaces": {
@@ -512,7 +550,7 @@
         "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
       },
       "purpose": "Run a named mode or author a package/artifact from a brief in the terminal; worker file defaults apply at preparation. CEO conversation and graph worker routes are distinct.",
-      "reviewed_schema": "7facc6fc5c6b3490ebacdf4e3b69b1ba5f341a0aca3d8627aeba2d6fdc6f7ecb"
+      "reviewed_schema": "f5ba8c57638462354ae4fe3174085ac5d8506889e34d830eeb893a8f17cb7f7f"
     },
     "cli:doctor": {
       "doc": "refactory/docs/cli.md",

@@ -13,8 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from refactory_dsh import delivery, repo_change
 from refactory_dsh.create_ops import API, RESEARCH_SCHEMA
-from refactory_dsh.delivery import VISIBILITIES
 from refactory_dsh.model import DEFAULT_TIMEOUT_S
 from refactory_dsh.nn import Graph, Knob, Mode, Node, RunResult
 
@@ -63,49 +63,20 @@ class DesignMode(Mode):
             "name": Knob("", "str", description="the artifact to design (empty takes the name from the brief)"),
             "brief": Knob("", "str", description="what to build, in the asker's words"),
             "check": Knob("", "str", description="the command that decides whether the artifact works"),
-            # Where the run works (#351). Frozen: they say what is being built, so no
-            # search may move them.
-            "target": Knob("", "str", frozen=True,
-                           description="the git repository to change; empty starts a new project "
-                                       "in the projects folder"),
-            "base": Knob("", "str", frozen=True,
-                         description="the commit, branch or tag the run starts from (default: the "
-                                     "target's HEAD, or a new project's main)"),
-            "worktree": Knob(True, "bool", frozen=True,
-                             description="work in a worktree of the target on the run's own branch; "
-                                         "off writes the artifact under .factory/artifacts instead"),
-            "setup": Knob("", "str", frozen=True,
-                          description="a command run in the worktree before each check, after its "
-                                      "dependencies are installed, such as a build"),
-            # How the run is delivered once its reviews pass (#350). Frozen too: each is
-            # what the person approves at the gate, not something a search may move.
-            "pr": Knob(True, "bool", frozen=True,
-                       description="open a pull request once the reviews pass: into the target's default "
-                                   "branch, or a new project's own GitHub repository; off keeps the work "
-                                   "on the run's local branch"),
-            "repo_owner": Knob("", "str", frozen=True,
-                               description="the GitHub account or organisation a new project's repository "
-                                           "is created under (default: the account gh is logged in to)"),
-            "repo_visibility": Knob("private", "str", values=VISIBILITIES, frozen=True,
-                                    description="who can see a new project's GitHub repository"),
-            "refine": Knob("", "str", frozen=True,
-                           description="an open pull request to follow up, as its URL or owner/repo#number: "
-                                       "the run starts from its branch and its result updates it"),
-            "review_comments": Knob(False, "bool", frozen=True,
-                                    description="with refine: add the pull request's reviews and comments to "
-                                                "the run's steering"),
+            # Where the run works (#351), as any mode that changes a repository declares it
+            # (`repo_change`), and how its work is delivered once its reviews pass (#350).
+            **repo_change.knobs(),
+            **delivery.knobs(),
         }
 
     def build(self) -> Graph:
         graph = Graph()
         graph.add(Node(
             "prepare", "op", call=f"{OPS}:prepare_design",
-            knobs=("name", "brief", "check", "target", "base", "worktree", "setup", "pr", "repo_owner",
-                   "repo_visibility", "refine", "review_comments"),
+            knobs=("name", "brief", "check", *repo_change.knob_names(), *delivery.knobs()),
             writes=("brief.json", "research-review.txt", "check.txt", "delivery.md"),
             produces=("name", "brief", "check", "validation", "research_review", "qa_gate",
-                      "overwatch_review", "target", "worktree", "branch", "base", "source",
-                      "check_root", "emit_scope", "setup", "delivery", "delivery_plan"),
+                      "overwatch_review", *repo_change.produces(), "delivery", "delivery_plan"),
             notes="read the brief and the command that decides whether it is done",
         ))
 
@@ -255,19 +226,14 @@ class DesignMode(Mode):
             produces=("emit",),
             notes="write the artifact's files",
         ))
-        graph.add(Node(
-            "materialise", "op", call=f"{OPS}:materialise_artifact",
-            reads=("emit.txt",),
-            writes=("changes.diff",),
-            produces=("artifact", "files", "commit", "change", "emission_refused"),
-            notes="commit the emitted files on the run's branch, or write the artifact directory",
-        ))
+        graph.add(repo_change.materialise_node())
         graph.add(Node(
             "check", "gate", evaluator=f"{OPS}:check_artifact", role="validation",
             resource_role="final_validation",
             reads=("brief.json",),
-            writes=("check.txt", "validation.txt", "authoring-evidence.json", "changes.diff"),
-            produces=("validation", "check_attempts_used", "attempts_used", "runtime_evidence", "commit"),
+            writes=("check.txt", "validation.txt", "authoring-evidence.json", *repo_change.CHECK_WRITES),
+            produces=("validation", "check_attempts_used", "attempts_used", "runtime_evidence",
+                      *repo_change.CHECK_PRODUCES),
             knobs=("check_attempts", "check_timeout_s"),
             max_iterations=8,
             notes="run the brief's check, in a sandbox",
@@ -496,7 +462,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--attempts", type=int, default=2)
     parser.add_argument("--fast", action="store_true", help="use the inspectable design_fast graph with focused QA")
     parser.add_argument("--repair-attempts", type=int, default=1, help="fast graph repair limit (0..3)")
-    parser.add_argument("--source-project", default="", help="fast design: copy this existing project before applying the feature")
+    parser.add_argument("--source-project", default="",
+                        help="fast design: copy this directory and apply the change there, instead of a worktree")
     parser.add_argument("--target", default="", help="the git repository to change (default: a new project)")
     parser.add_argument("--base", default="", help="the commit the run starts from (default: the target's HEAD)")
     parser.add_argument("--no-worktree", action="store_true",
@@ -530,6 +497,11 @@ def main(argv: list[str] | None = None) -> int:
         help="answer a gate a person owns, as <gate>=<value> (repeatable)",
     )
     args = parser.parse_args(argv)
+    delivered = [flag for flag, given in (("--no-pr", args.no_pr), ("--refine", args.refine),
+                                          ("--review-comments", args.review_comments)) if given]
+    if args.fast and delivered:
+        parser.error(f"--fast does not take {', '.join(delivered)}: design_fast has no approval gate, so it "
+                     "opens no pull request, and its work stays on the run's branch")
 
     from refactory_dsh.model import DshModelClient
     from refactory_dsh.paths import project_root
@@ -560,11 +532,11 @@ def main(argv: list[str] | None = None) -> int:
     mode = DesignFastMode() if args.fast else DesignMode()
     state = mode.state_dict()
     state["knobs"]["repair_attempts" if args.fast else "check_attempts"]["value"] = int(args.repair_attempts if args.fast else args.attempts)
-    if args.no_worktree and not args.fast:
+    if args.no_worktree:
         state["knobs"]["worktree"]["value"] = False
-    if args.no_pr and not args.fast:
+    if args.no_pr:
         state["knobs"]["pr"]["value"] = False
-    if args.review_comments and not args.fast:
+    if args.review_comments:
         state["knobs"]["review_comments"]["value"] = True
     mode.load_state_dict(state)
     from refactory_dsh.create import parse_verdicts

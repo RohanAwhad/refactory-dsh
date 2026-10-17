@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from refactory_dsh import delivery, repo_change
 from refactory_dsh.create import CreateMode
 from refactory_dsh.design import DesignMode
 from refactory_dsh.edit import EditMode
@@ -31,8 +32,8 @@ STRATEGY_PROMPT = (
 
 def _strategy_node(graph: Graph, *, artifact: bool) -> None:
     context = (
-        "Existing source project: {{source_project}}\nSource files: {{source_files}}\n"
-        "Required runtime check: {{check}}\n"
+        "It is built in {{source}}; read only what the change needs there.\n"
+        "Required runtime check, run from {{check_root}}: {{check}}\n"
         if artifact else
         "Plan the minimum reusable graph, declared knobs, score and required artifact "
         "invariants; avoid alternative architectures.\n"
@@ -72,6 +73,10 @@ QA_PROMPT = (
     "the gate, generate extra reports or repeat completed checks for handoff."
 )
 
+#: What design_fast's QA is told about the change it reviews: in a worktree, the branch's
+#: diff, and the command that runs a check in the worktree's own environment.
+ARTIFACT_QA = "\nThe change: {{change}}\n"
+
 
 def _qa_nodes(graph: Graph, *, artifact: bool) -> None:
     graph.add(Node(
@@ -79,14 +84,17 @@ def _qa_nodes(graph: Graph, *, artifact: bool) -> None:
         resource_role="final_validation",
         knobs=("check", "check_timeout_s"),
         reads=("emit.txt",) + (() if artifact else ("authoring-evidence.json", "smoke.json")),
-        writes=("focused-check.json", "focused-source.json", "authoring-evidence.json"),
-        produces=("focused_check", "output_path", "review_files", "runtime_evidence"),
+        writes=("focused-check.json", "focused-source.json", "authoring-evidence.json")
+               + (repo_change.CHECK_WRITES if artifact else ()),
+        produces=("focused_check", "output_path", "review_files", "runtime_evidence")
+                 + (repo_change.CHECK_PRODUCES if artifact else ()),
         notes="run the explicitly requested bounded check; no implicit full evaluation",
     ))
     from refactory_dsh.authoring_evidence import REVIEW_CONTEXT, AUDIT_INSTRUCTIONS
 
     graph.add(Node(
-        "focused_qa", "agent", role="code_reviewer", prompt_template=QA_PROMPT + REVIEW_CONTEXT + AUDIT_INSTRUCTIONS,
+        "focused_qa", "agent", role="code_reviewer",
+        prompt_template=QA_PROMPT + (ARTIFACT_QA if artifact else "") + REVIEW_CONTEXT + AUDIT_INSTRUCTIONS,
         resource_role="final_validation",
         reads=("brief.json", "focused-check.json", "authoring-evidence.json"),
         writes=("focused-qa.json", "intent-audit.json"),
@@ -210,25 +218,28 @@ class DesignFastMode(DesignMode):
         knobs = super().declare()
         knobs.pop("research_attempts")
         knobs.pop("check_attempts")
-        # Fast design keeps copying `source_project` until it moves onto worktrees (#351),
-        # so the knobs that place a run in one are not its own yet, and nor are those that
-        # deliver a worktree's branch (#350).
-        for name in ("target", "base", "worktree", "setup", "pr", "repo_owner", "repo_visibility", "refine",
-                     "review_comments"):
+        # It works where design works (`repo_change`), but delivers nothing: a pull request
+        # is opened only behind an approval gate that names it (#350), and fast mode has
+        # none. Its work stays on the run's branch.
+        for name in delivery.knobs():
             knobs.pop(name)
-        knobs["repair_attempts"] = Knob(1, "int", lo=0, hi=3, description="total repair attempts after focused QA")
-        knobs["source_project"] = Knob("", "str", description="existing project copied into the output artifact before applying the change")
+        knobs["repair_attempts"] = Knob(1, "int", lo=0, hi=3, description=(
+            "total repairs, for an emission materialise could not apply, a failed check or focused QA"))
+        knobs["source_project"] = Knob("", "str", description=(
+            "an existing directory copied into the artifact directory before the change is applied, "
+            "instead of a worktree; it takes no target, base or setup"))
         return knobs
 
     def build(self) -> Graph:
         graph = Graph()
         graph.add(Node(
             "prepare", "op", call=f"{OPS}:prepare_artifact", resource_role="work",
-            knobs=("name", "brief", "check", "source_project"),
+            knobs=("name", "brief", "check", "source_project", *repo_change.knob_names()),
             writes=("brief.json", "source-manifest.json", "repair.txt", "research-review.txt", "check.txt"),
             produces=("name", "brief", "check", "validation", "research_review", "qa_gate", "overwatch_review",
-                      "source_project", "source_files", "repair_feedback", "repairs_used"),
-            notes="read the artifact brief and capture the source project identity",
+                      "source_project", "source_files", "repair_feedback", "repairs_used",
+                      *repo_change.produces()),
+            notes="read the artifact brief, and say where the run works",
         ))
         _strategy_node(graph, artifact=True)
         graph.add(Node(
@@ -237,29 +248,32 @@ class DesignFastMode(DesignMode):
                 "Current stage: emit the changed files into emit.txt.\n"
                 "Build artifact {{name}}. Brief: {{brief}}\n"
                 "Implementation plan: {{implementation_plan}}\n"
-                "Existing source project (read only): {{source_project}}\n"
-                "Source file list: {{source_files}}\n"
-                "Required check from the artifact root: {{check}}\n"
+                "Required check, run from {{check_root}}: {{check}}\n"
                 "Repair feedback: {{repair_feedback}}\n"
-                "Implement the smallest complete change. For an existing project emit only "
-                "new or changed files; unchanged source is copied by the materialise node. "
-                "Read the relevant project files to make the change. The file-block contract "
-                "below is complete: do not read framework internals, worker receipts, graph "
-                "configuration or prior acceptance histories to rediscover it. "
-                "Never write to the source project. Do not delegate or launch research, reviewer agents "
-                "or an optimizer. Write emit.txt with file blocks introduced by exactly "
-                "===FILE: <relative path>=== followed by the full file contents. Paths are "
-                "relative to the artifact root. The runtime runs the requested check and "
-                "one focused QA review next. Preserve all requested behavior. After writing "
-                "emit.txt, return a short completion message. Do not materialize the artifact "
-                "or invoke downstream graph operations yourself."
+                "Implement the smallest complete change. Read the relevant project files to make "
+                "the change. The block contract below is complete: do not read framework internals, "
+                "worker receipts, graph configuration or prior acceptance histories to rediscover it. "
+                "Do not delegate or launch research, reviewer agents or an optimizer.\n"
+                "{{emit_scope}}\n"
+                "Write those blocks into emit.txt, with no prose outside them. Do not create or change "
+                "the files themselves: the materialise step applies emit.txt, and tells the next "
+                "attempt if it could not. The runtime runs the requested check and one focused QA "
+                "review next. Preserve all requested behavior. After writing emit.txt, return a "
+                "short completion message. Do not invoke downstream graph operations yourself."
             ), reads=("brief.json", "source-manifest.json", "implementation-plan.txt", "repair.txt"),
             writes=("emit.txt",), produces=("emit",), notes="implement the small artifact/change directly",
         ))
+        graph.add(repo_change.materialise_node(
+            call=f"{OPS}:materialise_artifact", resource_role="work",
+            reads=("emit.txt", "source-manifest.json"),
+            notes="commit the emitted files on the run's branch, or write the artifact directory: "
+                  "a copy of source_project, when there is one",
+        ))
         graph.add(Node(
-            "materialise", "op", call=f"{OPS}:materialise_artifact", resource_role="work",
-            reads=("emit.txt", "source-manifest.json"), produces=("artifact", "files"),
-            notes="copy the source and apply emitted files to the separate output artifact",
+            "gate_emit", "gate", evaluator=f"{OPS}:gate_emit", resource_role="work",
+            knobs=("repair_attempts",), writes=("fast-report.json", "repair.txt"),
+            produces=("repair_feedback", "repairs_used"), max_iterations=4,
+            notes="send an emission materialise could not apply back to emit, within the repair bound",
         ))
         _qa_nodes(graph, artifact=True)
         graph.add(Node(
@@ -270,6 +284,8 @@ class DesignFastMode(DesignMode):
         graph.connect("prepare", "strategy")
         graph.connect("strategy", "emit")
         graph.connect("emit", "materialise")
-        graph.connect("materialise", "focused_check")
+        graph.connect("materialise", "gate_emit")
+        graph.connect("gate_emit", "focused_check", condition="proceed")
+        graph.connect("gate_emit", "emit", condition="reloop")
         graph.connect("gate_qa", "report", condition="proceed")
         return graph

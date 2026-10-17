@@ -16,7 +16,9 @@ stretches are stated here rather than special-cased in the library:
 - **Their ops live in the library.** ``create_ops`` and ``design_ops`` ship with
   ``refactory_dsh`` rather than under this package, because a mode that writes a
   package needs the validator and the registry, and those are the library's. A
-  package may name any importable ops module; this one names two of the library's.
+  package may name any importable ops module; this one names the library's, including
+  ``repo_change`` and ``delivery``, whose steps the design modes use to change a
+  repository and hand the change back.
 - **They need a model.** No knob makes them run without one, so a run with no model
   client fails loudly at the first agent node rather than producing nothing.
 """
@@ -33,5 +35,6 @@ PACKAGE = Package(
     name="default_pack",
     description="Create a package, revise one, or design an artifact — from a brief.",
     modes=(CreateMode, EditMode, DesignMode, CreateFastMode, EditFastMode, DesignFastMode),
-    ops=("refactory_dsh.create_ops", "refactory_dsh.design_ops", "refactory_dsh.fast_ops"),
+    ops=("refactory_dsh.create_ops", "refactory_dsh.design_ops", "refactory_dsh.fast_ops",
+         "refactory_dsh.repo_change", "refactory_dsh.delivery"),
 )

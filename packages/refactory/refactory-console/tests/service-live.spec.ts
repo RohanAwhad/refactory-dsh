@@ -72,9 +72,11 @@ describe('the picker service against the real loop', () => {
     // The authoring modes are offered too, and each names its own verb rather
     // than the one the loop would refuse. The fast variants are authoring modes as
     // well: `run` for `create_fast` selects nothing, which is the bug this catches.
-    const authoring = modes.filter(mode => !mode.scored && mode.action !== 'start')
+    const authoring = modes.filter(mode => mode.id.startsWith('default_pack/'))
     expect(authoring.length).toBeGreaterThan(0)
     expect(authoring.every(mode => mode.action === mode.id.split('/')[1])).toBe(true)
+    // Any other unscored mode has no verb of its own, so it is run once.
+    expect(modes.find(mode => mode.id === 'fix_pack/make_pass')?.action).toBe('run')
   }, 120_000)
 
   it('answers with every declared knob of a mode, as a panel draws them', async () => {

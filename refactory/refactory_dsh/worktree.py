@@ -576,7 +576,7 @@ def state(run: Path, claimant: Any = None, *, branch: str = "") -> str:
     kept; remote-factory's session guard fails open instead. A run the spine drives is
     over only once its status says it failed or finished: a halted, cancelled or paused
     run can be resumed (`recovery`), and so can one whose GUI restarted. That is
-    stricter than `design_ops._still_open`, which releases an artifact name once the
+    stricter than `repo_change._still_open`, which releases an artifact name once the
     owner exits: a name released early costs a refusal, a worktree removed early costs
     adding it back from its branch. A walked run is over once its progress records an
     error, or once ``claimant``, the walking process, has exited. ``branch`` names the

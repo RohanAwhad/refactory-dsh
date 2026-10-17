@@ -9,7 +9,7 @@ and reviewer fan-out and allow one repair by default. The existing `create`,
 |---|---|
 | Create fast | One strategist plans the minimum reusable graph, knobs, score and artifact invariants; one coder emits the package; one QA agent reviews it. Structural admission and canonical runtime smoke remain required. |
 | Edit fast | One coder makes the small revision directly, then one QA agent checks it. Task bindings, inputs and artifact contracts are preserved; structural admission and canonical smoke remain required; comparison defaults on but `allow_regression=true` skips the original execution/comparison branch. |
-| Design fast | One strategist, one coder and one QA agent produce a tiny checked artifact, such as a one-file helper or a small change in a copied project. The required command runs against the materialized output. |
+| Design fast | One strategist, one coder and one QA agent produce a small checked change: commits on the run's own branch, in a worktree of the repository `target` names or of a new project, as Design works. The required command runs there. |
 
 The strategy is a concise plan, not a separate research or approval workflow.
 Create and Edit produce reusable packages. Design produces the artifact itself
@@ -30,6 +30,13 @@ These results establish the sampled artifact contracts, not token efficiency or
 arbitrary project quality. See the
 [recorded outcomes](release-validation-20260926.md#fast-mode-outcomes).
 
+Those Design runs worked on a copied project. Fast Design's move into a worktree
+was accepted separately, in CLI runs on 2026-10-16: a new project; a change to
+this repository checked with vitest, whose first check was failed on purpose, so
+its repair was a second commit built on the first; a run with its worktree off;
+and one copying a `source_project`. Native GUI runs of the worktree paths have
+not been made yet.
+
 ## Choose the graph
 
 In the terminal, choose `--mode create_fast`, `--mode edit_fast` or
@@ -44,18 +51,32 @@ uv run python -m refactory_dsh.design --fast \
   --check 'python helper.py' --repair-attempts 1 --max-elapsed-s 360
 ```
 
-For a change to an existing project, pass `--source-project /absolute/project`
-to fast Design, or set its `source_project` knob. Refactory copies the source to
-the output artifact and applies emitted new or changed files there. It does
-not replace the source project. Dependency directories, Git metadata, previous
-run output and `.env*` files are excluded; source symlinks are refused. File
-deletion is not part of this small-change emission contract.
+Fast Design works where Design works, through the same steps
+([`repo_change`](tutorials/01-write-a-mode.md#if-your-mode-changes-a-repository)).
+For a change to a repository you have, pass `--target <its root>` (the `target`
+knob): the run gets a worktree of it on its own branch, from a pinned base
+(`--base`), and your checkout stays as it is. Without one it starts a new project
+in `~/refactory-projects/<name>`. Each attempt is a commit, written in `===FILE:`,
+`===EDIT:` and `===DELETE:` blocks, and the check runs in the worktree's own
+environment after `--setup`; see [models](models.md). Fast Design has no approval
+gate, so it opens no pull request: its work stays on the run's branch, which
+`design.json` names. To open one, push the branch yourself; Design's delivery
+pushes only a base GitHub already has, so it cannot deliver that branch for you.
+`--no-worktree` writes `.factory/artifacts/<name>` instead.
+
+To change a directory that is not a git repository, pass
+`--source-project /absolute/project` (the `source_project` knob) instead of
+`--target`. Refactory copies the source to the artifact directory and applies
+emitted whole files there. It does not replace the source project. Dependency
+directories, Git metadata, previous run output and `.env*` files are excluded;
+source symlinks are refused, and so are edits and deletions.
 
 `repair_attempts` is one shared bound across structural admission, canonical runtime validation and focused QA,
-from zero to three. It counts repairs after the first implementation, so one
-permits at most two implementations. The required Design `check` runs against the
-materialized artifact as a command bounded by `check_timeout_s` rather than by
-memory, as every check is (see [models](models.md)). Create/Edit can also name an explicit
+and, in fast Design, an emission materialise could not apply, from zero to three. It
+counts repairs after the first implementation, so one permits at most two
+implementations. The required Design `check` runs where the run works, in its
+worktree or its artifact directory, as a command bounded by `check_timeout_s`
+rather than by memory, as every check is (see [models](models.md)). Create/Edit can also name an explicit
 `check`; an empty check is reported as not requested, not passed. Focused QA asks
 the worker to inspect the emitted or changed files, requested behavior and relevant
 regressions, using the actual command result already supplied. It records evidence

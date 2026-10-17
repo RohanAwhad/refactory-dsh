@@ -110,7 +110,8 @@ An operation is a plain function of the run context:
 The context offers `ctx.knob(name, default)`, `ctx.read_json(name, default)`,
 `ctx.write_json(name, payload)`, `ctx.write_text`, `ctx.append_text`,
 `ctx.read_text`, `ctx.exists`, `ctx.set_fact(name, value)`, `ctx.facts`,
-`ctx.workdir`, `ctx.iteration` and `ctx.model`.
+`ctx.task` (what the run was started with), `ctx.workdir`, `ctx.iteration` and
+`ctx.model`.
 
 A gate is an operation that returns its verdict: one of its out-edges' conditions.
 When it sends the run back, return the verdict as `nn.Verdict(label, reason)`, so
@@ -122,6 +123,18 @@ the reason on its next pass reads it from a fact or file the gate writes:
         if value >= 3:
             return "proceed"
         return nn.Verdict("retry", f"value {value} is below 3")
+
+A mode whose agent changes code in a repository takes `refactory_dsh.repo_change`'s
+steps rather than writing into the repository itself: declare `**repo_change.knobs()`;
+list `*repo_change.knob_names()` and `*repo_change.produces()` on the prepare node and
+return `repo_change.locate(ctx, name, ctx.task)`'s facts from its operation; name the
+agent node that writes `emit.txt` `emit` and put `{{emit_scope}}` in its prompt; add `repo_change.materialise_node()`; in the check gate, send
+`repo_change.refused(ctx)` back to `emit` and run the check with
+`repo_change.run_check(ctx, command, timeout)`, declaring `*repo_change.CHECK_WRITES` and
+`*repo_change.CHECK_PRODUCES` on that gate; call `repo_change.report(ctx, name, payload)`,
+which writes the report file `name`, from the report operation; and add
+`"refactory_dsh.repo_change"` to `PACKAGE.ops`.
+`refactory_packages.fix_pack` is a complete example.
 
 Generated packages live under `.factory/packages/<name>/` and are imported as
 `refactory_packages.<name>`. Use that qualified namespace for `call`, `evaluator`

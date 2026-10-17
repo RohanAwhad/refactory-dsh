@@ -657,6 +657,37 @@ design-v2: a brief in, a checked software artifact out.
 - **`main`** — ``python -m refactory_dsh.design --name <n> --brief <text> --check <cmd>``.
 
 
+<a id="refactory_dsh-repo_change"></a>
+
+## `refactory_dsh.repo_change`
+
+The steps a mode uses to change a repository: where it works, what lands, how it is checked.
+
+| kind | name | signature |
+|---|---|---|
+| function | `knob_names` | `() -> 'tuple[str, ...]'` |
+| function | `knobs` | `() -> 'dict[str, Knob]'` |
+| function | `locate` | `(ctx: 'Any', name: 'str', task: 'dict[str, Any]', *, in_worktree: 'bool \| None' = None, needs_worktree: 'tuple[str, ...]' = ()) -> 'dict[str, Any]'` |
+| function | `materialise` | `(ctx: 'Any', *, source: 'Path \| None' = None, files: 'tuple[str, ...]' = ()) -> 'dict[str, Any]'` |
+| function | `materialise_node` | `(**fields: 'Any') -> 'Node'` |
+| function | `produces` | `() -> 'tuple[str, ...]'` |
+| function | `refused` | `(ctx: 'Any') -> 'str'` |
+| function | `report` | `(ctx: 'Any', name: 'str', payload: 'dict[str, Any]') -> 'dict[str, Any]'` |
+| function | `run_check` | `(ctx: 'Any', command: 'str', timeout: 'float') -> 'Any'` |
+| function | `wants_worktree` | `(ctx: 'Any') -> 'bool'` |
+
+- **`knob_names`** — The knobs `knobs` declares, for the prepare node's ``knobs``.
+- **`knobs`** — The knobs that say where a run works.
+- **`locate`** — Where the run works, as facts for the mode's prepare op to return.
+- **`materialise`** — Make the emitted files the run's artifact: a commit in its worktree, when it has one.
+- **`materialise_node`** — The op that applies ``emit.txt`` as the run's next attempt (`materialise`).
+- **`produces`** — The facts `locate` returns, for the prepare node's ``produces``.
+- **`refused`** — Why `materialise` could not apply the last ``emit.txt``; empty when it did.
+- **`report`** — Settle the run's place, write the mode's report ``name`` from ``payload``, and return it.
+- **`run_check`** — Run ``command`` where the run works, and return its `sandbox.SandboxResult`.
+- **`wants_worktree`** — Whether the run's ``worktree`` knob asks for a worktree, as it does unless turned off.
+
+
 <a id="refactory_dsh-observe"></a>
 
 ## `refactory_dsh.observe`

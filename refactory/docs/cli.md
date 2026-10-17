@@ -29,11 +29,11 @@ its legacy `task_ref` field is populated when there is exactly one distinct Task
 | `--name <name>` | the package or artifact name; without it your words become the name. |
 | `--check "<command>"` | run in the Design run's worktree, or its artifact directory; fast Create/Edit also accept a focused package check. Failures enter the bounded repair path. |
 | `--repair-attempts <n>` | fast authoring repairs after the first implementation, from 0 to 3 (default 1). |
-| `--source-project <dir>` | fast Design: copy an existing project into the output artifact before applying a change. |
-| `--target <repo>` | Design: the git repository to change, given by its root. The run works in a worktree of it on its own branch, `refactory/run-<id>`, and your checkout is left as it is. Without it, the run starts a new project in `~/refactory-projects/<name>`. |
-| `--base <rev>` | Design: the commit, branch or tag to start from (default: the target's HEAD, or a new project's `main`). |
-| `--setup "<command>"` | Design: run in the worktree before each check, for example a build. |
-| `--no-worktree` | Design: write the artifact under `.factory/artifacts/<name>` instead of a worktree. |
+| `--source-project <dir>` | fast Design: copy an existing directory into the artifact directory and apply the change there, instead of working in a worktree; it takes no `--target`, `--base` or `--setup`. |
+| `--target <repo>` | Design and fast Design: the git repository to change, given by its root. The run works in a worktree of it on its own branch, `refactory/run-<id>`, and your checkout is left as it is. Without it, the run starts a new project in `~/refactory-projects/<name>`. |
+| `--base <rev>` | Design and fast Design: the commit, branch or tag to start from (default: the target's HEAD, or a new project's `main`). |
+| `--setup "<command>"` | Design and fast Design: run in the worktree before each check, for example a build. |
+| `--no-worktree` | Design and fast Design: write the artifact under `.factory/artifacts/<name>` instead of a worktree. |
 | `--no-pr` | Design: keep the work on the run's local branch. Without it, a run whose reviews pass opens a pull request: into the target's branch its base came from on GitHub (`--base <branch>`, or the checkout's upstream; otherwise the default branch), or, for a new project, in a GitHub repository created for it then, private and under your gh account (`--knob repo_owner=<account>` and `--knob repo_visibility=public` change that). The approval gate shows which, in its question and in `delivery.md`; a run whose gate you answer up front with `--approve` says it when it starts, as `refactory: delivery — …`, and keeps to it. |
 | `--refine <PR>` | Design: follow up an open pull request, given by its URL or `owner/repo#number`, with what you want changed as the brief. The run starts from the pull request's branch in a worktree of its own, goes through the full review, and pushes onto that branch, fast-forward only. It pushes nothing if the branch moved meanwhile, and never changes the pull request's title or description. Without `--target`, the clone to work in is found among `refactory projects`. |
 | `--review-comments` | Design, with `--refine`: add the pull request's reviews and comments to the run's steering. |
@@ -54,6 +54,9 @@ its legacy `task_ref` field is populated when there is exactly one distinct Task
 | `--timeout <seconds>` | bound the interactive graph process, including authoring; 0 supplies no separate wait limit. An explicit shared elapsed allocation can impose a shorter deadline. |
 
 Fast Create and Design use one strategist, coder and QA agent sequentially. Fast
+Design works where Design works, but has no approval gate, so it opens no pull
+request and takes none of `--no-pr`, `--refine` or `--review-comments`: its work
+stays on the run's branch, which its report names. Fast
 Edit starts with the coder and retains source-contract checks. Canonical smoke precedes QA; repairable failures share the repair bound. `allow_regression=true` skips original execution and comparison, retaining revised-mode validation and provenance; false remains the default.
 The CLI passes `--check` through the same declared `check` knob exposed in the
 native form; use `--knob check_timeout_s=45` to bound that command separately.

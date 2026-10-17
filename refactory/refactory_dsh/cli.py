@@ -53,6 +53,10 @@ PACKAGE_VERBS: tuple[str, ...] = (
     "list", "show", "verify", "smoke", "tools", "add", "import", "remove", "enable", "disable",
 )
 
+#: The flags that say how a design run is delivered (#350). design_fast, which has no
+#: approval gate, takes none of them.
+DELIVERY_FLAGS: tuple[str, ...] = ("--no-pr", "--refine", "--review-comments")
+
 
 def slug(text: str, *, words: int = 3) -> str:
     """A name for what was asked for, when the asker did not give one."""
@@ -109,8 +113,8 @@ def _run_argv(identifier: str, args: argparse.Namespace) -> list[str]:
     return forwarded
 
 
-def _worktree_knobs(args: argparse.Namespace) -> list[str]:
-    """`--target`, `--base`, `--no-worktree`, `--setup` and how the run is delivered, as design mode's knobs."""
+def _worktree_knobs(args: argparse.Namespace, *, deliver: bool = True) -> list[str]:
+    """`--target`, `--base`, `--no-worktree`, `--setup` and, with ``deliver``, delivery's, as knobs."""
     knobs = []
     if args.target:
         # Absolute, because the run resolves it from its own directory, not this shell's.
@@ -121,6 +125,8 @@ def _worktree_knobs(args: argparse.Namespace) -> list[str]:
         knobs.append("worktree=0")
     if args.setup:
         knobs.append(f"setup={args.setup}")
+    if not deliver:
+        return knobs
     if args.no_pr:
         knobs.append("pr=0")
     if args.refine:
@@ -214,13 +220,30 @@ def cmd_ceo(args: argparse.Namespace) -> int:
         )
         return 2
 
-    if located and identifier != AUTHORING["design"]:
+    if located and identifier not in (AUTHORING["design"], AUTHORING["design_fast"]):
         print(
-            f"refactory: --mode {mode} does not take {', '.join(located)}: only --mode design works "
-            "in a worktree of its target (design_fast takes --source-project instead)",
+            f"refactory: --mode {mode} does not take {', '.join(located)}: only --mode design and "
+            "design_fast work in a worktree of their target",
             file=sys.stderr,
         )
         return 2
+    if identifier == AUTHORING["design_fast"]:
+        delivered = [flag for flag in located if flag in DELIVERY_FLAGS]
+        if delivered:
+            print(
+                f"refactory: --mode {mode} does not take {', '.join(delivered)}: it has no approval "
+                "gate, so it opens no pull request, and its work stays on the run's branch",
+                file=sys.stderr,
+            )
+            return 2
+        placed = [flag for flag in located if flag in ("--target", "--base", "--setup")]
+        if args.source_project and placed:
+            print(
+                f"refactory: --source-project cannot take {', '.join(placed)}: it copies a directory "
+                "into the artifact, and they place the run in a worktree of a repository instead",
+                file=sys.stderr,
+            )
+            return 2
 
     knobs = [f"brief={target}", f"name={args.name or slug(target)}"]
     if authoring == "create" and not args.revise:
@@ -242,8 +265,8 @@ def cmd_ceo(args: argparse.Namespace) -> int:
         knobs.append(f"repair_attempts={args.repair_attempts}")
     if getattr(args, "source_project", ""):
         knobs.append(f"source_project={args.source_project}")
-    if identifier == AUTHORING["design"]:
-        knobs.extend(_worktree_knobs(args))
+    if identifier in (AUTHORING["design"], AUTHORING["design_fast"]):
+        knobs.extend(_worktree_knobs(args, deliver=identifier == AUTHORING["design"]))
     if args.revise:
         knobs.append(f"revision_of={args.revise}")
     # Last, so a person's own setting wins over the one derived from the flags above.
@@ -502,15 +525,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ceo.add_argument("--workdir", default="", help="the run directory")
     ceo.add_argument("--repair-attempts", type=int, default=None)
-    ceo.add_argument("--source-project", default="")
+    ceo.add_argument("--source-project", default="",
+                     help="design_fast only: copy this directory into the artifact directory and apply "
+                          "the change there, instead of working in a worktree")
     ceo.add_argument("--target", default="", metavar="REPO",
-                     help="design only: the git repository to change; the run works in a worktree "
-                          "of it on its own branch (default: a new project in ~/refactory-projects)")
-    ceo.add_argument("--base", default="", help="design only: the commit, branch or tag to start from")
+                     help="design and design_fast: the git repository to change; the run works in a "
+                          "worktree of it on its own branch (default: a new project in ~/refactory-projects)")
+    ceo.add_argument("--base", default="",
+                     help="design and design_fast: the commit, branch or tag to start from")
     ceo.add_argument("--no-worktree", action="store_true",
-                     help="design only: write the artifact under .factory/artifacts instead of a worktree")
+                     help="design and design_fast: write the artifact under .factory/artifacts instead "
+                          "of a worktree")
     ceo.add_argument("--setup", default="",
-                     help="design only: a command run in the worktree before each check, such as a build")
+                     help="design and design_fast: a command run in the worktree before each check, "
+                          "such as a build")
     ceo.add_argument("--no-pr", action="store_true",
                      help="design only: keep the work on the run's local branch instead of opening a pull "
                           "request once the reviews pass")

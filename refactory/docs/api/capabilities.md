@@ -4316,6 +4316,15 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
         "what": "rename the --json flag to --format json, as the review asked"
       },
       "explanation": "Follow up an open pull request: a new run starts from its branch, goes through the full review, and pushes onto that branch, fast-forward only, leaving its title and description alone."
+    },
+    {
+      "arguments": {
+        "check": "python -m pytest -q",
+        "mode": "design_fast",
+        "target": "/path/to/repository",
+        "what": "add a --json flag to the report command"
+      },
+      "explanation": "The same change with one strategist, coder and focused QA agent: it works in a worktree of the repository on its own branch, as design does, but has no approval gate, so it opens no pull request and takes no --no-pr, --refine or --review-comments; its work stays on the run's branch, which its report names."
     }
   ],
   "interfaces": {
@@ -4326,7 +4335,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
   "parameters": {
     "base": {
       "default": "",
-      "description": "design only: the commit, branch or tag to start from",
+      "description": "design and design_fast: the commit, branch or tag to start from",
       "flags": [
         "--base"
       ],
@@ -4461,7 +4470,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     },
     "no_worktree": {
       "default": false,
-      "description": "design only: write the artifact under .factory/artifacts instead of a worktree",
+      "description": "design and design_fast: write the artifact under .factory/artifacts instead of a worktree",
       "flags": [
         "--no-worktree"
       ],
@@ -4538,7 +4547,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     },
     "setup": {
       "default": "",
-      "description": "design only: a command run in the worktree before each check, such as a build",
+      "description": "design and design_fast: a command run in the worktree before each check, such as a build",
       "flags": [
         "--setup"
       ],
@@ -4588,7 +4597,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     },
     "source_project": {
       "default": "",
-      "description": "",
+      "description": "design_fast only: copy this directory into the artifact directory and apply the change there, instead of working in a worktree",
       "flags": [
         "--source-project"
       ],
@@ -4599,7 +4608,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     },
     "target": {
       "default": "",
-      "description": "design only: the git repository to change; the run works in a worktree of it on its own branch (default: a new project in ~/refactory-projects)",
+      "description": "design and design_fast: the git repository to change; the run works in a worktree of it on its own branch (default: a new project in ~/refactory-projects)",
       "flags": [
         "--target"
       ],
@@ -4700,7 +4709,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     }
   },
   "purpose": "Run a named mode or author a package/artifact from a brief in the terminal; worker file defaults apply at preparation. CEO conversation and graph worker routes are distinct.",
-  "reviewed_schema": "7facc6fc5c6b3490ebacdf4e3b69b1ba5f341a0aca3d8627aeba2d6fdc6f7ecb"
+  "reviewed_schema": "f5ba8c57638462354ae4fe3174085ac5d8506889e34d830eeb893a8f17cb7f7f"
 }
 ```
 
@@ -7460,7 +7469,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "role": "ceo"
     },
     {
-      "call": "refactory_dsh.design_ops:materialise_artifact",
+      "call": "refactory_dsh.repo_change:materialise",
       "id": "materialise",
       "kind": "op",
       "knobs": [],
@@ -7777,14 +7786,14 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local; `refine` updates an open one).",
-    "reviewed_schema": "097fc5d295938eff3f21a71a13471ba892d669c1d0d4c5b015c266bdadd340db"
+    "reviewed_schema": "a58201e57f7189d6c42f80693273770fd0e4b8958b61eac43c191c21605594f9"
   }
 }
 ```
 
 ## default_pack/design_fast
 
-build a small artifact with one sequential strategist, coder and QA agent. Produces a checked software artifact; supply a brief, name and acceptance check.
+Build a small artifact with one sequential strategist, coder and QA agent, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none (`worktree=0` writes .factory/artifacts instead; `source_project` copies a directory there). The check runs in that worktree before focused QA. It has no approval gate, so it opens no pull request: the branch is left for you to push.
 
 ```json
 {
@@ -7807,6 +7816,16 @@ build a small artifact with one sequential strategist, coder and QA agent. Produ
     },
     {
       "condition": "reloop",
+      "source": "gate_emit",
+      "target": "emit"
+    },
+    {
+      "condition": "proceed",
+      "source": "gate_emit",
+      "target": "focused_check"
+    },
+    {
+      "condition": "reloop",
       "source": "gate_qa",
       "target": "emit"
     },
@@ -7818,7 +7837,7 @@ build a small artifact with one sequential strategist, coder and QA agent. Produ
     {
       "condition": null,
       "source": "materialise",
-      "target": "focused_check"
+      "target": "gate_emit"
     },
     {
       "condition": null,
@@ -7832,6 +7851,10 @@ build a small artifact with one sequential strategist, coder and QA agent. Produ
     }
   ],
   "gates": [
+    {
+      "id": "gate_emit",
+      "user": false
+    },
     {
       "id": "gate_qa",
       "user": false
@@ -7868,6 +7891,17 @@ build a small artifact with one sequential strategist, coder and QA agent. Produ
       "role": "code_reviewer"
     },
     {
+      "call": "refactory_dsh.fast_ops:gate_emit",
+      "gate_kind": "fn",
+      "id": "gate_emit",
+      "kind": "gate",
+      "knobs": [
+        "repair_attempts"
+      ],
+      "notes": "send an emission materialise could not apply back to emit, within the repair bound",
+      "role": "ceo"
+    },
+    {
       "call": "refactory_dsh.fast_ops:gate_qa",
       "gate_kind": "fn",
       "id": "gate_qa",
@@ -7883,7 +7917,7 @@ build a small artifact with one sequential strategist, coder and QA agent. Produ
       "id": "materialise",
       "kind": "op",
       "knobs": [],
-      "notes": "copy the source and apply emitted files to the separate output artifact",
+      "notes": "commit the emitted files on the run's branch, or write the artifact directory: a copy of source_project, when there is one",
       "role": "ceo"
     },
     {
@@ -7894,9 +7928,13 @@ build a small artifact with one sequential strategist, coder and QA agent. Produ
         "name",
         "brief",
         "check",
-        "source_project"
+        "source_project",
+        "target",
+        "base",
+        "worktree",
+        "setup"
       ],
-      "notes": "read the artifact brief and capture the source project identity",
+      "notes": "read the artifact brief, and say where the run works",
       "role": "ceo"
     },
     {
@@ -7917,6 +7955,18 @@ build a small artifact with one sequential strategist, coder and QA agent. Produ
     }
   ],
   "parameters": {
+    "base": {
+      "default": "",
+      "description": "the commit, branch or tag the run starts from (default: the target's HEAD, or a new project's main)",
+      "frozen": true,
+      "kind": "str",
+      "range": [
+        null,
+        null
+      ],
+      "value": "",
+      "values": []
+    },
     "brief": {
       "default": "",
       "description": "what to build, in the asker's words",
@@ -7967,7 +8017,7 @@ build a small artifact with one sequential strategist, coder and QA agent. Produ
     },
     "repair_attempts": {
       "default": 1,
-      "description": "total repair attempts after focused QA",
+      "description": "total repairs, for an emission materialise could not apply, a failed check or focused QA",
       "frozen": false,
       "kind": "int",
       "range": [
@@ -7977,9 +8027,21 @@ build a small artifact with one sequential strategist, coder and QA agent. Produ
       "value": 1,
       "values": []
     },
+    "setup": {
+      "default": "",
+      "description": "a command run in the worktree before each check, after its dependencies are installed, such as a build",
+      "frozen": true,
+      "kind": "str",
+      "range": [
+        null,
+        null
+      ],
+      "value": "",
+      "values": []
+    },
     "source_project": {
       "default": "",
-      "description": "existing project copied into the output artifact before applying the change",
+      "description": "an existing directory copied into the artifact directory before the change is applied, instead of a worktree; it takes no target, base or setup",
       "frozen": false,
       "kind": "str",
       "range": [
@@ -7987,6 +8049,30 @@ build a small artifact with one sequential strategist, coder and QA agent. Produ
         null
       ],
       "value": "",
+      "values": []
+    },
+    "target": {
+      "default": "",
+      "description": "the git repository to change; empty starts a new project in the projects folder",
+      "frozen": true,
+      "kind": "str",
+      "range": [
+        null,
+        null
+      ],
+      "value": "",
+      "values": []
+    },
+    "worktree": {
+      "default": true,
+      "description": "work in a worktree of the target on the run's own branch; off writes the artifact under .factory/artifacts instead",
+      "frozen": true,
+      "kind": "bool",
+      "range": [
+        null,
+        null
+      ],
+      "value": true,
       "values": []
     }
   },
@@ -8002,6 +8088,15 @@ build a small artifact with one sequential strategist, coder and QA agent. Produ
           "check": "test -s hello.txt",
           "name": "tiny_example"
         }
+      },
+      {
+        "explanation": "Change an existing repository on a branch of its own, in a worktree of it; the checkout at /path/to/repository is left as it is, and the branch is not pushed.",
+        "knobs": {
+          "brief": "Add a --json flag to the report command",
+          "check": "python -m pytest -q",
+          "name": "report_json",
+          "target": "/path/to/repository"
+        }
       }
     ],
     "interfaces": {
@@ -8009,8 +8104,8 @@ build a small artifact with one sequential strategist, coder and QA agent. Produ
       "cli": "refactory ceo default_pack/design_fast",
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
-    "purpose": "build a small artifact with one sequential strategist, coder and QA agent. Produces a checked software artifact; supply a brief, name and acceptance check.",
-    "reviewed_schema": "da2a471f0e1bc360bbdb1231712eb53b16da0ee5ddbff053358138e7d5aeacfb"
+    "purpose": "Build a small artifact with one sequential strategist, coder and QA agent, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none (`worktree=0` writes .factory/artifacts instead; `source_project` copies a directory there). The check runs in that worktree before focused QA. It has no approval gate, so it opens no pull request: the branch is left for you to push.",
+    "reviewed_schema": "b13b257a2450ab2809c58eeb0e3ee98bbd68dff66d04f87b5457cd9298aff638"
   }
 }
 ```
@@ -8991,6 +9086,237 @@ Revise a small mode package with a coder and focused QA after canonical validati
     },
     "purpose": "Revise a small mode package with a coder and focused QA after canonical validation. Supply revision_of, name and brief. allow_regression=true skips original execution/comparison but still requires revised validation and intent evidence.",
     "reviewed_schema": "f87d2ec83e6c8b2fc7c318b4119429dfe80f0c2ef84aee04da57b12fb79cb8a1"
+  }
+}
+```
+
+## fix_pack/make_pass
+
+Change a repository until a failing check passes, on a branch of its own, through the steps any mode that changes a repository attaches (`repo_change`): the example mode authors copy. It opens no pull request; unscored, so not an optimization target.
+
+```json
+{
+  "description": "change a repository until a failing check passes, on a branch of its own",
+  "edges": [
+    {
+      "condition": "reloop",
+      "source": "check",
+      "target": "emit"
+    },
+    {
+      "condition": "proceed",
+      "source": "check",
+      "target": "report"
+    },
+    {
+      "condition": null,
+      "source": "emit",
+      "target": "materialise"
+    },
+    {
+      "condition": null,
+      "source": "materialise",
+      "target": "check"
+    },
+    {
+      "condition": null,
+      "source": "prepare",
+      "target": "emit"
+    }
+  ],
+  "gates": [
+    {
+      "id": "check",
+      "user": false
+    }
+  ],
+  "guidance": "",
+  "id": "fix_pack/make_pass",
+  "nodes": [
+    {
+      "call": "refactory_packages.fix_pack.ops:check",
+      "gate_kind": "fn",
+      "id": "check",
+      "kind": "gate",
+      "knobs": [
+        "attempts",
+        "check_timeout_s"
+      ],
+      "notes": "run the check where the run works; reloop with what it said until it passes",
+      "role": "ceo"
+    },
+    {
+      "call": "",
+      "id": "emit",
+      "kind": "agent",
+      "knobs": [],
+      "notes": "write the fix as blocks in emit.txt",
+      "role": "ceo"
+    },
+    {
+      "call": "refactory_dsh.repo_change:materialise",
+      "id": "materialise",
+      "kind": "op",
+      "knobs": [],
+      "notes": "commit the emitted files on the run's branch, or write the artifact directory",
+      "role": "ceo"
+    },
+    {
+      "call": "refactory_packages.fix_pack.ops:prepare",
+      "id": "prepare",
+      "kind": "op",
+      "knobs": [
+        "name",
+        "brief",
+        "check",
+        "target",
+        "base",
+        "worktree",
+        "setup"
+      ],
+      "notes": "read the check, and give the run its worktree",
+      "role": "ceo"
+    },
+    {
+      "call": "refactory_packages.fix_pack.ops:report",
+      "id": "report",
+      "kind": "op",
+      "knobs": [],
+      "notes": "say which branch holds the fix",
+      "role": "ceo"
+    }
+  ],
+  "parameters": {
+    "attempts": {
+      "default": 3,
+      "description": "how many fixes may be tried",
+      "frozen": false,
+      "kind": "int",
+      "range": [
+        1,
+        5
+      ],
+      "value": 3,
+      "values": []
+    },
+    "base": {
+      "default": "",
+      "description": "the commit, branch or tag the run starts from (default: the target's HEAD, or a new project's main)",
+      "frozen": true,
+      "kind": "str",
+      "range": [
+        null,
+        null
+      ],
+      "value": "",
+      "values": []
+    },
+    "brief": {
+      "default": "",
+      "description": "what the fix should do, if the check does not say",
+      "frozen": true,
+      "kind": "str",
+      "range": [
+        null,
+        null
+      ],
+      "value": "",
+      "values": []
+    },
+    "check": {
+      "default": "",
+      "description": "the command to make pass",
+      "frozen": true,
+      "kind": "str",
+      "range": [
+        null,
+        null
+      ],
+      "value": "",
+      "values": []
+    },
+    "check_timeout_s": {
+      "default": 300,
+      "description": "seconds the check may take",
+      "frozen": false,
+      "kind": "int",
+      "range": [
+        10,
+        3600
+      ],
+      "value": 300,
+      "values": []
+    },
+    "name": {
+      "default": "",
+      "description": "what the run is called; a new project is named after it",
+      "frozen": true,
+      "kind": "str",
+      "range": [
+        null,
+        null
+      ],
+      "value": "",
+      "values": []
+    },
+    "setup": {
+      "default": "",
+      "description": "a command run in the worktree before each check, after its dependencies are installed, such as a build",
+      "frozen": true,
+      "kind": "str",
+      "range": [
+        null,
+        null
+      ],
+      "value": "",
+      "values": []
+    },
+    "target": {
+      "default": "",
+      "description": "the git repository to change; empty starts a new project in the projects folder",
+      "frozen": true,
+      "kind": "str",
+      "range": [
+        null,
+        null
+      ],
+      "value": "",
+      "values": []
+    },
+    "worktree": {
+      "default": true,
+      "description": "work in a worktree of the target on the run's own branch; off writes the artifact under .factory/artifacts instead",
+      "frozen": true,
+      "kind": "bool",
+      "range": [
+        null,
+        null
+      ],
+      "value": true,
+      "values": []
+    }
+  },
+  "ports": [],
+  "scored": false,
+  "usage": {
+    "doc": "refactory/docs/tutorials/01-write-a-mode.md",
+    "examples": [
+      {
+        "explanation": "Make a failing check pass in an existing repository: each fix is a commit on the run's own branch in a worktree of it, retried with what the check said, and the checkout is left as it is.",
+        "knobs": {
+          "check": "python -m pytest -q",
+          "name": "fix_tests",
+          "target": "/path/to/repository"
+        }
+      }
+    ],
+    "interfaces": {
+      "chat": "wf_open mode=fix_pack/make_pass; use refactory help topic=fix_pack/make_pass first",
+      "cli": "refactory ceo fix_pack/make_pass",
+      "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
+    },
+    "purpose": "Change a repository until a failing check passes, on a branch of its own, through the steps any mode that changes a repository attaches (`repo_change`): the example mode authors copy. It opens no pull request; unscored, so not an optimization target.",
+    "reviewed_schema": "5874d9a8fb9aff131b6c0e935692bae99b8c9133b892652b06f37b6c083b62ea"
   }
 }
 ```

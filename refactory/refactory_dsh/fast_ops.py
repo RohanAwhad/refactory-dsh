@@ -6,11 +6,10 @@ import hashlib
 import json
 from pathlib import Path
 import re
-import shutil
-import tempfile
 from typing import Any
 
-from refactory_dsh import create_ops, design_ops, sandbox, target_guard, authoring_evidence as evidence
+from refactory_dsh import create_ops, design_ops, repo_change, sandbox, worktree
+from refactory_dsh import authoring_evidence as evidence
 from refactory_dsh.nn import Verdict
 
 #: A fast mode runs no full review gate or overwatch, so the prompts that show those
@@ -19,6 +18,15 @@ FAST_UNREFUSED = {
     "qa_gate": "(fast mode runs no full review gate)",
     "overwatch_review": "(fast mode runs no overwatch audit)",
 }
+
+#: Where emit writes when the run copies ``source_project``: the copy is kept as it is,
+#: and only the files the change adds or rewrites are written.
+COPY_SCOPE = (
+    "Paths are relative to the artifact's own directory, which starts as a copy of {source} "
+    "(read it there; never write to it). Write only the files this change adds or rewrites, "
+    "each as a block introduced by a line of exactly ===FILE: <relative path>=== followed by "
+    "its full contents; the rest of the copy is kept as it is. The copy holds: {files}"
+)
 
 
 def prepare_package(ctx: Any) -> dict[str, Any]:
@@ -54,62 +62,50 @@ def _source_manifest(root: Path) -> dict[str, str]:
 
 
 def prepare_artifact(ctx: Any) -> dict[str, Any]:
-    # Fast design keeps copying `source_project` until it moves onto worktrees (#351).
-    prepared = design_ops.prepare_design(ctx, worktrees=False)
-    ctx.write_text("repair.txt", "(initial implementation; no repair requested)\n")
-    source = str(getattr(ctx, "task", {}).get("source_project") or ctx.knob("source_project", "") or "").strip()
+    """design's prepare, without delivery: fast mode has no approval gate to show one at.
+
+    With ``source_project`` the run copies that directory rather than working in a
+    worktree (`materialise_artifact`), so it takes none of the knobs that place one.
+    """
+    task = dict(getattr(ctx, "task", {}) or {})
+    source = str(task.get("source_project") or ctx.knob("source_project", "") or "").strip()
     manifest: dict[str, str] = {}
     if source:
+        given = [knob for knob in ("target", "base", "setup")
+                 if str(task.get(knob) or ctx.knob(knob, "") or "").strip()]
+        if given:
+            raise ValueError(f"source_project copies a directory into the artifact, and {', '.join(given)} "
+                             "place the run in a worktree of a repository instead; pass one or the other")
         root = Path(source).expanduser().resolve()
         if not root.is_dir():
             raise ValueError("source_project must be an existing directory")
         source = str(root)
         manifest = _source_manifest(root)
+    prepared = design_ops.prepare_design(ctx, deliver=False, in_worktree=False if source else None)
+    if source:
+        prepared.update(source=source,
+                        emit_scope=COPY_SCOPE.format(source=source, files=json.dumps(sorted(manifest))))
+    ctx.write_text("repair.txt", "(initial implementation; no repair requested)\n")
     ctx.write_json("source-manifest.json", {"source_project": source, "files": manifest})
     return {**prepared, "source_project": source, "source_files": json.dumps(sorted(manifest)),
             **FAST_UNREFUSED, "repair_feedback": "(initial implementation)", "repairs_used": 0}
 
 
 def materialise_artifact(ctx: Any) -> dict[str, Any]:
+    """`repo_change.materialise`; with ``source_project``, onto a copy of it."""
     source = str(ctx.facts.get("source_project") or "")
     if not source:
-        return design_ops.materialise_directory(ctx)
-    root = Path(source)
+        return repo_change.materialise(ctx)
     expected = ctx.read_json("source-manifest.json", {}).get("files", {})
-    if _source_manifest(root) != expected:
+    if _source_manifest(Path(source)) != expected:
         raise ValueError("source project changed; restart preparation to invalidate dependent results")
-    checked, _, _ = design_ops._emitted(ctx.read_text("emit.txt"), edits=False)
-    output = design_ops._artifact_root(str(ctx.facts["name"]))
-    design_ops._claim(str(ctx.facts["name"]), ctx.workdir)
-    target_guard.warn_if_moved(ctx.workdir)
-    if output == root or output in root.parents:
-        raise ValueError("output artifact may not replace the source project")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    temporary = Path(tempfile.mkdtemp(prefix=".design-fast-", dir=output.parent))
-    stage = temporary / "artifact"
-    backup = temporary / "previous"
-    try:
-        stage.mkdir()
-        for relative in expected:
-            target = stage / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(root / relative, target)
-        for relative, content in checked.items():
-            target = stage / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content)
-        if output.exists():
-            output.rename(backup)
-        try:
-            stage.rename(output)
-        except BaseException:
-            if backup.exists():
-                backup.rename(output)
-            raise
-    finally:
-        if not backup.exists() or output.exists():
-            shutil.rmtree(temporary)
-    return {"artifact": str(output), "files": sorted(set(expected) | {str(path) for path in checked})}
+    return repo_change.materialise(ctx, source=Path(source), files=tuple(sorted(expected)))
+
+
+def _checked_files(root: Path) -> dict[str, str]:
+    """What focused QA is bound to: a run worktree's committed attempt, which is what its
+    branch delivers, or every file of a package or artifact directory."""
+    return evidence.source_files(root) if worktree.is_run_worktree(root) else _source_manifest(root)
 
 
 def _report(ctx: Any, status: str, findings: list[str]) -> dict[str, Any]:
@@ -137,6 +133,14 @@ def _repair(ctx: Any, findings: list[str]) -> str:
     ctx.set_fact("repairs_used", used + 1)
     ctx.write_json("fast-report.json", _report(ctx, "repairing", findings))
     return Verdict("reloop", feedback)
+
+
+def gate_emit(ctx: Any) -> str:
+    """Send an emission materialise could not apply back to emit, within the repair bound (#330 E5)."""
+    refused = repo_change.refused(ctx)
+    if not refused:
+        return "proceed"
+    return _repair(ctx, [f"materialise could not apply emit.txt, so nothing was checked: {refused}"])
 
 
 def validate_package(ctx: Any) -> str:
@@ -168,15 +172,24 @@ def focused_check(ctx: Any) -> dict[str, Any]:
             remaining = budget.remaining_s()
             if remaining is not None:
                 timeout = min(timeout, remaining)
-        result = sandbox.run_command(command, workdir=Path(output), timeout_s=timeout, budget=budget)
+        if ctx.facts.get("artifact"):
+            # Where design checks: the run's worktree, in its own environment, or the
+            # artifact directory.
+            result = repo_change.run_check(ctx, command, timeout)
+        else:
+            result = sandbox.run_command(command, workdir=Path(output), timeout_s=timeout, budget=budget)
         payload.update(status="pass" if result.ok else "fail", returncode=result.returncode,
                        stdout=result.stdout, stderr=result.stderr, timed_out=result.timed_out,
                        elapsed_s=result.elapsed_s)
         if budget is not None:
             budget.checkpoint()
-    # Bind the check and later QA verdict to these exact materialized files.
-    review_files = sorted(create_ops.parse_files(ctx.read_text("emit.txt")))
-    ctx.write_json("focused-source.json", {"root": output, "files": _source_manifest(Path(output)),
+    # Bind the check and later QA verdict to these exact materialized files: in a worktree,
+    # its committed attempt, and every file its branch changes.
+    if worktree.recorded(ctx.workdir) is not None:
+        review_files = sorted(ctx.facts.get("files") or [])
+    else:
+        review_files = sorted(create_ops.parse_files(ctx.read_text("emit.txt")))
+    ctx.write_json("focused-source.json", {"root": output, "files": _checked_files(Path(output)),
                                           "review_files": review_files})
     ctx.write_json("focused-check.json", payload)
     if payload["status"] == "fail":
@@ -207,7 +220,7 @@ def gate_qa(ctx: Any) -> str:
     output = str(ctx.facts.get("artifact") or ctx.facts.get("package_path") or "")
     try:
         unchanged = (checked_source.get("root") == output and
-                     checked_source.get("files") == _source_manifest(Path(output)))
+                     checked_source.get("files") == _checked_files(Path(output)))
     except (OSError, ValueError):
         unchanged = False
     if not unchanged:
