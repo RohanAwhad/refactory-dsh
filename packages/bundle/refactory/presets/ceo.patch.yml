@@ -209,7 +209,9 @@
               # A subagent the CEO spawns gets the content tools and no shell, so code work
               # stays in refactory's own nodes (#347): the file tools (`write` and `edit`
               # included, since an agent node the CEO dispatches itself writes its output
-              # with them), web research, `skill`, `todo_write`, and the `send_message` a
+              # with them; a `tools/pre-execute` listener in the workflow spine confines
+              # these to the run directory, so a subagent cannot write outside it), web
+              # research, `skill`, `todo_write`, and the `send_message` a
               # continuable child reaches its parent with. It gets nothing that starts a run
               # or an unfiltered child (`workflow`, `ralph`, `refactory`) and none of the
               # CEO's own controls. A name the child cannot inherit fails every subagent

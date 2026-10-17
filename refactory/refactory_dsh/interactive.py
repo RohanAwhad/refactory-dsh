@@ -327,6 +327,27 @@ def run(
         finally:
             if budget is not None:
                 budget.pause()
+        # In headless mode, when the run stopped at a user gate, print the exact
+        # commands a person uses to answer it and resume. Printed once, only here.
+        if headless and code != 0:
+            try:
+                from refactory_dsh import console
+                due_gates = console.gates(workdir)
+                for gate_info in due_gates:
+                    gate_id = gate_info["id"]
+                    prompt = gate_info.get("prompt", "")
+                    verdicts = gate_info.get("verdicts", [])
+                    verdicts_str = ", ".join(verdicts)
+                    print(f"refactory: {gate_id} is waiting for a person.", file=sys.stderr)
+                    if prompt:
+                        for line in prompt.splitlines():
+                            print(f"  {line}", file=sys.stderr)
+                    print(f"  Answer it with one of {verdicts_str} (add --note \"...\" to say why):", file=sys.stderr)
+                    print(f"    refactory steer --run {workdir} --verdict {gate_id}=<verdict>", file=sys.stderr)
+                    print(f"  Then continue the run:", file=sys.stderr)
+                    print(f"    refactory graph-control resume --run {workdir}", file=sys.stderr)
+            except Exception:
+                pass  # best-effort; do not mask the run's own error
         if code == 0:
             summary = run_summary(workdir)
             if summary:

@@ -2,7 +2,7 @@
  * The terminal answerer for a `user` gate: ask, or delegate.
  *
  * These hold the transport's own contract. The spine scopes a recorded verdict to
- * one reviewed visit and replays it through its ledger bridge, so this transport
+ * one reviewed visit and replays it through its own ledger bridge, so this transport
  * never replays history: each request is a fresh question. A non-terminal input
  * asks nobody and delegates so the spine refuses, and at a terminal the person's
  * choice is what is routed back for the spine to record.
@@ -15,10 +15,10 @@ import { GRAPH_STARTUP_SERVICE, type GraphStartupValues } from '../src/startup.t
 import { apply as applyAnswerer } from '../src/answerer.ts'
 
 /** A Context with the user-questions service, a startup value, and the answerer. */
-async function bench(): Promise<{ ctx: Context; dispose: () => Promise<void> }> {
+async function bench(chat = true): Promise<{ ctx: Context; dispose: () => Promise<void> }> {
   const ctx = new Context()
   await ctx.plugin(UserQuestionService)
-  ctx.provide(GRAPH_STARTUP_SERVICE, { workdir: '/run', pythonBin: '/venv/bin' } as GraphStartupValues)
+  ctx.provide(GRAPH_STARTUP_SERVICE, { workdir: '/run', pythonBin: '/venv/bin', chat } as GraphStartupValues)
   applyAnswerer(ctx)
   return { ctx, dispose: async () => { await ctx.fiber.dispose() } }
 }
@@ -64,10 +64,16 @@ describe('graph terminal answerer', () => {
       const first = ctx.userQuestions.ask({ questions: [QUESTION] })
       await new Promise(resolve => setTimeout(resolve, 20))
       terminal.stdin.write('1\n')
+      // Skip note
+      await new Promise(resolve => setTimeout(resolve, 20))
+      terminal.stdin.write('\n')
       expect((await first).answers).toEqual([{ id: 'approve', selected: ['proceed'] }])
       const second = ctx.userQuestions.ask({ questions: [QUESTION] })
       await new Promise(resolve => setTimeout(resolve, 20))
       terminal.stdin.write('2\n')
+      // Skip note
+      await new Promise(resolve => setTimeout(resolve, 20))
+      terminal.stdin.write('\n')
       expect((await second).answers).toEqual([{ id: 'approve', selected: ['halt'] }])
       expect(terminal.written.join('')).toContain('the person approves the draft')
       await dispose()
@@ -90,6 +96,9 @@ describe('graph terminal answerer', () => {
       const asking = ctx.userQuestions.ask({ questions: [QUESTION] })
       await new Promise(resolve => setTimeout(resolve, 20))
       terminal.stdin.write('2\n')
+      // Skip note
+      await new Promise(resolve => setTimeout(resolve, 20))
+      terminal.stdin.write('\n')
       const answer = await asking
       expect(answer.answers).toEqual([{ id: 'approve', selected: ['halt'] }])
       expect(terminal.written.join('')).toContain('the person approves the draft')
@@ -108,6 +117,9 @@ describe('graph terminal answerer', () => {
       terminal.stdin.write('nope\n')
       await new Promise(resolve => setTimeout(resolve, 20))
       terminal.stdin.write('proceed\n')
+      // Skip note
+      await new Promise(resolve => setTimeout(resolve, 20))
+      terminal.stdin.write('\n')
       const answer = await asking
       expect(answer.answers).toEqual([{ id: 'approve', selected: ['proceed'] }])
       expect(terminal.written.join('')).toContain('choose 1-2')
@@ -137,8 +149,70 @@ describe('graph terminal answerer', () => {
       terminal.stdin.write('\n')
       await new Promise(resolve => setTimeout(resolve, 20))
       terminal.stdin.write('looks good\n')
+      // Skip note
+      await new Promise(resolve => setTimeout(resolve, 20))
+      terminal.stdin.write('\n')
       const answer = await asking
       expect(answer.answers).toEqual([{ id: 'note', selected: ['looks good'] }])
+      await dispose()
+    } finally {
+      terminal.restore()
+    }
+  })
+
+  it('delegates when startup.chat is false even if stdin.isTTY is true (headless-at-TTY)', async () => {
+    // Correction C3: headless never asks at a terminal.
+    const terminal = fakeTerminal()
+    try {
+      const { ctx, dispose } = await bench(false)
+      await expect(ctx.userQuestions.ask({ questions: [QUESTION] }))
+        .rejects.toThrow(/no user-questions answerer/)
+      await dispose()
+    } finally {
+      terminal.restore()
+    }
+  })
+
+  it('accepts a multi-line note terminated by a lone dot, preserving blank lines', async () => {
+    const terminal = fakeTerminal()
+    try {
+      const { ctx, dispose } = await bench()
+      const asking = ctx.userQuestions.ask({ questions: [QUESTION] })
+      await new Promise(resolve => setTimeout(resolve, 20))
+      terminal.stdin.write('1\n')
+      // Write multi-line note with a blank line in it
+      await new Promise(resolve => setTimeout(resolve, 20))
+      terminal.stdin.write('first paragraph\n')
+      await new Promise(resolve => setTimeout(resolve, 20))
+      terminal.stdin.write('\n')
+      await new Promise(resolve => setTimeout(resolve, 20))
+      terminal.stdin.write('second paragraph\n')
+      await new Promise(resolve => setTimeout(resolve, 20))
+      terminal.stdin.write('.\n')
+      const answer = await asking
+      expect(answer.answers).toEqual([{
+        id: 'approve',
+        selected: ['proceed'],
+        custom: 'first paragraph\n\nsecond paragraph',
+      }])
+      await dispose()
+    } finally {
+      terminal.restore()
+    }
+  })
+
+  it('skips the note when the person presses Enter immediately', async () => {
+    const terminal = fakeTerminal()
+    try {
+      const { ctx, dispose } = await bench()
+      const asking = ctx.userQuestions.ask({ questions: [QUESTION] })
+      await new Promise(resolve => setTimeout(resolve, 20))
+      terminal.stdin.write('proceed\n')
+      // Press Enter immediately to skip the note
+      await new Promise(resolve => setTimeout(resolve, 20))
+      terminal.stdin.write('\n')
+      const answer = await asking
+      expect(answer.answers).toEqual([{ id: 'approve', selected: ['proceed'] }])
       await dispose()
     } finally {
       terminal.restore()
