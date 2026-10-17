@@ -1538,24 +1538,22 @@ def blocking_findings(text: str) -> list[str]:
         # marker when the finding text is outside the code span, e.g.
         # `BLOCKING:` the CLI crashes.  It is a quoted mention when the full
         # finding is inside the span (`BLOCKING: old text`) or when BLOCKING
-        # appears without a separator (`BLOCKING` finding).  A code span
-        # that contains BLOCKING together with other non-decoration text
-        # (e.g. `- **BLOCKING** x`) is a quotation of an example, not a
-        # finding marker.  Strip only mentions; keep markers so the finding
-        # is counted.
+        # appears without a separator (`BLOCKING` finding).  Strip only
+        # mentions; keep markers so the finding is counted.
         without_mentions = re.sub(r"`BLOCKING[:—–-]\s+\S[^`]*`", "", stripped, flags=re.I)
         without_mentions = re.sub(r"`BLOCKING`(?![*_]*\s*[:—–-])", "", without_mentions, flags=re.I)
-        # A code span quoting an example that contains BLOCKING alongside
-        # other text is a quotation, not a marker.  Spans holding only
-        # (decorated) BLOCKING are kept so the marker rules above apply.
-        without_mentions = re.sub(
-            r"`[^`]*[^*_`\s][^`]*?BLOCKING[^`]*`",
-            "", without_mentions, flags=re.I,
-        )
         if not re.search(r"BLOCKING", without_mentions, re.I):
             continue
-        cleaned = stripped.lstrip("*-+>#` \t")
-        cleaned = re.sub(r"^\d+[.)]\s+", "", cleaned).lstrip("*_` ")
+        cleaned = stripped.lstrip("*-+>#\t ")
+        cleaned = re.sub(r"^\d+[.)]\s+", "", cleaned).lstrip("*_ ")
+        # A line that opens with a code span marks a finding only when the span
+        # holds the marker itself (`BLOCKING`, `BLOCKING:`). A span that quotes
+        # more, as a review quoting an example does (`- **BLOCKING** x`), is a
+        # quotation however its text begins.
+        if cleaned.startswith("`"):
+            if not re.match(r"`BLOCKING(?:[*_]*\s*[:—–-])?`", cleaned, re.I):
+                continue
+            cleaned = cleaned[1:]
         # A numbered finding is still a finding, including when its marker is
         # a heading: "### BLOCKING 1: ..." is not an empty section title.
         cleaned = re.sub(

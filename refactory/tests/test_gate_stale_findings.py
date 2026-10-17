@@ -212,3 +212,17 @@ def test_overwatch_quoted_blocking_example_is_not_a_finding():
     """A code span quoting a test input that contains BLOCKING is not a finding."""
     text = "- `- **BLOCKING** x` tested in existing `test_create.py` via `test_a_bolded_blocking_finding_is_not_invisible_to_the_qa_gate` \u2713\n"
     assert blocking_findings(text) == []
+
+
+def test_reviews_quoting_markers_are_not_findings():
+    """b13a's own code review quoted the inputs it checked, some in double-backtick spans."""
+    text = (
+        "- `` `- **BLOCKING** x` `` \u2192 stripped (the `-` and space are non-decoration"
+        " chars before BLOCKING) \u2713\n"
+        "- `` `BLOCKING` `` \u2192 kept (no non-decoration char before BLOCKING) \u2713\n"
+        "- `` `BLOCKING:` `` \u2192 kept (`:` appears after BLOCKING) \u2713\n"
+        "- `` `**BLOCKING**` `` \u2192 kept (only `*` chars before BLOCKING) \u2713\n"
+        "- `BLOCKING the CLI crashes` was the old marker\n"
+        "- `**BLOCKING** x` is counted\n"
+    )
+    assert blocking_findings(text) == []
