@@ -412,6 +412,112 @@ def test_design_review_gate_accepts_bare_name_citation_to_real_line(tmp_path):
     assert result == "proceed", f"bare-name citation should resolve; got {result!r}"
 
 
+def test_design_review_gate_catches_backticked_citation_past_end(tmp_path):
+    """A backticked `path/to/file.py:99` citation past the file's end is caught."""
+    source = tmp_path / "src"
+    source.mkdir()
+    sub = source / "path" / "to"
+    sub.mkdir(parents=True)
+    (sub / "file.py").write_text("line1\nline2\nline3\n")
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({"source": str(source), "design_review_attempts_used": 0})
+    (tmp_path / "reviews").mkdir(parents=True, exist_ok=True)
+    ctx.write_text("reviews/design-review.md",
+                   "All confirmed.\n\nVERDICT: PASS\n")
+    ctx.write_text("design.md",
+                   "See `path/to/file.py:99` for details.\n")
+    ctx.write_json("brief.json", {"name": "x", "brief": "do a thing"})
+    import refactory_dsh.design_ops as ops
+    verdict = ops.gate_design_review(ctx)
+    assert verdict == "reloop"
+    assert "99" in verdict.reason and "3 lines" in verdict.reason
+
+
+def test_design_review_gate_skips_unresolvable_node_modules_citation(tmp_path):
+    """A citation of node_modules/... that is not there is not a problem."""
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({"source": str(tmp_path), "design_review_attempts_used": 0})
+    (tmp_path / "reviews").mkdir(parents=True, exist_ok=True)
+    ctx.write_text("reviews/design-review.md",
+                   "All confirmed.\n\nVERDICT: PASS\n")
+    ctx.write_text("design.md",
+                   "See node_modules/lodash/index.js:42 for the implementation.\n")
+    ctx.write_json("brief.json", {"name": "x", "brief": "do a thing"})
+    import refactory_dsh.design_ops as ops
+    result = ops.gate_design_review(ctx)
+    assert result == "proceed", f"unresolvable node_modules citation should be skipped; got {result!r}"
+
+
+def test_design_review_gate_skips_ambiguous_bare_name_citation(tmp_path):
+    """A bare name two tracked files share is not checked."""
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "a").mkdir()
+    (source / "b").mkdir()
+    (source / "a" / "index.ts").write_text("line1\n")
+    (source / "b" / "index.ts").write_text("line1\n")
+    import subprocess
+    subprocess.run(["git", "init", "-q"], cwd=str(source), check=True)
+    subprocess.run(["git", "add", "."], cwd=str(source), check=True)
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({"source": str(source), "design_review_attempts_used": 0})
+    (tmp_path / "reviews").mkdir(parents=True, exist_ok=True)
+    ctx.write_text("reviews/design-review.md",
+                   "All confirmed.\n\nVERDICT: PASS\n")
+    # Cite a bare name that matches two tracked files — should be skipped, not checked
+    ctx.write_text("design.md", "See index.ts:999 for the implementation.\n")
+    ctx.write_json("brief.json", {"name": "x", "brief": "do a thing"})
+    import refactory_dsh.design_ops as ops
+    result = ops.gate_design_review(ctx)
+    assert result == "proceed", f"ambiguous bare-name citation should be skipped; got {result!r}"
+
+
+def test_design_review_gate_ignores_code_quote_after_asks_to_change(tmp_path):
+    """"the brief asks to change "do_thing()"" is not a finding."""
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({"source": str(tmp_path), "design_review_attempts_used": 0})
+    (tmp_path / "reviews").mkdir(parents=True, exist_ok=True)
+    ctx.write_text("reviews/design-review.md",
+                   "All confirmed.\n\nVERDICT: PASS\n")
+    ctx.write_text("design.md",
+                   'The brief asks to change "do_thing()" to use async.\n')
+    ctx.write_json("brief.json", {"name": "x", "brief": "refactor the module"})
+    import refactory_dsh.design_ops as ops
+    result = ops.gate_design_review(ctx)
+    assert result == "proceed", f"code quote after 'asks to change' should not be a finding; got {result!r}"
+
+
+def test_design_review_gate_catches_misquote_after_brief_says_comma(tmp_path):
+    """A misquote after "the brief says, " is still caught."""
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({"source": str(tmp_path), "design_review_attempts_used": 0})
+    (tmp_path / "reviews").mkdir(parents=True, exist_ok=True)
+    ctx.write_text("reviews/design-review.md",
+                   "All confirmed.\n\nVERDICT: PASS\n")
+    ctx.write_text("design.md",
+                   'The brief says, "enable fast mode" is required.\n')
+    ctx.write_json("brief.json", {"name": "x", "brief": "make it work correctly"})
+    import refactory_dsh.design_ops as ops
+    verdict = ops.gate_design_review(ctx)
+    assert verdict == "reloop"
+    assert "enable fast mode" in verdict.reason
+
+
+def test_design_review_gate_reloop_findings_do_not_claim_pass(tmp_path):
+    """A relooped review's design_review_findings no longer says it passed."""
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({"source": str(tmp_path), "design_review_attempts_used": 0})
+    (tmp_path / "reviews").mkdir(parents=True, exist_ok=True)
+    ctx.write_text("reviews/design-review.md",
+                   "BLOCKING: the design leaves alternative X open\n\nVERDICT: FAIL\n")
+    ctx.write_text("design.md", "The design.\n")
+    ctx.write_json("brief.json", {"name": "x", "brief": "do a thing"})
+    import refactory_dsh.design_ops as ops
+    verdict = ops.gate_design_review(ctx)
+    assert verdict == "reloop"
+    assert "passed" not in ctx.facts["design_review_findings"]
+
+
 def test_a_design_run_produces_a_checked_artifact():
     """End to end, with a fake model: design, emit, and the check passing."""
     mode = DesignMode()

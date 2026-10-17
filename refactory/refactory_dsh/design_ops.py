@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import re as _re
+from pathlib import Path
 from typing import Any
 
 from refactory_dsh import delivery, repo_change, sandbox, worktree
@@ -107,7 +108,7 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
     return {"name": name, "brief": brief, "check": check, "validation": "(no check has run yet)",
             "research_review": "(no research review has run yet)", "research_scope": research_scope,
             "design_review_feedback": "(no design review has run yet)",
-            "design_review_findings": "(none: the design review passed)",
+            "design_review_findings": "(no findings yet)",
             **UNREFUSED, **located, **planned}
 
 
@@ -118,10 +119,6 @@ def gate_design_review(ctx: Any) -> str:
     gate_strategy with the remaining findings in the design_review_findings
     fact, so the person decides.
     """
-    import re
-    import subprocess
-    from pathlib import Path
-
     from refactory_dsh.create_ops import PASS_MARK, blocking_findings
     from refactory_dsh.nn import Verdict
 
@@ -148,12 +145,9 @@ def gate_design_review(ctx: Any) -> str:
     tracked_files: list[str] = []
     if source:
         try:
-            result = subprocess.run(
-                ["git", "ls-files"], capture_output=True, text=True, cwd=source,
-            )
-            if result.returncode == 0:
-                tracked_files = [f for f in result.stdout.splitlines() if f.strip()]
-        except (FileNotFoundError, OSError):
+            output = worktree.git(Path(source), "ls-files")
+            tracked_files = [f for f in output.splitlines() if f.strip()]
+        except ValueError:
             pass
 
     def _resolve_citation(file_path: str) -> Path | None:
@@ -162,17 +156,18 @@ def gate_design_review(ctx: Any) -> str:
         if full.is_file():
             return full
         # Bare or partial path: find a tracked file whose path ends with it.
+        matches = []
         for tracked in tracked_files:
             if tracked == file_path or tracked.endswith("/" + file_path):
                 candidate = Path(source) / tracked
                 if candidate.is_file():
-                    return candidate
-        return None
+                    matches.append(candidate)
+        return matches[0] if len(matches) == 1 else None
 
     if design_text and source:
         # Match path.ext:N or path.ext:N-M  (the format design_doc is told to use)
-        for match in re.finditer(
-            r'(?<![`\w])([A-Za-z_][\w/._-]*\.\w+):(\d+)(?:-(\d+))?(?!\w)',
+        for match in _re.finditer(
+            r'(?<!\w)([A-Za-z_][\w/._-]*\.\w+):(\d+)(?:-(\d+))?(?!\w)',
             design_text
         ):
             # Skip URLs: a "://" in the 10 chars before the match means this is
@@ -185,10 +180,7 @@ def gate_design_review(ctx: Any) -> str:
             line_num = int(end_s) if end_s else int(start_s)
             resolved = _resolve_citation(file_path)
             if resolved is None:
-                problems.append(
-                    f"citation {match.group(0)!r}: {file_path} does not exist "
-                    f"under {source}"
-                )
+                continue
             else:
                 actual_lines = resolved.read_text().splitlines()
                 if line_num > len(actual_lines):
@@ -208,14 +200,15 @@ def gate_design_review(ctx: Any) -> str:
                 pass
         if brief_text:
             # Collapse whitespace for comparison so wrapped quotes still match.
-            brief_collapsed = re.sub(r'\s+', ' ', brief_text).strip()
-            # 'the brief' followed within ~200 chars by a double-quoted string
-            for match in re.finditer(
-                r'(?i)\bthe brief\b.{0,200}?"([^"]{4,})"',
-                design_text, re.DOTALL
+            brief_collapsed = _re.sub(r'\s+', ' ', brief_text).strip()
+            for match in _re.finditer(
+                r'(?i)(?:\bthe brief\b\s+(?:says|asks|requires|reads)[,:]?\s*'
+                r'|\bthe brief:\s*)'
+                r'"([^"]{4,})"',
+                design_text,
             ):
                 quoted = match.group(1)
-                quoted_collapsed = re.sub(r'\s+', ' ', quoted).strip()
+                quoted_collapsed = _re.sub(r'\s+', ' ', quoted).strip()
                 if quoted_collapsed not in brief_collapsed:
                     problems.append(
                         f"the design attributes {quoted!r} to the brief, but "
@@ -248,7 +241,7 @@ def gate_design_review(ctx: Any) -> str:
     ctx.write_text("reviews/design-review-feedback.txt", report + "\n")
     ctx.set_fact("design_review_feedback", report)
     ctx.set_fact("design_review_findings",
-                 "(none: the design review passed)")
+                 "(no findings yet)")
     return Verdict("reloop", report)
 
 
