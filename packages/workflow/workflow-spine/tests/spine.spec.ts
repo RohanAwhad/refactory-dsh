@@ -598,11 +598,13 @@ describe('incomplete cursor drain', () => {
     second.restore(saved)
     const result = second.next()
     expect(result.status).toBe('done')
-    expect(result.halted).toBeDefined()
-    expect(result.halted!.reason).toBe('incomplete')
-    expect(result.halted!.unreached).toEqual(['b'])
-    // gate field is empty for incomplete — node names live in unreached
-    expect(result.halted!.gate).toBe('')
+    if (result.status === 'done') {
+      expect(result.halted).toBeDefined()
+      expect(result.halted!.reason).toBe('incomplete')
+      expect(result.halted!.unreached).toEqual(['b'])
+      // gate field is empty for incomplete — node names live in unreached
+      expect(result.halted!.gate).toBe('')
+    }
   })
 
   it('finishes done with no halt when one of two alternative sinks is reached', () => {
@@ -625,7 +627,9 @@ describe('incomplete cursor drain', () => {
     spine.complete('b')
     const result = spine.next()
     expect(result.status).toBe('done')
-    expect(result.halted).toBeUndefined()
+    if (result.status === 'done') {
+      expect(result.halted).toBeUndefined()
+    }
   })
 
   it('does not treat fork branch targets as unreached sinks', () => {
@@ -653,7 +657,9 @@ describe('incomplete cursor drain', () => {
     spine.complete('end')
     const result = spine.next()
     expect(result.status).toBe('done')
-    expect(result.halted).toBeUndefined()
+    if (result.status === 'done') {
+      expect(result.halted).toBeUndefined()
+    }
   })
 
   it('skipping the sink counts as reached — done with no halt', () => {
@@ -671,7 +677,9 @@ describe('incomplete cursor drain', () => {
     spine.skip('b')
     const result = spine.next()
     expect(result.status).toBe('done')
-    expect(result.halted).toBeUndefined()
+    if (result.status === 'done') {
+      expect(result.halted).toBeUndefined()
+    }
   })
 })
 
@@ -701,8 +709,11 @@ describe('gate refusal reason persistence', () => {
     spine.complete('emit')
     spine.verdict('check', 'reloop', 'still wrong')
     // count=2, cap=1: 2 > 1 → halts
-    expect(spine.next().status).toBe('done')
-    expect(spine.next().halted?.reason).toBe('max_iterations')
+    const haltResult = spine.next()
+    expect(haltResult.status).toBe('done')
+    if (haltResult.status === 'done') {
+      expect(haltResult.halted?.reason).toBe('max_iterations')
+    }
     // Verify gateReasons in state
     const reasons = (spine.state().gate_reasons as Record<string, { reason: string }>)
     expect(reasons.check?.reason).toBe('still wrong')

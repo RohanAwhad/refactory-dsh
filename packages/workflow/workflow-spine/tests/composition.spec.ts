@@ -16,7 +16,6 @@ import UserQuestionService from '@deepseek-ai/dsh-user-questions'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { afterEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import * as spinePlugin from '../src/index.ts'
-import { Spine } from '../src/spine.ts'
 import type { Config } from '../src/index.ts'
 import type { WorkflowGraph } from '../src/types.ts'
 
@@ -310,7 +309,7 @@ describe('gate reason composition through applyControls', () => {
     expect(halted.status).toBe('done')
     expect(halted.halted?.reason).toBe('max_iterations')
     // Write a checkpoint for the revision
-    const { readFileSync, writeFileSync: wfs, mkdirSync: md, existsSync: exists } = await import('node:fs')
+    const { readFileSync, writeFileSync: wfs, mkdirSync: md } = await import('node:fs')
     const { join, resolve } = await import('node:path')
     const { createHash } = await import('node:crypto')
     const cpBytes = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
