@@ -231,25 +231,23 @@ def finish(workdir: Path, node: str, *, final_response: str | None = None,
     all_changes = fail_changes + warn_changes
     receipt = {key: value for key, value in record.items()
                if key not in ('prompt', 'target')}
-    receipt.update(
-        finished=_now(),
-        status='failed' if missing or fail_changes else 'delivered',
-        delivery='context supplied; semantic compliance not verified',
-        artifacts=after, captured_final=captured,
-        final_response=(str(ROOT / record['id'] / 'final-response.txt')
-                        if final_response is not None else None),
-        missing_or_unchanged=missing,
-        **({'target_changes': all_changes} if all_changes else {}),
-        **({'set_aside': set_aside} if set_aside else {}),
-    )
-    (directory / 'receipt.json').write_text(
-        json.dumps(receipt, indent=2) + '\n')
+    receipt.update(finished=_now(),
+                   status='failed' if missing or fail_changes else 'delivered',
+                   delivery='context supplied; semantic compliance not verified',
+                   artifacts=after, captured_final=captured,
+                   final_response=str(ROOT / record['id'] / 'final-response.txt') if final_response is not None else None,
+                   missing_or_unchanged=missing,
+                   **({'target_changes': all_changes} if all_changes else {}),
+                   **({'set_aside': set_aside} if set_aside else {}))
+    (directory / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
     if warn_changes:
         target_guard.warn(
             f"while agent {record['node']!r} ran, files outside its "
             f"worktree changed: {'; '.join(warn_changes)}. The run works "
             "in its own worktree, so these changes are not its result; "
             "check whether another session or person made them.")
+    # Refused even when the declared output arrived: the output may be a summary of
+    # edits that never pass through the step that writes the artifact.
     if fail_changes:
         raise ValueError(target_guard.refusal(
             record['node'], record['target']['root'],
@@ -261,17 +259,17 @@ def finish(workdir: Path, node: str, *, final_response: str | None = None,
     # Check whether the git configuration or hooks the run's worktree shares
     # with its target changed during this step (#347).  Beside the existing
     # target-guard bracket.
-    _found = worktree.recorded(workdir)
-    if _found is not None and worktree.shared_changed(_found):
-        _msg = (f"the git configuration or hooks the run's worktree shares "
-                f"with {_found.target} changed during {node}; check them "
-                f"before your next commit there")
+    wt_found = worktree.recorded(workdir)
+    if wt_found is not None and worktree.shared_changed(wt_found):
+        wt_msg = (f"the git configuration or hooks the run's worktree shares "
+                  f"with {wt_found.target} changed during {node}; check them "
+                  f"before your next commit there")
         if record.get('target') is not None:
             # This step was output-only (target_guard.watch returned a snapshot
             # for it), so a shared-state change fails the step.
-            raise ValueError(f"agent {node!r} changed shared git state: {_msg}")
+            raise ValueError(f"agent {node!r} changed shared git state: {wt_msg}")
         else:
-            target_guard.warn(_msg)
+            target_guard.warn(wt_msg)
     pending.unlink()
     return receipt
 

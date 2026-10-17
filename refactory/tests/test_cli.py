@@ -311,6 +311,122 @@ def test_ceo_single_reaches_the_mode_as_the_knob_it_reads(monkeypatch):
 def test_graph_controls_reach_public_console_admission(tmp_path):
     result = _run("graph-control", "preview", "--run", str(tmp_path), "--node", "check")
     assert result.returncode == 2
-    payload = json.loads(result.stdout)
-    assert "durable graph checkpoint" in payload["error"]
+    # With readable output, error goes to stderr; with --json it goes to stdout as JSON.
+    combined = result.stdout + result.stderr
+    assert "durable graph checkpoint" in combined
     assert "invalid choice" not in result.stderr and "unrecognized arguments" not in result.stderr
+
+
+def test_status_is_readable_by_default_and_json_behind_flag(tmp_path):
+    """status prints readable text by default; --json gives the console's JSON unchanged."""
+    run_dir = tmp_path / "my_run"
+    run_dir.mkdir()
+    ref = run_dir / ".refactory"
+    ref.mkdir()
+    (ref / "spine-status.json").write_text(json.dumps({
+        "status": "executing",
+        "nodes": ["emit"],
+        "completed": ["survey", "strategy"],
+        "running_nodes": [{"id": "emit", "kind": "agent"}],
+    }))
+    (ref / "spine-checkpoint.json").write_text(json.dumps({"owner_pid": 99999}))
+    workers = ref / "workers"
+    workers.mkdir()
+    (workers / "001.json").write_text(json.dumps({"node_id": "survey", "usage": {"tokens": 5000}}))
+    (run_dir / "facts.json").write_text(json.dumps({"name": "my_design"}))
+
+    readable = _run("status", "--run", str(run_dir))
+    assert readable.returncode == 0
+    # Should not be valid JSON (it's readable text).
+    try:
+        json.loads(readable.stdout)
+        is_json = True
+    except json.JSONDecodeError:
+        is_json = False
+    assert not is_json, "readable output should not be valid JSON"
+    assert "Run " in readable.stdout
+    assert "Steps done" in readable.stdout
+    assert "emit (agent)" in readable.stdout
+
+    machine = _run("status", "--run", str(run_dir), "--json")
+    assert machine.returncode == 0
+    payload = json.loads(machine.stdout)
+    assert "run_id" in payload
+    assert "state" in payload
+    assert payload["authoring"]["completed"] == ["survey", "strategy"]
+
+
+def test_steer_is_readable_by_default_and_json_behind_flag(tmp_path):
+    """steer prints readable text by default; --json gives the console's JSON unchanged."""
+    run_dir = tmp_path / "steer_run"
+    run_dir.mkdir()
+    ref = run_dir / ".refactory"
+    ref.mkdir()
+    (ref / "spine-status.json").write_text(json.dumps({
+        "status": "waiting_user", "nodes": ["gate_strategy"],
+        "completed": ["survey"],
+    }))
+    (ref / "spine-checkpoint.json").write_text(json.dumps({"owner_pid": 99999}))
+    (run_dir / "facts.json").write_text(json.dumps({"name": "steer_test"}))
+    # Seed a minimal ledger.
+    ledger_path = run_dir / "intent-ledger.md"
+    ledger_path.write_text("# Intent Ledger\n\n## seed\nold entry\n")
+    # Create a graph so steer can derive gates.
+    graphs = run_dir / "graphs"
+    graphs.mkdir()
+    (graphs / "test.graph.json").write_text(json.dumps({
+        "nodes": {
+            "gate_strategy": {
+                "_type": "GateNode",
+                "evaluator_type": "user",
+                "gate_prompt": "Approve?",
+            },
+        },
+        "edges": [
+            {"source": "gate_strategy", "condition": "proceed"},
+            {"source": "gate_strategy", "condition": "reloop"},
+        ],
+    }))
+
+    readable = _run("steer", "--run", str(run_dir),
+                     "--verdict", "gate_strategy=proceed", "--note", "test note")
+    assert readable.returncode == 0
+    try:
+        json.loads(readable.stdout)
+        is_json = True
+    except json.JSONDecodeError:
+        is_json = False
+    assert not is_json, "readable steer output should not be valid JSON"
+    assert "Recorded verdict gate_strategy=proceed" in readable.stdout
+    assert "Note recorded" in readable.stdout
+    assert "graph-control resume" in readable.stdout
+
+    machine = _run("steer", "--run", str(run_dir), "--json")
+    assert machine.returncode == 0
+    payload = json.loads(machine.stdout)
+    assert "entries" in payload
+
+
+def test_graph_control_is_readable_by_default_and_json_behind_flag(tmp_path):
+    """graph-control prints readable text by default; --json gives JSON unchanged."""
+    run_dir = tmp_path / "gc_run"
+    run_dir.mkdir()
+    ref = run_dir / ".refactory"
+    ref.mkdir()
+    (ref / "spine-checkpoint.json").write_text(json.dumps({"owner_pid": 99999}))
+    (ref / "spine-status.json").write_text(json.dumps({"status": "executing", "nodes": ["emit"]}))
+
+    readable = _run("graph-control", "pause", "--run", str(run_dir))
+    assert readable.returncode == 0
+    try:
+        json.loads(readable.stdout)
+        is_json = True
+    except json.JSONDecodeError:
+        is_json = False
+    assert not is_json, "readable graph-control output should not be valid JSON"
+    assert "Queued pause" in readable.stdout or "pause" in readable.stdout.lower()
+
+    machine = _run("graph-control", "pause", "--run", str(run_dir), "--json")
+    assert machine.returncode == 0
+    payload = json.loads(machine.stdout)
+    assert payload.get("status") == "queued" or "status" in payload

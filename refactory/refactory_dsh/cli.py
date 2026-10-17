@@ -647,8 +647,41 @@ def main(argv: list[str] | None = None) -> int:
     # The run-reading verbs and the package verbs take the console's and the
     # registry's own arguments verbatim -- including flags -- so they are forwarded
     # before argparse, which would otherwise try to claim `--run` for itself.
+    READABLE_VERBS = {'status', 'steer', 'graph-control'}
     if argv and argv[0] in READ_VERBS:
-        return _forward("refactory_dsh.console", argv)
+        verb = argv[0]
+        if verb in READABLE_VERBS and '--json' in argv:
+            forward_argv = [arg for arg in argv if arg != '--json']
+            return _forward('refactory_dsh.console', forward_argv)
+        if verb in READABLE_VERBS:
+            import contextlib
+            import io as _io
+            buf = _io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                code = _forward('refactory_dsh.console', argv)
+            raw = buf.getvalue()
+            if code != 0:
+                try:
+                    error_payload = json.loads(raw)
+                    error_msg = error_payload.get('error', '') if isinstance(error_payload, dict) else ''
+                except (json.JSONDecodeError, AttributeError, TypeError):
+                    error_msg = ''
+                if error_msg:
+                    print(error_msg, file=sys.stderr)
+                else:
+                    print(raw, end='')
+                return code
+            try:
+                payload = json.loads(raw)
+                text = payload.get('text', '') if isinstance(payload, dict) else ''
+            except (json.JSONDecodeError, AttributeError, TypeError):
+                text = ''
+            if text:
+                print(text)
+            else:
+                print(raw, end='')
+            return code
+        return _forward('refactory_dsh.console', argv)
     if argv and argv[0] == "projects":
         return _forward("refactory_dsh.projects", argv[1:])
     if argv and argv[0] == "package" and len(argv) >= 2:

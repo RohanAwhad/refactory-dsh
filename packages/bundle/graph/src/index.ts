@@ -75,6 +75,42 @@ function spineStatus(workdir: string): { status: string; nodes?: string[]; compl
  * turn can drive several nodes for many minutes, and printing transitions only
  * after `agent.whenIdle()` would leave the terminal silent the whole time.
  */
+/** Read worker receipts to get the token total for a completed step. */
+function stepTokens(workdir: string, nodeId: string): number {
+  const dir = join(workdir, '.refactory', 'workers')
+  if (!existsSync(dir)) return 0
+  let total = 0
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith('.json')) continue
+    try {
+      const receipt = JSON.parse(readFileSync(join(dir, name), 'utf8'))
+      if (receipt?.node_id !== nodeId) continue
+      const tokens = receipt?.usage?.tokens ?? receipt?.usage?.known_tokens ?? 0
+      if (typeof tokens === 'number' && tokens > 0) total += tokens
+    } catch { /* skip unreadable */ }
+  }
+  return total
+}
+
+/** Flush new assistant messages from the session log and return the new offset. */
+function flushMessages(
+  agent: Agent,
+  lastSeq: SessionLogOffset,
+  io: { stdout: { write(chunk: string): unknown } },
+): SessionLogOffset {
+  for (let seq = lastSeq; seq < agent.session.seq; seq++) {
+    const event = agent.session.eventAt(SessionSeq(seq))
+    if (event?.type === 'assistant/message') {
+      const text = event.data.message.content
+        .filter(block => block.type === 'text')
+        .map(block => block.text)
+        .join('')
+      if (text !== '') io.stdout.write(`${text}\n`)
+    }
+  }
+  return agent.session.seq
+}
+
 async function whenIdleWithProgress(
   agent: Agent,
   startup: GraphStartupValues,
@@ -90,7 +126,12 @@ async function whenIdleWithProgress(
     if (status !== undefined) {
       const completed = status.completed ?? []
       for (const node of completed) {
-        if (!lastCompleted.includes(node)) io.stderr.write(`⟩ ${node} done\n`)
+        if (!lastCompleted.includes(node)) {
+          const tokens = stepTokens(startup.workdir, node)
+          io.stderr.write(tokens > 0
+            ? `⟩ ${node} done (${tokens.toLocaleString()} tokens)\n`
+            : `⟩ ${node} done\n`)
+        }
       }
       lastCompleted = completed
       const nodes = status.nodes ?? []
@@ -100,17 +141,7 @@ async function whenIdleWithProgress(
       lastNodes = nodes
     }
     // Print new assistant messages as they appear.
-    for (let seq = lastSeq; seq < agent.session.seq; seq++) {
-      const event = agent.session.eventAt(SessionSeq(seq))
-      if (event?.type === 'assistant/message') {
-        const text = event.data.message.content
-          .filter(block => block.type === 'text')
-          .map(block => block.text)
-          .join('')
-        if (text !== '') io.stdout.write(`${text}\n`)
-      }
-    }
-    lastSeq = agent.session.seq
+    lastSeq = flushMessages(agent, lastSeq, io)
   }, 500)
   try {
     await agent.whenIdle()
@@ -118,16 +149,7 @@ async function whenIdleWithProgress(
     clearInterval(poll)
   }
   // Flush any remaining events after the turn ends.
-  for (let seq = lastSeq; seq < agent.session.seq; seq++) {
-    const event = agent.session.eventAt(SessionSeq(seq))
-    if (event?.type === 'assistant/message') {
-      const text = event.data.message.content
-        .filter(block => block.type === 'text')
-        .map(block => block.text)
-        .join('')
-      if (text !== '') io.stdout.write(`${text}\n`)
-    }
-  }
+  lastSeq = flushMessages(agent, lastSeq, io)
 }
 
 /** The final assistant text of the turn. */

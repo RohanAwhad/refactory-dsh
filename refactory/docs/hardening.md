@@ -572,7 +572,7 @@ Recorded because the point of an audit is accuracy in both directions.
 
 ---
 
-## 10. Subagent write confinement (#347, C0)
+## 11. Subagent write confinement (#347, C0)
 
 **What the gap was.** Subagents the CEO spawns (via `subagent` and `subagent_fork`)
 had no shell (#360) but could `write` or `edit` any path. A subagent could change

@@ -1642,6 +1642,8 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
         elif args.verb == "status":
             payload = status(_root_for(args, project), after=args.after)
+            from refactory_dsh import readable
+            payload['text'] = readable.format_status(payload)
         elif args.verb == "graph-control":
             from refactory_dsh.graph_control import request
             try:
@@ -1652,6 +1654,8 @@ def main(argv: list[str] | None = None) -> int:
                 )
             except ValueError as error:
                 raise ConsoleError(str(error)) from error
+            from refactory_dsh import readable
+            payload['text'] = readable.format_graph_control(payload)
         elif args.verb == "artifacts":
             payload = artifacts(_root_for(args, project), contents=args.contents)
         elif args.verb == "leaderboard":
@@ -1676,6 +1680,10 @@ def main(argv: list[str] | None = None) -> int:
                 as_name=args.as_name,
                 project=project,
             )
+            payload['recorded_verdicts'] = list(args.verdict)
+            payload['recorded_note'] = args.note
+            from refactory_dsh import readable
+            payload['text'] = readable.format_steer(payload)
         elif args.verb == "best":
             payload = _best_payload(_root_for(args, project), keep_state=args.state)
         elif args.verb == "adopt":
