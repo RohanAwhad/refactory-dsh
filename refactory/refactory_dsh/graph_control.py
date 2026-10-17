@@ -44,9 +44,25 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
             return recovery.start(root)
         if pid:
             import os
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
+
+            def _pid_alive(p: int) -> bool:
+                """Whether *p* is alive, reaping zombies the way console._alive does."""
+                try:
+                    if os.waitpid(p, os.WNOHANG)[0] == p:
+                        return False
+                except ChildProcessError:
+                    pass  # not our child — fall through to the signal probe
+                except OSError:
+                    return False
+                try:
+                    os.kill(p, 0)
+                except ProcessLookupError:
+                    return False
+                except PermissionError:
+                    return True  # alive but not ours
+                return True
+
+            if not _pid_alive(pid):
                 return recovery.start(root)
             # The owner is alive. Check whether the run's status is one the
             # owner will not continue from on its own (terminal). If so,
@@ -59,12 +75,8 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
             if run_status in _TERMINAL_STATUSES:
                 deadline = time.monotonic() + _OWNER_EXIT_TIMEOUT
                 while time.monotonic() < deadline:
-                    try:
-                        os.kill(pid, 0)
-                    except ProcessLookupError:
+                    if not _pid_alive(pid):
                         return recovery.start(root)
-                    except PermissionError:
-                        pass  # alive but not ours to probe; let timeout fire
                     time.sleep(0.1)
                 _owner_exiting = True
     if action not in ('pause', 'resume', 'stop', 'rerun'):
