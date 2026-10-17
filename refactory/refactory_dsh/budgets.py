@@ -56,6 +56,8 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-tokens", type=int, default=None, help="shared tokens; requires provider usage telemetry")
     parser.add_argument("--validation-reserve-s", type=float, default=0, help="elapsed seconds retained for required final validation")
     parser.add_argument("--validation-reserve-tokens", type=int, default=0, help="tokens retained for required final validation")
+    parser.add_argument("--warn-tokens", type=int, default=None,
+                        help="per-step token warning threshold; emits a run_warning once per step (does not stop the run)")
 
 
 def arguments(args: argparse.Namespace) -> dict[str, Any] | None:
@@ -69,6 +71,7 @@ class ResourceLimits:
     max_tokens: int | None = None
     validation_reserve_s: float = 0
     validation_reserve_tokens: int = 0
+    warn_tokens: int | None = None
 
     def __post_init__(self) -> None:
         for name in ("max_elapsed_s", "max_tokens"):
@@ -83,6 +86,9 @@ class ResourceLimits:
             value = getattr(self, name)
             if value is not None and (isinstance(value, bool) or int(value) != value):
                 raise ValueError(f"{name} must be an integer")
+        if self.warn_tokens is not None and (isinstance(self.warn_tokens, bool)
+                or int(self.warn_tokens) != self.warn_tokens or self.warn_tokens <= 0):
+            raise ValueError("warn_tokens must be a positive integer or unset")
         if self.max_elapsed_s is not None and self.validation_reserve_s >= self.max_elapsed_s:
             raise ValueError("validation_reserve_s must be less than max_elapsed_s")
         if self.max_tokens is not None and self.validation_reserve_tokens >= self.max_tokens:
@@ -94,7 +100,7 @@ class ResourceLimits:
 
     @property
     def configured(self) -> bool:
-        return self.max_elapsed_s is not None or self.max_tokens is not None
+        return self.max_elapsed_s is not None or self.max_tokens is not None or self.warn_tokens is not None
 
 
 class RunBudget:
@@ -273,7 +279,7 @@ class RunBudget:
             raise BudgetExhausted("backend has no token telemetry; token-limited launch refused")
 
     def record_usage(self, worker_id: str, tokens: int | None, *, estimated_cost_usd: float | None = None,
-                     status: str = "measured") -> None:
+                     status: str = "measured", node_id: str = "") -> None:
         if not worker_id or status not in ("measured", "estimated", "unavailable"):
             raise ValueError("usage needs a worker identity and measured/estimated/unavailable status")
         if tokens is not None and (isinstance(tokens, bool) or int(tokens) != tokens or tokens < 0):
@@ -285,6 +291,42 @@ class RunBudget:
                 "tokens": tokens, "status": status if tokens is not None else "unavailable",
                 "estimated_cost_usd": estimated_cost_usd,
             }
+            if node_id:
+                state.setdefault("node_workers", {})[worker_id] = node_id
+
+    def node_tokens(self, node_id: str) -> int:
+        """Sum tokens for all workers belonging to the given node_id."""
+        with self._locked() as state:
+            total = 0
+            for worker_id, node in state.get("node_workers", {}).items():
+                if node == node_id:
+                    entry = state.get("workers", {}).get(worker_id, {})
+                    tokens = entry.get("tokens")
+                    if isinstance(tokens, (int, float)) and tokens >= 0:
+                        total += int(tokens)
+            return total
+
+    def warn_if_exceeded(self, node_id: str, node_tokens: int) -> None:
+        """Emit a run_warning once per step when it crosses warn_tokens."""
+        should_warn = False
+        warn_tokens = None
+        with self._locked() as state:
+            warn_tokens = state.get("limits", {}).get("warn_tokens")
+            if warn_tokens is None or node_tokens < warn_tokens:
+                return
+            warned = set(state.get("warned_nodes", []))
+            if node_id in warned:
+                return
+            warned.add(node_id)
+            state["warned_nodes"] = sorted(warned)
+            should_warn = True
+        # Emit outside the lock to avoid holding it during I/O.
+        if should_warn:
+            # Find the run directory from the budget's own ledger path.
+            workdir = self.path.parent.parent
+            from refactory_dsh import live
+            live.emit(workdir, "run_warning", node_id=node_id, state="warning",
+                      summary=f"step {node_id} reached {node_tokens:,} tokens (threshold: {warn_tokens:,})")
 
     def pause(self) -> None:
         """Stop charging idle time after the owning run ends or pauses."""

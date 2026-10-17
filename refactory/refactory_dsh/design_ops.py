@@ -13,9 +13,14 @@ its report.
 from __future__ import annotations
 
 import json
+import re as _re
 from typing import Any
 
 from refactory_dsh import delivery, repo_change, sandbox, worktree
+
+_FILE_EXT_RE = _re.compile(
+    r'\b[\w/.-]+\.(?:py|ts|js|mjs|cjs|jsx|tsx|json|md|yaml|yml|toml|go|rs|rb|java|c|cpp|h|sh|css|html)\b'
+)
 
 STAGING = "staging"
 
@@ -68,6 +73,15 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
     located = repo_change.locate(ctx, name, task, in_worktree=in_worktree,
                                  needs_worktree=("refine",) if deliver else (),
                                  output_only=PLANNING_STEPS)
+
+    # Compute research_scope: 'scoped' for --refine or briefs naming files.
+    if str(task.get("refine") or "").strip():
+        research_scope = "scoped"
+    elif _FILE_EXT_RE.search(brief):
+        research_scope = "scoped"
+    else:
+        research_scope = "full"
+
     # Match create/edit: inspect the exact nested route before launching research.
     # Other ModelClient implementations retain their own readiness contract.
     from refactory_dsh.model import DshModelClient
@@ -89,7 +103,8 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
 
     planned = delivery.plan_run(ctx, task=task) if deliver else {}
     return {"name": name, "brief": brief, "check": check, "validation": "(no check has run yet)",
-            "research_review": "(no research review has run yet)", **UNREFUSED, **located, **planned}
+            "research_review": "(no research review has run yet)", "research_scope": research_scope,
+            **UNREFUSED, **located, **planned}
 
 
 def check_artifact(ctx: Any) -> str:

@@ -293,6 +293,118 @@ def test_console_main_graph_control_acknowledge_failure(monkeypatch, tmp_path):
     assert captured.get('node') == 'a'
 
 
+def test_running_nodes_passes_through_live_snapshot(tmp_path):
+    """running_nodes from spine-status.json flows through live.snapshot()."""
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    running_nodes = [{'id': 'research_director', 'kind': 'agent'},
+                     {'id': 'gate_check', 'kind': 'gate'}]
+    (directory / 'spine-status.json').write_text(json.dumps({
+        'status': 'executing', 'nodes': ['research_director', 'gate_check'],
+        'running_nodes': running_nodes,
+        'wait_reason': 'waiting for worker delivery: research_director (agent), gate_check (gate)',
+    }))
+    activity = live.snapshot(tmp_path)
+    assert activity['running_nodes'] == running_nodes
+    assert 'research_director' in activity['wait_reason']
+
+
+def test_step_tokens_sums_workers_by_node_id(tmp_path):
+    """Two workers for the same node_id sum to one step_tokens entry."""
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    workers_dir = directory / 'workers'
+    workers_dir.mkdir()
+    (workers_dir / 'w1.json').write_text(json.dumps({
+        'worker_id': 'w1', 'node_id': 'research_director',
+        'usage': {'status': 'measured', 'tokens': 6000},
+    }))
+    (workers_dir / 'w2.json').write_text(json.dumps({
+        'worker_id': 'w2', 'node_id': 'research_director',
+        'usage': {'status': 'measured', 'tokens': 4000},
+    }))
+    (workers_dir / 'w3.json').write_text(json.dumps({
+        'worker_id': 'w3', 'node_id': 'strategy',
+        'usage': {'status': 'measured', 'tokens': 2000},
+    }))
+    spine = {'status': 'executing', 'nodes': ['design_doc'],
+             'completed': ['research_director', 'strategy']}
+    (directory / 'spine-status.json').write_text(json.dumps(spine))
+    authoring = console._authoring(tmp_path, spine)
+    assert authoring['step_tokens']['research_director'] == 10000
+    assert authoring['step_tokens']['strategy'] == 2000
+    assert authoring['total_tokens'] == 12000
+
+
+def test_step_tokens_is_none_when_no_workers(tmp_path):
+    """No worker receipts → step_tokens is None, not an empty dict."""
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    spine = {'status': 'executing', 'nodes': ['prepare']}
+    (directory / 'spine-status.json').write_text(json.dumps(spine))
+    authoring = console._authoring(tmp_path, spine)
+    assert authoring['step_tokens'] is None
+    assert authoring['total_tokens'] is None
+
+
+def test_warn_tokens_emits_exactly_one_run_warning_per_step(tmp_path):
+    """--warn-tokens triggers one run_warning per step via events.jsonl."""
+    from refactory_dsh.budgets import RunBudget, ResourceLimits
+
+    budget = RunBudget.create(tmp_path, ResourceLimits(warn_tokens=8000))
+    # Record two workers for same node totaling 10000
+    budget.record_usage('w1', 5000, node_id='research_director')
+    budget.record_usage('w2', 5000, node_id='research_director')
+    node_total = budget.node_tokens('research_director')
+    assert node_total == 10000
+    budget.warn_if_exceeded('research_director', node_total)
+    # Read events.jsonl
+    events_path = tmp_path / '.refactory' / 'events.jsonl'
+    assert events_path.exists()
+    all_lines = [json.loads(line) for line in events_path.read_text().strip().split('\n')]
+    warnings = [e for e in all_lines if e.get('kind') == 'run_warning']
+    assert len(warnings) == 1
+    assert 'research_director' in warnings[0]['summary']
+    assert '10,000' in warnings[0]['summary']
+
+    # Second call for the same node does NOT emit a second warning
+    budget.warn_if_exceeded('research_director', node_total)
+    all_lines2 = [json.loads(line) for line in events_path.read_text().strip().split('\n')]
+    warnings2 = [e for e in all_lines2 if e.get('kind') == 'run_warning']
+    assert len(warnings2) == 1  # still only one
+
+
+def test_warn_tokens_does_not_fire_below_threshold(tmp_path):
+    """Below the threshold, no warning is emitted."""
+    from refactory_dsh.budgets import RunBudget, ResourceLimits
+
+    budget = RunBudget.create(tmp_path, ResourceLimits(warn_tokens=20000))
+    budget.record_usage('w1', 5000, node_id='research_director')
+    budget.warn_if_exceeded('research_director', 5000)
+    events_path = tmp_path / '.refactory' / 'events.jsonl'
+    if events_path.exists():
+        all_lines = [json.loads(line) for line in events_path.read_text().strip().split('\n')]
+        warnings = [e for e in all_lines if e.get('kind') == 'run_warning']
+        assert len(warnings) == 0
+
+
+def test_warn_tokens_validation_rejects_invalid_values():
+    """warn_tokens must be a positive integer or unset."""
+    from refactory_dsh.budgets import ResourceLimits
+    with pytest.raises(ValueError, match="warn_tokens"):
+        ResourceLimits(warn_tokens=0)
+    with pytest.raises(ValueError, match="warn_tokens"):
+        ResourceLimits(warn_tokens=-1)
+    with pytest.raises(ValueError, match="warn_tokens"):
+        ResourceLimits(warn_tokens=True)
+    # Valid: positive integer
+    limits = ResourceLimits(warn_tokens=1000)
+    assert limits.warn_tokens == 1000
+    # Valid: None (unset)
+    limits = ResourceLimits(warn_tokens=None)
+    assert limits.warn_tokens is None
+
+
 def test_graph_snapshot_tolerates_old_and_partial_checkpoints(tmp_path):
     assert live.snapshot(tmp_path)['graph'] is None
     checkpoint = tmp_path / '.refactory/spine-checkpoint.json'

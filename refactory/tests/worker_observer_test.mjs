@@ -53,6 +53,65 @@ try {
   assert.equal(JSON.parse(readFileSync(path)).runtime.backend, null)
   assert.equal(JSON.parse(readFileSync(path)).runtime.version, null)
   console.log('worker observer accounting and capability boundaries passed')
+
+  // --- A2: tokens_delta on usage events ---
+  {
+    const deltaRoot = mkdtempSync(join(tmpdir(), 'refactory-delta-'))
+    try {
+      const deltaDir = join(deltaRoot, '.refactory', 'workers')
+      mkdirSync(deltaDir, { recursive: true })
+      const deltaPath = join(deltaDir, 'delta.json')
+      writeFileSync(deltaPath, JSON.stringify({
+        requested_route: { worker_backend: 'dsh' },
+        worker_id: 'delta', run_id: deltaRoot, node_id: 'test_node',
+        usage: { status: 'unavailable', tokens: null }
+      }))
+      const savedReceipt = process.env.REFACTORY_WORKER_RECEIPT
+      process.env.REFACTORY_WORKER_RECEIPT = deltaPath
+      const deltaEvents = new Map()
+      apply({
+        on: (name, callback) => deltaEvents.set(name, callback),
+        subagents: { list: () => ['spawn', 'fork'] }
+      })
+      const deltaAgent = { session: { id: 'delta-session' } }
+      const deltaRequest = deltaEvents.get('agent/request')
+      const deltaStream = deltaEvents.get('agent/assistant-stream')
+
+      // First completion: 11 tokens
+      await deltaRequest({ agent: deltaAgent }, async () => ({ provider: 'p', model: 'm' }))
+      deltaStream({ agent: deltaAgent, frame: { type: 'start' } })
+      deltaStream({ agent: deltaAgent, frame: { type: 'chunk', chunk: { type: 'usage', usage: { totalTokens: 11 } } } })
+      deltaStream({ agent: deltaAgent, frame: { type: 'end' } })
+
+      // Second completion: 13 tokens
+      await deltaRequest({ agent: deltaAgent }, async () => ({ provider: 'p', model: 'm' }))
+      deltaStream({ agent: deltaAgent, frame: { type: 'start' } })
+      deltaStream({ agent: deltaAgent, frame: { type: 'chunk', chunk: { type: 'usage', usage: { totalTokens: 13 } } } })
+      deltaStream({ agent: deltaAgent, frame: { type: 'end' } })
+
+      // Parse events.jsonl for usage events
+      const eventsContent = readFileSync(join(deltaRoot, '.refactory', 'events.jsonl'), 'utf8')
+      const usageEvents = eventsContent.trim().split('\n')
+        .map(line => JSON.parse(line))
+        .filter(e => e.kind === 'worker' && e.state === 'usage')
+
+      assert.equal(usageEvents.length, 2, 'should have 2 usage events')
+      // First event: tokens_delta=11, tokens=11
+      assert.equal(usageEvents[0].usage.tokens_delta, 11)
+      assert.equal(usageEvents[0].usage.tokens, 11)
+      // Second event: tokens_delta=13, tokens=24
+      assert.equal(usageEvents[1].usage.tokens_delta, 13)
+      assert.equal(usageEvents[1].usage.tokens, 24)
+      // Sum of deltas equals final tokens
+      const deltaSum = usageEvents.reduce((sum, e) => sum + e.usage.tokens_delta, 0)
+      assert.equal(deltaSum, usageEvents[usageEvents.length - 1].usage.tokens)
+
+      process.env.REFACTORY_WORKER_RECEIPT = savedReceipt
+      console.log('tokens_delta accounting passed')
+    } finally {
+      rmSync(deltaRoot, { recursive: true, force: true })
+    }
+  }
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

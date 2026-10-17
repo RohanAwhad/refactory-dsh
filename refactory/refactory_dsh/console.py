@@ -412,6 +412,25 @@ def _spine(run_root: Path) -> dict[str, Any]:
 def _authoring(run_root: Path, spine: dict[str, Any]) -> dict[str, Any]:
     """An authoring run's own progress: the nodes done, the nodes due, and its facts."""
     facts = _read_json(run_root / "facts.json")
+    # Per-step token totals: sum worker receipts by node_id.
+    step_tokens: dict[str, int] = {}
+    workers_dir = run_root / ".refactory" / "workers"
+    if workers_dir.is_dir():
+        for path in sorted(workers_dir.glob("*.json")):
+            try:
+                receipt = json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(receipt, dict):
+                continue
+            node_id = receipt.get("node_id")
+            if not node_id or not isinstance(node_id, str):
+                continue
+            usage = receipt.get("usage") or {}
+            tokens = usage.get("tokens") if usage.get("tokens") is not None else usage.get("known_tokens")
+            if isinstance(tokens, (int, float)) and tokens >= 0:
+                step_tokens[node_id] = step_tokens.get(node_id, 0) + int(tokens)
+    total_tokens = sum(step_tokens.values()) if step_tokens else 0
     return {
         "spine": spine.get("status"),
         "completed": spine.get("completed") or [],
@@ -425,6 +444,8 @@ def _authoring(run_root: Path, spine: dict[str, Any]) -> dict[str, Any]:
         "after_score": facts.get("after_score"),
         "regressed": facts.get("regressed"),
         "revision_note": facts.get("revision_note"),
+        "step_tokens": step_tokens if step_tokens else None,
+        "total_tokens": total_tokens if step_tokens else None,
     }
 
 

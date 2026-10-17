@@ -247,6 +247,27 @@ function sync<T>(value: T): Promise<T> {
   return Promise.resolve(value)
 }
 
+/** Map a node's _type to a semantic kind a reader can understand. */
+function nodeKind(_type: string): 'agent' | 'operation' | 'gate' | 'control' {
+  switch (_type) {
+    case 'AgentNode':
+    case 'LLMNode':
+      return 'agent'
+    case 'GateNode':
+      return 'gate'
+    case 'ForkNode':
+    case 'JoinNode':
+    case 'DataNode':
+      return 'control'
+    case 'FnNode':
+    case 'Study':
+    case 'SelectionNode':
+      return 'operation'
+    default:
+      return 'operation'
+  }
+}
+
 /** The last non-empty line of a command's output, for an error a reader can act on. */
 function lastLine(text: string | null | undefined): string {
   const lines = (text ?? '').split('\n').map(line => line.trim()).filter(line => line !== '')
@@ -746,16 +767,21 @@ export function apply(ctx: Context, config: Config): void {
       const state = spine.state()
       const next = spine.next()
       const views = next.status === 'ready' ? next.nodes : []
+      const runningNodes = views.map(v => ({ id: v.id, kind: nodeKind(v._type) }))
+      const nodeList = runningNodes.map(n => `${n.id} (${n.kind})`).join(', ')
       const wait = status === 'paused' ? 'paused by user'
-        : status === 'waiting_user' || views.some(node => node._type === 'GateNode' && node.evaluator_type === 'user') ? 'waiting for user gate'
+        : status === 'waiting_user' || views.some(node => node._type === 'GateNode' && node.evaluator_type === 'user')
+          ? `waiting for user gate: ${nodeList || 'user gate'}`
           : views.some(node =>
               (node._type === 'AgentNode' && !isDeterministic(node))
               || node._type === 'LLMNode'
-            ) ? 'waiting for worker delivery'
-            : status === 'executing' ? 'running a graph check' : undefined
+            ) ? `waiting for worker delivery: ${nodeList}`
+            : status === 'executing'
+              ? (nodeList ? `running a graph check: ${nodeList}` : 'running a graph check')
+              : undefined
       const record = {
         schema_version: 1, run_id: resolve(workdir), at: new Date().toISOString(),
-        status, nodes: state.cursor, completed: state.completed,
+        status, nodes: state.cursor, running_nodes: runningNodes, completed: state.completed,
         ...(detail === undefined ? {} : { error: detail }),
         ...(wait === undefined ? {} : { wait_reason: wait }),
         ...(status === 'paused' ? { paused_before: spine.pausedAt() } : {}),
