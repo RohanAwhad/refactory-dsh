@@ -167,8 +167,6 @@ def test_the_graph_argv_names_the_route_the_context_resolved(monkeypatch, tmp_pa
     from refactory_dsh import model as model_module
     from refactory_dsh import workers
 
-    monkeypatch.setattr(interactive, "require_build", lambda root=None: None)
-
     class RoutedClient:
         def __init__(self, **kwargs):
             self._given = kwargs
@@ -252,7 +250,6 @@ def test_headless_prints_gate_commands_when_stopped_at_user_gate(monkeypatch, tm
     """
     from refactory_dsh import workers
 
-    monkeypatch.setattr(interactive, "require_build", lambda root=None: None)
     workdir = tmp_path / "run"
 
     class _Run:
@@ -485,7 +482,6 @@ def test_a_cli_run_lists_its_warnings_when_it_ends(monkeypatch, tmp_path, capsys
     """
     from refactory_dsh import workers
 
-    monkeypatch.setattr(interactive, "require_build", lambda root=None: None)
     workdir = tmp_path / "run"
 
     class _Run:

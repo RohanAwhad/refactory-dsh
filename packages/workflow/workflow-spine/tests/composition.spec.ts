@@ -5,9 +5,10 @@
  *
  * These are the parts a run depends on but a single tool call does not reach.
  */
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
@@ -220,11 +221,9 @@ describe('the cursor status a run leaves behind', () => {
   })
 })
 
-describe('incomplete cursor drain through the plugin', () => {
-  it('records halted in spine-status.json when cursor empties short of the end', async () => {
+describe('a run that stops short of its end', () => {
+  it('halts naming the nodes it never reached, and records that for refactory status', async () => {
     const workdir = scratch()
-    // Graph: a → b, where b is a sink. We mount with executeCommands: false
-    // so we control completion manually.
     const graph: WorkflowGraph = {
       name: 'incomplete',
       start_node: 'a',
@@ -235,45 +234,23 @@ describe('incomplete cursor drain through the plugin', () => {
       edges: [{ source: 'a', target: 'b' }],
     }
     const { ctx } = await mount({ workdir, graph })
-    // Write the first status checkpoint
     await call(ctx, 'wf_next')
-    // Complete a, then restore a checkpoint with empty cursor and b not completed
     await call(ctx, 'wf_done', { node: 'a' })
-    // Now b is due. Advance the cursor by skipping b, but b is the sink so
-    // we need a different approach. Instead, save/restore a checkpoint with
-    // cursor=[] to simulate the short drain.
-    // Use wf_next to write a checkpoint, then tamper with it, then use a fresh mount.
     await call(ctx, 'wf_next')
-    const { readFileSync, writeFileSync: wfs } = await import('node:fs')
-    const { join } = await import('node:path')
-    const cpPath = join(workdir, '.refactory', 'spine-checkpoint.json')
-    const cp = JSON.parse(readFileSync(cpPath, 'utf8'))
-    // Tamper: empty cursor, b not completed (only a is completed)
-    cp.state.cursor = []
-    cp.state.completed = ['a']
-    wfs(cpPath, JSON.stringify(cp))
-    // Write a resume-request.json so restoreRequested reads this checkpoint
-    const { createHash } = await import('node:crypto')
-    const checkpointBytes = readFileSync(cpPath)
-    const sha = createHash('sha256').update(checkpointBytes).digest('hex')
-    wfs(join(workdir, '.refactory', 'resume-request.json'), JSON.stringify({
-      checkpoint_sha256: sha,
-    }))
-    // Mount fresh with the same graph; restoreRequested will restore the tampered checkpoint
-    const root2 = new Context()
-    await root2.plugin(SystemPrompt)
-    await root2.plugin(ToolRuntime)
-    await root2.plugin(spinePlugin, config({ workdir, graph }))
-    // Call wf_next — the cursor is empty, b was never completed, so it should halt
-    const result = await call(root2, 'wf_next') as { status: string; halted?: { reason: string; unreached?: string[] } }
-    expect(result.status).toBe('done')
-    expect(result.halted).toBeDefined()
-    expect(result.halted!.reason).toBe('incomplete')
-    expect(result.halted!.unreached).toEqual(['b'])
-    // spine-status.json should record halted
-    const statusPath = join(workdir, '.refactory', 'spine-status.json')
-    const status = JSON.parse(readFileSync(statusPath, 'utf8'))
-    expect(status.status).toBe('halted')
+    // A cursor that empties with `b` never run, restored the way a resume restores
+    // a saved checkpoint.
+    const saved = join(workdir, '.refactory', 'spine-checkpoint.json')
+    const checkpoint = JSON.parse(readFileSync(saved, 'utf8'))
+    checkpoint.state.cursor = []
+    checkpoint.state.completed = ['a']
+    writeFileSync(saved, JSON.stringify(checkpoint))
+    const sha = createHash('sha256').update(readFileSync(saved)).digest('hex')
+    writeFileSync(join(workdir, '.refactory', 'resume-request.json'), JSON.stringify({ checkpoint_sha256: sha }))
+    const { ctx: resumed } = await mount({ workdir, graph })
+    const result = await call(resumed, 'wf_next') as { status: string; halted?: { reason: string; unreached?: string[] } }
+    expect(result).toMatchObject({ status: 'done', halted: { reason: 'incomplete', unreached: ['b'] } })
+    const recorded = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8'))
+    expect(recorded).toMatchObject({ status: 'halted', error: 'never reached: b' })
   })
 })
 
@@ -309,16 +286,13 @@ describe('gate reason composition through applyControls', () => {
     expect(halted.status).toBe('done')
     expect(halted.halted?.reason).toBe('max_iterations')
     // Write a checkpoint for the revision
-    const { readFileSync, writeFileSync: wfs, mkdirSync: md } = await import('node:fs')
-    const { join, resolve } = await import('node:path')
-    const { createHash } = await import('node:crypto')
     const cpBytes = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
     const revision = createHash('sha256').update(cpBytes).digest('hex')
     // Queue a rerun control without text
     const directory = join(workdir, '.refactory', 'graph-controls')
-    md(directory, { recursive: true })
-    wfs(join(workdir, '.refactory', 'invocation.json'), JSON.stringify({ id: null }))
-    wfs(join(directory, '1.json'), JSON.stringify({
+    mkdirSync(directory, { recursive: true })
+    writeFileSync(join(workdir, '.refactory', 'invocation.json'), JSON.stringify({ id: null }))
+    writeFileSync(join(directory, '1.json'), JSON.stringify({
       id: '1', action: 'rerun', target: 'emit', text: '',
       revision, run_id: resolve(workdir), invocation: null,
       status: 'queued',
@@ -342,7 +316,7 @@ describe('gate reason composition through applyControls', () => {
     // count=2, cap=1: 2 > 1 → halts at max_iterations
     const cpBytes2 = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
     const revision2 = createHash('sha256').update(cpBytes2).digest('hex')
-    wfs(join(directory, '2.json'), JSON.stringify({
+    writeFileSync(join(directory, '2.json'), JSON.stringify({
       id: '2', action: 'rerun', target: 'emit', text: 'try a different approach',
       revision: revision2, run_id: resolve(workdir), invocation: null,
       status: 'queued',
@@ -363,7 +337,7 @@ describe('gate reason composition through applyControls', () => {
     // Now done. Redo emit after gate proceeded.
     const cpBytes3 = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
     const revision3 = createHash('sha256').update(cpBytes3).digest('hex')
-    wfs(join(directory, '3.json'), JSON.stringify({
+    writeFileSync(join(directory, '3.json'), JSON.stringify({
       id: '3', action: 'rerun', target: 'emit', text: '',
       revision: revision3, run_id: resolve(workdir), invocation: null,
       status: 'queued',

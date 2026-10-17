@@ -33,7 +33,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { UserQuestionService } from '@deepseek-ai/dsh-user-questions'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { HALT, Spine, validateGraph } from './spine.ts'
-import type { NodeView, SpineNext, TerminalHalt } from './spine.ts'
+import type { NodeView, SpineNext } from './spine.ts'
 import { commandOf, isDeterministic, runDataCommand, runDeterministic, runWarningsOf } from './execute.ts'
 import type { CommandFailure, CommandOutcome } from './execute.ts'
 import type { WorkflowGraph } from './types.ts'
@@ -770,7 +770,7 @@ export function apply(ctx: Context, config: Config): void {
       const runningNodes = views.map(v => ({ id: v.id, kind: nodeKind(v._type) }))
       const nodeList = runningNodes.map(n => `${n.id} (${n.kind})`).join(', ')
       const wait = status === 'paused' ? 'paused by user'
-        : status === 'halted' ? (detail ?? 'stopped at graph boundary')
+        : status === 'halted' && detail !== undefined ? detail
         : status === 'waiting_user' || views.some(node => node._type === 'GateNode' && node.evaluator_type === 'user')
           ? `waiting for user gate: ${nodeList || 'user gate'}`
           : views.some(node =>
@@ -1244,12 +1244,10 @@ export function apply(ctx: Context, config: Config): void {
         if (node._type === 'GateNode' && node.gate_prompt !== undefined) node.gate_prompt = withFacts(node.gate_prompt, workdir)
       }
     }
-    const haltInfo = next.status === 'done' ? (next as { halted?: TerminalHalt }).halted : undefined
-    const nextHalt = haltInfo !== undefined
-    const haltDetail = haltInfo?.reason === 'incomplete' && haltInfo.unreached?.length
-      ? `never reached: ${haltInfo.unreached.join(', ')}`
-      : undefined
-    recordStatus(spine, workdir, nextHalt ? 'halted' : spine.isPaused() ? 'paused' : next.status === 'done' ? 'done' : 'ready', haltDetail)
+    // A run that stopped short of its end says which nodes it never reached.
+    const halted = next.status === 'done' ? next.halted : undefined
+    const unreached = halted?.reason === 'incomplete' ? `never reached: ${(halted.unreached ?? []).join(', ')}` : undefined
+    recordStatus(spine, workdir, spine.isHalted() ? 'halted' : spine.isPaused() ? 'paused' : next.status === 'done' ? 'done' : 'ready', unreached)
     // The item being iterated travels with the node views, so the subagent for a
     // pass is handed the item rather than being sent to find it on disk. Under
     // `interactiveOpen` the node this call ran travels the same way, so the CEO
