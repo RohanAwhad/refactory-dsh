@@ -1556,6 +1556,12 @@ def blocking_findings(text: str) -> list[str]:
         marked = re.match(r"^BLOCKING(?:(?:[*_`]*\s*[:—–-][*_`]*\s*)|(?:[*_`]+\s+)|\s+)(.*)$", cleaned, re.I)
         if marked is None:
             continue
+        # Bare-space/decoration-only match (no separator) requires uppercase BLOCKING.
+        # "Blocking finding: `x`" and "**Blocking** finding: `x`" are prose,
+        # not findings; "BLOCKING foo" and "**BLOCKING** foo" still are.
+        gap = cleaned[8:marked.start(1)]
+        if not re.search(r'[:—–\-]', gap) and cleaned[:8] != 'BLOCKING':
+            continue
         content = marked[1].strip()
         if heading and not re.match(r"^BLOCKING[*_`]*\s*[:—–-]", cleaned, re.I):
             continue

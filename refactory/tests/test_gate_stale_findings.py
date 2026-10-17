@@ -111,3 +111,98 @@ def test_bold_code_marker_separator_after_span_is_caught():
     findings = blocking_findings(text)
     assert len(findings) == 1
     assert "the CLI crashes" in findings[0]
+
+
+# --- b13a: bare-space / separator case-sensitivity tests ---
+
+
+def test_b8_category_line_blocking_finding_is_not_a_finding():
+    """b8's review listed tests by category; 'Blocking finding:' is not a finding."""
+    text = "- Blocking finding: `test_design_review_gate_reloops_on_blocking_finding`\n"
+    assert blocking_findings(text) == []
+
+
+def test_b8_category_line_missing_verdict_is_not_a_finding():
+    """b8's '- Missing verdict: ...' does not start with BLOCKING at all."""
+    text = "- Missing verdict: `test_qa_gate_fails_when_verdict_missing`\n"
+    assert blocking_findings(text) == []
+
+
+def test_bold_blocking_colon_is_a_finding():
+    """**Blocking:** with a separator is still case-insensitive."""
+    text = "**Blocking:** the CLI crashes\n"
+    findings = blocking_findings(text)
+    assert len(findings) == 1
+    assert "the CLI crashes" in findings[0]
+
+
+def test_uppercase_blocking_bare_space_is_a_finding():
+    """Uppercase BLOCKING followed by bare space is a finding."""
+    text = "BLOCKING the CLI crashes\n"
+    findings = blocking_findings(text)
+    assert len(findings) == 1
+    assert "the CLI crashes" in findings[0]
+
+
+def test_lowercase_blocking_bare_space_is_not_a_finding():
+    """Title-case 'Blocking' followed by bare space is NOT a finding."""
+    text = "Blocking the CLI crashes\n"
+    assert blocking_findings(text) == []
+
+
+def test_mixed_case_blocking_bare_space_is_not_a_finding():
+    """Mixed-case 'BLOcking' followed by bare space is NOT a finding."""
+    text = "BLOcking the CLI crashes\n"
+    assert blocking_findings(text) == []
+
+
+def test_separator_colon_case_insensitive():
+    """Colon separator remains case-insensitive."""
+    text = "Blocking: the CLI crashes\n"
+    findings = blocking_findings(text)
+    assert len(findings) == 1
+    assert "the CLI crashes" in findings[0]
+
+
+def test_separator_em_dash_case_insensitive():
+    """Em-dash separator remains case-insensitive."""
+    text = "blocking\u2014 the CLI crashes\n"
+    findings = blocking_findings(text)
+    assert len(findings) == 1
+    assert "the CLI crashes" in findings[0]
+
+
+def test_separator_en_dash_case_insensitive():
+    """En-dash separator remains case-insensitive."""
+    text = "blocking\u2013 the CLI crashes\n"
+    findings = blocking_findings(text)
+    assert len(findings) == 1
+    assert "the CLI crashes" in findings[0]
+
+
+def test_separator_hyphen_case_insensitive():
+    """Hyphen separator remains case-insensitive."""
+    text = "blocking- the CLI crashes\n"
+    findings = blocking_findings(text)
+    assert len(findings) == 1
+    assert "the CLI crashes" in findings[0]
+
+
+def test_quoted_lowercase_blocking_colon_not_counted():
+    """Lowercase `blocking: ...` inside backticks is stripped as a mention."""
+    text = "The earlier review said `blocking: widget crashes` but this was fixed.\n"
+    assert blocking_findings(text) == []
+
+
+def test_bold_blocking_no_separator_is_not_a_finding():
+    """**Blocking** without a separator is the same false positive as b8's line."""
+    text = "**Blocking** finding: `x`\n"
+    assert blocking_findings(text) == []
+
+
+def test_bold_uppercase_blocking_no_separator_is_a_finding():
+    """**BLOCKING** without a separator is a finding (uppercase required)."""
+    text = "**BLOCKING** the CLI crashes\n"
+    findings = blocking_findings(text)
+    assert len(findings) == 1
+    assert "the CLI crashes" in findings[0]
