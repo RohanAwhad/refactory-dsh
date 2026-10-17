@@ -527,6 +527,62 @@ def test_steer_is_readable_by_default_and_json_behind_flag(tmp_path):
     assert payload == console_payload
 
 
+def test_steer_shows_note_kind(tmp_path):
+    """A note's kind appears in the readable steer output."""
+    run_dir = tmp_path / "kind_run"
+    run_dir.mkdir()
+    ref = run_dir / ".refactory"
+    ref.mkdir()
+    (ref / "spine-status.json").write_text(json.dumps({
+        "status": "executing", "nodes": ["emit"],
+    }))
+    (ref / "spine-checkpoint.json").write_text(json.dumps({"owner_pid": 99999}))
+    (run_dir / "facts.json").write_text(json.dumps({"name": "kind_test"}))
+    (run_dir / "intent-ledger.md").write_text("# Intent Ledger\n")
+
+    result = _run("steer", "--run", str(run_dir),
+                   "--note", "keep it small", "--kind", "constraint")
+    assert result.returncode == 0
+    assert "Note recorded" in result.stdout
+    assert "constraint" in result.stdout
+
+
+def test_steer_shows_verdict_scope(tmp_path):
+    """A verdict's scope appears in the readable steer output."""
+    run_dir = tmp_path / "scope_run"
+    run_dir.mkdir()
+    ref = run_dir / ".refactory"
+    ref.mkdir()
+    (ref / "spine-status.json").write_text(json.dumps({
+        "status": "waiting_user", "nodes": ["approve"],
+        "completed": [],
+    }))
+    (ref / "spine-checkpoint.json").write_text(json.dumps({"owner_pid": 99999}))
+    (run_dir / "facts.json").write_text(json.dumps({"name": "scope_test"}))
+    (run_dir / "intent-ledger.md").write_text("# Intent Ledger\n")
+    graphs = run_dir / "graphs"
+    graphs.mkdir()
+    (graphs / "test.graph.json").write_text(json.dumps({
+        "nodes": {
+            "approve": {
+                "_type": "GateNode",
+                "evaluator_type": "user",
+                "gate_prompt": "Approve the draft?",
+            },
+        },
+        "edges": [
+            {"source": "approve", "condition": "proceed"},
+            {"source": "approve", "condition": "reloop"},
+        ],
+    }))
+
+    result = _run("steer", "--run", str(run_dir),
+                   "--verdict", "approve=proceed")
+    assert result.returncode == 0
+    assert "Recorded verdict approve=proceed" in result.stdout
+    assert "scoped to" in result.stdout
+
+
 def test_graph_control_is_readable_by_default_and_json_behind_flag(tmp_path):
     """graph-control prints readable text by default; --json gives JSON unchanged."""
     run_dir = tmp_path / "gc_run"

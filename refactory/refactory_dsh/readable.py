@@ -117,14 +117,20 @@ def format_steer(payload: dict[str, Any]) -> str:
     has_note = recorded_note is not None
 
     if has_verdict:
+        scopes = payload.get('recorded_scopes') or {}
         for pair in recorded_verdicts:
-            lines.append(f"Recorded verdict {pair}.")
+            scope = scopes.get(pair, '')
+            if scope:
+                lines.append(f"Recorded verdict {pair}, scoped to {scope}.")
+            else:
+                lines.append(f"Recorded verdict {pair}.")
         root = payload.get('run', '')
         lines.append("Continue the run:")
         lines.append(f"  refactory graph-control resume --run {root}")
 
     if has_note:
-        lines.append("Note recorded.")
+        kind = payload.get('recorded_kind', 'info')
+        lines.append(f"Note recorded ({kind}).")
 
     if not has_verdict and not has_note:
         entries = payload.get('entries') or []

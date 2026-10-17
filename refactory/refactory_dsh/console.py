@@ -847,9 +847,11 @@ def _steer(
         Ledger.seed(run_root, seed)
     if note is not None:
         ledger.note(kind, note)
+    recorded_scopes: dict[str, str] = {}
     for pair in verdicts:
         gate, _, value = str(pair).partition("=")
-        ledger.verdict(gate, value)
+        entry = ledger.verdict(gate, value)
+        recorded_scopes[str(pair)] = entry.get('scope', '')
     # The chain is checkable only when the run left agent outputs beside the ledger
     # (a single mode run does; an outer-loop run keeps its candidates in subdirs).
     outputs = outputs_in(run_root) if ledger.exists() else {}
@@ -861,6 +863,7 @@ def _steer(
         "entries": ledger.entries(),
         "constraints": ledger.constraints(),
         "verdicts": ledger.verdicts(),
+        "recorded_scopes": recorded_scopes,
         "chain": chain(ledger, outputs, deliveries=deliveries) if ledger.exists() else [],
         "problems": fidelity(ledger, outputs, deliveries=deliveries),
         "deliveries": deliveries,
@@ -1682,6 +1685,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             payload['recorded_verdicts'] = list(args.verdict)
             payload['recorded_note'] = args.note
+            payload['recorded_kind'] = args.kind
             from refactory_dsh import readable
             payload['text'] = readable.format_steer(payload)
         elif args.verb == "best":
