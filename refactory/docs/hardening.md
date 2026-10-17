@@ -509,6 +509,51 @@ serialized. Verified both ways — restoring the hardcoded `fn` fails the first.
 
 ---
 
+## 10. Planning steps changed the person's git hooks (#347)
+
+**What happened.** In a design run, while `design_doc` ran, an install in the
+run's worktree re-ran the repository's `lefthook install` postinstall. The hooks
+in `.git/hooks/` (pre-commit, pre-merge-commit, pre-push) are shared by every
+worktree of the repository, so the person's checkout changed before anything was
+approved. The target guard held only `emit` to its declared output; the run
+reported the change only at materialise, 45 minutes later.
+
+**The three-part fix.**
+
+1. **Suppress hook managers.** `HOOK_SUPPRESS` in `worktree.py` sets
+   `LEFTHOOK=0` and `HUSKY=0` in every environment a run uses: `_install_env`,
+   `check_environment` (and therefore the wrapper), and `model._environment`
+   (every agent worker). An install or command cannot trigger a hook manager.
+2. **Per-step shared-state detection.** `agent_delivery.finish`, beside the
+   existing target-guard bracket, checks `worktree.shared_changed` after every
+   agent step. A change to the shared hooks or configuration is a run warning
+   naming the step; for output-only steps (planning steps and emit), it fails
+   the step.
+3. **Planning guard.** Design's `prepare_design` passes its planning steps
+   (`research_director`, `strategy_director`, `synthesize_strategy`,
+   `design_doc`) to `repo_change.locate` as `output_only`, which merges them
+   with `OUTPUT_ONLY = ("emit",)` at `target_guard.record`. The watch/strayed
+   bracket that catches emit editing the target now catches a planning step
+   doing so. `OUTPUT_ONLY` stays `("emit",)` — design's steps are design's own.
+
+**Held by.**
+
+- `test_worktree.py`: `test_check_environment_suppresses_hook_managers`,
+  `test_the_wrapper_suppresses_hook_managers`.
+- `test_agent_delivery.py`: per-step shared-state check for output-only and
+  non-output-only steps, mode isolation between design and plain `locate`.
+- `test_target_guard.py`: a planning step registered as output-only that
+  changes the target is refused.
+- `test_design_worktree.py`: end-to-end — a planning step that changes shared
+  hooks fails the design run.
+
+**Known limit.** The hook suppression relies on each hook manager honouring its
+own disable variable. A hook manager that ignores `LEFTHOOK=0` or `HUSKY=0`
+would still install hooks. The per-step `shared_changed` check catches that
+case and names the step.
+
+---
+
 ## Two probes that came back clean
 
 Recorded because the point of an audit is accuracy in both directions.

@@ -415,18 +415,32 @@ class _EditingModel(FakeModel):
         return answer
 
 
-@pytest.mark.parametrize("where", ["worktree", "target"])
-def test_an_emit_that_edits_the_worktree_or_the_checkout_is_refused(repo, tmp_path, where):
+def test_an_emit_that_edits_the_worktree_is_refused(repo, tmp_path):
     """The worktree is the run's own, but only materialise writes it (#319)."""
     run = tmp_path / "run"
-    edit = (lambda: Path(worktree.recorded(run).path)) if where == "worktree" else (lambda: repo)
-    result = _design(run, _EditingModel(_answers(render({"tool.py": "print('built')\n"})), edit),
-                     target=str(repo))
+    edit = lambda: Path(worktree.recorded(run).path)
+    result = _design(run, _EditingModel(
+        _answers(render({"tool.py": "print('built')\n"})), edit),
+        target=str(repo))
     assert result.exit_ok is False
     assert "changed while agent 'emit' ran" in (result.error or "")
     found = worktree.recorded(run)
-    assert (f"in {found.path}, " in (result.error or "")) == (where == "worktree")
+    assert f"in {found.path}, " in (result.error or "")
     assert found.head == found.base, "materialise never ran"
+
+
+def test_an_emit_during_which_the_target_moves_warns_but_succeeds(
+        repo, tmp_path, capsys):
+    """In a worktree run the target is not where the run works; a change
+    there is a warning, not a failure."""
+    run = tmp_path / "run"
+    result = _design(run, _EditingModel(
+        _answers(render({"tool.py": "print('built')\n"})), lambda: repo),
+        target=str(repo))
+    assert result.exit_ok is True, result.error
+    warned = capsys.readouterr().err
+    assert "files outside its worktree changed" in warned
+    assert "app.py" in warned
 
 
 def test_a_refused_emit_is_redone_from_a_fresh_emit_txt(repo, tmp_path):
@@ -442,6 +456,39 @@ def test_a_refused_emit_is_redone_from_a_fresh_emit_txt(repo, tmp_path):
     assert redone.error is None
     assert (run / "emit.txt").read_text() == render({"tool.py": "print('redone')\n"})
     assert git(repo, "show", f"{_report(run)['branch']}:tool.py") == "print('redone')"
+
+
+class _HookChangingModel(FakeModel):
+    """An agent that rewrites a shared hook while a planning step runs (#347)."""
+
+    def __init__(self, answers: list[str], target_fn) -> None:
+        super().__init__(answers)
+        self._target_fn = target_fn
+
+    def complete(self, prompt: str, *, system: str = "", workdir: object = None) -> str:
+        answer = super().complete(prompt, system=system, workdir=workdir)
+        if "You are the research director" in prompt:
+            import subprocess
+            target = self._target_fn()
+            hooks = Path(subprocess.run(
+                ['git', '-C', str(target), 'rev-parse', '--path-format=absolute',
+                 '--git-common-dir'], capture_output=True, text=True,
+                check=True).stdout.strip()) / 'hooks'
+            hooks.mkdir(parents=True, exist_ok=True)
+            (hooks / 'pre-commit').write_text('#!/bin/sh\nexit 0\n')
+        return answer
+
+
+def test_a_planning_step_that_changes_shared_hooks_fails_the_step(repo, tmp_path):
+    """End-to-end: full design run, planning step changes hooks -> run fails (#347)."""
+    model = _HookChangingModel(
+        _answers(render({"tool.py": "print('built')\n"})),
+        lambda: repo,
+    )
+    result = _design(tmp_path / "run", model, target=str(repo))
+    assert result.exit_ok is False
+    assert "changed shared git state" in (result.error or "")
+    assert "research_director" in (result.error or "")
 
 
 def test_a_check_in_the_worktree_sees_none_of_refactorys_environment(repo, tmp_path, monkeypatch):
@@ -565,18 +612,30 @@ def test_a_second_run_on_a_project_names_the_earlier_runs_branches(tmp_path, cap
     assert f"has earlier runs, whose work is on their branches, not on main: {_report(tmp_path / 'one')['branch']}" in warned
 
 
-def test_an_emit_that_edits_the_checkout_the_run_started_from_is_refused(repo, tmp_path, monkeypatch):
-    """Workers start in the run directory inside that checkout, so it is watched too (#319)."""
+def test_an_emit_during_which_the_launcher_checkout_moves_warns_but_succeeds(
+        repo, tmp_path, monkeypatch, capsys):
+    """Workers start in the run directory inside that checkout; in a worktree
+    run a change there is a warning, not a failure (#319)."""
     launcher = git_repo(tmp_path / "launcher")
     monkeypatch.setenv("REFACTORY_PROJECT", str(launcher))
-    result = _design(tmp_path / "run", _EditingModel(_answers(render({"tool.py": "print(1)\n"})), lambda: launcher),
-                     target=str(repo))
-    assert result.exit_ok is False
-    assert f"in {launcher.resolve()}, " in (result.error or "")
+    result = _design(
+        tmp_path / "run",
+        _EditingModel(_answers(render({"tool.py": "print(1)\n"})),
+                      lambda: launcher),
+        target=str(repo))
+    assert result.exit_ok is True, result.error
+    warned = capsys.readouterr().err
+    assert f"in {launcher.resolve()}" in warned
+    assert "files outside its worktree changed" in warned
 
 
 def test_a_worktree_run_does_not_warn_that_the_persons_checkout_moved(repo, tmp_path, capsys):
-    """Its base is pinned, so the person working in their checkout meanwhile changes nothing it sees."""
+    """Its base is pinned, so the person working in their checkout meanwhile changes nothing it sees.
+
+    A person's edit during a planning step (an output-only step that watches
+    only the worktree for failure) gives the "files outside its worktree
+    changed" run warning and the run succeeds.
+    """
     class Moving(FakeModel):
         def complete(self, prompt: str, *, system: str = "", workdir: object = None) -> str:
             if "You are the research director" in prompt:
@@ -585,7 +644,10 @@ def test_a_worktree_run_does_not_warn_that_the_persons_checkout_moved(repo, tmp_
 
     result = _design(tmp_path / "run", Moving(_answers(render({"tool.py": "print(1)\n"}))), target=str(repo))
     assert result.exit_ok, result.error
-    assert "changed since this run recorded it" not in capsys.readouterr().err
+    warned = capsys.readouterr().err
+    assert "changed since this run recorded it" not in warned
+    assert "app.py" in warned
+    assert "files outside its worktree changed" in warned
 
 
 def test_the_agents_are_told_the_worktree_and_the_reviewers_the_diff_and_the_wrapper(repo, tmp_path):

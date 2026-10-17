@@ -206,18 +206,22 @@ def _compare(before: dict[str, Any], after: dict[str, Any], *, commits: bool = T
 
 
 def record(workdir: Path, root: Path, *, output_only: tuple[str, ...] = (),
-           also: tuple[Path, ...] = ()) -> dict[str, Any]:
+           also: tuple[Path, ...] = (),
+           warn_also: tuple[Path, ...] = ()) -> dict[str, Any]:
     """Record the target's baseline for this run, and which nodes may not touch it.
 
     ``output_only`` names agent nodes whose only output is their declared file: the
     agent-delivery bracket refuses one of them that changed the target while it ran.
-    ``also`` names further directories those nodes may not change either -- the run's
-    own worktree (#351), where an output-only node's direct edits would bypass the
-    commit that materialise makes of its answer.
+    ``also`` names directories whose changes **fail** an output-only step -- the
+    run's own worktree, where a direct edit bypasses materialise.
+    ``warn_also`` names directories whose changes produce a run **warning** -- the
+    launcher checkout, where another session's edit is not this run's result but
+    should be reported.
     """
     workdir = Path(workdir).resolve()
     baseline = {**state(root, exclude=(workdir,)), "output_only": list(output_only),
                 "also": [str(Path(path).resolve()) for path in also],
+                "warn_also": [str(Path(path).resolve()) for path in warn_also],
                 "recorded": datetime.now(timezone.utc).isoformat()}
     path = workdir / RECORD
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -276,23 +280,39 @@ def watch(workdir: Path, node: str) -> dict[str, Any] | None:
         return None
     found = state(Path(baseline["root"]), exclude=(Path(workdir),))
     found["also"] = {path: _also_state(path, workdir) for path in baseline.get("also", [])}
+    found["warn_also"] = {path: _also_state(path, workdir) for path in baseline.get("warn_also", [])}
     return found
 
 
-def strayed(workdir: Path, before: dict[str, Any] | None) -> list[str]:
-    """What changed in the target, or in a further watched directory, since :func:`watch`.
+def strayed(workdir: Path, before: dict[str, Any] | None) -> tuple[list[str], list[str]]:
+    """What changed since :func:`watch`, split into failures and warnings.
 
-    A watched worktree is held to its commits as well as its files: an output-only node
-    that committed there, or checked out another branch, changed it as surely as one
-    that edited a file.
+    Returns ``(fail, warn)``.
+
+    ``fail`` lists changes in ``also`` directories (the run's worktree): writing
+    there bypasses materialise.  When there are no ``also`` entries -- a run without
+    a worktree -- every target-root change goes here instead, preserving today's
+    behaviour where the target is the only protection.
+
+    ``warn`` lists changes in the target root (when ``also`` is non-empty) and in
+    ``warn_also`` directories (the launcher checkout): those are not where the run
+    works, so a change there cannot be its result, but the person is told their
+    files moved.
     """
     if before is None:
-        return []
-    changed = _compare(before, state(Path(before["root"]), exclude=(Path(workdir),)), commits=False)
+        return ([], [])
+    target_changes = _compare(before, state(Path(before["root"]), exclude=(Path(workdir),)), commits=False)
+    also_changes: list[str] = []
     for path, earlier in (before.get("also") or {}).items():
-        changed.extend(f"in {path}, {difference}"
-                       for difference in _compare(earlier, _also_state(path, workdir)))
-    return changed
+        also_changes.extend(f"in {path}, {difference}"
+                            for difference in _compare(earlier, _also_state(path, workdir)))
+    warn_also_changes: list[str] = []
+    for path, earlier in (before.get("warn_also") or {}).items():
+        warn_also_changes.extend(f"in {path}, {difference}"
+                                 for difference in _compare(earlier, _also_state(path, workdir)))
+    if also_changes or before.get("also"):
+        return (also_changes, target_changes + warn_also_changes)
+    return (target_changes, warn_also_changes)
 
 
 def refusal(node: str, root: str, changed: list[str], writes: list[str], *,

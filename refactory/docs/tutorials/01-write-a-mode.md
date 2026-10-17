@@ -193,7 +193,7 @@ steps design and design_fast use, and any mode can attach them:
 | Step | What it gives the run |
 |---|---|
 | `repo_change.knobs()`, `knob_names()`, `produces()` | the `target`, `base`, `worktree` and `setup` knobs, and the facts prepare returns, for the prepare node to declare |
-| `repo_change.locate(ctx, name, task)` | called from your prepare op: a git worktree of the target on the run's own branch, from a pinned base (a new project when there is no target), or the artifact directory with `worktree` off; its `emit_scope` fact tells your agent where to write and in which blocks |
+| `repo_change.locate(ctx, name, task, *, output_only=())` | called from your prepare op: a git worktree of the target on the run's own branch, from a pinned base (a new project when there is no target), or the artifact directory with `worktree` off; its `emit_scope` fact tells your agent where to write and in which blocks |
 | `repo_change.materialise_node()` | applies `emit.txt` as the run's next attempt, one commit each; an emission it cannot apply is recorded, not fatal |
 | `repo_change.refused(ctx)` | in your check gate: why the last emission could not be applied, to send back to the agent |
 | `repo_change.run_check(ctx, command, timeout)` | runs a command where the run works, in the worktree's own environment; the node that calls it also declares `repo_change.CHECK_WRITES` and `CHECK_PRODUCES`, because an install that writes a lockfile amends the attempt |
@@ -257,7 +257,7 @@ def build(self) -> nn.Graph:
 ```
 
 Its [ops](../../refactory_packages/fix_pack/ops.py) are as short: `prepare` returns
-`repo_change.locate(ctx, name, task)`'s facts, `check` sends `repo_change.refused(ctx)`
+`repo_change.locate(ctx, name, task, *, output_only=())`'s facts, `check` sends `repo_change.refused(ctx)`
 back to `emit` and otherwise runs `repo_change.run_check`, and `report` calls
 `repo_change.report(ctx, "result.json", ...)`.
 
