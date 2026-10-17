@@ -288,7 +288,6 @@ def test_stop_finds_checkpoint_owner_when_console_record_is_absent(monkeypatch, 
     interactive entry point), records its PID in console.json, and console.stop
     kills that child.
     """
-    import subprocess as real_subprocess
     from contextlib import contextmanager
     from refactory_dsh import recovery
 
@@ -307,14 +306,14 @@ def test_stop_finds_checkpoint_owner_when_console_record_is_absent(monkeypatch, 
     monkeypatch.setattr("refactory_dsh.run_ownership.ownership", fake_ownership)
 
     # Monkeypatch subprocess.Popen to launch a long-lived sleep instead of interactive
-    real_popen = real_subprocess.Popen
+    real_popen = subprocess.Popen
 
     def sleep_popen(args, **kwargs):
         return real_popen(
             [sys.executable, "-c", "import time; time.sleep(60)"],
             **kwargs,
         )
-    monkeypatch.setattr(real_subprocess, "Popen", sleep_popen)
+    monkeypatch.setattr(subprocess, "Popen", sleep_popen)
 
     result = recovery.start(run)
     child_pid = result["pid"]
@@ -328,16 +327,14 @@ def test_stop_finds_checkpoint_owner_when_console_record_is_absent(monkeypatch, 
         assert stop_result["stopped"] is True, stop_result
 
         # The child must be dead
-        import os as _os
         try:
-            _os.kill(child_pid, 0)
+            os.kill(child_pid, 0)
             raise AssertionError("child process should be dead")
         except ProcessLookupError:
             pass  # expected
     finally:
         try:
-            import os as _os
-            _os.kill(child_pid, signal.SIGKILL)
+            os.kill(child_pid, signal.SIGKILL)
         except (OSError, ProcessLookupError):
             pass
 

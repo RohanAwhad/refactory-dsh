@@ -132,7 +132,8 @@ def start(root: Path, *, acknowledge_failed: bool = False) -> dict[str, Any]:
             start_new_session=True)
     # Record the resumed launcher's PID in the console's launch record so that
     # console.stop finds and signals it exactly as it does a launched run's.
-    console_path = root / 'console.json'
+    from refactory_dsh.console import CONSOLE_FILE
+    console_path = root / CONSOLE_FILE
     try:
         existing = json.loads(console_path.read_text()) if console_path.exists() else {}
     except (OSError, json.JSONDecodeError):
