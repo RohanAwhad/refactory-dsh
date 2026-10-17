@@ -349,6 +349,18 @@ def run(
                     print(f"    refactory graph-control resume --run {workdir}", file=sys.stderr)
             except (OSError, ValueError, KeyError, TypeError):
                 pass  # gate diagnostic; do not mask the run's exit code
+            # An incomplete halt names the unreached sinks; say so here,
+            # since the gate diagnostic above says nothing for this case.
+            try:
+                import json as _json
+                _sp = workdir / ".refactory" / "spine-status.json"
+                if _sp.exists():
+                    _ss = _json.loads(_sp.read_text())
+                    _err = _ss.get("error")
+                    if _ss.get("status") == "halted" and _err:
+                        print(f"refactory: halted — {_err}", file=sys.stderr)
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
         if code == 0:
             summary = run_summary(workdir)
             if summary:

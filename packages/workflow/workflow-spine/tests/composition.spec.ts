@@ -330,11 +330,17 @@ describe('gate reason composition through applyControls', () => {
     expect(result.nodes.some(n => n.id === 'emit')).toBe(true)
     // Without rerun text, the gate's reason alone is the feedback
     expect(result.feedback?.emit).toBe('still wrong')
-    // Now test with rerun text: complete emit, drive back to halt, then rerun with text
+    // Now test with rerun text: drive to halt again (iterations were reset by the
+    // person's rerun, so two reloops are needed to exceed cap=1 again), then rerun
+    // with text.
     await call(ctx, 'wf_done', { node: 'emit' })
     await call(ctx, 'wf_next')     // check is due
     await call(ctx, 'wf_verdict', { gate: 'check', verdict: 'reloop', feedback: 'third refusal' })
-    // Halted again (iteration counter was reset by person's rerun)
+    // count=1, cap=1: 1 > 1 is false → loops back to emit
+    await call(ctx, 'wf_done', { node: 'emit' })
+    await call(ctx, 'wf_next')     // check is due again
+    await call(ctx, 'wf_verdict', { gate: 'check', verdict: 'reloop', feedback: 'fourth refusal' })
+    // count=2, cap=1: 2 > 1 → halts at max_iterations
     const cpBytes2 = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
     const revision2 = createHash('sha256').update(cpBytes2).digest('hex')
     wfs(join(directory, '2.json'), JSON.stringify({
@@ -345,9 +351,9 @@ describe('gate reason composition through applyControls', () => {
     const result2 = await call(ctx, 'wf_next') as { status: string; feedback?: Record<string, string> }
     // With rerun text, gate reason first then rerun text
     const fb = result2.feedback?.emit ?? ''
-    expect(fb).toContain('third refusal')
+    expect(fb).toContain('fourth refusal')
     expect(fb).toContain('try a different approach')
-    expect(fb.indexOf('third refusal')).toBeLessThan(fb.indexOf('try a different approach'))
+    expect(fb.indexOf('fourth refusal')).toBeLessThan(fb.indexOf('try a different approach'))
 
     // Now test after gate proceeded: complete emit, check proceeds, rerun should show no old reason
     await call(ctx, 'wf_done', { node: 'emit' })
