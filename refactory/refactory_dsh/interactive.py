@@ -224,7 +224,11 @@ def run(
     if workdir is None:
         workdir = default_workdir(identifier)
     workdir = Path(workdir).expanduser().resolve()
+    # Pre-flight: both checks raise on failure before ownership() creates
+    # the run directory, so a refused start leaves nothing behind.
     require_build()
+    from refactory_dsh import dsh_profile
+    dsh_profile.require()
     with ownership(workdir) as owner:
         if resume:
             if source or source_format not in ('', 'directory') or approve or knobs or intent or model_context or provider or model or bool(worker_backend) or effort or permission_mode or role_routes or node_routes:

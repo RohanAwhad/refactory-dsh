@@ -24,6 +24,7 @@ import pytest
 from refactory_dsh import dsh_profile, registry
 from refactory_dsh.dsh_runtime import run_on_dsh
 from refactory_dsh.paths import REPO_ROOT
+from tests_support import _link_bundle, _profile
 
 #: The preset bundle this checkout renamed. Spelled out because a profile manifest
 #: written before the rename carries exactly this string, and the migration tests
@@ -40,23 +41,6 @@ def _fixed_node(monkeypatch):
     """These tests fake `subprocess.Popen` to watch DSH being spawned. Choosing a Node
     may run `node --version`, which would reach the fake, so the choice is fixed."""
     monkeypatch.setenv("NODE_BIN", "node")
-
-def _profile(home: Path, name: str, bundles: list[str]) -> Path:
-    directory = home / "profiles" / name
-    directory.mkdir(parents=True)
-    (directory / "package.json").write_text(
-        json.dumps({
-            "name": f"dsh-profile-{name}",
-            "dependencies": {
-                bundle: "link:/checkout"
-                for bundle in bundles
-                if bundle in {entry.bundle for entry in dsh_profile.LAYERS.values()}
-            },
-            "dsh": {"profile": {"bundles": bundles}},
-        })
-    )
-    return directory
-
 
 def _declare(directory: Path, packages: list[str]) -> None:
     """Write ``dependencies`` entries for ``packages``, as `dsh plugin add` would.
@@ -884,6 +868,109 @@ def test_runtime_real_child_receives_preflight_home(tmp_path, monkeypatch, expli
     received = json.loads(record.read_text())
     assert received["HOME"] == str(tmp_path / "contained")
     assert received["DSH_HOME"] == received["REFACTORY_MODEL_DSH_HOME"] == str(selected)
+
+
+def test_a_profile_linked_to_another_checkout_is_a_mismatch(tmp_path, monkeypatch):
+    """A profile whose symlink resolves to another checkout is not ready."""
+    home = tmp_path / "home"
+    _profile(home, "graph", ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
+    other_checkout = tmp_path / "other-checkout" / "packages" / "bundle" / "graph"
+    _link_bundle(home, "graph", dsh_profile.GRAPH_BUNDLE, other_checkout)
+    monkeypatch.setenv("DSH_HOME", str(home))
+
+    problem = dsh_profile.requirement()
+    assert problem is not None
+    assert str(other_checkout) in problem or "other-checkout" in problem
+    assert dsh_profile.add_command() in problem
+    assert not dsh_profile.is_ready()
+
+
+def test_a_profile_linked_to_this_checkout_is_still_ready(tmp_path, monkeypatch):
+    """A profile whose symlink resolves to this checkout is ready."""
+    home = tmp_path / "home"
+    _profile(home, "graph", ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
+    _link_bundle(home, "graph", dsh_profile.GRAPH_BUNDLE,
+                 REPO_ROOT / "packages" / "bundle" / "graph")
+    monkeypatch.setenv("DSH_HOME", str(home))
+
+    assert dsh_profile.is_ready()
+    assert dsh_profile.requirement() is None
+    dsh_profile.require()  # must not raise
+
+
+def test_a_profile_without_a_symlink_falls_through(tmp_path, monkeypatch):
+    """No symlink means no mismatch — the existing checks still govern."""
+    home = tmp_path / "home"
+    _profile(home, "graph", ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
+    # No _link_bundle call — no node_modules symlink exists.
+    monkeypatch.setenv("DSH_HOME", str(home))
+
+    # The bundle is declared, no symlink to compare → still ready.
+    assert dsh_profile.requirement() is None
+    assert dsh_profile.is_ready()
+
+
+def test_run_on_dsh_refuses_before_spawning_when_the_profile_links_to_another_checkout(
+    tmp_path, monkeypatch
+):
+    """The runner refuses before spawning when the profile links to another checkout."""
+    home = tmp_path / "home"
+    _profile(home, "graph", ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
+    other = tmp_path / "other" / "packages" / "bundle" / "graph"
+    _link_bundle(home, "graph", dsh_profile.GRAPH_BUNDLE, other)
+    monkeypatch.setenv("DSH_HOME", str(home))
+    monkeypatch.delenv("REFACTORY_MODEL_DSH_HOME", raising=False)
+
+    def _no_spawn(*args, **kwargs):
+        raise AssertionError("a subprocess was spawned without a usable profile")
+
+    monkeypatch.setattr("refactory_dsh.dsh_runtime.subprocess.Popen", _no_spawn)
+    run = run_on_dsh({}, tmp_path / "run")
+    assert run.returncode == 2
+    assert "other" in run.stderr  # names the other checkout
+    assert dsh_profile.add_command() in run.stderr
+
+
+def test_readiness_gaps_includes_checkout_mismatch(tmp_path, monkeypatch):
+    """Doctor's readiness_gaps reports a checkout mismatch for an owned target."""
+    home = tmp_path / "home"
+    _profile(home, "graph", ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
+    other = tmp_path / "other" / "packages" / "bundle" / "graph"
+    _link_bundle(home, "graph", dsh_profile.GRAPH_BUNDLE, other)
+    # Also create a ready GUI profile so only graph is a gap.
+    _profile(home, dsh_profile.GUI_PROFILE, [
+        "@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app",
+        dsh_profile.PRESETS_BUNDLE, dsh_profile.WEB_SURFACE_BUNDLE,
+    ])
+    monkeypatch.setenv("DSH_HOME", str(home))
+
+    gaps = dsh_profile.readiness_gaps()
+    graph_gaps = [(p, b, r) for p, b, r in gaps if p == "graph"]
+    assert len(graph_gaps) == 1
+    assert "other" in graph_gaps[0][2]  # names the other checkout
+    assert dsh_profile.add_command() in graph_gaps[0][2]
+
+
+def test_bundle_checkout_root_returns_resolved_path(tmp_path, monkeypatch):
+    """bundle_checkout_root resolves the profile's bundle symlink."""
+    home = tmp_path / "home"
+    _profile(home, "graph", ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
+    target = tmp_path / "checkout" / "packages" / "bundle" / "graph"
+    _link_bundle(home, "graph", dsh_profile.GRAPH_BUNDLE, target)
+    monkeypatch.setenv("DSH_HOME", str(home))
+
+    result = dsh_profile.bundle_checkout_root()
+    assert result is not None
+    assert result == target.resolve()
+
+
+def test_bundle_checkout_root_returns_none_without_symlink(tmp_path, monkeypatch):
+    """bundle_checkout_root returns None when no symlink exists."""
+    home = tmp_path / "home"
+    _profile(home, "graph", ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
+    monkeypatch.setenv("DSH_HOME", str(home))
+
+    assert dsh_profile.bundle_checkout_root() is None
 
 
 def test_additive_profile_is_composed_and_not_retired(tmp_path, monkeypatch):

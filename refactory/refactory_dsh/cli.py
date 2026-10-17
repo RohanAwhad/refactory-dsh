@@ -370,11 +370,19 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             ).exists():
                 continue
             problems = [reason for name, _bundle, reason in gaps if name == entry.profile]
+            # Show which checkout the graph bundle comes from on the ok row too.
+            ok_detail = f"{dsh_profile.profile_dir(entry.profile)} — {entry.why}"
+            if entry.owned and not problems:
+                for key in entry.layers:
+                    layer = dsh_profile.LAYERS[key]
+                    resolved = dsh_profile.bundle_checkout_root(entry.profile, layer.bundle)
+                    if resolved is not None:
+                        ok_detail += f" (bundle: {resolved})"
+                        break
             checks.append((
                 f"DSH profile {entry.profile!r}",
                 not problems,
-                " | ".join(problems)
-                or f"{dsh_profile.profile_dir(entry.profile)} — {entry.why}",
+                " | ".join(problems) or ok_detail,
             ))
         # A harness-owned profile an older install mutated. The migration is
         # stated, not performed: it is the operator's machine state, so the row

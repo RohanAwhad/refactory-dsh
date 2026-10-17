@@ -349,9 +349,62 @@ def _obsolete_names(name: str, names: list[str]) -> list[str]:
     ]
 
 
+def bundle_checkout_root(
+    name: str = GRAPH_PROFILE,
+    bundle: str = GRAPH_BUNDLE,
+    *,
+    home: str | Path | None = None,
+) -> Path | None:
+    """The resolved directory the profile's bundle symlink points to, or ``None``.
+
+    Returns ``None`` when the symlink cannot be inspected (absent, broken, not a
+    symlink, permission error).  The caller compares this against
+    ``REPO_ROOT / 'packages' / 'bundle' / bundle_directory(bundle)`` to decide
+    whether the profile carries *this* checkout's bundle or another's.
+    """
+    link = profile_dir(name, home=home) / "node_modules" / bundle
+    try:
+        if not link.is_symlink():
+            return None
+        return link.resolve(strict=True)
+    except (OSError, ValueError):
+        return None
+
+
+def checkout_mismatch(
+    name: str = GRAPH_PROFILE,
+    bundle: str = GRAPH_BUNDLE,
+    *,
+    home: str | Path | None = None,
+    checkout: Path | None = None,
+) -> str | None:
+    """A diagnostic when the profile's bundle symlink resolves to another checkout.
+
+    Returns ``None`` when the symlink matches this checkout, when the symlink
+    cannot be inspected, or when the profile does not exist.  Returns an
+    actionable string naming the other checkout and the ``dsh plugin`` command
+    that relinks it when the symlink resolves to a different checkout.
+    """
+    resolved = bundle_checkout_root(name, bundle, home=home)
+    if resolved is None:
+        return None
+    expected = (checkout or REPO_ROOT) / "packages" / "bundle" / bundle_directory(bundle)
+    try:
+        expected_resolved = expected.resolve()
+    except (OSError, ValueError):
+        expected_resolved = expected
+    if resolved == expected_resolved:
+        return None
+    return (
+        f"the DSH profile {name!r} carries {bundle}, but its symlink resolves to "
+        f"{resolved}, not this checkout's {expected}. Relink it with "
+        f"`{add_command(name, bundle, checkout=checkout)}`"
+    )
+
+
 def is_ready(name: str = GRAPH_PROFILE, bundle: str = GRAPH_BUNDLE, *, home: str | Path | None = None) -> bool:
     """Whether a mode can be run on DSH through this profile right now."""
-    return bundle in declared_bundles(name, home=home)
+    return bundle in declared_bundles(name, home=home) and checkout_mismatch(name, bundle, home=home) is None
 
 
 def bundle_directory(bundle: str) -> str:
@@ -685,6 +738,9 @@ def requirement(name: str = GRAPH_PROFILE, bundle: str = GRAPH_BUNDLE, *, home: 
             f"the DSH profile {name!r} exists but does not carry {bundle}, so it is "
             f"not this checkout's {name!r} profile. Add it with `{prefix}{add_command(name, bundle)}`"
         )
+    mismatch = checkout_mismatch(name, bundle, home=home)
+    if mismatch is not None:
+        return mismatch
     return None
 
 
@@ -713,7 +769,9 @@ __all__ = [
     "Layer",
     "Target",
     "add_command",
+    "bundle_checkout_root",
     "bundle_directory",
+    "checkout_mismatch",
     "declared_bundles",
     "declared_bundles_in",
     "dsh_home",
