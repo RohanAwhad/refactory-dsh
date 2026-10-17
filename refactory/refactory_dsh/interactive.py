@@ -347,8 +347,8 @@ def run(
                     print(f"    refactory steer --run {workdir} --verdict {gate_id}=<verdict>", file=sys.stderr)
                     print(f"  Then continue the run:", file=sys.stderr)
                     print(f"    refactory graph-control resume --run {workdir}", file=sys.stderr)
-            except Exception:
-                pass  # best-effort; do not mask the run's own error
+            except (OSError, ValueError, KeyError, TypeError):
+                pass  # gate diagnostic; do not mask the run's exit code
         if code == 0:
             summary = run_summary(workdir)
             if summary:

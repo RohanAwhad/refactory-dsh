@@ -240,6 +240,26 @@ describe('graph runner', () => {
     expect(harness.exits).toEqual([0])
   })
 
+  it('shows tokens on the step-done line from worker receipts', async () => {
+    const dir = workdir()
+    mkdirSync(join(dir, '.refactory', 'workers'), { recursive: true })
+    writeFileSync(join(dir, '.refactory', 'workers', '001.json'),
+      JSON.stringify({ node_id: 'survey', usage: { tokens: 5000 } }))
+    const harness = await bench({
+      chat: true,
+      workdir: dir,
+      statuses: [
+        { status: 'done', completed: ['survey'] },
+      ],
+      chatTurns: ['all done'],
+      events: [],
+      stdin: Readable.from(['/quit\n']),
+    })
+    expect(harness.exits).toEqual([0])
+    expect(harness.err()).toContain('survey done')
+    expect(harness.err()).toContain('tokens')
+  })
+
   it('does not read the terminal when chat is off', async () => {
     // The one-shot run is a promise to scripts: no prompt, no read, no waiting on a
     // person who is not there. A stdin that never ends would hang the run if it did.
