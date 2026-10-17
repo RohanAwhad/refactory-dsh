@@ -542,6 +542,46 @@ def test_a_mid_line_search_is_not_falsely_skipped_when_replacement_starts_a_line
     assert result == "def f():\n    return compute(b)\ncompute(b)\n" and skipped == 0
 
 
+def _applied(text: str, answer: str, name: str = "models.md") -> tuple[str, int]:
+    """An emission's edits to one file, parsed as materialise parses them, then applied to ``text``."""
+    _files, edits, _deletes = repo_change._emitted(answer, edits=True)
+    return repo_change._edited(Path(name), text, edits[Path(name)], f"git show HEAD:{name}")
+
+
+#: models.md keeps each paragraph on one line; b13b's refused edit searched mid-paragraph.
+PARAGRAPH = ("the refused emission does not count against `check_attempts`; the gate's own iteration "
+             "limit still bounds retries. An emission that changes nothing is refused back to emit.\n")
+SENTENCE = "the gate's own iteration limit still bounds retries."
+ADDED = " A CEO redo keeps the count."
+
+
+def test_an_emitted_edit_that_stops_inside_a_line_applies():
+    """The parser ends a search with a newline; a sentence inside a one-line paragraph is still found."""
+    answer = _edit("models.md", (SENTENCE + "\n", SENTENCE + ADDED + "\n"))
+    result, skipped = _applied(PARAGRAPH, answer)
+    assert result == PARAGRAPH.replace(SENTENCE, SENTENCE + ADDED) and skipped == 0
+
+
+def test_an_emitted_mid_line_insertion_sent_again_is_skipped_not_applied_twice():
+    answer = _edit("models.md", (SENTENCE + "\n", SENTENCE + ADDED + "\n"))
+    once, _ = _applied(PARAGRAPH, answer)
+    assert _applied(once, answer) == (once, 1)
+
+
+def test_an_emitted_mid_line_search_found_twice_is_refused():
+    with pytest.raises(worktree.AttemptRefused, match="appears 2 times"):
+        _applied("x. y.\nx. z.\n", _edit("models.md", ("x.\n", "w.\n")))
+
+
+@pytest.mark.parametrize("pair, edited", [
+    (("b\n", "B\n"), "a\nB\nc\n"),
+    (("b\n", ""), "a\nc\n"),
+], ids=["whole-line", "line-removed"])
+def test_emitted_whole_line_edits_still_match_whole_lines(pair, edited):
+    """A search that ends at a line's end keeps its newline, so a removed line leaves no blank."""
+    assert _applied("a\nb\nc\n", _edit("models.md", pair)) == (edited, 0)
+
+
 def test_multiple_edit_blocks_for_the_same_file_are_merged():
     """Several ===EDIT: blocks naming the same file are applied in order, as if one block."""
     answer = (_edit("a.py", ("aaa\n", "AAA\n"))

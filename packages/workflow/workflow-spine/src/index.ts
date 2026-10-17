@@ -770,6 +770,7 @@ export function apply(ctx: Context, config: Config): void {
       const runningNodes = views.map(v => ({ id: v.id, kind: nodeKind(v._type) }))
       const nodeList = runningNodes.map(n => `${n.id} (${n.kind})`).join(', ')
       const wait = status === 'paused' ? 'paused by user'
+        : status === 'halted' && detail !== undefined ? detail
         : status === 'waiting_user' || views.some(node => node._type === 'GateNode' && node.evaluator_type === 'user')
           ? `waiting for user gate: ${nodeList || 'user gate'}`
           : views.some(node =>
@@ -804,6 +805,17 @@ export function apply(ctx: Context, config: Config): void {
       // A stale ready checkpoint could replay a command whose outcome is unknown.
       // Persist the execution marker before dispatch, and stop on every write error.
       throw new Error('Cannot persist graph recovery checkpoint; continuation refused', { cause: error })
+    }
+  }
+
+  /** The status {@link recordStatus} last wrote for the run, or undefined when there is none to read. */
+  function recordedStatus(workdir: string | undefined): string | undefined {
+    if (workdir === undefined) return undefined
+    try {
+      const recorded = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8')) as { status?: unknown }
+      return typeof recorded?.status === 'string' ? recorded.status : undefined
+    } catch {
+      return undefined
     }
   }
 
@@ -869,7 +881,12 @@ export function apply(ctx: Context, config: Config): void {
             runtimeBridge(`${dataCommand} reset`, workdir, env, { ...plan, state, archiveArtifacts: true })
           }
           spine.redo(target)
-          if (typeof request.text === 'string' && request.text.trim() !== '') spine.setFeedback(target, request.text)
+          const gateReason = spine.gateReasonFor(target)
+          const rerunText = typeof request.text === 'string' && request.text.trim() !== '' ? request.text.trim() : ''
+          if (gateReason !== undefined || rerunText !== '') {
+            const parts = [gateReason, rerunText].filter(Boolean)
+            spine.setFeedback(target, parts.join('\n\n'))
+          }
           if (plan.resetPass) materialised.delete(spine)
           receipt.message = `Reopened ${target}; invalidated ${plan.nodes.join(', ')}; prior evidence archived.`
         } else throw new Error('unsupported graph control')
@@ -1227,7 +1244,10 @@ export function apply(ctx: Context, config: Config): void {
         if (node._type === 'GateNode' && node.gate_prompt !== undefined) node.gate_prompt = withFacts(node.gate_prompt, workdir)
       }
     }
-    recordStatus(spine, workdir, spine.isHalted() ? 'halted' : spine.isPaused() ? 'paused' : next.status === 'done' ? 'done' : 'ready')
+    // A run that stopped short of its end says which nodes it never reached.
+    const halted = next.status === 'done' ? next.halted : undefined
+    const unreached = halted?.reason === 'incomplete' ? `never reached: ${(halted.unreached ?? []).join(', ')}` : undefined
+    recordStatus(spine, workdir, spine.isHalted() ? 'halted' : spine.isPaused() ? 'paused' : next.status === 'done' ? 'done' : 'ready', unreached)
     // The item being iterated travels with the node views, so the subagent for a
     // pass is handed the item rather than being sent to find it on disk. Under
     // `interactiveOpen` the node this call ran travels the same way, so the CEO
@@ -1755,6 +1775,17 @@ export function apply(ctx: Context, config: Config): void {
     presentResult: (args, result) => presentResult('redo', args as Record<string, unknown>, result),
     execute(args, exec) {
       const { spine, workdir, commandEnv, dataCommand } = requireRun(exec)
+      // A limit that stopped the run -- a gate halted at its iteration limit, or the run
+      // failed, as design mode's own attempt limit fails it -- is not the CEO's to lift.
+      const state = spine.state()
+      const halted = state.halted as { gate?: string; reason?: string } | undefined
+      const stopped = halted?.reason === 'max_iterations'
+        ? `run halted at gate ${halted.gate} after reaching its iteration limit`
+        : recordedStatus(workdir) === 'failed' ? 'run has failed' : undefined
+      if (stopped !== undefined) {
+        throw new Error(`${stopped}; a CEO redo cannot spend more attempts. Use `
+          + '`refactory graph-control rerun --acknowledge-failure` to have a person spend more attempts.')
+      }
       const plan = spine.planRedo(args.node)
       if (dataCommand !== '' && workdir === undefined) {
         throw new Error('redo needs the run workdir to invalidate its data facts safely')
@@ -1762,9 +1793,9 @@ export function apply(ctx: Context, config: Config): void {
       // Bookkeeping must succeed before the live cursor is changed. This bridge
       // uses the existing data loader because it owns the run's Task facts.
       const receipt = dataCommand !== '' && workdir !== undefined
-        ? runtimeBridge(`${dataCommand} reset`, workdir, commandEnv, { ...plan, state: spine.state() })
+        ? runtimeBridge(`${dataCommand} reset`, workdir, commandEnv, { ...plan, state, preserveAttemptFacts: true })
         : undefined
-      spine.redo(args.node)
+      spine.redo(args.node, { preserveIterations: true })
       if (plan.resetPass) materialised.delete(spine)
       recordStatus(spine, workdir, spine.isPaused() ? 'paused' : 'ready')
       return sync(json({ status: 'redone', node: args.node, ...plan, ...(receipt === undefined ? {} : { receipt }) }))

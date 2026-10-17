@@ -351,8 +351,17 @@ def run(
                     print(f"    refactory steer --run {workdir} --verdict {gate_id}=<verdict>", file=sys.stderr)
                     print(f"  Then continue the run:", file=sys.stderr)
                     print(f"    refactory graph-control resume --run {workdir}", file=sys.stderr)
-            except Exception:
-                pass  # best-effort; do not mask the run's own error
+            except (OSError, ValueError, KeyError, TypeError):
+                pass  # gate diagnostic; do not mask the run's exit code
+            # A run that stopped short of its end names the nodes it never reached;
+            # the gate diagnostic above says nothing for that case.
+            try:
+                import json
+                recorded = json.loads((workdir / ".refactory" / "spine-status.json").read_text())
+                if recorded.get("status") == "halted" and recorded.get("error"):
+                    print(f"refactory: the run stopped early: {recorded['error']}", file=sys.stderr)
+            except (OSError, ValueError, AttributeError):
+                pass  # diagnostic only; do not mask the run's exit code
         if code == 0:
             summary = run_summary(workdir)
             if summary:

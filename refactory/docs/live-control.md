@@ -67,7 +67,7 @@ uv run refactory graph-control stop --run /absolute/run
 
 Process cancellation is separate: `refactory stop --run RUN_DIR` requests interruption of its recorded owned process. Inspect the receipt and subsequent activity for confirmation; sending a signal is not proof that every worker terminated. Stopping a reader does not issue either kind of stop.
 
-A control that cannot be applied — a stale revision, an unsupported action, a node that is not safely replayable — is recorded with `status: failed` in the receipt. The failure reason is also journaled as a run warning, visible in `refactory status` and in the receipt shown by `refactory graph-control`'s own output. The owner consumes and removes the control file regardless of outcome.
+A control that cannot be applied — a stale revision, an unsupported action, a node that is not safely replayable — is recorded with `status: failed` in the receipt. The failure reason is also journaled as a run warning, visible in `refactory status` and in the receipt shown by `refactory graph-control`'s own output. The owner removes the control file once it applies or refuses the control. A deferred rerun stays queued until concurrent work joins.
 
 To change completed work, choose a completed node and prompt correction, press **Preview affected results**, inspect the invalidated nodes, then **Confirm correction and rerun**. The console equivalent is `graph-control preview --node NODE`, followed by `graph-control rerun --node NODE --text "CORRECTION" --revision REVISION` with the returned revision and the same `--run`. The owner refuses a stale preview. Prior evidence is archived and dependent results invalidated before execution; a note alone does not silently rewrite completed work. Unsafe replay plans, including unsettled concurrent work, are refused.
 
@@ -75,12 +75,13 @@ To change completed work, choose a completed node and prompt correction, press *
 
 The run's status includes whether its owner process is alive. A failed run with a live owner may still apply queued controls and does not need recovery — wait for it or send another control. A failed run whose owner is not alive cannot apply pending controls; explicit recovery (resume) is needed to start a fresh owner from the saved checkpoint.
 
-A live owner's resume control releases its boundary pause. If the old graph owner is gone, explicit resume can start a fresh owned process from the saved checkpoint. It preserves the run identity, completed work, route configuration and consumed resources. Larger resource limits are explicit allocations, not a reset of usage. The interactive entry point also accepts:
+A live owner's resume control releases its boundary pause. If the old graph owner is gone, explicit resume can start a fresh owned process from the saved checkpoint. It preserves the run identity, completed work, route configuration and consumed resources. Larger resource limits are explicit allocations, not a reset of usage. `refactory graph-control resume --run <dir>` is the recovery command:
 
 ```bash
-uv run python -m refactory_dsh.interactive package/mode \
-  --workdir /absolute/run --headless --resume
+uv run refactory graph-control resume --run /absolute/run
 ```
+
+It internally runs the interactive entry point with `--resume`.
 
 Recovery requires a recognized checkpoint, a stopped owner, matching prepared configuration and unchanged fingerprinted inputs/outputs. It refuses a dispatch whose outcome is unknown — a pending marker with no written receipt; a refused step whose receipt was written is not unknown. It also refuses a failed or unknown last-node outcome. In-flight external product sessions are not resumed. Python executor partial-fork recovery is also refused because successful sibling facts cannot yet be restored safely.
 
@@ -110,6 +111,14 @@ the queued rerun at its first boundary, and continues the run.
 `--resume` continues to refuse failed checkpoints. Only `graph-control rerun`
 with `--acknowledge-failure` starts an owner for a failed run.
 
+### Incomplete cursor drain
+
+A run whose cursor empties before reaching a graph sink — for example after
+a redo that dropped the work due, or a skip that bypassed the remaining
+path — halts with the names of the unreached sinks. The halt is visible in
+`refactory status` (state `halted`, finished) and makes `refactory ceo`
+exit non-zero.
+
 ### Forward-only invalidation
 
 Replaying a node invalidates only its forward path. Nodes reached exclusively
@@ -124,6 +133,32 @@ amendment. The feedback is shown to the driver, cleared when the agent
 completes, and superseded when a gate reloops with its own findings. A
 one-shot correction ("emit these two files and change nothing else") applies
 to that visit only and does not override a later review's repair.
+
+### Gate refusal reason persistence
+
+When a gate refused work and sent it back (reloop), or halted at its
+iteration limit, the gate's last refusal reason is preserved beside its
+verdicts. On a rerun of the node the gate sent work back to, that reason
+is shown as the node's feedback — the node sees what the gate said, even
+when the person reruns without `--text`. When the person supplies `--text`,
+the gate's reason appears first and the person's text follows it. A gate
+that proceeded clears its stored reason, so a rerun after a passed gate
+shows no stale refusal.
+
+### CEO redo and attempt limits
+
+When the CEO redoes a completed node through `wf_redo`, the redo preserves
+the run's attempt counters and gate iteration counts. A gate that was on
+iteration 2 of 3 stays there; the check gate's `attempts_used` is not reset.
+This prevents an infinite redo loop where the CEO redoes emit after the check
+gate exhausts its attempts, resetting the counter each time.
+
+Once a gate's iteration limit has halted the run, or a node has failed,
+`wf_redo` is refused. The refusal names
+`refactory graph-control rerun --acknowledge-failure` as the way a person
+spends more attempts. Any `graph-control rerun` by a person resets all
+counters — both gate iteration counts and attempt facts — as their decision
+to spend more attempts.
 
 ### Deferred replay
 

@@ -287,6 +287,8 @@ def watch(workdir: Path, node: str) -> dict[str, Any] | None:
 def strayed(workdir: Path, before: dict[str, Any] | None) -> tuple[list[str], list[str]]:
     """What changed since :func:`watch`, split into failures and warnings.
 
+    A watched worktree is held to its commits as well as its files.
+
     Returns ``(fail, warn)``.
 
     ``fail`` lists changes in ``also`` directories (the run's worktree): writing

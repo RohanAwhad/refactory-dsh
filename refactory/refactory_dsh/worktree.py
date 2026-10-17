@@ -507,13 +507,13 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
         destination.write_text(content)
     if files:
         git(path, "add", "-f", "--", *(str(name) for name in files))
-    # An emission that changes nothing — every file and edit already in the last
-    # attempt — is refused before committing, so the run loops back to emit
+    # An emission that changes nothing -- every file and edit already in the last
+    # attempt -- is refused before committing, so the run loops back to emit
     # rather than through the check and reviews on identical code.
     try:
         git(path, "diff", "--cached", "--quiet")
     except ValueError:
-        pass  # exit 1 means something is staged — the normal path
+        pass  # a non-zero exit from git diff --cached --quiet -- the normal path when something is staged
     else:
         pending.unlink(missing_ok=True)
         raise AttemptRefused(
@@ -941,9 +941,13 @@ def ensure_environment(found: Worktree, run: Path, budget: Any = None) -> tuple[
 def amend(found: Worktree, run: Path, paths: list[str], message: str) -> Worktree:
     """Stage ``paths`` and amend them into the attempt, or commit with ``message`` when there is none.
 
+    When the head is still the base -- before there is one, a commit of its own, so
+    the base the run was pinned to is never rewritten -- the amendment is a fresh
+    commit rather than an amend.
+
     One code path for every amendment -- a lockfile an install writes and a file a
     generate command rewrites -- so the git add, the amend-or-commit, the new head
-    and the record write are never duplicated.
+    and the record write are in one place.
     """
     path = Path(found.path)
     git(path, "add", "-f", "--", *paths)

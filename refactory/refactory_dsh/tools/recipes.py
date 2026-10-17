@@ -203,8 +203,8 @@ RECIPES: tuple[Recipe, ...] = (
         group="read",
         title="Where the run is",
         command=f"uv run refactory status --run {SCRATCH}/run",
-        expect="the run's state and the events it went through",
-        contains=('"state"', '"events"'),
+        expect="the run's state and how far it got",
+        contains=("State:", "Epoch"),
     ),
     Recipe(
         id="again-adopt",
@@ -224,7 +224,7 @@ RECIPES: tuple[Recipe, ...] = (
         title="Tell a run what it is for, while it runs",
         command=f'uv run refactory steer --run {SCRATCH}/run --note "keep the step small" --kind constraint',
         expect="the note is in the run's intent ledger, marked as a constraint",
-        contains=("entries", "constraint"),
+        contains=("Note recorded", "constraint"),
     ),
     Recipe(
         id="steer-verdict",
@@ -236,7 +236,7 @@ RECIPES: tuple[Recipe, ...] = (
             f"uv run refactory steer --run {SCRATCH}/verdict-run --verdict approve=proceed"
         ),
         expect="the verdict is scoped to the reviewed draft and recorded under the gate that owns it",
-        contains=("gate: approve", "verdict: proceed", "scope:"),
+        contains=("Recorded verdict approve=proceed", "scoped to"),
     ),
     Recipe(
         id="dataset-walker",

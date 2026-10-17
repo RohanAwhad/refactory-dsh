@@ -798,6 +798,83 @@ describe('applyControls integration', () => {
     expect(state.completed).not.toContain('p')
   })
 
+  it('wf_redo refuses when run is halted by max_iterations', async () => {
+    const workdir = scratch()
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', reads: [], writes: [] },
+        gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'fn', evaluator_command: 'true', reads: [] },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', reads: [], writes: [] },
+      },
+      edges: [
+        { source: 'a', target: 'gate' },
+        { source: 'gate', target: 'a', condition: 'reloop' },
+        { source: 'gate', target: 'b', condition: 'proceed' },
+      ],
+    }
+    const ctx = await mount(graph, { workdir, maxIterations: 2 })
+    // Drive through 3 reloops (count > cap=2 halts on the 3rd)
+    await call(ctx, 'wf_next')       // a is due
+    await call(ctx, 'wf_done', { node: 'a' })
+    await call(ctx, 'wf_next')       // gate is due
+    await call(ctx, 'wf_verdict', { gate: 'gate', verdict: 'reloop' }) // iteration 1
+    await call(ctx, 'wf_next')       // a is due again
+    await call(ctx, 'wf_done', { node: 'a' })
+    await call(ctx, 'wf_next')       // gate is due
+    await call(ctx, 'wf_verdict', { gate: 'gate', verdict: 'reloop' }) // iteration 2
+    await call(ctx, 'wf_next')       // a is due again
+    await call(ctx, 'wf_done', { node: 'a' })
+    await call(ctx, 'wf_next')       // gate is due
+    await call(ctx, 'wf_verdict', { gate: 'gate', verdict: 'reloop' }) // iteration 3 > cap=2 → halts
+    // The spine is now halted
+    const next = await call(ctx, 'wf_next') as { status: string; halted?: { reason: string } }
+    expect(next.status).toBe('done')
+    expect(next.halted?.reason).toBe('max_iterations')
+    // wf_redo should refuse
+    await expect(call(ctx, 'wf_redo', { node: 'a' }))
+      .rejects.toThrow(/iteration limit/)
+    await expect(call(ctx, 'wf_redo', { node: 'a' }))
+      .rejects.toThrow(/refactory graph-control rerun --acknowledge-failure/)
+  })
+
+  it('wf_redo refuses when run has failed', async () => {
+    const workdir = scratch()
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', reads: [], writes: [] },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', reads: [], writes: [] },
+      },
+      edges: [{ source: 'a', target: 'b' }],
+    }
+    const ctx = await mount(graph, { workdir })
+    // Complete a so it can be redone
+    await call(ctx, 'wf_next')
+    await call(ctx, 'wf_done', { node: 'a' })
+    // Simulate a failed run by writing the status file
+    mkdirSync(join(workdir, '.refactory'), { recursive: true })
+    writeFileSync(join(workdir, '.refactory', 'spine-status.json'),
+      JSON.stringify({ status: 'failed', error: 'authoring unresolved after 3 attempt(s)' }))
+    // wf_redo should refuse
+    await expect(call(ctx, 'wf_redo', { node: 'a' }))
+      .rejects.toThrow(/CEO redo cannot/)
+    await expect(call(ctx, 'wf_redo', { node: 'a' }))
+      .rejects.toThrow(/refactory graph-control rerun --acknowledge-failure/)
+  })
+
+  it('a CEO redo asks the data bridge to keep the attempt facts', async () => {
+    // The bridge is the Python reset that clears a reopened node's facts; the flag is
+    // what keeps design mode's own attempt counts through the CEO's redo.
+    const workdir = scratch()
+    const payload = join(workdir, 'reset-payload.json')
+    const ctx = await mount(agentGraph(), { workdir, dataCommand: `cat > '${payload}' && echo '{}' #` })
+    await call(ctx, 'wf_next')
+    await call(ctx, 'wf_done', { node: 'a' })
+    await call(ctx, 'wf_redo', { node: 'a' })
+    expect(JSON.parse(readFileSync(payload, 'utf8')).preserveAttemptFacts).toBe(true)
+  })
+
   it('deferred rerun fails when invalidation plan changed after join', async () => {
     const workdir = scratch()
     const graph: WorkflowGraph = {
@@ -850,5 +927,139 @@ describe('applyControls integration', () => {
     // The node should NOT have been redone — p stays completed.
     const state = await call(ctx, 'wf_state') as { completed: string[] }
     expect(state.completed).toContain('p')
+  })
+})
+
+describe('cursor merge on redo', () => {
+  function designGraph(): WorkflowGraph {
+    return {
+      name: 't', start_node: 'emit',
+      nodes: {
+        emit: { _type: 'AgentNode', id: 'emit', role: 'builder', prompt_template: 'E', reads: [], writes: [] },
+        materialise: { _type: 'FnNode', id: 'materialise', command: 'true', reads: [], writes: [] },
+        check: { _type: 'FnNode', id: 'check', command: 'true', reads: [], writes: [] },
+        fork_qa: { _type: 'ForkNode', id: 'fork_qa', targets: ['health_checker', 'code_reviewer', 'qa_director'] },
+        health_checker: { _type: 'AgentNode', id: 'health_checker', role: 'reviewer', prompt_template: 'HC', reads: [], writes: [] },
+        code_reviewer: { _type: 'AgentNode', id: 'code_reviewer', role: 'reviewer', prompt_template: 'CR', reads: [], writes: [] },
+        qa_director: { _type: 'AgentNode', id: 'qa_director', role: 'reviewer', prompt_template: 'QD', reads: [], writes: [] },
+        join_qa: { _type: 'JoinNode', id: 'join_qa', sources: ['health_checker', 'code_reviewer', 'qa_director'] },
+        gate_qa: { _type: 'GateNode', id: 'gate_qa', evaluator_type: 'fn', evaluator_command: 'true', reads: [] },
+        report: { _type: 'AgentNode', id: 'report', role: 'builder', prompt_template: 'R', reads: [], writes: [] },
+        deliver: { _type: 'AgentNode', id: 'deliver', role: 'builder', prompt_template: 'D', reads: [], writes: [] },
+      },
+      edges: [
+        { source: 'emit', target: 'materialise' },
+        { source: 'materialise', target: 'check' },
+        { source: 'check', target: 'fork_qa' },
+        { source: 'fork_qa', target: 'join_qa' },
+        { source: 'join_qa', target: 'gate_qa' },
+        { source: 'gate_qa', target: 'emit', condition: 'reloop' },
+        { source: 'gate_qa', target: 'report', condition: 'proceed' },
+        { source: 'report', target: 'deliver' },
+      ],
+    }
+  }
+
+  it('redo of a branch keeps unaffected cursor entries and the run completes at deliver', () => {
+    const spine = new Spine(designGraph())
+    // First pass: emit → materialise → check → fork_qa → branches → join_qa → gate_qa reloop
+    spine.complete('emit')
+    spine.complete('materialise')
+    spine.complete('check')
+    spine.complete('fork_qa')
+    spine.complete('health_checker')
+    spine.complete('code_reviewer')
+    spine.complete('qa_director')
+    spine.complete('join_qa')
+    spine.verdict('gate_qa', 'reloop')
+    // Second pass through the loop body — complete everything up through the branches.
+    // After the reloop, uncompleteBetween clears the loop body's completion records,
+    // so code_reviewer must be re-completed in this iteration before it can be redone.
+    spine.complete('emit')
+    spine.complete('materialise')
+    spine.complete('check')
+    spine.complete('fork_qa')
+    spine.complete('health_checker')
+    spine.complete('code_reviewer')
+    spine.complete('qa_director')
+    // All branches done; join_qa pops from afters to cursor.
+    expect(ids(spine)).toEqual(['join_qa'])
+
+    // Redo code_reviewer — it completed in this iteration; join_qa is due in cursor
+    spine.redo('code_reviewer')
+
+    // With the fix: join_qa is still in the cursor alongside code_reviewer
+    expect(ids(spine)).toContain('join_qa')
+    expect(ids(spine)).toContain('code_reviewer')
+
+    // Complete the redo: code_reviewer, then join_qa, gate proceed, report, deliver
+    spine.complete('code_reviewer')
+    spine.complete('join_qa')
+    spine.verdict('gate_qa', 'proceed')
+    spine.complete('report')
+    spine.complete('deliver')
+    expect(spine.next().status).toBe('done')
+  })
+})
+
+describe('iteration preservation on CEO redo', () => {
+  function gateLoopGraph(): WorkflowGraph {
+    return {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', reads: [], writes: [] },
+        gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'fn', evaluator_command: 'true', reads: [] },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', reads: [], writes: [] },
+      },
+      edges: [
+        { source: 'a', target: 'gate' },
+        { source: 'gate', target: 'a', condition: 'reloop' },
+        { source: 'gate', target: 'b', condition: 'proceed' },
+      ],
+    }
+  }
+
+  it('CEO redo preserves gate iteration count', () => {
+    const spine = new Spine(gateLoopGraph(), { maxIterations: 2 })
+    spine.complete('a')
+    spine.verdict('gate', 'reloop') // iteration 1
+    expect((spine.state().iterations as Record<string, number>).gate).toBe(1)
+    spine.complete('a')
+    spine.verdict('gate', 'reloop') // iteration 2
+    expect((spine.state().iterations as Record<string, number>).gate).toBe(2)
+    // After the reloop, a is uncompleted by uncompleteBetween. Complete it again
+    // so planRedo accepts it.
+    spine.complete('a')
+    // CEO redo with preserveIterations
+    spine.redo('a', { preserveIterations: true })
+    expect((spine.state().iterations as Record<string, number>).gate).toBe(2)
+    // One more reloop → count = 3 > cap = 2 → halts
+    spine.complete('a')
+    spine.verdict('gate', 'reloop')
+    expect(spine.next().status).toBe('done')
+    expect((spine.next() as { halted?: { reason: string } }).halted?.reason).toBe('max_iterations')
+  })
+
+  it('graph-control rerun resets gate iteration count', () => {
+    const spine = new Spine(gateLoopGraph(), { maxIterations: 2 })
+    spine.complete('a')
+    spine.verdict('gate', 'reloop') // iteration 1
+    spine.complete('a')
+    spine.verdict('gate', 'reloop') // iteration 2
+    expect((spine.state().iterations as Record<string, number>).gate).toBe(2)
+    // After the reloop, a is uncompleted. Complete it again so planRedo accepts it.
+    spine.complete('a')
+    // Rerun redo without preserveIterations (the default, as graph-control uses)
+    spine.redo('a')
+    expect((spine.state().iterations as Record<string, number>).gate).toBeUndefined()
+    // Now 3 reloops needed to hit the cap (count > 2)
+    spine.complete('a')
+    spine.verdict('gate', 'reloop') // iteration 1
+    spine.complete('a')
+    spine.verdict('gate', 'reloop') // iteration 2
+    spine.complete('a')
+    spine.verdict('gate', 'reloop') // iteration 3 > 2 → halts
+    expect(spine.next().status).toBe('done')
+    expect((spine.next() as { halted?: { reason: string } }).halted?.reason).toBe('max_iterations')
   })
 })
