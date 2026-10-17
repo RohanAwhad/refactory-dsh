@@ -168,6 +168,15 @@ def test_the_graph_argv_names_the_route_the_context_resolved(monkeypatch, tmp_pa
     from refactory_dsh import model as model_module
     from refactory_dsh import workers
 
+    # The pre-flight profile check in interactive.run() needs a valid graph
+    # profile.  Set one up so the test reaches the monkeypatched worker.
+    home = tmp_path / "dsh-home"
+    _profile(home, "graph", ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
+    _link_bundle(home, "graph", dsh_profile.GRAPH_BUNDLE,
+                 ROOT / "packages" / "bundle" / "graph")
+    monkeypatch.setenv("DSH_HOME", str(home))
+    monkeypatch.delenv("REFACTORY_MODEL_DSH_HOME", raising=False)
+
     class RoutedClient:
         def __init__(self, **kwargs):
             self._given = kwargs
@@ -250,6 +259,15 @@ def test_headless_prints_gate_commands_when_stopped_at_user_gate(monkeypatch, tm
     steer --verdict and graph-control resume commands once, from interactive.py.
     """
     from refactory_dsh import workers
+
+    # The pre-flight profile check in interactive.run() needs a valid graph
+    # profile.  Set one up so the test reaches the monkeypatched worker.
+    home = tmp_path / "dsh-home"
+    _profile(home, "graph", ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
+    _link_bundle(home, "graph", dsh_profile.GRAPH_BUNDLE,
+                 ROOT / "packages" / "bundle" / "graph")
+    monkeypatch.setenv("DSH_HOME", str(home))
+    monkeypatch.delenv("REFACTORY_MODEL_DSH_HOME", raising=False)
 
     workdir = tmp_path / "run"
 
@@ -565,6 +583,15 @@ def test_a_cli_run_lists_its_warnings_when_it_ends(monkeypatch, tmp_path, capsys
     the run itself lists what its steps warned about, whether or not it succeeded.
     """
     from refactory_dsh import workers
+
+    # The pre-flight profile check in interactive.run() needs a valid graph
+    # profile.  Set one up so the test reaches the monkeypatched worker.
+    home = tmp_path / "dsh-home"
+    _profile(home, "graph", ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
+    _link_bundle(home, "graph", dsh_profile.GRAPH_BUNDLE,
+                 ROOT / "packages" / "bundle" / "graph")
+    monkeypatch.setenv("DSH_HOME", str(home))
+    monkeypatch.delenv("REFACTORY_MODEL_DSH_HOME", raising=False)
 
     workdir = tmp_path / "run"
 
