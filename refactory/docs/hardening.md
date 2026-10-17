@@ -572,6 +572,61 @@ Recorded because the point of an audit is accuracy in both directions.
 
 ---
 
+## 10. Subagent write confinement (#347, C0)
+
+**What the gap was.** Subagents the CEO spawns (via `subagent` and `subagent_fork`)
+had no shell (#360) but could `write` or `edit` any path. A subagent could change
+the person's checkout or the run's worktree directly, bypassing materialise, the
+check, and the reviews.
+
+**The mechanism.** A `tools/pre-execute` listener in `packages/workflow/workflow-spine`
+intercepts every `write` and `edit` call. When the calling session is a delegated
+child — identified by `delegationDepth > 0` or the presence of `parentSession` in
+the session header (NOT by `header.origin`, which the session types document as
+presentation metadata only) — the listener walks the parent chain via `parentSession`
+to find the session that opened the run (in `openedBySession` for the GUI CEO preset,
+or the configured graph's `config.workdir` for the CLI graph profile).
+
+The target path is resolved against the calling session's sandbox policy workspace
+root (when a sandboxPolicy service is mounted), falling back to `header.cwd`, exactly
+as dsh-tool-fs does. Both the run directory and the resolved target are normalised with
+`realpathSync` (where the path exists) via the existing `canonicalWorkdir` helper,
+handling discrepancies such as `/var` vs `/private/var`.
+
+If the normalised target does not start with the normalised run directory (plus a path
+separator, or equal to it), the call is denied with a message naming the run directory
+the subagent may write to instead.
+
+**Behaviour matrix.**
+
+| Scenario | Result |
+|---|---|
+| Subagent writes inside the run directory | Allowed |
+| Subagent writes outside the run directory | Denied |
+| Subagent edits outside the run directory | Denied |
+| Non-subagent (top-level CEO) writes anywhere | Allowed (the CEO's own `write`/`edit` are separately denied by `ceoDeny`) |
+| Subagent whose parent has no open run | Allowed freely |
+| Non-write/edit tool from a subagent | Allowed |
+| Grandchild subagent (helper's own helper) | Confined; the parent chain is walked |
+| `subagent_fork` child | Confined; identified by `parentSession` |
+
+**What it does not cover.**
+
+- **Symlinks.** The listener uses `realpathSync` where paths exist, but a non-existent
+  target being written can only resolve its parent directory. A symlink created after
+  the check (TOCTOU) is not caught. dsh-tool-fs's own backend owns deeper symlink policy.
+- **The CEO's own tools.** Unchanged; `ceoDeny` removes `write` and `edit` from the
+  CEO's own scope.
+- **Workers.** Workers run in their own headless runtime, not through the spine plugin's
+  tool pipeline.
+
+**Held by.** `packages/workflow/workflow-spine/tests/confine-writes.spec.ts`: nineteen
+test cases covering both configured-graph and interactiveOpen modes, path traversal,
+relative-path cwd resolution, fork children, grandchildren, the deny message content,
+and the fail-open case when no run is open.
+
+---
+
 ## What this does not cover
 
 - Listing a generated package still imports it (§1).

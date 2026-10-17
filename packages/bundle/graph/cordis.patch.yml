@@ -36,10 +36,12 @@
 #
 # Both delegation rows carry the `ceo` preset's allow-list, so a subagent here also
 # gets the content tools and no shell; the refactory bundle's `presets/ceo.patch.yml`
-# says what is kept and why. The fork row comes from dsh-base, and a patch replaces a
-# row's whole `config`, so it restates the base row's provider, name and mode as they
-# were; like the base row it still offers `run_in_background`. Its child's tool list now
-# differs from the CEO's, so a fork no longer reuses the CEO's cached request prefix.
+# says what is kept and why. A `tools/pre-execute` listener in the spine confines
+# subagent `write` and `edit` to the run directory (config.workdir). The fork row
+# comes from dsh-base, and a patch replaces a row's whole `config`, so it restates
+# the base row's provider, name and mode as they were; like the base row it still
+# offers `run_in_background`. Its child's tool list now differs from the CEO's, so a
+# fork no longer reuses the CEO's cached request prefix.
 - id: tool-subagent
   config:
     provider: spawn
