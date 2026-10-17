@@ -72,6 +72,45 @@ def test_failed_status_accepted_with_acknowledge_flag(tmp_path):
     assert request['acknowledge_failed'] is True
 
 
+def test_child_prepare_honours_acknowledged_failed_from_file(tmp_path):
+    saved_run(tmp_path, 'failed')
+    # Parent's call: writes resume-request.json with acknowledge_failed: true
+    recovery.prepare(tmp_path, 'demo-run', acknowledge_failed=True)
+    request_path = tmp_path / '.refactory/resume-request.json'
+    assert request_path.exists()
+    parent_request = json.loads(request_path.read_text())
+    assert parent_request['acknowledge_failed'] is True
+
+    # Child's call: no acknowledge_failed argument, reads from file
+    recovery.prepare(tmp_path, 'demo-run')
+    child_request = json.loads(request_path.read_text())
+    assert child_request['acknowledge_failed'] is True
+    checkpoint = tmp_path / '.refactory/spine-checkpoint.json'
+    assert child_request['checkpoint_sha256'] == hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+
+
+def test_child_prepare_refuses_failed_without_file_acknowledgement(tmp_path):
+    saved_run(tmp_path, 'failed')
+    # No pre-existing resume-request.json, no acknowledge_failed argument
+    with pytest.raises(ValueError, match='unknown or failed'):
+        recovery.prepare(tmp_path, 'demo-run')
+    assert not (tmp_path / '.refactory/resume-request.json').exists()
+
+
+def test_child_prepare_refuses_stale_acknowledgement(tmp_path):
+    """A resume-request.json whose checkpoint_sha256 does not match the current
+    checkpoint bytes is not honoured — the request belongs to a different checkpoint."""
+    saved_run(tmp_path, 'failed')
+    # Write a resume-request.json with acknowledge_failed but a wrong sha256
+    request_path = tmp_path / '.refactory/resume-request.json'
+    request_path.write_text(json.dumps({
+        'checkpoint_sha256': 'stale-sha256-that-does-not-match',
+        'acknowledge_failed': True,
+    }))
+    with pytest.raises(ValueError, match='unknown or failed'):
+        recovery.prepare(tmp_path, 'demo-run')
+
+
 def test_changed_source_and_unknown_worker_refuse_recovery(tmp_path):
     source = saved_run(tmp_path)
     source.write_text('answer = 0\n')
