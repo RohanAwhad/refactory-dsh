@@ -6,7 +6,9 @@ import { describe, expect, it } from 'vitest'
 import type { ShellExecution, ShellExecRequest, ShellExecSpec, ShellExecutor, ShellRunResult } from '@deepseek-ai/dsh-shell'
 import { commandOf, isDeterministic, NODE_ENV_KEY, REASON_LIMIT, reasonOf, runDeterministic, runWarningsOf, verdictOf } from '../src/execute.ts'
 import type { CommandFailure, CommandOutcome, CommandRunnerConfig, NodeManifest } from '../src/execute.ts'
+import { Spine } from '../src/spine.ts'
 import type { NodeView } from '../src/spine.ts'
+import type { WorkflowGraph } from '../src/types.ts'
 
 /**
  * A shell executor that really runs the command, so these tests exercise the
@@ -307,6 +309,50 @@ describe('shared resource boundaries', () => {
       expect(completed(await runDeterministic(localShell, { ...fn('validate', 'echo validated'), resource_role: 'final_validation' }, bounded)).stdout).toBe('validated')
       expect(completed(await runDeterministic(localShell, fn('report', 'echo reported'), bounded)).stdout).toBe('reported')
     } finally { rmSync(root, { recursive: true, force: true }) }
+  })
+})
+
+describe("a node's own time limit", () => {
+  /** A shell that records the time limit each command is given, and answers proceed. */
+  function recordingShell(limits: number[]): ShellExecutor {
+    return {
+      resolve: (request: ShellExecRequest) => localShell.resolve(request),
+      async execute(spec: ShellExecSpec): Promise<ShellExecution> {
+        limits.push(spec.timeoutMs)
+        const result: ShellRunResult = {
+          exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: spec.timeoutMs,
+          stdout: { text: 'proceed', truncated: false }, stderr: { text: '', truncated: false },
+        }
+        return { result: async () => result } as unknown as ShellExecution
+      },
+    } as unknown as ShellExecutor
+  }
+
+  /** The node the spine says is due, as it hands it to the runner. */
+  function due(spine: Spine): NodeView {
+    const next = spine.next()
+    const node = next.status === 'ready' ? next.nodes[0] : undefined
+    if (node === undefined) throw new Error('expected due work')
+    return node
+  }
+
+  it('reaches a function gate from its graph, as it reaches an FnNode', async () => {
+    // Lowering puts the check's whole envelope on design's `check` gate (#378); a view
+    // that dropped it left the gate at the default limit, which stopped b13c's check.
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'build',
+      nodes: {
+        build: { _type: 'FnNode', id: 'build', command: 'true', command_timeout_s: 4321, reads: [], writes: [] },
+        check: { _type: 'GateNode', id: 'check', evaluator_type: 'fn', evaluator_command: 'echo proceed', command_timeout_s: 10_500, reads: [] },
+      },
+      edges: [{ source: 'build', target: 'check' }],
+    }
+    const spine = new Spine(graph)
+    const limits: number[] = []
+    completed(await runDeterministic(recordingShell(limits), due(spine), config))
+    spine.complete('build')
+    completed(await runDeterministic(recordingShell(limits), due(spine), config))
+    expect(limits).toEqual([4_321_000, 10_500_000])
   })
 })
 
