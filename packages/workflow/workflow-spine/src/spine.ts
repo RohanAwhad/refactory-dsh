@@ -971,12 +971,12 @@ export class Spine {
   }
 
   /** Clear current completion and gate decisions without erasing graph edits. */
-  private invalidateNodes(affected: Set<string>, clearSkips = true): void {
+  private invalidateNodes(affected: Set<string>, clearSkips = true, preserveIterations = false): void {
     this.completed = this.completed.filter(entry => !affected.has(entry))
     if (clearSkips) this.skipped = this.skipped.filter(entry => !affected.has(entry))
     for (const id of affected) {
       this.gateVerdicts.delete(id)
-      delete this.iterations[id]
+      if (!preserveIterations) delete this.iterations[id]
       delete this.feedback[id]
     }
   }
@@ -1046,15 +1046,18 @@ export class Spine {
   }
 
   /** Reopen work and invalidate descendants; prompts and historical log remain. */
-  redo(node: string): SpineNext {
+  redo(node: string, opts?: { preserveIterations?: boolean }): SpineNext {
     const plan = this.planRedo(node)
     const affected = new Set(plan.nodes)
-    this.invalidateNodes(affected)
+    this.invalidateNodes(affected, true, opts?.preserveIterations ?? false)
     if (plan.resetPass) this.pass = undefined
     else if (this.pass !== undefined) this.pass.finished = false
-    this.afters = []
+    // Keep cursor entries and afters not in the affected set
+    this.cursor = this.cursor.filter(id => !affected.has(id))
+    this.afters = this.afters.filter(id => !affected.has(id))
     this.halted = undefined
-    this.cursor = [plan.start]
+    // Add the redo start if not already present
+    if (!this.cursor.includes(plan.start)) this.cursor.unshift(plan.start)
     this.log.push(`redid ${node} at ${plan.start}; invalidated ${plan.nodes.join(', ')}`)
     return this.next()
   }

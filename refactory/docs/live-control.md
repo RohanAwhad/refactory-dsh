@@ -126,6 +126,21 @@ completes, and superseded when a gate reloops with its own findings. A
 one-shot correction ("emit these two files and change nothing else") applies
 to that visit only and does not override a later review's repair.
 
+### CEO redo and attempt limits
+
+When the CEO redoes a completed node through `wf_redo`, the redo preserves
+the run's attempt counters and gate iteration counts. A gate that was on
+iteration 2 of 3 stays there; the check gate's `attempts_used` is not reset.
+This prevents an infinite redo loop where the CEO redoes emit after the check
+gate exhausts its attempts, resetting the counter each time.
+
+Once a gate's iteration limit has halted the run, or a node has failed,
+`wf_redo` is refused. The refusal names
+`refactory graph-control rerun --acknowledge-failure` as the way a person
+spends more attempts. Any `graph-control rerun` by a person resets all
+counters — both gate iteration counts and attempt facts — as their decision
+to spend more attempts.
+
 ### Deferred replay
 
 When concurrent work (a fork's parallel branches) blocks a replay, preview
