@@ -548,7 +548,9 @@ def test_a_design_that_never_passes_its_check_fails_loudly():
     mode = DesignMode()
     workdir = Path(".factory/design-fail")
     shutil.rmtree(workdir, ignore_errors=True)
-    model = FakeModel(_design_answers([render({"tool.py": "raise SystemExit(1)\n"})] * 4))
+    # Each emission must be distinct so materialise does not refuse it as "changed nothing".
+    emits = [render({"tool.py": f"raise SystemExit({i})\n"}) for i in range(1, 5)]
+    model = FakeModel(_design_answers(emits))
     result = mode.run(
         workdir,
         model=model,

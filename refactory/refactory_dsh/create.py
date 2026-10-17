@@ -488,6 +488,7 @@ class CreateMode(Mode):
             prompt_template=(
                 "Brief: {{brief}}\n\n## The strategy\nRead the file `strategy.json` in the run directory. It contains the strategy and acceptance criteria.\n\n"
                 "## The merged reviews\nRead the file `reviews/qa-synthesized.md` in the run directory. It contains the merged reviews from all three reviewers.\n\n"
+                "## What the last audit was refused for\n{{overwatch_review}}\n\n"
                 "You are the overwatch. This is not another review: audit the reviews "
                 "themselves. Take each ask in the brief and each acceptance criterion, "
                 "and say what evidence proves it — a command and its output — or that "
@@ -561,6 +562,7 @@ class CreateMode(Mode):
         graph.connect("gate_qa", "overwatch", condition="proceed")
         graph.connect("overwatch", "gate_overwatch")
         graph.connect("gate_overwatch", "emit", condition="reloop")
+        graph.connect("gate_overwatch", "overwatch", condition="audit")
         graph.connect("gate_overwatch", "report", condition="proceed")
         graph.connect("register", "smoke")
         graph.connect("smoke", "fork_qa", condition="proceed")

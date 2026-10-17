@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from refactory_dsh import delivery, repo_change, sandbox, worktree
+from refactory_dsh.nn import Verdict
 
 _FILE_EXT_RE = _re.compile(
     r'\b[\w/.-]+\.(?:py|ts|js|mjs|cjs|jsx|tsx|json|md|yaml|yml|toml|go|rs|rb|java|c|cpp|h|sh|css|html)\b'
@@ -262,10 +263,11 @@ def check_artifact(ctx: Any) -> str:
     refused = repo_change.refused(ctx)
     if refused:
         # Nothing was materialised, so there is nothing to record runtime evidence about;
-        # the attempt the retry makes records its own.
+        # a refused emission is not a code failure, so it does not spend an attempt.
         detail = f"materialise could not apply emit.txt, so nothing was checked: {refused}"
         ctx.write_text("check.txt", detail + "\n")
-        return repair(ctx, [detail])
+        ctx.set_fact("validation", detail)
+        return Verdict("reloop", detail)
     command = str(ctx.facts["check"])
     result = repo_change.run_check(ctx, command, int(ctx.knob("check_timeout_s", 180)))
     detail = "\n".join((result.problem(), result.stdout or "", result.stderr or "")).strip()

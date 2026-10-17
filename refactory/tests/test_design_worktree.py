@@ -22,14 +22,52 @@ import pytest
 from refactory_dsh import (cli, console, design_ops, interactive, lowering, nn, projects, registry, repo_change,
                            worktree)
 from refactory_dsh import run as node_runner
+from refactory_dsh.create import CreateMode as CreateModeForGraph
 from refactory_dsh.design import DesignMode
 from refactory_dsh.fast import DesignFastMode
+from refactory_dsh.nn import Verdict
 from refactory_dsh.paths import REPO_ROOT
 from refactory_dsh.projects import projects_dir
 from tests_support import (DESIGN_REVIEW_ANSWER, RESEARCH_ANSWER, REVIEW_ANSWERS, FakeModel,
                            StaleEmitModel, git, git_repo, render, stub)
 
 NAME = "worktree_tool"
+
+
+# ── graph edges for audit reloop and refused emission ──────────────────────
+
+
+def test_gate_overwatch_audit_edge_exists_in_design_graph():
+    """gate_overwatch has an 'audit' edge back to overwatch in the design graph."""
+    graph = DesignMode().build()
+    edges = graph.out_edges("gate_overwatch")
+    audit_edges = [e for e in edges if e.condition == "audit"]
+    assert len(audit_edges) == 1
+    assert audit_edges[0].target == "overwatch"
+
+
+def test_gate_overwatch_audit_edge_exists_in_create_graph():
+    """gate_overwatch has an 'audit' edge back to overwatch in the create graph."""
+    graph = CreateModeForGraph().build()
+    edges = graph.out_edges("gate_overwatch")
+    audit_edges = [e for e in edges if e.condition == "audit"]
+    assert len(audit_edges) == 1
+    assert audit_edges[0].target == "overwatch"
+
+
+def test_refused_emission_does_not_spend_attempt_design(tmp_path, monkeypatch):
+    """check_artifact returns Verdict('reloop') without calling repair() for a refused emission."""
+    monkeypatch.setattr(repo_change, "refused", lambda ctx: "edit text not found")
+    ctx = nn.RunContext(tmp_path, facts={"check": "python tool.py"},
+                        knobs={"attempts": 3})
+    ctx._declared = ("check.txt",)
+    ctx._declared_facts = ("validation", "attempts_used")
+    ctx.enforce_writes = False
+    result = design_ops.check_artifact(ctx)
+    assert isinstance(result, Verdict)
+    assert str(result) == "reloop"
+    assert "materialise could not apply" in result.reason
+    assert not ctx.facts.get("attempts_used"), "refused emission must not spend an attempt"
 
 
 @pytest.fixture
@@ -169,6 +207,28 @@ def test_a_target_inside_a_repository_is_refused_before_anything_is_made(repo, t
     assert not worktree.slot(repo).exists() and projects.load()["projects"] == []
 
 
+def test_facts_json_records_final_attempts_used_on_failure(repo, tmp_path, monkeypatch):
+    """run_node's except clause writes facts.json so attempts_used on disk agrees with the error.
+
+    Without it (after removing _persist_facts from create_ops), no writer would persist
+    the facts a raising node set, and the on-disk attempts_used would stay at 0.
+    """
+    run = tmp_path / "run"
+    worktree.create(repo, "HEAD", "abcdef999999", run)
+    lowering.write_declarations(DesignMode().state_dict(), run)
+    (run / "facts.json").write_text(json.dumps({"name": NAME, "brief": "a tool", "check": "exit 1"}))
+    monkeypatch.setenv("REFACTORY_KNOBS", json.dumps({"check_attempts": 1}))
+    (run / "emit.txt").write_text(render({"tool.py": "print('will fail check')\n"}))
+    node_runner.run_node(f"{repo_change.OPS}:materialise", workdir=run, node_id="materialise")
+    # Before the check, attempts_used is absent from facts.json on disk.
+    assert "attempts_used" not in json.loads((run / "facts.json").read_text())
+    with pytest.raises(ValueError, match=r"authoring unresolved after 1 attempt\(s\)"):
+        node_runner.run_node(f"{design_ops.__name__}:check_artifact", workdir=run, node_id="check")
+    # run_node's except clause wrote facts.json; the on-disk value agrees with the message.
+    saved = json.loads((run / "facts.json").read_text())
+    assert saved["attempts_used"] == 1
+
+
 def test_an_attempt_that_fails_its_check_is_redone_as_a_second_commit_on_top_of_it(tmp_path):
     """The retry changes only what it needs to; a file of the first attempt goes when it is deleted."""
     failing = render({"tool.py": "raise SystemExit(1)\n", "draft.py": "x = 1\n", "keep.py": "y = 2\n"})
@@ -241,11 +301,54 @@ def test_an_emission_materialise_cannot_apply_goes_back_to_emit_with_the_reason(
         f"{NAME}: attempt 1"]
 
 
-def test_emissions_that_never_apply_end_the_run_once_its_attempts_are_spent(repo, tmp_path):
+def test_emissions_that_never_apply_exhaust_the_gate_iteration_limit(repo, tmp_path):
+    """Refused emissions do not spend attempts; the gate's max_iterations (8) ends the run."""
     bad = _edit("app.py", ("print('not there')\n", "x\n"))
-    result = _design(tmp_path / "run", FakeModel(_answers(bad, bad, bad)), target=str(repo))
+    # 9 bad emissions: the check gate allows 8 iterations; the 9th triggers the error.
+    result = _design(tmp_path / "run", FakeModel(_answers(*([bad] * 9))), target=str(repo))
     assert not result.exit_ok
-    assert "materialise could not apply emit.txt" in str(result.error)
+    assert "exceeded max_iterations" in str(result.error)
+    assert not result.facts.get("attempts_used"), "refused emissions must not spend attempts"
+    # A person reads result.facts["validation"] via `refactory status`; it holds the refusal.
+    assert "materialise could not apply emit.txt" in result.facts.get("validation", "")
+
+
+def test_a_no_change_emission_is_refused_and_does_not_spend_an_attempt(repo, tmp_path, monkeypatch):
+    """An emission that changes nothing is refused at materialise and takes the same path as any
+    refused emission: back to emit via Verdict('reloop'), no attempt spent.
+    """
+    # Phase 1 — materialise refuses the no-change emission
+    run = tmp_path / "run"
+    ctx = nn.RunContext(run, model=FakeModel([]),
+                        task={"name": NAME, "brief": "a tool", "check": "true", "target": str(repo)})
+    ctx.facts.update(design_ops.prepare_design(ctx))
+    emit_text = render({"tool.py": "print('built')\n"})
+    ctx.write_text("emit.txt", emit_text)
+    result1 = repo_change.materialise(ctx)
+    assert "emission_refused" not in result1
+    head_after_first = worktree.recorded(run).head
+
+    ctx.write_text("emit.txt", emit_text)
+    result2 = repo_change.materialise(ctx)
+    assert "emission_refused" in result2
+    assert "changed nothing" in result2["emission_refused"]
+    assert worktree.recorded(run).head == head_after_first
+
+    # Phase 2 — check_artifact returns Verdict("reloop") without spending attempts
+    monkeypatch.setattr(repo_change, "refused", lambda ctx: "the emission changed nothing: every file and edit in it is already in the last attempt")
+    ctx2 = nn.RunContext(tmp_path / "run2", facts={"check": "python tool.py"},
+                         knobs={"attempts": 3})
+    ctx2._declared = ("check.txt",)
+    ctx2._declared_facts = ("validation", "attempts_used")
+    ctx2.enforce_writes = False
+    result = design_ops.check_artifact(ctx2)
+    assert isinstance(result, Verdict)
+    assert str(result) == "reloop"
+    assert "materialise could not apply" in result.reason
+    assert "changed nothing" in result.reason
+    assert not ctx2.facts.get("attempts_used"), "refused emission must not spend an attempt"
+    # A person reads ctx.facts["validation"] via `refactory status`; it holds the refusal.
+    assert "materialise could not apply emit.txt" in ctx2.facts.get("validation", "")
 
 
 def test_the_same_edits_given_again_are_recognised_as_already_applied(repo, tmp_path):
@@ -947,16 +1050,14 @@ def test_design_fast_carries_generate_changes(repo, tmp_path):
 
 
 def test_design_fast_sends_an_emission_it_cannot_apply_back_to_emit(tmp_path):
-    """Within its repair bound, as a failed check is; with no repair left, the run ends and says why."""
+    """A refused emission does not spend a repair attempt; the gate's iteration limit bounds retries."""
     truncated = "===FILE: tool.py===\nx = 1  # ... (line truncated to 2000 chars)\n"
     result = _fast(tmp_path / "run", truncated, render({"tool.py": "print('whole')\n"}), refused=1)
     assert result.exit_ok, result.error
-    assert "the read tool's note that it cut text short" in (tmp_path / "run" / "repair.txt").read_text()
-    assert _report(tmp_path / "run")["fast"]["repairs_used"] == 1
-    ended = _fast(tmp_path / "ended", truncated, refused=1, knobs={"repair_attempts": 0}, name="other_tool")
-    assert not ended.exit_ok
-    assert "after 0 repair(s): materialise could not apply emit.txt" in str(ended.error)
-    assert "cut text short" in str(ended.error)
+    # The feedback reaches emit through the repair_feedback fact, not through repair.txt.
+    assert result.facts.get("repair_feedback") and "cut text short" in result.facts["repair_feedback"]
+    # A refused emission does not spend a repair attempt.
+    assert _report(tmp_path / "run")["fast"]["repairs_used"] == 0
 
 
 def test_design_fast_with_its_worktree_off_keeps_its_own_copy_and_makes_no_worktree(tmp_path, monkeypatch):
@@ -974,7 +1075,7 @@ def test_design_fast_copies_a_source_project_and_refuses_a_target_with_it(repo, 
     copied = _fast(tmp_path / "run", truncated, "===FILE: tool.py===\nx = 1\n", refused=1,
                    source_project=str(repo))
     assert copied.exit_ok, copied.error
-    assert "cut text short" in (tmp_path / "run" / "repair.txt").read_text(), "a refusal is repaired here too"
+    assert "cut text short" in str(copied.facts.get("repair_feedback", "")), "a refusal is reported here too"
     assert sorted(path.name for path in Path(copied.facts["artifact"]).iterdir()) == ["app.py", "tool.py"]
     assert not worktree.root().exists()
     refused = _fast(tmp_path / "both", source_project=str(repo), target=str(repo))
