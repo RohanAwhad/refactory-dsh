@@ -15,6 +15,12 @@ uv run refactory list
 
 The repository must be accessible to your GitHub account. `uv` manages the Python environment. Run `./install.sh` again after every pull, then restart any running GUI; see [Updating](../../README.md#updating).
 
+> **Multiple checkouts.** The DSH graph profile links to whichever checkout
+> last ran `install.sh`. A run from a different checkout (a second clone, a
+> worktree, a contributor's branch) will refuse and name the command that
+> relinks the profile. Run `install.sh` from the checkout you want to use, or
+> run the named `dsh plugin --profile graph add` command it prints.
+
 ## 2. Try a search without a model
 
 The shipped circle-packing example is deterministic. These options keep proposal generation and evaluation offline:

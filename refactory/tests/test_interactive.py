@@ -14,7 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from refactory_dsh import dsh_runtime, interactive, registry, steering
+from refactory_dsh import dsh_profile, dsh_runtime, interactive, registry, steering
+from tests_support import _link_bundle, _profile
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 #: A mode with agent nodes, so "the ledger reaches the agents" has something to reach.
@@ -527,6 +528,33 @@ def test_gate_research_reads_facts_not_knobs(tmp_path):
     ctx = _gate_ctx(tmp_path, research_scope="scoped", direction_count=2)
     verdict = create_ops.gate_research(ctx)
     assert verdict == "proceed"
+
+
+def test_interactive_run_refuses_when_the_profile_links_to_another_checkout(
+    tmp_path, monkeypatch, capsys
+):
+    """The interactive path refuses before spawning when the profile is mismatched."""
+    from refactory_dsh import workers
+
+    home = tmp_path / "home"
+    # Create graph profile with bundle declared but symlink to another checkout.
+    _profile(home, "graph", ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
+    other = tmp_path / "other" / "packages" / "bundle" / "graph"
+    _link_bundle(home, "graph", dsh_profile.GRAPH_BUNDLE, other)
+    monkeypatch.setenv("DSH_HOME", str(home))
+    monkeypatch.delenv("REFACTORY_MODEL_DSH_HOME", raising=False)
+
+    def _no_spawn(argv, **kwargs):
+        raise AssertionError("DSH was spawned with a mismatched profile")
+
+    monkeypatch.setattr(workers, "run_graph_command", _no_spawn)
+    code = interactive.run(
+        WITH_A_GATE, workdir=tmp_path / "run", project=ROOT, headless=True,
+    )
+    assert code == 2
+    captured = capsys.readouterr()
+    assert "other" in captured.err
+    assert dsh_profile.add_command() in captured.err
 
 
 @pytest.mark.parametrize("returncode", [0, 1])

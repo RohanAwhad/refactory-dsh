@@ -13,8 +13,9 @@ from pathlib import Path
 
 import pytest
 
-from refactory_dsh import cli
+from refactory_dsh import cli, dsh_profile
 from refactory_dsh.paths import REPO_ROOT
+from tests_support import _link_bundle, _profile
 
 
 def _run(*argv: str, timeout: int = 300) -> subprocess.CompletedProcess[str]:
@@ -306,6 +307,66 @@ def test_ceo_single_reaches_the_mode_as_the_knob_it_reads(monkeypatch):
     monkeypatch.setattr(cli, "_forward", lambda module, argv: seen.append(argv) or 0)
     assert cli.main(["ceo", "count to ten", "--mode", "create", "--single"]) == 0
     assert "single_shot=1" in seen[0]
+
+
+def test_doctor_reports_a_checkout_mismatch_as_a_failing_row(
+    tmp_path, monkeypatch, capsys
+):
+    """Doctor shows MISS for a profile whose symlink points to another checkout."""
+    from argparse import Namespace
+
+    from refactory_dsh.cli import cmd_doctor
+
+    home = tmp_path / "home"
+    # Create all owned targets with their bundles declared.
+    for entry in dsh_profile.TARGETS:
+        if entry.owned:
+            bundles = [dsh_profile.LAYERS[key].bundle for key in entry.layers]
+            _profile(home, entry.profile, bundles)
+    # Link graph to another checkout.
+    other = tmp_path / "other-checkout" / "packages" / "bundle" / "graph"
+    _link_bundle(home, "graph", dsh_profile.GRAPH_BUNDLE, other)
+    monkeypatch.setenv("DSH_HOME", str(home))
+    monkeypatch.delenv("REFACTORY_MODEL_DSH_HOME", raising=False)
+    monkeypatch.setattr(
+        "refactory_dsh.sandbox.model_readiness",
+        lambda *a, **kw: {"provider": "test", "model": "test", "status": "configured"},
+    )
+    cmd_doctor(Namespace(provider="", model=""))
+    output = capsys.readouterr().out
+    graph_line = next(line for line in output.splitlines() if "DSH profile 'graph'" in line)
+    assert "MISS" in graph_line
+    assert "other-checkout" in output
+
+
+def test_doctor_ok_row_names_the_checkout_the_bundle_comes_from(
+    tmp_path, monkeypatch, capsys
+):
+    """Doctor shows which checkout the graph bundle comes from on the ok row."""
+    from argparse import Namespace
+
+    from refactory_dsh.cli import cmd_doctor
+
+    home = tmp_path / "home"
+    bundle_target = tmp_path / "this-checkout" / "packages" / "bundle" / "graph"
+    for entry in dsh_profile.TARGETS:
+        if entry.owned:
+            bundles = [dsh_profile.LAYERS[key].bundle for key in entry.layers]
+            _profile(home, entry.profile, bundles)
+    _link_bundle(home, "graph", dsh_profile.GRAPH_BUNDLE, bundle_target)
+    monkeypatch.setenv("DSH_HOME", str(home))
+    monkeypatch.delenv("REFACTORY_MODEL_DSH_HOME", raising=False)
+    monkeypatch.setattr(
+        "refactory_dsh.sandbox.model_readiness",
+        lambda *a, **kw: {"provider": "test", "model": "test", "status": "configured"},
+    )
+    # Patch checkout_mismatch to return None so the profile is "ok"
+    monkeypatch.setattr(dsh_profile, "checkout_mismatch", lambda *a, **kw: None)
+    cmd_doctor(Namespace(provider="", model=""))
+    output = capsys.readouterr().out
+    graph_line = next(line for line in output.splitlines() if "DSH profile 'graph'" in line)
+    assert "ok" in graph_line
+    assert str(bundle_target) in output
 
 
 def test_graph_controls_reach_public_console_admission(tmp_path):

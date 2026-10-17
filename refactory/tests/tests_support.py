@@ -1,7 +1,9 @@
 """Fixtures shared by the tests that need a generated package.
 
 Kept in one module so `test_create.py` and `test_example.py` exercise the same
-package rather than two copies that drift apart.
+package rather than two copies that drift apart. The DSH profile helpers
+``_profile`` and ``_link_bundle`` are shared by test_dsh_profile.py,
+test_cli.py and test_interactive.py.
 """
 
 from __future__ import annotations
@@ -9,7 +11,41 @@ from __future__ import annotations
 import json
 import os
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Iterator
+
+from refactory_dsh import dsh_profile
+
+
+def _profile(home: Path, name: str, bundles: list[str]) -> Path:
+    """Create a minimal DSH profile directory with a manifest."""
+    directory = home / "profiles" / name
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "package.json").write_text(
+        json.dumps({
+            "name": f"dsh-profile-{name}",
+            "dependencies": {
+                bundle: "link:/checkout"
+                for bundle in bundles
+                if bundle in {entry.bundle for entry in dsh_profile.LAYERS.values()}
+            },
+            "dsh": {"profile": {"bundles": bundles}},
+        })
+    )
+    return directory
+
+
+def _link_bundle(home: Path, name: str, bundle: str, target: Path) -> None:
+    """Create the node_modules symlink that ``dsh plugin add`` creates.
+
+    The target is the directory the symlink resolves to — either this
+    checkout's ``packages/bundle/graph`` or a different directory that
+    simulates another checkout.
+    """
+    link = home / "profiles" / name / "node_modules" / bundle
+    link.parent.mkdir(parents=True, exist_ok=True)
+    target.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(target)
 
 _INIT = '''\
 """A generated package."""

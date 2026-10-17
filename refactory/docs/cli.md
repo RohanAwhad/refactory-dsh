@@ -192,7 +192,7 @@ The read verbs pass through the console's own `--project`, `--runs-root`, `--aft
 
 | command | what it does |
 |---|---|
-| `refactory doctor` | check local configuration and missing setup; this does not test authentication or quota. |
+| `refactory doctor` | check local configuration and missing setup; this does not test authentication or quota. Doctor reports which checkout the DSH graph profile's bundle comes from. If it names a different checkout, the profile was last provisioned by that checkout's `install.sh`. Run `install.sh` from the checkout you want to use, or run the `dsh plugin --profile graph add` command that doctor names. |
 | `refactory help [--topic <topic>]` | the operating guide, and the current mode and operation schemas. |
 | `refactory docs [--page <page>]` | search and read the documentation shipped with this checkout. |
 | `refactory workers` | the coding-agent worker configuration and the capabilities each backend reports. |
