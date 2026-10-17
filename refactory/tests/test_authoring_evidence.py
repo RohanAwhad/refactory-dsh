@@ -526,14 +526,14 @@ def test_ceo_redo_preserves_attempt_facts(tmp_path):
 
     graph = nn.Graph()
     graph.add(nn.Node('emit', 'op', call='loop_ops:write_number',
-                      produces=('emit',)))
+                      produces=('emit', 'strategy_used')))
     graph.add(nn.Node('check', 'op', call='loop_ops:write_number',
                       reads=('validation.txt',), writes=('validation.txt',),
                       produces=('validation', 'attempts_used')))
     graph.connect('emit', 'check')
     lowering.write_declarations({'graph': graph.to_state()}, tmp_path)
     (tmp_path / 'facts.json').write_text(json.dumps({
-        'attempts_used': 2, 'validation': 'old', 'emit': 'prior'
+        'attempts_used': 2, 'validation': 'old', 'emit': 'prior', 'strategy_used': 'lean'
     }))
     (tmp_path / '.refactory').mkdir(exist_ok=True)
     request = {
@@ -543,11 +543,13 @@ def test_ceo_redo_preserves_attempt_facts(tmp_path):
     }
     items.command_reset(tmp_path, request)
     facts = json.loads((tmp_path / 'facts.json').read_text())
-    # attempts_used is preserved (ends with _used)
+    # The gate's attempt count is kept, so its limit still ends the run.
     assert facts['attempts_used'] == 2
-    # validation and emit are cleared (do not end with _used)
+    # Everything else the reopened nodes produced is cleared, including a fact that
+    # only shares the suffix (lean_pack's strategy_used is not a count).
     assert 'validation' not in facts
     assert 'emit' not in facts
+    assert 'strategy_used' not in facts
 
 
 def test_graph_control_rerun_resets_attempt_facts(tmp_path):

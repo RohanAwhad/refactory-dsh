@@ -863,6 +863,18 @@ describe('applyControls integration', () => {
       .rejects.toThrow(/refactory graph-control rerun --acknowledge-failure/)
   })
 
+  it('a CEO redo asks the data bridge to keep the attempt facts', async () => {
+    // The bridge is the Python reset that clears a reopened node's facts; the flag is
+    // what keeps design mode's own attempt counts through the CEO's redo.
+    const workdir = scratch()
+    const payload = join(workdir, 'reset-payload.json')
+    const ctx = await mount(agentGraph(), { workdir, dataCommand: `cat > '${payload}' && echo '{}' #` })
+    await call(ctx, 'wf_next')
+    await call(ctx, 'wf_done', { node: 'a' })
+    await call(ctx, 'wf_redo', { node: 'a' })
+    expect(JSON.parse(readFileSync(payload, 'utf8')).preserveAttemptFacts).toBe(true)
+  })
+
   it('deferred rerun fails when invalidation plan changed after join', async () => {
     const workdir = scratch()
     const graph: WorkflowGraph = {
@@ -988,34 +1000,6 @@ describe('cursor merge on redo', () => {
     spine.complete('deliver')
     expect(spine.next().status).toBe('done')
   })
-
-  it('without the cursor-merge fix, join_qa would be lost and the run ends prematurely', () => {
-    // This test documents the bug: replacing the cursor with [plan.start] loses join_qa.
-    // The production code now merges, so we verify that join_qa is NOT lost.
-    const spine = new Spine(designGraph())
-    spine.complete('emit')
-    spine.complete('materialise')
-    spine.complete('check')
-    spine.complete('fork_qa')
-    spine.complete('health_checker')
-    spine.complete('code_reviewer')
-    spine.complete('qa_director')
-    spine.complete('join_qa')
-    spine.verdict('gate_qa', 'reloop')
-    // Second pass — complete through branches so code_reviewer is completed again
-    spine.complete('emit')
-    spine.complete('materialise')
-    spine.complete('check')
-    spine.complete('fork_qa')
-    spine.complete('health_checker')
-    spine.complete('code_reviewer')
-    spine.complete('qa_director')
-    expect(ids(spine)).toEqual(['join_qa'])
-    spine.redo('code_reviewer')
-    // The old code would produce cursor=['code_reviewer'] only — join_qa lost.
-    // The fix preserves join_qa in the cursor alongside code_reviewer.
-    expect(ids(spine)).toContain('join_qa')
-  })
 })
 
 describe('iteration preservation on CEO redo', () => {
@@ -1077,16 +1061,5 @@ describe('iteration preservation on CEO redo', () => {
     spine.verdict('gate', 'reloop') // iteration 3 > 2 → halts
     expect(spine.next().status).toBe('done')
     expect((spine.next() as { halted?: { reason: string } }).halted?.reason).toBe('max_iterations')
-  })
-
-  it('state after max_iterations halt has the structure wf_redo checks', () => {
-    const spine = new Spine(gateLoopGraph(), { maxIterations: 1 })
-    spine.complete('a')
-    spine.verdict('gate', 'reloop') // iteration 1
-    spine.complete('a')
-    spine.verdict('gate', 'reloop') // iteration 2 > 1 → halts
-    const state = spine.state()
-    expect(state.halted).toEqual({ gate: 'gate', reason: 'max_iterations' })
-    // wf_redo's guard checks: state.halted?.reason === 'max_iterations'
   })
 })

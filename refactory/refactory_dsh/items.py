@@ -246,8 +246,11 @@ def command_reset(workdir: Path, request: dict[str, Any]) -> dict[str, Any]:
     if not declarations:
         raise ItemsError('reset requires the run declarations; re-lower this mode before redoing work')
     names = {name for node in nodes for name in declarations.get(node, {}).get('produces', [])}
+    # A CEO's redo keeps the counts its gates check against their limits (attempts_used,
+    # check_attempts_used, research_attempts_used, repairs_used, ...), so a redo cannot
+    # reset a limit; a person's graph-control rerun sends no flag and resets them.
     if request.get('preserveAttemptFacts'):
-        names = {n for n in names if not n.endswith('_used')}
+        names = {n for n in names if not n.endswith(('attempts_used', 'repairs_used'))}
     path = workdir / FACTS
     prior = path.read_text() if path.exists() else '{}'
     facts = json.loads(prior)

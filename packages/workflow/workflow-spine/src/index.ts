@@ -807,6 +807,17 @@ export function apply(ctx: Context, config: Config): void {
     }
   }
 
+  /** The status {@link recordStatus} last wrote for the run, or undefined when there is none to read. */
+  function recordedStatus(workdir: string | undefined): string | undefined {
+    if (workdir === undefined) return undefined
+    try {
+      const recorded = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8')) as { status?: unknown }
+      return typeof recorded?.status === 'string' ? recorded.status : undefined
+    } catch {
+      return undefined
+    }
+  }
+
   /** Consume only controls addressed to this exact durable invocation. */
   function applyControls(spine: Spine, workdir: string | undefined, env: Record<string, string>, dataCommand: string): void {
     if (workdir === undefined) return
@@ -1755,30 +1766,16 @@ export function apply(ctx: Context, config: Config): void {
     presentResult: (args, result) => presentResult('redo', args as Record<string, unknown>, result),
     execute(args, exec) {
       const { spine, workdir, commandEnv, dataCommand } = requireRun(exec)
-      // Refuse once a gate's iteration limit has halted the run or a node has failed
+      // A limit that stopped the run -- a gate halted at its iteration limit, or the run
+      // failed, as design mode's own attempt limit fails it -- is not the CEO's to lift.
       const state = spine.state()
-      if ((state.halted as { reason?: string } | undefined)?.reason === 'max_iterations') {
-        const gate = (state.halted as { gate: string }).gate
-        throw new Error(
-          `run halted at gate ${gate} after reaching its iteration limit; ` +
-          `a CEO redo cannot spend more attempts. Use \`refactory graph-control rerun --acknowledge-failure\` to have a person spend more attempts.`
-        )
-      }
-      if (workdir !== undefined) {
-        const statusPath = join(workdir, '.refactory', 'spine-status.json')
-        if (existsSync(statusPath)) {
-          try {
-            const recorded = JSON.parse(readFileSync(statusPath, 'utf8'))
-            if (recorded.status === 'failed') {
-              throw new Error(
-                `run has failed; a CEO redo cannot spend more attempts. ` +
-                `Use \`refactory graph-control rerun --acknowledge-failure\` to have a person spend more attempts.`
-              )
-            }
-          } catch (error) {
-            if (error instanceof Error && error.message.includes('CEO redo cannot')) throw error
-          }
-        }
+      const halted = state.halted as { gate?: string; reason?: string } | undefined
+      const stopped = halted?.reason === 'max_iterations'
+        ? `run halted at gate ${halted.gate} after reaching its iteration limit`
+        : recordedStatus(workdir) === 'failed' ? 'run has failed' : undefined
+      if (stopped !== undefined) {
+        throw new Error(`${stopped}; a CEO redo cannot spend more attempts. Use `
+          + '`refactory graph-control rerun --acknowledge-failure` to have a person spend more attempts.')
       }
       const plan = spine.planRedo(args.node)
       if (dataCommand !== '' && workdir === undefined) {
