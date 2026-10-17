@@ -222,7 +222,7 @@ def test_a_retry_edits_the_file_its_last_attempt_wrote(tmp_path):
 
 
 @pytest.mark.parametrize("emission, reason", [
-    (_edit("app.py", ("print('not there')\n", "print('x')\n")), "are not in the file the edit applies to"),
+    (_edit("app.py", ("print('not there')\n", "print('x')\n")), "is not in the file the edit applies to"),
     (render({"tool.py": "x = 'long'  # ... (line truncated to 2000 chars)\n"}), "the read tool's note that it cut"),
     ("===EDIT: app.py===\nprint('no pairs')\n", "has text outside its"),
     ("===FILE: ../outside.py===\nx = 1\n", "is not a file inside the artifact directory"),
@@ -349,6 +349,46 @@ def test_an_edit_whose_lines_hold_a_divider_is_refused_rather_than_cut_short():
 def test_an_edit_matches_whole_lines_as_the_read_tool_shows_them_and_keeps_the_files_endings(text, pairs, edited):
     """The read tool strips `\\r` and ends every line, so that is the text a search is copied from."""
     assert repo_change._edited(Path("a.py"), text, pairs, "git show HEAD:a.py") == (edited, 0)
+
+
+def test_a_mid_line_search_applies_when_unique():
+    """A search that starts inside a line, not at position 0 or after a newline, matches when unique."""
+    result, skipped = repo_change._edited(
+        Path("a.py"), "hello world\n", [("world\n", "earth\n")], "git show HEAD:a.py")
+    assert result == "hello earth\n" and skipped == 0
+
+
+def test_a_search_inside_a_line_longer_than_2000_characters_applies():
+    """An edit can reach text past the 2000-char point the read tool truncates at."""
+    line = "x" * 2500 + "MARKER" + "y" * 100 + "\n"
+    result, skipped = repo_change._edited(
+        Path("a.py"), line, [("MARKER", "REPLACED")], "git show HEAD:a.py")
+    assert result == "x" * 2500 + "REPLACED" + "y" * 100 + "\n" and skipped == 0
+
+
+def test_a_search_without_leading_spaces_applies_when_unique():
+    """A search that omits the line's leading whitespace matches when the content is unique."""
+    result, skipped = repo_change._edited(
+        Path("a.py"), "    def foo():\n        pass\n",
+        [("def foo():\n        pass\n", "def bar():\n        pass\n")],
+        "git show HEAD:a.py")
+    assert result == "    def bar():\n        pass\n" and skipped == 0
+
+
+def test_a_substring_that_appears_twice_is_refused():
+    """A search text appearing twice as a substring is refused, even when neither occurrence starts a line."""
+    with pytest.raises(worktree.AttemptRefused, match="appears 2 times"):
+        repo_change._edited(
+            Path("a.py"), "abXYZcd\nefXYZgh\n",
+            [("XYZ", "NEW")], "git show HEAD:a.py")
+
+
+def test_an_absent_search_with_short_replacement_mid_line_is_refused_not_skipped():
+    """An edit whose search text is absent and whose short replacement appears once mid-line is refused."""
+    with pytest.raises(worktree.AttemptRefused, match="is not in the file"):
+        repo_change._edited(
+            Path("a.py"), "abREPLcd\n",
+            [("GONE\n", "REPL")], "git show HEAD:a.py")
 
 
 def test_the_read_tools_paging_note_is_refused_too():

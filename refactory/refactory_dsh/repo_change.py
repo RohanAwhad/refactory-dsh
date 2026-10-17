@@ -339,8 +339,8 @@ def _open_worktree(ctx: Any, name: str, task: dict[str, Any]) -> dict[str, Any]:
                 "===FILE: <relative path>=== followed by the whole file, for a new file or one you "
                 "rewrite entirely;\n"
                 "===EDIT: <relative path>=== followed by one or more edits to an existing file, each "
-                f"written as\n{SEARCH}\n<lines copied exactly from the file as it is now>\n{DIVIDER}\n"
-                f"<the lines that replace them>\n{REPLACE}\nwhere the copied lines appear in the file "
+                f"written as\n{SEARCH}\n<text copied exactly from the file as it is now>\n{DIVIDER}\n"
+                f"<the text that replaces it>\n{REPLACE}\nwhere the copied text appears in the file "
                 "exactly once;\n"
                 "===DELETE: <relative path>=== on its own, to remove a file.\n"
                 "Prefer ===EDIT: for a file that exists: retyping a long file risks changing lines you "
@@ -479,16 +479,27 @@ def _pairs(path: Path, body: str) -> list[tuple[str, str]]:
     return pairs
 
 
+def _occurrences(text: str, search: str) -> list[int]:
+    """Every position where ``search`` occurs in ``text``, regardless of line boundaries."""
+    found: list[int] = []
+    at = text.find(search)
+    while at != -1:
+        found.append(at)
+        at = text.find(search, at + 1)
+    return found
+
+
 def _edited(path: Path, text: str, pairs: list[tuple[str, str]], shown: str) -> tuple[str, int]:
     """``text`` with each edit applied in turn, and how many were already in it.
 
-    Each edit is refused unless its search lines are there exactly once. Search lines
-    match whole lines, from a line's start. The read tool shows a file with ``\r``
-    stripped and every line ended, so a file whose lines all end in ``\r\n``, or whose
-    last line has no newline, is matched as shown and written back as it was. An edit
-    whose result is already where it would go -- a model re-sending an earlier attempt's
-    edit -- is skipped rather than applied twice. ``shown`` is the command that prints
-    ``text``, so a refusal names where to copy from.
+    Each edit is refused unless its search text is there exactly once. Search text
+    is matched as exact text anywhere in the file, like the dsh edit tool's old_string.
+    The read tool shows a file with ``\r`` stripped and every line ended, so a file
+    whose lines all end in ``\r\n``, or whose last line has no newline, is matched as
+    shown and written back as it was. An edit whose result is already where it would go
+    -- a model re-sending an earlier attempt's edit -- is skipped rather than applied
+    twice. ``shown`` is the command that prints ``text``, so a refusal names where to
+    copy from.
     """
     crlf = "\r\n" in text and text.count("\r\n") == text.count("\n")
     work = text.replace("\r\n", "\n") if crlf else text
@@ -496,16 +507,16 @@ def _edited(path: Path, text: str, pairs: list[tuple[str, str]], shown: str) -> 
     work += "\n" if open_end else ""
     skipped = 0
     for search, replacement in pairs:
-        starts = _line_starts(work, search)
-        if _already_applied(work, search, replacement, starts):
+        starts = _occurrences(work, search)
+        if _already_applied(work, search, replacement, _line_starts(work, search)):
             skipped += 1
             continue
         if len(starts) != 1:
             first = next((line.strip() for line in search.splitlines() if line.strip()), "")[:80]
             raise AttemptRefused(
-                f"an edit to {path} searches for lines beginning {first!r}, which "
-                + (f"are not in the file the edit applies to; copy them exactly from `{shown}`"
-                   if not starts else f"appear {len(starts)} times; add lines around them until they appear once"))
+                f"an edit to {path} searches for text beginning {first!r}, which "
+                + (f"is not in the file the edit applies to; copy it exactly from `{shown}`"
+                   if not starts else f"appears {len(starts)} times; include more text around it until it appears once"))
         work = work[:starts[0]] + replacement + work[starts[0] + len(search):]
     if open_end and work.endswith("\n"):
         work = work[:-1]
