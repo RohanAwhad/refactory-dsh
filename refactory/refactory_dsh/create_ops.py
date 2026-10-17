@@ -1230,24 +1230,8 @@ def repair(ctx: Any, findings: list[str]) -> str:
     ctx.set_fact("validation", feedback)
     ctx.set_fact("attempts_used", used)
     if used >= int(ctx.knob("attempts", ctx.knob("check_attempts", 3))):
-        # Persist facts before raising so that facts.json agrees with the message.
-        # A node that raises does not keep the facts it set (the runner writes
-        # facts.json only after a successful return), so without this the saved
-        # attempts_used stays one behind the failure message.
-        _persist_facts(ctx)
         raise ValueError(f"authoring unresolved after {used} attempt(s): {feedback}")
     return Verdict("reloop", feedback)
-
-
-def _persist_facts(ctx: Any) -> None:
-    """Write facts.json so a raising node's facts survive for ``refactory status``."""
-    import json as _json
-
-    path = ctx.workdir / "facts.json"
-    try:
-        path.write_text(_json.dumps(ctx.facts, indent=2, default=str))
-    except OSError:
-        pass
 
 
 def gate_smoke(ctx: Any) -> str:

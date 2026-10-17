@@ -206,6 +206,28 @@ def test_a_target_inside_a_repository_is_refused_before_anything_is_made(repo, t
     assert not worktree.slot(repo).exists() and projects.load()["projects"] == []
 
 
+def test_facts_json_records_final_attempts_used_on_failure(repo, tmp_path, monkeypatch):
+    """run_node's except clause writes facts.json so attempts_used on disk agrees with the error.
+
+    Without it (after removing _persist_facts from create_ops), no writer would persist
+    the facts a raising node set, and the on-disk attempts_used would stay at 0.
+    """
+    run = tmp_path / "run"
+    worktree.create(repo, "HEAD", "abcdef999999", run)
+    lowering.write_declarations(DesignMode().state_dict(), run)
+    (run / "facts.json").write_text(json.dumps({"name": NAME, "brief": "a tool", "check": "exit 1"}))
+    monkeypatch.setenv("REFACTORY_KNOBS", json.dumps({"check_attempts": 1}))
+    (run / "emit.txt").write_text(render({"tool.py": "print('will fail check')\n"}))
+    node_runner.run_node(f"{repo_change.OPS}:materialise", workdir=run, node_id="materialise")
+    # Before the check, attempts_used is absent from facts.json on disk.
+    assert "attempts_used" not in json.loads((run / "facts.json").read_text())
+    with pytest.raises(ValueError, match=r"authoring unresolved after 1 attempt\(s\)"):
+        node_runner.run_node(f"{design_ops.__name__}:check_artifact", workdir=run, node_id="check")
+    # run_node's except clause wrote facts.json; the on-disk value agrees with the message.
+    saved = json.loads((run / "facts.json").read_text())
+    assert saved["attempts_used"] == 1
+
+
 def test_an_attempt_that_fails_its_check_is_redone_as_a_second_commit_on_top_of_it(tmp_path):
     """The retry changes only what it needs to; a file of the first attempt goes when it is deleted."""
     failing = render({"tool.py": "raise SystemExit(1)\n", "draft.py": "x = 1\n", "keep.py": "y = 2\n"})
@@ -278,11 +300,54 @@ def test_an_emission_materialise_cannot_apply_goes_back_to_emit_with_the_reason(
         f"{NAME}: attempt 1"]
 
 
-def test_emissions_that_never_apply_end_the_run_once_its_attempts_are_spent(repo, tmp_path):
+def test_emissions_that_never_apply_exhaust_the_gate_iteration_limit(repo, tmp_path):
+    """Refused emissions do not spend attempts; the gate's max_iterations (8) ends the run."""
     bad = _edit("app.py", ("print('not there')\n", "x\n"))
-    result = _design(tmp_path / "run", FakeModel(_answers(bad, bad, bad)), target=str(repo))
+    # 9 bad emissions: the check gate allows 8 iterations; the 9th triggers the error.
+    result = _design(tmp_path / "run", FakeModel(_answers(*([bad] * 9))), target=str(repo))
     assert not result.exit_ok
-    assert "materialise could not apply emit.txt" in str(result.error)
+    assert "exceeded max_iterations" in str(result.error)
+    assert not result.facts.get("attempts_used"), "refused emissions must not spend attempts"
+    # A person reads result.facts["validation"] via `refactory status`; it holds the refusal.
+    assert "materialise could not apply emit.txt" in result.facts.get("validation", "")
+
+
+def test_a_no_change_emission_is_refused_and_does_not_spend_an_attempt(repo, tmp_path, monkeypatch):
+    """An emission that changes nothing is refused at materialise and takes the same path as any
+    refused emission: back to emit via Verdict('reloop'), no attempt spent.
+    """
+    # Phase 1 — materialise refuses the no-change emission
+    run = tmp_path / "run"
+    ctx = nn.RunContext(run, model=FakeModel([]),
+                        task={"name": NAME, "brief": "a tool", "check": "true", "target": str(repo)})
+    ctx.facts.update(design_ops.prepare_design(ctx))
+    emit_text = render({"tool.py": "print('built')\n"})
+    ctx.write_text("emit.txt", emit_text)
+    result1 = repo_change.materialise(ctx)
+    assert "emission_refused" not in result1
+    head_after_first = worktree.recorded(run).head
+
+    ctx.write_text("emit.txt", emit_text)
+    result2 = repo_change.materialise(ctx)
+    assert "emission_refused" in result2
+    assert "changed nothing" in result2["emission_refused"]
+    assert worktree.recorded(run).head == head_after_first
+
+    # Phase 2 — check_artifact returns Verdict("reloop") without spending attempts
+    monkeypatch.setattr(repo_change, "refused", lambda ctx: "the emission changed nothing: every file and edit in it is already in the last attempt")
+    ctx2 = nn.RunContext(tmp_path / "run2", facts={"check": "python tool.py"},
+                         knobs={"attempts": 3})
+    ctx2._declared = ("check.txt",)
+    ctx2._declared_facts = ("validation", "attempts_used")
+    ctx2.enforce_writes = False
+    result = design_ops.check_artifact(ctx2)
+    assert isinstance(result, Verdict)
+    assert str(result) == "reloop"
+    assert "materialise could not apply" in result.reason
+    assert "changed nothing" in result.reason
+    assert not ctx2.facts.get("attempts_used"), "refused emission must not spend an attempt"
+    # A person reads ctx.facts["validation"] via `refactory status`; it holds the refusal.
+    assert "materialise could not apply emit.txt" in ctx2.facts.get("validation", "")
 
 
 def test_the_same_edits_given_again_are_recognised_as_already_applied(repo, tmp_path):
