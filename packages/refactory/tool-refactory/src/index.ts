@@ -252,37 +252,7 @@ export function renderResult(args: Args, value: unknown): ContentBlock[] {
       lines.push(`Watch it with action "status" and run "${scalar(data.run_id)}".`)
       break
     case 'status': {
-      // An authoring run is driven by the graph spine and writes no progress lines, so
-      // its own status file is what says where it is.
-      const authoring = isRecord(data.authoring) ? data.authoring : undefined
-      if (authoring !== undefined) {
-        const due = Array.isArray(authoring.nodes_due) ? authoring.nodes_due.map(String) : []
-        const done = Array.isArray(authoring.completed) ? authoring.completed.length : 0
-        lines.push(`Authoring run ${scalar(authoring.name)} is ${scalar(authoring.spine)}: ${done} node(s) done${due.length === 0 ? '' : `, ${due.length} due (${due.join(', ')})`}.`)
-        if (typeof authoring.error === 'string' && authoring.error !== '') lines.push(`error: ${authoring.error}`)
-        if (typeof authoring.validation === 'string' && authoring.validation !== '') lines.push(`validation: ${authoring.validation}`)
-        const stepTokens = isRecord(authoring.step_tokens) ? authoring.step_tokens : undefined
-        if (stepTokens !== undefined) {
-          const entries = Object.entries(stepTokens)
-            .filter(([, v]) => typeof v === 'number')
-            .map(([k, v]) => `${k}: ${(v as number).toLocaleString()}`)
-          if (entries.length > 0) {
-            lines.push(`Tokens per step: ${entries.join(', ')}.`)
-          }
-        }
-      }
-      if (data.owner_alive === true) lines.push('Owner process is alive.')
-      else if (data.owner_alive === false) lines.push('Owner process is not alive.')
-      lines.push(`Run ${scalar(data.run_id)} is ${scalar(data.state)}; ${score(data.best_score)}.`)
-      const counters = isRecord(data.counters) ? data.counters : {}
-      lines.push(
-        `epoch ${scalar(counters.epoch) || '0'}, generation ${scalar(counters.generation) || '0'}, `
-        + `${scalar(counters.evaluations) || '0'} evaluation(s).`,
-      )
-      const control = isRecord(data.activity) && isRecord(data.activity.control) ? data.activity.control : undefined
-      if (control !== undefined && control.status === 'failed') {
-        lines.push(`last graph control ${scalar(control.action)} failed: ${scalar(control.message)}`)
-      }
+      lines.push(typeof data.text === 'string' && data.text !== '' ? data.text : `Run ${scalar(data.run_id)} is ${scalar(data.state)}.`)
       break
     }
     case 'artifacts': {
@@ -330,24 +300,7 @@ export function renderResult(args: Args, value: unknown): ContentBlock[] {
       break
     }
     case 'steer': {
-      const entries = Array.isArray(data.entries) ? data.entries : []
-      lines.push(`Run directory: ${scalar(data.run)}.`)
-      lines.push(`Intent ledger: ${scalar(data.ledger)}.`)
-      lines.push(
-        `The intent ledger is ${data.exists === true ? 'present' : 'missing'} `
-        + `with ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}:`,
-      )
-      for (const entry of entries) {
-        if (isRecord(entry)) lines.push(`- [${scalar(entry.kind)}] ${scalar(entry.text)}`)
-      }
-      const verdicts = isRecord(data.verdicts) ? data.verdicts : {}
-      const gates = Object.keys(verdicts)
-      if (gates.length > 0) {
-        lines.push(`Gate verdicts: ${gates.map(gate => `${gate}=${scalar(verdicts[gate])}`).join(', ')}.`)
-      }
-      for (const problem of Array.isArray(data.problems) ? data.problems : []) {
-        lines.push(`problem: ${scalar(problem)}`)
-      }
+      lines.push(typeof data.text === 'string' && data.text !== '' ? data.text : `Ledger for ${scalar(data.run)}.`)
       break
     }
     case 'best':

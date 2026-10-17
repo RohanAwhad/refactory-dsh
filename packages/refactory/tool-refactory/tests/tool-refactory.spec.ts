@@ -226,11 +226,14 @@ describe('dsh-tool-refactory', () => {
 
   it('returns the console\'s JSON beside the action that produced it', async () => {
     const { ctx, subprocess } = await setup()
-    subprocess.handler = () => runResult(JSON.stringify({ run_id: 'r1', state: 'running', counters: { epoch: 2 } }))
+    subprocess.handler = () => runResult(JSON.stringify({
+      run_id: 'r1', state: 'running', counters: { epoch: 2 },
+      text: 'Run r1  probe\nState: running; no score yet.\nEpoch 2, generation 0, 0 evaluation(s).',
+    }))
     const result = await call(ctx, { action: 'status', run: 'r1' })
     expect(result.isError).toBeFalsy()
-    expect(text(result)).toContain('is running')
-    expect(text(result)).toContain('epoch 2')
+    expect(text(result)).toContain('Run r1')
+    expect(text(result)).toContain('running')
   })
 
   it('summarizes every action without printing the whole payload', async () => {
@@ -238,7 +241,7 @@ describe('dsh-tool-refactory', () => {
       modes: [{ id: 'a/b', startable: true }, { id: 'c/d', startable: false }],
       runs: [{ run_id: 'r1', mode: 'a/b', best_score: 1.5, finished: true }],
       start: { run_id: 'r1', mode: 'a/b' },
-      status: { run_id: 'r1', state: 'finished', best_score: 1.5, counters: { epoch: 1, generation: 2, evaluations: 3 } },
+      status: { run_id: 'r1', state: 'finished', best_score: 1.5, counters: { epoch: 1, generation: 2, evaluations: 3 }, text: 'Run r1  \nState: finished; best score 1.5.\nEpoch 1, generation 2, 3 evaluation(s).' },
       artifacts: { artifacts: [{ name: 'report', media_type: 'text/markdown', exists: true }] },
       leaderboard: [{ id: 'x', score: 1.5 }],
       candidate: { candidate: 'x', parent: 'y', rendered: 'Parameters:\n- grid: 18 → 24' },
@@ -470,30 +473,19 @@ describe('renderResult', () => {
       .toContain('- autoresearch: searches')
   })
 
-  it('renders a status with no counters rather than undefined', () => {
-    expect(rendered('status', { run_id: 'r1', state: 'running', counters: 'nope' }))
-      .toContain('epoch 0, generation 0, 0 evaluation(s)')
+  it('renders status without text as a minimal line', () => {
+    expect(rendered('status', { run_id: 'r1', state: 'running' }))
+      .toContain('Run r1 is running')
   })
 
-  it('renders owner_alive and a failed graph control in status', () => {
-    const alive = rendered('status', { run_id: 'r1', state: 'running', owner_alive: true })
-    expect(alive).toContain('Owner process is alive.')
-    const dead = rendered('status', { run_id: 'r1', state: 'failed', owner_alive: false })
-    expect(dead).toContain('Owner process is not alive.')
-    // owner_alive absent → no line
-    expect(rendered('status', { run_id: 'r1', state: 'running' })).not.toContain('Owner process')
-    // failed control receipt in activity.control
-    const failed = rendered('status', {
-      run_id: 'r1', state: 'running',
-      activity: { control: { status: 'failed', action: 'rerun', message: 'stale revision' } },
+  it('renders status from payload text field', () => {
+    const result = rendered('status', {
+      run_id: 'test_run', state: 'running',
+      text: 'Run test_run  my_mode\nSteps done: 3\nOwner: alive',
     })
-    expect(failed).toContain('last graph control rerun failed: stale revision')
-    // applied control → no failure line
-    const applied = rendered('status', {
-      run_id: 'r1', state: 'running',
-      activity: { control: { status: 'applied', action: 'rerun', message: 'ok' } },
-    })
-    expect(applied).not.toContain('last graph control')
+    expect(result).toContain('Run test_run  my_mode')
+    expect(result).toContain('Steps done: 3')
+    expect(result).toContain('Owner: alive')
   })
 
   it('renders a leaderboard, saying a row with no score scored nothing', () => {
@@ -505,21 +497,17 @@ describe('renderResult', () => {
     expect(rendered('candidate', {})).toContain('Candidate  against no parent:')
   })
 
-  it('renders the intent ledger, its gate verdicts and its problems', () => {
-    expect(rendered('steer', { exists: false, entries: 'nope' })).toContain('missing with 0 entries')
-    const one = rendered('steer', {
-      exists: true,
-      entries: [{ kind: 'note', text: 'hi' }],
-      verdicts: { approve: 'proceed' },
-      problems: ['nothing'],
+  it('renders steer from payload text field', () => {
+    const result = rendered('steer', {
+      run: '/tmp/run', ledger: '/tmp/run/ledger.md',
+      text: 'Recorded verdict gate_strategy=proceed.\nNote recorded.',
     })
-    expect(one).toContain('with 1 entry')
-    expect(one).toContain('- [note] hi')
-    expect(one).toContain('Gate verdicts: approve=proceed.')
-    expect(one).toContain('problem: nothing')
-    // An entry that is not a record is counted, and skipped rather than printed.
-    expect(rendered('steer', { entries: ['nope'] })).toContain('with 1 entry')
-    expect(rendered('steer', { verdicts: 'nope' })).not.toContain('Gate verdicts')
+    expect(result).toContain('Recorded verdict gate_strategy=proceed')
+    expect(result).toContain('Note recorded')
+  })
+
+  it('renders steer without text as a minimal line', () => {
+    expect(rendered('steer', { run: '/tmp/run' })).toContain('Ledger for /tmp/run')
   })
 
   it('renders the winner and the adoption', () => {
@@ -685,12 +673,13 @@ describe('authoring from the Web GUI', () => {
     expect(rendered).toContain('the strategy gate is answered by a person')
   })
 
-  it('reports an authoring run\'s own progress from status', async () => {
+  it('reports an authoring run\'s own progress from status via text field', async () => {
     const { ctx, subprocess } = await setup()
     subprocess.handler = () => runResult(JSON.stringify({
       run_id: 'demo_pack',
       state: 'running',
       counters: { epoch: 0, generation: 0, evaluations: 0 },
+      text: 'Run demo_pack  demo_pack\nPosition: strategy_director (agent)\nSteps done: 3',
       authoring: {
         spine: 'ready',
         completed: ['prepare', 'survey', 'research_director'],
@@ -701,7 +690,7 @@ describe('authoring from the Web GUI', () => {
     }))
     const rendered = text(await call(ctx, { action: 'status', run: '.factory/create/demo_pack' }))
     expect(rendered).toContain('demo_pack')
-    expect(rendered).toContain('3 node(s) done')
+    expect(rendered).toContain('Steps done: 3')
     expect(rendered).toContain('strategy_director')
   })
 
