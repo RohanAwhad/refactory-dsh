@@ -61,8 +61,9 @@ allocation or prove that more tokens would produce a good result.
 | Small graph and repair bound | Keep the requested work finite and focused | Create/Design use one strategist, coder and QA agent sequentially; Edit uses coder and QA directly. At most one repair by default; required checks remain in the graph |
 | Worker/check timeout | Stop a hung or excessively slow operation | Separate from the optional run-wide elapsed limit |
 | Optional elapsed/token limit | Honor an explicitly chosen resource boundary | Shared across descendants and validation; exhaustion is reported and does not become success |
+| `--warn-tokens` threshold | Alert when any step's cumulative tokens reach the threshold | Emits a `run_warning` once per step; does not stop the run. Visible in `refactory status` text and the run's events journal |
 | Validation reserve | Retain part of an explicit allocation for required checks | Validation may use the reserve; returning to implementation must use the work allowance |
-| Usage and progress evidence | Explain what the run spent and achieved | Inspect worker receipts, completed nodes and artifact/check records; unavailable measurements stay unavailable |
+| Usage and progress evidence | Explain what the run spent and achieved | Inspect worker receipts, completed nodes and artifact/check records; unavailable measurements stay unavailable. Per-step tokens are visible in `refactory status` output. Each usage event carries `tokens_delta` for incremental accounting alongside the cumulative `tokens` total |
 
 A token limit is checked at usage boundaries. An already admitted request can
 overshoot it, so it is not an exact provider-side ceiling. Do not silently raise an

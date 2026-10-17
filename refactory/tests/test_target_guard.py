@@ -87,7 +87,7 @@ def test_prepare_records_the_targets_commit_branch_and_uncommitted_changes(targe
     assert recorded["head"] == _git(target, "rev-parse", "HEAD")
     assert recorded["branch"] == "main"
     assert list(recorded["changes"]) == ["app.py"], "the dirty state is part of the baseline"
-    assert recorded["output_only"] == ["emit"]
+    assert recorded["output_only"] == ["emit", *design_ops.PLANNING_STEPS]
 
 
 def test_a_later_step_warns_when_the_target_moved_since_prepare(target, tmp_path, capsys):
@@ -345,6 +345,17 @@ def test_a_node_that_is_not_output_only_is_not_held_to_its_outputs(target, tmp_p
     (target / "scratch.txt").write_text("a probe the research ran\n")
     (workdir / "research-plan.json").write_text("[]\n")
     assert agent_delivery.finish(workdir, "research_director")["status"] == "delivered"
+
+
+def test_a_planning_step_registered_as_output_only_is_refused_when_it_changes_the_target(target, tmp_path):
+    """A planning step as output-only: target file changes refused (#347)."""
+    workdir = tmp_path / "run"
+    target_guard.record(workdir, target, output_only=("emit", "design_doc"))
+    agent_delivery.begin(workdir, "design_doc", "Write the design.", ["design.md"])
+    (target / "app.py").write_text("EDITED\n")
+    (workdir / "design.md").write_text("the design\n")
+    with pytest.raises(ValueError, match=r"changed while agent 'design_doc' ran"):
+        agent_delivery.finish(workdir, "design_doc")
 
 
 class _EditingModel(FakeModel):

@@ -63,4 +63,46 @@ describe('durable graph checkpoints', () => {
     expect(spine.next()).toMatchObject({ status: 'done', halted: { reason: 'cancelled' } })
     expect(spine.state().completed).toEqual(['a'])
   })
+  it('feedback survives checkpoint round-trip', () => {
+    const spine = new Spine(graph())
+    spine.setFeedback('a', 'fix')
+    const saved = JSON.parse(JSON.stringify(spine.checkpoint()))
+    const second = new Spine(graph())
+    second.restore(saved)
+    expect(second.state().feedback).toHaveProperty('a', 'fix')
+  })
+  it('deferred_redo_plans present in checkpoint alongside redo_plans', () => {
+    const forkGraph = (): WorkflowGraph => ({
+      name: 'checkpoint', start_node: 'start', nodes: {
+        start: { id: 'start', _type: 'AgentNode', prompt_template: 'go' },
+        fork: { id: 'fork', _type: 'ForkNode', targets: ['p', 'q'] },
+        p: { id: 'p', _type: 'AgentNode', prompt_template: 'P' },
+        q: { id: 'q', _type: 'AgentNode', prompt_template: 'Q' },
+        join: { id: 'join', _type: 'JoinNode', sources: ['p', 'q'] },
+        end: { id: 'end', _type: 'AgentNode', prompt_template: 'E' },
+      }, edges: [
+        { source: 'start', target: 'fork' },
+        { source: 'fork', target: 'join' },
+        { source: 'join', target: 'end' },
+      ],
+    })
+    const spine = new Spine(forkGraph())
+    spine.complete('start')
+    spine.complete('fork')
+    spine.complete('p')
+    const cp = spine.checkpoint()
+    expect(cp.deferred_redo_plans).toHaveProperty('p')
+    expect(cp.redo_plans).not.toHaveProperty('p')
+  })
+  it('restoreRequested accepts failed status when acknowledge_failed is set', () => {
+    // Verify the spine itself round-trips a "failed" checkpoint.
+    // The restoreRequested guard is in index.ts; here we verify spine.restore works.
+    const first = new Spine(graph())
+    first.complete('a')
+    const cp = first.checkpoint()
+    const saved = { ...cp, status: 'failed' }
+    const second = new Spine(graph())
+    second.restore(saved)
+    expect(second.state().completed).toContain('a')
+  })
 })

@@ -1,4 +1,6 @@
+import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -33,6 +35,7 @@ def test_rerun_requires_exact_preview_and_never_executes_work(tmp_path):
     directory.mkdir()
     checkpoint = directory / 'spine-checkpoint.json'
     checkpoint.write_text(json.dumps({'redo_plans': {'a': {'nodes': ['a', 'qa']}}}))
+    (directory / 'invocation.json').write_text(json.dumps({'id': 'inv1'}))
     preview = graph_control.request(tmp_path, 'preview', node='a')
     assert preview['invalidated'] == ['a', 'qa']
     assert not (directory / 'graph-controls').exists()
@@ -91,12 +94,68 @@ def test_exhausted_or_exited_graph_never_claims_running(tmp_path):
     directory.mkdir()
     (directory / 'spine-status.json').write_text(json.dumps({'status': 'executing', 'nodes': ['work']}))
     (directory / 'spine-checkpoint.json').write_text(json.dumps({'owner_pid': 99999999}))
-    assert console.status(tmp_path)['state'] == 'died'
+    result = console.status(tmp_path)
+    assert result['state'] == 'died'
+    assert result['owner_alive'] is False
     (directory / 'resource-usage.json').write_text(json.dumps({'exhausted': True, 'reason': 'token budget exhausted'}))
     result = console.status(tmp_path)
     assert result['state'] == 'failed'
     assert not result['running']
     assert result['activity']['wait_reason'] == 'token budget exhausted'
+
+
+def test_owner_alive_reflects_pid_liveness(tmp_path):
+    """owner_alive=True for a live PID, False for a dead one, None when absent."""
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    (directory / 'spine-status.json').write_text(json.dumps({'status': 'executing', 'nodes': []}))
+
+    # Live PID
+    (directory / 'spine-checkpoint.json').write_text(json.dumps({'owner_pid': os.getpid()}))
+    result = console.status(tmp_path)
+    assert result['owner_alive'] is True
+
+    # Dead PID
+    (directory / 'spine-checkpoint.json').write_text(json.dumps({'owner_pid': 99999999}))
+    result = console.status(tmp_path)
+    assert result['owner_alive'] is False
+
+    # No owner PID
+    (directory / 'spine-checkpoint.json').write_text(json.dumps({}))
+    result = console.status(tmp_path)
+    assert result['owner_alive'] is None
+
+
+def test_status_surfaces_failed_control_in_activity(tmp_path):
+    """console.status() includes failed graph control receipt from activity.control."""
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    (directory / 'spine-status.json').write_text(json.dumps({'status': 'executing', 'nodes': ['work']}))
+    (directory / 'spine-checkpoint.json').write_text(json.dumps({'owner_pid': os.getpid()}))
+    (directory / 'graph-control-receipt.json').write_text(json.dumps({
+        'action': 'rerun', 'status': 'failed',
+        'message': 'graph changed since preview; preview invalidation again',
+    }))
+    result = console.status(tmp_path)
+    control = result['activity'].get('control')
+    assert control is not None
+    assert control['status'] == 'failed'
+    assert 'graph changed since preview' in control['message']
+
+
+def test_graph_control_shows_last_failed_receipt(tmp_path):
+    """graph_control.request() returns the last failed receipt when one exists."""
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    (directory / 'spine-checkpoint.json').write_text(json.dumps({}))
+    (directory / 'graph-control-receipt.json').write_text(json.dumps({
+        'action': 'rerun', 'status': 'failed',
+        'message': 'graph changed since preview; preview invalidation again',
+    }))
+    result = graph_control.request(tmp_path, 'pause')
+    assert result['status'] == 'queued'
+    assert result['last_failed_receipt']['status'] == 'failed'
+    assert 'graph changed since preview' in result['last_failed_receipt']['message']
 
 
 def test_graph_snapshot_reads_saved_topology_without_commands_or_mutations(tmp_path):
@@ -125,6 +184,225 @@ def test_graph_snapshot_reads_saved_topology_without_commands_or_mutations(tmp_p
     assert 'DO NOT EXECUTE' not in json.dumps(result)
     assert checkpoint.read_bytes() == before
     assert not (tmp_path / live.EVENTS).exists()
+
+
+def test_preview_returns_deferred_when_concurrent_work_blocks(tmp_path):
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    checkpoint = directory / 'spine-checkpoint.json'
+    checkpoint.write_text(json.dumps({
+        'deferred_redo_plans': {'a': {'nodes': ['a', 'join', 'end']}},
+        'redo_plans': {},
+    }))
+    preview = graph_control.request(tmp_path, 'preview', node='a')
+    assert preview['status'] == 'deferred'
+    assert preview['invalidated'] == ['a', 'join', 'end']
+
+
+def test_rerun_from_deferred_preview_records_deferred_nodes(tmp_path):
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    (directory / 'invocation.json').write_text(json.dumps({'id': 'inv1'}))
+    checkpoint = directory / 'spine-checkpoint.json'
+    checkpoint.write_text(json.dumps({
+        'deferred_redo_plans': {'a': {'nodes': ['a', 'join', 'end']}},
+        'redo_plans': {},
+    }))
+    revision = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    receipt = graph_control.request(tmp_path, 'rerun', node='a', revision=revision)
+    assert receipt['status'] == 'queued'
+    assert receipt['deferred_nodes'] == ['a', 'join', 'end']
+    # Verify the control file on disk
+    controls = list((directory / 'graph-controls').glob('*.json'))
+    assert len(controls) == 1
+    control = json.loads(controls[0].read_text())
+    assert control['deferred_nodes'] == ['a', 'join', 'end']
+
+
+def test_rerun_of_failed_run_refused_without_acknowledge(tmp_path):
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    checkpoint = directory / 'spine-checkpoint.json'
+    checkpoint.write_text(json.dumps({
+        'status': 'failed',
+        'redo_plans': {'a': {'nodes': ['a']}},
+    }))
+    revision = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    with pytest.raises(ValueError, match='acknowledge_failure'):
+        graph_control.request(tmp_path, 'rerun', node='a', revision=revision)
+
+
+def test_rerun_of_failed_run_queues_control_then_starts_owner(monkeypatch, tmp_path):
+    from refactory_dsh import recovery
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    (directory / 'invocation.json').write_text(json.dumps({'id': 'inv1'}))
+    checkpoint = directory / 'spine-checkpoint.json'
+    checkpoint.write_text(json.dumps({
+        'status': 'failed',
+        'redo_plans': {'a': {'nodes': ['a']}},
+    }))
+    revision = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    start_calls = []
+    def mock_start(root, *, acknowledge_failed=False):
+        # Verify control file exists BEFORE start is called
+        controls = list((root / '.refactory/graph-controls').glob('*.json'))
+        start_calls.append({
+            'root': root,
+            'acknowledge_failed': acknowledge_failed,
+            'controls_existed': len(controls) > 0,
+        })
+        return {'status': 'queued', 'pid': 999}
+    monkeypatch.setattr(recovery, 'start', mock_start)
+    result = graph_control.request(
+        tmp_path, 'rerun', node='a', revision=revision,
+        acknowledge_failure=True,
+    )
+    assert result['status'] == 'queued'
+    assert result['target'] == 'a'
+    assert len(start_calls) == 1
+    assert start_calls[0]['acknowledge_failed'] is True
+    assert start_calls[0]['controls_existed'] is True
+    assert result['owner']['pid'] == 999
+
+
+def test_console_main_graph_control_acknowledge_failure(monkeypatch, tmp_path):
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    (directory / 'invocation.json').write_text(json.dumps({'id': 'inv1'}))
+    checkpoint = directory / 'spine-checkpoint.json'
+    checkpoint.write_text(json.dumps({
+        'status': 'failed',
+        'redo_plans': {'a': {'nodes': ['a']}},
+    }))
+    revision = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    captured = {}
+    def mock_request(root, action, **kwargs):
+        captured.update(kwargs)
+        captured['action'] = action
+        return {'status': 'queued', 'target': 'a'}
+    monkeypatch.setattr(graph_control, 'request', mock_request)
+    console.main([
+        'graph-control', 'rerun',
+        '--run', str(tmp_path),
+        '--node', 'a',
+        '--revision', revision,
+        '--acknowledge-failure',
+    ])
+    assert captured.get('acknowledge_failure') is True
+    assert captured.get('node') == 'a'
+
+
+def test_running_nodes_passes_through_live_snapshot(tmp_path):
+    """running_nodes from spine-status.json flows through live.snapshot()."""
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    running_nodes = [{'id': 'research_director', 'kind': 'agent'},
+                     {'id': 'gate_check', 'kind': 'gate'}]
+    (directory / 'spine-status.json').write_text(json.dumps({
+        'status': 'executing', 'nodes': ['research_director', 'gate_check'],
+        'running_nodes': running_nodes,
+        'wait_reason': 'waiting for worker delivery: research_director (agent), gate_check (gate)',
+    }))
+    activity = live.snapshot(tmp_path)
+    assert activity['running_nodes'] == running_nodes
+    assert 'research_director' in activity['wait_reason']
+
+
+def test_step_tokens_sums_workers_by_node_id(tmp_path):
+    """Two workers for the same node_id sum to one step_tokens entry."""
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    workers_dir = directory / 'workers'
+    workers_dir.mkdir()
+    (workers_dir / 'w1.json').write_text(json.dumps({
+        'worker_id': 'w1', 'node_id': 'research_director',
+        'usage': {'status': 'measured', 'tokens': 6000},
+    }))
+    (workers_dir / 'w2.json').write_text(json.dumps({
+        'worker_id': 'w2', 'node_id': 'research_director',
+        'usage': {'status': 'measured', 'tokens': 4000},
+    }))
+    (workers_dir / 'w3.json').write_text(json.dumps({
+        'worker_id': 'w3', 'node_id': 'strategy',
+        'usage': {'status': 'measured', 'tokens': 2000},
+    }))
+    spine = {'status': 'executing', 'nodes': ['design_doc'],
+             'completed': ['research_director', 'strategy']}
+    (directory / 'spine-status.json').write_text(json.dumps(spine))
+    authoring = console._authoring(tmp_path, spine)
+    assert authoring['step_tokens']['research_director'] == 10000
+    assert authoring['step_tokens']['strategy'] == 2000
+    assert authoring['total_tokens'] == 12000
+
+
+def test_step_tokens_is_none_when_no_workers(tmp_path):
+    """No worker receipts → step_tokens is None, not an empty dict."""
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    spine = {'status': 'executing', 'nodes': ['prepare']}
+    (directory / 'spine-status.json').write_text(json.dumps(spine))
+    authoring = console._authoring(tmp_path, spine)
+    assert authoring['step_tokens'] is None
+    assert authoring['total_tokens'] is None
+
+
+def test_warn_tokens_emits_exactly_one_run_warning_per_step(tmp_path):
+    """--warn-tokens triggers one run_warning per step via events.jsonl."""
+    from refactory_dsh.budgets import RunBudget, ResourceLimits
+
+    budget = RunBudget.create(tmp_path, ResourceLimits(warn_tokens=8000))
+    # Record two workers for same node totaling 10000
+    budget.record_usage('w1', 5000, node_id='research_director')
+    budget.record_usage('w2', 5000, node_id='research_director')
+    node_total = budget.node_tokens('research_director')
+    assert node_total == 10000
+    budget.warn_if_exceeded('research_director', node_total)
+    # Read events.jsonl
+    events_path = tmp_path / '.refactory' / 'events.jsonl'
+    assert events_path.exists()
+    all_lines = [json.loads(line) for line in events_path.read_text().strip().split('\n')]
+    warnings = [e for e in all_lines if e.get('kind') == 'run_warning']
+    assert len(warnings) == 1
+    assert 'research_director' in warnings[0]['summary']
+    assert '10,000' in warnings[0]['summary']
+
+    # Second call for the same node does NOT emit a second warning
+    budget.warn_if_exceeded('research_director', node_total)
+    all_lines2 = [json.loads(line) for line in events_path.read_text().strip().split('\n')]
+    warnings2 = [e for e in all_lines2 if e.get('kind') == 'run_warning']
+    assert len(warnings2) == 1  # still only one
+
+
+def test_warn_tokens_does_not_fire_below_threshold(tmp_path):
+    """Below the threshold, no warning is emitted."""
+    from refactory_dsh.budgets import RunBudget, ResourceLimits
+
+    budget = RunBudget.create(tmp_path, ResourceLimits(warn_tokens=20000))
+    budget.record_usage('w1', 5000, node_id='research_director')
+    budget.warn_if_exceeded('research_director', 5000)
+    events_path = tmp_path / '.refactory' / 'events.jsonl'
+    if events_path.exists():
+        all_lines = [json.loads(line) for line in events_path.read_text().strip().split('\n')]
+        warnings = [e for e in all_lines if e.get('kind') == 'run_warning']
+        assert len(warnings) == 0
+
+
+def test_warn_tokens_validation_rejects_invalid_values():
+    """warn_tokens must be a positive integer or unset."""
+    from refactory_dsh.budgets import ResourceLimits
+    with pytest.raises(ValueError, match="warn_tokens"):
+        ResourceLimits(warn_tokens=0)
+    with pytest.raises(ValueError, match="warn_tokens"):
+        ResourceLimits(warn_tokens=-1)
+    with pytest.raises(ValueError, match="warn_tokens"):
+        ResourceLimits(warn_tokens=True)
+    # Valid: positive integer
+    limits = ResourceLimits(warn_tokens=1000)
+    assert limits.warn_tokens == 1000
+    # Valid: None (unset)
+    limits = ResourceLimits(warn_tokens=None)
+    assert limits.warn_tokens is None
 
 
 def test_graph_snapshot_tolerates_old_and_partial_checkpoints(tmp_path):

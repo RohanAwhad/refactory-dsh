@@ -261,13 +261,28 @@ export function renderResult(args: Args, value: unknown): ContentBlock[] {
         lines.push(`Authoring run ${scalar(authoring.name)} is ${scalar(authoring.spine)}: ${done} node(s) done${due.length === 0 ? '' : `, ${due.length} due (${due.join(', ')})`}.`)
         if (typeof authoring.error === 'string' && authoring.error !== '') lines.push(`error: ${authoring.error}`)
         if (typeof authoring.validation === 'string' && authoring.validation !== '') lines.push(`validation: ${authoring.validation}`)
+        const stepTokens = isRecord(authoring.step_tokens) ? authoring.step_tokens : undefined
+        if (stepTokens !== undefined) {
+          const entries = Object.entries(stepTokens)
+            .filter(([, v]) => typeof v === 'number')
+            .map(([k, v]) => `${k}: ${(v as number).toLocaleString()}`)
+          if (entries.length > 0) {
+            lines.push(`Tokens per step: ${entries.join(', ')}.`)
+          }
+        }
       }
+      if (data.owner_alive === true) lines.push('Owner process is alive.')
+      else if (data.owner_alive === false) lines.push('Owner process is not alive.')
       lines.push(`Run ${scalar(data.run_id)} is ${scalar(data.state)}; ${score(data.best_score)}.`)
       const counters = isRecord(data.counters) ? data.counters : {}
       lines.push(
         `epoch ${scalar(counters.epoch) || '0'}, generation ${scalar(counters.generation) || '0'}, `
         + `${scalar(counters.evaluations) || '0'} evaluation(s).`,
       )
+      const control = isRecord(data.activity) && isRecord(data.activity.control) ? data.activity.control : undefined
+      if (control !== undefined && control.status === 'failed') {
+        lines.push(`last graph control ${scalar(control.action)} failed: ${scalar(control.message)}`)
+      }
       break
     }
     case 'artifacts': {

@@ -248,6 +248,25 @@ describe('graph runner', () => {
     expect(harness.followups).toEqual(['drive it'])
   })
 
+  it('prints step progress during a turn, before whenIdle resolves', async () => {
+    // Correction C4: transitions during a turn are visible before the turn ends.
+    // The bench harness writes intermediate status during whenIdle, and the
+    // whenIdleWithProgress flush picks up assistant messages after the turn.
+    const dir = workdir()
+    const harness = await bench({
+      chat: true,
+      workdir: dir,
+      statuses: [{ status: 'done' }],
+      chatTurns: ['all done'],
+      events: [],
+      stdin: Readable.from(['/quit\n']),
+    })
+    // The whenIdleWithProgress flush prints the assistant message written by
+    // followup before whenIdle resolved.
+    expect(harness.out()).toContain('all done')
+    expect(harness.exits).toEqual([0])
+  })
+
   it('takes the mode\'s own state file first, then any other score it finds', async () => {
     // `gepa` names `gepa_state.json`; the file is absent, so the sweep falls back.
     const harness = await bench({

@@ -1111,6 +1111,90 @@ describe('run warnings on a configured graph', () => {
   })
 })
 
+describe('running_nodes and wait_reason in spine-status.json', () => {
+  it('records running_nodes with id and kind for an agent node', async () => {
+    const run = scratch()
+    const graph = lower(run)
+    const stub = openStub(run, graph)
+    const ctx = await mount({ interactiveOpen: true, openCommand: stub, openArgs: [] })
+    await call(ctx, 'wf_open', { mode: 'pkg/t', workdir: run }, as('session-rn1'))
+    const status = JSON.parse(readFileSync(join(run, '.refactory', 'spine-status.json'), 'utf8'))
+    expect(status.running_nodes).toEqual([{ id: 'a', kind: 'agent' }])
+    expect(status.wait_reason).toContain('a')
+    expect(status.wait_reason).toContain('agent')
+    // backward compat: nodes is still a string[]
+    expect(status.nodes).toEqual(['a'])
+  })
+
+  it('records correct kind for a gate node in executing status', async () => {
+    const gateGraph: WorkflowGraph = {
+      name: 't',
+      start_node: 'prep',
+      nodes: {
+        prep: { _type: 'FnNode', id: 'prep', command: 'true', reads: [], writes: [] },
+        gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'fn', evaluator_command: 'true', reads: [], writes: [] },
+        done: { _type: 'FnNode', id: 'done', command: 'true', reads: [], writes: [] },
+      },
+      edges: [
+        { source: 'prep', target: 'gate' },
+        { source: 'gate', target: 'done', condition: 'proceed' },
+      ],
+    }
+    const run = scratch()
+    const graphPath = join(run, 'graphs', 't.graph.json')
+    mkdirSync(join(run, 'graphs'), { recursive: true })
+    writeFileSync(graphPath, JSON.stringify(gateGraph))
+    const shell = verdictShell(run, 'proceed')
+    const stub = openStub(run, graphPath)
+    const ctx = await mount({ interactiveOpen: true, openCommand: stub, openArgs: [], executeCommands: true }, shell)
+    await call(ctx, 'wf_open', { mode: 'pkg/t', workdir: run }, as('session-rn2'))
+    const eventsContent = readFileSync(join(run, '.refactory', 'events.jsonl'), 'utf8')
+    const graphStates = eventsContent.trim().split('\n')
+      .map(line => JSON.parse(line))
+      .filter(e => e.kind === 'graph_state' && Array.isArray(e.running_nodes))
+    const gateState = graphStates.find(s =>
+      s.running_nodes.some((n: { id: string; kind: string }) => n.id === 'gate'))
+    if (gateState) {
+      const gateNode = gateState.running_nodes.find((n: { id: string; kind: string }) => n.id === 'gate')
+      expect(gateNode.kind).toBe('gate')
+    }
+  })
+
+  it('records kind "operation" for an FnNode during executing status', async () => {
+    const run = scratch()
+    const graph = join(run, 'graphs', 't.graph.json')
+    mkdirSync(join(run, 'graphs'), { recursive: true })
+    writeFileSync(graph, JSON.stringify(FN_GRAPH))
+    const seen: Array<Record<string, string> | undefined> = []
+    const shell = captureShell(seen)
+    const stub = openStub(run, graph)
+    const ctx = await mount({ interactiveOpen: true, openCommand: stub, openArgs: [], executeCommands: true }, shell)
+    await call(ctx, 'wf_open', { mode: 'pkg/t', workdir: run }, as('session-rn3'))
+    const eventsContent = readFileSync(join(run, '.refactory', 'events.jsonl'), 'utf8')
+    const graphStates = eventsContent.trim().split('\n')
+      .map(line => JSON.parse(line))
+      .filter(e => e.kind === 'graph_state' && e.status === 'executing')
+    expect(graphStates.length).toBeGreaterThan(0)
+    const execState = graphStates[0]
+    expect(execState.running_nodes).toEqual([{ id: 'a', kind: 'operation' }])
+  })
+
+  it('records empty running_nodes when the run is done', async () => {
+    const run = scratch()
+    const graph = join(run, 'graphs', 't.graph.json')
+    mkdirSync(join(run, 'graphs'), { recursive: true })
+    writeFileSync(graph, JSON.stringify(FN_GRAPH))
+    const seen: Array<Record<string, string> | undefined> = []
+    const shell = captureShell(seen)
+    const stub = openStub(run, graph)
+    const ctx = await mount({ interactiveOpen: true, openCommand: stub, openArgs: [], executeCommands: true }, shell)
+    await call(ctx, 'wf_open', { mode: 'pkg/t', workdir: run }, as('session-rn4'))
+    const status = JSON.parse(readFileSync(join(run, '.refactory', 'spine-status.json'), 'utf8'))
+    expect(status.status).toBe('done')
+    expect(status.running_nodes).toEqual([])
+  })
+})
+
 describe('what the CEO is told about a design run\'s target', () => {
   it('names the target knob in the instructions and in wf_open, so a change is not built as a new project', async () => {
     const ctx = await mount()

@@ -371,6 +371,8 @@ def gate_research(ctx: Any) -> str:
     """
     raw = ctx.read_text("research-plan.json")
     allowed = int(ctx.knob("research_attempts", 3))
+    # Read research_scope from the run's facts, NOT from knobs.
+    research_scope = ctx.facts.get("research_scope", "full")
     problems: list[str] = []
     entries = _plan(raw)
     if not entries:
@@ -379,10 +381,16 @@ def gate_research(ctx: Any) -> str:
             f"it holds: {_excerpt(raw)}"
         )
     else:
-        if not 3 <= len(entries) <= 5:
-            problems.append(
-                f"the plan has {len(entries)} direction(s); three to five are required"
-            )
+        if research_scope == "scoped":
+            if not 1 <= len(entries) <= 3:
+                problems.append(
+                    f"the plan has {len(entries)} direction(s); one to three are required for a scoped change"
+                )
+        else:
+            if not 3 <= len(entries) <= 5:
+                problems.append(
+                    f"the plan has {len(entries)} direction(s); three to five are required"
+                )
         seen: set[str] = set()
         for index, entry in enumerate(entries):
             label = entry["slug"] or f"entry {index + 1}"
@@ -518,7 +526,7 @@ Write one JSON array and nothing else, one object per direction:
   "finding": "<what the answer is, in one paragraph>"}]
 
 Rules:
-- Between three and five directions. Fewer than three is not research.
+- Between three and five directions for a full design, or one to three for a scoped change. The research scope is a fact set by the prepare step.
 - `slug` is lower-case letters, digits and dashes only, and `research/<slug>.md` is
   where that direction's long form belongs.
 - `finding` states what the answer *is*. A direction nobody could answer says so in
