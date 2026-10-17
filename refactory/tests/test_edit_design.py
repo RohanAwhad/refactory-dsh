@@ -23,6 +23,7 @@ from refactory_dsh.repo_change import ARTIFACTS, OWNERS
 from refactory_dsh.edit import EditConfig, EditMode
 from refactory_dsh.run import run_node
 from tests_support import (
+    DESIGN_REVIEW_ANSWER,
     RESEARCH_ANSWER,
     REVIEW_ANSWERS,
     FakeModel,
@@ -193,6 +194,7 @@ def _design_answers(emit: list[str]) -> list[str]:
         "perspectives: the simplest thing that passes the check",
         "one plan: the files, and how the check exercises them",
         "the design document",
+        DESIGN_REVIEW_ANSWER,
         *emit,
         *REVIEW_ANSWERS,
     ]
@@ -201,10 +203,12 @@ def _design_answers(emit: list[str]) -> list[str]:
 def test_the_design_graph_is_a_different_shape_from_a_package_one():
     graph = DesignMode().graph()
     assert sorted(graph.nodes) == [
-        "check", "code_reviewer", "deliver", "design_doc", "emit", "fork_qa", "gate_overwatch",
+        "check", "code_reviewer", "deliver", "design_doc", "design_review",
+        "emit", "fork_qa", "gate_design_review", "gate_overwatch",
         "gate_qa", "gate_research", "gate_strategy", "health_checker", "join_qa",
-        "materialise", "overwatch", "prepare", "qa_director", "record_findings", "report",
-        "research_director", "strategy_director", "synthesize_qa", "synthesize_strategy",
+        "materialise", "overwatch", "prepare", "qa_director", "record_findings",
+        "report", "research_director", "strategy_director", "synthesize_qa",
+        "synthesize_strategy",
     ], "the graph is design-v2's phases, not v1's"
     assert graph.nodes["check"].evaluator.endswith("check_artifact")
     assert "register" not in graph.nodes, "an artifact is not a package"
@@ -279,6 +283,118 @@ def test_the_check_runs_without_the_real_credentials(tmp_path):
         env={**__import__("os").environ, "DEEPSEEK_API_KEY": "sk-hidden"},
     )
     assert result.ok, result.stderr
+
+
+# ── design review gate tests ───────────────────────────────────────────────
+
+def test_design_review_gate_passes_a_clean_review(tmp_path):
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({"source": str(tmp_path), "design_review_attempts_used": 0})
+    (tmp_path / "reviews").mkdir(parents=True, exist_ok=True)
+    ctx.write_text("reviews/design-review.md",
+                   "Everything is fine.\n\nVERDICT: PASS\n")
+    ctx.write_text("design.md", "The design.\n")
+    ctx.write_json("brief.json", {"name": "x", "brief": "do a thing"})
+    import refactory_dsh.design_ops as ops
+    assert ops.gate_design_review(ctx) == "proceed"
+    assert "(none: the design review passed)" in ctx.facts["design_review_findings"]
+
+
+def test_design_review_gate_reloops_on_blocking_finding(tmp_path):
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({"source": str(tmp_path), "design_review_attempts_used": 0})
+    (tmp_path / "reviews").mkdir(parents=True, exist_ok=True)
+    ctx.write_text("reviews/design-review.md",
+                   "BLOCKING: the design leaves alternative X open\n\nVERDICT: FAIL\n")
+    ctx.write_text("design.md", "The design.\n")
+    ctx.write_json("brief.json", {"name": "x", "brief": "do a thing"})
+    import refactory_dsh.design_ops as ops
+    verdict = ops.gate_design_review(ctx)
+    assert verdict == "reloop"
+    assert "alternative X open" in verdict.reason
+
+
+def test_design_review_gate_reloops_on_missing_verdict(tmp_path):
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({"source": str(tmp_path), "design_review_attempts_used": 0})
+    (tmp_path / "reviews").mkdir(parents=True, exist_ok=True)
+    ctx.write_text("reviews/design-review.md", "Some review text, no verdict.\n")
+    ctx.write_text("design.md", "The design.\n")
+    ctx.write_json("brief.json", {"name": "x", "brief": "do a thing"})
+    import refactory_dsh.design_ops as ops
+    verdict = ops.gate_design_review(ctx)
+    assert verdict == "reloop"
+    assert "did not state" in verdict.reason
+
+
+def test_design_review_gate_catches_citation_to_missing_line(tmp_path):
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "somefile.py").write_text("line1\nline2\nline3\n")
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({"source": str(source), "design_review_attempts_used": 0})
+    (tmp_path / "reviews").mkdir(parents=True, exist_ok=True)
+    ctx.write_text("reviews/design-review.md",
+                   "All confirmed.\n\nVERDICT: PASS\n")
+    ctx.write_text("design.md", "See somefile.py:999 for details.\n")
+    ctx.write_json("brief.json", {"name": "x", "brief": "do a thing"})
+    import refactory_dsh.design_ops as ops
+    verdict = ops.gate_design_review(ctx)
+    assert verdict == "reloop"
+    assert "999" in verdict.reason and "3 lines" in verdict.reason
+
+
+def test_design_review_gate_catches_misquoted_brief(tmp_path):
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({"source": str(tmp_path), "design_review_attempts_used": 0})
+    (tmp_path / "reviews").mkdir(parents=True, exist_ok=True)
+    ctx.write_text("reviews/design-review.md",
+                   "All confirmed.\n\nVERDICT: PASS\n")
+    ctx.write_text("design.md",
+                   'As the brief says, "enable fast mode" is required.\n')
+    ctx.write_json("brief.json", {"name": "x", "brief": "make it work correctly"})
+    import refactory_dsh.design_ops as ops
+    verdict = ops.gate_design_review(ctx)
+    assert verdict == "reloop"
+    assert "enable fast mode" in verdict.reason
+
+
+def test_design_review_gate_proceeds_when_attempts_exhausted(tmp_path):
+    ctx = nn.RunContext(tmp_path, knobs={"design_review_attempts": 1})
+    ctx.facts.update({"source": str(tmp_path), "design_review_attempts_used": 0})
+    (tmp_path / "reviews").mkdir(parents=True, exist_ok=True)
+    ctx.write_text("reviews/design-review.md",
+                   "BLOCKING: alternative left open\n\nVERDICT: FAIL\n")
+    ctx.write_text("design.md", "The design.\n")
+    ctx.write_json("brief.json", {"name": "x", "brief": "do a thing"})
+    import refactory_dsh.design_ops as ops
+    result = ops.gate_design_review(ctx)
+    assert result == "proceed"
+    assert "alternative left open" in ctx.facts["design_review_findings"]
+
+
+def test_design_review_gate_accepts_bare_name_citation_to_real_line(tmp_path):
+    """A citation like `somefile.py:2` resolves to a tracked file whose path ends with it."""
+    source = tmp_path / "src"
+    source.mkdir()
+    sub = source / "deep" / "path"
+    sub.mkdir(parents=True)
+    (sub / "somefile.py").write_text("line1\nline2\nline3\n")
+    # Simulate git ls-files by creating a .git directory so git works
+    import subprocess
+    subprocess.run(["git", "init", "-q"], cwd=str(source), check=True)
+    subprocess.run(["git", "add", "."], cwd=str(source), check=True)
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({"source": str(source), "design_review_attempts_used": 0})
+    (tmp_path / "reviews").mkdir(parents=True, exist_ok=True)
+    ctx.write_text("reviews/design-review.md",
+                   "All confirmed.\n\nVERDICT: PASS\n")
+    # Cite a bare name that resolves via git ls-files to deep/path/somefile.py
+    ctx.write_text("design.md", "See somefile.py:2 for the implementation.\n")
+    ctx.write_json("brief.json", {"name": "x", "brief": "do a thing"})
+    import refactory_dsh.design_ops as ops
+    result = ops.gate_design_review(ctx)
+    assert result == "proceed", f"bare-name citation should resolve; got {result!r}"
 
 
 def test_a_design_run_produces_a_checked_artifact():
