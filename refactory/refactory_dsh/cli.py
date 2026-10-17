@@ -114,7 +114,7 @@ def _run_argv(identifier: str, args: argparse.Namespace) -> list[str]:
 
 
 def _worktree_knobs(args: argparse.Namespace, *, deliver: bool = True) -> list[str]:
-    """`--target`, `--base`, `--no-worktree`, `--setup` and, with ``deliver``, delivery's, as knobs."""
+    """`--target`, `--base`, `--no-worktree`, `--setup`, `--generate` and, with ``deliver``, delivery's, as knobs."""
     knobs = []
     if args.target:
         # Absolute, because the run resolves it from its own directory, not this shell's.
@@ -125,6 +125,8 @@ def _worktree_knobs(args: argparse.Namespace, *, deliver: bool = True) -> list[s
         knobs.append("worktree=0")
     if args.setup:
         knobs.append(f"setup={args.setup}")
+    if args.generate:
+        knobs.append(f"generate={args.generate}")
     if not deliver:
         return knobs
     if args.no_pr:
@@ -165,6 +167,7 @@ def cmd_ceo(args: argparse.Namespace) -> int:
     # A flag a mode would ignore is refused, not dropped: the person meant it.
     located = [flag for flag, given in (("--target", args.target), ("--base", args.base),
                                         ("--no-worktree", args.no_worktree), ("--setup", args.setup),
+                                        ("--generate", args.generate),
                                         ("--no-pr", args.no_pr), ("--refine", args.refine),
                                         ("--review-comments", args.review_comments)) if given]
     in_worktree = [flag for flag in located if flag not in ("--no-worktree", "--no-pr")]
@@ -236,7 +239,7 @@ def cmd_ceo(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 2
-        placed = [flag for flag in located if flag in ("--target", "--base", "--setup")]
+        placed = [flag for flag in located if flag in ("--target", "--base", "--setup", "--generate")]
         if args.source_project and placed:
             print(
                 f"refactory: --source-project cannot take {', '.join(placed)}: it copies a directory "
@@ -292,7 +295,9 @@ def cmd_ceo(args: argparse.Namespace) -> int:
             forwarded += ["--" + key.replace("_", "-"), str(value)]
     if args.headless:
         forwarded += ["--headless"]
-    print(f"refactory: {authoring} — {target}", file=sys.stderr)
+    first = target.split('\n', 1)[0]
+    short = first[:80] + '…' if len(first) > 80 else first
+    print(f"refactory: {authoring} — {short}", file=sys.stderr)
     return _forward("refactory_dsh.interactive", forwarded)
 
 
@@ -539,6 +544,9 @@ def build_parser() -> argparse.ArgumentParser:
     ceo.add_argument("--setup", default="",
                      help="design and design_fast: a command run in the worktree before each check, "
                           "such as a build")
+    ceo.add_argument("--generate", default="",
+                     help="design and design_fast: a command run in the worktree after setup, "
+                          "before each check; its tracked-file changes are amended into the attempt")
     ceo.add_argument("--no-pr", action="store_true",
                      help="design only: keep the work on the run's local branch instead of opening a pull "
                           "request once the reviews pass")

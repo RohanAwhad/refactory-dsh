@@ -55,4 +55,16 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
     temporary.write_text(json.dumps(result))
     temporary.replace(directory / f'{identifier}.json')
     emit(root, 'control_requested', state='queued', summary=action, node_id=node)
+    receipt_path = root / '.refactory/graph-control-receipt.json'
+    if receipt_path.exists():
+        try:
+            last_receipt = json.loads(receipt_path.read_text())
+            if isinstance(last_receipt, dict) and last_receipt.get('status') == 'failed':
+                result['last_failed_receipt'] = {
+                    'action': last_receipt.get('action'),
+                    'status': 'failed',
+                    'message': last_receipt.get('message', ''),
+                }
+        except (OSError, json.JSONDecodeError):
+            pass
     return result

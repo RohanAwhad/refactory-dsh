@@ -338,6 +338,23 @@ describe('deterministic nodes run without the driver', () => {
 })
 
 
+describe('spine threads custom field as feedback', () => {
+  it('passes custom text from a selected verdict as feedback to the gate bridge', async () => {
+    // When user-questions returns a selected verdict plus custom text (the note),
+    // the spine records the custom text as feedback via the gate bridge.
+    const tmp = mkdtempSync(join(tmpdir(), 'spine-custom-fb-'))
+    try {
+      const { ctx } = await gateRun(graphWithReads, tmp,
+        question => Promise.resolve({
+          answers: [{ id: question.id, selected: ['proceed'], custom: 'approved with conditions' }],
+        }))
+      const result = await run(ctx, 'wf_verdict', { gate: 'gate' }) as { status: string; feedback?: string }
+      expect(result.status).toBe('routed')
+      expect(result.feedback).toBe('approved with conditions')
+    } finally { rmSync(tmp, { recursive: true, force: true }) }
+  })
+})
+
 describe('recovery checkpoint ownership', () => {
   it('refuses dispatch when the execution checkpoint cannot be replaced', async () => {
     const root = mkdtempSync(join(tmpdir(), 'spine-checkpoint-'))

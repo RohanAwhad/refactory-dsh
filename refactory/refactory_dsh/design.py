@@ -217,9 +217,10 @@ class DesignMode(Mode):
                 "## What the reviews refused\n{{qa_gate}}\n{{overwatch_review}}\n\n"
                 + _ACCEPTANCE_BASELINE
                 + "{{emit_scope}}\n\n"
-                "Write those blocks into emit.txt, with no prose outside them. Do not create "
-                "or change the files themselves: the materialise step applies emit.txt, and "
-                "tells the next attempt if it could not. Then return a short completion message.\n"
+                "Write those blocks into emit.txt, with no prose outside them. Write nothing "
+                "but emit.txt: do not apply or test your change anywhere — the target, the "
+                "run's worktree or a copy — because materialise and the check do that after "
+                "you answer and send you the result. Then return a short completion message.\n"
             ),
             reads=("brief.json", "design.md", "check.txt"),
             writes=("emit.txt",),
@@ -469,6 +470,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-worktree", action="store_true",
                         help="write the artifact under .factory/artifacts instead of a worktree")
     parser.add_argument("--setup", default="", help="a command run in the worktree before each check, such as a build")
+    parser.add_argument("--generate", default="",
+                        help="a command run in the worktree after setup, before each check; "
+                             "its tracked-file changes are amended into the attempt")
     parser.add_argument("--no-pr", action="store_true",
                         help="keep the work on the run's local branch instead of opening a pull request")
     parser.add_argument("--refine", default="", metavar="PR",
@@ -558,7 +562,8 @@ def main(argv: list[str] | None = None) -> int:
             timeout_s=int(args.model_timeout_s), model=args.model, provider=args.provider,
         ),
         task={"name": args.name, "brief": args.brief, "check": args.check, "source_project": args.source_project,
-              "target": args.target, "base": args.base, "setup": args.setup, "refine": args.refine},
+              "target": args.target, "base": args.base, "setup": args.setup, "generate": args.generate,
+              "refine": args.refine},
         verdicts=verdicts,
         resource_limits=arguments(args),
     )

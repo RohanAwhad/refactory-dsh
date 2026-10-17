@@ -25,8 +25,22 @@ export const name = 'graph-answerer'
 /** The service a `user` gate is asked through. */
 export const inject = ['userQuestions']
 
-/** Ask one question on the terminal and return the chosen option label. */
-async function askTerminal(question: { id: string; question: string; options?: Array<{ label: string }> }): Promise<string> {
+/** Read a multi-line note from the terminal, terminated by a line containing only `.`. */
+async function readNote(rl: ReturnType<typeof createInterface>): Promise<string> {
+  process.stdout.write('Add a note (end with a line containing only ".", or press Enter to skip):\n')
+  const lines: string[] = []
+  for (;;) {
+    const line = await new Promise<string>((resolve) => { rl.question('', resolve) })
+    // First line empty → skip note entirely
+    if (lines.length === 0 && line === '') return ''
+    // Lone dot terminates the note
+    if (line === '.') return lines.join('\n')
+    lines.push(line)
+  }
+}
+
+/** Ask one question on the terminal and return the chosen option label, plus an optional note. */
+async function askTerminal(question: { id: string; question: string; options?: Array<{ label: string }> }): Promise<{ selected: string; custom: string }> {
   const options = question.options ?? []
   process.stdout.write(`\n[gate ${question.id}] ${question.question}\n`)
   options.forEach((option, index) => {
@@ -34,6 +48,7 @@ async function askTerminal(question: { id: string; question: string; options?: A
   })
   const rl = createInterface({ input: process.stdin, output: process.stdout })
   try {
+    let selected: string
     for (;;) {
       const line = (await new Promise<string>((resolve) => { rl.question('> ', resolve) })).trim()
       if (line === '') continue
@@ -41,12 +56,15 @@ async function askTerminal(question: { id: string; question: string; options?: A
       const byIndex = Number.isInteger(index) && index >= 1 && index <= options.length
         ? options[index - 1]
         : undefined
-      if (byIndex !== undefined) return byIndex.label
+      if (byIndex !== undefined) { selected = byIndex.label; break }
       const matched = options.find(option => option.label === line)
-      if (matched !== undefined) return matched.label
-      if (options.length === 0) return line
+      if (matched !== undefined) { selected = matched.label; break }
+      if (options.length === 0) { selected = line; break }
       process.stdout.write(`choose 1-${options.length}, or one of: ${options.map(o => o.label).join(', ')}\n`)
     }
+    // After choosing the verdict, offer a multi-line note.
+    const custom = await readNote(rl)
+    return { selected, custom }
   } finally {
     rl.close()
   }
@@ -64,16 +82,15 @@ export function apply(ctx: Context): void {
     request: AskUserQuestionRequest,
     next: () => Promise<AskUserQuestionAnswer>,
   ): Promise<AskUserQuestionAnswer> => {
-    if (startup === undefined) return next()
+    // Delegate unless this is a live chat session with a real terminal.
+    // Headless mode (startup.chat === false) must never prompt, even at a TTY:
+    // running `refactory ceo ... --headless` in tmux would otherwise prompt
+    // instead of refusing.
+    if (startup === undefined || !startup.chat || !process.stdin.isTTY) return next()
     const answers = []
     for (const question of request.questions) {
-      if (!process.stdin.isTTY) {
-        // Nobody can be asked here. Delegating lets the spine refuse the gate with a
-        // message that names it, rather than inventing a verdict.
-        return next()
-      }
-      const chosen = await askTerminal(question)
-      answers.push({ id: question.id, selected: [chosen] })
+      const { selected, custom } = await askTerminal(question)
+      answers.push({ id: question.id, selected: [selected], ...(custom ? { custom } : {}) })
     }
     return { answers }
   })

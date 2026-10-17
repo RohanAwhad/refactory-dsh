@@ -19,6 +19,11 @@ from refactory_dsh import delivery, repo_change, sandbox, worktree
 
 STAGING = "staging"
 
+#: Planning steps that must not change the target or the worktree (#347).
+#: They write only into the run directory; a change they make to the target
+#: or the worktree fails the step and names what changed.
+PLANNING_STEPS = ('research_director', 'strategy_director', 'synthesize_strategy', 'design_doc')
+
 #: The op design's materialise node called before it moved to `repo_change` (#330): a run
 #: lowered then, such as one waiting at its approval gate, still names it.
 materialise_artifact = repo_change.materialise
@@ -61,7 +66,8 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
         # A refinement starts from its pull request's head, in a clone of its repository.
         task = delivery.refine_task(ctx, task)
     located = repo_change.locate(ctx, name, task, in_worktree=in_worktree,
-                                 needs_worktree=("refine",) if deliver else ())
+                                 needs_worktree=("refine",) if deliver else (),
+                                 output_only=PLANNING_STEPS)
     # Match create/edit: inspect the exact nested route before launching research.
     # Other ModelClient implementations retain their own readiness contract.
     from refactory_dsh.model import DshModelClient
