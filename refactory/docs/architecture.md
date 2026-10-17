@@ -321,7 +321,17 @@ loop.
 subagent answer each question, a strategy director chooses the perspectives and
 records which asks each one covers, `synthesize_strategy` compiles them into one
 intent-faithful plan, and design-v2 adds `design_doc` — the design document the
-code is written from. A **person answers `gate_strategy`** at that point, because a
+code is written from. Between `design_doc` and `gate_strategy`, a **design review**
+step checks the document: a `design_review` agent reads the design, the brief and
+the code the design cites, and writes `reviews/design-review.md` listing open
+alternatives and unconfirmed claims as `BLOCKING:` findings. `gate_design_review`
+reads that review using the same verdict and blocking-findings parsing as
+`gate_overwatch`, and adds two mechanical checks with no false positives: every
+`path:line` citation names an existing file with that many lines, and every
+quotation the design attributes to the brief appears verbatim in the brief. On
+failure it reloops to `design_doc`; when `design_review_attempts` runs out, it
+proceeds to `gate_strategy` with the remaining findings shown — it never fails the
+run. A **person answers `gate_strategy`** at that point, because a
 run that can approve its own plan is not reviewed at all, so a headless run refuses
 that gate unless the caller supplies the verdict. The build then passes structural admission and canonical runtime validation inside the bounded repair cycle. Registration supplies execution visibility, not completion. Then three
 reviews (a health check, a code review and an adversarial QA pass) run **in

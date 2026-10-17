@@ -6284,11 +6284,6 @@ Build a reusable mode package from a brief, name and task/single-shot inputs. Ca
       "target": "emit"
     },
     {
-      "condition": "audit",
-      "source": "gate_overwatch",
-      "target": "overwatch"
-    },
-    {
       "condition": "proceed",
       "source": "gate_overwatch",
       "target": "report"
@@ -6848,7 +6843,7 @@ Build a reusable mode package from a brief, name and task/single-shot inputs. Ca
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a reusable mode package from a brief, name and task/single-shot inputs. Canonical smoke runs before separate QA and Overwatch; repair shares the attempt bound and completion needs current validation and intent evidence.",
-    "reviewed_schema": "33dd7f848f6ae5ad2570cc992144aec6e142cae1e94645a955705b7dde8cc0a6"
+    "reviewed_schema": "7b2557e667506b09ea5c76f8cb26c3a9610d5288ace452ac027b8d94eae10417"
   }
 }
 ```
@@ -7255,7 +7250,7 @@ Build a small reusable package with a strategist, coder and focused QA. Canonica
 
 ## default_pack/design
 
-Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local; `refine` updates an open one).
+Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`). The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local; `refine` updates an open one).
 
 ```json
 {
@@ -7274,7 +7269,12 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     {
       "condition": null,
       "source": "design_doc",
-      "target": "gate_strategy"
+      "target": "design_review"
+    },
+    {
+      "condition": null,
+      "source": "design_review",
+      "target": "gate_design_review"
     },
     {
       "condition": null,
@@ -7288,13 +7288,18 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     },
     {
       "condition": "reloop",
-      "source": "gate_overwatch",
-      "target": "emit"
+      "source": "gate_design_review",
+      "target": "design_doc"
     },
     {
-      "condition": "audit",
+      "condition": "proceed",
+      "source": "gate_design_review",
+      "target": "gate_strategy"
+    },
+    {
+      "condition": "reloop",
       "source": "gate_overwatch",
-      "target": "overwatch"
+      "target": "emit"
     },
     {
       "condition": "proceed",
@@ -7388,6 +7393,10 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "user": false
     },
     {
+      "id": "gate_design_review",
+      "user": false
+    },
+    {
       "id": "gate_overwatch",
       "user": false
     },
@@ -7445,6 +7454,14 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     },
     {
       "call": "",
+      "id": "design_review",
+      "kind": "agent",
+      "knobs": [],
+      "notes": "review the design for open alternatives and unconfirmed claims",
+      "role": "ceo"
+    },
+    {
+      "call": "",
       "id": "emit",
       "kind": "agent",
       "knobs": [],
@@ -7457,6 +7474,17 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "kind": "fork",
       "knobs": [],
       "notes": "start the three reviews",
+      "role": "ceo"
+    },
+    {
+      "call": "refactory_dsh.design_ops:gate_design_review",
+      "gate_kind": "fn",
+      "id": "gate_design_review",
+      "kind": "gate",
+      "knobs": [
+        "design_review_attempts"
+      ],
+      "notes": "proceed on PASS with no findings; reloop to design_doc otherwise; never fail the run",
       "role": "ceo"
     },
     {
@@ -7494,7 +7522,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "id": "gate_strategy",
       "kind": "gate",
       "knobs": [],
-      "notes": "Approve the design before the artifact is written? It is in design.md in the run directory. Then, {{delivery}}; delivery.md there says more. Answer proceed to build and deliver it that way, or reloop to have the plan redone.",
+      "notes": "Approve the design before the artifact is written? It is in design.md in the run directory. Then, {{delivery}}; delivery.md there says more. Answer proceed to build and deliver it that way, or reloop to have the plan redone.\n\n## Unresolved design review findings\n{{design_review_findings}}",
       "role": "ceo"
     },
     {
@@ -7667,6 +7695,18 @@ Build a software artifact from a brief, name and acceptance command, as commits 
         1800
       ],
       "value": 180,
+      "values": []
+    },
+    "design_review_attempts": {
+      "default": 2,
+      "description": "how many times the design review may reloop before proceeding to the approval gate with its remaining findings",
+      "frozen": false,
+      "kind": "int",
+      "range": [
+        1,
+        4
+      ],
+      "value": 2,
       "values": []
     },
     "generate": {
@@ -7843,8 +7883,8 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "cli": "refactory ceo default_pack/design",
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
-    "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local; `refine` updates an open one).",
-    "reviewed_schema": "2ab54a9f4bd61bdc1ac2b4309de3f2848dc1f7731d6448409b475b0e91d9bae8"
+    "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`). The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local; `refine` updates an open one).",
+    "reviewed_schema": "5c8ff6351a8876cf2d09f009be3a163135ea7db5a2930cbc1570e930c2babfbc"
   }
 }
 ```
@@ -8208,11 +8248,6 @@ Revise an existing mode package and validate the revision before separate QA and
       "condition": "reloop",
       "source": "gate_overwatch",
       "target": "emit"
-    },
-    {
-      "condition": "audit",
-      "source": "gate_overwatch",
-      "target": "overwatch"
     },
     {
       "condition": "proceed",
@@ -8774,7 +8809,7 @@ Revise an existing mode package and validate the revision before separate QA and
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Revise an existing mode package and validate the revision before separate QA and Overwatch. Supply revision_of, name and brief. allow_regression=true skips original execution and numerical comparison, while revised execution and intent evidence remain mandatory.",
-    "reviewed_schema": "c293edc1d69b8c3fbda779072fb331f2b6bffc1d4713728998bc550904f78afa"
+    "reviewed_schema": "95b561df3f3281e46d8d1d9b8e31edaaf12aaa597ce9a85361826b8df6391d96"
   }
 }
 ```

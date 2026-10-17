@@ -21,7 +21,7 @@ import pytest
 from refactory_dsh import cli, console, delivery, nn, projects, worktree
 from refactory_dsh.design import DesignMode
 from refactory_dsh.projects import projects_dir
-from tests_support import RESEARCH_ANSWER, REVIEW_ANSWERS, FakeModel, git, git_repo, render, stub
+from tests_support import DESIGN_REVIEW_ANSWER, RESEARCH_ANSWER, REVIEW_ANSWERS, FakeModel, git, git_repo, render, stub
 
 NAME = "delivered_tool"
 FAKE_GH = Path(__file__).resolve().parent / "fake_gh.py"
@@ -172,7 +172,8 @@ def _calls(tmp_path: Path) -> str:
 
 def _answers(*emits: str) -> list[str]:
     """Every answer a design run needs, in the order its graph asks."""
-    return [RESEARCH_ANSWER, "perspectives", "one plan", "the design document", *emits, *REVIEW_ANSWERS]
+    return [RESEARCH_ANSWER, "perspectives", "one plan", "the design document",
+            DESIGN_REVIEW_ANSWER, *emits, *REVIEW_ANSWERS]
 
 
 def _mode(**knobs) -> DesignMode:

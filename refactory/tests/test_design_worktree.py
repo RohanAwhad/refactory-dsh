@@ -28,8 +28,8 @@ from refactory_dsh.fast import DesignFastMode
 from refactory_dsh.nn import Verdict
 from refactory_dsh.paths import REPO_ROOT
 from refactory_dsh.projects import projects_dir
-from tests_support import (RESEARCH_ANSWER, REVIEW_ANSWERS, FakeModel, StaleEmitModel, git, git_repo,
-                           render, stub)
+from tests_support import (DESIGN_REVIEW_ANSWER, RESEARCH_ANSWER, REVIEW_ANSWERS, FakeModel,
+                           StaleEmitModel, git, git_repo, render, stub)
 
 NAME = "worktree_tool"
 
@@ -77,7 +77,8 @@ def repo(tmp_path) -> Path:
 
 def _answers(*emits: str) -> list[str]:
     """Every answer a design run needs, in the order its graph asks."""
-    return [RESEARCH_ANSWER, "perspectives", "one plan", "the design document", *emits, *REVIEW_ANSWERS]
+    return [RESEARCH_ANSWER, "perspectives", "one plan", "the design document",
+            DESIGN_REVIEW_ANSWER, *emits, *REVIEW_ANSWERS]
 
 
 def _mode(**knobs) -> DesignMode:
