@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import sys
 
+import pytest
+
 from refactory_dsh import agent_delivery, nn
 from refactory_dsh.model import DshModelClient
 from refactory_dsh.steering import Ledger
@@ -245,3 +247,56 @@ def test_python_and_native_worker_dispatch_share_execution_contract(tmp_path, mo
         assert seen[-1].endswith('Read input.txt; write answer.txt.')
         contexts.append({key: value for key, value in context.items() if key not in ('workdir', 'inputs', 'outputs')})
     assert contexts[0] == contexts[1]
+
+
+def test_redispatch_moves_previous_emit_txt_aside(tmp_path):
+    """After a completed delivery, begin() again moves emit.txt under agent-delivery."""
+    from refactory_dsh.repo_change import EMIT_FILE
+
+    record = agent_delivery.begin(tmp_path, 'emit', 'Write emit.txt.', [EMIT_FILE])
+    (tmp_path / EMIT_FILE).write_text('===FILE: tool.py===\nprint(1)\n')
+    agent_delivery.finish(tmp_path, 'emit', final_response='Done.')
+    # emit.txt is still in the run directory after finish
+    assert (tmp_path / EMIT_FILE).exists()
+    # A new begin() for the same node moves the stale output
+    record2 = agent_delivery.begin(tmp_path, 'emit', 'Write emit.txt again.', [EMIT_FILE])
+    assert not (tmp_path / EMIT_FILE).exists(), 'stale emit.txt must be gone before re-dispatch'
+    # The moved file is under the previous receipt's refused/ folder
+    moved = tmp_path / agent_delivery.ROOT / record['id'] / 'refused'
+    assert moved.exists() and list(moved.rglob(EMIT_FILE))
+    # The new dispatch's before snapshot shows no emit.txt
+    assert record2['before'][EMIT_FILE] is None
+    # A fresh write is treated as newly delivered
+    (tmp_path / EMIT_FILE).write_text('===FILE: tool.py===\nprint(2)\n')
+    receipt = agent_delivery.finish(tmp_path, 'emit', final_response='Done again.')
+    assert receipt['status'] == 'delivered'
+
+
+def test_redispatch_after_failed_delivery_starts_clean(tmp_path):
+    """After a failed delivery, begin() again moves a surviving emit.txt aside."""
+    from refactory_dsh.repo_change import EMIT_FILE
+
+    record = agent_delivery.begin(tmp_path, 'emit', 'Write emit.txt.', [EMIT_FILE])
+    # Do NOT write emit.txt — finish will raise for missing output
+    with pytest.raises(ValueError, match='did not deliver'):
+        agent_delivery.finish(tmp_path, 'emit')
+    # Simulate the file appearing after the failed delivery (e.g. captured_final
+    # wrote it, or the runner planted it for a retry)
+    (tmp_path / EMIT_FILE).write_text('stale content\n')
+    # A new begin() for the same node moves the stale output
+    record2 = agent_delivery.begin(tmp_path, 'emit', 'Write emit.txt again.', [EMIT_FILE])
+    assert not (tmp_path / EMIT_FILE).exists(), 'stale emit.txt must be gone before re-dispatch'
+    moved = tmp_path / agent_delivery.ROOT / record['id'] / 'refused'
+    assert moved.exists() and list(moved.rglob(EMIT_FILE))
+    assert record2['before'][EMIT_FILE] is None
+
+
+def test_redispatch_of_non_emit_node_leaves_its_output_in_place(tmp_path):
+    """A redispatch of a node writing another file (e.g. design.md) leaves that file in place."""
+    record = agent_delivery.begin(tmp_path, 'design_doc', 'Write the design.', ['design.md'])
+    (tmp_path / 'design.md').write_text('the design\n')
+    agent_delivery.finish(tmp_path, 'design_doc', final_response='Done.')
+    assert (tmp_path / 'design.md').exists()
+    # A new begin() for a non-emit node does NOT move its output aside
+    record2 = agent_delivery.begin(tmp_path, 'design_doc', 'Revise the design.', ['design.md'])
+    assert (tmp_path / 'design.md').exists(), 'non-emit outputs must stay in place for revision'

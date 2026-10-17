@@ -293,7 +293,7 @@ class DesignMode(Mode):
                 "you answer and send you the result. Then return a short completion message.\n"
             ),
             reads=("brief.json", "design.md", "check.txt"),
-            writes=("emit.txt",),
+            writes=(repo_change.EMIT_FILE,),
             produces=("emit",),
             notes="write the artifact's files",
         ))
