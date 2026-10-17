@@ -236,8 +236,8 @@ class DesignFastMode(DesignMode):
             "prepare", "op", call=f"{OPS}:prepare_artifact", resource_role="work",
             knobs=("name", "brief", "check", "source_project", *repo_change.knob_names()),
             writes=("brief.json", "source-manifest.json", "repair.txt", "research-review.txt", "check.txt"),
-            produces=("name", "brief", "check", "validation", "research_review", "qa_gate", "overwatch_review",
-                      "source_project", "source_files", "repair_feedback", "repairs_used",
+            produces=("name", "brief", "check", "validation", "research_review", "research_scope", "qa_gate",
+                      "overwatch_review", "source_project", "source_files", "repair_feedback", "repairs_used",
                       *repo_change.produces()),
             notes="read the artifact brief, and say where the run works",
         ))
