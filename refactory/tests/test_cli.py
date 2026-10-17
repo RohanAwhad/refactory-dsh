@@ -7,6 +7,7 @@ refusals that exist to stop a person being confused by a low-level error.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -361,7 +362,7 @@ def test_status_shows_steer_then_resume_at_gate(tmp_path):
         "running_nodes": [{"id": "gate_strategy", "kind": "gate"}],
         "completed": ["survey"],
     }))
-    (ref / "spine-checkpoint.json").write_text(json.dumps({"owner_pid": 99999}))
+    (ref / "spine-checkpoint.json").write_text(json.dumps({"owner_pid": os.getpid()}))
     (run_dir / "facts.json").write_text(json.dumps({"name": "gate_test"}))
     graphs = run_dir / "graphs"
     graphs.mkdir()
