@@ -249,7 +249,7 @@ def test_run_warnings_says_nothing_when_no_step_warned(tmp_path):
 
 def test_prepare_design_sets_scoped_for_refine_task(tmp_path, monkeypatch):
     """prepare_design with task.refine truthy → research_scope='scoped'."""
-    from refactory_dsh import design_ops, repo_change, sandbox
+    from refactory_dsh import delivery, design_ops, repo_change, sandbox
     monkeypatch.setattr(repo_change, "wants_worktree", lambda ctx: False)
     monkeypatch.setattr(repo_change, "locate",
                         lambda ctx, name, task, **kw: {
@@ -257,6 +257,8 @@ def test_prepare_design_sets_scoped_for_refine_task(tmp_path, monkeypatch):
                             "artifact": str(tmp_path), "branch": "", "change": "",
                         })
     monkeypatch.setattr(sandbox, "model_readiness", lambda *a, **kw: {})
+    monkeypatch.setattr(delivery, "plan_run",
+                        lambda ctx, *, task: {"delivery": "test", "delivery_plan": {}})
     from types import SimpleNamespace
     workdir = tmp_path / "run"
     workdir.mkdir(exist_ok=True)
@@ -276,13 +278,13 @@ def test_prepare_design_sets_scoped_for_refine_task(tmp_path, monkeypatch):
         set_fact=lambda name, value: None,
         facts={},
     )
-    result = design_ops.prepare_design(ctx, deliver=False)
+    result = design_ops.prepare_design(ctx, deliver=True, in_worktree=False)
     assert result["research_scope"] == "scoped"
 
 
 def test_prepare_design_sets_scoped_for_refine_without_file_in_brief(tmp_path, monkeypatch):
     """A refine run whose brief names no file still gets research_scope 'scoped'."""
-    from refactory_dsh import design_ops, repo_change, sandbox
+    from refactory_dsh import delivery, design_ops, repo_change, sandbox
     monkeypatch.setattr(repo_change, "wants_worktree", lambda ctx: False)
     monkeypatch.setattr(repo_change, "locate",
                         lambda ctx, name, task, **kw: {
@@ -290,6 +292,8 @@ def test_prepare_design_sets_scoped_for_refine_without_file_in_brief(tmp_path, m
                             "artifact": str(tmp_path), "branch": "", "change": "",
                         })
     monkeypatch.setattr(sandbox, "model_readiness", lambda *a, **kw: {})
+    monkeypatch.setattr(delivery, "plan_run",
+                        lambda ctx, *, task: {"delivery": "test", "delivery_plan": {}})
     from types import SimpleNamespace
     workdir = tmp_path / "run"
     workdir.mkdir(exist_ok=True)
@@ -309,7 +313,7 @@ def test_prepare_design_sets_scoped_for_refine_without_file_in_brief(tmp_path, m
         set_fact=lambda name, value: None,
         facts={},
     )
-    result = design_ops.prepare_design(ctx, deliver=False)
+    result = design_ops.prepare_design(ctx, deliver=True, in_worktree=False)
     assert result["research_scope"] == "scoped"
 
 
