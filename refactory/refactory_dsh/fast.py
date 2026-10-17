@@ -218,6 +218,7 @@ class DesignFastMode(DesignMode):
         knobs = super().declare()
         knobs.pop("research_attempts")
         knobs.pop("check_attempts")
+        knobs.pop("design_review_attempts")
         # It works where design works (`repo_change`), but delivers nothing: a pull request
         # is opened only behind an approval gate that names it (#350), and fast mode has
         # none. Its work stays on the run's branch.
@@ -235,8 +236,10 @@ class DesignFastMode(DesignMode):
         graph.add(Node(
             "prepare", "op", call=f"{OPS}:prepare_artifact", resource_role="work",
             knobs=("name", "brief", "check", "source_project", *repo_change.knob_names()),
-            writes=("brief.json", "source-manifest.json", "repair.txt", "research-review.txt", "check.txt"),
+            writes=("brief.json", "source-manifest.json", "repair.txt", "research-review.txt", "check.txt",
+                    "reviews/design-review-feedback.txt"),
             produces=("name", "brief", "check", "validation", "research_review", "qa_gate", "overwatch_review",
+                      "design_review_feedback", "design_review_findings",
                       "source_project", "source_files", "repair_feedback", "repairs_used",
                       *repo_change.produces()),
             notes="read the artifact brief, and say where the run works",
