@@ -12,6 +12,12 @@ uv run refactory steer --run /absolute/run
 
 The native Modes panel offers **Runs and pending questions** and **Existing run directory → Read this run**. Attached views stream persisted changes. Activity includes due/completed nodes, last event time, wait reason, worker receipts, requested and observed routes, available usage, instruction-delivery state and recorded outputs. No completion percentage is estimated from elapsed time. A missing observation remains unavailable.
 
+`spine-status.json` now includes a `running_nodes` array naming each executing node and its kind (`agent`, `operation`, `gate`, `control`). The `wait_reason` field names the running node(s) and their kinds — e.g. `"waiting for worker delivery: research_director (agent)"`.
+
+Each usage event in `.refactory/events.jsonl` carries `tokens_delta` (the token count of the single request that triggered this event) alongside the cumulative `tokens` total. Summing `tokens_delta` across events for one worker gives its total; summing `tokens` across events overcounts.
+
+The authoring status includes `step_tokens`: per-step token totals computed by summing worker receipts by `node_id`. A step with retries sums to one entry. `total_tokens` is the sum across all steps.
+
 Graph activity is appended to `.refactory/events.jsonl`; checkpoints, worker receipts and the resource ledger live beside it. Historical runs may lack newer records. An interrupted journal write is reported as a gap rather than fabricated progress. A worker context being prepared, a dispatch being observed, and an output satisfying a correction are different facts.
 
 ## Questions and ownership

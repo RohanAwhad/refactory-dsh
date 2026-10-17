@@ -287,11 +287,16 @@ def account_usage(budget: Any, receipt: dict[str, Any], *, final: bool = False) 
     """Keep measured DSH calls while exposing incomplete delegated coverage."""
     usage = receipt.get('usage', {})
     identifier = receipt['worker_id']
+    node_id = receipt.get('node_id', '')
     if usage.get('incomplete_nested_usage'):
-        budget.record_usage(identifier, usage.get('known_tokens'), status='measured')
-        budget.record_usage(identifier + ':unmetered-descendants', None, status='unavailable')
+        budget.record_usage(identifier, usage.get('known_tokens'), status='measured', node_id=node_id)
+        budget.record_usage(identifier + ':unmetered-descendants', None, status='unavailable', node_id=node_id)
     elif final or usage.get('status') == 'measured':
-        budget.record_usage(identifier, usage.get('tokens'), status=usage.get('status', 'unavailable'))
+        budget.record_usage(identifier, usage.get('tokens'), status=usage.get('status', 'unavailable'), node_id=node_id)
+    # Check per-step warning threshold after recording.
+    if node_id:
+        node_total = budget.node_tokens(node_id)
+        budget.warn_if_exceeded(node_id, node_total)
 
 
 class GraphTelemetry:

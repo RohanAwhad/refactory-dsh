@@ -75,7 +75,7 @@ class DesignMode(Mode):
             "prepare", "op", call=f"{OPS}:prepare_design",
             knobs=("name", "brief", "check", *repo_change.knob_names(), *delivery.knobs()),
             writes=("brief.json", "research-review.txt", "check.txt", "delivery.md"),
-            produces=("name", "brief", "check", "validation", "research_review", "qa_gate",
+            produces=("name", "brief", "check", "validation", "research_review", "research_scope", "qa_gate",
                       "overwatch_review", *repo_change.produces(), "delivery", "delivery_plan"),
             notes="read the brief and the command that decides whether it is done",
         ))
@@ -87,8 +87,11 @@ class DesignMode(Mode):
                 "Artifact name: {{name}}\nBrief: {{brief}}\n"
                 "It will be checked by running, from {{check_root}}:\n"
                 "    {{check}}\n\n"
+                "## Research scope\n{{research_scope}}\n\n"
                 "You are the research director. Decide what has to be learned before "
-                "this artifact can be designed: between three and five questions, each "
+                "this artifact can be designed: between three and five questions for "
+                "a full design, or one to three focused questions for a scoped "
+                "change. Each must be "
                 "answerable by reading {{source}} or by running something there. Spawn "
                 "one subagent per question and have each write its findings to "
                 "`research/<slug>.md` under the run directory, then write "
