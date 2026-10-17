@@ -905,26 +905,85 @@ def _public(text: str) -> str:
     return _ASSIGNMENT.sub(lambda found: f"{found[1]}=***" if is_secret(found[1]) else found[0], text)
 
 
+def _shorten(text: str, limit: int) -> str:
+    """Shorten text to limit at a word boundary, never cutting inside backtick pairs."""
+    if len(text) <= limit:
+        return text
+    # Find the last space at or before limit - 1 (leaving room for the ellipsis).
+    cut = text.rfind(" ", 0, limit)
+    if cut <= 0:
+        cut = limit - 1
+    prefix = text[:cut]
+    # Never cut inside an open backtick pair.
+    if prefix.count("`") % 2 != 0:
+        last_backtick = prefix.rfind("`")
+        cut = text.rfind(" ", 0, last_backtick)
+        if cut <= 0:
+            cut = last_backtick
+    return text[:cut].rstrip() + "…"
+
+
 def _title(ctx: Any) -> str:
-    """The pull request's title: the brief's first line, shortened to fit."""
+    """The pull request's title: from the design's heading, or the brief as a fallback."""
+    if ctx.exists("design.md"):
+        for line in ctx.read_text("design.md").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("# "):
+                heading = stripped[2:].strip()
+                # Strip a "Design:" prefix (case-insensitive).
+                match = re.match(r'^[Dd]esign:\s*', heading)
+                if match:
+                    heading = heading[match.end():].strip()
+                if heading:
+                    return _shorten(heading, TITLE_LIMIT)
+    # Fallback: first line of the brief.
     brief = _public(str(ctx.facts.get("brief") or ""))
     first = next((line.strip() for line in brief.splitlines() if line.strip()), "") or str(ctx.facts.get("name"))
-    return first if len(first) <= TITLE_LIMIT else first[:TITLE_LIMIT - 1].rstrip() + "…"
+    return _shorten(first, TITLE_LIMIT)
 
 
 def _body(ctx: Any, found: worktree.Worktree) -> str:
-    """The pull request's description: what was asked, how it was checked, and what changed."""
+    """The pull request's description: what changed, how it was verified, and the original request."""
     stat = worktree.git(Path(found.path), "diff", "--stat", found.base, found.head).strip("\n")
     attempts = len(worktree.git(Path(found.path), "rev-list", f"{found.base}..{found.head}").split())
-    return (f"{_public(str(ctx.facts.get('brief') or '')).strip()}\n\n---\n\n"
-            "Opened by a refactory design run once its reviews passed.\n\n"
-            f"- **Check:** `{_public(str(ctx.facts.get('check')))}` passed in the run's worktree.\n"
-            "- **Reviews:** the health check, code review and QA found nothing blocking, and the "
-            "overwatch audit passed.\n"
-            f"- **Base:** `{found.base[:12]}`, with {attempts} attempt commit(s) on `{found.branch}`.\n"
-            "- **Merging:** squash merge is recommended. The branch's commits are the run's attempts, "
-            "each the base plus that attempt's files, committed by Refactory; the change is their sum.\n\n"
-            f"```\n{stat}\n```\n")
+    brief = _public(str(ctx.facts.get("brief") or "")).strip()
+    check_cmd = _public(str(ctx.facts.get("check") or ""))
+
+    # Summary: the design's first paragraph (after heading, before blank line).
+    summary = ""
+    if ctx.exists("design.md"):
+        past_heading = False
+        para: list[str] = []
+        for line in ctx.read_text("design.md").splitlines():
+            stripped = line.strip()
+            if not past_heading:
+                if stripped.startswith("# "):
+                    past_heading = True
+                continue
+            if not stripped and para:
+                break
+            if stripped.startswith("---") and para:
+                break
+            if stripped:
+                para.append(stripped)
+        summary = " ".join(para)
+
+    sections = []
+    if summary:
+        sections.append(f"## Summary\n\n{summary}")
+    sections.append(
+        f"## Verification\n\n"
+        f"- **Check:** `{check_cmd}` passed in the run's worktree.\n"
+        "- **Reviews:** the health check, code review and QA found nothing blocking, "
+        "and the overwatch audit passed.\n"
+        f"- **Base:** `{found.base[:12]}`, with {attempts} attempt commit(s) on `{found.branch}`.\n"
+        "- **Merging:** squash merge is recommended. The branch's commits are the run's attempts, "
+        "each the base plus that attempt's files, committed by Refactory; the change is their sum."
+    )
+    sections.append(f"## Original request\n\n{brief}")
+    sections.append(f"---\n\nOpened by a refactory design run once its reviews passed.\n\n"
+                    f"```\n{stat}\n```")
+    return "\n\n".join(sections) + "\n"
 
 
 def _record(ctx: Any, record: dict[str, Any]) -> None:

@@ -1222,8 +1222,24 @@ def repair(ctx: Any, findings: list[str]) -> str:
     ctx.set_fact("validation", feedback)
     ctx.set_fact("attempts_used", used)
     if used >= int(ctx.knob("attempts", ctx.knob("check_attempts", 3))):
+        # Persist facts before raising so that facts.json agrees with the message.
+        # A node that raises does not keep the facts it set (the runner writes
+        # facts.json only after a successful return), so without this the saved
+        # attempts_used stays one behind the failure message.
+        _persist_facts(ctx)
         raise ValueError(f"authoring unresolved after {used} attempt(s): {feedback}")
     return Verdict("reloop", feedback)
+
+
+def _persist_facts(ctx: Any) -> None:
+    """Write facts.json so a raising node's facts survive for ``refactory status``."""
+    import json as _json
+
+    path = ctx.workdir / "facts.json"
+    try:
+        path.write_text(_json.dumps(ctx.facts, indent=2, default=str))
+    except OSError:
+        pass
 
 
 def gate_smoke(ctx: Any) -> str:
@@ -1682,21 +1698,49 @@ def gate_overwatch(ctx: Any) -> str:
     unavailable = re.search(r"(?im)^\s*UNAVAILABLE:.*$", text)
     if unavailable:
         evidence.stop_unrepairable("unavailable", unavailable[0])
-    problems = evidence.current_problems(ctx, ("overwatch",)) + evidence.audit_problems(ctx)
-    problems.extend(blocking_findings(text))
+
+    # Compute three separate problem categories so the reason names each one.
+    evidence_problems = evidence.current_problems(ctx, ("overwatch",))
+    audit_problems_list = evidence.audit_problems(ctx)
+    review_findings = blocking_findings(text)
     verdict = text.strip().splitlines()[-1].strip() if text.strip() else ""
-    if verdict == PASS_MARK and not problems:
+
+    if verdict == PASS_MARK and not evidence_problems and not audit_problems_list and not review_findings:
         ctx.write_text("reviews/overwatch-gate.txt", "proceed: overwatch passed\n")
         ctx.set_fact("overwatch_review", "(overwatch passed)")
         ctx.write_text("validation.txt", "(overwatch passed)\n")
         ctx.set_fact("validation", "(overwatch passed)")
         return "proceed"
-    # The audit's own findings are the most useful thing a rebuild can be given, so
-    # they travel both ways: the file for a reader, the fact for the next attempt.
-    reason = (
-        "reloop: overwatch did not state " + repr(PASS_MARK) + ". What it found:\n"
-        + "\n".join(problems) + "\n" + _excerpt(text, 2000)
-    )
+
+    # ── Audit-only path: code is not at fault ────────────────────────────
+    # When VERDICT: PASS, no blocking findings and no evidence problems,
+    # but audit_problems exist, route back to overwatch without spending
+    # an attempt.  gate_overwatch's max_iterations bounds this.
+    if (verdict == PASS_MARK and not review_findings
+            and not evidence_problems and audit_problems_list):
+        reason = ("intent audit problems: "
+                  + "; ".join(audit_problems_list)
+                  + "\n" + _excerpt(text, 2000))
+        ctx.write_text("reviews/overwatch-gate.txt", reason + "\n")
+        ctx.set_fact("overwatch_review", reason)
+        ctx.write_text("validation.txt", reason + "\n")
+        ctx.set_fact("validation", reason)
+        return Verdict("audit", reason)
+
+    # ── Reloop path: at least one non-audit problem ──────────────────────
+    parts: list[str] = []
+    if evidence_problems:
+        parts.append("evidence problems: " + "; ".join(evidence_problems))
+    if audit_problems_list:
+        parts.append("intent audit problems: " + "; ".join(audit_problems_list))
+    if review_findings:
+        parts.append("blocking review findings: " + "; ".join(review_findings))
+    if verdict != PASS_MARK:
+        parts.append(
+            f"overwatch verdict is missing or not {PASS_MARK!r}"
+            f" (last line: {verdict!r})"
+        )
+    reason = "reloop: " + "; ".join(parts) + "\n" + _excerpt(text, 2000)
     ctx.write_text("reviews/overwatch-gate.txt", reason + "\n")
     ctx.set_fact("overwatch_review", reason)
     ctx.write_text("validation.txt", reason + "\n")

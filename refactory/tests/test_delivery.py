@@ -28,6 +28,103 @@ FAKE_GH = Path(__file__).resolve().parent / "fake_gh.py"
 LOGIN = "octo"
 
 
+# ── PR title and body unit tests ───────────────────────────────────────────
+
+
+class _TitleCtx:
+    """Minimal context for _title() and _body() unit tests."""
+    def __init__(self, facts=None, files=None):
+        self.facts = dict(facts or {})
+        self._files = dict(files or {})
+    def exists(self, name):
+        return name in self._files
+    def read_text(self, name):
+        return self._files[name]
+
+
+def test_pr_title_from_design_heading():
+    ctx = _TitleCtx(
+        facts={"brief": "Fix audit", "name": "b2"},
+        files={"design.md": "# Audit bookkeeping and PR formatting\n\nSome text.\n"},
+    )
+    assert delivery._title(ctx) == "Audit bookkeeping and PR formatting"
+
+
+def test_pr_title_strips_design_prefix():
+    ctx = _TitleCtx(
+        facts={"brief": "Fix audit", "name": "b2"},
+        files={"design.md": "# Design: Audit bookkeeping\n\nSome text.\n"},
+    )
+    assert delivery._title(ctx) == "Audit bookkeeping"
+
+
+def test_pr_title_falls_back_to_brief():
+    ctx = _TitleCtx(
+        facts={"brief": "Fix the audit gate", "name": "b2"},
+        files={"design.md": "No heading here, just text.\n"},
+    )
+    assert delivery._title(ctx) == "Fix the audit gate"
+
+
+def test_pr_title_truncates_at_word_boundary():
+    long_heading = "Fix " + "word " * 20  # well over 72 chars
+    ctx = _TitleCtx(
+        facts={"brief": "short", "name": "b2"},
+        files={"design.md": f"# {long_heading}\n"},
+    )
+    title = delivery._title(ctx)
+    assert len(title) <= delivery.TITLE_LIMIT
+    assert title.endswith("…")
+
+
+def test_pr_title_never_cuts_inside_backticks():
+    heading = "Fix how gate_overwatch and its refusal of the `code_reviewer` backtick_spans are reported in the pipeline"
+    ctx = _TitleCtx(
+        facts={"brief": "short", "name": "b2"},
+        files={"design.md": f"# {heading}\n"},
+    )
+    title = delivery._title(ctx)
+    assert len(title) <= delivery.TITLE_LIMIT
+    # Even number of backticks: no unclosed pair.
+    assert title.count("`") % 2 == 0, f"unclosed backtick in title: {title!r}"
+
+
+def test_pr_body_has_summary_verification_and_original_request(tmp_path):
+    import subprocess
+    ctx = _TitleCtx(
+        facts={"brief": "Build a tool\nthat prints built.", "check": "python tool.py", "name": "b2"},
+        files={"design.md": "# The design heading\n\nFirst paragraph of the design.\n\n---\n"},
+    )
+    # Set up a minimal git repo so worktree.git works.
+    subprocess.run(["git", "init", str(tmp_path)], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@test.com"], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], capture_output=True, check=True)
+    (tmp_path / "file.txt").write_text("content\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "init"], capture_output=True, check=True)
+    base = subprocess.run(
+        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True).stdout.strip()
+    (tmp_path / "tool.py").write_text("print('built')\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "attempt"], capture_output=True, check=True)
+    head = subprocess.run(
+        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True).stdout.strip()
+    from unittest.mock import SimpleNamespace
+    found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
+    body = delivery._body(ctx, found)
+    assert "## Summary" in body
+    assert "First paragraph of the design." in body
+    assert "## Verification" in body
+    assert "python tool.py" in body
+    assert "the health check, code review and QA found nothing blocking" in body
+    assert "## Original request" in body
+    assert "Build a tool\nthat prints built." in body
+
+
+
+
 @pytest.fixture
 def github(tmp_path, monkeypatch) -> Path:
     """GitHub, as far as delivery can tell: gh logged in as `octo`, repositories on disk."""

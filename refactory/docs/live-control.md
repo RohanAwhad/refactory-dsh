@@ -24,6 +24,12 @@ uv run refactory steer --run /absolute/run --verdict gate_name=proceed
 
 The allowed verdict comes from that gate. The answer is scoped to the run and invocation, not to whichever chat is visible. Reading or answering a persisted question does not grant a second session permission to drive the graph. Each CEO session owns its workflow; concurrent runs need distinct work directories. A native question left pending after a disconnect stays pending until a valid answer reaches the owner. A restarted owner must pass the recovery checks below.
 
+### Steering note kinds
+
+Steering notes added with `refactory steer --kind info` record context that agents
+see but the audit does not require evidence for. Use `--kind correction` or
+`--kind constraint` for asks the audit must cover.
+
 ## Apply a control at its boundary
 
 Optimizer notes, keep/reject and pause/resume/stop apply at generation boundaries. Graph controls apply at the next graph boundary and can wait for admitted work to settle. External workers accept new instructions at a subsequent node boundary, not as an in-flight prompt edit. A queued control receipt is a request, not confirmation of application.

@@ -22,14 +22,52 @@ import pytest
 from refactory_dsh import (cli, console, design_ops, interactive, lowering, nn, projects, registry, repo_change,
                            worktree)
 from refactory_dsh import run as node_runner
+from refactory_dsh.create import CreateMode as CreateModeForGraph
 from refactory_dsh.design import DesignMode
 from refactory_dsh.fast import DesignFastMode
+from refactory_dsh.nn import Verdict
 from refactory_dsh.paths import REPO_ROOT
 from refactory_dsh.projects import projects_dir
 from tests_support import (RESEARCH_ANSWER, REVIEW_ANSWERS, FakeModel, StaleEmitModel, git, git_repo,
                            render, stub)
 
 NAME = "worktree_tool"
+
+
+# ── graph edges for audit reloop and refused emission ──────────────────────
+
+
+def test_gate_overwatch_audit_edge_exists_in_design_graph():
+    """gate_overwatch has an 'audit' edge back to overwatch in the design graph."""
+    graph = DesignMode().build()
+    edges = graph.out_edges("gate_overwatch")
+    audit_edges = [e for e in edges if e.condition == "audit"]
+    assert len(audit_edges) == 1
+    assert audit_edges[0].target == "overwatch"
+
+
+def test_gate_overwatch_audit_edge_exists_in_create_graph():
+    """gate_overwatch has an 'audit' edge back to overwatch in the create graph."""
+    graph = CreateModeForGraph().build()
+    edges = graph.out_edges("gate_overwatch")
+    audit_edges = [e for e in edges if e.condition == "audit"]
+    assert len(audit_edges) == 1
+    assert audit_edges[0].target == "overwatch"
+
+
+def test_refused_emission_does_not_spend_attempt_design(tmp_path, monkeypatch):
+    """check_artifact returns Verdict('reloop') without calling repair() for a refused emission."""
+    monkeypatch.setattr(repo_change, "refused", lambda ctx: "edit text not found")
+    ctx = nn.RunContext(tmp_path, facts={"check": "python tool.py"},
+                        knobs={"attempts": 3})
+    ctx._declared = ("check.txt",)
+    ctx._declared_facts = ("validation", "attempts_used")
+    ctx.enforce_writes = False
+    result = design_ops.check_artifact(ctx)
+    assert isinstance(result, Verdict)
+    assert str(result) == "reloop"
+    assert "materialise could not apply" in result.reason
+    assert not ctx.facts.get("attempts_used"), "refused emission must not spend an attempt"
 
 
 @pytest.fixture
@@ -730,16 +768,14 @@ def test_design_fast_carries_the_lockfile_its_install_writes(repo, tmp_path, mon
     assert "package-lock.json" in json.loads(result.facts["review_files"])
 
 def test_design_fast_sends_an_emission_it_cannot_apply_back_to_emit(tmp_path):
-    """Within its repair bound, as a failed check is; with no repair left, the run ends and says why."""
+    """A refused emission does not spend a repair attempt; the gate's iteration limit bounds retries."""
     truncated = "===FILE: tool.py===\nx = 1  # ... (line truncated to 2000 chars)\n"
     result = _fast(tmp_path / "run", truncated, render({"tool.py": "print('whole')\n"}), refused=1)
     assert result.exit_ok, result.error
-    assert "the read tool's note that it cut text short" in (tmp_path / "run" / "repair.txt").read_text()
-    assert _report(tmp_path / "run")["fast"]["repairs_used"] == 1
-    ended = _fast(tmp_path / "ended", truncated, refused=1, knobs={"repair_attempts": 0}, name="other_tool")
-    assert not ended.exit_ok
-    assert "after 0 repair(s): materialise could not apply emit.txt" in str(ended.error)
-    assert "cut text short" in str(ended.error)
+    # The feedback reaches emit through the repair_feedback fact, not through repair.txt.
+    assert result.facts.get("repair_feedback") and "cut text short" in result.facts["repair_feedback"]
+    # A refused emission does not spend a repair attempt.
+    assert _report(tmp_path / "run")["fast"]["repairs_used"] == 0
 
 
 def test_design_fast_with_its_worktree_off_keeps_its_own_copy_and_makes_no_worktree(tmp_path, monkeypatch):
@@ -757,7 +793,7 @@ def test_design_fast_copies_a_source_project_and_refuses_a_target_with_it(repo, 
     copied = _fast(tmp_path / "run", truncated, "===FILE: tool.py===\nx = 1\n", refused=1,
                    source_project=str(repo))
     assert copied.exit_ok, copied.error
-    assert "cut text short" in (tmp_path / "run" / "repair.txt").read_text(), "a refusal is repaired here too"
+    assert "cut text short" in str(copied.facts.get("repair_feedback", "")), "a refusal is reported here too"
     assert sorted(path.name for path in Path(copied.facts["artifact"]).iterdir()) == ["app.py", "tool.py"]
     assert not worktree.root().exists()
     refused = _fast(tmp_path / "both", source_project=str(repo), target=str(repo))

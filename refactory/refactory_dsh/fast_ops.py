@@ -136,11 +136,17 @@ def _repair(ctx: Any, findings: list[str]) -> str:
 
 
 def gate_emit(ctx: Any) -> str:
-    """Send an emission materialise could not apply back to emit, within the repair bound (#330 E5)."""
+    """Send an emission materialise could not apply back to emit (#330 E5).
+
+    A refused emission is not a code failure, so it does not spend a repair attempt.
+    The gate's own max_iterations still bounds retries.
+    """
     refused = repo_change.refused(ctx)
     if not refused:
         return "proceed"
-    return _repair(ctx, [f"materialise could not apply emit.txt, so nothing was checked: {refused}"])
+    detail = f"materialise could not apply emit.txt, so nothing was checked: {refused}"
+    ctx.set_fact("repair_feedback", detail)
+    return Verdict("reloop", detail)
 
 
 def validate_package(ctx: Any) -> str:

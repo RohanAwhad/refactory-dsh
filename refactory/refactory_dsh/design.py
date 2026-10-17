@@ -363,6 +363,7 @@ class DesignMode(Mode):
                 "Brief: {{brief}}\nThe check it must pass: {{check}}\n\n"
                 "## The design\nRead the approved design from `design.md` in the run directory.\n\n"
                 "## The merged reviews\nRead the file `reviews/qa-synthesized.md` in the run directory. It contains the merged reviews from the health checker, code reviewer, and QA director.\n\n"
+                "## What the last audit was refused for\n{{overwatch_review}}\n\n"
                 + _ACCEPTANCE_BASELINE
                 + "You are the overwatch. Audit the reviews rather than repeating them: "
                 "take each ask in the brief and say what evidence proves it — a command "
@@ -435,6 +436,7 @@ class DesignMode(Mode):
         graph.connect("gate_qa", "overwatch", condition="proceed")
         graph.connect("overwatch", "gate_overwatch")
         graph.connect("gate_overwatch", "emit", condition="reloop")
+        graph.connect("gate_overwatch", "overwatch", condition="audit")
         graph.connect("gate_overwatch", "report", condition="proceed")
         graph.connect("report", "deliver")
         from refactory_dsh.authoring_evidence import wire_reviews
