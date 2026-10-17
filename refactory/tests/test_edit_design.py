@@ -373,6 +373,21 @@ def test_design_review_gate_proceeds_when_attempts_exhausted(tmp_path):
     assert "alternative left open" in ctx.facts["design_review_findings"]
 
 
+def test_design_review_gate_ignores_url_port_numbers(tmp_path):
+    """A URL like https://example.com:443 must not be treated as a citation."""
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({"source": str(tmp_path), "design_review_attempts_used": 0})
+    (tmp_path / "reviews").mkdir(parents=True, exist_ok=True)
+    ctx.write_text("reviews/design-review.md",
+                   "All confirmed.\n\nVERDICT: PASS\n")
+    ctx.write_text("design.md",
+                   "See https://example.com:443/path and http://localhost:8080/api.\n")
+    ctx.write_json("brief.json", {"name": "x", "brief": "do a thing"})
+    import refactory_dsh.design_ops as ops
+    result = ops.gate_design_review(ctx)
+    assert result == "proceed", f"URL port numbers should not be flagged; got {result!r}"
+
+
 def test_design_review_gate_accepts_bare_name_citation_to_real_line(tmp_path):
     """A citation like `somefile.py:2` resolves to a tracked file whose path ends with it."""
     source = tmp_path / "src"

@@ -155,6 +155,11 @@ def gate_design_review(ctx: Any) -> str:
             r'(?<![`\w])([A-Za-z_][\w/._-]*\.\w+):(\d+)(?:-(\d+))?(?!\w)',
             design_text
         ):
+            # Skip URLs: a "://" in the 10 chars before the match means this is
+            # a hostname:port, not a file:line citation.
+            prefix = design_text[max(0, match.start() - 10):match.start()]
+            if '://' in prefix:
+                continue
             file_path = match.group(1)
             start_s, end_s = match.group(2), match.group(3)
             line_num = int(end_s) if end_s else int(start_s)
