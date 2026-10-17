@@ -108,6 +108,11 @@ ENDED = ("failed", "done")
 #: post-commit hook would still run on the run's behalf.
 NO_HOOKS = ("-c", "core.hooksPath=/dev/null")
 
+#: Suppress git hook managers (lefthook, husky) so installs and commands in the
+#: worktree do not rewrite the shared repository's hooks (#347). Defined once
+#: and used in _install_env, check_environment and model._environment.
+HOOK_SUPPRESS: dict[str, str] = {"LEFTHOOK": "0", "HUSKY": "0"}
+
 #: Where the spine records the invocation that owns a run directory (`invocations`).
 INVOCATION = Path(".refactory") / "invocation.json"
 
@@ -775,6 +780,9 @@ def check_environment(path: Path, home: Path) -> dict[str, str]:
     store = _json(path / "node_modules" / ".modules.yaml").get("storeDir")
     if isinstance(store, str) and store:
         env["pnpm_config_store_dir"] = store
+    # Suppress git hook managers so commands run through the worktree's
+    # environment do not rewrite the shared repository's hooks (#347).
+    env.update(HOOK_SUPPRESS)
     return env
 
 
@@ -818,10 +826,10 @@ def _install_env() -> dict[str, str]:
            if not name.startswith(("REFACTORY_", "DSH_"))
            and name not in ("PYTHONPATH", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "VENV_BIN", "NODE_BIN")
            and (not is_secret(name) or name.upper().startswith(REGISTRY_ENV))}
-    # A worktree shares the target's git configuration and hooks, so hook managers are
-    # told not to "set up" hooks there; nobody answers an install's prompts either, so
-    # it is told it runs unattended.
-    env.update(HUSKY="0", LEFTHOOK="0", CI="true")
+    # Suppress git hook managers so installs in the worktree do not rewrite the
+    # shared repository's hooks (#347).  Nobody answers an install's prompts
+    # either, so it is told it runs unattended.
+    env.update(**HOOK_SUPPRESS, CI="true")
     return env
 
 

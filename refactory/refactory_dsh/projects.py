@@ -176,8 +176,15 @@ def new_project(name: str) -> Path:
         staging = Path(tempfile.mkdtemp(prefix=f".{name}.", suffix=".new", dir=path.parent))
         try:
             worktree.git(staging, "init", "-q", "-b", "main")
-            worktree.git(staging, *worktree.NO_HOOKS, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify",
-                         "--allow-empty", "-m", f"Start {name}", env={**os.environ, **worktree.COMMITTER})
+            # gc.auto=0 and maintenance.auto=false stop git from starting background
+            # maintenance after this commit: the staging directory is renamed or deleted
+            # immediately, and a background process writing inside it races with that.
+            worktree.git(staging, *worktree.NO_HOOKS,
+                         "-c", "gc.auto=0", "-c", "maintenance.auto=false",
+                         "-c", "commit.gpgsign=false",
+                         "commit", "-q", "--no-verify",
+                         "--allow-empty", "-m", f"Start {name}",
+                         env={**os.environ, **worktree.COMMITTER})
             register(path, kind="new")
             try:
                 staging.rename(path)
