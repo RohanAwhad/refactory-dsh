@@ -960,24 +960,28 @@ describe('cursor merge on redo', () => {
     spine.complete('qa_director')
     spine.complete('join_qa')
     spine.verdict('gate_qa', 'reloop')
-    // Second pass: emit → materialise → check → cursor at fork_qa
+    // Second pass through the loop body — complete everything up through the branches.
+    // After the reloop, uncompleteBetween clears the loop body's completion records,
+    // so code_reviewer must be re-completed in this iteration before it can be redone.
     spine.complete('emit')
     spine.complete('materialise')
     spine.complete('check')
-    expect(ids(spine)).toEqual(['fork_qa'])
+    spine.complete('fork_qa')
+    spine.complete('health_checker')
+    spine.complete('code_reviewer')
+    spine.complete('qa_director')
+    // All branches done; join_qa pops from afters to cursor.
+    expect(ids(spine)).toEqual(['join_qa'])
 
-    // Redo code_reviewer — it completed in the first pass; fork_qa is due
+    // Redo code_reviewer — it completed in this iteration; join_qa is due in cursor
     spine.redo('code_reviewer')
 
-    // With the fix: fork_qa is still in the cursor alongside code_reviewer
-    expect(ids(spine)).toContain('fork_qa')
+    // With the fix: join_qa is still in the cursor alongside code_reviewer
+    expect(ids(spine)).toContain('join_qa')
     expect(ids(spine)).toContain('code_reviewer')
 
-    // Complete the redo: fork_qa fans out, then branches, join, gate proceed, report, deliver
-    spine.complete('fork_qa')
+    // Complete the redo: code_reviewer, then join_qa, gate proceed, report, deliver
     spine.complete('code_reviewer')
-    spine.complete('health_checker')
-    spine.complete('qa_director')
     spine.complete('join_qa')
     spine.verdict('gate_qa', 'proceed')
     spine.complete('report')
@@ -985,9 +989,9 @@ describe('cursor merge on redo', () => {
     expect(spine.next().status).toBe('done')
   })
 
-  it('without the cursor-merge fix, fork_qa would be lost and the run ends prematurely', () => {
-    // This test documents the bug: replacing the cursor with [plan.start] loses fork_qa.
-    // The production code now merges, so we verify that fork_qa is NOT lost.
+  it('without the cursor-merge fix, join_qa would be lost and the run ends prematurely', () => {
+    // This test documents the bug: replacing the cursor with [plan.start] loses join_qa.
+    // The production code now merges, so we verify that join_qa is NOT lost.
     const spine = new Spine(designGraph())
     spine.complete('emit')
     spine.complete('materialise')
@@ -998,14 +1002,19 @@ describe('cursor merge on redo', () => {
     spine.complete('qa_director')
     spine.complete('join_qa')
     spine.verdict('gate_qa', 'reloop')
+    // Second pass — complete through branches so code_reviewer is completed again
     spine.complete('emit')
     spine.complete('materialise')
     spine.complete('check')
-    expect(ids(spine)).toEqual(['fork_qa'])
+    spine.complete('fork_qa')
+    spine.complete('health_checker')
+    spine.complete('code_reviewer')
+    spine.complete('qa_director')
+    expect(ids(spine)).toEqual(['join_qa'])
     spine.redo('code_reviewer')
-    // The old code would produce cursor=['code_reviewer'] only.
-    // The fix produces cursor=['code_reviewer','fork_qa'] (or a superset containing both).
-    expect(ids(spine)).toContain('fork_qa')
+    // The old code would produce cursor=['code_reviewer'] only — join_qa lost.
+    // The fix preserves join_qa in the cursor alongside code_reviewer.
+    expect(ids(spine)).toContain('join_qa')
   })
 })
 
@@ -1034,6 +1043,9 @@ describe('iteration preservation on CEO redo', () => {
     spine.complete('a')
     spine.verdict('gate', 'reloop') // iteration 2
     expect((spine.state().iterations as Record<string, number>).gate).toBe(2)
+    // After the reloop, a is uncompleted by uncompleteBetween. Complete it again
+    // so planRedo accepts it.
+    spine.complete('a')
     // CEO redo with preserveIterations
     spine.redo('a', { preserveIterations: true })
     expect((spine.state().iterations as Record<string, number>).gate).toBe(2)
@@ -1051,6 +1063,8 @@ describe('iteration preservation on CEO redo', () => {
     spine.complete('a')
     spine.verdict('gate', 'reloop') // iteration 2
     expect((spine.state().iterations as Record<string, number>).gate).toBe(2)
+    // After the reloop, a is uncompleted. Complete it again so planRedo accepts it.
+    spine.complete('a')
     // Rerun redo without preserveIterations (the default, as graph-control uses)
     spine.redo('a')
     expect((spine.state().iterations as Record<string, number>).gate).toBeUndefined()
