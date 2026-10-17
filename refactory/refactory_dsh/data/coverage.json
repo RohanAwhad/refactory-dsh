@@ -771,6 +771,7 @@
           "resume": "resume",
           "reviewComments": "review_comments",
           "setup": "setup",
+          "generate": "generate",
           "target": "target"
         },
         "order": [
@@ -780,6 +781,7 @@
           "target",
           "base",
           "setup",
+          "generate",
           "noWorktree",
           "noPr",
           "refine",
