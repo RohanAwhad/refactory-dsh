@@ -271,7 +271,8 @@ def _run_id(workdir: Path) -> str:
     return found[:12] if re.fullmatch(r"[0-9a-f]{12,}", found) else uuid.uuid4().hex[:12]
 
 
-def _open_worktree(ctx: Any, name: str, task: dict[str, Any]) -> dict[str, Any]:
+def _open_worktree(ctx: Any, name: str, task: dict[str, Any],
+                   output_only: tuple[str, ...] = ()) -> dict[str, Any]:
     """Give the run its own worktree of its target, and say what that means (#351).
 
     The target is the repository ``target`` names -- relative to the project the run
@@ -310,7 +311,9 @@ def _open_worktree(ctx: Any, name: str, task: dict[str, Any]) -> dict[str, Any]:
     watched = [Path(found.path)]
     if launcher != target and (launcher / ".git").exists():
         watched.append(launcher)
-    baseline = target_guard.record(ctx.workdir, target, output_only=OUTPUT_ONLY, also=tuple(watched))
+    baseline = target_guard.record(ctx.workdir, target,
+                                   output_only=(*OUTPUT_ONLY, *output_only),
+                                   also=tuple(watched))
     if baseline["changes"]:
         target_guard.warn(f"{len(baseline['changes'])} uncommitted change(s) in {target} are not part of "
                           f"this run, which starts from commit {found.base[:12]}: "
@@ -355,7 +358,7 @@ def wants_worktree(ctx: Any) -> bool:
 
 
 def locate(ctx: Any, name: str, task: dict[str, Any], *, in_worktree: bool | None = None,
-           needs_worktree: tuple[str, ...] = ()) -> dict[str, Any]:
+           needs_worktree: tuple[str, ...] = (), output_only: tuple[str, ...] = ()) -> dict[str, Any]:
     """Where the run works, as facts for the mode's prepare op to return.
 
     ``name`` is the run's artifact, and a new project's name. In a worktree unless
@@ -368,7 +371,7 @@ def locate(ctx: Any, name: str, task: dict[str, Any], *, in_worktree: bool | Non
     if in_worktree is None:
         in_worktree = wants_worktree(ctx)
     if in_worktree:
-        located = _open_worktree(ctx, name, task)
+        located = _open_worktree(ctx, name, task, output_only=output_only)
     else:
         given = [knob for knob in ("target", "base", "setup", *needs_worktree)
                  if str(task.get(knob) or ctx.knob(knob, "") or "").strip()]
@@ -382,7 +385,8 @@ def locate(ctx: Any, name: str, task: dict[str, Any], *, in_worktree: bool | Non
         # The baseline every later step compares with (#330 I1), and the bracket that
         # holds `emit` to its declared output (#319).
         project = project_for_nodes().expanduser()
-        baseline = target_guard.record(ctx.workdir, project, output_only=OUTPUT_ONLY)
+        baseline = target_guard.record(ctx.workdir, project,
+                                       output_only=(*OUTPUT_ONLY, *output_only))
         if baseline["changes"] is None:
             target_guard.warn(f"the target {baseline['root']} has more than {target_guard.LIMIT} "
                               "files to watch, so this run cannot tell whether it moves or "

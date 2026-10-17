@@ -240,6 +240,21 @@ def finish(workdir: Path, node: str, *, final_response: str | None = None,
                                               set_aside=set_aside))
     if missing:
         raise ValueError(f'agent {node!r} did not deliver required outputs: {", ".join(missing)} (missing or unchanged from before dispatch)')
+    # Check whether the git configuration or hooks the run's worktree shares
+    # with its target changed during this step (#347). Beside the existing
+    # target-guard bracket, not in executor.py.
+    from refactory_dsh import worktree as _wt
+    _found = _wt.recorded(workdir)
+    if _found is not None and _wt.shared_changed(_found):
+        _msg = (f"the git configuration or hooks the run's worktree shares "
+                f"with {_found.target} changed during {node}; check them "
+                f"before your next commit there")
+        if record.get('target') is not None:
+            # This step was output-only (target_guard.watch returned a snapshot
+            # for it), so a shared-state change fails the step.
+            raise ValueError(f"agent {node!r} changed shared git state: {_msg}")
+        else:
+            target_guard.warn(_msg)
     pending.unlink()
     return receipt
 

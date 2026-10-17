@@ -347,6 +347,17 @@ def test_a_node_that_is_not_output_only_is_not_held_to_its_outputs(target, tmp_p
     assert agent_delivery.finish(workdir, "research_director")["status"] == "delivered"
 
 
+def test_a_planning_step_registered_as_output_only_is_refused_when_it_changes_the_target(target, tmp_path):
+    """A planning step as output-only: target file changes refused (#347)."""
+    workdir = tmp_path / "run"
+    target_guard.record(workdir, target, output_only=("emit", "design_doc"))
+    agent_delivery.begin(workdir, "design_doc", "Write the design.", ["design.md"])
+    (target / "app.py").write_text("EDITED\n")
+    (workdir / "design.md").write_text("the design\n")
+    with pytest.raises(ValueError, match=r"changed while agent 'design_doc' ran"):
+        agent_delivery.finish(workdir, "design_doc")
+
+
 class _EditingModel(FakeModel):
     """The #319 worker: edits the checkout, then answers that it is already done."""
 

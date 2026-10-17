@@ -444,6 +444,39 @@ def test_a_refused_emit_is_redone_from_a_fresh_emit_txt(repo, tmp_path):
     assert git(repo, "show", f"{_report(run)['branch']}:tool.py") == "print('redone')"
 
 
+class _HookChangingModel(FakeModel):
+    """An agent that rewrites a shared hook while a planning step runs (#347)."""
+
+    def __init__(self, answers: list[str], target_fn) -> None:
+        super().__init__(answers)
+        self._target_fn = target_fn
+
+    def complete(self, prompt: str, *, system: str = "", workdir: object = None) -> str:
+        answer = super().complete(prompt, system=system, workdir=workdir)
+        if "You are the research director" in prompt:
+            import subprocess
+            target = self._target_fn()
+            hooks = Path(subprocess.run(
+                ['git', '-C', str(target), 'rev-parse', '--path-format=absolute',
+                 '--git-common-dir'], capture_output=True, text=True,
+                check=True).stdout.strip()) / 'hooks'
+            hooks.mkdir(parents=True, exist_ok=True)
+            (hooks / 'pre-commit').write_text('#!/bin/sh\nexit 0\n')
+        return answer
+
+
+def test_a_planning_step_that_changes_shared_hooks_fails_the_step(repo, tmp_path):
+    """End-to-end: full design run, planning step changes hooks -> run fails (#347)."""
+    model = _HookChangingModel(
+        _answers(render({"tool.py": "print('built')\n"})),
+        lambda: repo,
+    )
+    result = _design(tmp_path / "run", model, target=str(repo))
+    assert result.exit_ok is False
+    assert "changed shared git state" in (result.error or "")
+    assert "research_director" in (result.error or "")
+
+
 def test_a_check_in_the_worktree_sees_none_of_refactorys_environment(repo, tmp_path, monkeypatch):
     """`REFACTORY_*` and the launcher's PYTHONPATH once failed a target's own tests (#330 E1)."""
     monkeypatch.setenv("PYTHONPATH", str(tmp_path / "launcher"))

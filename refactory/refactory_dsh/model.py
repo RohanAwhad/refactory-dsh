@@ -300,6 +300,10 @@ class DshModelClient:
             result["REFACTORY_WORKER_RECEIPT"] = str(self._worker_receipt)
         from refactory_dsh.workers import environment
         result.update(environment(self.context()))
+        # An agent's own shell can run install commands that would rewrite the
+        # target's hooks; suppress hook managers there too (#347).
+        from refactory_dsh.worktree import HOOK_SUPPRESS
+        result.update(HOOK_SUPPRESS)
         return result
 
     def _readiness_unavailable(self, reason: str) -> dict[str, object]:

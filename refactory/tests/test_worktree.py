@@ -827,6 +827,26 @@ def test_a_change_to_the_hooks_shared_with_the_target_is_reported_once(repo, tmp
     assert worktree.shared_changed(found) is False
 
 
+def test_check_environment_suppresses_hook_managers(repo, tmp_path):
+    """HOOK_SUPPRESS is merged into check_environment's output (#347)."""
+    found = worktree.create(repo, "HEAD", "hook0000aaaa", _run(tmp_path))
+    home = tmp_path / "home"
+    home.mkdir()
+    env = worktree.check_environment(Path(found.path), home)
+    assert env["LEFTHOOK"] == "0", "LEFTHOOK must be suppressed"
+    assert env["HUSKY"] == "0", "HUSKY must be suppressed"
+
+
+def test_the_wrapper_suppresses_hook_managers(repo, tmp_path):
+    """HOOK_SUPPRESS flows into the wrapper script via check_environment (#347)."""
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "hook1111bbbb", run)
+    script = worktree.write_wrapper(found, run)
+    text = script.read_text()
+    assert "LEFTHOOK=" in text, "LEFTHOOK must appear in the wrapper"
+    assert "HUSKY=" in text, "HUSKY must appear in the wrapper"
+
+
 def test_the_wrapper_runs_a_command_in_the_worktree_with_the_check_environment(repo, tmp_path, monkeypatch):
     """Reviewers run commands through it, so a target that is refactory is not tested from the launcher."""
     monkeypatch.setenv("PYTHONPATH", "/launcher/refactory")
