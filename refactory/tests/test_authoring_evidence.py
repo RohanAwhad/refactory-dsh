@@ -237,6 +237,43 @@ def test_code_findings_about_timeout_and_local_modules_remain_repairable():
     assert evidence.failure_kind("ModuleNotFoundError: No module named 'external_renderer'") == "unavailable"
 
 
+def test_signal_death_classified_as_uncertain():
+    assert evidence.failure_kind("killed by SIGABRT") == "uncertain"
+
+
+def test_signal_death_stops_check_artifact_without_attempt(tmp_path, monkeypatch):
+    """A signal-killed environment install stops the run as uncertain, not as a code failure."""
+    from refactory_dsh import design_ops, repo_change
+
+    # Set up a RunContext with the minimum facts check_artifact needs.
+    root = tmp_path / "artifact"
+    root.mkdir()
+    (root / "tool.py").write_text("print(1)\n")
+    ctx = nn.RunContext(tmp_path, facts={
+        "name": "signal_probe",
+        "brief": "a tool that gets killed",
+        "artifact": str(root),
+        "check": "python tool.py",
+    })
+    ctx.write_json("brief.json", {"brief": ctx.facts["brief"]})
+    Ledger.seed(tmp_path, ctx.facts["brief"])
+
+    # Monkeypatch repo_change so check_artifact never touches the real filesystem
+    # or worktree machinery: it sees the signal-death SandboxResult directly.
+    monkeypatch.setattr(repo_change, "refused", lambda ctx: "")
+    monkeypatch.setattr(repo_change, "run_check", lambda ctx, cmd, timeout: sandbox.SandboxResult(
+        ok=False, returncode=1, stderr="the worktree's environment could not be prepared:\n"
+        "`pnpm install --frozen-lockfile` failed: killed by SIGABRT", stdout=""))
+
+    # check_artifact must raise ValueError matching "uncertain" — stop_unrepairable's
+    # message — proving the run does not reloop into emit or spend an attempt.
+    with pytest.raises(ValueError, match="uncertain"):
+        design_ops.check_artifact(ctx)
+
+    # No attempt was spent: repair() is never reached because stop_unrepairable raises first.
+    assert not ctx.facts.get("attempts_used")
+
+
 # ── asks 2 and 3: Initial Idea and info are not requirements ──────────────
 
 

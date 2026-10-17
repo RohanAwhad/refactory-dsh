@@ -196,5 +196,27 @@ def venv_bin() -> Path:
     return Path(os.environ.get("VENV_BIN") or REPO_ROOT / ".venv" / "bin")
 
 
+#: The spine bundle a built checkout provides, relative to the DSH root.
+SPINE_LIB = Path("packages") / "workflow" / "workflow-spine" / "lib" / "index.js"
+
+
+def require_build(root: Path | None = None) -> None:
+    """Refuse immediately when the spine build is missing.
+
+    Running from source (SOURCE_CLI_ENTRY exists) skips the check: tsx
+    compiles on the fly. Otherwise, the built bundle at SPINE_LIB must
+    exist. Raises RuntimeError naming ``pnpm run build`` as the fix.
+    """
+    selected = Path(root) if root is not None else dsh_root()
+    if (selected / SOURCE_CLI_ENTRY).exists():
+        return  # running from source; tsx handles it
+    if (selected / SPINE_LIB).exists():
+        return
+    raise RuntimeError(
+        "the workflow-spine build is missing; run `pnpm run build` "
+        "from the checkout root"
+    )
+
+
 def python() -> Path:
     return venv_bin() / "python"

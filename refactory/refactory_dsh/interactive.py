@@ -23,7 +23,7 @@ from typing import Any
 
 from refactory_dsh import lowering, registry, steering
 from refactory_dsh.dsh_runtime import TASK
-from refactory_dsh.paths import REPO_ROOT, dsh_command, venv_bin, project_root
+from refactory_dsh.paths import REPO_ROOT, dsh_command, require_build, venv_bin, project_root
 from refactory_dsh.run_ownership import ownership
 from refactory_dsh.owned_process import run_owned
 
@@ -224,6 +224,7 @@ def run(
     if workdir is None:
         workdir = default_workdir(identifier)
     workdir = Path(workdir).expanduser().resolve()
+    require_build()
     with ownership(workdir) as owner:
         if resume:
             if source or source_format not in ('', 'directory') or approve or knobs or intent or model_context or provider or model or bool(worker_backend) or effort or permission_mode or role_routes or node_routes:

@@ -308,6 +308,35 @@ def test_ceo_single_reaches_the_mode_as_the_knob_it_reads(monkeypatch):
     assert "single_shot=1" in seen[0]
 
 
+def test_require_build_passes_when_spine_lib_exists(tmp_path):
+    """A checkout with a built spine is not refused."""
+    from refactory_dsh.paths import require_build, SPINE_LIB
+
+    lib = tmp_path / SPINE_LIB
+    lib.parent.mkdir(parents=True)
+    lib.write_text("built")
+    require_build(root=tmp_path)  # should not raise
+
+
+def test_require_build_refuses_when_spine_lib_is_missing(tmp_path):
+    """A checkout with no build refuses at once, naming pnpm run build."""
+    from refactory_dsh.paths import require_build
+
+    with pytest.raises(RuntimeError, match="pnpm run build"):
+        require_build(root=tmp_path)
+
+
+def test_require_build_skips_check_when_running_from_source(tmp_path):
+    """Running from source (SOURCE_CLI_ENTRY exists) does not need the lib build."""
+    from refactory_dsh.paths import require_build, SOURCE_CLI_ENTRY
+
+    source = tmp_path / SOURCE_CLI_ENTRY
+    source.parent.mkdir(parents=True)
+    source.write_text("source entry")
+    # No SPINE_LIB exists, but no error — tsx compiles on the fly
+    require_build(root=tmp_path)  # should not raise
+
+
 def test_graph_controls_reach_public_console_admission(tmp_path):
     result = _run("graph-control", "preview", "--run", str(tmp_path), "--node", "check")
     assert result.returncode == 2
