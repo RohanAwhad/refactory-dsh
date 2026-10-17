@@ -111,7 +111,7 @@ def test_pr_body_has_summary_verification_and_original_request(tmp_path):
     head = subprocess.run(
         ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
         capture_output=True, text=True, check=True).stdout.strip()
-    from unittest.mock import SimpleNamespace
+    from types import SimpleNamespace
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
     assert "## Summary" in body
