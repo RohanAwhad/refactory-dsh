@@ -223,7 +223,7 @@ def test_a_retry_edits_the_file_its_last_attempt_wrote(tmp_path):
 
 
 @pytest.mark.parametrize("emission, reason", [
-    (_edit("app.py", ("print('not there')\n", "print('x')\n")), "are not in the file the edit applies to"),
+    (_edit("app.py", ("print('not there')\n", "print('x')\n")), "is not in the file the edit applies to"),
     (render({"tool.py": "x = 'long'  # ... (line truncated to 2000 chars)\n"}), "the read tool's note that it cut"),
     ("===EDIT: app.py===\nprint('no pairs')\n", "has text outside its"),
     ("===FILE: ../outside.py===\nx = 1\n", "is not a file inside the artifact directory"),
@@ -346,7 +346,7 @@ def test_without_a_worktree_a_run_takes_whole_files_only(repo, tmp_path, monkeyp
 @pytest.mark.parametrize("answer, reason", [
     ("print('no blocks')\n", "holds no ===FILE:"),
     ("===EDIT: a path with spaces===\n", "has a block header that is not"),
-    ("===FILE: a.py===\nx\n" + _edit("a.py", ("x\n", "y\n")), "more than one block"),
+    ("===FILE: a.py===\nx\n" + _edit("a.py", ("x\n", "y\n")), "more than one block.*===FILE:"),
     ("===DELETE: a.py===\nleftover\n", "a deletion takes none"),
     (f"===EDIT: a.py===\n{repo_change.SEARCH}\nx\n{repo_change.DIVIDER}\ny\n", "missing its"),
     (_edit("a.py", ("\n", "y\n")), "nothing to search for"),
@@ -357,7 +357,7 @@ def test_an_emission_whose_blocks_are_malformed_is_refused_with_the_reason(answe
 
 
 def test_an_edit_whose_text_is_in_its_file_twice_is_refused_rather_than_guessed():
-    with pytest.raises(worktree.AttemptRefused, match="appear 2 times"):
+    with pytest.raises(worktree.AttemptRefused, match="appears 2 times"):
         repo_change._edited(Path("a.py"), "x = 1\nx = 1\n", [("x = 1\n", "x = 3\n")], "git show HEAD:a.py")
 
 
@@ -370,14 +370,87 @@ def test_an_edit_whose_lines_hold_a_divider_is_refused_rather_than_cut_short():
 
 
 @pytest.mark.parametrize("text, pairs, edited", [
-    ("max = 1\nx = 1\n", [("x = 1\n", "x = 2\n")], "max = 1\nx = 2\n"),
+    ("max = 1\nx = 1\n", [("\nx = 1\n", "\nx = 2\n")], "max = 1\nx = 2\n"),
     ("a\r\nb\r\n", [("b\n", "c\n")], "a\r\nc\r\n"),
     ("a\nb", [("b\n", "c\n")], "a\nc"),
     ("a\nb\nc\n", [("b\n", "")], "a\nc\n"),
-], ids=["whole-lines-only", "crlf-kept", "no-final-newline-kept", "lines-removed"])
+], ids=["whole-line-with-context", "crlf-kept", "no-final-newline-kept", "lines-removed"])
 def test_an_edit_matches_whole_lines_as_the_read_tool_shows_them_and_keeps_the_files_endings(text, pairs, edited):
     """The read tool strips `\\r` and ends every line, so that is the text a search is copied from."""
     assert repo_change._edited(Path("a.py"), text, pairs, "git show HEAD:a.py") == (edited, 0)
+
+
+def test_a_short_search_inside_another_line_is_refused_as_appearing_twice():
+    """'x = 1\\n' occurs both in 'max = 1\\n' and 'x = 1\\n'; the safe outcome is a refusal."""
+    with pytest.raises(worktree.AttemptRefused, match="appears 2 times"):
+        repo_change._edited(
+            Path("a.py"), "max = 1\nx = 1\n",
+            [("x = 1\n", "x = 2\n")], "git show HEAD:a.py")
+
+
+def test_a_mid_line_search_applies_when_unique():
+    """A search that starts inside a line, not at position 0 or after a newline, matches when unique."""
+    result, skipped = repo_change._edited(
+        Path("a.py"), "hello world\n", [("world\n", "earth\n")], "git show HEAD:a.py")
+    assert result == "hello earth\n" and skipped == 0
+
+
+def test_a_search_inside_a_line_longer_than_2000_characters_applies():
+    """An edit can reach text past the 2000-char point the read tool truncates at."""
+    line = "x" * 2500 + "MARKER" + "y" * 100 + "\n"
+    result, skipped = repo_change._edited(
+        Path("a.py"), line, [("MARKER", "REPLACED")], "git show HEAD:a.py")
+    assert result == "x" * 2500 + "REPLACED" + "y" * 100 + "\n" and skipped == 0
+
+
+def test_a_search_without_leading_spaces_applies_when_unique():
+    """A search that omits the line's leading whitespace matches when the content is unique."""
+    result, skipped = repo_change._edited(
+        Path("a.py"), "    def foo():\n        pass\n",
+        [("def foo():\n        pass\n", "def bar():\n        pass\n")],
+        "git show HEAD:a.py")
+    assert result == "    def bar():\n        pass\n" and skipped == 0
+
+
+def test_a_substring_that_appears_twice_is_refused():
+    """A search text appearing twice as a substring is refused, even when neither occurrence starts a line."""
+    with pytest.raises(worktree.AttemptRefused, match="appears 2 times"):
+        repo_change._edited(
+            Path("a.py"), "abXYZcd\nefXYZgh\n",
+            [("XYZ", "NEW")], "git show HEAD:a.py")
+
+
+def test_an_absent_search_with_short_replacement_mid_line_is_refused_not_skipped():
+    """An edit whose search text is absent and whose short replacement appears once mid-line is refused."""
+    with pytest.raises(worktree.AttemptRefused, match="is not in the file"):
+        repo_change._edited(
+            Path("a.py"), "abREPLcd\n",
+            [("GONE\n", "REPL")], "git show HEAD:a.py")
+
+
+def test_a_mid_line_search_is_not_falsely_skipped_when_replacement_starts_a_line():
+    """An edit whose search is mid-line applies even when the replacement starts another line."""
+    result, skipped = repo_change._edited(
+        Path("a.py"),
+        "def f():\n    return compute(a)\ncompute(b)\n",
+        [("compute(a)", "compute(b)")],
+        "git show HEAD:a.py")
+    assert result == "def f():\n    return compute(b)\ncompute(b)\n" and skipped == 0
+
+
+def test_multiple_edit_blocks_for_the_same_file_are_merged():
+    """Several ===EDIT: blocks naming the same file are applied in order, as if one block."""
+    answer = (_edit("a.py", ("aaa\n", "AAA\n"))
+              + _edit("a.py", ("bbb\n", "BBB\n")))
+    _, changed, _ = repo_change._emitted(answer, edits=True)
+    assert list(changed.keys()) == [Path("a.py")]
+    assert changed[Path("a.py")] == [("aaa\n", "AAA\n"), ("bbb\n", "BBB\n")]
+
+
+def test_two_file_blocks_for_one_file_are_refused():
+    """Two ===FILE: blocks for the same file are refused, saying which."""
+    with pytest.raises(worktree.AttemptRefused, match="more than one block.*===FILE:"):
+        repo_change._emitted("===FILE: a.py===\nx\n===FILE: a.py===\ny\n", edits=True)
 
 
 def test_the_read_tools_paging_note_is_refused_too():

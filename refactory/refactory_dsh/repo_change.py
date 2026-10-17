@@ -342,13 +342,14 @@ def _open_worktree(ctx: Any, name: str, task: dict[str, Any],
                 f"{target} on branch {found.branch}, from the base commit {found.base[:12]}. Each attempt "
                 "builds on the last: the worktree holds the base and every earlier attempt, as committed "
                 f"(`git -C {found.path} diff {found.base[:12]}` shows the change so far), so read the files "
-                "there and change only what this attempt needs. Write one block per file, introduced by "
-                "a line of exactly one of:\n"
+                "there and change only what this attempt needs. For each file, write one ===FILE: or "
+                "===DELETE: block, or one or more ===EDIT: blocks; each block starts with a line of "
+                "exactly one of:\n"
                 "===FILE: <relative path>=== followed by the whole file, for a new file or one you "
                 "rewrite entirely;\n"
                 "===EDIT: <relative path>=== followed by one or more edits to an existing file, each "
-                f"written as\n{SEARCH}\n<lines copied exactly from the file as it is now>\n{DIVIDER}\n"
-                f"<the lines that replace them>\n{REPLACE}\nwhere the copied lines appear in the file "
+                f"written as\n{SEARCH}\n<text copied exactly from the file as it is now>\n{DIVIDER}\n"
+                f"<the text that replaces it>\n{REPLACE}\nwhere the copied text appears in the file "
                 "exactly once;\n"
                 "===DELETE: <relative path>=== on its own, to remove a file.\n"
                 "Prefer ===EDIT: for a file that exists: retyping a long file risks changing lines you "
@@ -430,12 +431,26 @@ def _emitted(answer: str, *, edits: bool) -> tuple[dict[Path, str], Edits, tuple
         raise AttemptRefused(f"emit.txt holds no {kinds} blocks; write each file's change as one, as the "
                              "prompt describes, with no other text")
     names = [match.group(2) for match in matches]
-    if len(names) != len(set(names)):
-        raise AttemptRefused("emit.txt names a file in more than one block; put all of a file's change in one block")
+    # Several ===EDIT: blocks for the same file are merged; a file named by an
+    # ===EDIT: and a ===FILE: or ===DELETE:, or by two ===FILE: blocks, is refused.
+    kinds_by_name: dict[str, set[str]] = {}
+    for match in matches:
+        kinds_by_name.setdefault(match.group(2), set()).add(match.group(1))
+    for name, used in kinds_by_name.items():
+        if used == {"EDIT"}:
+            continue  # several ===EDIT: blocks for one file are applied in order
+        if names.count(name) > 1:
+            blocks = " and a ".join(f"==={k}:" for k in sorted(used))
+            raise AttemptRefused(
+                f"emit.txt names {name} in more than one block ({blocks}); "
+                "a file may appear in several ===EDIT: blocks, but not in a mix with ===FILE: or ===DELETE:")
+    unique_names = list(dict.fromkeys(names))
+    paths = {name: path for name, path in zip(unique_names, _artifact_paths(unique_names))}
     files: dict[Path, str] = {}
     changed: Edits = {}
     deletes: list[Path] = []
-    for index, (match, path) in enumerate(zip(matches, _artifact_paths(names))):
+    for index, match in enumerate(matches):
+        path = paths[match.group(2)]
         kind = match.group(1)
         end = matches[index + 1].start() if index + 1 < len(matches) else len(answer)
         body = answer[match.end():end].strip("\n")
@@ -446,7 +461,7 @@ def _emitted(answer: str, *, edits: bool) -> tuple[dict[Path, str], Edits, tuple
             _refuse_truncated(path, body)
             files[path] = body + "\n"
         elif kind == "EDIT":
-            changed[path] = _pairs(path, body)
+            changed.setdefault(path, []).extend(_pairs(path, body))
         elif body.strip():
             raise AttemptRefused(f"the ===DELETE: block for {path} has text after it; a deletion takes none, "
                                  "so leave the line after the header empty")
@@ -494,16 +509,27 @@ def _pairs(path: Path, body: str) -> list[tuple[str, str]]:
     return pairs
 
 
+def _occurrences(text: str, search: str) -> list[int]:
+    """Every position where ``search`` occurs in ``text``, regardless of line boundaries."""
+    found: list[int] = []
+    at = text.find(search)
+    while at != -1:
+        found.append(at)
+        at = text.find(search, at + 1)
+    return found
+
+
 def _edited(path: Path, text: str, pairs: list[tuple[str, str]], shown: str) -> tuple[str, int]:
     """``text`` with each edit applied in turn, and how many were already in it.
 
-    Each edit is refused unless its search lines are there exactly once. Search lines
-    match whole lines, from a line's start. The read tool shows a file with ``\r``
-    stripped and every line ended, so a file whose lines all end in ``\r\n``, or whose
-    last line has no newline, is matched as shown and written back as it was. An edit
-    whose result is already where it would go -- a model re-sending an earlier attempt's
-    edit -- is skipped rather than applied twice. ``shown`` is the command that prints
-    ``text``, so a refusal names where to copy from.
+    Each edit is refused unless its search text is there exactly once. Search text
+    is matched as exact text anywhere in the file, like the dsh edit tool's old_string.
+    The read tool shows a file with ``\r`` stripped and every line ended, so a file
+    whose lines all end in ``\r\n``, or whose last line has no newline, is matched as
+    shown and written back as it was. An edit whose result is already where it would go
+    -- a model re-sending an earlier attempt's edit -- is skipped rather than applied
+    twice. ``shown`` is the command that prints ``text``, so a refusal names where to
+    copy from.
     """
     crlf = "\r\n" in text and text.count("\r\n") == text.count("\n")
     work = text.replace("\r\n", "\n") if crlf else text
@@ -511,16 +537,16 @@ def _edited(path: Path, text: str, pairs: list[tuple[str, str]], shown: str) -> 
     work += "\n" if open_end else ""
     skipped = 0
     for search, replacement in pairs:
-        starts = _line_starts(work, search)
+        starts = _occurrences(work, search)
         if _already_applied(work, search, replacement, starts):
             skipped += 1
             continue
         if len(starts) != 1:
             first = next((line.strip() for line in search.splitlines() if line.strip()), "")[:80]
             raise AttemptRefused(
-                f"an edit to {path} searches for lines beginning {first!r}, which "
-                + (f"are not in the file the edit applies to; copy them exactly from `{shown}`"
-                   if not starts else f"appear {len(starts)} times; add lines around them until they appear once"))
+                f"an edit to {path} searches for text beginning {first!r}, which "
+                + (f"is not in the file the edit applies to; copy it exactly from `{shown}`"
+                   if not starts else f"appears {len(starts)} times; include more text around it until it appears once"))
         work = work[:starts[0]] + replacement + work[starts[0] + len(search):]
     if open_end and work.endswith("\n"):
         work = work[:-1]
