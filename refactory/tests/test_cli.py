@@ -13,7 +13,11 @@ from pathlib import Path
 
 import pytest
 
+import contextlib
+import io as _io
+
 from refactory_dsh import cli
+from refactory_dsh import console as _console_mod
 from refactory_dsh.paths import REPO_ROOT
 
 
@@ -82,7 +86,7 @@ def test_the_read_verbs_pass_their_flags_through():
     assert "unrecognized arguments" not in result.stderr
     # The readable path prints the error as text, not JSON.
     assert result.returncode != 0
-    assert result.stdout, "a missing run must be reported, not accepted"
+    assert result.stderr, "a missing run must be reported, not accepted"
 
 
 def test_a_name_is_derived_from_what_was_asked_for():
@@ -312,10 +316,79 @@ def test_ceo_single_reaches_the_mode_as_the_knob_it_reads(monkeypatch):
 def test_graph_controls_reach_public_console_admission(tmp_path):
     result = _run("graph-control", "preview", "--run", str(tmp_path), "--node", "check")
     assert result.returncode == 2
-    # With readable output, error goes to stderr; with --json it goes to stdout as JSON.
-    combined = result.stdout + result.stderr
-    assert "durable graph checkpoint" in combined
+    # With readable output, the error goes to stderr with the refactory: prefix.
+    assert "durable graph checkpoint" in result.stderr
     assert "invalid choice" not in result.stderr and "unrecognized arguments" not in result.stderr
+
+
+def test_status_shows_run_warnings(tmp_path):
+    """Run warnings from events.jsonl appear in the readable status output."""
+    run_dir = tmp_path / "warn_run"
+    run_dir.mkdir()
+    ref = run_dir / ".refactory"
+    ref.mkdir()
+    (ref / "spine-status.json").write_text(json.dumps({
+        "status": "executing",
+        "nodes": ["emit"],
+        "completed": ["survey"],
+        "running_nodes": [{"id": "emit", "kind": "agent"}],
+    }))
+    (ref / "spine-checkpoint.json").write_text(json.dumps({"owner_pid": 99999}))
+    (run_dir / "facts.json").write_text(json.dumps({"name": "warn_test"}))
+    # Write a run_warning event.
+    (ref / "events.jsonl").write_text(
+        json.dumps({
+            "kind": "run_warning", "node_id": "emit",
+            "state": "warning", "summary": "worktree file changed: README.md",
+            "schema_version": 1, "run_id": str(run_dir),
+        }) + "\n"
+    )
+
+    readable = _run("status", "--run", str(run_dir))
+    assert readable.returncode == 0
+    assert "Warning: worktree file changed: README.md" in readable.stdout
+
+
+def test_status_shows_steer_then_resume_at_gate(tmp_path):
+    """At a user gate, status shows the steer and resume commands, not resume alone."""
+    run_dir = tmp_path / "gate_run"
+    run_dir.mkdir()
+    ref = run_dir / ".refactory"
+    ref.mkdir()
+    (ref / "spine-status.json").write_text(json.dumps({
+        "status": "waiting_user",
+        "nodes": ["gate_strategy"],
+        "running_nodes": [{"id": "gate_strategy", "kind": "gate"}],
+        "completed": ["survey"],
+    }))
+    (ref / "spine-checkpoint.json").write_text(json.dumps({"owner_pid": 99999}))
+    (run_dir / "facts.json").write_text(json.dumps({"name": "gate_test"}))
+    graphs = run_dir / "graphs"
+    graphs.mkdir()
+    (graphs / "test.graph.json").write_text(json.dumps({
+        "nodes": {
+            "gate_strategy": {
+                "_type": "GateNode",
+                "evaluator_type": "user",
+                "gate_prompt": "Approve the strategy?",
+            },
+        },
+        "edges": [
+            {"source": "gate_strategy", "condition": "proceed"},
+            {"source": "gate_strategy", "condition": "reloop"},
+        ],
+    }))
+
+    readable = _run("status", "--run", str(run_dir))
+    assert readable.returncode == 0
+    output = readable.stdout
+    assert "refactory steer --run" in output
+    assert "gate_strategy=<verdict>" in output
+    assert "refactory graph-control resume --run" in output
+    # The steer command must appear before the resume command.
+    steer_pos = output.index("refactory steer --run")
+    resume_pos = output.index("refactory graph-control resume --run")
+    assert steer_pos < resume_pos
 
 
 def test_status_is_readable_by_default_and_json_behind_flag(tmp_path):
@@ -355,6 +428,14 @@ def test_status_is_readable_by_default_and_json_behind_flag(tmp_path):
     assert "run_id" in payload
     assert "state" in payload
     assert payload["authoring"]["completed"] == ["survey", "strategy"]
+
+    # The CLI's --json must match the console's own JSON.
+    buf = _io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        _console_mod.main(["status", "--run", str(run_dir)])
+    console_payload = json.loads(buf.getvalue())
+    # Both payloads come from the same static run directory; no fields change.
+    assert payload == console_payload
 
 
 def test_steer_is_readable_by_default_and_json_behind_flag(tmp_path):
@@ -407,6 +488,14 @@ def test_steer_is_readable_by_default_and_json_behind_flag(tmp_path):
     payload = json.loads(machine.stdout)
     assert "entries" in payload
 
+    # The CLI's --json must match the console's own JSON.
+    buf = _io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        _console_mod.main(["steer", "--run", str(run_dir)])
+    console_payload = json.loads(buf.getvalue())
+    # Both payloads come from the same static run directory; no fields change.
+    assert payload == console_payload
+
 
 def test_graph_control_is_readable_by_default_and_json_behind_flag(tmp_path):
     """graph-control prints readable text by default; --json gives JSON unchanged."""
@@ -425,9 +514,21 @@ def test_graph_control_is_readable_by_default_and_json_behind_flag(tmp_path):
     except json.JSONDecodeError:
         is_json = False
     assert not is_json, "readable graph-control output should not be valid JSON"
-    assert "Queued pause" in readable.stdout or "pause" in readable.stdout.lower()
+    assert "Queued pause" in readable.stdout
 
     machine = _run("graph-control", "pause", "--run", str(run_dir), "--json")
     assert machine.returncode == 0
     payload = json.loads(machine.stdout)
-    assert payload.get("status") == "queued" or "status" in payload
+    assert payload["status"] == "queued"
+
+    # The CLI's --json output must match the console's own JSON for the same call.
+    buf = _io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        _console_mod.main(["graph-control", "pause", "--run", str(run_dir)])
+    console_payload = json.loads(buf.getvalue())
+    # Compare every key except those that identify the individual request (id, text).
+    per_request_keys = {"id", "text"}
+    for key in set(payload) | set(console_payload):
+        if key in per_request_keys:
+            continue
+        assert payload.get(key) == console_payload.get(key), f"--json and console disagree on {key}"

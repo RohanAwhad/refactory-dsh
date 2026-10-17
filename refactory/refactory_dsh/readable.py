@@ -70,9 +70,29 @@ def format_status(payload: dict[str, Any]) -> str:
             message = control.get('message', '')
             lines.append(f"Last failed control: {action} — {message}")
 
+        warnings = [
+            e.get('summary', '') for e in (activity.get('events') or [])
+            if isinstance(e, dict) and e.get('kind') == 'run_warning' and e.get('summary')
+        ]
+        for w in dict.fromkeys(warnings):
+            lines.append(f"Warning: {w}")
+
         if state in ('waiting_user', 'paused', 'died'):
             root = payload.get('root', payload.get('run_id', ''))
-            lines.append(f"Next: refactory graph-control resume --run {root}")
+            if state == 'waiting_user':
+                gate = next(
+                    (n for n in running_nodes
+                     if isinstance(n, dict) and n.get('kind') == 'gate'),
+                    None,
+                )
+                if gate:
+                    gate_id = gate.get('id', '')
+                    lines.append(f"Next: refactory steer --run {root} --verdict {gate_id}=<verdict>")
+                    lines.append(f"      refactory graph-control resume --run {root}")
+                else:
+                    lines.append(f"Next: refactory graph-control resume --run {root}")
+            else:
+                lines.append(f"Next: refactory graph-control resume --run {root}")
     else:
         # Optimizer run.
         lines.append(f"Run {payload.get('run_id', '')}  {payload.get('mode', '')}")

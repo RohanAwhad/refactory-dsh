@@ -667,9 +667,9 @@ def main(argv: list[str] | None = None) -> int:
                 except (json.JSONDecodeError, AttributeError, TypeError):
                     error_msg = ''
                 if error_msg:
-                    print(error_msg)
+                    print(f'refactory: {error_msg}', file=sys.stderr)
                 else:
-                    print(raw, end='')
+                    print(f'refactory: {raw}', file=sys.stderr, end='')
                 return code
             try:
                 payload = json.loads(raw)
