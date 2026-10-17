@@ -247,6 +247,27 @@ function sync<T>(value: T): Promise<T> {
   return Promise.resolve(value)
 }
 
+/** Map a node's _type to a semantic kind a reader can understand. */
+function nodeKind(_type: string): 'agent' | 'operation' | 'gate' | 'control' {
+  switch (_type) {
+    case 'AgentNode':
+    case 'LLMNode':
+      return 'agent'
+    case 'GateNode':
+      return 'gate'
+    case 'ForkNode':
+    case 'JoinNode':
+    case 'DataNode':
+      return 'control'
+    case 'FnNode':
+    case 'Study':
+    case 'SelectionNode':
+      return 'operation'
+    default:
+      return 'operation'
+  }
+}
+
 /** The last non-empty line of a command's output, for an error a reader can act on. */
 function lastLine(text: string | null | undefined): string {
   const lines = (text ?? '').split('\n').map(line => line.trim()).filter(line => line !== '')
@@ -527,6 +548,94 @@ export function apply(ctx: Context, config: Config): void {
   // Keep each claim until that same session successfully opens its next run.
   const openedBySession = new Map<string, OpenRun>()
 
+  // Child-to-parent session map for the write-confinement listener (#347, C0).
+  // Populated at `agent/created` when the created agent has a parentSession,
+  // cleaned at `agent/disposed`. The map makes the parent-chain walk possible:
+  // from a grandchild to the session that opened the run.
+  const childToParent = new Map<string, string>()
+
+  // Subagent write confinement (#347, C0). A `tools/pre-execute` listener that
+  // denies `write` and `edit` calls whose resolved path falls outside the open
+  // run's directory, when the calling session is a delegated child of a session
+  // that has an open run.
+  //
+  // Path resolution mirrors dsh-tool-fs: the sandbox policy's workspaceRoot
+  // (when a sandboxPolicy service is mounted) takes precedence over
+  // session.header.cwd, which is how the write/edit tools themselves resolve
+  // file_path. Both the run directory and the target are normalised with
+  // canonicalWorkdir (realpathSync for existing ancestors, resolve for new
+  // segments), so /var vs /private/var discrepancies are handled.
+  //
+  // The first step up the chain comes from the calling session's own
+  // header.parentSession, so a direct child is confined even if its
+  // agent/created event was not observed. Subsequent steps use the
+  // childToParent map.
+  ctx.on('tools/pre-execute', (exec, next) => {
+    // 1. Only intercept 'write' and 'edit' tool calls
+    if (exec.name !== 'write' && exec.name !== 'edit') return next()
+
+    // 2. Get the calling session
+    const session = exec.agent?.session
+    if (session === undefined) return next()
+
+    // 3. Identify a delegated child by structural lineage
+    const depth = session.header.delegationDepth
+    const parent = session.header.parentSession
+    if ((depth === undefined || depth === 0) && parent === undefined) return next()
+
+    // 4. Walk the parent chain to find the run directory.
+    //    First step: the session's own header.parentSession (so a direct child
+    //    is confined even if its agent/created event was not seen).
+    //    Subsequent steps: the childToParent map.
+    let runDir: string | undefined
+    let current: string | undefined = parent !== undefined ? String(parent) : undefined
+
+    for (let steps = 0; steps < 20 && current !== undefined; steps += 1) {
+      const opened = openedBySession.get(current)
+      if (opened !== undefined) {
+        runDir = opened.workdir
+        break
+      }
+      current = childToParent.get(current)
+    }
+
+    // 5. Fallback to config.workdir for configured-graph mode
+    if (runDir === undefined && configuredSpine !== undefined) {
+      runDir = config.workdir
+    }
+
+    // 6. No confinement boundary found — allow freely
+    if (runDir === undefined) return next()
+
+    // 7. Resolve the target file_path exactly as dsh-tool-fs does:
+    //    sandbox policy's workspaceRoot when available, else session.header.cwd.
+    const filePath = (exec.arguments as Record<string, unknown>)?.file_path
+    if (typeof filePath !== 'string') return next()
+    const sandboxPolicyService: { resolve(opts: { session?: unknown }): { workspaceRoot: string } } | undefined =
+      ctx.get('sandboxPolicy')
+    const policyCwd = sandboxPolicyService !== undefined
+      ? sandboxPolicyService.resolve({ session }).workspaceRoot
+      : undefined
+    const sessionCwd = policyCwd ?? session.header.cwd
+    const resolvedTarget = canonicalWorkdir(
+      sessionCwd !== undefined ? resolve(sessionCwd, filePath) : resolve(filePath),
+    )
+
+    // 8. Normalise the run directory the same way
+    const resolvedRun = canonicalWorkdir(runDir)
+
+    // 9. Compare: target must be inside or equal to the run directory
+    if (resolvedTarget !== resolvedRun
+        && !resolvedTarget.startsWith(resolvedRun.endsWith(sep) ? resolvedRun : resolvedRun + sep)) {
+      return Promise.resolve({
+        kind: 'deny' as const,
+        reason: `this subagent may only write inside the run directory ${resolvedRun}`,
+      })
+    }
+
+    return next()
+  })
+
   /** The id of the session an execution belongs to, when it has an agent. */
   function sessionIdOf(exec: ToolExec): string | undefined {
     const session = exec.agent?.session
@@ -604,7 +713,8 @@ export function apply(ctx: Context, config: Config): void {
     const bytes = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
     if (createHash('sha256').update(bytes).digest('hex') !== request.checkpoint_sha256) throw new Error('checkpoint changed after recovery was requested')
     const saved = JSON.parse(bytes.toString())
-    if (saved.status === 'executing' || saved.status === 'failed') throw new Error('unknown side-effect outcome; automatic replay refused')
+    if (saved.status === 'executing') throw new Error('unknown side-effect outcome; automatic replay refused')
+    if (saved.status === 'failed' && request.acknowledge_failed !== true) throw new Error('last node outcome failed; pass acknowledge_failed to resume from this state')
     if (saved.state.halted?.reason === 'cancelled') delete saved.state.halted
     saved.state.pause_before = []
     spine.restore(saved)
@@ -657,16 +767,21 @@ export function apply(ctx: Context, config: Config): void {
       const state = spine.state()
       const next = spine.next()
       const views = next.status === 'ready' ? next.nodes : []
+      const runningNodes = views.map(v => ({ id: v.id, kind: nodeKind(v._type) }))
+      const nodeList = runningNodes.map(n => `${n.id} (${n.kind})`).join(', ')
       const wait = status === 'paused' ? 'paused by user'
-        : status === 'waiting_user' || views.some(node => node._type === 'GateNode' && node.evaluator_type === 'user') ? 'waiting for user gate'
+        : status === 'waiting_user' || views.some(node => node._type === 'GateNode' && node.evaluator_type === 'user')
+          ? `waiting for user gate: ${nodeList || 'user gate'}`
           : views.some(node =>
               (node._type === 'AgentNode' && !isDeterministic(node))
               || node._type === 'LLMNode'
-            ) ? 'waiting for worker delivery'
-            : status === 'executing' ? 'running a graph check' : undefined
+            ) ? `waiting for worker delivery: ${nodeList}`
+            : status === 'executing'
+              ? (nodeList ? `running a graph check: ${nodeList}` : 'running a graph check')
+              : undefined
       const record = {
         schema_version: 1, run_id: resolve(workdir), at: new Date().toISOString(),
-        status, nodes: state.cursor, completed: state.completed,
+        status, nodes: state.cursor, running_nodes: runningNodes, completed: state.completed,
         ...(detail === undefined ? {} : { error: detail }),
         ...(wait === undefined ? {} : { wait_reason: wait }),
         ...(status === 'paused' ? { paused_before: spine.pausedAt() } : {}),
@@ -714,9 +829,36 @@ export function apply(ctx: Context, config: Config): void {
         else if (request.action === 'resume') for (const node of state.pause_before as string[]) spine.pauseBefore(node, false)
         else if (request.action === 'stop') { spine.stopAtBoundary(); receipt.message = 'Stopped at graph boundary; no further nodes will dispatch.' }
         else if (request.action === 'rerun') {
-          const checkpoint = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
-          if (createHash('sha256').update(checkpoint).digest('hex') !== request.revision) throw new Error('graph changed since preview; preview invalidation again')
           const target = String(request.target)
+          const deferredNodes = request.deferred_nodes as string[] | undefined
+
+          if (Array.isArray(deferredNodes) && deferredNodes.length > 0) {
+            if (spine.hasConcurrentWork()) {
+              // Concurrent work still running — skip this control, keep file.
+              receipt.status = 'deferred'
+              receipt.message = 'Concurrent work still running; control retained for next boundary.'
+              writeFileSync(join(workdir, '.refactory', 'graph-control-receipt.json'), JSON.stringify(receipt))
+              appendFileSync(join(workdir, '.refactory', 'events.jsonl'), JSON.stringify({ schema_version: 1,
+                run_id: resolve(workdir), invocation, at: new Date().toISOString(), kind: 'control',
+                state: receipt.status, summary: receipt.message }) + '\n')
+              continue  // skip unlinkSync — file survives to next boundary
+            }
+            // Concurrent work has finished. Verify the plan still matches.
+            const currentPlan = spine.planRedo(target)
+            const currentSet = new Set(currentPlan.nodes)
+            const deferredSet = new Set(deferredNodes)
+            if (currentSet.size !== deferredSet.size
+                || ![...currentSet].every(n => deferredSet.has(n))) {
+              throw new Error(
+                'invalidation plan changed since preview; re-preview before rerunning'
+              )
+            }
+            // Plan check passed — skip the revision check for deferred controls.
+          } else {
+            // Non-deferred: the checkpoint revision must still match.
+            const checkpoint = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
+            if (createHash('sha256').update(checkpoint).digest('hex') !== request.revision) throw new Error('graph changed since preview; preview invalidation again')
+          }
           const plan = spine.planRedo(target)
           const nodes = (spine.checkpoint().graph as WorkflowGraph).nodes
           if (typeof request.text === 'string' && request.text.trim() !== '' && !['AgentNode', 'LLMNode'].includes(nodes[target]?._type ?? '')) {
@@ -726,19 +868,25 @@ export function apply(ctx: Context, config: Config): void {
             recordStatus(spine, workdir, 'executing')
             runtimeBridge(`${dataCommand} reset`, workdir, env, { ...plan, state, archiveArtifacts: true })
           }
-          if (typeof request.text === 'string' && request.text.trim() !== '') spine.amendPrompt(target, request.text, 'append')
           spine.redo(target)
+          if (typeof request.text === 'string' && request.text.trim() !== '') spine.setFeedback(target, request.text)
           if (plan.resetPass) materialised.delete(spine)
           receipt.message = `Reopened ${target}; invalidated ${plan.nodes.join(', ')}; prior evidence archived.`
         } else throw new Error('unsupported graph control')
-      } catch (error) { receipt.status = 'failed'; receipt.message = error instanceof Error ? error.message : String(error) }
+      } catch (error) {
+        receipt.status = 'failed'
+        receipt.message = error instanceof Error ? error.message : String(error)
+        recordWarnings(workdir, [{ node: '__graph_control__', line: `graph control ${String(request.action)} failed: ${receipt.message}` }])
+      }
       if (receipt.status === 'applied') recordStatus(spine, workdir,
         spine.isHalted() ? 'halted' : spine.isPaused() ? 'paused' : spine.next().status)
-      writeFileSync(join(workdir, '.refactory', 'graph-control-receipt.json'), JSON.stringify(receipt))
-      appendFileSync(join(workdir, '.refactory', 'events.jsonl'), JSON.stringify({ schema_version: 1,
-        run_id: resolve(workdir), invocation, at: new Date().toISOString(), kind: 'control',
-        state: receipt.status, summary: receipt.message }) + '\n')
-      unlinkSync(path)
+      if (receipt.status !== 'deferred') {
+        writeFileSync(join(workdir, '.refactory', 'graph-control-receipt.json'), JSON.stringify(receipt))
+        appendFileSync(join(workdir, '.refactory', 'events.jsonl'), JSON.stringify({ schema_version: 1,
+          run_id: resolve(workdir), invocation, at: new Date().toISOString(), kind: 'control',
+          state: receipt.status, summary: receipt.message }) + '\n')
+        unlinkSync(path)
+      }
     }
   }
 
@@ -1211,6 +1359,11 @@ export function apply(ctx: Context, config: Config): void {
     if (picked !== undefined) {
       if (labels.length > 0 && !labels.includes(picked.trim())) throw new Error(`gate ${gate} does not accept ${picked}`)
       verdict = picked.trim()
+      // Thread the answerer's note through as feedback, so the gate bridge
+      // can record it in the intent ledger.
+      if (typeof chosen.custom === 'string' && chosen.custom.trim() !== '') {
+        feedback = chosen.custom.trim()
+      }
     } else {
       const typed = (chosen.custom ?? '').trim()
       const read = readGateAnswer(typed, labels)
@@ -1710,6 +1863,18 @@ export function apply(ctx: Context, config: Config): void {
       },
     }))
   }
+
+  // Populate childToParent for write-confinement (#347, C0). Registered before
+  // the CEO deny guard so the map is ready before any restriction is applied.
+  ctx.on('agent/created', ({ agent }) => {
+    const parentId = agent.session.header.parentSession
+    if (parentId !== undefined) {
+      childToParent.set(String(agent.session.id), String(parentId))
+    }
+  })
+  ctx.on('agent/disposed', ({ agent }) => {
+    childToParent.delete(String(agent.session.id))
+  })
 
   // The drift-free guard. At `agent/created` the CEO (a top-level agent, never
   // a subagent) of THIS composition loses the coding/external tools on its own

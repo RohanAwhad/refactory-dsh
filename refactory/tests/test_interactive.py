@@ -244,6 +244,291 @@ def test_run_warnings_says_nothing_when_no_step_warned(tmp_path):
     assert interactive.run_warnings(tmp_path) == ""
 
 
+def test_headless_prints_gate_commands_when_stopped_at_user_gate(monkeypatch, tmp_path, capsys):
+    """In headless mode, when a run stops at a user gate, print the exact
+    steer --verdict and graph-control resume commands once, from interactive.py.
+    """
+    from refactory_dsh import workers
+
+    workdir = tmp_path / "run"
+
+    class _Run:
+        returncode = 1
+
+    def _graph(argv, **kwargs):
+        # Write spine-status showing refused at the user gate
+        (workdir / ".refactory").mkdir(parents=True, exist_ok=True)
+        (workdir / ".refactory" / "spine-status.json").write_text(
+            json.dumps({"status": "refused", "nodes": ["approve"],
+                        "error": "gate approve is answered by a person"})
+        )
+        return _Run()
+
+    monkeypatch.setattr(workers, "run_graph_command", _graph)
+    code = interactive.run(
+        WITH_A_GATE, workdir=workdir, project=ROOT, headless=True,
+    )
+    assert code == 1
+    captured = capsys.readouterr()
+    assert "approve is waiting for a person" in captured.err
+    assert f"refactory steer --run {workdir} --verdict approve=" in captured.err
+    assert f"refactory graph-control resume --run {workdir}" in captured.err
+    assert "proceed" in captured.err or "halt" in captured.err
+
+
+def test_note_recorded_as_correction_with_reloop(tmp_path):
+    """A reloop verdict with a note records the note as a `correction` entry."""
+    ledger = steering.Ledger.seed(tmp_path, "test intent")
+    # Simulate what steering.main() does for an answer with feedback on reloop
+    gate = "approve"
+    reads = ["draft.md"]
+    review = ledger.visit(gate, reads)
+    ledger.verdict(gate, "reloop", review=review, answered=True)
+    ledger.note("correction", "Please fix the approach")
+    entries = ledger.entries()
+    corrections = [e for e in entries if e["kind"] == "correction"]
+    assert len(corrections) == 1
+    assert "Please fix the approach" in corrections[0]["text"]
+
+
+def test_note_recorded_as_constraint_with_proceed(tmp_path):
+    """A proceed verdict with a note records the note as a `constraint` entry."""
+    ledger = steering.Ledger.seed(tmp_path, "test intent")
+    gate = "approve"
+    reads = ["draft.md"]
+    review = ledger.visit(gate, reads)
+    ledger.verdict(gate, "proceed", review=review, answered=True)
+    ledger.note("constraint", "Must keep backward compatibility")
+    entries = ledger.entries()
+    constraints = [e for e in entries if e["kind"] == "constraint"]
+    assert len(constraints) == 1
+    assert "Must keep backward compatibility" in constraints[0]["text"]
+
+
+def test_brief_echo_shortened_to_first_line(monkeypatch, capsys):
+    """A multi-line brief prints only its first line, truncated."""
+    from refactory_dsh import cli
+
+    long_brief = "First line of the brief\nSecond paragraph with details\nThird paragraph"
+    # Mock _forward to avoid actually running anything
+    monkeypatch.setattr(cli, "_forward", lambda *a, **k: 0)
+    assert cli.main(["ceo", long_brief, "--mode", "design", "--check", "echo ok"]) == 0
+    captured = capsys.readouterr()
+    assert "First line of the brief" in captured.err
+    assert "Second paragraph" not in captured.err
+    assert "Third paragraph" not in captured.err
+
+
+# ── A4: research scope ─────────────────────────────────────────────────
+
+
+def test_prepare_design_sets_scoped_for_refine_task(tmp_path, monkeypatch):
+    """prepare_design with task.refine truthy → research_scope='scoped'."""
+    from refactory_dsh import delivery, design_ops, repo_change, sandbox
+    monkeypatch.setattr(repo_change, "wants_worktree", lambda ctx: False)
+    monkeypatch.setattr(repo_change, "locate",
+                        lambda ctx, name, task, **kw: {
+                            "source": str(tmp_path), "check_root": str(tmp_path),
+                            "artifact": str(tmp_path), "branch": "", "change": "",
+                        })
+    monkeypatch.setattr(sandbox, "model_readiness", lambda *a, **kw: {})
+    monkeypatch.setattr(delivery, "plan_run",
+                        lambda ctx, *, task: {"delivery": "test", "delivery_plan": {}})
+    from types import SimpleNamespace
+    workdir = tmp_path / "run"
+    workdir.mkdir(exist_ok=True)
+    task = {"name": "test_artifact", "brief": "Make the widget better",
+            "check": "python -m pytest -q",
+            "refine": "https://github.com/example/repo/pull/1"}
+    ctx = SimpleNamespace(
+        task=task,
+        knob=lambda name, default="": task.get(name, default),
+        workdir=workdir,
+        model=None,
+        write_json=lambda name, data: (workdir / name).write_text(json.dumps(data)),
+        write_text=lambda name, text: (workdir / name).write_text(text),
+        read_text=lambda name: (workdir / name).read_text()
+            if (workdir / name).exists() else "",
+        exists=lambda name: (workdir / name).exists(),
+        set_fact=lambda name, value: None,
+        facts={},
+    )
+    result = design_ops.prepare_design(ctx, deliver=True, in_worktree=False)
+    assert result["research_scope"] == "scoped"
+
+
+def test_prepare_design_sets_scoped_for_refine_without_file_in_brief(tmp_path, monkeypatch):
+    """A refine run whose brief names no file still gets research_scope 'scoped'."""
+    from refactory_dsh import delivery, design_ops, repo_change, sandbox
+    monkeypatch.setattr(repo_change, "wants_worktree", lambda ctx: False)
+    monkeypatch.setattr(repo_change, "locate",
+                        lambda ctx, name, task, **kw: {
+                            "source": str(tmp_path), "check_root": str(tmp_path),
+                            "artifact": str(tmp_path), "branch": "", "change": "",
+                        })
+    monkeypatch.setattr(sandbox, "model_readiness", lambda *a, **kw: {})
+    monkeypatch.setattr(delivery, "plan_run",
+                        lambda ctx, *, task: {"delivery": "test", "delivery_plan": {}})
+    from types import SimpleNamespace
+    workdir = tmp_path / "run"
+    workdir.mkdir(exist_ok=True)
+    task = {"name": "polish_ui", "brief": "Make the spacing more consistent",
+            "check": "python -m pytest -q",
+            "refine": "https://github.com/example/repo/pull/42"}
+    ctx = SimpleNamespace(
+        task=task,
+        knob=lambda name, default="": task.get(name, default),
+        workdir=workdir,
+        model=None,
+        write_json=lambda name, data: (workdir / name).write_text(json.dumps(data)),
+        write_text=lambda name, text: (workdir / name).write_text(text),
+        read_text=lambda name: (workdir / name).read_text()
+            if (workdir / name).exists() else "",
+        exists=lambda name: (workdir / name).exists(),
+        set_fact=lambda name, value: None,
+        facts={},
+    )
+    result = design_ops.prepare_design(ctx, deliver=True, in_worktree=False)
+    assert result["research_scope"] == "scoped"
+
+
+def test_prepare_design_sets_scoped_for_brief_with_file_extension(
+        tmp_path, monkeypatch):
+    """A brief naming worker_observer.mjs → research_scope='scoped'."""
+    from refactory_dsh import design_ops, repo_change, sandbox
+    monkeypatch.setattr(repo_change, "wants_worktree", lambda ctx: False)
+    monkeypatch.setattr(repo_change, "locate",
+                        lambda ctx, name, task, **kw: {
+                            "source": str(tmp_path), "check_root": str(tmp_path),
+                            "artifact": str(tmp_path), "branch": "", "change": "",
+                        })
+    monkeypatch.setattr(sandbox, "model_readiness", lambda *a, **kw: {})
+    from types import SimpleNamespace
+    workdir = tmp_path / "run"
+    workdir.mkdir(exist_ok=True)
+    task = {"name": "fix_observer",
+            "brief": "Fix worker_observer.mjs to emit tokens_delta",
+            "check": "python -m pytest -q"}
+    ctx = SimpleNamespace(
+        task=task,
+        knob=lambda name, default="": task.get(name, default),
+        workdir=workdir,
+        model=None,
+        write_json=lambda name, data: (workdir / name).write_text(json.dumps(data)),
+        write_text=lambda name, text: (workdir / name).write_text(text),
+        read_text=lambda name: (workdir / name).read_text()
+            if (workdir / name).exists() else "",
+        exists=lambda name: (workdir / name).exists(),
+        set_fact=lambda name, value: None,
+        facts={},
+    )
+    result = design_ops.prepare_design(ctx, deliver=False)
+    assert result["research_scope"] == "scoped"
+
+
+def test_prepare_design_sets_full_for_plain_prose(tmp_path, monkeypatch):
+    """'Make the UI better.' — period is not a file extension → 'full'."""
+    from refactory_dsh import design_ops, repo_change, sandbox
+    monkeypatch.setattr(repo_change, "wants_worktree", lambda ctx: False)
+    monkeypatch.setattr(repo_change, "locate",
+                        lambda ctx, name, task, **kw: {
+                            "source": str(tmp_path), "check_root": str(tmp_path),
+                            "artifact": str(tmp_path), "branch": "", "change": "",
+                        })
+    monkeypatch.setattr(sandbox, "model_readiness", lambda *a, **kw: {})
+    from types import SimpleNamespace
+    workdir = tmp_path / "run"
+    workdir.mkdir(exist_ok=True)
+    task = {"name": "ui_improvement",
+            "brief": "Make the UI better.",
+            "check": "python -m pytest -q"}
+    ctx = SimpleNamespace(
+        task=task,
+        knob=lambda name, default="": task.get(name, default),
+        workdir=workdir,
+        model=None,
+        write_json=lambda name, data: (workdir / name).write_text(json.dumps(data)),
+        write_text=lambda name, text: (workdir / name).write_text(text),
+        read_text=lambda name: (workdir / name).read_text()
+            if (workdir / name).exists() else "",
+        exists=lambda name: (workdir / name).exists(),
+        set_fact=lambda name, value: None,
+        facts={},
+    )
+    result = design_ops.prepare_design(ctx, deliver=False)
+    assert result["research_scope"] == "full"
+
+
+def _gate_ctx(tmp_path, *, research_scope, direction_count):
+    """A context for gate_research with the specified scope and N directions."""
+    from types import SimpleNamespace
+    workdir = tmp_path / "run"
+    workdir.mkdir(exist_ok=True)
+    entries = [
+        {"focus": f"direction {i+1}", "slug": f"dir-{i+1}",
+         "finding": f"Finding {i+1}"}
+        for i in range(direction_count)
+    ]
+    (workdir / "research-plan.json").write_text(json.dumps(entries))
+    research_dir = workdir / "research"
+    research_dir.mkdir(exist_ok=True)
+    for entry in entries:
+        (research_dir / f"{entry['slug']}.md").write_text(
+            f"# {entry['focus']}\n{entry['finding']}\n")
+    facts = {"research_scope": research_scope, "research_attempts_used": 0}
+    return SimpleNamespace(
+        workdir=workdir,
+        knob=lambda name, default="": {"research_attempts": 3}.get(name, default),
+        read_text=lambda name: (workdir / name).read_text()
+            if (workdir / name).exists() else "",
+        exists=lambda name: (workdir / name).exists(),
+        write_text=lambda name, text: (workdir / name).write_text(text),
+        set_fact=lambda name, value: facts.update({name: value}),
+        facts=facts,
+    )
+
+
+def test_gate_research_accepts_two_directions_when_scoped(tmp_path):
+    """gate_research with research_scope='scoped' and 2 directions → proceed."""
+    from refactory_dsh import create_ops
+    ctx = _gate_ctx(tmp_path, research_scope="scoped", direction_count=2)
+    verdict = create_ops.gate_research(ctx)
+    assert verdict == "proceed"
+
+
+def test_gate_research_refuses_two_directions_when_full(tmp_path):
+    """gate_research with research_scope='full' and 2 directions → refusal."""
+    from refactory_dsh import create_ops
+    from refactory_dsh.nn import Verdict
+    ctx = _gate_ctx(tmp_path, research_scope="full", direction_count=2)
+    verdict = create_ops.gate_research(ctx)
+    assert isinstance(verdict, Verdict)
+    assert "three to five" in str(verdict.reason)
+
+
+def test_gate_research_refuses_zero_directions_when_scoped(tmp_path):
+    """gate_research with research_scope='scoped' and 0 entries → refusal."""
+    from refactory_dsh import create_ops
+    from refactory_dsh.nn import Verdict
+    ctx = _gate_ctx(tmp_path, research_scope="scoped", direction_count=0)
+    verdict = create_ops.gate_research(ctx)
+    # 0 entries means _plan() returned empty list, so the error is the JSON array check
+    assert isinstance(verdict, Verdict)
+
+
+def test_gate_research_reads_facts_not_knobs(tmp_path):
+    """gate_research reads ctx.facts, NOT ctx.knob('research_scope', ...).
+
+    The _gate_ctx does NOT set research_scope as a knob. If gate_research
+    called ctx.knob('research_scope', 'full'), it would get 'full' (the
+    dict does not contain it), and a 2-direction scoped plan would be refused.
+    """
+    from refactory_dsh import create_ops
+    ctx = _gate_ctx(tmp_path, research_scope="scoped", direction_count=2)
+    verdict = create_ops.gate_research(ctx)
+    assert verdict == "proceed"
+
+
 @pytest.mark.parametrize("returncode", [0, 1])
 def test_a_cli_run_lists_its_warnings_when_it_ends(monkeypatch, tmp_path, capsys, returncode):
     """`refactory ceo` runs the configured graph, where nobody is made to read `ran`.

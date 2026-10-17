@@ -13,11 +13,21 @@ its report.
 from __future__ import annotations
 
 import json
+import re as _re
 from typing import Any
 
 from refactory_dsh import delivery, repo_change, sandbox, worktree
 
+_FILE_EXT_RE = _re.compile(
+    r'\b[\w/.-]+\.(?:py|ts|js|mjs|cjs|jsx|tsx|json|md|yaml|yml|toml|go|rs|rb|java|c|cpp|h|sh|css|html)\b'
+)
+
 STAGING = "staging"
+
+#: Planning steps that must not change the target or the worktree (#347).
+#: They write only into the run directory; a change they make to the target
+#: or the worktree fails the step and names what changed.
+PLANNING_STEPS = ('research_director', 'strategy_director', 'synthesize_strategy', 'design_doc')
 
 #: The op design's materialise node called before it moved to `repo_change` (#330): a run
 #: lowered then, such as one waiting at its approval gate, still names it.
@@ -61,7 +71,17 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
         # A refinement starts from its pull request's head, in a clone of its repository.
         task = delivery.refine_task(ctx, task)
     located = repo_change.locate(ctx, name, task, in_worktree=in_worktree,
-                                 needs_worktree=("refine",) if deliver else ())
+                                 needs_worktree=("refine",) if deliver else (),
+                                 output_only=PLANNING_STEPS)
+
+    # Compute research_scope: 'scoped' for --refine or briefs naming files.
+    if str(task.get("refine") or "").strip():
+        research_scope = "scoped"
+    elif _FILE_EXT_RE.search(brief):
+        research_scope = "scoped"
+    else:
+        research_scope = "full"
+
     # Match create/edit: inspect the exact nested route before launching research.
     # Other ModelClient implementations retain their own readiness contract.
     from refactory_dsh.model import DshModelClient
@@ -85,7 +105,7 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
 
     planned = delivery.plan_run(ctx, task=task) if deliver else {}
     return {"name": name, "brief": brief, "check": check, "validation": "(no check has run yet)",
-            "research_review": "(no research review has run yet)",
+            "research_review": "(no research review has run yet)", "research_scope": research_scope,
             "design_review_feedback": "(no design review has run yet)",
             "design_review_findings": "(none: the design review passed)",
             **UNREFUSED, **located, **planned}

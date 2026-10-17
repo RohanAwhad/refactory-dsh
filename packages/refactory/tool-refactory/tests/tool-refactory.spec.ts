@@ -475,6 +475,27 @@ describe('renderResult', () => {
       .toContain('epoch 0, generation 0, 0 evaluation(s)')
   })
 
+  it('renders owner_alive and a failed graph control in status', () => {
+    const alive = rendered('status', { run_id: 'r1', state: 'running', owner_alive: true })
+    expect(alive).toContain('Owner process is alive.')
+    const dead = rendered('status', { run_id: 'r1', state: 'failed', owner_alive: false })
+    expect(dead).toContain('Owner process is not alive.')
+    // owner_alive absent → no line
+    expect(rendered('status', { run_id: 'r1', state: 'running' })).not.toContain('Owner process')
+    // failed control receipt in activity.control
+    const failed = rendered('status', {
+      run_id: 'r1', state: 'running',
+      activity: { control: { status: 'failed', action: 'rerun', message: 'stale revision' } },
+    })
+    expect(failed).toContain('last graph control rerun failed: stale revision')
+    // applied control → no failure line
+    const applied = rendered('status', {
+      run_id: 'r1', state: 'running',
+      activity: { control: { status: 'applied', action: 'rerun', message: 'ok' } },
+    })
+    expect(applied).not.toContain('last graph control')
+  })
+
   it('renders a leaderboard, saying a row with no score scored nothing', () => {
     expect(rendered('leaderboard', 'nope')).toContain('0 candidate(s)')
     expect(rendered('leaderboard', ['nope', { id: 'x' }])).toContain('- x scored nothing')

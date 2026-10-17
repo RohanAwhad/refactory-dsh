@@ -161,8 +161,11 @@ class CreateFastMode(CreateMode):
                 "and canonical runtime validation follow. Emit the whole package as file "
                 "blocks introduced by ===FILE: <relative path>===, starting with __init__.py "
                 "containing PACKAGE = nn.Package(...). Paths are relative to the package root, "
-                "never prefixed with the package name. Write those blocks to emit.txt, then "
-                "return a short completion message. Materialization, registration, structural "
+                "never prefixed with the package name. Write those blocks to emit.txt. "
+                "Write nothing but emit.txt: do not apply or test your change anywhere — "
+                "the target, the run's worktree or a copy — because materialise and the "
+                "check do that after you answer and send you the result. Then return a "
+                "short completion message. Materialization, registration, structural "
                 "admission, the requested check and canonical smoke belong to later runtime "
                 "nodes; do not invoke them or locate their implementation during emission."
             ), reads=("brief.json", "survey.json", "repair.txt", "validation.txt")
@@ -238,8 +241,8 @@ class DesignFastMode(DesignMode):
             knobs=("name", "brief", "check", "source_project", *repo_change.knob_names()),
             writes=("brief.json", "source-manifest.json", "repair.txt", "research-review.txt", "check.txt",
                     "reviews/design-review-feedback.txt"),
-            produces=("name", "brief", "check", "validation", "research_review", "qa_gate", "overwatch_review",
-                      "design_review_feedback", "design_review_findings",
+            produces=("name", "brief", "check", "validation", "research_review", "research_scope", "qa_gate",
+                      "overwatch_review", "design_review_feedback", "design_review_findings",
                       "source_project", "source_files", "repair_feedback", "repairs_used",
                       *repo_change.produces()),
             notes="read the artifact brief, and say where the run works",
@@ -258,11 +261,13 @@ class DesignFastMode(DesignMode):
                 "worker receipts, graph configuration or prior acceptance histories to rediscover it. "
                 "Do not delegate or launch research, reviewer agents or an optimizer.\n"
                 "{{emit_scope}}\n"
-                "Write those blocks into emit.txt, with no prose outside them. Do not create or change "
-                "the files themselves: the materialise step applies emit.txt, and tells the next "
-                "attempt if it could not. The runtime runs the requested check and one focused QA "
-                "review next. Preserve all requested behavior. After writing emit.txt, return a "
-                "short completion message. Do not invoke downstream graph operations yourself."
+                "Write those blocks into emit.txt, with no prose outside them. Write nothing "
+                "but emit.txt: do not apply or test your change anywhere — the target, the "
+                "run's worktree or a copy — because materialise and the check do that after "
+                "you answer and send you the result. The runtime runs the requested check "
+                "and one focused QA review next. Preserve all requested behavior. After "
+                "writing emit.txt, return a short completion message. Do not invoke "
+                "downstream graph operations yourself."
             ), reads=("brief.json", "source-manifest.json", "implementation-plan.txt", "repair.txt"),
             writes=("emit.txt",), produces=("emit",), notes="implement the small artifact/change directly",
         ))

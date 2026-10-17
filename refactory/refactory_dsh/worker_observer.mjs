@@ -14,12 +14,13 @@ export function apply(ctx) {
   let incompleteNestedUsage = false
   const calls = []
   const nativeObservations = []
+  let lastDelta = null
   function usage() {
     const known = calls.reduce((sum, call) => sum + call.tokens, 0)
     return incompleteNestedUsage
-      ? { status: 'unavailable', tokens: null, known_tokens: known, calls,
+      ? { status: 'unavailable', tokens: null, known_tokens: known, tokens_delta: lastDelta, calls,
         incomplete_nested_usage: true, reason: 'A delegated runtime has incomplete nested token coverage.' }
-      : { status: 'measured', tokens: known, calls }
+      : { status: 'measured', tokens: known, tokens_delta: lastDelta, calls }
   }
   function save(patch, state, summary) {
     const receipt = { ...JSON.parse(readFileSync(path, 'utf8')), ...patch }
@@ -114,9 +115,11 @@ export function apply(ctx) {
       streams.delete(agent.session.id)
       return
     }
+    lastDelta = total
     calls.push({ session_id: agent.session.id, tokens: total })
     save({ usage: usage() },
       'usage', `Measured ${total} tokens`)
+    lastDelta = null
     streams.delete(agent.session.id)
   })
   ctx.on('subagent/start', info => {

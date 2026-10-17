@@ -140,6 +140,7 @@ def snapshot(root: Path, *, after: int = 0) -> dict[str, Any]:
     return {'schema_version': 1, 'run_id': str(root), 'invocation': invocation.get('id'),
             'events': history, 'cursor': cursor, 'last_event_at': all_events[-1].get('at') if all_events else None,
             'started_at': invocation.get('started'), 'nodes': nodes, 'completed': completed,
+            'running_nodes': spine.get('running_nodes'),
             'graph': graph_snapshot(root),
             'wait_reason': wait, 'workers': workers, 'deliveries': supplied,
             'resources': read(root / '.refactory/resource-usage.json') or None,
