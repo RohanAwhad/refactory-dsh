@@ -87,7 +87,7 @@ def test_prepare_records_the_targets_commit_branch_and_uncommitted_changes(targe
     assert recorded["head"] == _git(target, "rev-parse", "HEAD")
     assert recorded["branch"] == "main"
     assert list(recorded["changes"]) == ["app.py"], "the dirty state is part of the baseline"
-    assert recorded["output_only"] == ["emit"]
+    assert recorded["output_only"] == ["emit", *design_ops.PLANNING_STEPS]
 
 
 def test_a_later_step_warns_when_the_target_moved_since_prepare(target, tmp_path, capsys):

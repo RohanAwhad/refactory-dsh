@@ -609,10 +609,15 @@ def test_an_emit_that_edits_the_checkout_the_run_started_from_is_refused(repo, t
 
 
 def test_a_worktree_run_does_not_warn_that_the_persons_checkout_moved(repo, tmp_path, capsys):
-    """Its base is pinned, so the person working in their checkout meanwhile changes nothing it sees."""
+    """Its base is pinned, so the person working in their checkout meanwhile changes nothing it sees.
+
+    The edit happens during the overwatch (a review step, not output-only), because
+    planning steps are now output-only (#347) and the target guard cannot tell a
+    person's edit from the agent's.
+    """
     class Moving(FakeModel):
         def complete(self, prompt: str, *, system: str = "", workdir: object = None) -> str:
-            if "You are the research director" in prompt:
+            if "You are the overwatch" in prompt:
                 (repo / "app.py").write_text("print('the person kept working')\n")
             return super().complete(prompt, system=system, workdir=workdir)
 
