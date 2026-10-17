@@ -349,6 +349,14 @@ export function renderResult(args: Args, value: unknown): ContentBlock[] {
       lines.push(`Wrote ${scalar(data.mode)} from ${scalar(data.adopted_from)} at ${scalar(data.package_root)}.`)
       lines.push(`The adopted mode scored ${typeof data.score === 'number' ? String(data.score) : 'nothing'}; the source is untouched.`)
       break
+    case 'graph-control': {
+      const receipt = isRecord(data.last_failed_receipt) ? data.last_failed_receipt : undefined
+      if (receipt !== undefined && receipt.status === 'failed') {
+        lines.push(`last graph control ${scalar(receipt.action)} failed: ${scalar(receipt.message)}`)
+      }
+      lines.push(JSON.stringify(value, null, 2))
+      break
+    }
     case 'registry':
     case 'create':
     case 'edit':
