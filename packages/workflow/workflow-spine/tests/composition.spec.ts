@@ -16,6 +16,7 @@ import UserQuestionService from '@deepseek-ai/dsh-user-questions'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { afterEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import * as spinePlugin from '../src/index.ts'
+import { Spine } from '../src/spine.ts'
 import type { Config } from '../src/index.ts'
 import type { WorkflowGraph } from '../src/types.ts'
 
@@ -217,6 +218,154 @@ describe('the cursor status a run leaves behind', () => {
     ctx.provide('shell', shell(executed))
     await expect(call(ctx, 'wf_next')).rejects.toThrow(/Cannot persist graph recovery checkpoint/)
     expect(executed).not.toHaveBeenCalled()
+  })
+})
+
+describe('incomplete cursor drain through the plugin', () => {
+  it('records halted in spine-status.json when cursor empties short of the end', async () => {
+    const workdir = scratch()
+    // Graph: a → b, where b is a sink. We mount with executeCommands: false
+    // so we control completion manually.
+    const graph: WorkflowGraph = {
+      name: 'incomplete',
+      start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', writes: [], reads: [] },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', writes: [], reads: [] },
+      },
+      edges: [{ source: 'a', target: 'b' }],
+    }
+    const { ctx } = await mount({ workdir, graph })
+    // Write the first status checkpoint
+    await call(ctx, 'wf_next')
+    // Complete a, then restore a checkpoint with empty cursor and b not completed
+    await call(ctx, 'wf_done', { node: 'a' })
+    // Now b is due. Advance the cursor by skipping b, but b is the sink so
+    // we need a different approach. Instead, save/restore a checkpoint with
+    // cursor=[] to simulate the short drain.
+    // Use wf_next to write a checkpoint, then tamper with it, then use a fresh mount.
+    await call(ctx, 'wf_next')
+    const { readFileSync, writeFileSync: wfs } = await import('node:fs')
+    const { join } = await import('node:path')
+    const cpPath = join(workdir, '.refactory', 'spine-checkpoint.json')
+    const cp = JSON.parse(readFileSync(cpPath, 'utf8'))
+    // Tamper: empty cursor, b not completed (only a is completed)
+    cp.state.cursor = []
+    cp.state.completed = ['a']
+    wfs(cpPath, JSON.stringify(cp))
+    // Write a resume-request.json so restoreRequested reads this checkpoint
+    const { createHash } = await import('node:crypto')
+    const checkpointBytes = readFileSync(cpPath)
+    const sha = createHash('sha256').update(checkpointBytes).digest('hex')
+    wfs(join(workdir, '.refactory', 'resume-request.json'), JSON.stringify({
+      checkpoint_sha256: sha,
+    }))
+    // Mount fresh with the same graph; restoreRequested will restore the tampered checkpoint
+    const root2 = new Context()
+    await root2.plugin(SystemPrompt)
+    await root2.plugin(ToolRuntime)
+    await root2.plugin(spinePlugin, config({ workdir, graph }))
+    // Call wf_next — the cursor is empty, b was never completed, so it should halt
+    const result = await call(root2, 'wf_next') as { status: string; halted?: { reason: string; unreached?: string[] } }
+    expect(result.status).toBe('done')
+    expect(result.halted).toBeDefined()
+    expect(result.halted!.reason).toBe('incomplete')
+    expect(result.halted!.unreached).toEqual(['b'])
+    // spine-status.json should record halted
+    const statusPath = join(workdir, '.refactory', 'spine-status.json')
+    const status = JSON.parse(readFileSync(statusPath, 'utf8'))
+    expect(status.status).toBe('halted')
+  })
+})
+
+describe('gate reason composition through applyControls', () => {
+  it('rerun without text shows the gate reason; with text, reason then text; after proceed, no reason', async () => {
+    const workdir = scratch()
+    const graph: WorkflowGraph = {
+      name: 'gate-reason',
+      start_node: 'emit',
+      nodes: {
+        emit: { _type: 'AgentNode', id: 'emit', role: 'builder', prompt_template: 'E', writes: [], reads: [] },
+        check: { _type: 'GateNode', id: 'check', evaluator_type: 'fn', evaluator_command: 'true', reads: [], max_iterations: 1 },
+        done_node: { _type: 'FnNode', id: 'done_node', writes: [], command: '' },
+      },
+      edges: [
+        { source: 'emit', target: 'check' },
+        { source: 'check', target: 'emit', condition: 'reloop' },
+        { source: 'check', target: 'done_node', condition: 'proceed' },
+      ],
+    }
+    const { ctx } = await mount({ workdir, graph })
+    // Drive to halt: emit → check reloop → emit → check reloop (halts at max_iterations)
+    await call(ctx, 'wf_next')     // emit is due
+    await call(ctx, 'wf_done', { node: 'emit' })
+    await call(ctx, 'wf_next')     // check is due
+    await call(ctx, 'wf_verdict', { gate: 'check', verdict: 'reloop', feedback: 'fix the formatting' })
+    await call(ctx, 'wf_next')     // emit is due (reloop)
+    await call(ctx, 'wf_done', { node: 'emit' })
+    await call(ctx, 'wf_next')     // check is due
+    await call(ctx, 'wf_verdict', { gate: 'check', verdict: 'reloop', feedback: 'still wrong' })
+    // Now halted at max_iterations
+    const halted = await call(ctx, 'wf_next') as { status: string; halted?: { reason: string } }
+    expect(halted.status).toBe('done')
+    expect(halted.halted?.reason).toBe('max_iterations')
+    // Write a checkpoint for the revision
+    const { readFileSync, writeFileSync: wfs, mkdirSync: md, existsSync: exists } = await import('node:fs')
+    const { join, resolve } = await import('node:path')
+    const { createHash } = await import('node:crypto')
+    const cpBytes = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
+    const revision = createHash('sha256').update(cpBytes).digest('hex')
+    // Queue a rerun control without text
+    const directory = join(workdir, '.refactory', 'graph-controls')
+    md(directory, { recursive: true })
+    wfs(join(workdir, '.refactory', 'invocation.json'), JSON.stringify({ id: null }))
+    wfs(join(directory, '1.json'), JSON.stringify({
+      id: '1', action: 'rerun', target: 'emit', text: '',
+      revision, run_id: resolve(workdir), invocation: null,
+      status: 'queued',
+    }))
+    // Call wf_next — applyControls should apply the rerun and compose the gate reason
+    const result = await call(ctx, 'wf_next') as { status: string; nodes: Array<{ id: string }>; feedback?: Record<string, string> }
+    expect(result.status).toBe('ready')
+    expect(result.nodes.some(n => n.id === 'emit')).toBe(true)
+    // Without rerun text, the gate's reason alone is the feedback
+    expect(result.feedback?.emit).toBe('still wrong')
+    // Now test with rerun text: complete emit, drive back to halt, then rerun with text
+    await call(ctx, 'wf_done', { node: 'emit' })
+    await call(ctx, 'wf_next')     // check is due
+    await call(ctx, 'wf_verdict', { gate: 'check', verdict: 'reloop', feedback: 'third refusal' })
+    // Halted again (iteration counter was reset by person's rerun)
+    const cpBytes2 = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
+    const revision2 = createHash('sha256').update(cpBytes2).digest('hex')
+    wfs(join(directory, '2.json'), JSON.stringify({
+      id: '2', action: 'rerun', target: 'emit', text: 'try a different approach',
+      revision: revision2, run_id: resolve(workdir), invocation: null,
+      status: 'queued',
+    }))
+    const result2 = await call(ctx, 'wf_next') as { status: string; feedback?: Record<string, string> }
+    // With rerun text, gate reason first then rerun text
+    const fb = result2.feedback?.emit ?? ''
+    expect(fb).toContain('third refusal')
+    expect(fb).toContain('try a different approach')
+    expect(fb.indexOf('third refusal')).toBeLessThan(fb.indexOf('try a different approach'))
+
+    // Now test after gate proceeded: complete emit, check proceeds, rerun should show no old reason
+    await call(ctx, 'wf_done', { node: 'emit' })
+    await call(ctx, 'wf_next')     // check is due
+    await call(ctx, 'wf_verdict', { gate: 'check', verdict: 'proceed' })
+    await call(ctx, 'wf_next')     // done_node
+    await call(ctx, 'wf_done', { node: 'done_node' })
+    // Now done. Redo emit after gate proceeded.
+    const cpBytes3 = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
+    const revision3 = createHash('sha256').update(cpBytes3).digest('hex')
+    wfs(join(directory, '3.json'), JSON.stringify({
+      id: '3', action: 'rerun', target: 'emit', text: '',
+      revision: revision3, run_id: resolve(workdir), invocation: null,
+      status: 'queued',
+    }))
+    const result3 = await call(ctx, 'wf_next') as { status: string; feedback?: Record<string, string> }
+    // After gate proceeded, no old reason
+    expect(result3.feedback?.emit).toBeUndefined()
   })
 })
 

@@ -76,6 +76,32 @@ def test_smoke_refuses_a_mode_that_calls_a_model_naming_the_command_that_works()
     assert cli._smoke_without_a_model("not/a_mode") == ""
 
 
+def test_status_shows_halted_for_incomplete_drain(tmp_path):
+    """An incomplete-drain halt makes refactory status report the run as halted and finished.
+
+    The path from spine halt to non-zero exit: recordStatus() (index.ts:1241)
+    writes 'halted' to spine-status.json when spine.isHalted() or when the
+    next() result has a halted field; the graph runner (packages/bundle/graph)
+    exits non-zero for halted; refactory ceo (interactive.py:327) returns that code.
+    """
+    run_dir = tmp_path / "incomplete_run"
+    run_dir.mkdir()
+    ref = run_dir / ".refactory"
+    ref.mkdir()
+    (ref / "spine-status.json").write_text(json.dumps({
+        "status": "halted",
+        "nodes": [],
+        "completed": ["emit", "check"],
+        "running_nodes": [],
+    }))
+    (ref / "spine-checkpoint.json").write_text(json.dumps({"owner_pid": os.getpid()}))
+    (run_dir / "facts.json").write_text(json.dumps({"name": "test_halt"}))
+
+    result = _console_mod.status(run_dir)
+    assert result["state"] == "halted"
+    assert result["finished"] is True
+
+
 def test_the_read_verbs_pass_their_flags_through():
     """`refactory status --run X` is the console's own command, flags and all.
 

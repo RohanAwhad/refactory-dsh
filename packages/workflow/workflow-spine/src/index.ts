@@ -880,7 +880,12 @@ export function apply(ctx: Context, config: Config): void {
             runtimeBridge(`${dataCommand} reset`, workdir, env, { ...plan, state, archiveArtifacts: true })
           }
           spine.redo(target)
-          if (typeof request.text === 'string' && request.text.trim() !== '') spine.setFeedback(target, request.text)
+          const gateReason = spine.gateReasonFor(target)
+          const rerunText = typeof request.text === 'string' && request.text.trim() !== '' ? request.text.trim() : ''
+          if (gateReason !== undefined || rerunText !== '') {
+            const parts = [gateReason, rerunText].filter(Boolean)
+            spine.setFeedback(target, parts.join('\n\n'))
+          }
           if (plan.resetPass) materialised.delete(spine)
           receipt.message = `Reopened ${target}; invalidated ${plan.nodes.join(', ')}; prior evidence archived.`
         } else throw new Error('unsupported graph control')
@@ -1238,7 +1243,8 @@ export function apply(ctx: Context, config: Config): void {
         if (node._type === 'GateNode' && node.gate_prompt !== undefined) node.gate_prompt = withFacts(node.gate_prompt, workdir)
       }
     }
-    recordStatus(spine, workdir, spine.isHalted() ? 'halted' : spine.isPaused() ? 'paused' : next.status === 'done' ? 'done' : 'ready')
+    const nextHalt = next.status === 'done' && (next as { halted?: { reason: string } }).halted !== undefined
+    recordStatus(spine, workdir, nextHalt ? 'halted' : spine.isPaused() ? 'paused' : next.status === 'done' ? 'done' : 'ready')
     // The item being iterated travels with the node views, so the subagent for a
     // pass is handed the item rather than being sent to find it on disk. Under
     // `interactiveOpen` the node this call ran travels the same way, so the CEO
