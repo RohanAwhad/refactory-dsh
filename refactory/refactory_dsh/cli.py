@@ -653,7 +653,7 @@ def main(argv: list[str] | None = None) -> int:
         if verb in READABLE_VERBS and '--json' in argv:
             forward_argv = [arg for arg in argv if arg != '--json']
             return _forward('refactory_dsh.console', forward_argv)
-        if verb in READABLE_VERBS:
+        if verb in READABLE_VERBS and '--help' not in argv:
             import contextlib
             import io as _io
             buf = _io.StringIO()
@@ -667,7 +667,7 @@ def main(argv: list[str] | None = None) -> int:
                 except (json.JSONDecodeError, AttributeError, TypeError):
                     error_msg = ''
                 if error_msg:
-                    print(error_msg, file=sys.stderr)
+                    print(error_msg)
                 else:
                     print(raw, end='')
                 return code

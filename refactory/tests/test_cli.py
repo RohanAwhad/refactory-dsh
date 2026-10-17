@@ -80,8 +80,9 @@ def test_the_read_verbs_pass_their_flags_through():
     """
     result = _run("status", "--run", "/tmp/definitely-not-a-run")
     assert "unrecognized arguments" not in result.stderr
-    payload = json.loads(result.stdout[result.stdout.index("{"):])
-    assert payload["error"], "a missing run must be reported, not accepted"
+    # The readable path prints the error as text, not JSON.
+    assert result.returncode != 0
+    assert result.stdout, "a missing run must be reported, not accepted"
 
 
 def test_a_name_is_derived_from_what_was_asked_for():

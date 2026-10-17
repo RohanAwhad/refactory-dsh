@@ -231,13 +231,11 @@ def finish(workdir: Path, node: str, *, final_response: str | None = None,
     all_changes = fail_changes + warn_changes
     receipt = {key: value for key, value in record.items()
                if key not in ('prompt', 'target')}
-    receipt.update(finished=_now(),
-                   status='failed' if missing or fail_changes else 'delivered',
+    receipt.update(finished=_now(), status='failed' if missing or fail_changes else 'delivered',
                    delivery='context supplied; semantic compliance not verified',
                    artifacts=after, captured_final=captured,
                    final_response=str(ROOT / record['id'] / 'final-response.txt') if final_response is not None else None,
-                   missing_or_unchanged=missing,
-                   **({'target_changes': all_changes} if all_changes else {}),
+                   missing_or_unchanged=missing, **({'target_changes': all_changes} if all_changes else {}),
                    **({'set_aside': set_aside} if set_aside else {}))
     (directory / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
     if warn_changes:
