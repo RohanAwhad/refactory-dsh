@@ -770,6 +770,7 @@ export function apply(ctx: Context, config: Config): void {
       const runningNodes = views.map(v => ({ id: v.id, kind: nodeKind(v._type) }))
       const nodeList = runningNodes.map(n => `${n.id} (${n.kind})`).join(', ')
       const wait = status === 'paused' ? 'paused by user'
+        : status === 'halted' && detail !== undefined ? detail
         : status === 'waiting_user' || views.some(node => node._type === 'GateNode' && node.evaluator_type === 'user')
           ? `waiting for user gate: ${nodeList || 'user gate'}`
           : views.some(node =>
@@ -880,7 +881,12 @@ export function apply(ctx: Context, config: Config): void {
             runtimeBridge(`${dataCommand} reset`, workdir, env, { ...plan, state, archiveArtifacts: true })
           }
           spine.redo(target)
-          if (typeof request.text === 'string' && request.text.trim() !== '') spine.setFeedback(target, request.text)
+          const gateReason = spine.gateReasonFor(target)
+          const rerunText = typeof request.text === 'string' && request.text.trim() !== '' ? request.text.trim() : ''
+          if (gateReason !== undefined || rerunText !== '') {
+            const parts = [gateReason, rerunText].filter(Boolean)
+            spine.setFeedback(target, parts.join('\n\n'))
+          }
           if (plan.resetPass) materialised.delete(spine)
           receipt.message = `Reopened ${target}; invalidated ${plan.nodes.join(', ')}; prior evidence archived.`
         } else throw new Error('unsupported graph control')
@@ -1238,7 +1244,10 @@ export function apply(ctx: Context, config: Config): void {
         if (node._type === 'GateNode' && node.gate_prompt !== undefined) node.gate_prompt = withFacts(node.gate_prompt, workdir)
       }
     }
-    recordStatus(spine, workdir, spine.isHalted() ? 'halted' : spine.isPaused() ? 'paused' : next.status === 'done' ? 'done' : 'ready')
+    // A run that stopped short of its end says which nodes it never reached.
+    const halted = next.status === 'done' ? next.halted : undefined
+    const unreached = halted?.reason === 'incomplete' ? `never reached: ${(halted.unreached ?? []).join(', ')}` : undefined
+    recordStatus(spine, workdir, spine.isHalted() ? 'halted' : spine.isPaused() ? 'paused' : next.status === 'done' ? 'done' : 'ready', unreached)
     // The item being iterated travels with the node views, so the subagent for a
     // pass is handed the item rather than being sent to find it on disk. Under
     // `interactiveOpen` the node this call ran travels the same way, so the CEO

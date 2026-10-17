@@ -111,6 +111,14 @@ the queued rerun at its first boundary, and continues the run.
 `--resume` continues to refuse failed checkpoints. Only `graph-control rerun`
 with `--acknowledge-failure` starts an owner for a failed run.
 
+### Incomplete cursor drain
+
+A run whose cursor empties before reaching a graph sink — for example after
+a redo that dropped the work due, or a skip that bypassed the remaining
+path — halts with the names of the unreached sinks. The halt is visible in
+`refactory status` (state `halted`, finished) and makes `refactory ceo`
+exit non-zero.
+
 ### Forward-only invalidation
 
 Replaying a node invalidates only its forward path. Nodes reached exclusively
@@ -125,6 +133,17 @@ amendment. The feedback is shown to the driver, cleared when the agent
 completes, and superseded when a gate reloops with its own findings. A
 one-shot correction ("emit these two files and change nothing else") applies
 to that visit only and does not override a later review's repair.
+
+### Gate refusal reason persistence
+
+When a gate refused work and sent it back (reloop), or halted at its
+iteration limit, the gate's last refusal reason is preserved beside its
+verdicts. On a rerun of the node the gate sent work back to, that reason
+is shown as the node's feedback — the node sees what the gate said, even
+when the person reruns without `--text`. When the person supplies `--text`,
+the gate's reason appears first and the person's text follows it. A gate
+that proceeded clears its stored reason, so a rerun after a passed gate
+shows no stale refusal.
 
 ### CEO redo and attempt limits
 

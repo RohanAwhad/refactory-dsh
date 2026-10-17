@@ -76,7 +76,9 @@ export interface DataPass {
 /** A gate stopped the run, rather than completing an item branch. */
 export interface TerminalHalt {
   gate: string
-  reason: 'verdict' | 'max_iterations' | 'cancelled'
+  reason: 'verdict' | 'max_iterations' | 'cancelled' | 'incomplete'
+  /** Sink nodes the run never reached, when reason is 'incomplete'. */
+  unreached?: string[]
 }
 
 /**
@@ -333,6 +335,8 @@ export class Spine {
   private readonly successors: Record<string, string>
   private readonly log: string[]
   private readonly promptEdits: Set<string>
+  private readonly gateReasons: Record<string, { reason: string; at: number }>
+  private gateReasonSeq: number
   private pass: DataPass | undefined
   private halted: TerminalHalt | undefined
   private readonly pauseBoundaries = new Set<string>()
@@ -354,6 +358,8 @@ export class Spine {
     this.successors = {}
     this.log = []
     this.promptEdits = new Set()
+    this.gateReasons = {}
+    this.gateReasonSeq = 0
     this.retryEdges()
   }
 
@@ -539,12 +545,40 @@ export class Spine {
     }
   }
 
+  /** Graph sinks: nodes with no outgoing edge that are not fork branch targets or join sources. */
+  private sinks(): string[] {
+    const forkTargets = new Set<string>()
+    const joinSources = new Set<string>()
+    for (const node of this.nodes.values()) {
+      if (node._type === 'ForkNode') for (const t of node.targets ?? []) forkTargets.add(t)
+      if (node._type === 'JoinNode') for (const s of node.sources ?? []) joinSources.add(s)
+    }
+    const result: string[] = []
+    for (const id of this.nodes.keys()) {
+      if (this.outgoing(id).length > 0) continue
+      if (forkTargets.has(id)) continue
+      if (joinSources.has(id)) continue
+      result.push(id)
+    }
+    return result
+  }
+
   /** The node(s) due now, or `done`. */
   next(): SpineNext {
     this.retryEdges()
     this.advanceSkipped()
     const pass = this.pass === undefined ? {} : { pass: { ...this.pass } }
     if (this.halted !== undefined || (this.cursor.length === 0 && this.pass === undefined)) {
+      if (this.halted === undefined) {
+        // Cursor drained without an explicit halt. Check whether any graph sink
+        // was completed or skipped; with several sinks (alternative ends),
+        // reaching any one is the end.
+        const graphSinks = this.sinks()
+        const reached = (id: string): boolean => this.completed.includes(id) || this.skipped.includes(id)
+        if (graphSinks.length > 0 && !graphSinks.some(reached)) {
+          this.halted = { gate: '', reason: 'incomplete', unreached: graphSinks }
+        }
+      }
       return {
         status: 'done', completed: this.completed.length, skipped: [...this.skipped], ...pass,
         ...(this.halted === undefined ? {} : { halted: { ...this.halted } }),
@@ -759,6 +793,8 @@ export class Spine {
       const cap = this.reloopCap(gate)
       const count = (this.iterations[gate] ?? 0) + 1
       this.iterations[gate] = count
+      this.gateReasonSeq += 1
+      this.gateReasons[gate] = { reason: feedback, at: this.gateReasonSeq }
       if (count > cap) {
         this.gateVerdicts.set(gate, HALT)
         this.halted = { gate, reason: 'max_iterations' }
@@ -776,6 +812,7 @@ export class Spine {
     } else if (outcome === HALT) {
       const target = this.conditionalTarget(gate, HALT)
       record()
+      delete this.gateReasons[gate]
       this.halted = target === undefined ? { gate, reason: 'verdict' } : undefined
       this.cursor = target === undefined ? [] : [target]
       this.afters = []
@@ -788,6 +825,7 @@ export class Spine {
         throw new Error(`${gate} has no '${outcome}' edge (accepts ${allowed.join(', ')})`)
       }
       record()
+      delete this.gateReasons[gate]
       this.halted = undefined
       this.cursor = [target]
       this.afters = []
@@ -1092,6 +1130,27 @@ export class Spine {
   /** Stop at a graph boundary after owned in-flight work has returned. */
   stopAtBoundary(): void { this.halted = { gate: this.cursor[0] ?? '', reason: 'cancelled' } }
 
+  /**
+   * The gate reason for a node: the latest refusal reason from any gate whose
+   * retry edge targets this node, or undefined when no gate holds a reason for it.
+   *
+   * When more than one gate holds a reason for the node (e.g. both `check` and
+   * `gate_qa` send work back to `emit`), the latest refusal is returned.
+   */
+  gateReasonFor(node: string): string | undefined {
+    const retrySet = this.retryEdges()
+    let best: { reason: string; at: number } | undefined
+    for (const [gate, entry] of Object.entries(this.gateReasons)) {
+      if (entry.reason === '') continue
+      for (const edge of this.outgoing(gate)) {
+        if (edge.target === node && retrySet.has(retryKey(gate, edge.target, edge.condition))) {
+          if (best === undefined || entry.at > best.at) best = entry
+        }
+      }
+    }
+    return best?.reason
+  }
+
   /** Serialize the complete cursor, including nested branches and graph edits. */
   checkpoint(): Record<string, unknown> {
     const redo_plans: Record<string, RedoPlan> = {}
@@ -1135,6 +1194,10 @@ export class Spine {
     for (const [id, verdict] of Object.entries(saved.gate_verdicts as Record<string, string>)) this.gateVerdicts.set(id, verdict)
     Object.assign(this.iterations, saved.iterations)
     Object.assign(this.feedback, saved.feedback)
+    for (const key of Object.keys(this.gateReasons)) delete this.gateReasons[key]
+    Object.assign(this.gateReasons, saved.gate_reasons ?? {})
+    this.gateReasonSeq = Object.values(this.gateReasons as Record<string, { at?: number }>).reduce(
+      (max, entry) => Math.max(max, typeof entry?.at === 'number' ? entry.at : 0), 0)
     Object.assign(this.successors, value.successors)
     this.log.splice(0, this.log.length, ...list(saved.log))
     this.promptEdits.clear()
@@ -1160,6 +1223,7 @@ export class Spine {
       gate_verdicts: Object.fromEntries(this.gateVerdicts),
       iterations: { ...this.iterations },
       feedback: { ...this.feedback },
+      gate_reasons: { ...this.gateReasons },
       prompts,
       ...(this.pass === undefined ? {} : { pass: { ...this.pass } }),
       ...(this.halted === undefined ? {} : { halted: { ...this.halted } }),

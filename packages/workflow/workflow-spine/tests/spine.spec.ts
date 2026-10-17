@@ -574,6 +574,233 @@ describe('refusing what the cursor cannot do', () => {
   })
 })
 
+describe('incomplete cursor drain', () => {
+  it('halts naming unreached sinks when the cursor empties short of the end', () => {
+    // Restore a checkpoint whose cursor is empty short of the end.
+    // Graph: a → b, where b is the sink. Complete a, then restore a
+    // checkpoint with cursor=[] and b not completed.
+    const graph: WorkflowGraph = {
+      name: 't',
+      start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', writes: [], reads: [] },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', writes: [], reads: [] },
+      },
+      edges: [{ source: 'a', target: 'b' }],
+    }
+    const spine = new Spine(graph)
+    spine.complete('a')
+    // Save a checkpoint at cursor=['b'], then tamper to empty cursor before restore.
+    const saved = JSON.parse(JSON.stringify(spine.checkpoint()))
+    saved.state.cursor = []
+    saved.state.completed = ['a']
+    const second = new Spine(graph)
+    second.restore(saved)
+    const result = second.next()
+    expect(result.status).toBe('done')
+    if (result.status === 'done') {
+      expect(result.halted).toBeDefined()
+      expect(result.halted!.reason).toBe('incomplete')
+      expect(result.halted!.unreached).toEqual(['b'])
+      // gate field is empty for incomplete — node names live in unreached
+      expect(result.halted!.gate).toBe('')
+    }
+  })
+
+  it('finishes done with no halt when one of two alternative sinks is reached', () => {
+    // Graph: gate → b (proceed), gate → c (alt). Both b and c are sinks.
+    const graph: WorkflowGraph = {
+      name: 't',
+      start_node: 'gate',
+      nodes: {
+        gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'fn', evaluator_command: 'true', reads: [] },
+        b: { _type: 'FnNode', id: 'b', writes: [], command: '' },
+        c: { _type: 'FnNode', id: 'c', writes: [], command: '' },
+      },
+      edges: [
+        { source: 'gate', target: 'b', condition: 'proceed' },
+        { source: 'gate', target: 'c', condition: 'alt' },
+      ],
+    }
+    const spine = new Spine(graph)
+    spine.verdict('gate', 'proceed')
+    spine.complete('b')
+    const result = spine.next()
+    expect(result.status).toBe('done')
+    if (result.status === 'done') {
+      expect(result.halted).toBeUndefined()
+    }
+  })
+
+  it('does not treat fork branch targets as unreached sinks', () => {
+    // Graph: fork → join → end. c1, c2 are fork targets with no outgoing edges.
+    const graph: WorkflowGraph = {
+      name: 't',
+      start_node: 'fork',
+      nodes: {
+        fork: { _type: 'ForkNode', id: 'fork', targets: ['c1', 'c2'] },
+        c1: { _type: 'AgentNode', id: 'c1', role: 'reviewer', prompt_template: 'r1', writes: [], reads: [] },
+        c2: { _type: 'AgentNode', id: 'c2', role: 'reviewer', prompt_template: 'r2', writes: [], reads: [] },
+        join: { _type: 'JoinNode', id: 'join', sources: ['c1', 'c2'] },
+        end: { _type: 'FnNode', id: 'end', writes: [], command: '' },
+      },
+      edges: [
+        { source: 'fork', target: 'join' },
+        { source: 'join', target: 'end' },
+      ],
+    }
+    const spine = new Spine(graph)
+    spine.complete('fork')
+    spine.complete('c1')
+    spine.complete('c2')
+    spine.complete('join')
+    spine.complete('end')
+    const result = spine.next()
+    expect(result.status).toBe('done')
+    if (result.status === 'done') {
+      expect(result.halted).toBeUndefined()
+    }
+  })
+
+  it('skipping the sink counts as reached — done with no halt', () => {
+    const graph: WorkflowGraph = {
+      name: 't',
+      start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', writes: [], reads: [] },
+        b: { _type: 'FnNode', id: 'b', writes: [], command: '' },
+      },
+      edges: [{ source: 'a', target: 'b' }],
+    }
+    const spine = new Spine(graph)
+    spine.complete('a')
+    spine.skip('b')
+    const result = spine.next()
+    expect(result.status).toBe('done')
+    if (result.status === 'done') {
+      expect(result.halted).toBeUndefined()
+    }
+  })
+})
+
+describe('gate refusal reason persistence', () => {
+  // Common graph: emit → check → done_node.
+  // check is a GateNode with max_iterations: 1, reloop edge back to emit, proceed edge to done_node.
+  const gateReasonGraph: WorkflowGraph = {
+    name: 't',
+    start_node: 'emit',
+    nodes: {
+      emit: { _type: 'AgentNode', id: 'emit', role: 'builder', prompt_template: 'E', writes: [], reads: [] },
+      check: { _type: 'GateNode', id: 'check', evaluator_type: 'fn', evaluator_command: 'true', reads: [], max_iterations: 1 },
+      done_node: { _type: 'FnNode', id: 'done_node', writes: [], command: '' },
+    },
+    edges: [
+      { source: 'emit', target: 'check' },
+      { source: 'check', target: 'emit', condition: 'reloop' },
+      { source: 'check', target: 'done_node', condition: 'proceed' },
+    ],
+  }
+
+  it('rerun without text shows the gate reason after halt', () => {
+    const spine = new Spine(gateReasonGraph)
+    spine.complete('emit')
+    spine.verdict('check', 'reloop', 'fix the formatting')
+    // count=1, cap=1: 1 > 1 is false → loops
+    spine.complete('emit')
+    spine.verdict('check', 'reloop', 'still wrong')
+    // count=2, cap=1: 2 > 1 → halts
+    const haltResult = spine.next()
+    expect(haltResult.status).toBe('done')
+    if (haltResult.status === 'done') {
+      expect(haltResult.halted?.reason).toBe('max_iterations')
+    }
+    // Verify gateReasons in state
+    const reasons = (spine.state().gate_reasons as Record<string, { reason: string }>)
+    expect(reasons.check?.reason).toBe('still wrong')
+    // Redo emit
+    spine.redo('emit')
+    // gateReasonFor should return 'still wrong'
+    expect(spine.gateReasonFor('emit')).toBe('still wrong')
+    // Compose feedback as index.ts does (no rerun text)
+    const gateReason = spine.gateReasonFor('emit')
+    if (gateReason !== undefined) spine.setFeedback('emit', gateReason)
+    expect(spine.next().feedback?.emit).toBe('still wrong')
+  })
+
+  it('rerun with text shows reason first, then text', () => {
+    const spine = new Spine(gateReasonGraph)
+    spine.complete('emit')
+    spine.verdict('check', 'reloop', 'fix the formatting')
+    spine.complete('emit')
+    spine.verdict('check', 'reloop', 'still wrong')
+    spine.redo('emit')
+    // Compose as index.ts does: gate reason + rerun text
+    const gateReason = spine.gateReasonFor('emit')
+    const rerunText = 'try a different approach'
+    const parts = [gateReason, rerunText].filter(Boolean)
+    spine.setFeedback('emit', parts.join('\n\n'))
+    const fb = spine.next().feedback?.emit ?? ''
+    expect(fb).toMatch(/^still wrong/)
+    expect(fb).toContain('try a different approach')
+    // Reason comes before rerun text
+    expect(fb.indexOf('still wrong')).toBeLessThan(fb.indexOf('try a different approach'))
+  })
+
+  it('rerun after the gate passed shows no old reason', () => {
+    const spine = new Spine(gateReasonGraph)
+    spine.complete('emit')
+    spine.verdict('check', 'reloop', 'fix it')
+    spine.complete('emit')
+    spine.verdict('check', 'proceed')
+    spine.complete('done_node')
+    // Redo emit after gate proceeded
+    spine.redo('emit')
+    expect(spine.gateReasonFor('emit')).toBeUndefined()
+    expect(spine.next().feedback).not.toHaveProperty('emit')
+  })
+
+  it('with multiple gates, gives the latest refusal', () => {
+    // Graph: emit → check (reloop→emit) → gate_qa (reloop→emit) → done_node
+    const graph: WorkflowGraph = {
+      name: 't',
+      start_node: 'emit',
+      nodes: {
+        emit: { _type: 'AgentNode', id: 'emit', role: 'builder', prompt_template: 'E', writes: [], reads: [] },
+        check: { _type: 'GateNode', id: 'check', evaluator_type: 'fn', evaluator_command: 'true', reads: [], max_iterations: 3 },
+        gate_qa: { _type: 'GateNode', id: 'gate_qa', evaluator_type: 'fn', evaluator_command: 'true', reads: [], max_iterations: 3 },
+        done_node: { _type: 'FnNode', id: 'done_node', writes: [], command: '' },
+      },
+      edges: [
+        { source: 'emit', target: 'check' },
+        { source: 'check', target: 'emit', condition: 'reloop' },
+        { source: 'check', target: 'gate_qa', condition: 'proceed' },
+        { source: 'gate_qa', target: 'emit', condition: 'reloop' },
+        { source: 'gate_qa', target: 'done_node', condition: 'proceed' },
+      ],
+    }
+    const spine = new Spine(graph)
+    // First pass: check reloops
+    spine.complete('emit')
+    spine.verdict('check', 'reloop', 'check says fix it')
+    // Second pass: check proceeds, gate_qa reloops
+    spine.complete('emit')
+    spine.verdict('check', 'proceed')
+    spine.verdict('gate_qa', 'reloop', 'qa says fix it')
+    // Both gates hold reasons for emit. gate_qa's is later.
+    expect(spine.gateReasonFor('emit')).toBe('qa says fix it')
+  })
+
+  it('gate reason survives checkpoint round-trip', () => {
+    const spine = new Spine(gateReasonGraph)
+    spine.complete('emit')
+    spine.verdict('check', 'reloop', 'fix it')
+    const saved = JSON.parse(JSON.stringify(spine.checkpoint()))
+    const second = new Spine(gateReasonGraph)
+    second.restore(saved)
+    expect(second.gateReasonFor('emit')).toBe('fix it')
+  })
+})
+
 describe('a fork with nothing to fan out to', () => {
   it('ends the run when the fork names no branches and no successor', () => {
     const graph: WorkflowGraph = {
