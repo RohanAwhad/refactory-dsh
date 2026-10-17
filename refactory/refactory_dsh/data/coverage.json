@@ -117,7 +117,7 @@
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
       "purpose": "Build a reusable mode package from a brief, name and task/single-shot inputs. Canonical smoke runs before separate QA and Overwatch; repair shares the attempt bound and completion needs current validation and intent evidence.",
-      "reviewed_schema": "7b2557e667506b09ea5c76f8cb26c3a9610d5288ace452ac027b8d94eae10417"
+      "reviewed_schema": "33dd7f848f6ae5ad2570cc992144aec6e142cae1e94645a955705b7dde8cc0a6"
     },
     "default_pack/create_fast": {
       "doc": "refactory/docs/authoring-validation.md",
@@ -175,7 +175,7 @@
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
       "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local; `refine` updates an open one).",
-      "reviewed_schema": "4413ea24f798407008e220210e8c00f80053cb9e9f0fc2abc2429cf904e549f1"
+      "reviewed_schema": "2ab54a9f4bd61bdc1ac2b4309de3f2848dc1f7731d6448409b475b0e91d9bae8"
     },
     "default_pack/design_fast": {
       "doc": "refactory/docs/budgets-fast-modes.md",
@@ -224,7 +224,7 @@
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
       "purpose": "Revise an existing mode package and validate the revision before separate QA and Overwatch. Supply revision_of, name and brief. allow_regression=true skips original execution and numerical comparison, while revised execution and intent evidence remain mandatory.",
-      "reviewed_schema": "95b561df3f3281e46d8d1d9b8e31edaaf12aaa597ce9a85361826b8df6391d96"
+      "reviewed_schema": "c293edc1d69b8c3fbda779072fb331f2b6bffc1d4713728998bc550904f78afa"
     },
     "default_pack/edit_fast": {
       "doc": "refactory/docs/authoring-validation.md",
