@@ -65,6 +65,22 @@ def prepare(root: Path, name: str, *, resource_limits: dict[str, Any] | None = N
             pass
         else:
             raise ValueError('the graph owner is still alive; use its boundary resume control')
+    # When the parent's start() already wrote resume-request.json with
+    # acknowledge_failed: true, the child inherits the acknowledgement
+    # from the file rather than requiring it as a call argument — but only
+    # when the file's checkpoint_sha256 matches the current checkpoint bytes,
+    # so a stale request left behind by a crashed child cannot let a later
+    # plain resume of a failed run through.
+    if not acknowledge_failed:
+        existing_request = root / '.refactory/resume-request.json'
+        if existing_request.is_file():
+            try:
+                existing = json.loads(existing_request.read_text())
+                if (existing.get('acknowledge_failed') is True
+                        and existing.get('checkpoint_sha256') == hashlib.sha256(payload).hexdigest()):
+                    acknowledge_failed = True
+            except (OSError, json.JSONDecodeError, ValueError):
+                pass
     allowed = {'ready', 'paused', 'halted', 'done', 'cancelled', 'waiting_user', 'refused'}
     if acknowledge_failed:
         allowed.add('failed')
