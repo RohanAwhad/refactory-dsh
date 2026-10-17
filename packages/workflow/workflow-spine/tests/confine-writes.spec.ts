@@ -146,6 +146,10 @@ function mockAgent(sessionId: string, opts: {
   delegationDepth?: number
   parentSession?: string
 } = {}): Agent {
+  // When the agent is a delegated child (has parentSession or delegationDepth > 0),
+  // set origin to 'subagent' so the CEO deny guard (which checks header.origin)
+  // skips it without accessing agent.ctx.
+  const isChild = opts.parentSession !== undefined || (opts.delegationDepth !== undefined && opts.delegationDepth > 0)
   return {
     id: sessionId,
     session: {
@@ -154,6 +158,7 @@ function mockAgent(sessionId: string, opts: {
         cwd: opts.cwd,
         delegationDepth: opts.delegationDepth,
         parentSession: opts.parentSession,
+        ...(isChild ? { origin: 'subagent' } : {}),
       },
       requestHeader: () => undefined,
     },
