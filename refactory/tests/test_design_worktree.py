@@ -598,8 +598,10 @@ def test_a_generate_command_that_changes_nothing_adds_no_commit(repo, tmp_path):
 
 
 def test_a_generate_command_that_fails_fails_the_check_and_says_why(tmp_path):
-    emit = render({"tool.py": "print('built')\n"})
-    failed_generate = _design(tmp_path / "run", FakeModel(_answers(emit, emit, emit)),
+    emit1 = render({"tool.py": "print('built')\n"})
+    emit2 = render({"tool.py": "print('built')\n", "note.txt": "r1\n"})
+    emit3 = render({"tool.py": "print('built')\n", "note.txt": "r2\n"})
+    failed_generate = _design(tmp_path / "run", FakeModel(_answers(emit1, emit2, emit3)),
                               _mode(generate="exit 3"),
                               target=str(git_repo(tmp_path / "plain")))
     assert failed_generate.exit_ok is False
