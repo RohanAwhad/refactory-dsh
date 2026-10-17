@@ -242,7 +242,27 @@ class Ledger:
         valid = latest.get("scope") == review and value in labels
         self._decision_entry({"at": _now(), "kind": "verdict-use", "id": decision,
                               "gate": gate, "result": "used" if valid else "expired"})
+        self._mark_consumed(decision)
         return value if valid else ""
+
+    def _mark_consumed(self, verdict_id: str) -> None:
+        """Update the original verdict entry's consumed field from 'no' to 'yes'."""
+        if not self.path.is_file():
+            return
+        text = self.path.read_text()
+        lines = text.splitlines(keepends=True)
+        found_id = False
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped == f"id: {verdict_id}":
+                found_id = True
+            elif found_id and stripped == "consumed: no":
+                lines[i] = line.replace("consumed: no", "consumed: yes")
+                break
+            elif found_id and stripped.startswith("## ["):
+                break  # Moved past the entry without finding consumed: no
+        if found_id:
+            self.path.write_text("".join(lines))
 
     # ── reading ────────────────────────────────────────────────────────────
     def exists(self) -> bool:

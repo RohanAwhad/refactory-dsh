@@ -194,7 +194,15 @@ def run_node(
     ctx.node_id = node_id
     ctx._declared = tuple(declared["writes"])  # noqa: SLF001 - the runner owns the context
     ctx._declared_facts = tuple(declared["produces"])  # noqa: SLF001
-    produced = resolve(target)(ctx)
+    try:
+        produced = resolve(target)(ctx)
+    except Exception:
+        # Write facts even on failure so attempts_used persists on disk and
+        # agrees with the count in the failure message.
+        path = directory / FACTS
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(ctx.facts, indent=2, default=str))
+        raise
     if isinstance(produced, dict):
         for key, value in produced.items():
             ctx.set_fact(key, value)
