@@ -739,10 +739,12 @@ export function apply(ctx: Context, config: Config): void {
                 'invalidation plan changed since preview; re-preview before rerunning'
               )
             }
+            // Plan check passed — skip the revision check for deferred controls.
+          } else {
+            // Non-deferred: the checkpoint revision must still match.
+            const checkpoint = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
+            if (createHash('sha256').update(checkpoint).digest('hex') !== request.revision) throw new Error('graph changed since preview; preview invalidation again')
           }
-
-          const checkpoint = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
-          if (createHash('sha256').update(checkpoint).digest('hex') !== request.revision) throw new Error('graph changed since preview; preview invalidation again')
           const plan = spine.planRedo(target)
           const nodes = (spine.checkpoint().graph as WorkflowGraph).nodes
           if (typeof request.text === 'string' && request.text.trim() !== '' && !['AgentNode', 'LLMNode'].includes(nodes[target]?._type ?? '')) {
