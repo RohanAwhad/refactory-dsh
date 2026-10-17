@@ -130,5 +130,16 @@ def start(root: Path, *, acknowledge_failed: bool = False) -> dict[str, Any]:
             '--workdir', str(root), '--headless', '--resume'], cwd=config['project'],
             env={**os.environ, 'PYTHONUNBUFFERED': '1'}, stdout=output, stderr=subprocess.STDOUT,
             start_new_session=True)
+    # Record the resumed launcher's PID in the console's launch record so that
+    # console.stop finds and signals it exactly as it does a launched run's.
+    from refactory_dsh.console import CONSOLE_FILE
+    console_path = root / CONSOLE_FILE
+    try:
+        existing = json.loads(console_path.read_text()) if console_path.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        existing = {}
+    if isinstance(existing, dict):
+        existing['pid'] = child.pid
+        console_path.write_text(json.dumps(existing, indent=2))
     return {'status': 'queued', 'action': 'resume', 'run_id': str(root), 'pid': child.pid,
             'message': 'Recovery requested for the saved boundary; inspect live state for confirmation.'}

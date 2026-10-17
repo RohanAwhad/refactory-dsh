@@ -646,6 +646,15 @@ def _alive(pid: int) -> bool:
     return True
 
 
+def _checkpoint_owner_pid(run_root: Path) -> int | None:
+    """The checkpoint's owner PID when it is alive, or None."""
+    checkpoint = _read_json(run_root / '.refactory/spine-checkpoint.json')
+    pid = checkpoint.get('owner_pid')
+    if isinstance(pid, int) and _alive(pid):
+        return pid
+    return None
+
+
 def stop(run_root: Path) -> dict[str, Any]:
     """Ask the run to stop, and say whether it did.
 
@@ -659,10 +668,18 @@ def stop(run_root: Path) -> dict[str, Any]:
     run_root = Path(run_root)
     console = _console(run_root)
     pid = console.get("pid")
-    if not pid:
-        return {"stopped": False, "reason": "the run is not running"}
-    pid = int(pid)
+    if pid:
+        pid = int(pid)
+    # Fall back to the checkpoint's owner PID — the same source console.status
+    # uses for owner_alive — so a resumed run stops like a launched one.
+    if not pid or not _alive(pid):
+        pid = _checkpoint_owner_pid(run_root)
     marker = run_root / STOP_REQUESTED
+    if not pid:
+        if marker.exists():
+            return {"stopped": True, "requested": True,
+                    "reason": "the run stopped"}
+        return {"stopped": False, "reason": "the run is not running"}
     if not _alive(pid):
         if marker.exists():
             return {"stopped": True, "requested": True, "pid": pid,
