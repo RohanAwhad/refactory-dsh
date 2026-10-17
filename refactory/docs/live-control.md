@@ -16,7 +16,22 @@ Graph activity is appended to `.refactory/events.jsonl`; checkpoints, worker rec
 
 ## Questions and ownership
 
-Pending user gates retain their prompt and accepted verdicts. Select the run in the native panel and answer its waiting gate, use the owning CEO session, or record an explicit verdict:
+Pending user gates retain their prompt and accepted verdicts.
+
+**Live mode (no `--headless`).** When a run reaches a user gate, the terminal shows the gate's own prompt (including the delivery line, with the run's facts filled in), the accepted verdicts, and asks the person to pick one. After choosing a verdict, the person may add an optional multi-line note (ending with a line containing only `.`); the note is recorded as steering in the intent ledger — a correction with reloop, a constraint with proceed.
+
+**Headless mode.** A headless run refuses a user gate and prints the exact commands to answer it later:
+
+```
+refactory: <gate> is waiting for a person.
+  <the gate's prompt>
+  Answer it with one of <verdicts> (add --note "..." to say why):
+    refactory steer --run <dir> --verdict <gate>=<verdict>
+  Then continue the run:
+    refactory graph-control resume --run <dir>
+```
+
+You can also answer via the native panel, the owning CEO session, or an explicit verdict:
 
 ```bash
 uv run refactory steer --run /absolute/run --verdict gate_name=proceed

@@ -244,6 +244,92 @@ def test_run_warnings_says_nothing_when_no_step_warned(tmp_path):
     assert interactive.run_warnings(tmp_path) == ""
 
 
+def test_headless_prints_gate_commands_when_stopped_at_user_gate(monkeypatch, tmp_path, capsys):
+    """In headless mode, when a run stops at a user gate, print the exact
+    steer --verdict and graph-control resume commands once, from interactive.py.
+    """
+    from refactory_dsh import workers
+
+    workdir = tmp_path / "run"
+
+    class _Run:
+        returncode = 1
+
+    def _graph(argv, **kwargs):
+        # Write spine-status showing refused at the user gate
+        (workdir / ".refactory").mkdir(parents=True, exist_ok=True)
+        (workdir / ".refactory" / "spine-status.json").write_text(
+            json.dumps({"status": "refused", "nodes": ["approve"],
+                        "error": "gate approve is answered by a person"})
+        )
+        return _Run()
+
+    monkeypatch.setattr(workers, "run_graph_command", _graph)
+    code = interactive.run(
+        WITH_A_GATE, workdir=workdir, project=ROOT, headless=True,
+    )
+    assert code == 1
+    captured = capsys.readouterr()
+    assert "approve is waiting for a person" in captured.err
+    assert f"refactory steer --run {workdir} --verdict approve=" in captured.err
+    assert f"refactory graph-control resume --run {workdir}" in captured.err
+    assert "proceed" in captured.err or "halt" in captured.err
+
+
+def test_note_recorded_as_correction_with_reloop(tmp_path):
+    """A reloop verdict with a note records the note as a `correction` entry."""
+    ledger = steering.Ledger.seed(tmp_path, "test intent")
+    # Simulate what steering.main() does for an answer with feedback on reloop
+    gate = "approve"
+    reads = ["draft.md"]
+    review = ledger.visit(gate, reads)
+    ledger.verdict(gate, "reloop", review=review, answered=True)
+    ledger.note("correction", "Please fix the approach")
+    entries = ledger.entries()
+    corrections = [e for e in entries if e["kind"] == "correction"]
+    assert len(corrections) == 1
+    assert "Please fix the approach" in corrections[0]["text"]
+
+
+def test_note_recorded_as_constraint_with_proceed(tmp_path):
+    """A proceed verdict with a note records the note as a `constraint` entry."""
+    ledger = steering.Ledger.seed(tmp_path, "test intent")
+    gate = "approve"
+    reads = ["draft.md"]
+    review = ledger.visit(gate, reads)
+    ledger.verdict(gate, "proceed", review=review, answered=True)
+    ledger.note("constraint", "Must keep backward compatibility")
+    entries = ledger.entries()
+    constraints = [e for e in entries if e["kind"] == "constraint"]
+    assert len(constraints) == 1
+    assert "Must keep backward compatibility" in constraints[0]["text"]
+
+
+def test_brief_echo_shortened_to_first_line(monkeypatch, capsys):
+    """A multi-line brief prints only its first line, truncated."""
+    from refactory_dsh import cli
+
+    long_brief = "First line of the brief\nSecond paragraph with details\nThird paragraph"
+    # Mock _forward to avoid actually running anything
+    monkeypatch.setattr(cli, "_forward", lambda *a, **k: 0)
+    cli.cmd_ceo(type("Args", (), {
+        "what": long_brief, "mode": "design", "name": "test", "check": "echo ok",
+        "revise": "", "task_ref": "", "single_shot": False, "knob": [],
+        "workdir": "", "repair_attempts": None, "source_project": "",
+        "target": "", "base": "", "no_worktree": False, "setup": "",
+        "no_pr": False, "refine": "", "review_comments": False,
+        "verdict": [], "timeout": 0, "provider": "", "model": "",
+        "headless": False, "intent": "",
+        "worker_backend": "", "effort": "", "permission_mode": "",
+        "max_elapsed_s": None, "max_tokens": None,
+        "validation_reserve_s": None, "validation_reserve_tokens": None,
+    })())
+    captured = capsys.readouterr()
+    assert "First line of the brief" in captured.err
+    assert "Second paragraph" not in captured.err
+    assert "Third paragraph" not in captured.err
+
+
 @pytest.mark.parametrize("returncode", [0, 1])
 def test_a_cli_run_lists_its_warnings_when_it_ends(monkeypatch, tmp_path, capsys, returncode):
     """`refactory ceo` runs the configured graph, where nobody is made to read `ran`.

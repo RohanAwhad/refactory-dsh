@@ -94,6 +94,11 @@
           - workflow
           - read_image
 
+    # The user-questions channel: allows the answerer and the spine to put a user
+    # gate to the person at the terminal.
+    - id: user-questions
+      name: '@deepseek-ai/dsh-user-questions'
+
     - id: graph-answerer
       name: '@deepseek-ai/dsh-graph/answerer'
       inject: [graphStartup]

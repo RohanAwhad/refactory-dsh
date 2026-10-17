@@ -1211,6 +1211,11 @@ export function apply(ctx: Context, config: Config): void {
     if (picked !== undefined) {
       if (labels.length > 0 && !labels.includes(picked.trim())) throw new Error(`gate ${gate} does not accept ${picked}`)
       verdict = picked.trim()
+      // Thread the answerer's note through as feedback, so the gate bridge
+      // can record it in the intent ledger.
+      if (typeof chosen.custom === 'string' && chosen.custom.trim() !== '') {
+        feedback = chosen.custom.trim()
+      }
     } else {
       const typed = (chosen.custom ?? '').trim()
       const read = readGateAnswer(typed, labels)
