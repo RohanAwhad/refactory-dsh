@@ -238,6 +238,7 @@ def test_signal_death_classified_as_uncertain():
 
 
 def test_signal_death_stops_check_artifact_without_attempt(tmp_path, monkeypatch):
+    """A signal-killed environment install stops the run as uncertain, not as a code failure."""
     from refactory_dsh import design_ops, repo_change
 
     # Set up a RunContext with the minimum facts check_artifact needs.
