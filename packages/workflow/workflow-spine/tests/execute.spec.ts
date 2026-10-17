@@ -328,11 +328,12 @@ describe("a node's own time limit", () => {
     } as unknown as ShellExecutor
   }
 
-  /** The nodes the spine says are due, as it hands them to the runner. */
-  function due(spine: Spine): NodeView[] {
+  /** The node the spine says is due, as it hands it to the runner. */
+  function due(spine: Spine): NodeView {
     const next = spine.next()
-    if (next.status !== 'ready') throw new Error('expected due work')
-    return next.nodes
+    const node = next.status === 'ready' ? next.nodes[0] : undefined
+    if (node === undefined) throw new Error('expected due work')
+    return node
   }
 
   it('reaches a function gate from its graph, as it reaches an FnNode', async () => {
@@ -348,9 +349,9 @@ describe("a node's own time limit", () => {
     }
     const spine = new Spine(graph)
     const limits: number[] = []
-    completed(await runDeterministic(recordingShell(limits), due(spine)[0], config))
+    completed(await runDeterministic(recordingShell(limits), due(spine), config))
     spine.complete('build')
-    completed(await runDeterministic(recordingShell(limits), due(spine)[0], config))
+    completed(await runDeterministic(recordingShell(limits), due(spine), config))
     expect(limits).toEqual([4_321_000, 10_500_000])
   })
 })
