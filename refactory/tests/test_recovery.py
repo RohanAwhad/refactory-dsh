@@ -48,12 +48,28 @@ def test_start_releases_ownership_before_launch(monkeypatch, tmp_path):
     assert recovery.start(tmp_path)['pid'] == 123
 
 
-@pytest.mark.parametrize('status', ['executing', 'failed', 'unexpected', None])
+@pytest.mark.parametrize('status', ['executing', 'unexpected', None])
 def test_unknown_outcome_never_produces_resume_request(tmp_path, status):
     saved_run(tmp_path, status)
     with pytest.raises(ValueError, match='unknown or failed'):
         recovery.prepare(tmp_path, 'demo-run')
     assert not (tmp_path / '.refactory/resume-request.json').exists()
+
+
+def test_failed_status_refused_without_acknowledge_flag(tmp_path):
+    saved_run(tmp_path, 'failed')
+    with pytest.raises(ValueError, match='unknown or failed'):
+        recovery.prepare(tmp_path, 'demo-run')
+    assert not (tmp_path / '.refactory/resume-request.json').exists()
+
+
+def test_failed_status_accepted_with_acknowledge_flag(tmp_path):
+    saved_run(tmp_path, 'failed')
+    recovery.prepare(tmp_path, 'demo-run', acknowledge_failed=True)
+    request = json.loads((tmp_path / '.refactory/resume-request.json').read_text())
+    checkpoint = tmp_path / '.refactory/spine-checkpoint.json'
+    assert request['checkpoint_sha256'] == hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    assert request['acknowledge_failed'] is True
 
 
 def test_changed_source_and_unknown_worker_refuse_recovery(tmp_path):

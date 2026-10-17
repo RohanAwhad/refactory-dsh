@@ -1221,6 +1221,12 @@ def _parser() -> argparse.ArgumentParser:
     graph_control.add_argument("--node", default="")
     graph_control.add_argument("--text", default="")
     graph_control.add_argument("--revision", default="")
+    graph_control.add_argument(
+        "--acknowledge-failure", action="store_true", default=False,
+        dest="acknowledge_failure",
+        help="confirm that side effects of the failed node have been inspected; "
+             "required for rerun of a failed run",
+    )
 
     read = add(sub.add_parser("artifacts", help="what a run left"))
     read.add_argument("--contents", action="store_true")
@@ -1618,7 +1624,11 @@ def main(argv: list[str] | None = None) -> int:
         elif args.verb == "graph-control":
             from refactory_dsh.graph_control import request
             try:
-                payload = request(_root_for(args, project), args.action, node=args.node, text=args.text, revision=args.revision)
+                payload = request(
+                    _root_for(args, project), args.action,
+                    node=args.node, text=args.text, revision=args.revision,
+                    acknowledge_failure=getattr(args, 'acknowledge_failure', False),
+                )
             except ValueError as error:
                 raise ConsoleError(str(error)) from error
         elif args.verb == "artifacts":

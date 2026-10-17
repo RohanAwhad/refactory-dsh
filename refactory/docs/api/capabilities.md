@@ -1291,7 +1291,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 
 ## graph-control
 
-Preview or queue boundary pause/resume/stop/rerun controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints.
+Preview or queue boundary pause/resume/stop/rerun controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected.
 
 Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-control.md)
 
@@ -1306,7 +1306,7 @@ Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-con
         "node": "emit",
         "run": "/tmp/example-run"
       },
-      "explanation": "Preview or queue boundary pause/resume/stop/rerun controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints."
+      "explanation": "Preview or queue boundary pause/resume/stop/rerun controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected."
     }
   ],
   "interfaces": {
@@ -1315,6 +1315,17 @@ Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-con
     "panel": "Graph boundary controls and recovery preview."
   },
   "parameters": {
+    "acknowledge_failure": {
+      "default": false,
+      "description": "confirm that side effects of the failed node have been inspected; required for rerun of a failed run",
+      "flags": [
+        "--acknowledge-failure"
+      ],
+      "nargs": 0,
+      "positional": false,
+      "required": false,
+      "type": "boolean"
+    },
     "action": {
       "default": null,
       "description": "",
@@ -1399,8 +1410,8 @@ Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-con
       "type": "string"
     }
   },
-  "purpose": "Preview or queue boundary pause/resume/stop/rerun controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints.",
-  "reviewed_schema": "b6730bfc5092237a38578f41c8a680d0281a61a193b317a34fd3f8d4824d2e0b"
+  "purpose": "Preview or queue boundary pause/resume/stop/rerun controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected.",
+  "reviewed_schema": "5ddc5ba8edfa2aef1a5adccb09e138505d1a64e4b73c8ba47813b36b275618e0"
 }
 ```
 

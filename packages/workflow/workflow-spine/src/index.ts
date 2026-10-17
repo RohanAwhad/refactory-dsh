@@ -692,7 +692,8 @@ export function apply(ctx: Context, config: Config): void {
     const bytes = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
     if (createHash('sha256').update(bytes).digest('hex') !== request.checkpoint_sha256) throw new Error('checkpoint changed after recovery was requested')
     const saved = JSON.parse(bytes.toString())
-    if (saved.status === 'executing' || saved.status === 'failed') throw new Error('unknown side-effect outcome; automatic replay refused')
+    if (saved.status === 'executing') throw new Error('unknown side-effect outcome; automatic replay refused')
+    if (saved.status === 'failed' && request.acknowledge_failed !== true) throw new Error('last node outcome failed; pass acknowledge_failed to resume from this state')
     if (saved.state.halted?.reason === 'cancelled') delete saved.state.halted
     saved.state.pause_before = []
     spine.restore(saved)
@@ -802,9 +803,36 @@ export function apply(ctx: Context, config: Config): void {
         else if (request.action === 'resume') for (const node of state.pause_before as string[]) spine.pauseBefore(node, false)
         else if (request.action === 'stop') { spine.stopAtBoundary(); receipt.message = 'Stopped at graph boundary; no further nodes will dispatch.' }
         else if (request.action === 'rerun') {
-          const checkpoint = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
-          if (createHash('sha256').update(checkpoint).digest('hex') !== request.revision) throw new Error('graph changed since preview; preview invalidation again')
           const target = String(request.target)
+          const deferredNodes = request.deferred_nodes as string[] | undefined
+
+          if (Array.isArray(deferredNodes) && deferredNodes.length > 0) {
+            if (spine.hasConcurrentWork()) {
+              // Concurrent work still running — skip this control, keep file.
+              receipt.status = 'deferred'
+              receipt.message = 'Concurrent work still running; control retained for next boundary.'
+              writeFileSync(join(workdir, '.refactory', 'graph-control-receipt.json'), JSON.stringify(receipt))
+              appendFileSync(join(workdir, '.refactory', 'events.jsonl'), JSON.stringify({ schema_version: 1,
+                run_id: resolve(workdir), invocation, at: new Date().toISOString(), kind: 'control',
+                state: receipt.status, summary: receipt.message }) + '\n')
+              continue  // skip unlinkSync — file survives to next boundary
+            }
+            // Concurrent work has finished. Verify the plan still matches.
+            const currentPlan = spine.planRedo(target)
+            const currentSet = new Set(currentPlan.nodes)
+            const deferredSet = new Set(deferredNodes)
+            if (currentSet.size !== deferredSet.size
+                || ![...currentSet].every(n => deferredSet.has(n))) {
+              throw new Error(
+                'invalidation plan changed since preview; re-preview before rerunning'
+              )
+            }
+            // Plan check passed — skip the revision check for deferred controls.
+          } else {
+            // Non-deferred: the checkpoint revision must still match.
+            const checkpoint = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
+            if (createHash('sha256').update(checkpoint).digest('hex') !== request.revision) throw new Error('graph changed since preview; preview invalidation again')
+          }
           const plan = spine.planRedo(target)
           const nodes = (spine.checkpoint().graph as WorkflowGraph).nodes
           if (typeof request.text === 'string' && request.text.trim() !== '' && !['AgentNode', 'LLMNode'].includes(nodes[target]?._type ?? '')) {
@@ -814,8 +842,8 @@ export function apply(ctx: Context, config: Config): void {
             recordStatus(spine, workdir, 'executing')
             runtimeBridge(`${dataCommand} reset`, workdir, env, { ...plan, state, archiveArtifacts: true })
           }
-          if (typeof request.text === 'string' && request.text.trim() !== '') spine.amendPrompt(target, request.text, 'append')
           spine.redo(target)
+          if (typeof request.text === 'string' && request.text.trim() !== '') spine.setFeedback(target, request.text)
           if (plan.resetPass) materialised.delete(spine)
           receipt.message = `Reopened ${target}; invalidated ${plan.nodes.join(', ')}; prior evidence archived.`
         } else throw new Error('unsupported graph control')
@@ -826,11 +854,13 @@ export function apply(ctx: Context, config: Config): void {
       }
       if (receipt.status === 'applied') recordStatus(spine, workdir,
         spine.isHalted() ? 'halted' : spine.isPaused() ? 'paused' : spine.next().status)
-      writeFileSync(join(workdir, '.refactory', 'graph-control-receipt.json'), JSON.stringify(receipt))
-      appendFileSync(join(workdir, '.refactory', 'events.jsonl'), JSON.stringify({ schema_version: 1,
-        run_id: resolve(workdir), invocation, at: new Date().toISOString(), kind: 'control',
-        state: receipt.status, summary: receipt.message }) + '\n')
-      unlinkSync(path)
+      if (receipt.status !== 'deferred') {
+        writeFileSync(join(workdir, '.refactory', 'graph-control-receipt.json'), JSON.stringify(receipt))
+        appendFileSync(join(workdir, '.refactory', 'events.jsonl'), JSON.stringify({ schema_version: 1,
+          run_id: resolve(workdir), invocation, at: new Date().toISOString(), kind: 'control',
+          state: receipt.status, summary: receipt.message }) + '\n')
+        unlinkSync(path)
+      }
     }
   }
 
