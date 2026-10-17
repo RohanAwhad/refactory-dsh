@@ -334,8 +334,8 @@ def _open_worktree(ctx: Any, name: str, task: dict[str, Any]) -> dict[str, Any]:
                 f"{target} on branch {found.branch}, from the base commit {found.base[:12]}. Each attempt "
                 "builds on the last: the worktree holds the base and every earlier attempt, as committed "
                 f"(`git -C {found.path} diff {found.base[:12]}` shows the change so far), so read the files "
-                "there and change only what this attempt needs. Write one block per file, introduced by "
-                "a line of exactly one of:\n"
+                "there and change only what this attempt needs. Write each file's change as one or more "
+                "blocks, introduced by a line of exactly one of:\n"
                 "===FILE: <relative path>=== followed by the whole file, for a new file or one you "
                 "rewrite entirely;\n"
                 "===EDIT: <relative path>=== followed by one or more edits to an existing file, each "
@@ -415,12 +415,26 @@ def _emitted(answer: str, *, edits: bool) -> tuple[dict[Path, str], Edits, tuple
         raise AttemptRefused(f"emit.txt holds no {kinds} blocks; write each file's change as one, as the "
                              "prompt describes, with no other text")
     names = [match.group(2) for match in matches]
-    if len(names) != len(set(names)):
-        raise AttemptRefused("emit.txt names a file in more than one block; put all of a file's change in one block")
+    # Several ===EDIT: blocks for the same file are merged; a file named by an
+    # ===EDIT: and a ===FILE: or ===DELETE:, or by two ===FILE: blocks, is refused.
+    kinds_by_name: dict[str, set[str]] = {}
+    for match in matches:
+        kinds_by_name.setdefault(match.group(2), set()).add(match.group(1))
+    for name, used in kinds_by_name.items():
+        if used == {"EDIT"}:
+            continue  # several ===EDIT: blocks for one file are applied in order
+        if names.count(name) > 1:
+            blocks = " and a ".join(f"==={k}:" for k in sorted(used))
+            raise AttemptRefused(
+                f"emit.txt names {name} in more than one block ({blocks}); "
+                "a file may appear in several ===EDIT: blocks, but not in a mix with ===FILE: or ===DELETE:")
+    unique_names = list(dict.fromkeys(names))
+    paths = {name: path for name, path in zip(unique_names, _artifact_paths(unique_names))}
     files: dict[Path, str] = {}
     changed: Edits = {}
     deletes: list[Path] = []
-    for index, (match, path) in enumerate(zip(matches, _artifact_paths(names))):
+    for index, match in enumerate(matches):
+        path = paths[match.group(2)]
         kind = match.group(1)
         end = matches[index + 1].start() if index + 1 < len(matches) else len(answer)
         body = answer[match.end():end].strip("\n")
@@ -431,7 +445,7 @@ def _emitted(answer: str, *, edits: bool) -> tuple[dict[Path, str], Edits, tuple
             _refuse_truncated(path, body)
             files[path] = body + "\n"
         elif kind == "EDIT":
-            changed[path] = _pairs(path, body)
+            changed.setdefault(path, []).extend(_pairs(path, body))
         elif body.strip():
             raise AttemptRefused(f"the ===DELETE: block for {path} has text after it; a deletion takes none, "
                                  "so leave the line after the header empty")
