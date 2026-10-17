@@ -206,3 +206,9 @@ def test_bold_uppercase_blocking_no_separator_is_a_finding():
     findings = blocking_findings(text)
     assert len(findings) == 1
     assert "the CLI crashes" in findings[0]
+
+
+def test_overwatch_quoted_blocking_example_is_not_a_finding():
+    """A code span quoting a test input that contains BLOCKING is not a finding."""
+    text = "- `- **BLOCKING** x` tested in existing `test_create.py` via `test_a_bolded_blocking_finding_is_not_invisible_to_the_qa_gate` \u2713\n"
+    assert blocking_findings(text) == []
