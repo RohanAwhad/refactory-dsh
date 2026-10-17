@@ -343,7 +343,7 @@ def test_brief_echo_shortened_to_first_line(monkeypatch, capsys):
 
 def test_prepare_design_sets_scoped_for_refine_task(tmp_path, monkeypatch):
     """prepare_design with task.refine truthy → research_scope='scoped'."""
-    from refactory_dsh import delivery, design_ops, repo_change, sandbox
+    from refactory_dsh import delivery, design_ops, nn, repo_change, sandbox
     monkeypatch.setattr(repo_change, "wants_worktree", lambda ctx: False)
     monkeypatch.setattr(repo_change, "locate",
                         lambda ctx, name, task, **kw: {
@@ -353,32 +353,18 @@ def test_prepare_design_sets_scoped_for_refine_task(tmp_path, monkeypatch):
     monkeypatch.setattr(sandbox, "model_readiness", lambda *a, **kw: {})
     monkeypatch.setattr(delivery, "plan_run",
                         lambda ctx, *, task: {"delivery": "test", "delivery_plan": {}})
-    from types import SimpleNamespace
     workdir = tmp_path / "run"
-    workdir.mkdir(exist_ok=True)
     task = {"name": "test_artifact", "brief": "Make the widget better",
             "check": "python -m pytest -q",
             "refine": "https://github.com/example/repo/pull/1"}
-    ctx = SimpleNamespace(
-        task=task,
-        knob=lambda name, default="": task.get(name, default),
-        workdir=workdir,
-        model=None,
-        write_json=lambda name, data: (workdir / name).write_text(json.dumps(data)),
-        write_text=lambda name, text: (workdir / name).write_text(text),
-        read_text=lambda name: (workdir / name).read_text()
-            if (workdir / name).exists() else "",
-        exists=lambda name: (workdir / name).exists(),
-        set_fact=lambda name, value: None,
-        facts={},
-    )
+    ctx = nn.RunContext(workdir, task=task)
     result = design_ops.prepare_design(ctx, deliver=True, in_worktree=False)
     assert result["research_scope"] == "scoped"
 
 
 def test_prepare_design_sets_scoped_for_refine_without_file_in_brief(tmp_path, monkeypatch):
     """A refine run whose brief names no file still gets research_scope 'scoped'."""
-    from refactory_dsh import delivery, design_ops, repo_change, sandbox
+    from refactory_dsh import delivery, design_ops, nn, repo_change, sandbox
     monkeypatch.setattr(repo_change, "wants_worktree", lambda ctx: False)
     monkeypatch.setattr(repo_change, "locate",
                         lambda ctx, name, task, **kw: {
@@ -388,25 +374,11 @@ def test_prepare_design_sets_scoped_for_refine_without_file_in_brief(tmp_path, m
     monkeypatch.setattr(sandbox, "model_readiness", lambda *a, **kw: {})
     monkeypatch.setattr(delivery, "plan_run",
                         lambda ctx, *, task: {"delivery": "test", "delivery_plan": {}})
-    from types import SimpleNamespace
     workdir = tmp_path / "run"
-    workdir.mkdir(exist_ok=True)
     task = {"name": "polish_ui", "brief": "Make the spacing more consistent",
             "check": "python -m pytest -q",
             "refine": "https://github.com/example/repo/pull/42"}
-    ctx = SimpleNamespace(
-        task=task,
-        knob=lambda name, default="": task.get(name, default),
-        workdir=workdir,
-        model=None,
-        write_json=lambda name, data: (workdir / name).write_text(json.dumps(data)),
-        write_text=lambda name, text: (workdir / name).write_text(text),
-        read_text=lambda name: (workdir / name).read_text()
-            if (workdir / name).exists() else "",
-        exists=lambda name: (workdir / name).exists(),
-        set_fact=lambda name, value: None,
-        facts={},
-    )
+    ctx = nn.RunContext(workdir, task=task)
     result = design_ops.prepare_design(ctx, deliver=True, in_worktree=False)
     assert result["research_scope"] == "scoped"
 
@@ -414,7 +386,7 @@ def test_prepare_design_sets_scoped_for_refine_without_file_in_brief(tmp_path, m
 def test_prepare_design_sets_scoped_for_brief_with_file_extension(
         tmp_path, monkeypatch):
     """A brief naming worker_observer.mjs → research_scope='scoped'."""
-    from refactory_dsh import design_ops, repo_change, sandbox
+    from refactory_dsh import design_ops, nn, repo_change, sandbox
     monkeypatch.setattr(repo_change, "wants_worktree", lambda ctx: False)
     monkeypatch.setattr(repo_change, "locate",
                         lambda ctx, name, task, **kw: {
@@ -422,32 +394,18 @@ def test_prepare_design_sets_scoped_for_brief_with_file_extension(
                             "artifact": str(tmp_path), "branch": "", "change": "",
                         })
     monkeypatch.setattr(sandbox, "model_readiness", lambda *a, **kw: {})
-    from types import SimpleNamespace
     workdir = tmp_path / "run"
-    workdir.mkdir(exist_ok=True)
     task = {"name": "fix_observer",
             "brief": "Fix worker_observer.mjs to emit tokens_delta",
             "check": "python -m pytest -q"}
-    ctx = SimpleNamespace(
-        task=task,
-        knob=lambda name, default="": task.get(name, default),
-        workdir=workdir,
-        model=None,
-        write_json=lambda name, data: (workdir / name).write_text(json.dumps(data)),
-        write_text=lambda name, text: (workdir / name).write_text(text),
-        read_text=lambda name: (workdir / name).read_text()
-            if (workdir / name).exists() else "",
-        exists=lambda name: (workdir / name).exists(),
-        set_fact=lambda name, value: None,
-        facts={},
-    )
+    ctx = nn.RunContext(workdir, task=task)
     result = design_ops.prepare_design(ctx, deliver=False)
     assert result["research_scope"] == "scoped"
 
 
 def test_prepare_design_sets_full_for_plain_prose(tmp_path, monkeypatch):
     """'Make the UI better.' — period is not a file extension → 'full'."""
-    from refactory_dsh import design_ops, repo_change, sandbox
+    from refactory_dsh import design_ops, nn, repo_change, sandbox
     monkeypatch.setattr(repo_change, "wants_worktree", lambda ctx: False)
     monkeypatch.setattr(repo_change, "locate",
                         lambda ctx, name, task, **kw: {
@@ -455,25 +413,11 @@ def test_prepare_design_sets_full_for_plain_prose(tmp_path, monkeypatch):
                             "artifact": str(tmp_path), "branch": "", "change": "",
                         })
     monkeypatch.setattr(sandbox, "model_readiness", lambda *a, **kw: {})
-    from types import SimpleNamespace
     workdir = tmp_path / "run"
-    workdir.mkdir(exist_ok=True)
     task = {"name": "ui_improvement",
             "brief": "Make the UI better.",
             "check": "python -m pytest -q"}
-    ctx = SimpleNamespace(
-        task=task,
-        knob=lambda name, default="": task.get(name, default),
-        workdir=workdir,
-        model=None,
-        write_json=lambda name, data: (workdir / name).write_text(json.dumps(data)),
-        write_text=lambda name, text: (workdir / name).write_text(text),
-        read_text=lambda name: (workdir / name).read_text()
-            if (workdir / name).exists() else "",
-        exists=lambda name: (workdir / name).exists(),
-        set_fact=lambda name, value: None,
-        facts={},
-    )
+    ctx = nn.RunContext(workdir, task=task)
     result = design_ops.prepare_design(ctx, deliver=False)
     assert result["research_scope"] == "full"
 

@@ -892,6 +892,23 @@ def test_a_worktrees_identity_is_its_committed_attempt(repo, tmp_path):
     assert authoring_evidence.source_files(path) != before
 
 
+def test_signal_killed_install_propagates_signal_name(repo, tmp_path, monkeypatch):
+    """A signal-killed install (after retry) carries the signal name in its problem text."""
+    _python_project(repo)
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "sig0000test", run)
+
+    def fake_run_command(cmd, **kwargs):
+        return sandbox.SandboxResult(
+            ok=False, returncode=-6, elapsed_s=1.0,
+            stderr="killed by SIGABRT", stdout="",
+        )
+
+    monkeypatch.setattr(sandbox, "run_command", fake_run_command)
+    _, problems = worktree.ensure_environment(found, run)
+    assert any("killed by SIGABRT" in p for p in problems)
+
+
 def test_identity_outside_a_worktree_still_counts_every_file(tmp_path):
     """A package's or an artifact directory's identity is what it was before #351."""
     (tmp_path / "pkg").mkdir()

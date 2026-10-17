@@ -266,6 +266,74 @@ def test_rerun_of_failed_run_queues_control_then_starts_owner(monkeypatch, tmp_p
     assert result['owner']['pid'] == 999
 
 
+def test_acknowledged_rerun_child_gets_past_validation(tmp_path):
+    """Full parent-write → child-read → spine-delete lifecycle: one-shot semantics."""
+    from refactory_dsh import recovery
+
+    # -- setup: a failed run --
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    source = tmp_path / 'mode.py'
+    source.write_text('answer = 42\n')
+    config = {'mode': 'demo/run', 'project': str(tmp_path),
+              'configuration_fingerprints': {str(source): recovery.fingerprint(source)}}
+    (directory / 'run-config.json').write_text(json.dumps(config))
+    payload = {'run_id': str(tmp_path), 'graph': {'name': 'demo-run'},
+               'status': 'failed', 'file_fingerprints': {}}
+    (directory / 'spine-checkpoint.json').write_text(json.dumps(payload))
+
+    # -- parent path: prepare with acknowledgement --
+    recovery.prepare(tmp_path, 'demo-run', acknowledge_failed=True)
+    request_path = directory / 'resume-request.json'
+    assert request_path.exists()
+    assert json.loads(request_path.read_text())['acknowledge_failed'] is True
+
+    # -- child path: prepare without acknowledgement --
+    recovery.prepare(tmp_path, 'demo-run')
+    assert json.loads(request_path.read_text())['acknowledge_failed'] is True
+
+    # -- spine consumption: delete the file --
+    request_path.unlink()
+
+    # -- one-shot: a plain resume now refuses --
+    with pytest.raises(ValueError, match='unknown or failed'):
+        recovery.prepare(tmp_path, 'demo-run')
+    assert not request_path.exists()
+
+
+def test_acknowledged_rerun_child_interactive_resume_path(monkeypatch, tmp_path):
+    """The child's interactive resume path (interactive.prepare with resume=True)
+    gets past validation when the parent wrote an acknowledged resume-request.json.
+    This exercises the exact code path the bug was in: interactive.prepare(resume=True)
+    → recovery.prepare(workdir, name) without acknowledge_failed."""
+    from refactory_dsh import recovery, interactive
+
+    # -- setup: a failed run with run-config --
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    source = tmp_path / 'mode.py'
+    source.write_text('answer = 42\n')
+    config = {'mode': 'demo/run', 'project': str(tmp_path),
+              'configuration_fingerprints': {str(source): recovery.fingerprint(source)}}
+    (directory / 'run-config.json').write_text(json.dumps(config))
+    payload = {'run_id': str(tmp_path), 'graph': {'name': 'demo-run'},
+               'status': 'failed', 'file_fingerprints': {}}
+    (directory / 'spine-checkpoint.json').write_text(json.dumps(payload))
+
+    # -- parent's prepare (as start() does inside the ownership block) --
+    recovery.prepare(tmp_path, 'demo-run', acknowledge_failed=True)
+    assert json.loads((directory / 'resume-request.json').read_text())['acknowledge_failed'] is True
+
+    # -- child's interactive.prepare(resume=True): this is the path the bug was in --
+    # interactive.prepare acquires ownership, so we need to release before it.
+    # We call it directly — it calls recovery.prepare(workdir, name) without acknowledge_failed.
+    name, graphs = interactive.prepare('demo/run', workdir=tmp_path, resume=True)
+    assert name == 'demo-run'
+    # The child got past validation — no ValueError raised.
+    request = json.loads((directory / 'resume-request.json').read_text())
+    assert request['acknowledge_failed'] is True
+
+
 def test_console_main_graph_control_acknowledge_failure(monkeypatch, tmp_path):
     directory = tmp_path / '.refactory'
     directory.mkdir()

@@ -175,7 +175,7 @@ installed copy.
 | `refactory artifacts --run <id> --contents` | what it left on disk. |
 | `refactory adopt --run <id> --as <package>` | write the winner as a new package, input untouched. |
 | `refactory adopt --run <id> --as <package> --allow-overfit` | adopt it anyway, with the audit recorded beside the package. |
-| `refactory steer --run <id> --note "<words>" --kind info\|correction\|constraint` | add what you said to the run's intent ledger. The proposer reads the ledger before every generation, so a note steers the next one. |
+| `refactory steer --run <id> --note "<words>" --kind info\|correction\|constraint` | add what you said to the run's intent ledger. The proposer reads the ledger before every generation, so a note steers the next one. An info note records context that is not a testable requirement; correction and constraint entries become requirements the audit must cover. |
 | `refactory steer --run <id> --verdict <gate>=<value>` | record a gate's answer, so a resume replays it. |
 | `refactory steer --run <id> --pause` / `--resume` | hold a search at its next generation boundary, or release it. |
 | `refactory steer --run <id> --stop` | end a search at its next boundary, recording that a person asked. |

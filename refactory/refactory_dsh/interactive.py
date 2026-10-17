@@ -23,7 +23,7 @@ from typing import Any
 
 from refactory_dsh import lowering, registry, steering
 from refactory_dsh.dsh_runtime import TASK
-from refactory_dsh.paths import REPO_ROOT, dsh_command, venv_bin, project_root
+from refactory_dsh.paths import REPO_ROOT, dsh_command, require_build, venv_bin, project_root
 from refactory_dsh.run_ownership import ownership
 from refactory_dsh.owned_process import run_owned
 
@@ -227,6 +227,7 @@ def run(
     # Pre-flight: refuse before the run directory is prepared, so a refused
     # start leaves nothing behind.  Placed before ownership() which creates
     # the .refactory directory.
+    require_build()
     from refactory_dsh import dsh_profile
     try:
         dsh_profile.require()

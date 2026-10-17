@@ -318,6 +318,14 @@ REVIEW_ANSWERS = [
     "VERDICT: PASS",
 ]
 
+#: The design review agent's answer: a passing review that ends with the verdict.
+#: design_review is an agent node that consumes a FakeModel answer, placed after
+#: design_doc in graph order.
+DESIGN_REVIEW_ANSWER = (
+    "No open alternatives found. All citations confirmed. "
+    "All brief references verified.\n\nVERDICT: PASS"
+)
+
 
 def create_script(name: str, emits: list[str]) -> list[str]:
     """The whole answer script, with the given emit answers in the order used.

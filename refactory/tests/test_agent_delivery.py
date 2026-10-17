@@ -129,6 +129,48 @@ def test_shared_state_check_does_not_run_without_a_worktree(tmp_path, capsys):
     assert 'changed during' not in err
 
 
+def test_refused_step_writes_receipt_and_removes_pending_marker(tmp_path):
+    """A refused step (target guard refusal) writes its receipt and removes its marker."""
+    from refactory_dsh import target_guard, worktree
+    from tests_support import git_repo
+
+    repo = git_repo(tmp_path / 'repo')
+    run = tmp_path / 'run'
+    found = worktree.create(repo, 'HEAD', 'pend0000clean', run)
+    target_guard.record(run, repo, output_only=('emit', 'design_doc'))
+    record = agent_delivery.begin(run, 'design_doc', 'Write the design.', ['design.md'])
+    # Modify the target repository to trigger target guard refusal
+    import subprocess as _sp
+    (repo / 'intruder.txt').write_text('unexpected change\n')
+    _sp.run(['git', '-C', str(repo), 'add', 'intruder.txt'], check=True, capture_output=True)
+    _sp.run(['git', '-C', str(repo), 'commit', '-q', '-m', 'intruder'], check=True, capture_output=True)
+    (run / 'design.md').write_text('the design\n')
+    pending = run / agent_delivery.ROOT / 'pending'
+    assert any(pending.glob('*.json'))
+    import pytest as _pytest
+    with _pytest.raises(ValueError):
+        agent_delivery.finish(run, 'design_doc')
+    # Receipt is written
+    receipt = json.loads((run / record['receipt']).read_text())
+    assert receipt['status'] == 'failed'
+    # Pending marker is gone
+    assert not any(pending.glob('*.json'))
+
+
+def test_missing_outputs_writes_receipt_and_removes_pending_marker(tmp_path):
+    """A step with missing outputs writes its receipt and removes its pending marker."""
+    record = agent_delivery.begin(tmp_path, 'build', 'Write output.txt.', ['output.txt'])
+    # Do NOT write output.txt — it will be missing
+    pending = tmp_path / agent_delivery.ROOT / 'pending'
+    assert any(pending.glob('*.json'))
+    import pytest as _pytest
+    with _pytest.raises(ValueError, match='did not deliver'):
+        agent_delivery.finish(tmp_path, 'build')
+    receipt = json.loads((tmp_path / record['receipt']).read_text())
+    assert receipt['status'] == 'failed'
+    assert not any(pending.glob('*.json'))
+
+
 def test_planning_steps_are_output_only_in_design_but_not_in_a_plain_locate(tmp_path, monkeypatch):
     """Mode-supplied output_only through locate(): mode isolation (#347)."""
     import subprocess

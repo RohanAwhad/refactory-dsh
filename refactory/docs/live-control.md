@@ -47,6 +47,12 @@ uv run refactory steer --run /absolute/run --verdict gate_name=proceed
 
 The allowed verdict comes from that gate. The answer is scoped to the run and invocation, not to whichever chat is visible. Reading or answering a persisted question does not grant a second session permission to drive the graph. Each CEO session owns its workflow; concurrent runs need distinct work directories. A native question left pending after a disconnect stays pending until a valid answer reaches the owner. A restarted owner must pass the recovery checks below.
 
+### Steering note kinds
+
+Steering notes added with `refactory steer --kind info` record context that agents
+see but the audit does not require evidence for. Use `--kind correction` or
+`--kind constraint` for asks the audit must cover.
+
 ## Apply a control at its boundary
 
 Optimizer notes, keep/reject and pause/resume/stop apply at generation boundaries. Graph controls apply at the next graph boundary and can wait for admitted work to settle. External workers accept new instructions at a subsequent node boundary, not as an in-flight prompt edit. A queued control receipt is a request, not confirmation of application.
@@ -76,7 +82,9 @@ uv run python -m refactory_dsh.interactive package/mode \
   --workdir /absolute/run --headless --resume
 ```
 
-Recovery requires a recognized checkpoint, a stopped owner, matching prepared configuration and unchanged fingerprinted inputs/outputs. It refuses a pending dispatched worker with unknown outcome or a failed/unknown last-node outcome. In-flight external product sessions are not resumed. Python executor partial-fork recovery is also refused because successful sibling facts cannot yet be restored safely.
+Recovery requires a recognized checkpoint, a stopped owner, matching prepared configuration and unchanged fingerprinted inputs/outputs. It refuses a dispatch whose outcome is unknown — a pending marker with no written receipt; a refused step whose receipt was written is not unknown. It also refuses a failed or unknown last-node outcome. In-flight external product sessions are not resumed. Python executor partial-fork recovery is also refused because successful sibling facts cannot yet be restored safely.
+
+A process killed by a signal during a check or environment install is retried once; if it dies again, the run reports it as an infrastructure failure naming the signal and halts without spending an attempt.
 
 An emission that changes nothing is refused back to emit, including when materialise is replayed on an emit.txt the last attempt already holds. The refusal says the emission changed nothing, not that an edit's text is missing, and the branch holds one attempt per answer that changed something.
 
