@@ -284,6 +284,40 @@ def test_check_timeout_s_out_of_range_is_refused():
             lowering.to_workflow(state, name="design")
 
 
+@pytest.mark.parametrize("mode_cls, check_node_id, expected_envelope_s", [
+    ("design", "check", 6540),
+    ("design_fast", "focused_check", 6540),
+    ("make_pass", "check", 6900),
+])
+def test_real_modes_get_check_envelope(mode_cls, check_node_id, expected_envelope_s):
+    """The real modes' check nodes get the envelope from their own check_timeout_s default.
+
+    This test instantiates the actual mode classes — not synthetic graphs —
+    so it catches regressions where a real mode's check node stops declaring
+    the facts or knobs the predicate needs.
+    """
+    from refactory_dsh.design import DesignMode
+    from refactory_dsh.fast import DesignFastMode
+    from refactory_packages.fix_pack.mode import MakePass
+
+    classes = {"design": DesignMode, "design_fast": DesignFastMode, "make_pass": MakePass}
+    mode = classes[mode_cls]()
+    state = mode.state_dict()
+    workflow = lowering.to_workflow(state, name=mode_cls)
+
+    lowered_check = workflow.nodes[check_node_id]
+    assert lowered_check.command_timeout_s == expected_envelope_s, (
+        f"{mode_cls}'s {check_node_id}: expected {expected_envelope_s}, "
+        f"got {lowered_check.command_timeout_s}"
+    )
+
+    lowered_mat = workflow.nodes["materialise"]
+    assert lowered_mat.command_timeout_s is None, (
+        f"{mode_cls}'s materialise should not get the check envelope, "
+        f"but got command_timeout_s={lowered_mat.command_timeout_s}"
+    )
+
+
 def test_op_without_check_produces_keeps_default_timeout():
     """An op whose produces do not include CHECK_PRODUCES keeps command_timeout_s=None."""
     graph = Graph()

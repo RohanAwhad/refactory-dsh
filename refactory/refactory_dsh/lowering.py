@@ -284,16 +284,24 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
 
 
 def _is_check_node(node: Any) -> bool:
-    """Whether this node declares repo_change's check facts in its produces.
+    """Whether this node runs repo_change's check and needs the check envelope.
 
     Every mode that uses ``repo_change.run_check`` declares
-    ``*repo_change.CHECK_PRODUCES`` on the gate or op that calls it.
-    Matching by produces rather than by evaluator name covers every
-    such mode -- shipped and authored -- without listing each one.
+    ``*repo_change.CHECK_PRODUCES`` on the gate or op that calls it, and
+    declares ``check_timeout_s`` in its knobs so the budget travels to the
+    operation. Both conditions are required: ``materialise`` also produces
+    ``commit`` and ``files`` (the check rewrites them after an install
+    amends the attempt), but it does not declare the knob because it does
+    not run the check. No fact-level discriminator (CHECK_WRITES or
+    CHECK_PRODUCES alone) can exclude materialise, because materialise
+    writes ``changes.diff`` and produces both ``commit`` and ``files``.
     """
     from refactory_dsh.repo_change import CHECK_PRODUCES
 
-    return set(CHECK_PRODUCES).issubset(set(node.produces))
+    return (
+        set(CHECK_PRODUCES).issubset(set(node.produces))
+        and "check_timeout_s" in node.knobs
+    )
 
 
 def _check_envelope_s(state: dict[str, Any]) -> int:
