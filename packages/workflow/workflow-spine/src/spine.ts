@@ -423,6 +423,7 @@ export class Spine {
     if (node._type === 'GateNode') {
       if (node.evaluator_type !== undefined) view.evaluator_type = node.evaluator_type
       if (node.evaluator_command !== undefined) view.evaluator_command = node.evaluator_command
+      if (node.command_timeout_s !== undefined) view.command_timeout_s = node.command_timeout_s
       view.gate_prompt = node.gate_prompt ?? ''
       view.reads = node.reads ?? []
       view.verdicts = this.acceptedVerdicts(nid)
