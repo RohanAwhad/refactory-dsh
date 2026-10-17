@@ -726,4 +726,58 @@ describe('applyControls integration', () => {
     const state = await call(ctx, 'wf_state') as { completed: string[] }
     expect(state.completed).not.toContain('p')
   })
+
+  it('deferred rerun fails when invalidation plan changed after join', async () => {
+    const workdir = scratch()
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'start',
+      nodes: {
+        start: { _type: 'AgentNode', id: 'start', role: 'builder', prompt_template: 'S', reads: [], writes: [] },
+        fork: { _type: 'ForkNode', id: 'fork', targets: ['p', 'q'] },
+        p: { _type: 'AgentNode', id: 'p', role: 'builder', prompt_template: 'P', reads: [], writes: [] },
+        q: { _type: 'AgentNode', id: 'q', role: 'builder', prompt_template: 'Q', reads: [], writes: [] },
+        join: { _type: 'JoinNode', id: 'join', sources: ['p', 'q'] },
+        end: { _type: 'AgentNode', id: 'end', role: 'builder', prompt_template: 'E', reads: [], writes: [] },
+      },
+      edges: [
+        { source: 'start', target: 'fork' },
+        { source: 'fork', target: 'join' },
+        { source: 'join', target: 'end' },
+      ],
+    }
+    const ctx = await mount(graph, { workdir })
+    // Advance through start, fork, and complete one branch.
+    await call(ctx, 'wf_next')
+    await call(ctx, 'wf_done', { node: 'start' })
+    await call(ctx, 'wf_next')
+    await call(ctx, 'wf_done', { node: 'fork' })
+    await call(ctx, 'wf_next')
+    await call(ctx, 'wf_done', { node: 'p' })
+    // wf_next writes checkpoint with p completed, q still pending.
+    await call(ctx, 'wf_next')
+    const cpBytes = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
+    const revision = createHash('sha256').update(cpBytes).digest('hex')
+    // Queue a deferred rerun control with a stale deferred_nodes list that
+    // does NOT match what planRedo('p') will return after the join — simulating
+    // the scenario where the graph expanded between preview and apply.
+    writeRerunControl(workdir, 'p', { revision, deferredNodes: ['p', 'join', 'end', 'phantom'] })
+    // wf_next — q still due, concurrent work running, control deferred.
+    await call(ctx, 'wf_next')
+    expect(existsSync(join(workdir, '.refactory', 'graph-controls', '1.json'))).toBe(true)
+    // Complete q so the join drains and concurrent work ends.
+    await call(ctx, 'wf_done', { node: 'q' })
+    // wf_next — hasConcurrentWork() is now false. applyControls compares the
+    // deferred_nodes to the current planRedo('p').nodes, finds a mismatch, and
+    // writes a failed receipt.
+    await call(ctx, 'wf_next')
+    // The control file should have been consumed (removed after failure).
+    expect(existsSync(join(workdir, '.refactory', 'graph-controls', '1.json'))).toBe(false)
+    // The receipt should report plan-changed failure.
+    const receipt = JSON.parse(readFileSync(join(workdir, '.refactory', 'graph-control-receipt.json'), 'utf8'))
+    expect(receipt.status).toBe('failed')
+    expect(receipt.message).toContain('plan changed')
+    // The node should NOT have been redone — p stays completed.
+    const state = await call(ctx, 'wf_state') as { completed: string[] }
+    expect(state.completed).toContain('p')
+  })
 })
