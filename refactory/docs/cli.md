@@ -50,8 +50,8 @@ its legacy `task_ref` field is populated when there is exactly one distinct Task
 | `--workdir <dir>` | where the run's evidence lands (default `.factory/interactive/<package>-<mode>`). |
 | `--provider <route>` | the provider route that model is on, e.g. `deepseek-official`. |
 | `--model <id>` | the model this run uses, e.g. `deepseek-v4-pro`. |
-| `--approve <gate>=<value>` | answer a gate up front, e.g. `gate_strategy=proceed`, for a run with nobody at it. A gate a person would be asked at is theirs: run without this and answer it, or drive the mode node by node with the `wf_open` tool. `modes` marks a person's gate `(user)`. |
-| `--headless` | run without a conversation: one task, one report, then exit, for scripts and CI. Without it the run is live — each turn prints as it happens and a line you type between turns reaches the CEO. |
+| `--approve <gate>=<value>` | answer a gate up front, e.g. `gate_strategy=proceed`, for a run with nobody at it. In live mode, a user gate is shown at the terminal with its prompt and accepted verdicts; pick one and optionally add a multi-line note (end with a line containing only `.`) that is recorded as steering. Without `--approve`, run it and answer the gate when it reaches you. `modes` marks a person's gate `(user)`. |
+| `--headless` | run without a conversation: one task, one report, then exit, for scripts and CI. When a headless run reaches a user gate, it prints the exact `refactory steer --run <dir> --verdict <gate>=<value>` and `refactory graph-control resume --run <dir>` commands. Without it the run is live — step progress prints as it happens during each turn, and a line you type between turns reaches the CEO. |
 | `--timeout <seconds>` | bound the interactive graph process, including authoring; 0 supplies no separate wait limit. An explicit shared elapsed allocation can impose a shorter deadline. |
 
 Fast Create and Design use one strategist, coder and QA agent sequentially. Fast
@@ -107,7 +107,7 @@ installed copy.
 
 `refactory ceo <package>/<mode>` runs a mode you already have on DSH with your terminal attached, so a gate reaches you. It is the same `ceo` verb that authors a mode; a positional that names one is what says to run it. Only a whole `<package>/<mode>` identifier (lower-case letters, digits and underscores, each side starting with a letter, around one slash) counts. Anything else is a brief for the default design mode, including a brief that mentions a path, such as `"add a version flag to refactory/refactory_dsh/cli.py"`.
 
-**A run is a live session.** The CEO's turns print as they complete, each node is reported as it runs, a gate is a prompt, and a line you type between turns reaches the CEO — which can amend a node's prompt and re-run it. `--headless` builds the older one-shot argv instead, for a script or CI, and then the run prints only its final JSON.
+**A run is a live session.** Step transitions and the CEO's messages print as they happen during each turn, not only between turns; a gate a person owns is shown at the terminal with its prompt and accepted verdicts, and a line you type between turns reaches the CEO — which can amend a node's prompt and re-run it. `--headless` builds the older one-shot argv instead, for a script or CI, and then the run prints only its final JSON; when it stops at a user gate it prints the exact steer and resume commands.
 
 | command | what it does |
 |---|---|
@@ -118,7 +118,7 @@ installed copy.
 | `refactory ceo <package>/<mode> --workdir <dir>` | where the run's evidence lands. |
 | `refactory ceo <package>/<mode> --timeout <seconds>` | how long to wait at a gate; `0` waits for you. |
 | `refactory ceo <package>/<mode> --model <id> --provider <route>` | the model this run uses. |
-| `refactory ceo <package>/<mode> --approve <gate>=<value>` | answer a gate before the run instead of at it, for a run nobody can ask. For a gate a person owns, leave it to them: they are asked when the run reaches it. |
+| `refactory ceo <package>/<mode> --approve <gate>=<value>` | answer a gate before the run instead of at it, for a run nobody can ask. In live mode, a gate a person owns is shown at the terminal with its prompt and accepted verdicts; the person picks one. |
 
 ## Optimization
 

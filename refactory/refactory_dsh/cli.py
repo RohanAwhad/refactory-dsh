@@ -295,7 +295,9 @@ def cmd_ceo(args: argparse.Namespace) -> int:
             forwarded += ["--" + key.replace("_", "-"), str(value)]
     if args.headless:
         forwarded += ["--headless"]
-    print(f"refactory: {authoring} — {target}", file=sys.stderr)
+    first = target.split('\n', 1)[0]
+    short = first[:80] + '…' if len(first) > 80 else first
+    print(f"refactory: {authoring} — {short}", file=sys.stderr)
     return _forward("refactory_dsh.interactive", forwarded)
 
 
