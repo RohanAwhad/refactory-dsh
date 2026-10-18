@@ -47,9 +47,14 @@ FULL_REVIEW_CONTEXT = REVIEW_CONTEXT.replace("{{repair_feedback}}", "{{validatio
 AUDIT_INSTRUCTIONS = (
     "\nWrite intent-audit.json as {\"requirements\":[{\"id\":\"baseline id\", "
     "\"requirement\":\"the concrete ask(s) checked\", \"status\":\"pass|fail|unverified|excluded\", "
+    "\"clauses\":[{\"clause\":\"one distinct obligation\", \"evidence\":[{\"path\":\"file\", \"detail\":\"finding\"}]}], "
     "\"evidence\":[{\"path\":\"actual file path\", \"detail\":\"command/output or precise finding\"}], "
     "\"reason\":\"explanation\", \"user_change\":\"ledger id or brief, only for an explicit user exclusion\", "
     "\"user_quote\":\"exact text of that explicit exclusion\"}]}. "
+    "For every constraint or correction row, list each distinct clause — every separate "
+    "obligation in the text — in the \"clauses\" array, each with its own evidence from "
+    "the diff. Omitting a clause that is in the text, or listing a clause with no "
+    "evidence, is a structural failure. "
     "Cover EVERY baseline id in authoring-evidence.json, decomposing compound asks "
     "into separate rows with the same id when needed. Map every ask, accepted criterion, "
     "design obligation and current ledger instruction to actual current evidence. "
@@ -257,6 +262,21 @@ def audit_problems(ctx: Any) -> list[str]:
                     or not quote.strip() or quote not in baseline.get(change, {}).get("text", "")):
                 problems.append(f"{key}: exclusion has no explicit user change; reviewers cannot waive requirements")
             continue
+        # ── clause-level check for constraint/correction rows ──
+        base_item = baseline.get(key, {})
+        if base_item.get("kind") in ("correction", "constraint"):
+            clauses = row.get("clauses")
+            if not isinstance(clauses, list) or not clauses:
+                problems.append(f"{key}: constraint/correction row has no clauses; "
+                                "list every distinct obligation from the text")
+                continue
+            for ci, clause in enumerate(clauses):
+                if not isinstance(clause, dict) or not clause.get("clause"):
+                    problems.append(f"{key}: clause {ci + 1} has no text")
+                    continue
+                clause_evidence = clause.get("evidence")
+                if not isinstance(clause_evidence, list) or not clause_evidence:
+                    problems.append(f"{key}: clause {ci + 1} ({clause.get('clause', '')!r}) has no evidence")
         refs = row.get("evidence")
         if row.get("status") != "pass" or not row.get("requirement") or not isinstance(refs, list) or not refs:
             problems.append(f"{key}: required evidence is failed or unverified: {row.get('reason', 'no supporting evidence')}")

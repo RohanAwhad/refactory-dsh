@@ -155,7 +155,7 @@ def test_a_seed_state_with_no_ports_lowers_without_them():
 
 # ── check envelope ─────────────────────────────────────────────────────────
 #
-# The check step runs dependency installs, setup, generate and the check
+# The check step runs dependency installs, generate, setup and the check
 # itself.  Its spine envelope must cover all of them, or the spine kills it.
 
 

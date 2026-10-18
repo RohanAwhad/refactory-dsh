@@ -177,9 +177,11 @@ def compare_failures(
         if failure not in base_failures:
             new_failures.add(failure)
             continue
-        # Condition (b): test file not changed by the attempt
+        # Condition (b): test file not changed by the attempt. A runner names the file
+        # relative to where it ran (a package directory, say), git relative to the root.
         test_file = _test_file(failure)
-        if test_file and test_file in changed_set:
+        if test_file and any(path == test_file or path.endswith("/" + test_file)
+                             for path in changed_set):
             new_failures.add(failure)
             continue
         # Condition (c): test name not mentioned in brief or design.md
@@ -391,45 +393,19 @@ def run_base_check(ctx: Any, command: str, timeout: float) -> BaseCheckResult:
     budget = getattr(ctx, "budget", None)
     env = worktree.check_environment(base_path, home)
 
-    # Run setup on the base if configured
-    if setup:
-        prepared = sandbox.run_command(
-            setup, workdir=base_path, timeout_s=timeout,
-            budget=budget, env=env, home=home, exact_env=True,
-        )
-        if not prepared.ok:
-            detail = (
-                f"the setup command `{setup}` failed on the base: "
-                + "\n".join(
-                    (prepared.problem(), prepared.stdout or "", prepared.stderr or "")
-                ).strip()
-            )
-            result = BaseCheckResult(
-                ok=False, failures=set(), output=detail, exit_code=-1,
-                environment_failure=detail,
-            )
-            _write_cache(ctx.workdir, key, result)
-            return result
+    # Generate, then setup, exactly as the attempt's check prepares its worktree
+    # (repo_change.prepare_commands), without amending anything on the base.
+    from refactory_dsh.repo_change import prepare_commands
 
-    # Run generate on the base if configured
-    if generate:
-        prepared = sandbox.run_command(
-            generate, workdir=base_path, timeout_s=timeout,
-            budget=budget, env=env, home=home, exact_env=True,
+    _, problems = prepare_commands(ctx, base_found, env, home, timeout, budget, amend=False)
+    if problems:
+        detail = "on the base: " + "\n".join(problems)
+        result = BaseCheckResult(
+            ok=False, failures=set(), output=detail, exit_code=-1,
+            environment_failure=detail,
         )
-        if not prepared.ok:
-            detail = (
-                f"the generate command `{generate}` failed on the base: "
-                + "\n".join(
-                    (prepared.problem(), prepared.stdout or "", prepared.stderr or "")
-                ).strip()
-            )
-            result = BaseCheckResult(
-                ok=False, failures=set(), output=detail, exit_code=-1,
-                environment_failure=detail,
-            )
-            _write_cache(ctx.workdir, key, result)
-            return result
+        _write_cache(ctx.workdir, key, result)
+        return result
 
     # Run the check command on the base
     check_result = sandbox.run_command(
@@ -465,8 +441,8 @@ def compute_test_guardedness(
 ) -> dict | None:
     """Run the attempt's new/changed test files against the base source.
 
-    Returns a guardedness record dict, or None if no new test files or runner not
-    inferrable. Computed per attempt (never cached). Creates the base worktree on
+    Returns a guardedness record dict; when the tests cannot be run on the base, the
+    record says why under ``unavailable``. None only when the run has no worktree. Computed per attempt (never cached). Creates the base worktree on
     demand if it does not already exist.
     """
     found = worktree.recorded(ctx.workdir)
@@ -486,13 +462,16 @@ def compute_test_guardedness(
 
     runner = _infer_test_runner(command)
     if runner is None:
-        return None
+        return {"new_test_files": sorted(new_test_files),
+                "unavailable": "the check command runs neither pytest nor vitest, so the new tests "
+                               "could not be run on the base"}
 
     # Ensure the base worktree exists (on demand, correction 1)
     try:
         base_path, _ = _ensure_base_worktree(ctx)
-    except ValueError:
-        return None
+    except ValueError as exc:
+        return {"new_test_files": sorted(new_test_files),
+                "unavailable": f"the base worktree could not be prepared: {exc}"}
 
     # Copy the attempt's new/changed test files AND their helpers/fixtures
     # into the base worktree (correction 3)

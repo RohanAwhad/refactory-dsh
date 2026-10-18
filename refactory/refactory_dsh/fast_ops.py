@@ -207,8 +207,8 @@ def focused_check(ctx: Any) -> dict[str, Any]:
             guardedness = base_check.compute_test_guardedness(
                 ctx, command, float(ctx.knob("check_timeout_s", 60)),
             )
-        except Exception:
-            guardedness = None
+        except Exception as exc:  # evidence, not a gate: say why it is missing
+            guardedness = {"unavailable": f"the new tests could not be run on the base: {exc}"}
         if guardedness is not None:
             ctx.write_json("test-guardedness.json", guardedness)
     # ── end guardedness ──────────────────────────────────────────────
@@ -235,6 +235,7 @@ def focused_check(ctx: Any) -> dict[str, Any]:
             if filtered.all_excused:
                 payload["status"] = "pass"
                 payload["inherited_failures"] = sorted(filtered.inherited)
+                ctx.set_fact("inherited_failures", sorted(filtered.inherited))
                 ctx.write_json("focused-check.json", payload)
         # ── end base comparison gate ─────────────────────────────────
     if ctx.facts.get("package_path"):

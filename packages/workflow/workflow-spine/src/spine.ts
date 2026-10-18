@@ -207,7 +207,96 @@ export function validateGraph(graph: WorkflowGraph): GraphIssue[] {
   } catch (error) {
     issues.push({ message: error instanceof Error ? error.message : String(error) })
   }
+  // Cross-container reloop check: a gate inside a fork body may not reloop
+  // to a target outside that fork's body.
+  issues.push(...crossContainerReloopIssues(graph, outgoing))
   return issues
+}
+
+/**
+ * Detect reloop edges whose target lies outside the gate's innermost
+ * container (fork). Returns issues for each violation.
+ */
+function crossContainerReloopIssues(
+  graph: WorkflowGraph,
+  outgoing: Map<string, WorkflowEdge[]>,
+): GraphIssue[] {
+  const issues: GraphIssue[] = []
+  let retrySet: Set<string>
+  try {
+    retrySet = retryEdges(graph.nodes, graph.edges)
+  } catch {
+    return issues // retryEdges already reported its error
+  }
+  // For each fork, compute its body
+  for (const [forkId, forkNode] of Object.entries(graph.nodes)) {
+    if (forkNode._type !== 'ForkNode') continue
+    const joinEdge = (outgoing.get(forkId) ?? []).find(e => e.condition == null)
+    if (joinEdge === undefined) continue
+    const joinId = joinEdge.target
+    const body = forwardWalk(forkId, joinId, { outgoing: id => outgoing.get(id) ?? [], node: id => graph.nodes[id] }, retrySet)
+    body.delete(forkId)
+    body.delete(joinId)
+    // Check if any gate in this body has a retry edge to a target outside the body
+    for (const nodeId of body) {
+      if (graph.nodes[nodeId]?._type !== 'GateNode') continue
+      for (const edge of outgoing.get(nodeId) ?? []) {
+        if (edge.condition == null) continue
+        if (!retrySet.has(retryKey(edge.source, edge.target, edge.condition))) continue
+        if (!body.has(edge.target)) {
+          issues.push({
+            node: nodeId,
+            message: `gate ${nodeId} is inside container ${forkId}, but reloop target ${edge.target} is outside it; place the reloop target within the same container, or move the gate to the top level`,
+          })
+        }
+      }
+    }
+  }
+  return issues
+}
+
+/**
+ * Every node reachable forward from `start`, `start` included: edges (less the
+ * retry back-edges in `skip`), a remembered director successor, fork targets,
+ * extra continuations the caller supplies, and a data node's body walked up to
+ * its exit. A walk stops at `stop`. The one forward walk both the spine and the
+ * load-time validator use, so the validator's container bodies are the spine's.
+ */
+function forwardWalk(
+  start: string,
+  stop: string | undefined,
+  look: {
+    outgoing: (id: string) => WorkflowEdge[]
+    node: (id: string) => WorkflowNode | undefined
+    successor?: (id: string) => string | undefined
+    continuations?: (id: string) => string[]
+  },
+  skip?: Set<string>,
+): Set<string> {
+  const found = new Set<string>()
+  const visited = new Set<string>()
+  const queue = [{ id: start, stop }]
+  for (const next of queue) {
+    const { id } = next
+    const key = JSON.stringify(next)
+    if (visited.has(key)) continue
+    visited.add(key)
+    found.add(id)
+    if (id === next.stop) continue
+    const targets = look.outgoing(id)
+      .filter(edge => skip === undefined || !skip.has(retryKey(edge.source, edge.target, edge.condition)))
+      .map(edge => edge.target)
+    const successor = look.successor?.(id)
+    if (successor !== undefined) targets.push(successor)
+    const body = look.node(id)
+    if (body?._type === 'ForkNode') targets.push(...(body.targets ?? []))
+    if (look.continuations !== undefined) targets.push(...look.continuations(id))
+    queue.push(...targets.map(target => ({ id: target, stop: next.stop })))
+    if (body?._type === 'DataNode' && body.subgraph_entry !== undefined) {
+      queue.push({ id: body.subgraph_entry, stop: body.subgraph_exit })
+    }
+  }
+  return found
 }
 
 /** Nodes the walk can never reach, following edges plus fork fan-out. */
@@ -326,7 +415,7 @@ export class Spine {
   private readonly projectDir: string
   private readonly maxIterations: number
   private cursor: string[]
-  private afters: string[]
+  private afters: Map<string, string>
   private completed: string[]
   private skipped: string[]
   private readonly gateVerdicts: Map<string, string>
@@ -349,7 +438,7 @@ export class Spine {
     this.projectDir = graph.project_dir ?? ''
     this.maxIterations = options?.maxIterations ?? DEFAULT_MAX_ITERATIONS
     this.cursor = [graph.start_node]
-    this.afters = []
+    this.afters = new Map()
     this.completed = []
     this.skipped = []
     this.gateVerdicts = new Map()
@@ -361,6 +450,7 @@ export class Spine {
     this.gateReasons = {}
     this.gateReasonSeq = 0
     this.retryEdges()
+    this.validateContainerReloops()
   }
 
   /** Recompute after expansion; remembered continuations are control edges too. */
@@ -520,13 +610,13 @@ export class Spine {
   /** Follow explicit skip edits without completing work or discarding peers. */
   private advanceSkipped(skipped = this.skipped, dryRun = false): void {
     let cursor = [...this.cursor]
-    const afters = [...this.afters]
+    const afters = new Map(this.afters)
     let pass = this.pass === undefined ? undefined : { ...this.pass }
     const seen = new Set<string>()
     while (!cursor.some(node => this.pauseBoundaries.has(node))) {
       const node = cursor.find(entry => skipped.includes(entry))
       if (node === undefined) break
-      const position = JSON.stringify([cursor, afters, pass?.finished])
+      const position = JSON.stringify([cursor, [...afters], pass?.finished])
       if (seen.has(position)) throw new Error('skipped nodes form a workflow cycle; unskip a step before continuing')
       seen.add(position)
       if (pass !== undefined && !pass.finished && node === pass.exit) {
@@ -535,7 +625,23 @@ export class Spine {
       } else {
         const target = this.unconditionalTarget(node)
         cursor = [...new Set([...cursor.filter(entry => entry !== node), ...(target === undefined ? [] : [target])])]
-        if (cursor.length === 0 && afters.length > 0) cursor = [afters.pop() as string]
+        // Container drain check on local copies
+        let drained = true
+        while (drained) {
+          drained = false
+          for (const [container, continuation] of afters) {
+            const body = this.containerBody(container, continuation)
+            const hasInBody = cursor.some(pos => body.has(pos))
+            const hasActivePass = pass !== undefined && body.has(pass.node)
+            const hasPendingCont = [...afters].some(([c2, cont2]) => c2 !== container && body.has(cont2))
+            if (!hasInBody && !hasActivePass && !hasPendingCont) {
+              afters.delete(container)
+              if (!cursor.includes(continuation)) cursor.push(continuation)
+              drained = true
+              break
+            }
+          }
+        }
       }
     }
     if (!dryRun) {
@@ -659,8 +765,7 @@ export class Spine {
     if (entry === '' || exit === '') throw new Error(`${node} declares no subgraph to iterate`)
     this.invalidateNodes(this.descendants(entry, exit), false)
     this.pass = { node, count, index: 0, entry, exit, finished: false }
-    this.cursor = [entry]
-    this.afters = []
+    this.splicePosition(node, [entry])
     this.log.push(`data ${node}: ${count} item(s), first pass at ${entry}`)
     return this.next()
   }
@@ -679,15 +784,19 @@ export class Spine {
     if (this.halted !== undefined) throw new Error(`run halted at ${this.halted.gate}; its item did not finish`)
     // A terminal branch (for example an explicit refusal) also ends an item.
     // The runner must still obtain its Task verdict before advancing the pass.
-    if (!pass.finished && this.cursor.length !== 0) {
-      throw new Error(`item ${pass.index} of ${pass.node} has not finished`)
+    if (!pass.finished) {
+      // Check if any pass body position remains in cursor
+      const passBody = this.descendants(pass.entry, pass.exit)
+      const hasPassPositions = this.cursor.some(pos => passBody.has(pos))
+      if (hasPassPositions) {
+        throw new Error(`item ${pass.index} of ${pass.node} has not finished`)
+      }
     }
     if (pass.index + 1 < pass.count) {
       const index = pass.index + 1
       this.invalidateNodes(this.descendants(pass.entry, pass.exit), false)
       this.pass = { ...pass, index, finished: false }
-      this.cursor = [pass.entry]
-      this.afters = []
+      if (!this.cursor.includes(pass.entry)) this.cursor.push(pass.entry)
       this.log.push(`data ${pass.node}: item ${index + 1}/${pass.count}`)
       return this.next()
     }
@@ -695,7 +804,7 @@ export class Spine {
     this.log.push(`data ${pass.node}: ${pass.count} item(s) done`)
     // Restore the enclosing data continuation before completing it. Its body
     // exhausted the cursor, but only this bookkeeping may resume the parent.
-    this.cursor = [pass.node]
+    if (!this.cursor.includes(pass.node)) this.cursor.push(pass.node)
     // This node entered before a boundary may have been armed. Closing that
     // admitted pass is bookkeeping, not a new entry across the pause boundary.
     return this.completeDue(pass.node)
@@ -726,13 +835,9 @@ export class Spine {
 
     if (body._type === 'ForkNode') {
       const join = this.unconditionalTarget(node)
-      if (join !== undefined) this.afters.push(join)
-      this.cursor = [...(body.targets ?? [])]
-      // An empty fork still reaches its join; skipped targets retain their own
-      // continuations through next() instead of dropping an entire branch.
-      if (this.cursor.length === 0 && this.afters.length > 0) {
-        this.cursor = [this.afters.pop() as string]
-      }
+      if (join !== undefined) this.afters.set(node, join)
+      this.splicePosition(node, [...(body.targets ?? [])])
+      this.checkContainerDrained()
       return this.next()
     }
 
@@ -742,13 +847,12 @@ export class Spine {
     if (this.pass !== undefined && !this.pass.finished && node === this.pass.exit) {
       this.pass = { ...this.pass, finished: true }
       this.cursor = this.cursor.filter(entry => entry !== node)
+      this.checkContainerDrained()
       return this.next()
     }
 
     this.advance(node)
-    if (this.cursor.length === 0 && this.afters.length > 0) {
-      this.cursor = [this.afters.pop() as string]
-    }
+    this.checkContainerDrained()
     return this.next()
   }
 
@@ -804,23 +908,41 @@ export class Spine {
         this.gateVerdicts.set(gate, HALT)
         this.halted = { gate, reason: 'max_iterations' }
         this.cursor = []
-        this.afters = []
+        this.afters = new Map()
         this.log.push(`gate ${gate}: max iterations -> halt`)
         return this.next()
+      }
+      // Refuse cross-container reloop (runtime backstop; also checked at load)
+      const gateContainer = this.continuationOf(gate)
+      if (gateContainer !== undefined) {
+        const body = this.containerBody(gateContainer.container, gateContainer.continuation)
+        if (!body.has(target)) {
+          throw new Error(
+            `gate ${gate} is inside container ${gateContainer.container}, but reloop target ${target} is outside it; `
+            + `place the reloop target within the same container, or move the gate to the top level`
+          )
+        }
       }
       this.halted = undefined
       this.feedback[target] = feedback
       this.uncompleteBetween(target, gate)
-      this.cursor = [target]
-      this.afters = []
+      this.splicePosition(gate, [target])
       this.log.push(`gate ${gate}: ${outcome} -> ${target} (${count})`)
     } else if (outcome === HALT) {
       const target = this.conditionalTarget(gate, HALT)
       record()
       delete this.gateReasons[gate]
-      this.halted = target === undefined ? { gate, reason: 'verdict' } : undefined
-      this.cursor = target === undefined ? [] : [target]
-      this.afters = []
+      if (target === undefined) {
+        // Terminal halt: end the whole run
+        this.halted = { gate, reason: 'verdict' }
+        this.cursor = []
+        this.afters = new Map()
+      } else {
+        // Forward halt edge: preserve siblings
+        this.halted = undefined
+        this.splicePosition(gate, [target])
+        this.checkContainerDrained()
+      }
       this.log.push(`gate ${gate}: halt`)
     } else {
       const target = this.conditionalTarget(gate, outcome)
@@ -832,8 +954,8 @@ export class Spine {
       record()
       delete this.gateReasons[gate]
       this.halted = undefined
-      this.cursor = [target]
-      this.afters = []
+      this.splicePosition(gate, [target])
+      this.checkContainerDrained()
       this.log.push(`gate ${gate}: ${outcome} -> ${target}`)
     }
     return this.next()
@@ -848,7 +970,7 @@ export class Spine {
     }
     this.halted = { gate, reason: 'cancelled' }
     this.cursor = []
-    this.afters = []
+    this.afters = new Map()
     this.log.push(`gate ${gate}: cancelled`)
     return this.next()
   }
@@ -896,6 +1018,8 @@ export class Spine {
         this.completed = this.completed.filter(entry => entry !== child)
       }
     }
+    // Remove old children from cursor so re-expansion doesn't leave stale entries
+    this.cursor = this.cursor.filter(entry => !entry.startsWith(prefix))
     this.edges = this.edges.filter(edge =>
       !(edge.source === director && edge.condition == null)
       && !(edge.source.startsWith(prefix) || edge.target.startsWith(prefix)),
@@ -930,8 +1054,8 @@ export class Spine {
     }
 
     if (!this.completed.includes(director)) this.completed.push(director)
-    if (successor !== undefined) this.afters.push(successor)
-    this.cursor = children
+    if (successor !== undefined) this.afters.set(director, successor)
+    this.splicePosition(director, children)
     this.log.push(`expanded ${director} -> ${children.join(',')}`)
     return { expanded: director, children, next: this.next() }
   }
@@ -986,6 +1110,19 @@ export class Spine {
   }
 
   /**
+   * The body of a container (fork or expanded director): the nodes between
+   * `container` and `continuation`, walked without retry edges, minus the two
+   * ends. One definition used by continuationOf, checkContainerDrained,
+   * advanceSkipped, verdict cross-container check, and endPass scoping.
+   */
+  private containerBody(container: string, continuation: string): Set<string> {
+    const body = this.descendants(container, continuation, { skipRetryEdges: true })
+    body.delete(container)
+    body.delete(continuation)
+    return body
+  }
+
+  /**
    * Find the innermost container (fork or expanded director) whose body holds
    * `nodeId`, and the continuation that container pushes onto `afters`.
    *
@@ -1006,9 +1143,7 @@ export class Spine {
     let best: { container: string; continuation: string; size: number } | undefined
     for (const [container, continuation] of containers) {
       if (continuation === undefined) continue
-      const body = this.descendants(container, continuation, { skipRetryEdges: true })
-      body.delete(container)
-      body.delete(continuation)
+      const body = this.containerBody(container, continuation)
       if (body.has(nodeId) && (best === undefined || body.size < best.size)) {
         best = { container, continuation, size: body.size }
       }
@@ -1016,38 +1151,83 @@ export class Spine {
     return best === undefined ? undefined : { container: best.container, continuation: best.continuation }
   }
 
-  /** All branches reachable from a node, including data bodies and fork targets. */
-  private descendants(start: string, stop?: string, opts?: { skipRetryEdges?: boolean; followContinuations?: boolean }): Set<string> {
-    const skip = opts?.skipRetryEdges === true
-    const followCont = opts?.followContinuations === true
-    const retrySet = skip ? this.retryEdges() : undefined
-    const found = new Set<string>()
-    const visited = new Set<string>()
-    const queue = [{ id: start, stop }]
-    for (const next of queue) {
-      const { id } = next
-      const key = JSON.stringify(next)
-      if (visited.has(key)) continue
-      visited.add(key)
-      found.add(id)
-      if (id === next.stop) continue
-      const targets = this.outgoing(id)
-        .filter(edge => !skip || !retrySet!.has(retryKey(edge.source, edge.target, edge.condition)))
-        .map(edge => edge.target)
-      const successor = this.successors[id]
-      if (successor !== undefined) targets.push(successor)
-      const body = this.nodes.get(id)
-      if (body?._type === 'ForkNode') targets.push(...(body.targets ?? []))
-      if (followCont) {
-        const cont = this.continuationOf(id)
-        if (cont !== undefined) targets.push(cont.continuation)
-      }
-      queue.push(...targets.map(target => ({ id: target, stop: next.stop })))
-      if (body?._type === 'DataNode' && body.subgraph_entry !== undefined) {
-        queue.push({ id: body.subgraph_entry, stop: body.subgraph_exit })
+  /**
+   * Replace one position in the cursor with its successors, leaving all other
+   * positions intact.
+   */
+  private splicePosition(old: string, replacements: string[]): void {
+    const rest = this.cursor.filter(entry => entry !== old)
+    this.cursor = [...new Set([...rest, ...replacements])]
+  }
+
+  /**
+   * After any cursor mutation, check whether any container registered in
+   * `afters` has no remaining positions inside its body. If so, move the
+   * continuation from `afters` into `cursor`.
+   *
+   * A container is not drained while:
+   * - any cursor position is inside its body (at any depth), OR
+   * - any other registered container's continuation lies inside its body
+   *   (so an inner join fires before the outer join).
+   */
+  private checkContainerDrained(): void {
+    for (const [container, continuation] of this.afters) {
+      const body = this.containerBody(container, continuation)
+      const hasCursorInBody = this.cursor.some(pos => body.has(pos))
+      // An active data pass keeps its data node's position virtually alive
+      const hasActivePass = this.pass !== undefined && body.has(this.pass.node)
+      // Also check whether a pending inner continuation lies in this body
+      const hasPendingCont = [...this.afters].some(
+        ([c2, cont2]) => c2 !== container && body.has(cont2),
+      )
+      if (!hasCursorInBody && !hasActivePass && !hasPendingCont) {
+        this.afters.delete(container)
+        if (!this.cursor.includes(continuation)) {
+          this.cursor.push(continuation)
+        }
+        // After adding a continuation, re-check: that continuation might itself
+        // be inside another container that is now drained.
+        return this.checkContainerDrained()
       }
     }
-    return found
+  }
+
+  /**
+   * Validate at load time that no reloop edge crosses a container boundary.
+   * A gate inside a fork branch (or expanded director body) may only reloop
+   * to a target within the same container. This catches graph authoring errors
+   * before a run starts.
+   */
+  private validateContainerReloops(): void {
+    const retrySet = this.retryEdges()
+    for (const edge of this.edges) {
+      if (edge.condition == null) continue
+      if (!retrySet.has(retryKey(edge.source, edge.target, edge.condition))) continue
+      const gate = edge.source
+      const target = edge.target
+      const gateContainer = this.continuationOf(gate)
+      if (gateContainer === undefined) continue
+      const body = this.containerBody(gateContainer.container, gateContainer.continuation)
+      if (!body.has(target)) {
+        throw new Error(
+          `gate ${gate} is inside container ${gateContainer.container}, but reloop target ${target} is outside it; `
+          + `place the reloop target within the same container, or move the gate to the top level`
+        )
+      }
+    }
+  }
+
+  /** All branches reachable from a node, including data bodies and fork targets. */
+  private descendants(start: string, stop?: string, opts?: { skipRetryEdges?: boolean; followContinuations?: boolean }): Set<string> {
+    const look: Parameters<typeof forwardWalk>[2] = {
+      outgoing: id => this.outgoing(id),
+      node: id => this.nodes.get(id),
+      successor: id => this.successors[id],
+    }
+    if (opts?.followContinuations === true) {
+      look.continuations = id => { const cont = this.continuationOf(id); return cont === undefined ? [] : [cont.continuation] }
+    }
+    return forwardWalk(start, stop, look, opts?.skipRetryEdges === true ? this.retryEdges() : undefined)
   }
 
   /** Clear current completion and gate decisions without erasing graph edits. */
@@ -1063,7 +1243,7 @@ export class Spine {
 
   /** Whether concurrent work (a fork's parallel branches) is in progress. */
   hasConcurrentWork(): boolean {
-    return this.cursor.length > 1 || this.afters.length > 0
+    return this.cursor.length > 1 || this.afters.size > 0
   }
 
   /** Set per-visit feedback for a node, visible in next() and cleared on complete. */
@@ -1134,26 +1314,27 @@ export class Spine {
     else if (this.pass !== undefined) this.pass.finished = false
     // Keep cursor entries and afters not in the affected set
     this.cursor = this.cursor.filter(id => !affected.has(id))
-    this.afters = this.afters.filter(id => !affected.has(id))
+    for (const [container, continuation] of this.afters) {
+      if (affected.has(continuation)) this.afters.delete(container)
+    }
     this.halted = undefined
     // Add the redo start if not already present
     if (!this.cursor.includes(plan.start)) this.cursor.unshift(plan.start)
     // Re-arm the afters barrier for continuations whose container is not being
     // redone — the container's completeDue would normally push the continuation,
     // but it won't re-run.
-    const continuations: string[] = []
+    const rearms: Array<{ container: string; continuation: string }> = []
     const seen = new Set<string>()
     for (const n of plan.nodes) {
       const cont = this.continuationOf(n)
       if (cont !== undefined && affected.has(cont.continuation) && !affected.has(cont.container)
           && cont.continuation !== plan.start && !this.cursor.includes(cont.continuation) && !seen.has(cont.continuation)) {
         seen.add(cont.continuation)
-        continuations.push(cont.continuation)
+        rearms.push(cont)
       }
     }
-    // Push in reverse BFS order so innermost continuation pops first.
-    for (let i = continuations.length - 1; i >= 0; i--) {
-      this.afters.push(continuations[i]!)
+    for (const { container, continuation } of rearms) {
+      this.afters.set(container, continuation)
     }
     this.log.push(`redid ${node} at ${plan.start}; invalidated ${plan.nodes.join(', ')}`)
     return this.next()
@@ -1220,15 +1401,15 @@ export class Spine {
       if (node in redo_plans) continue
       try { deferred_redo_plans[node] = this.planRedo(node, { deferred: true }) } catch { /* unsafe replay stays unavailable */ }
     }
-    return { schema_version: 1, source_graph: this.sourceGraph, state: this.state(),
+    return { schema_version: 2, source_graph: this.sourceGraph, state: this.state(),
       graph: { name: this.workflow, project_dir: this.projectDir, start_node: this.cursor[0] ?? '',
         nodes: Object.fromEntries(this.nodes), edges: this.edges },
-      afters: [...this.afters], successors: { ...this.successors }, redo_plans, deferred_redo_plans }
+      afters_map: Object.fromEntries(this.afters), successors: { ...this.successors }, redo_plans, deferred_redo_plans }
   }
 
   /** Restore only an explicit checkpoint of this exact source graph. */
   restore(value: Record<string, unknown>): void {
-    if (value.schema_version !== 1 || value.source_graph !== this.sourceGraph) {
+    if ((value.schema_version !== 1 && value.schema_version !== 2) || value.source_graph !== this.sourceGraph) {
       throw new Error('checkpoint inputs or source graph changed; explicit invalidation is required')
     }
     const saved = value.state as ReturnType<Spine['state']>
@@ -1245,7 +1426,6 @@ export class Spine {
     this.cursor = cursor
     this.completed = completed
     this.skipped = list(saved.skipped)
-    this.afters = list(value.afters)
     this.pauseBoundaries.clear()
     for (const node of list(saved.pause_before)) this.pauseBoundaries.add(node)
     this.gateVerdicts.clear()
@@ -1262,6 +1442,29 @@ export class Spine {
     for (const node of Object.keys(saved.prompts as object)) this.promptEdits.add(node)
     this.pass = saved.pass as DataPass | undefined
     this.halted = saved.halted as TerminalHalt | undefined
+    // Restore afters: v2 uses afters_map, v1 uses flat afters array (migration)
+    if (value.schema_version === 2) {
+      const map = value.afters_map as Record<string, string>
+      this.afters = new Map(Object.entries(map))
+    } else {
+      // v1: flat array — reconstruct keyed map by matching each entry to its container
+      const flatAfters = list(value.afters)
+      this.afters = new Map()
+      for (const continuation of flatAfters) {
+        // Find the container whose continuation matches this entry
+        const containers: Array<[string, string | undefined]> = [
+          ...[...this.nodes].filter(([, body]) => body._type === 'ForkNode')
+            .map(([id]): [string, string | undefined] => [id, this.unconditionalTarget(id)]),
+          ...Object.entries(this.successors),
+        ]
+        for (const [container, cont] of containers) {
+          if (cont === continuation) {
+            this.afters.set(container, continuation)
+            break
+          }
+        }
+      }
+    }
   }
 
   /** Full mutable state (for `wf_state`). */
@@ -1282,6 +1485,8 @@ export class Spine {
       iterations: { ...this.iterations },
       feedback: { ...this.feedback },
       gate_reasons: { ...this.gateReasons },
+      afters: [...this.afters.values()],
+      afters_map: Object.fromEntries(this.afters),
       prompts,
       ...(this.pass === undefined ? {} : { pass: { ...this.pass } }),
       ...(this.halted === undefined ? {} : { halted: { ...this.halted } }),

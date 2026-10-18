@@ -814,7 +814,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     },
     "generate": {
       "default": "",
-      "description": "a command run in the worktree after setup, before each check; tracked-file changes are amended into the attempt",
+      "description": "a command run in the worktree after dependencies are installed, before setup and each check; whatever it changes in tracked files is amended into the attempt. A generator that itself needs a build includes that build in its own command",
       "flags": [
         "--generate"
       ],
@@ -960,7 +960,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     }
   },
   "purpose": "Build and check software from a brief and a check command, on its own branch in a git worktree: of the repository `target` names, or of a new project. Once its reviews pass it opens a pull request (a new project's private GitHub repository is created then), unless noPr. No reusable mode is required. Prefer wf_open default_pack/design with user gates.",
-  "reviewed_schema": "e291dd097cbae3d200acc7c992fcc95085eabba6fd90bf7b67baee86eaf8d729"
+  "reviewed_schema": "cf209301bbb3f9d4e7039a61172369fbb331bb7b7ff91387d7d27b7e9b68bd2a"
 }
 ```
 
@@ -4392,7 +4392,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     },
     "generate": {
       "default": "",
-      "description": "design and design_fast: a command run in the worktree after setup, before each check; its tracked-file changes are amended into the attempt",
+      "description": "design and design_fast: a command run in the worktree after dependencies are installed, before setup and each check; whatever it changes in tracked files is amended into the attempt. A generator that itself needs a build includes that build in its own command",
       "flags": [
         "--generate"
       ],
@@ -4744,7 +4744,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     }
   },
   "purpose": "Run a named mode or author a package/artifact from a brief in the terminal; worker file defaults apply at preparation. CEO conversation and graph worker routes are distinct.",
-  "reviewed_schema": "491e399e27bc1cceab42001b29d8ecb490fea9822c5b7149510d322ad7cf1710"
+  "reviewed_schema": "87dce677805e168eca7f531ba916bf2b45635225867cb1f461420fafc80f3862"
 }
 ```
 
@@ -7721,7 +7721,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     },
     "generate": {
       "default": "",
-      "description": "a command run in the worktree after setup, before each check; whatever it changes in tracked files is amended into the attempt",
+      "description": "a command run in the worktree after dependencies are installed, before setup and each check; whatever it changes in tracked files is amended into the attempt. A generator that itself needs a build includes that build in its own command",
       "frozen": true,
       "kind": "str",
       "range": [
@@ -7894,7 +7894,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`). The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local; `refine` updates an open one).",
-    "reviewed_schema": "cadd1c55eb6ab54c69576beb3089238bad5eb64310baf04f2ea2cb38d90941a4"
+    "reviewed_schema": "5179ee6774d565c669b60d2487d17ab46987a115c73bbad6017186ee6b58a5ae"
   }
 }
 ```
@@ -8114,7 +8114,7 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
     },
     "generate": {
       "default": "",
-      "description": "a command run in the worktree after setup, before each check; whatever it changes in tracked files is amended into the attempt",
+      "description": "a command run in the worktree after dependencies are installed, before setup and each check; whatever it changes in tracked files is amended into the attempt. A generator that itself needs a build includes that build in its own command",
       "frozen": true,
       "kind": "str",
       "range": [
@@ -8226,7 +8226,7 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a small artifact with one sequential strategist, coder and QA agent, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none (`worktree=0` writes .factory/artifacts instead; `source_project` copies a directory there). The check runs in that worktree before focused QA. It has no approval gate, so it opens no pull request: the branch is left for you to push.",
-    "reviewed_schema": "093f085dd3078e2d74e037ecdf54bcdbdc77d35511b91a0858da07cdb5935f36"
+    "reviewed_schema": "251795ee3c0005c0d3abf41b3d1624c5ff60c6e929d8cbd31c75c4e950b48147"
   }
 }
 ```
@@ -9376,7 +9376,7 @@ Change a repository until a failing check passes, on a branch of its own, throug
     },
     "generate": {
       "default": "",
-      "description": "a command run in the worktree after setup, before each check; whatever it changes in tracked files is amended into the attempt",
+      "description": "a command run in the worktree after dependencies are installed, before setup and each check; whatever it changes in tracked files is amended into the attempt. A generator that itself needs a build includes that build in its own command",
       "frozen": true,
       "kind": "str",
       "range": [
@@ -9455,7 +9455,7 @@ Change a repository until a failing check passes, on a branch of its own, throug
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Change a repository until a failing check passes, on a branch of its own, through the steps any mode that changes a repository attaches (`repo_change`): the example mode authors copy. It opens no pull request; unscored, so not an optimization target.",
-    "reviewed_schema": "083a14b9ec35c161734536bde6ec38fe184bce337428190f8670aa7768fbbc4c"
+    "reviewed_schema": "e23089c592149082b0c64eb7bda81bd8adde05ee284df5157e7bf8e402de0007"
   }
 }
 ```

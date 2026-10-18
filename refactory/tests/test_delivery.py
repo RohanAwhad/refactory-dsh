@@ -21,7 +21,7 @@ import pytest
 from refactory_dsh import cli, console, delivery, nn, projects, worktree
 from refactory_dsh.design import DesignMode
 from refactory_dsh.projects import projects_dir
-from tests_support import DESIGN_REVIEW_ANSWER, RESEARCH_ANSWER, REVIEW_ANSWERS, FakeModel, git, git_repo, render, stub
+from tests_support import DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, RESEARCH_ANSWER, REVIEW_ANSWERS, FakeModel, git, git_repo, render, stub
 
 NAME = "delivered_tool"
 FAKE_GH = Path(__file__).resolve().parent / "fake_gh.py"
@@ -92,7 +92,8 @@ def test_pr_title_never_cuts_inside_backticks():
 def test_pr_body_has_summary_verification_and_original_request(tmp_path):
     import subprocess
     ctx = _TitleCtx(
-        facts={"brief": "Build a tool\nthat prints built.", "check": "python tool.py", "name": "b2"},
+        facts={"brief": "Build a tool\nthat prints built.", "check": "python tool.py", "name": "b2",
+               "inherited_failures": ["tests/test_env.py::test_needs_profile"]},
         files={"design.md": "# The design heading\n\nFirst paragraph of the design.\n\n---\n"},
     )
     # Set up a minimal git repo so worktree.git works.
@@ -119,8 +120,117 @@ def test_pr_body_has_summary_verification_and_original_request(tmp_path):
     assert "## Verification" in body
     assert "python tool.py" in body
     assert "the health check, code review and QA found nothing blocking" in body
+    assert "`tests/test_env.py::test_needs_profile`" in body
     assert "## Original request" in body
     assert "Build a tool\nthat prints built." in body
+
+
+def test_pr_verification_names_inherited_failures_and_the_new_tests_on_the_base():
+    import json
+    ctx = _TitleCtx(
+        facts={"inherited_failures": ["tests/test_env.py::test_needs_profile"]},
+        files={"test-guardedness.json": json.dumps(
+            {"summary": {"guarding": 3, "not_guarding": 1, "cannot_run_on_base": 0, "total_new_tests": 4}})},
+    )
+    lines = delivery._base_evidence(ctx)
+    assert "`tests/test_env.py::test_needs_profile`" in lines
+    assert "3 of 4 fail without the change; 1 pass there, so they do not guard it" in lines
+
+
+def test_pr_verification_says_why_the_new_tests_were_not_run_on_the_base():
+    import json
+    ctx = _TitleCtx(files={"test-guardedness.json": json.dumps(
+        {"unavailable": "the base worktree could not be prepared: no uv"})})
+    assert "not run: the base worktree could not be prepared: no uv" in delivery._base_evidence(ctx)
+    assert delivery._base_evidence(_TitleCtx()) == ""
+    leaked = _TitleCtx(files={"test-guardedness.json": json.dumps(
+        {"unavailable": "setup failed: ANTHROPIC_API_KEY=sk-live-123 not accepted"})})
+    assert "sk-live-123" not in delivery._base_evidence(leaked)
+
+
+def _git_pair(tmp_path):
+    """Set up a minimal two-commit git repo; return (base, head, path)."""
+    import subprocess
+    subprocess.run(["git", "init", str(tmp_path)], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t"], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "T"], capture_output=True, check=True)
+    (tmp_path / "f.txt").write_text("a\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "init"], capture_output=True, check=True)
+    base = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    (tmp_path / "g.txt").write_text("b\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "work"], capture_output=True, check=True)
+    head = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    return base, head
+
+
+def test_contract_design_gives_title_summary_and_changes(tmp_path):
+    design_text = (
+        "# Enforce clause-level audit coverage\n\n"
+        "## Summary\n\n"
+        "The overwatch audit missed a clause. This change adds clause-level checking.\n\n"
+        "## Rule and sites\n\n"
+        "The rule: every constraint clause is checked.\n\n"
+        "- `authoring_evidence.py:132-157` — **[changed]** adds clause rows.\n"
+        "- `design_ops.py:116-246` — **[left: only the gate; clauses are audit-side]**\n\n"
+        "## Docs\n\n"
+        "- `docs/models.md` — add clause-level audit section\n\n"
+        "## Changes\n\n"
+        "- `refactory/refactory_dsh/authoring_evidence.py`\n"
+        "- `refactory/tests/test_authoring_evidence.py`\n"
+    )
+    ctx = _TitleCtx(
+        facts={"brief": "Add clause checking", "check": "pytest", "name": "b17_clauses"},
+        files={"design.md": design_text},
+    )
+    title = delivery._title(ctx)
+    assert title == "Enforce clause-level audit coverage"
+    assert title != "b17_clauses"
+
+    base, head = _git_pair(tmp_path)
+    from types import SimpleNamespace
+    found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
+    body = delivery._body(ctx, found)
+    assert "## Summary" in body
+    assert "clause-level checking" in body
+    assert "## What changed" in body
+    assert "authoring_evidence.py" in body
+
+
+@pytest.mark.parametrize("heading,run_name,expected_not_equal", [
+    ("# Design: b15b_reference_oracle", "b15b_reference_oracle", "b15b_reference_oracle"),
+    ("# Design: b16b_graph_ends \u2014 Make sinks() agree with scheduler reachability",
+     "b16b_graph_ends", "b16b_graph_ends"),
+    ("# Design: Fork-branch redo reopens join and downstream",
+     "b15a_fork_redo", "b15a_fork_redo"),
+    ("# Design: Generalize set-aside to every declared output on re-dispatch",
+     "b16a_set_aside", "b16a_set_aside"),
+])
+def test_pre_contract_design_title_is_not_the_run_name(heading, run_name, expected_not_equal):
+    design_text = f"{heading}\n\n## Problem\n\nThe current implementation has a bug that causes incorrect results.\n"
+    ctx = _TitleCtx(
+        facts={"brief": "Fix something important in the codebase.", "name": run_name},
+        files={"design.md": design_text},
+    )
+    title = delivery._title(ctx)
+    assert title, f"title should not be empty for heading={heading!r}"
+    assert title != expected_not_equal, f"title should not be the run name: {title!r}"
+
+
+def test_pre_contract_design_gives_prose_summary():
+    from refactory_dsh import design_contract
+
+    design_text = (
+        "# Design: b15b_reference_oracle\n\n"
+        "## Problem\n\n"
+        "The oracle returns stale references when the cache is cold.\n"
+    )
+    parsed = design_contract.parse(design_text, "b15b_reference_oracle")
+    assert parsed.summary == "The oracle returns stale references when the cache is cold."
+    assert "## Problem" not in parsed.summary
 
 
 
@@ -172,7 +282,7 @@ def _calls(tmp_path: Path) -> str:
 
 def _answers(*emits: str) -> list[str]:
     """Every answer a design run needs, in the order its graph asks."""
-    return [RESEARCH_ANSWER, "perspectives", "one plan", "the design document",
+    return [RESEARCH_ANSWER, "perspectives", "one plan", DESIGN_DOC_ANSWER,
             DESIGN_REVIEW_ANSWER, *emits, *REVIEW_ANSWERS]
 
 
@@ -211,7 +321,7 @@ def test_a_new_project_gets_a_private_repository_whose_first_pull_request_holds_
     assert _remote_head(github, slug, "main") == git(project, "rev-parse", "main")
     [pull] = _pulls(github, slug)
     branch = json.loads((run / "design.json").read_text())["branch"]
-    assert (pull["head"], pull["base"], pull["title"]) == (branch, "main", "Build a tool")
+    assert (pull["head"], pull["base"], pull["title"]) == (branch, "main", "Do the thing")
     assert _remote_head(github, slug, branch) == git(project, "rev-parse", branch)
     assert git(project, "ls-tree", "--name-only", "main") == ""
     assert "Build a tool\nthat prints built." in pull["body"] and "python tool.py" in pull["body"]
@@ -539,13 +649,15 @@ def test_a_remote_url_is_read_as_github_only_on_github():
 # ── every route that starts a design run says how it is delivered ──────────
 def _launched(monkeypatch) -> list[list[str]]:
     """What a `refactory ceo` run would have handed DSH; nothing is launched."""
-    from refactory_dsh import workers
+    from refactory_dsh import workers, interactive, dsh_profile
 
     class _Run:
         returncode = 0
 
     seen: list[list[str]] = []
     monkeypatch.setattr(workers, "run_graph_command", lambda argv, **kwargs: seen.append(argv) or _Run())
+    monkeypatch.setattr(interactive, "require_build", lambda: None)
+    monkeypatch.setattr(dsh_profile, "require", lambda *a, **k: None)
     return seen
 
 
@@ -1104,10 +1216,11 @@ def test_a_run_planned_while_gh_was_logged_out_says_the_next_run_delivers(github
     assert "`gh auth login` signs in, for the next run" in (run / delivery.PLAN).read_text()
 
 
-def test_the_pull_request_recommends_a_squash_merge_of_the_runs_attempts(github, tmp_path):
+def test_the_pull_request_says_the_commits_are_the_runs_attempts(github, tmp_path):
     assert _design(tmp_path / "run").exit_ok
     [pull] = _pulls(github, f"{LOGIN}/{NAME}")
-    assert "squash merge is recommended" in pull["body"]
+    assert "the run's attempts" in pull["body"]
+    assert "squash merge is recommended" not in pull["body"]
 
 
 def test_an_upstream_that_does_not_hold_the_base_is_not_where_the_pull_request_goes(github, tmp_path):

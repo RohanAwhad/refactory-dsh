@@ -552,9 +552,9 @@ def build_parser() -> argparse.ArgumentParser:
     ceo.add_argument("--setup", default="",
                      help="design and design_fast: a command run in the worktree before each check, "
                           "such as a build")
+    from refactory_dsh import repo_change as _rc
     ceo.add_argument("--generate", default="",
-                     help="design and design_fast: a command run in the worktree after setup, "
-                          "before each check; its tracked-file changes are amended into the attempt")
+                     help="design and design_fast: " + _rc.knobs()["generate"].description)
     ceo.add_argument("--no-pr", action="store_true",
                      help="design only: keep the work on the run's local branch instead of opening a pull "
                           "request once the reviews pass")

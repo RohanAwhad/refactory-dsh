@@ -216,6 +216,34 @@ def gate_design_review(ctx: Any) -> str:
                         f"that text does not appear verbatim in the brief"
                     )
 
+    # ── mechanical check 3: design-document contract ──
+    from refactory_dsh import design_contract
+
+    if design_text:
+        run_name = str(ctx.facts.get("name") or "")
+        parsed = design_contract.parse(design_text, run_name)
+        missing = design_contract.missing_parts(parsed)
+        if missing:
+            problems.append(
+                f"the design is missing required section(s): {', '.join(missing)}"
+            )
+        left_no_reason = design_contract.left_without_reason(parsed)
+        if left_no_reason:
+            problems.append(
+                "rule-site(s) marked [left] without a reason: "
+                + ", ".join(left_no_reason)
+            )
+        unmarked = design_contract.unmarked_sites(parsed)
+        if unmarked:
+            problems.append(
+                "rule-site(s) with no [changed] or [left: <reason>] marker: "
+                + ", ".join(unmarked)
+            )
+        if design_contract.title_is_run_name(design_text, run_name):
+            problems.append(
+                "the design's title is the run name; it must say what the change does"
+            )
+
     # ── decide: proceed, reloop, or exhaust ──
     allowed = int(ctx.knob("design_review_attempts", 2))
     used = int(ctx.facts.get("design_review_attempts_used", 0)) + 1
@@ -285,8 +313,8 @@ def check_artifact(ctx: Any) -> str:
             guardedness = base_check.compute_test_guardedness(
                 ctx, command, int(ctx.knob("check_timeout_s", 180)),
             )
-        except Exception:
-            pass  # guardedness is evidence, not a gate
+        except Exception as exc:  # evidence, not a gate: say why it is missing
+            guardedness = {"unavailable": f"the new tests could not be run on the base: {exc}"}
         if guardedness is not None:
             ctx.write_json("test-guardedness.json", guardedness)
     # ── end guardedness ───────────────────────────────────────────────
@@ -322,6 +350,7 @@ def check_artifact(ctx: Any) -> str:
             # (gate_overwatch, gate_qa) see a valid runtime receipt.
             outcome["status"] = "pass"
             outcome["inherited_failures"] = sorted(filtered.inherited)
+            ctx.set_fact("inherited_failures", sorted(filtered.inherited))
             evidence.record(ctx, outcome)
             return "proceed"
         if filtered.new_failures and filtered.inherited:

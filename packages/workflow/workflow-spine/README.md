@@ -115,7 +115,7 @@ A `user` gate is neither run nor routed by the model. `wf_verdict` asks the comp
 | `FnNode` / `Study` | `wf_next` returns it; the agent runs the deterministic op, then `wf_done`. |
 | `GateNode` fn/user/agent | `wf_next` returns it; the agent calls `wf_verdict`. |
 | `DataNode` | The plugin selects its items and iterates its subgraph once per item, reporting the item with each pass and closing it with the loader's `end`. |
-| `ForkNode` / `JoinNode` | Automatic execution crosses sole due controls; manual execution uses `wf_done`. Each branch advances on its own, and the barrier is the `afters` stack. |
+| `ForkNode` / `JoinNode` | Automatic execution crosses sole due controls; manual execution uses `wf_done`. Each branch advances on its own; each container's barrier is scoped to its own body (a join waits only for its own fork's branches). |
 | Named gate condition | `wf_verdict(gate, "draft")` advances along the matching edge. |
 | RELOOP edge | `wf_verdict(reloop, feedback)` rewinds, capped by the gate's `max_iterations` or `maxIterations`. |
 
@@ -144,12 +144,11 @@ The tool block and the prompt section are fixed for the life of a run and sit in
 
 These limits define the current spine. They are current package constraints, not a graph-authoring backlog.
 
+- The scheduler advances only the position it is moving. Structural operations (fork completion, gate verdict, director expansion, data pass) replace only the operated-on position in the cursor and leave sibling positions and their barriers in place. Each container's barrier is scoped to its body: a join waits for exactly its own fork's branches, and nested containers drain independently (inner join fires before outer join). A reloop whose target lies outside its gate's innermost container (fork or expanded director) is refused at load time and at verdict time with a descriptive error naming the gate, its container, and the target.
 - `SubgraphForkNode` / `SelectionNode` are advanced through with an `unsupported` marker; both need an isolated-worktree sub-executor no current graph declares.
 - A `DataNode`'s passes run one after another. The node's `parallelism` is not honoured: the subgraph is walked on the single cursor, so a subgraph with concurrent branches would need a second cursor per item.
 - The item loader is a command, not a service. `dataCommand` is a shell command line, so a composition that wants a different loader changes it rather than implementing a seam.
 - `LLMNode` is executed as a one-shot agent node: the driving agent makes the call. Nothing enforces the declared `model`, `temperature`, or tool set.
-- A reloop collapses the cursor onto its target, discarding any other active position, so a reloop gate reached with a fork in flight drops the other branches. Graph authors must place reloop gates where the cursor is single.
-- The `afters` barrier is one stack, so a fork nested inside a fork branch makes the inner barrier fire on the outer join.
 - The graph is inlined via `config.graph`; loading a `graphPath` at apply time (via the `fs` seam) is not yet implemented.
 - Mounted at host level, the guard cannot tell the CEO from another top-level agent: every top-level agent on the host gets the `wf_*` tools and loses its `ceoDeny` tools. Mount the spine inside a preset when the host runs other agents, as the `ceo` preset does.
 - The "force the loop" guidance is a registered prompt section; the structural enforcement (the spine only advances on a reported completion) is the drift-proof guarantee, and the section only asks the agent to cooperate.
@@ -165,6 +164,38 @@ None.
 </details>
 
 **Runtime invariant:** No runtime invariant companion is published because the spine's cursor, gate verdicts, and iteration counters are read only through the `wf_*` tools the plugin registers on the session's fiber.
+
+-----
+
+## Graph Shape Invariant Suite
+
+Every scheduler change must pass the graph shape invariant suite:
+
+```sh
+pnpm exec vitest run packages/workflow/workflow-spine
+```
+
+The suite (`tests/graph-set.spec.ts`) drives 14 named graph shapes through the
+spine in every completion order of the nodes due together, checking five
+invariants on each run:
+
+1. Every node completes once per visit.
+2. A join completes only after every branch of its own fork, and before anything
+   after it.
+3. No node that became due is dropped: it completes or is explicitly skipped.
+4. The run ends done with no incomplete halt, and the graph's real ends are
+   reached.
+5. After the run, for every completed non-gate node, a redo re-runs exactly the
+   nodes after it (not its siblings) and ends done.
+
+### Adding a shape
+
+1. Define the `WorkflowGraph` in `tests/graph-shapes.ts` and add a `ShapeEntry`
+   to the `shapes` array with its metadata (`directors`, `dataPasses`,
+   `gatesWithReloop`, `fixedVerdicts`, `large`).
+2. dm-73 expected failures are no longer needed. The `DM73_SHAPES` list in
+   `tests/dm73-shapes.ts` is empty. All shapes run all invariants in all orderings.
+3. Run the suite — the driver and invariants pick up the new shape automatically.
 
 ## Live intent and progress
 

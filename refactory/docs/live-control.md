@@ -136,6 +136,13 @@ director's successor. Replaying `code_reviewer` invalidates
 reviewers' answers in place; once `code_reviewer` runs again, the join and the
 gate after it run again too.
 
+A verdict (proceed, reloop, or any forward outcome) inside a fork branch
+replaces only the gate's own cursor position; sibling positions and their
+container barriers remain intact. A reloop whose target lies outside its
+gate's innermost container (fork or expanded director) is refused at graph
+load time and at verdict time with a descriptive error naming the gate, its
+container, and the external target.
+
 ### Scoped corrections
 
 The `--text` on a rerun sets per-visit feedback, not a permanent prompt

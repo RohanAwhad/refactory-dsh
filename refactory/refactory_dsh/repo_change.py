@@ -125,8 +125,10 @@ def knobs() -> dict[str, Knob]:
                       description="a command run in the worktree before each check, after its "
                                   "dependencies are installed, such as a build"),
         "generate": Knob("", "str", frozen=True,
-                         description="a command run in the worktree after setup, before each check; "
-                                     "whatever it changes in tracked files is amended into the attempt"),
+                         description="a command run in the worktree after dependencies are installed, "
+                                     "before setup and each check; whatever it changes in tracked files "
+                                     "is amended into the attempt. A generator that itself needs a build "
+                                     "includes that build in its own command"),
     }
 
 
@@ -740,6 +742,38 @@ def _warn_if_shared_changed(found: worktree.Worktree, when: str) -> None:
                           f"changed {when}; check them before your next commit there")
 
 
+def prepare_commands(ctx: Any, found: worktree.Worktree, env: dict[str, str], home: Path, timeout: float,
+                     budget: Any, *, amend: bool = True) -> tuple[worktree.Worktree, list[str]]:
+    """Run the run's generate command, then its setup command, in a prepared worktree.
+
+    Generated files are inputs to what setup builds and checks, so generate comes first.
+    With ``amend`` (the attempt's worktree), what generate rewrites in tracked files is
+    amended into the attempt; without it (the base worktree base_check runs), the
+    rewrite stays local. Returns the worktree, at its new head when amended, and the
+    problems that stop the check.
+    """
+    problems: list[str] = []
+    generate = str(ctx.facts.get("generate") or "").strip()
+    if generate:
+        prepared = sandbox.run_command(generate, workdir=Path(found.path), timeout_s=timeout,
+                                       budget=budget, env=env, home=home, exact_env=True)
+        if not prepared.ok:
+            problems.append(f"the generate command `{generate}` failed: "
+                            + "\n".join((prepared.problem(), prepared.stdout or "", prepared.stderr or "")).strip())
+        elif amend:
+            edits = worktree.tracked_edits(found)
+            if edits:
+                found = worktree.amend(found, ctx.workdir, edits, "files written by the generate command")
+    setup = str(ctx.facts.get("setup") or "").strip()
+    if not problems and setup:
+        prepared = sandbox.run_command(setup, workdir=Path(found.path), timeout_s=timeout,
+                                       budget=budget, env=env, home=home, exact_env=True)
+        if not prepared.ok:
+            problems.append(f"the setup command `{setup}` failed: "
+                            + "\n".join((prepared.problem(), prepared.stdout or "", prepared.stderr or "")).strip())
+    return found, problems
+
+
 def _check_in_worktree(ctx: Any, found: worktree.Worktree, command: str, timeout: float) -> Any:
     """Run the check in the run's worktree, after preparing the environment it needs.
 
@@ -756,25 +790,8 @@ def _check_in_worktree(ctx: Any, found: worktree.Worktree, command: str, timeout
         found = amended
     worktree.write_wrapper(found, ctx.workdir)
     env = worktree.check_environment(Path(found.path), home)
-    setup = str(ctx.facts.get("setup") or "").strip()
-    if not problems and setup:
-        prepared = sandbox.run_command(setup, workdir=Path(found.path), timeout_s=timeout,
-                                       budget=budget, env=env, home=home, exact_env=True)
-        if not prepared.ok:
-            problems.append(f"the setup command `{setup}` failed: "
-                            + "\n".join((prepared.problem(), prepared.stdout or "", prepared.stderr or "")).strip())
-    # ── generate: run and amend tracked-file changes into the attempt ──
-    generate = str(ctx.facts.get("generate") or "").strip()
-    if not problems and generate:
-        prepared = sandbox.run_command(generate, workdir=Path(found.path), timeout_s=timeout,
-                                       budget=budget, env=env, home=home, exact_env=True)
-        if not prepared.ok:
-            problems.append(f"the generate command `{generate}` failed: "
-                            + "\n".join((prepared.problem(), prepared.stdout or "", prepared.stderr or "")).strip())
-        else:
-            edits = worktree.tracked_edits(found)
-            if edits:
-                found = worktree.amend(found, ctx.workdir, edits, "files written by the generate command")
+    if not problems:
+        found, problems = prepare_commands(ctx, found, env, home, timeout, budget)
     if found.head != head_before:
         ctx.set_fact("commit", found.head)
         ctx.set_fact("files", _branch_files(found))
@@ -796,8 +813,8 @@ def run_check(ctx: Any, command: str, timeout: float) -> Any:
 
     In the run's worktree it runs on the committed attempt -- what a check or reviewer
     changed is put back first -- in the worktree's own environment: its dependencies
-    installed when its manifests call for them, then the ``setup`` fact's command, then the
-    ``generate`` fact's command, whose tracked-file changes are amended into the attempt, and
+    installed when its manifests call for them, then the ``generate`` fact's command (whose
+    tracked-file changes are amended into the attempt), then the ``setup`` fact's command, and
     nothing of refactory's own on the path (`worktree.check_environment`). Afterwards the
     worktree is put back again, so the reviews and the next attempt see what edits apply
     to. Without a worktree it runs in the artifact directory the run claimed.
