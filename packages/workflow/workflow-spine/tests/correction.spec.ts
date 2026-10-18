@@ -1249,7 +1249,7 @@ describe('fork-branch redo reopens join and downstream', () => {
         director: {
           _type: 'AgentNode', id: 'director', role: 'builder', prompt_template: 'D',
           reads: [], writes: [],
-          expand: { role: 'worker', slug_field: 'slug', prompt_field: 'prompt', writes_template: '' },
+          expand: { plan: 'plan.json', role: 'worker', slug_field: 'slug', prompt_field: 'prompt', writes_template: '' },
         },
         end: { _type: 'AgentNode', id: 'end', role: 'builder', prompt_template: 'E', reads: [], writes: [] },
       },
