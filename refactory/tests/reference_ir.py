@@ -84,9 +84,13 @@ def strip_extension_keys(workflow_dict: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _wrap_reference_class(ref_cls):
-    """A subclass of *ref_cls* whose __init__ silently drops EXTENSION_FIELDS kwargs."""
-    def __init__(self, **kwargs):
+def _wrap_reference_class(ref_cls: type) -> type:
+    """A subclass of *ref_cls* whose __init__ silently drops EXTENSION_FIELDS kwargs.
+
+    A subclass, not a function, because `to_dict()` writes `type(node).__name__` as
+    the `_type` discriminator, so the wrapper must carry the reference class's name.
+    """
+    def __init__(self: Any, **kwargs: Any) -> None:
         for field_name in EXTENSION_FIELDS:
             kwargs.pop(field_name, None)
         super(wrapper, self).__init__(**kwargs)
