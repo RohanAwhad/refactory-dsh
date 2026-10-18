@@ -209,7 +209,7 @@ export function validateGraph(graph: WorkflowGraph): GraphIssue[] {
   }
   // Cross-container reloop check: a gate inside a fork body may not reloop
   // to a target outside that fork's body.
-  issues.push(...crossContainerReloopIssues(graph, ids, outgoing))
+  issues.push(...crossContainerReloopIssues(graph, outgoing))
   return issues
 }
 
@@ -219,7 +219,6 @@ export function validateGraph(graph: WorkflowGraph): GraphIssue[] {
  */
 function crossContainerReloopIssues(
   graph: WorkflowGraph,
-  ids: Set<string>,
   outgoing: Map<string, WorkflowEdge[]>,
 ): GraphIssue[] {
   const issues: GraphIssue[] = []
@@ -235,7 +234,7 @@ function crossContainerReloopIssues(
     const joinEdge = (outgoing.get(forkId) ?? []).find(e => e.condition == null)
     if (joinEdge === undefined) continue
     const joinId = joinEdge.target
-    const body = graphDescendants(forkId, joinId, ids, outgoing, graph, retrySet)
+    const body = forwardWalk(forkId, joinId, { outgoing: id => outgoing.get(id) ?? [], node: id => graph.nodes[id] }, retrySet)
     body.delete(forkId)
     body.delete(joinId)
     // Check if any gate in this body has a retry edge to a target outside the body
@@ -256,33 +255,46 @@ function crossContainerReloopIssues(
   return issues
 }
 
-/** Graph descendants without retry edges, for the standalone validator. */
-function graphDescendants(
+/**
+ * Every node reachable forward from `start`, `start` included: edges (less the
+ * retry back-edges in `skip`), a remembered director successor, fork targets,
+ * extra continuations the caller supplies, and a data node's body walked up to
+ * its exit. A walk stops at `stop`. The one forward walk both the spine and the
+ * load-time validator use, so the validator's container bodies are the spine's.
+ */
+function forwardWalk(
   start: string,
-  stop: string,
-  ids: Set<string>,
-  outgoing: Map<string, WorkflowEdge[]>,
-  graph: WorkflowGraph,
-  retrySet: Set<string>,
+  stop: string | undefined,
+  look: {
+    outgoing: (id: string) => WorkflowEdge[]
+    node: (id: string) => WorkflowNode | undefined
+    successor?: (id: string) => string | undefined
+    continuations?: (id: string) => string[]
+  },
+  skip?: Set<string>,
 ): Set<string> {
   const found = new Set<string>()
-  const queue = [{ id: start, stopAt: stop }]
   const visited = new Set<string>()
+  const queue = [{ id: start, stop }]
   for (const next of queue) {
+    const { id } = next
     const key = JSON.stringify(next)
     if (visited.has(key)) continue
     visited.add(key)
-    found.add(next.id)
-    if (next.id === next.stopAt) continue
-    const targets = (outgoing.get(next.id) ?? [])
-      .filter(edge => !retrySet.has(retryKey(edge.source, edge.target, edge.condition)))
+    found.add(id)
+    if (id === next.stop) continue
+    const targets = look.outgoing(id)
+      .filter(edge => skip === undefined || !skip.has(retryKey(edge.source, edge.target, edge.condition)))
       .map(edge => edge.target)
-    const nd = graph.nodes[next.id]
-    if (nd?._type === 'ForkNode') targets.push(...(nd.targets ?? []))
-    if (nd?._type === 'DataNode' && nd.subgraph_entry !== undefined) {
-      queue.push({ id: nd.subgraph_entry, stopAt: nd.subgraph_exit ?? stop })
+    const successor = look.successor?.(id)
+    if (successor !== undefined) targets.push(successor)
+    const body = look.node(id)
+    if (body?._type === 'ForkNode') targets.push(...(body.targets ?? []))
+    if (look.continuations !== undefined) targets.push(...look.continuations(id))
+    queue.push(...targets.map(target => ({ id: target, stop: next.stop })))
+    if (body?._type === 'DataNode' && body.subgraph_entry !== undefined) {
+      queue.push({ id: body.subgraph_entry, stop: body.subgraph_exit })
     }
-    queue.push(...targets.filter(t => ids.has(t)).map(t => ({ id: t, stopAt: next.stopAt })))
   }
   return found
 }
@@ -1207,36 +1219,15 @@ export class Spine {
 
   /** All branches reachable from a node, including data bodies and fork targets. */
   private descendants(start: string, stop?: string, opts?: { skipRetryEdges?: boolean; followContinuations?: boolean }): Set<string> {
-    const skip = opts?.skipRetryEdges === true
-    const followCont = opts?.followContinuations === true
-    const retrySet = skip ? this.retryEdges() : undefined
-    const found = new Set<string>()
-    const visited = new Set<string>()
-    const queue = [{ id: start, stop }]
-    for (const next of queue) {
-      const { id } = next
-      const key = JSON.stringify(next)
-      if (visited.has(key)) continue
-      visited.add(key)
-      found.add(id)
-      if (id === next.stop) continue
-      const targets = this.outgoing(id)
-        .filter(edge => !skip || !retrySet!.has(retryKey(edge.source, edge.target, edge.condition)))
-        .map(edge => edge.target)
-      const successor = this.successors[id]
-      if (successor !== undefined) targets.push(successor)
-      const body = this.nodes.get(id)
-      if (body?._type === 'ForkNode') targets.push(...(body.targets ?? []))
-      if (followCont) {
-        const cont = this.continuationOf(id)
-        if (cont !== undefined) targets.push(cont.continuation)
-      }
-      queue.push(...targets.map(target => ({ id: target, stop: next.stop })))
-      if (body?._type === 'DataNode' && body.subgraph_entry !== undefined) {
-        queue.push({ id: body.subgraph_entry, stop: body.subgraph_exit })
-      }
+    const look: Parameters<typeof forwardWalk>[2] = {
+      outgoing: id => this.outgoing(id),
+      node: id => this.nodes.get(id),
+      successor: id => this.successors[id],
     }
-    return found
+    if (opts?.followContinuations === true) {
+      look.continuations = id => { const cont = this.continuationOf(id); return cont === undefined ? [] : [cont.continuation] }
+    }
+    return forwardWalk(start, stop, look, opts?.skipRetryEdges === true ? this.retryEdges() : undefined)
   }
 
   /** Clear current completion and gate decisions without erasing graph edits. */
