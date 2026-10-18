@@ -1473,6 +1473,260 @@ def test_no_github_remote_says_so_plainly(github, tmp_path, capsys):
     assert "pull request text is at" in dr
 
 
+# ── merge-before-deliver (dm-76) ───────────────────────────────────────────
+
+def test_base_moved_with_generated_conflict(github, tmp_path, monkeypatch):
+    """The base moves after the run starts, with a change to a generated file and to an
+    unrelated file: the delivered branch contains the base, the generated file is
+    regenerated, the check ran on the merged result, and the pull request merges cleanly.
+
+    Fails without the change: delivery pushes the reviewed commit as-is, and the PR
+    opens behind its base with a generated-file conflict.
+    """
+    repo = git_repo(tmp_path / "repo")
+    # gen.sh: concatenate source files into generated.txt
+    (repo / "gen.sh").write_text("cat source.txt > generated.txt\n"
+                                 "if [ -f source2.txt ]; then cat source2.txt >> generated.txt; fi\n")
+    (repo / "source.txt").write_text("alpha\n")
+    # generate from the initial state
+    subprocess.run(["bash", "gen.sh"], cwd=str(repo), check=True, capture_output=True)
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "base with gen")
+    slug = "acme/merge-gen"
+    bare = _published(github, slug, repo)
+
+    real = delivery.deliver_design
+
+    def advance_main_then_deliver(ctx):
+        """Between the run's start and delivery, advance main with a generated-file conflict."""
+        other = tmp_path / "other"
+        git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(other))
+        (other / "source2.txt").write_text("gamma\n")
+        (other / "unrelated.txt").write_text("hello\n")
+        # regenerate generated.txt with the base's new sources
+        subprocess.run(["bash", "gen.sh"], cwd=str(other), check=True, capture_output=True)
+        git(other, "add", ".")
+        git(other, "-c", "user.name=t", "-c", "user.email=t@example.com",
+            "commit", "-q", "-m", "base moves: add source2 and unrelated")
+        git(other, "push", "-q", "origin", "main")
+        return real(ctx)
+
+    monkeypatch.setattr(delivery, "deliver_design", advance_main_then_deliver)
+
+    run = tmp_path / "run"
+    # The run changes source.txt and writes tool.py; gen.sh is the generate command.
+    result = _design(run, {"tool.py": "print('built')\n", "source.txt": "alpha\nbeta\n"},
+                     target=str(repo), check="python tool.py",
+                     generate="bash gen.sh")
+    assert result.exit_ok, result.error
+
+    record = _record(run)
+    assert record["status"] == "opened"
+    assert record.get("merge_commit") and len(record["merge_commit"]) == 40
+    merge_commit = record["merge_commit"]
+    assert record.get("reviewed_commit") and record["reviewed_commit"] != merge_commit
+    assert record.get("merge_check") == "passed on the merged result"
+
+    # The merge commit has exactly two parents.
+    parents = [line.split()[1] for line in
+               git(bare, "cat-file", "-p", merge_commit).splitlines()
+               if line.startswith("parent ")]
+    assert len(parents) == 2
+
+    # The delivered branch contains the base.
+    main_tip = git(bare, "rev-parse", "refs/heads/main")
+    assert git(bare, "merge-base", "--is-ancestor", main_tip, merge_commit) == ""
+
+    # The generated file has content from both sides.
+    generated = git(bare, "show", f"{merge_commit}:generated.txt")
+    assert "alpha" in generated and "beta" in generated and "gamma" in generated
+
+    # The PR body names both commits and says the check passed on the merged result.
+    [pull] = _pulls(github, slug)
+    assert record["reviewed_commit"][:12] in pull["body"]
+    assert merge_commit[:12] in pull["body"]
+    assert "check passed on the merged result" in pull["body"]
+
+    # The remote branch head equals the merge commit.
+    branch = json.loads((run / "design.json").read_text())["branch"]
+    assert _remote_head(github, slug, branch) == merge_commit
+
+
+def test_base_changed_authored_file_conflict(github, tmp_path, monkeypatch):
+    """The base changes the same lines of an authored file: nothing is resolved
+    automatically, the reviewed commit is delivered, and the conflict is named.
+
+    Fails without the change: delivery pushes the reviewed commit as-is, and the PR
+    opens behind its base. It does not name the conflicting file in the PR body.
+    """
+    repo = git_repo(tmp_path / "repo")
+    (repo / "authored.py").write_text("line1\nline2\nline3\n")
+    (repo / "gen.sh").write_text("echo generated > generated.txt\n")
+    subprocess.run(["bash", "gen.sh"], cwd=str(repo), check=True, capture_output=True)
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "base with authored")
+    slug = "acme/merge-auth"
+    bare = _published(github, slug, repo)
+
+    real = delivery.deliver_design
+
+    def advance_main_then_deliver(ctx):
+        other = tmp_path / "other"
+        git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(other))
+        (other / "authored.py").write_text("line1\nchanged_by_base\nline3\n")
+        git(other, "add", ".")
+        git(other, "-c", "user.name=t", "-c", "user.email=t@example.com",
+            "commit", "-q", "-m", "base changes authored.py line 2")
+        git(other, "push", "-q", "origin", "main")
+        return real(ctx)
+
+    monkeypatch.setattr(delivery, "deliver_design", advance_main_then_deliver)
+
+    run = tmp_path / "run"
+    result = _design(run, {"tool.py": "print('built')\n",
+                           "authored.py": "line1\nchanged_by_run\nline3\n"},
+                     target=str(repo), check="python tool.py",
+                     generate="bash gen.sh")
+    assert result.exit_ok, result.error
+
+    record = _record(run)
+    assert record["status"] == "opened"
+    assert not record.get("merge_commit")
+    assert "authored.py" in record.get("merge_conflicts", [])
+
+    # The PR body names the conflict.
+    [pull] = _pulls(github, slug)
+    assert "authored.py" in pull["body"]
+    assert "conflicts" in pull["body"].lower()
+
+    # The remote head is the reviewed commit (no merge).
+    branch = json.loads((run / "design.json").read_text())["branch"]
+    reviewed = worktree.recorded(run).head
+    assert _remote_head(github, slug, branch) == reviewed
+
+
+def test_merged_result_fails_check(github, tmp_path, monkeypatch, capsys):
+    """The merged result fails the check: the merge is not delivered, and the reason
+    names the failures.
+
+    Fails without the change: delivery pushes the reviewed commit as-is, opening a PR
+    behind its base. There is no check failure on the merged result.
+    """
+    repo = git_repo(tmp_path / "repo")
+    (repo / "config.txt").write_text("ok\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "base config ok")
+    slug = "acme/merge-fail"
+    bare = _published(github, slug, repo)
+
+    real = delivery.deliver_design
+
+    def advance_main_then_deliver(ctx):
+        other = tmp_path / "other"
+        git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(other))
+        (other / "config.txt").write_text("broken\n")
+        git(other, "add", ".")
+        git(other, "-c", "user.name=t", "-c", "user.email=t@example.com",
+            "commit", "-q", "-m", "base breaks config")
+        git(other, "push", "-q", "origin", "main")
+        return real(ctx)
+
+    monkeypatch.setattr(delivery, "deliver_design", advance_main_then_deliver)
+
+    run = tmp_path / "run"
+    # tool.py fails when config.txt says "broken"
+    result = _design(run, {"tool.py": "import sys; sys.exit(1 if open('config.txt').read().strip() == 'broken' else 0)\n"},
+                     target=str(repo), check="python tool.py")
+    assert result.exit_ok, result.error
+
+    record = _record(run)
+    assert record["status"] == "kept local"
+    assert "check failed" in record.get("why", "").lower() or "base changed" in record.get("why", "").lower()
+
+    # Nothing was pushed (or reviewed commit was pushed but no merge).
+    branch = json.loads((run / "design.json").read_text())["branch"]
+    remote = _remote_head(github, slug, branch)
+    assert not remote or remote == worktree.recorded(run).head
+
+
+def test_base_did_not_move(github, tmp_path):
+    """The base did not move: no merge commit.
+
+    This test passes without the change too (it tests the no-change path). It asserts
+    that no merge_commit is recorded, guarding against a spurious merge.
+    """
+    repo = git_repo(tmp_path / "repo")
+    slug = "acme/no-move"
+    _published(github, slug, repo)
+
+    run = tmp_path / "run"
+    result = _design(run, target=str(repo))
+    assert result.exit_ok, result.error
+
+    record = _record(run)
+    assert record["status"] == "opened"
+    assert not record.get("merge_commit")
+
+    # No merge commits in the delivered branch.
+    branch = json.loads((run / "design.json").read_text())["branch"]
+    remote_head = _remote_head(github, slug, branch)
+    assert remote_head == worktree.recorded(run).head
+    merges = git(github / f"{slug}.git", "rev-list", "--merges",
+                 f"{git(repo, 'rev-parse', 'main')}..{remote_head}")
+    assert merges == ""
+
+
+def test_generated_content_equals_base_version_still_merges(github, tmp_path, monkeypatch):
+    """When the merged generated content equals the base's version, the file is still
+    classified as generated (A == B from both sides' generate), and the merge succeeds.
+
+    This tests the correction #2: classify by whether generate determines the file,
+    not by whether generate changed it relative to the base's version.
+    """
+    repo = git_repo(tmp_path / "repo")
+    # gen.sh always writes the same content regardless of other source files.
+    (repo / "gen.sh").write_text("echo 'static-content' > generated.txt\n")
+    subprocess.run(["bash", "gen.sh"], cwd=str(repo), check=True, capture_output=True)
+    (repo / "source.txt").write_text("alpha\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "base")
+    slug = "acme/merge-static-gen"
+    bare = _published(github, slug, repo)
+
+    real = delivery.deliver_design
+
+    def advance_main_then_deliver(ctx):
+        other = tmp_path / "other"
+        git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(other))
+        # Base changes generated.txt to something else (simulating a different generator version),
+        # but the generate command always produces 'static-content'.
+        (other / "generated.txt").write_text("old-generated-content\n")
+        (other / "extra.txt").write_text("extra\n")
+        git(other, "add", ".")
+        git(other, "-c", "user.name=t", "-c", "user.email=t@example.com",
+            "commit", "-q", "-m", "base changes generated.txt")
+        git(other, "push", "-q", "origin", "main")
+        return real(ctx)
+
+    monkeypatch.setattr(delivery, "deliver_design", advance_main_then_deliver)
+
+    run = tmp_path / "run"
+    # The run also changes generated.txt (via generate), causing a conflict.
+    result = _design(run, {"tool.py": "print('built')\n", "source.txt": "alpha\nbeta\n"},
+                     target=str(repo), check="python tool.py",
+                     generate="bash gen.sh")
+    assert result.exit_ok, result.error
+
+    record = _record(run)
+    assert record["status"] == "opened"
+    # The merge succeeded even though the generated content equals the base's version
+    # (generate produces 'static-content' from both sides).
+    assert record.get("merge_commit") and len(record["merge_commit"]) == 40
+    # generated.txt has the generate command's output.
+    generated = git(bare, "show", f"{record['merge_commit']}:generated.txt")
+    assert generated.strip() == "static-content"
+
+
 def test_an_upstream_that_does_not_hold_the_base_is_not_where_the_pull_request_goes(github, tmp_path):
     repo, _stack = _stacked(github, tmp_path)
     # main moves on GitHub; a local branch at that commit still names stack as its upstream.

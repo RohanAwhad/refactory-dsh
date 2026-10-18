@@ -26,11 +26,12 @@ There are three deliveries:
   first pull request holds all of the code. A repository that already has the name is
   never linked or pushed into.
 - **A refinement** (the `refine` knob). The run started from an open pull request's
-  head, and its commits are pushed onto that pull request's branch, fast-forward only.
-  A branch that moved since the run started is left alone.
+  head, and its commits are pushed onto that pull request's branch, after merging the
+  base branch in when it has moved. A branch that moved since the run started (someone
+  else pushed onto it) is left alone.
 
 Delivery never force-pushes, never pushes to a default branch (except a new
-repository's first, empty `main`), never merges, and never changes a pull request's
+repository's first, empty `main`), and never changes a pull request's
 title or body once it exists: one already open for the branch is reused
 (remote-factory's #1544). Nothing here comes from remote-factory's `publish_github`,
 which creates a public repository without asking and links a same-name one it finds.
@@ -42,10 +43,17 @@ checked, and it leaves the target's remotes and remote-tracking branches as they
 A `url.<base>.insteadOf` of the person's own still applies; one that sends GitHub to
 SSH uses their key. Either way nothing prompts: git's prompts and askpass are off and
 SSH runs in batch mode, so a missing credential is a failure, not a wait.
+
+When the target branch has moved since the run started, delivery merges it into the
+run's branch with a merge commit before pushing. Conflicts in files the run's generate
+command produces are resolved by re-running the generate command; a conflict in any
+other file is not resolved automatically. The merged result is re-checked; if the check
+fails, the merge is not delivered and the run says why.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import re
@@ -128,11 +136,19 @@ class _NotFound(NotDelivered):
 
 
 class Unverified(ValueError):
-    """A pull request that GitHub shows at a head other than the run's reviewed commit."""
+    """A pull request that GitHub shows at a head other than the run's reviewed commit or its merge commit."""
 
     def __init__(self, message: str, url: str) -> None:
         super().__init__(message)
         self.url = url
+
+
+@dataclasses.dataclass
+class MergeResult:
+    """The outcome of merging the target branch into the run's branch before delivery pushes."""
+    merge_commit: str = ""            # 40-char SHA when a merge commit was made, empty otherwise
+    conflicts: list[str] = dataclasses.field(default_factory=list)  # authored-file paths that conflicted
+    check_failed: str = ""            # failure reason when the merge-check failed, empty on success
 
 
 def knobs() -> dict[str, Knob]:
@@ -494,7 +510,7 @@ def _refinement(target: Path, found: tuple[str, str] | None, refine: dict[str, A
     return {"action": "refine", "repo": refine["repo"], "into": pull["baseRefName"],
             "branch": pull["headRefName"], "pull_request": pull["url"], "head": base,
             "summary": (f"pushes onto {pull['headRefName']}, the branch of the pull request {pull['url']}, "
-                        f"fast-forward only, so that pull request updates (nothing is pushed if the "
+                        f"after merging the base branch in when it has moved (nothing is pushed if the "
                         f"branch moves from {base[:12]} first)")}
 
 
@@ -515,7 +531,8 @@ def describe(planned: dict[str, Any], branch: str) -> str:
                   f"- Pull request: from `{branch}` into `main`, holding all of the code."]
     elif action == "refine":
         lines += [f"- Pull request: {planned['pull_request']}, whose title and description are left as they are.",
-                  f"- Pushed: this run's commits onto `{planned['branch']}`, fast-forward only. If that branch "
+                  f"- Pushed: this run's commits onto `{planned['branch']}`; the base branch is merged in "
+                  f"when it has moved. If that branch "
                   f"moves from {planned['head'][:12]} before then, nothing is pushed."]
     elif branch:
         lines += [f"The work stays on the local branch `{branch}`."]
@@ -734,8 +751,9 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
     a plan that now differs from the approved one -- another repository, another branch,
     or no pull request -- keeps the work local. So does anything GitHub refuses, which
     is reported as a run warning, not a failure: the work passed its reviews and is on
-    its branch. A pull request that then shows a head other than the run's is the one
-    failure, because something other than the reviewed commit would be in it.
+    its branch. A pull request that then shows a head other than the run's reviewed
+    commit or its merge commit is the one failure, because something other than the
+    reviewed work would be in it.
     """
     approved = dict(ctx.facts.get("delivery_plan") or {})
     found = worktree.recorded(ctx.workdir)
@@ -774,14 +792,23 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
     try:
         outcome = _deliver(ctx, found, now, title=title)
     except NotDelivered as reason:
+        merge = getattr(reason, "merge", None)
         return _kept(ctx, approved, found, str(reason), reason.pull_request, reason.pushed,
-                     title=title, finish=finish)
+                     title=title, finish=finish, merge=merge)
     except Unverified as error:
         _record(ctx, {"status": "unverified", "pull_request": error.url, "head": found.head, "why": str(error),
                       "plan": approved.get("summary"), "at": datetime.now(timezone.utc).isoformat()})
         projects.record_delivery(Path(found.target), branch=found.branch, pull_request=error.url,
                                  status="unverified")
         raise
+    finally:
+        # Restore the worktree to the reviewed commit so a redo finds it where
+        # require_current expects it, even when _deliver left it at a merge commit.
+        path = Path(found.path)
+        if path.is_dir():
+            actual = worktree.git(path, "rev-parse", "HEAD").strip()
+            if actual != found.head:
+                worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", found.head)
     return _delivered(ctx, approved, found, outcome, title=title)
 
 
@@ -789,33 +816,59 @@ def _deliver(ctx: Any, found: worktree.Worktree, planned: dict[str, Any], *,
              title: str = "") -> dict[str, Any]:
     """Push and open, or push onto the refined pull request; never a second pull request."""
     path, slug, branch = Path(found.path), str(planned["repo"]), str(planned["branch"])
+    into = str(planned["into"])
+    generate = str(ctx.facts.get("generate") or "").strip()
+    reviewed_commit = found.head  # the commit the reviews passed on
+
+    # ── merge the target branch in when it has moved ──────────────────
+    merge = _merge_target(ctx, path, slug, into, generate, reviewed_commit)
+    if merge.merge_commit:
+        check_failure = _check_merged(ctx, found, merge.merge_commit, reviewed_commit)
+        if check_failure:
+            merge = MergeResult(check_failed=check_failure)
+    push_head = merge.merge_commit or found.head
+
+    # ── rewrite the PR body with merge information ────────────────────
+    if merge.merge_commit or merge.conflicts or merge.check_failed:
+        ctx.write_text(BODY, _body(ctx, found, merge=merge))
+
+    if merge.check_failed:
+        reason = NotDelivered(f"the base changed under it: the check failed on the merged result: "
+                              f"{merge.check_failed[:500]}")
+        reason.merge = merge  # type: ignore[attr-defined]
+        raise reason
+
     if planned["action"] == "refine":
         url = str(planned["pull_request"])
         before = json.loads(_gh("pr", "view", url, "--json", "headRefOid")).get("headRefOid")
-        _push(path, slug, found.head, branch, default="")
-        status = "already updated" if before == found.head else "updated"
-        return {"status": status, "pull_request": _after_push(lambda: _verified(url, found.head), slug, branch, url)}
+        _push(path, slug, push_head, branch, default="")
+        status = "already updated" if before == push_head else "updated"
+        return {"status": status, "merge": merge,
+                "pull_request": _after_push(lambda: _verified(url, push_head), slug, branch, url)}
     if planned["action"] == "create":
         _create(Path(found.target), slug, str(planned["visibility"]))
     existing = _existing_pull(path, slug, branch)
-    if existing is not None and existing.get("state") == "MERGED" and existing.get("headRefOid") == found.head:
-        return {"status": "merged", "pull_request": str(existing["url"])}
+    if existing is not None and existing.get("state") == "MERGED" and existing.get("headRefOid") in (found.head, push_head):
+        return {"status": "merged", "merge": merge, "pull_request": str(existing["url"])}
     if existing is not None and existing.get("state") != "OPEN":
         raise NotDelivered(f"the pull request for {branch}, {existing['url']}, is "
                            f"{str(existing['state']).lower()}, and delivery never opens a second one",
                            str(existing["url"]))
     try:
-        _push(path, slug, found.head, branch, default=str(planned["into"]))
+        _push(path, slug, push_head, branch, default=str(planned["into"]))
     except NotDelivered as reason:
+        reason.merge = merge  # type: ignore[attr-defined]
         raise NotDelivered(str(reason), str((existing or {}).get("url") or "")) from reason
     if existing is not None:
-        status = "already open" if existing.get("headRefOid") == found.head else "updated"
+        status = "already open" if existing.get("headRefOid") == push_head else "updated"
         url = str(existing["url"])
-        return {"status": status, "pull_request": _after_push(lambda: _verified(url, found.head), slug, branch, url)}
+        return {"status": status, "merge": merge,
+                "pull_request": _after_push(lambda: _verified(url, push_head), slug, branch, url)}
     body = Path(ctx.workdir) / BODY
     opened = _after_push(lambda: _open(path, slug, branch, str(planned["into"]), title, body), slug, branch)
     url = next((line.strip() for line in reversed(opened.splitlines()) if "/pull/" in line), opened.strip())
-    return {"status": "opened", "pull_request": _after_push(lambda: _verified(url, found.head), slug, branch, url)}
+    return {"status": "opened", "merge": merge,
+            "pull_request": _after_push(lambda: _verified(url, push_head), slug, branch, url)}
 
 
 def _open(path: Path, slug: str, branch: str, into: str, title: str, body: Path) -> str:
@@ -892,6 +945,225 @@ def _settled(step: Any) -> Any:
             if attempt == VERIFY_ATTEMPTS - 1:
                 raise
             time.sleep(VERIFY_WAIT_S * (attempt + 1))
+
+
+def _merge_target(ctx: Any, path: Path, slug: str, into: str, generate: str,
+                  reviewed_commit: str) -> MergeResult:
+    """Merge the current tip of ``into`` into the run's branch, when it has moved.
+
+    Conflicts in files the generate command produces are resolved by re-running the
+    generate command. A conflict in any other file is not resolved automatically:
+    delivery proceeds from the reviewed commit and names the conflicts.
+    """
+    # Find the current tip of the target branch on GitHub.
+    try:
+        listing = _git(path, "ls-remote", _url(slug), f"refs/heads/{into}")
+    except NotDelivered:
+        # The repository does not exist yet (new project) or is unreachable.
+        return MergeResult()
+    if not listing.strip():
+        # The target branch does not exist on GitHub (first PR for a new project).
+        return MergeResult()
+    target_tip = listing.split()[0]
+
+    # Bring the target branch's objects into the local repo.
+    _fetch(path, slug, f"refs/heads/{into}")
+
+    # If the target tip is already an ancestor of HEAD, no merge is needed.
+    try:
+        worktree.git(path, "merge-base", "--is-ancestor", target_tip, "HEAD")
+        return MergeResult()
+    except ValueError:
+        pass  # not an ancestor — merge needed
+
+    # Attempt the merge.
+    merge_env = {**os.environ, **worktree.COMMITTER}
+    result = subprocess.run(
+        ["git", "-C", str(path), *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
+         "merge", "--no-edit", "--no-verify", target_tip],
+        capture_output=True, text=True, timeout=300, env=merge_env,
+    )
+
+    if result.returncode == 0:
+        # Clean merge — no conflicts.
+        merge_sha = worktree.git(path, "rev-parse", "HEAD").strip()
+        return MergeResult(merge_commit=merge_sha)
+
+    # Merge failed — identify conflicting files.
+    try:
+        conflict_output = worktree.git(path, "diff", "--name-only", "--diff-filter=U")
+    except ValueError:
+        conflict_output = ""
+    conflicting = [f for f in conflict_output.strip().splitlines() if f.strip()]
+
+    if not conflicting:
+        # Merge failed for a reason other than file conflicts.
+        worktree.git(path, *worktree.NO_HOOKS, "merge", "--abort")
+        return MergeResult(conflicts=["(merge failed: " + (result.stderr or result.stdout).strip()[:200] + ")"])
+
+    if not generate:
+        # No generate command — all conflicts are authored-file conflicts.
+        worktree.git(path, *worktree.NO_HOOKS, "merge", "--abort")
+        return MergeResult(conflicts=conflicting)
+
+    # ── The practical approach: classify conflicts as generated or authored ──
+    # For each conflicting file, determine if the generate command produces it:
+    # resolve to base's side → run generate → content A
+    # resolve to run's side → run generate → content B
+    # if A == B, the file is generated (use A); otherwise it is authored.
+    from refactory_dsh import sandbox
+
+    home = Path(ctx.workdir).resolve() / ".refactory" / "merge-gen-home"
+    home.mkdir(parents=True, exist_ok=True)
+    env = worktree.check_environment(path, home)
+
+    authored_conflicts: list[str] = []
+
+    # Save the conflict state for each file, then test both sides.
+    for cfile in conflicting:
+        # Resolve to base's side (--theirs is the branch being merged in = target = base)
+        subprocess.run(
+            ["git", "-C", str(path), "checkout", "--theirs", "--", cfile],
+            capture_output=True, timeout=60,
+        )
+    # Stage to clear the conflict markers so generate can run.
+    for cfile in conflicting:
+        subprocess.run(
+            ["git", "-C", str(path), "add", "--", cfile],
+            capture_output=True, timeout=60,
+        )
+    # Complete the merge with base's versions of conflicting files.
+    subprocess.run(
+        ["git", "-C", str(path), *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
+         "commit", "--no-edit", "--no-verify"],
+        capture_output=True, text=True, timeout=300, env=merge_env,
+    )
+    # Run generate on this tree (base side) to get content A.
+    sandbox.run_command(generate, workdir=path, timeout_s=300, env=env, home=home, exact_env=True)
+    content_a: dict[str, bytes] = {}
+    for cfile in conflicting:
+        fpath = path / cfile
+        content_a[cfile] = fpath.read_bytes() if fpath.exists() else b""
+
+    # Now reset to the reviewed commit and redo with run's side.
+    worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", reviewed_commit)
+
+    # Merge again.
+    result2 = subprocess.run(
+        ["git", "-C", str(path), *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
+         "merge", "--no-edit", "--no-verify", target_tip],
+        capture_output=True, text=True, timeout=300, env=merge_env,
+    )
+
+    if result2.returncode == 0:
+        # This time it merged cleanly — shouldn't happen, but handle it.
+        merge_sha = worktree.git(path, "rev-parse", "HEAD").strip()
+        return MergeResult(merge_commit=merge_sha)
+
+    # Resolve to run's side (--ours is HEAD = run's branch).
+    for cfile in conflicting:
+        subprocess.run(
+            ["git", "-C", str(path), "checkout", "--ours", "--", cfile],
+            capture_output=True, timeout=60,
+        )
+    for cfile in conflicting:
+        subprocess.run(
+            ["git", "-C", str(path), "add", "--", cfile],
+            capture_output=True, timeout=60,
+        )
+    subprocess.run(
+        ["git", "-C", str(path), *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
+         "commit", "--no-edit", "--no-verify"],
+        capture_output=True, text=True, timeout=300, env=merge_env,
+    )
+    # Run generate on this tree (run's side) to get content B.
+    sandbox.run_command(generate, workdir=path, timeout_s=300, env=env, home=home, exact_env=True)
+    content_b: dict[str, bytes] = {}
+    for cfile in conflicting:
+        fpath = path / cfile
+        content_b[cfile] = fpath.read_bytes() if fpath.exists() else b""
+
+    # Classify each conflicting file.
+    for cfile in conflicting:
+        if content_a.get(cfile) != content_b.get(cfile):
+            authored_conflicts.append(cfile)
+
+    if authored_conflicts:
+        # At least one authored-file conflict — abandon the merge.
+        worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", reviewed_commit)
+        return MergeResult(conflicts=authored_conflicts)
+
+    # All conflicting files are generated — build the final merge commit.
+    # Reset to reviewed commit and redo the merge one more time with the generated content.
+    worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", reviewed_commit)
+
+    result3 = subprocess.run(
+        ["git", "-C", str(path), *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
+         "merge", "--no-edit", "--no-verify", target_tip],
+        capture_output=True, text=True, timeout=300, env=merge_env,
+    )
+
+    # Resolve conflicts using the generated content (content_a == content_b, use A).
+    for cfile in conflicting:
+        fpath = path / cfile
+        fpath.parent.mkdir(parents=True, exist_ok=True)
+        fpath.write_bytes(content_a[cfile])
+        subprocess.run(
+            ["git", "-C", str(path), "add", "--", cfile],
+            capture_output=True, timeout=60,
+        )
+
+    # Complete the merge commit.
+    subprocess.run(
+        ["git", "-C", str(path), *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
+         "commit", "--no-edit", "--no-verify"],
+        capture_output=True, text=True, timeout=300, env=merge_env,
+    )
+
+    merge_sha = worktree.git(path, "rev-parse", "HEAD").strip()
+    return MergeResult(merge_commit=merge_sha)
+
+
+def _check_merged(ctx: Any, found: worktree.Worktree, merge_commit: str,
+                  reviewed_commit: str) -> str:
+    """Run the check on the merged result; return the failure reason, or empty on success.
+
+    The environment is built the same way as ``_check_in_worktree`` in ``repo_change.py``:
+    HOME under the run directory, ``check_environment()`` for PATH, and
+    ``prepare_commands()`` for generate+setup. Dependencies are already installed from
+    the attempt's own check, so ``ensure_environment`` is not called again (it would
+    try to amend a lockfile into the reviewed commit while the worktree is at the merge).
+    """
+    from refactory_dsh import sandbox, repo_change
+
+    path = Path(found.path)
+    home = Path(ctx.workdir).resolve() / ".refactory" / "merge-check-home"
+    home.mkdir(parents=True, exist_ok=True)
+
+    budget = getattr(ctx, "budget", None)
+    env = worktree.check_environment(path, home)
+
+    # Run generate+setup (amend=False: do not amend the merge commit).
+    _found_after, problems = repo_change.prepare_commands(
+        ctx, found, env, home, 300.0, budget, amend=False)
+
+    if problems:
+        worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", reviewed_commit)
+        return "the worktree's environment could not be prepared: " + "; ".join(problems)
+
+    check = str(ctx.facts.get("check") or "").strip()
+    if not check:
+        return ""
+
+    result = sandbox.run_command(check, workdir=path, timeout_s=300, budget=budget,
+                                 env=env, home=home, exact_env=True)
+    if result.ok:
+        return ""
+
+    # Check failed — reset to reviewed commit and report.
+    worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", reviewed_commit)
+    failure = (result.stderr or result.stdout or result.problem() or "check failed").strip()
+    return failure[:2000]
 
 
 def _push(path: Path, slug: str, commit: str, branch: str, *, default: str, first: bool = False) -> None:
@@ -986,7 +1258,7 @@ def _base_evidence(ctx: Any) -> str:
     return lines
 
 
-def _body(ctx: Any, found: worktree.Worktree) -> str:
+def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = None) -> str:
     """The pull request's description: what changed, how it was verified, and the original request."""
     stat = worktree.git(Path(found.path), "diff", "--stat", found.base, found.head).strip("\n")
     attempts = len(worktree.git(Path(found.path), "rev-list", f"{found.base}..{found.head}").split())
@@ -1006,6 +1278,17 @@ def _body(ctx: Any, found: worktree.Worktree) -> str:
         sections.append(f"## Summary\n\n{summary}")
     if parsed.has_contract and parsed.changes:
         sections.append("## What changed\n\n" + "\n".join(f"- {item}" for item in parsed.changes))
+    merge_line = ""
+    if merge is not None and merge.merge_commit:
+        into = str((ctx.facts.get("delivery_plan") or {}).get("into", ""))
+        merge_line = (f"- **Merge:** merged {into} at `{merge.merge_commit[:12]}`; "
+                      f"reviewed commit `{found.head[:12]}`; check passed on the merged result.\n")
+    elif merge is not None and merge.conflicts:
+        merge_line = (f"- **Merge:** not merged; conflicts in "
+                      f"{', '.join(f'`{f}`' for f in merge.conflicts)}.\n")
+    elif merge is not None and merge.check_failed:
+        merge_line = (f"- **Merge:** not merged; the check failed on the merged result: "
+                      f"{merge.check_failed[:200]}.\n")
     sections.append(
         f"## Verification\n\n"
         f"- **Check:** `{check_cmd}` passed in the run's worktree.\n"
@@ -1013,7 +1296,8 @@ def _body(ctx: Any, found: worktree.Worktree) -> str:
         "and the overwatch audit passed.\n"
         + _base_evidence(ctx)
         + f"- **Base:** `{found.base[:12]}`, with {attempts} attempt commit(s) on `{found.branch}`.\n"
-        "- **Merging:** the branch's commits are the run's attempts, "
+        + merge_line
+        + "- **Merging:** the branch's commits are the run's attempts, "
         "each the base plus that attempt's files, committed by Refactory; the change is their sum."
     )
     sections.append(f"## Original request\n\n{brief}")
@@ -1067,22 +1351,31 @@ def _record(ctx: Any, record: dict[str, Any]) -> None:
 def _delivered(ctx: Any, approved: dict[str, Any], found: worktree.Worktree,
                outcome: dict[str, Any], *, title: str = "") -> dict[str, Any]:
     url = str(outcome["pull_request"])
+    merge: MergeResult | None = outcome.get("merge")
     record: dict[str, Any] = {
         "status": outcome["status"], "pull_request": url, "repository": approved.get("repo"),
-        "branch": approved.get("branch"), "head": found.head, "verified": True,
+        "branch": approved.get("branch"), "reviewed_commit": found.head, "verified": True,
         "plan": approved.get("summary"), "at": datetime.now(timezone.utc).isoformat(),
     }
+    if merge is not None and merge.merge_commit:
+        record["head"] = merge.merge_commit
+        record["merge_commit"] = merge.merge_commit
+        record["merge_check"] = "passed on the merged result"
+    else:
+        record["head"] = found.head
     if title:
         record["title"] = title
         record["pr_text"] = BODY
     _record(ctx, record)
     projects.record_delivery(Path(found.target), branch=found.branch, pull_request=url, status=outcome["status"])
-    return {"delivery_result": f"{outcome['status']}: {url}, at {found.head[:12]}", "pull_request": url}
+    delivered_head = (merge.merge_commit if merge and merge.merge_commit else found.head)
+    return {"delivery_result": f"{outcome['status']}: {url}, at {delivered_head[:12]}", "pull_request": url}
 
 
 def _kept(ctx: Any, approved: dict[str, Any], found: worktree.Worktree | None, why: str,
           pull_request: str = "", pushed: str = "", *,
-          title: str = "", finish: list[str] | None = None) -> dict[str, Any]:
+          title: str = "", finish: list[str] | None = None,
+          merge: MergeResult | None = None) -> dict[str, Any]:
     """Nothing delivered: say why, and where the work is, as a run warning unless the person chose it.
 
     ``pull_request`` is one GitHub already had for the branch, which stays in the record;
@@ -1095,6 +1388,10 @@ def _kept(ctx: Any, approved: dict[str, Any], found: worktree.Worktree | None, w
         "pull_request": pull_request, "pushed": pushed, "plan": approved.get("summary"),
         "at": datetime.now(timezone.utc).isoformat(),
     }
+    if merge is not None and merge.conflicts:
+        record["merge_conflicts"] = merge.conflicts
+    if merge is not None and merge.check_failed:
+        record["merge_check_failed"] = merge.check_failed
     if title:
         record["title"] = title
         record["pr_text"] = BODY
