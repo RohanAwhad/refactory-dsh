@@ -85,7 +85,7 @@ def strip_extension_keys(workflow_dict: dict[str, Any]) -> dict[str, Any]:
 
 
 def _wrap_reference_class(ref_cls):
-    """A subclass of ref_cls whose __init__ silently drops EXTENSION_FIELDS kwargs."""
+    """A subclass of *ref_cls* whose __init__ silently drops EXTENSION_FIELDS kwargs."""
     def __init__(self, **kwargs):
         for field_name in EXTENSION_FIELDS:
             kwargs.pop(field_name, None)
