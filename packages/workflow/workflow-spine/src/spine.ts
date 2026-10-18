@@ -980,9 +980,44 @@ export class Spine {
     return this.next()
   }
 
+  /**
+   * Find the innermost container (fork or expanded director) whose body holds
+   * `nodeId`, and the continuation that container pushes onto `afters`.
+   *
+   * A ForkNode's continuation is its unconditional edge target. An expanded
+   * director's continuation is `this.successors[director]`. The body is
+   * `descendants(container, continuation)` minus the container and continuation
+   * — the same set `planSkip` uses. The innermost container is the one with the
+   * smallest body.
+   */
+  private continuationOf(nodeId: string): { container: string; continuation: string } | undefined {
+    let best: { container: string; continuation: string; size: number } | undefined
+    for (const [fid, body] of this.nodes) {
+      if (body._type !== 'ForkNode') continue
+      const cont = this.unconditionalTarget(fid)
+      if (cont === undefined) continue
+      const bodySet = this.descendants(fid, cont)
+      bodySet.delete(fid)
+      bodySet.delete(cont)
+      if (bodySet.has(nodeId) && (best === undefined || bodySet.size < best.size)) {
+        best = { container: fid, continuation: cont, size: bodySet.size }
+      }
+    }
+    for (const [did, succ] of Object.entries(this.successors)) {
+      const bodySet = this.descendants(did, succ)
+      bodySet.delete(did)
+      bodySet.delete(succ)
+      if (bodySet.has(nodeId) && (best === undefined || bodySet.size < best.size)) {
+        best = { container: did, continuation: succ, size: bodySet.size }
+      }
+    }
+    return best === undefined ? undefined : { container: best.container, continuation: best.continuation }
+  }
+
   /** All branches reachable from a node, including data bodies and fork targets. */
-  private descendants(start: string, stop?: string, opts?: { skipRetryEdges?: boolean }): Set<string> {
+  private descendants(start: string, stop?: string, opts?: { skipRetryEdges?: boolean; followContinuations?: boolean }): Set<string> {
     const skip = opts?.skipRetryEdges === true
+    const followCont = opts?.followContinuations === true
     const retrySet = skip ? this.retryEdges() : undefined
     const found = new Set<string>()
     const visited = new Set<string>()
@@ -1001,6 +1036,10 @@ export class Spine {
       if (successor !== undefined) targets.push(successor)
       const body = this.nodes.get(id)
       if (body?._type === 'ForkNode') targets.push(...(body.targets ?? []))
+      if (followCont) {
+        const cont = this.continuationOf(id)
+        if (cont !== undefined) targets.push(cont.continuation)
+      }
       queue.push(...targets.map(target => ({ id: target, stop: next.stop })))
       if (body?._type === 'DataNode' && body.subgraph_entry !== undefined) {
         queue.push({ id: body.subgraph_entry, stop: body.subgraph_exit })
@@ -1070,10 +1109,10 @@ export class Spine {
     // A finished dataset no longer has a current item. Reopening a body node
     // therefore restarts its owning dataset, rather than running an orphan pass.
     const start = owner !== undefined && !currentItem ? owner[0] : node
-    const affected = this.descendants(start, currentItem ? this.pass?.exit : undefined, { skipRetryEdges: true })
+    const affected = this.descendants(start, currentItem ? this.pass?.exit : undefined, { skipRetryEdges: true, followContinuations: true })
     if (currentItem && owner !== undefined) {
       for (const edge of this.outgoing(owner[0])) {
-        for (const id of this.descendants(edge.target, undefined, { skipRetryEdges: true })) affected.add(id)
+        for (const id of this.descendants(edge.target, undefined, { skipRetryEdges: true, followContinuations: true })) affected.add(id)
       }
     }
     const resetPass = this.pass !== undefined && affected.has(this.pass.node)
@@ -1097,6 +1136,23 @@ export class Spine {
     this.halted = undefined
     // Add the redo start if not already present
     if (!this.cursor.includes(plan.start)) this.cursor.unshift(plan.start)
+    // Re-arm the afters barrier for continuations whose container is not being
+    // redone — the container's completeDue would normally push the continuation,
+    // but it won't re-run.
+    const continuations: string[] = []
+    const seen = new Set<string>()
+    for (const n of plan.nodes) {
+      const cont = this.continuationOf(n)
+      if (cont !== undefined && affected.has(cont.continuation) && !affected.has(cont.container)
+          && cont.continuation !== plan.start && !this.cursor.includes(cont.continuation) && !seen.has(cont.continuation)) {
+        seen.add(cont.continuation)
+        continuations.push(cont.continuation)
+      }
+    }
+    // Push in reverse BFS order so innermost continuation pops first.
+    for (let i = continuations.length - 1; i >= 0; i--) {
+      this.afters.push(continuations[i]!)
+    }
     this.log.push(`redid ${node} at ${plan.start}; invalidated ${plan.nodes.join(', ')}`)
     return this.next()
   }
