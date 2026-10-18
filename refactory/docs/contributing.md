@@ -104,8 +104,11 @@ anything. A proposal that would produce an invalid graph costs no budget.
   no knob: the search spends batches learning nothing.
 - `V6` refuses a node reading a file no node on a start-to-terminal path writes.
 - `V11` refuses a declared port no node writes.
-- A `str` knob may be declared `required=True`; V9 refuses a value that is
-  empty or whitespace-only.
+- A `str` knob may be declared `required=True`. Its default is then only a
+  placeholder: a run with no value for it (in its knobs or its task), or an empty
+  or blank one, is refused before its run directory exists, by `Mode.run` and by
+  `interactive.prepare`, naming the knob. V9, which validates a mode's structure
+  and starting state, refuses only a blank value a candidate sets.
 - `Loop.unreachable_knobs()` reports knobs that *this optimizer* cannot move even
   though they are declared and consumed. It warns rather than refuses, because a
   knob-only optimizer on a structural mode is a legitimate pairing.

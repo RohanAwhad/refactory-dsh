@@ -42,9 +42,10 @@ def check_required_knobs(
 ) -> list[tuple[str, str]]:
     """Return ``(name, message)`` for every required knob whose value is empty.
 
-    With ``allow_defaults``, a value equal to the knob's default is silently
-    accepted.  V9 uses this so that a mode's starting state (whose required knobs
-    are placeholders) passes structural validation; the run-start check does not.
+    A required knob's default is a placeholder: at run start (``Mode.run``,
+    ``interactive.prepare``) a value equal to it is still refused when blank. With
+    ``allow_defaults`` such a value is accepted instead, which is what V9 wants: it
+    validates a mode's structure and starting state, where nothing has been given yet.
     """
     violations: list[tuple[str, str]] = []
     # declared may be a list when callers pass raw knob lists (e.g. nn.validate
@@ -60,7 +61,7 @@ def check_required_knobs(
         if not str(value).strip():
             violations.append(
                 (name,
-                 f"required knob {name!r} is empty or whitespace-only; "
-                 "it must have a non-empty value")
+                 f"required knob {name!r} has no value, or an empty or blank one; "
+                 "give it one")
             )
     return violations

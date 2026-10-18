@@ -74,51 +74,32 @@ def prepare(
     into the agent prompts; seeding afterwards would produce a run nobody steered.
     """
     workdir = Path(workdir).expanduser().resolve()
+    project = Path(project or project_root())
+    if not resume:
+        if "/" not in identifier:
+            raise ValueError(f"{identifier!r} is not a <package>/<mode> identifier")
+        Mode = registry.resolve(project, identifier)[1]
+        mode = Mode()
+        state = with_knobs(mode.state_dict(), list(knobs or []))
+        # Refuse a required knob with no value, or an empty or blank one, before the run
+        # directory exists (ownership creates it), and so before any worktree or model
+        # call. Every mode that declares one is covered, not only the built-ins; a
+        # default is only a placeholder.
+        from refactory_dsh.brief_guard import check_required_knobs
+        from refactory_dsh.nn.validate import declared_knobs
+
+        values = {name: entry["value"] for name, entry in (state.get("knobs") or {}).items()}
+        violations = check_required_knobs(declared_knobs(state), values)
+        if violations:
+            raise ValueError(f"refactory: {violations[0][1]}")
     with ownership(workdir):
-        project = Path(project or project_root())
         if resume:
             if knobs or intent or model_context:
                 raise ValueError('resume retains saved knobs, instructions and route; changes require explicit invalidation')
             from refactory_dsh.recovery import prepare as recover
             name = identifier.replace('/', '-')
             return name, recover(workdir, name, resource_limits=resource_limits)
-        if "/" not in identifier:
-            raise ValueError(f"{identifier!r} is not a <package>/<mode> identifier")
         package, mode_name = identifier.split("/", 1)
-        Mode = registry.resolve(project, identifier)[1]
-        mode = Mode()
-        state = with_knobs(mode.state_dict(), list(knobs or []))
-
-        # Refuse required knobs that are empty before any directory, worktree or
-        # model call is provisioned.  This is the DSH entry-point guard: every
-        # mode that declares a required knob is covered, not just the built-ins.
-        from refactory_dsh.brief_guard import check_required_knobs
-        from refactory_dsh.nn.validate import declared_knobs as _declared_knobs
-
-        _decl = _declared_knobs(state)
-        _vals = {name: entry["value"] for name, entry in (state.get("knobs") or {}).items()}
-        _violations = check_required_knobs(_decl, _vals, allow_defaults=True)
-        if not _violations:
-            # with_knobs strips values, so "brief=   " becomes "" in the state,
-            # matching the default and passing the allow_defaults gate above.
-            # Catch explicitly overridden knobs whose stripped value is empty.
-            _explicit = {
-                str(p).partition("=")[0].strip()
-                for p in (knobs or []) if "=" in str(p)
-            }
-            for _name in _explicit:
-                _knob = _decl.get(_name)
-                if _knob and getattr(_knob, "required", False) and _knob.kind == "str":
-                    if not str(_vals.get(_name, _knob.default)).strip():
-                        _violations.append(
-                            (_name, f"required knob {_name!r} is empty or whitespace-only; "
-                             "it must have a non-empty value"))
-        if _violations:
-            knob_name, message = _violations[0]
-            raise ValueError(
-                f"refactory: {knob_name} is empty or whitespace-only; "
-                "every authoring mode needs an idea to work from"
-            )
 
         # Absolute, because this directory becomes DSH's session cwd and DSH refuses a
         # relative one: `interactive <mode>` with no `--workdir` used to fail before the

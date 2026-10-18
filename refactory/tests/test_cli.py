@@ -771,13 +771,13 @@ def test_v9_refuses_empty_required_knob():
         },
     }
     issues = validate_state(state, resolve_calls=False)
-    v9_required = [i for i in issues if i.code == "V9" and "empty or whitespace-only" in i.message]
+    v9_required = [i for i in issues if i.code == "V9" and "required knob 'brief'" in i.message]
     assert len(v9_required) == 1, f"expected one V9 required-knob issue, got {[str(i) for i in issues]}"
 
     # A non-empty value produces no such issue.
     state["knobs"]["brief"]["value"] = "a real idea"
     issues2 = validate_state(state, resolve_calls=False)
-    v9_required2 = [i for i in issues2 if i.code == "V9" and "empty or whitespace-only" in i.message]
+    v9_required2 = [i for i in issues2 if i.code == "V9" and "required knob 'brief'" in i.message]
     assert v9_required2 == []
 
 
@@ -798,7 +798,7 @@ def test_v9_allows_default_empty_required_knob():
         },
     }
     issues = validate_state(state, resolve_calls=False)
-    v9_required = [i for i in issues if i.code == "V9" and "empty or whitespace-only" in i.message]
+    v9_required = [i for i in issues if i.code == "V9" and "required knob 'brief'" in i.message]
     assert v9_required == [], (
         "V9 must not flag a required knob whose value equals its default; "
         f"got {[str(i) for i in v9_required]}"
@@ -826,9 +826,38 @@ def test_mode_run_refuses_empty_required_knob(tmp_path):
     state["knobs"]["brief"]["value"] = "   "
     mode.load_state_dict(state)
     run_dir = tmp_path / "should-not-exist"
-    with pytest.raises(ValueError, match="empty or whitespace-only"):
+    with pytest.raises(ValueError, match="required knob 'brief'"):
         mode.run(run_dir)
     assert not run_dir.exists(), "run directory must not be created when a required knob is empty"
+
+
+def test_a_required_knob_left_at_its_default_is_refused_unless_the_task_gives_it(tmp_path, monkeypatch):
+    """A required knob's default is a placeholder: a run with no value for it anywhere is
+    refused, and one whose task carries it (as the walker passes a brief) is not."""
+    from refactory_dsh.nn import executor
+    from refactory_dsh.nn.graph import Graph, Node
+
+    class StubMode(nn.Mode):
+        name = "stub"
+
+        @classmethod
+        def declare(cls):
+            return {"brief": Knob("", "str", required=True, description="idea")}
+
+        def build(self):
+            graph = Graph()
+            graph.add(Node("work", "op", call="refactory_dsh.create_ops:prepare", knobs=("brief",)))
+            return graph
+
+    ran = []
+    monkeypatch.setattr(executor, "execute", lambda *args, **kwargs: ran.append(kwargs.get("task")) or "ran")
+    run_dir = tmp_path / "never"
+    with pytest.raises(ValueError, match="required knob 'brief'"):
+        StubMode().run(run_dir)
+    with pytest.raises(ValueError, match="required knob 'brief'"):
+        StubMode().run(run_dir, task={"brief": ""})
+    assert not run_dir.exists() and ran == []
+    assert StubMode().run(run_dir, task={"brief": "a real idea"}) == "ran"
 
 
 def test_interactive_prepare_refuses_empty_required_knob(tmp_path, monkeypatch):
@@ -851,12 +880,10 @@ def test_interactive_prepare_refuses_empty_required_knob(tmp_path, monkeypatch):
     monkeypatch.setattr(registry, "resolve", lambda project, identifier: ("stub_pack", StubMode))
 
     workdir = tmp_path / "run-test"
-    with pytest.raises(ValueError, match="empty or whitespace-only"):
-        interactive.prepare(
-            "stub_pack/stub",
-            workdir=workdir,
-            knobs=["brief=   "],
-        )
+    for knobs in (["brief=   "], ["brief="], []):
+        with pytest.raises(ValueError, match="required knob 'brief'"):
+            interactive.prepare("stub_pack/stub", workdir=workdir, knobs=knobs)
+        assert not workdir.exists()
 
 
 def test_prepare_ops_refuse_an_empty_brief_with_a_name():
