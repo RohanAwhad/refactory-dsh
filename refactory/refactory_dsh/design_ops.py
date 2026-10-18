@@ -349,10 +349,8 @@ def check_artifact(ctx: Any) -> str:
             return "proceed"
         if filtered.new_failures and filtered.inherited:
             detail = filtered.new_failure_detail
-            ctx.write_text(
-                "check.txt",
-                detail + "\n\n" + filtered.inherited_detail + "\n",
-            )
+        if filtered.inherited_detail:
+            ctx.write_text("check.txt", detail + "\n\n" + filtered.inherited_detail + "\n")
 
     return repair(ctx, [detail])
 

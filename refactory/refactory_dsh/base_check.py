@@ -9,7 +9,9 @@ all three conditions hold:
 (c) its test id or leaf name appears in neither the brief text nor design.md.
 
 When the check cannot identify individual tests, no failure is excused (conservative
-fallback). When the base environment cannot be prepared, the run stops as unavailable.
+fallback), and an excusal stands only if the identified failures are the whole of what
+failed and nothing was left unrun behind them (`excusal_blocker`). When the base
+environment cannot be prepared, the run stops as unavailable.
 """
 
 from __future__ import annotations
@@ -48,11 +50,121 @@ def parse_test_failures(output: str) -> set[str]:
     found: set[str] = set()
     for m in _PYTEST_FAILED.finditer(output):
         found.add(m.group(1).strip())
+    # An error (a module that does not import, a fixture that fails) is a failure too.
+    for m in _PYTEST_ERROR.finditer(output):
+        found.add(m.group(1).strip())
     for m in _VITEST_FAIL.finditer(output):
         candidate = m.group(1).strip()
         if " > " in candidate:
             found.add(candidate)
     return found
+
+
+#: A flag that stops a runner at its first failure, so nothing after it runs: pytest's
+#: ``-x`` (alone or in a cluster such as ``-xq``; ``-r`` takes report letters instead),
+#: ``--exitfirst`` and ``--maxfail``, and vitest's and jest's ``--bail``.
+_EXIT_FIRST = re.compile(r"^(?:-(?!r)[a-zA-Z]*x[a-zA-Z]*|--exitfirst|--maxfail(?:=.*)?|--bail(?:=.*)?)$")
+_PYTEST_SUMMARY = re.compile(r"^=*\s*(\d+ (?:failed|passed|errors?|skipped)\b.*\bin [\d.]+s\b.*)$", re.MULTILINE)
+
+
+def _steps(command: str) -> list[str]:
+    """The shell steps ``command`` chains with ``&&``, ``||``, ``;``, ``|``, ``&`` or newlines.
+
+    Quotes, backslashes and parentheses are respected; a step inside a subshell stays
+    part of the step that opens it.
+    """
+    steps, current, depth, quote, i = [], "", 0, "", 0
+    while i < len(command):
+        char = command[i]
+        if quote:
+            current += char
+            if char == "\\" and quote == '"' and i + 1 < len(command):
+                current += command[i + 1]
+                i += 1
+            elif char == quote:
+                quote = ""
+        elif char == "\\" and i + 1 < len(command):
+            current += command[i:i + 2]
+            i += 1
+        elif char in "'\"":
+            quote = char
+            current += char
+        elif char == "(":
+            depth += 1
+            current += char
+        elif char == ")":
+            depth -= 1
+            current += char
+        elif char == "&" and (current.endswith((">", "<")) or command[i + 1:i + 2] == ">"):
+            current += char  # a redirection (2>&1, &>log), not a step
+        elif depth == 0 and (char in ";|&\n"):
+            steps.append(current.strip())
+            current = ""
+            if command[i:i + 2] in ("&&", "||"):
+                i += 1
+        else:
+            current += char
+        i += 1
+    steps.append(current.strip())
+    return [step for step in steps if step]
+
+
+def _runner(step: str) -> str | None:
+    """``pytest`` or ``vitest`` when ``step`` names that runner (jest reports like vitest)."""
+    import shlex
+
+    try:
+        words = shlex.split(step)
+    except ValueError:
+        return None
+    names = {Path(word).name for word in words}
+    if "pytest" in names or "py.test" in names:
+        return "pytest"
+    if "vitest" in names or "jest" in names:
+        return "vitest"
+    return None
+
+
+def _accounted(runner: str, output: str, failures: set[str]) -> bool:
+    """Whether the runner's own summary counts exactly the failures that were identified."""
+    if runner == "pytest":
+        summaries = _PYTEST_SUMMARY.findall(output)
+        if not summaries:
+            return False
+        last = summaries[-1]
+        counted = sum(int(n) for n in re.findall(r"(\d+) (?:failed|errors?)\b", last))
+        return counted == len(failures)
+    tests = re.findall(r"^\s*Tests\s+(\d+) failed", output, re.MULTILINE)
+    files = re.findall(r"^\s*Test Files\s+(\d+) failed", output, re.MULTILINE)
+    if not tests:
+        return False
+    named_files = {failure.split(" > ")[0].strip() for failure in failures}
+    return int(tests[-1]) == len(failures) and (not files or int(files[-1]) <= len(named_files))
+
+
+def excusal_blocker(command: str, output: str, failures: set[str]) -> str | None:
+    """Why the check's failures, all inherited, still cannot excuse it; None when they can.
+
+    Matching tests is not enough: the check must have failed only for them, and nothing
+    may have gone unrun behind them. So the failing runner has to be the command's last
+    step, named so it can be recognised; it must not stop at its first failure; and its
+    own summary must count exactly the failures identified. A later step, a module that
+    does not import, or a step skipped after a failing one is otherwise unaccounted for.
+    """
+    steps = _steps(command)
+    runner = _runner(steps[-1]) if steps else None
+    if runner is None:
+        return "the check's last step is not a test runner refactory recognises (pytest, vitest, jest)"
+    kind = {"pytest": lambda failure: " > " not in failure, "vitest": lambda failure: " > " in failure}[runner]
+    if not all(kind(failure) for failure in failures):
+        return f"a failure is not from the check's last step ({runner}), so what follows it never ran"
+    import shlex
+
+    if any(_EXIT_FIRST.match(word) for word in shlex.split(steps[-1])):
+        return f"{runner} stops at its first failure here, so the tests after it never ran"
+    if not _accounted(runner, output, failures):
+        return f"{runner}'s summary counts failures that are not identified by name"
+    return None
 
 
 def _parse_collection_errors(output: str) -> set[str]:
@@ -137,7 +249,9 @@ def _test_name_parts(identifier: str) -> list[str]:
 
 
 def _test_file(identifier: str) -> str | None:
-    """Extract the test file path from a test identifier."""
+    """Extract the test file path from a test identifier, or a file-level error's file."""
+    if identifier.endswith((".py", ".ts", ".tsx", ".js", ".jsx")):
+        return identifier
     if "::" in identifier:
         return identifier.split("::")[0]
     if " > " in identifier:
@@ -616,9 +730,13 @@ def filter_check(
         base_result.failures, attempt_failures, changed_files,
         brief_text, design_text,
     )
+    blocker = excusal_blocker(command, attempt_output, attempt_failures) if comparison.all_excused else None
+    if blocker:
+        comparison = ComparisonResult(inherited=set(), new_failures=set(), all_excused=False,
+                                      base_ok=comparison.base_ok)
 
     # Build detail strings
-    inherited_detail = ""
+    inherited_detail = f"no failure was excused: {blocker}" if blocker else ""
     if comparison.inherited:
         inherited_detail = (
             "inherited failures from the base (not the attempt's): "

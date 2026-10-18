@@ -1362,6 +1362,24 @@ def test_inherited_failure_passes_check(tmp_path):
     assert "test_base_broken" in check_txt
 
 
+def test_inherited_failure_does_not_excuse_a_check_that_stopped_at_it(tmp_path):
+    """With -x nothing after the inherited failure ran, so the attempt is not excused."""
+    repo = git_repo(tmp_path / "repo")
+    _commit(repo, "test_base_broken.py", "def test_base_broken():\n    assert False\n")
+    fixed = render({"tool.py": "print('built')\n",
+                    "test_base_broken.py": "def test_base_broken():\n    assert True\n"})
+    result = _design(
+        tmp_path / "run",
+        FakeModel(_answers(render({"tool.py": "print('built')\n"}), fixed)),
+        target=str(repo),
+        check="python -m pytest -q -x",
+    )
+    assert result.exit_ok, result.error
+    payload = _report(tmp_path / "run")
+    assert git(Path(payload["target"]), "rev-list", "--count",
+               f"{payload['base']}..{payload['branch']}") == "2"
+
+
 def test_new_failure_introduced_by_attempt_is_refused(tmp_path):
     """An attempt that adds a new failure is refused (attempt is spent)."""
     repo = git_repo(tmp_path / "repo")
@@ -1411,6 +1429,38 @@ def test_failure_in_a_test_file_the_attempt_changes_is_not_excused():
     assert edited.new_failures == failing and not edited.all_excused
     untouched = compare_failures(failing, failing, ["pkg/tool.py"], "", "")
     assert untouched.inherited == failing and untouched.all_excused
+
+
+def test_inherited_failures_excuse_a_check_only_when_nothing_else_failed_or_went_unrun():
+    """Matched names are not enough: the last step must be the runner, run to completion."""
+    from refactory_dsh.base_check import excusal_blocker, parse_test_failures
+    out = "FAILED tests/test_a.py::test_x - assert False\n1 failed, 3 passed in 0.12s\n"
+    failures = parse_test_failures(out)
+    assert excusal_blocker("pnpm test && .venv/bin/python -m pytest -q tests 2>&1", out, failures) is None
+    assert excusal_blocker("python -m pytest -q -rfEx", out, failures) is None
+    # A step after the runner, or one the runner's failure skipped, is not accounted for.
+    assert "last step" in excusal_blocker("python -m pytest -q; ruff check .", out, failures)
+    vitest = " FAIL  tests/a.spec.ts > suite > works\n      Tests  1 failed | 9 passed (10)\n"
+    assert "never ran" in excusal_blocker("npx vitest run && pytest -q", vitest, parse_test_failures(vitest))
+    assert excusal_blocker("npx vitest run", vitest, parse_test_failures(vitest)) is None
+    # Stopping at the first failure hides every test after it.
+    assert "first failure" in excusal_blocker("python -m pytest -xq", out, failures)
+    # An error the summary counts but no name accounts for, or no summary at all.
+    errored = out.replace("1 failed, 3 passed", "1 failed, 3 passed, 1 error")
+    assert "not identified" in excusal_blocker("pytest -q", errored, failures)
+    assert "not identified" in excusal_blocker("pytest -q", "FAILED tests/test_a.py::test_x - x\n", failures)
+
+
+def test_a_test_module_the_attempt_breaks_is_its_failure():
+    """A collection error is a failure with a name; the base does not have it."""
+    from refactory_dsh.base_check import compare_failures, parse_test_failures
+    base = parse_test_failures("FAILED tests/test_a.py::test_x - x\n1 failed in 0.1s\n")
+    attempt = parse_test_failures("FAILED tests/test_a.py::test_x - x\n"
+                                  "ERROR tests/test_b.py - ImportError: cannot import name\n"
+                                  "1 failed, 1 error in 0.1s\n")
+    assert attempt == {"tests/test_a.py::test_x", "tests/test_b.py"}
+    result = compare_failures(base, attempt, [], "", "")
+    assert result.new_failures == {"tests/test_b.py"} and not result.all_excused
 
 
 def test_base_check_cannot_run_stops_unavailable(tmp_path):
