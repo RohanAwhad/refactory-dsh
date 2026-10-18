@@ -880,9 +880,11 @@ def test_interactive_prepare_refuses_empty_required_knob(tmp_path, monkeypatch):
     monkeypatch.setattr(registry, "resolve", lambda project, identifier: ("stub_pack", StubMode))
 
     workdir = tmp_path / "run-test"
-    for knobs in (["brief=   "], ["brief="], []):
+    # A value given blank is refused either way; no value at all only when headless,
+    # because a session a person opens gets the idea in the conversation.
+    for knobs, headless in ((["brief=   "], False), (["brief="], False), ([], True)):
         with pytest.raises(ValueError, match="required knob 'brief'"):
-            interactive.prepare("stub_pack/stub", workdir=workdir, knobs=knobs)
+            interactive.prepare("stub_pack/stub", workdir=workdir, knobs=knobs, headless=headless)
         assert not workdir.exists()
 
 

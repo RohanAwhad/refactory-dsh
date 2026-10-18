@@ -66,6 +66,7 @@ def prepare(
     model_context: dict[str, Any] | None = None,
     resource_limits: dict[str, Any] | None = None,
     resume: bool = False,
+    headless: bool = False,
 ) -> tuple[str, Path]:
     """Lower the mode for a person to use, and leave the run ready to start.
 
@@ -81,15 +82,18 @@ def prepare(
         Mode = registry.resolve(project, identifier)[1]
         mode = Mode()
         state = with_knobs(mode.state_dict(), list(knobs or []))
-        # Refuse a required knob with no value, or an empty or blank one, before the run
-        # directory exists (ownership creates it), and so before any worktree or model
-        # call. Every mode that declares one is covered, not only the built-ins; a
-        # default is only a placeholder.
+        # A required knob's default is only a placeholder. A headless run has nobody to
+        # give the value later, so one with no value, or an empty or blank one, is refused
+        # here, before ownership creates the run directory. A session a person opens may
+        # start without it -- the idea comes in the conversation -- so there only a value
+        # given explicitly blank is refused. Every mode that declares one is covered.
         from refactory_dsh.brief_guard import check_required_knobs
         from refactory_dsh.nn.validate import declared_knobs
 
         values = {name: entry["value"] for name, entry in (state.get("knobs") or {}).items()}
-        violations = check_required_knobs(declared_knobs(state), values)
+        given = {str(part).partition("=")[0].strip() for part in knobs or [] if "=" in str(part)}
+        violations = [(name, message) for name, message in check_required_knobs(declared_knobs(state), values)
+                      if headless or name in given]
         if violations:
             raise ValueError(f"refactory: {violations[0][1]}")
     with ownership(workdir):
@@ -288,7 +292,7 @@ def run(
             worker_backend = model_context.get('worker_backend', 'dsh')
         if not resume:
             name, graphs = prepare(
-                identifier, workdir=workdir, intent=intent, project=project, knobs=knobs, model_context=model_context, resource_limits=resource_limits,
+                identifier, workdir=workdir, intent=intent, project=project, knobs=knobs, model_context=model_context, resource_limits=resource_limits, headless=headless,
             )
         for pair in list(approve or []):
             gate, separator, value = str(pair).partition("=")

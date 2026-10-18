@@ -106,9 +106,11 @@ anything. A proposal that would produce an invalid graph costs no budget.
 - `V11` refuses a declared port no node writes.
 - A `str` knob may be declared `required=True`. Its default is then only a
   placeholder: a run with no value for it (in its knobs or its task), or an empty
-  or blank one, is refused before its run directory exists, by `Mode.run` and by
-  `interactive.prepare`, naming the knob. V9, which validates a mode's structure
-  and starting state, refuses only a blank value a candidate sets.
+  or blank one, is refused before its run directory exists, naming the knob -- by
+  `Mode.run`, and by `interactive.prepare` for a headless run. A session a person
+  opens may start without it, since the value can come in the conversation; there
+  only a value given explicitly blank is refused. V9, which validates a mode's
+  structure and starting state, refuses only a blank value a candidate sets.
 - `Loop.unreachable_knobs()` reports knobs that *this optimizer* cannot move even
   though they are declared and consumed. It warns rather than refuses, because a
   knob-only optimizer on a structural mode is a legitimate pairing.
