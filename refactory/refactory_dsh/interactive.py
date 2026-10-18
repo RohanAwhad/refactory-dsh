@@ -378,6 +378,14 @@ def run(
                     print(f"refactory: the run stopped early: {recorded['error']}", file=sys.stderr)
             except (OSError, ValueError, AttributeError):
                 pass  # diagnostic only; do not mask the run's exit code
+        # Inline supervision for headless runs: if the owner exited and the
+        # run needs supervision, respawn it within the same process.
+        if headless and code != 0:
+            try:
+                from refactory_dsh.supervisor import supervise_inline
+                code = supervise_inline(workdir, exit_code=code)
+            except Exception:
+                pass  # supervision is best-effort; don't mask the run's exit code
         if code == 0:
             summary = run_summary(workdir)
             if summary:

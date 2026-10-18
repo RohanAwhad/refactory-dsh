@@ -531,7 +531,7 @@ def test_resume_waits_for_exiting_owner_then_starts_fresh(monkeypatch, tmp_path)
 
 
 def test_resume_reports_owner_still_alive_after_timeout(monkeypatch, tmp_path):
-    """A resume at a terminal status where the owner outlives the timeout says so."""
+    """A resume at a terminal status where the owner outlives the timeout files a pending resume."""
     directory = tmp_path / '.refactory'
     directory.mkdir()
     (directory / 'spine-checkpoint.json').write_text(
@@ -544,9 +544,11 @@ def test_resume_reports_owner_still_alive_after_timeout(monkeypatch, tmp_path):
     monkeypatch.setattr(graph_control, '_OWNER_EXIT_TIMEOUT', 0.3)
     result = graph_control.request(tmp_path, 'resume')
     assert result['status'] == 'queued'
-    assert result.get('owner_exiting') is True
+    assert result.get('resume_pending') is True
+    assert 'owner_exiting' not in result
     formatted = readable.format_graph_control(result)
-    assert 'Its owner is still finishing; run resume again once it has exited.' in formatted
+    assert 'Resume is pending; a new owner will start when the current one exits.' in formatted
+    assert (directory / 'resume-pending.json').exists()
 
 
 def test_resume_queued_for_paused_live_owner(tmp_path):
@@ -563,6 +565,7 @@ def test_resume_queued_for_paused_live_owner(tmp_path):
     result = graph_control.request(tmp_path, 'resume')
     assert result['status'] == 'queued'
     assert 'owner_exiting' not in result
+    assert 'resume_pending' not in result
 
 
 def test_graph_snapshot_tolerates_old_and_partial_checkpoints(tmp_path):

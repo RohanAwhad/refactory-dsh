@@ -150,9 +150,9 @@ def format_graph_control(payload: dict[str, Any]) -> str:
 
     if status == 'queued':
         lines.append(f"Queued {action} for {run_id}.")
-        if payload.get('owner_exiting'):
+        if payload.get('resume_pending'):
             lines.append(
-                'Its owner is still finishing; run resume again once it has exited.'
+                'Resume is pending; a new owner will start when the current one exits.'
             )
     elif status == 'preview':
         nodes = payload.get('invalidated') or []

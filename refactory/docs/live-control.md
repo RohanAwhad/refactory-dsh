@@ -75,7 +75,7 @@ To change completed work, choose a completed node and prompt correction, press *
 
 The run's status includes whether its owner process is alive. A failed run with a live owner may still apply queued controls and does not need recovery — wait for it or send another control. A failed run whose owner is not alive cannot apply pending controls; explicit recovery (resume) is needed to start a fresh owner from the saved checkpoint.
 
-A live owner's resume control releases its boundary pause. If the old graph owner is gone, explicit resume can start a fresh owned process from the saved checkpoint. When the run's status is terminal (done, halted, failed, refused, or cancelled) and the recorded owner is still alive, resume waits briefly for it to exit. If the owner exits during the wait, a fresh owner is started automatically. If the owner is still alive after the wait, the resume is queued and the response notes that the owner is still finishing — run resume again once it has exited. It preserves the run identity, completed work, route configuration and consumed resources. Larger resource limits are explicit allocations, not a reset of usage. `refactory graph-control resume --run <dir>` is the recovery command:
+A live owner's resume control releases its boundary pause. If the old graph owner is gone, explicit resume can start a fresh owned process from the saved checkpoint. When the run's status is terminal (done, halted, failed, refused, or cancelled) and the recorded owner is still alive, resume waits briefly for it to exit. If the owner exits during the wait, a fresh owner is started automatically. If the owner is still alive after the wait, the resume is filed as a pending resume (`.refactory/resume-pending.json`) and honoured automatically when the old owner finishes exiting — no second command is needed. It preserves the run identity, completed work, route configuration and consumed resources. Larger resource limits are explicit allocations, not a reset of usage. `refactory graph-control resume --run <dir>` is the recovery command:
 
 ```bash
 uv run refactory graph-control resume --run /absolute/run
@@ -90,6 +90,25 @@ A process killed by a signal during a check or environment install is retried on
 An emission that changes nothing is refused back to emit, including when materialise is replayed on an emit.txt the last attempt already holds. The refusal says the emission changed nothing, not that an edit's text is missing, and the branch holds one attempt per answer that changed something.
 
 Inspect side effects and outputs when continuation is refused. Use explicit invalidation where a valid replay plan exists, or start a new run deliberately. Reopening the mode is not an implicit retry. No mechanism here can infer whether an unacknowledged external side effect happened before a crash.
+
+### Supervision
+
+When an owner process exits and the run's spine status is neither terminal nor deliberately paused, the supervisor automatically restarts the owner from the saved checkpoint. This eliminates the need for manual `graph-control resume` after a model outage, a crash, or a killed process.
+
+**Terminal states** (no respawn): `done`, `cancelled`, `failed`.
+**Deliberately paused states** (no respawn): `halted`, `paused`, `waiting_user`, `refused`.
+**Supervisable states** (respawn if owner is dead): `ready`, `executing`.
+
+| Aspect | Detail |
+|--------|--------|
+| Respawn limit | `REFACTORY_MAX_RESPAWNS` environment variable (default 3, 0 disables). |
+| History | Each respawn is logged to `.refactory/supervision-history.json` and to `.refactory/events.jsonl`. |
+| Detached process | The supervisor (`python -m refactory_dsh.supervisor`) outlives the CLI or GUI that launched it. One per run, held by `.refactory/supervisor.lock`. |
+| Transient vs deterministic | A `recovery.prepare()` refusal (e.g. "last node outcome is unknown or failed") is deterministic — recorded as a start failure and not retried. Only transient exits (crash, kill, model outage) are respawned. |
+| Start-failure recording | An owner that exits before advancing the spine status writes `.refactory/start-failure.json` with the reason. `refactory status` reports `state: failed` with the reason, instead of the stale spine state. |
+| Single-resume | A resume requested while the old owner is still exiting is filed as `.refactory/resume-pending.json` and honoured automatically when the old owner finishes exiting. No second command needed (dm-81). |
+| Headless inline | A fresh headless run (`refactory ceo --headless`, `interactive.run(headless=True)`) applies the same supervision loop inline after the owner exits. |
+| Supervisor killed | If the supervisor itself is killed (`SIGKILL`), the owner child continues in its own session. The run is then unsupervised — exactly as today. A manual `refactory graph-control resume` is the fallback. |
 
 ### Replay a failed run
 
