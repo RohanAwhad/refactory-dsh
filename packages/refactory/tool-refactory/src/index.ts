@@ -75,6 +75,7 @@ interface Args {
   intent?: string
   note?: string
   kind?: string
+  scope?: string
   state?: boolean
   as?: string
   packages?: string
