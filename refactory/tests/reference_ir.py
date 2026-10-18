@@ -101,7 +101,7 @@ def reference_lowering(state: dict[str, Any], *, name: str = "") -> Any:
     saved = {attribute: getattr(lowering, attribute) for attribute in IR_NAMES}
     for attribute in IR_NAMES:
         ref_obj = getattr(reference, attribute)
-        if attribute != "AgentRole" and hasattr(ref_obj, "model_fields"):
+        if hasattr(ref_obj, "model_fields"):
             setattr(lowering, attribute, _wrap_reference_class(ref_obj))
         else:
             setattr(lowering, attribute, ref_obj)
