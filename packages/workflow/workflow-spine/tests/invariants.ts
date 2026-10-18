@@ -3,7 +3,7 @@
  */
 import { Spine } from '../src/spine.ts'
 import type { WorkflowGraph } from '../src/types.ts'
-import type { DriveResult, DriveEvent } from './shape-driver.ts'
+import type { DriveResult, DriveEvent, GatePolicy } from './shape-driver.ts'
 import type { ShapeEntry } from './graph-shapes.ts'
 import { driveExistingToEnd, replayTo } from './shape-driver.ts'
 import {
@@ -256,9 +256,18 @@ export function checkRedoInvariant(result: DriveResult, shape: ShapeEntry): void
       }
     }
 
-    // Do the redo and drive to end
+    // Do the redo and drive to end.
+    // Use a no-reloop gate policy: redo re-runs the forward closure (which
+    // excludes reloop back-edge targets), so letting a gate reloop would
+    // re-complete nodes outside the expected closure. The forward closure
+    // already follows all non-retry conditional edges (including proceed),
+    // so always proceeding keeps execution within it.
     replayedSpine.redo(nodeId)
-    const redoResult = driveExistingToEnd(replayedSpine, shape)
+    const noReloopPolicy: GatePolicy = (gateId) =>
+      shape.fixedVerdicts[gateId] ?? 'proceed'
+    const redoResult = driveExistingToEnd(replayedSpine, shape, {
+      gatePolicy: noReloopPolicy,
+    })
 
     // The re-completed nodes should be within the forward closure
     const reCompletedNodes = new Set(redoResult.completedOrder)

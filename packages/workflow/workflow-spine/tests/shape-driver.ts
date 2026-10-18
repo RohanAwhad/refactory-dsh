@@ -131,6 +131,11 @@ export function driveExistingToEnd(
   throw new Error('drive overflow: 500 steps exceeded')
 }
 
+/** Deep-copy a graph so Spine mutations (expand, etc.) don't leak. */
+export function deepCopyGraph(graph: WorkflowGraph): WorkflowGraph {
+  return JSON.parse(JSON.stringify(graph)) as WorkflowGraph
+}
+
 /** Create a fresh Spine and drive to completion. */
 export function driveToEnd(
   graph: WorkflowGraph,
@@ -140,7 +145,7 @@ export function driveToEnd(
     gatePolicy?: GatePolicy
   },
 ): DriveResult {
-  const spine = new Spine(graph)
+  const spine = new Spine(deepCopyGraph(graph))
   return driveExistingToEnd(spine, shape, opts)
 }
 
@@ -194,7 +199,7 @@ export function allOrders(shape: ShapeEntry): DriveResult[] {
   // Run once with identity ordering, recording choice points
   {
     let cpIndex = 0
-    const spine = new Spine(shape.graph)
+    const spine = new Spine(deepCopyGraph(shape.graph))
     const policy = defaultGatePolicy(shape)
     const gateEncounters: Record<string, number> = {}
 
@@ -302,7 +307,7 @@ export function seededOrders(shape: ShapeEntry, seed: number, count: number): Dr
  * After replaying an expand, the expansion children exist again.
  */
 export function replayTo(graph: WorkflowGraph, shape: ShapeEntry, events: DriveEvent[]): Spine {
-  const spine = new Spine(graph)
+  const spine = new Spine(deepCopyGraph(graph))
   for (const event of events) {
     switch (event.action) {
       case 'complete':
