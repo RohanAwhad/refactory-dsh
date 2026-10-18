@@ -984,31 +984,28 @@ export class Spine {
    * Find the innermost container (fork or expanded director) whose body holds
    * `nodeId`, and the continuation that container pushes onto `afters`.
    *
-   * A ForkNode's continuation is its unconditional edge target. An expanded
-   * director's continuation is `this.successors[director]`. The body is
-   * `descendants(container, continuation)` minus the container and continuation
-   * — the same set `planSkip` uses. The innermost container is the one with the
-   * smallest body.
+   * These are the facts the scheduler itself uses: a ForkNode's continuation is
+   * its unconditional edge target (what `completeDue` pushes), an expanded
+   * director's is `this.successors[director]` (what `expand` pushes). A join's
+   * `sources` are not consulted. The body is what `planSkip` removes for a fork,
+   * `descendants(container, continuation)` minus the two ends, walked without
+   * retry edges so a reloop inside a branch cannot pull in nodes before the
+   * container. Bodies nest, so the innermost container has the smallest body.
    */
   private continuationOf(nodeId: string): { container: string; continuation: string } | undefined {
+    const containers: Array<[string, string | undefined]> = [
+      ...[...this.nodes].filter(([, body]) => body._type === 'ForkNode')
+        .map(([id]): [string, string | undefined] => [id, this.unconditionalTarget(id)]),
+      ...Object.entries(this.successors),
+    ]
     let best: { container: string; continuation: string; size: number } | undefined
-    for (const [fid, body] of this.nodes) {
-      if (body._type !== 'ForkNode') continue
-      const cont = this.unconditionalTarget(fid)
-      if (cont === undefined) continue
-      const bodySet = this.descendants(fid, cont)
-      bodySet.delete(fid)
-      bodySet.delete(cont)
-      if (bodySet.has(nodeId) && (best === undefined || bodySet.size < best.size)) {
-        best = { container: fid, continuation: cont, size: bodySet.size }
-      }
-    }
-    for (const [did, succ] of Object.entries(this.successors)) {
-      const bodySet = this.descendants(did, succ)
-      bodySet.delete(did)
-      bodySet.delete(succ)
-      if (bodySet.has(nodeId) && (best === undefined || bodySet.size < best.size)) {
-        best = { container: did, continuation: succ, size: bodySet.size }
+    for (const [container, continuation] of containers) {
+      if (continuation === undefined) continue
+      const body = this.descendants(container, continuation, { skipRetryEdges: true })
+      body.delete(container)
+      body.delete(continuation)
+      if (body.has(nodeId) && (best === undefined || body.size < best.size)) {
+        best = { container, continuation, size: body.size }
       }
     }
     return best === undefined ? undefined : { container: best.container, continuation: best.continuation }

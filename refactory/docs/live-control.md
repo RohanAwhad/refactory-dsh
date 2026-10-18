@@ -126,6 +126,13 @@ through a gate's reloop back-edge are not invalidated or archived. Example:
 replaying `overwatch` invalidates `{overwatch, gate_overwatch, report,
 deliver}` but not `{emit, materialise, check, reviews, synth}`.
 
+The forward path of a node inside a fork branch, or of a director's child,
+continues where the scheduler would take it: the fork's join, or the
+director's successor. Replaying `code_reviewer` invalidates
+`{code_reviewer, join_qa, synthesize_qa, gate_qa, ...}` and leaves the other
+reviewers' answers in place; once `code_reviewer` runs again, the join and the
+gate after it run again too.
+
 ### Scoped corrections
 
 The `--text` on a rerun sets per-visit feedback, not a permanent prompt

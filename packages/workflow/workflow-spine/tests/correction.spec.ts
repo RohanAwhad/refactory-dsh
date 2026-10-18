@@ -1199,8 +1199,9 @@ describe('fork-branch redo reopens join and downstream', () => {
     }
     const spine = new Spine(graph)
     spine.complete('outer_fork')
-    // inner_fork and z are parallel — complete z first because completing a
-    // ForkNode replaces the entire cursor with its targets, dropping siblings.
+    // inner_fork and z are parallel. z completes first: completing a fork replaces
+    // the cursor with its targets, so a sibling still due would be dropped (the
+    // nested-fork limit in the spine README). This test is about redo, not that.
     spine.complete('z')
     spine.complete('inner_fork')
     // x and y are parallel from inner fork
