@@ -165,7 +165,8 @@ def _set_aside_stale_outputs(workdir: Path, node: str, reads: list[str],
     archive = _set_aside(workdir, latest, to_move, subfolder='previous')
     if archive is None:
         return None
-    return {name: str(Path(archive) / name) for name in to_move}
+    # Absolute, like the contract's inputs and outputs.
+    return {name: str(workdir / archive / name) for name in to_move}
 
 
 def _attempt_failed(workdir: Path, record: dict[str, Any]) -> bool:
