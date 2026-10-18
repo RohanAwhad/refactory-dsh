@@ -1,9 +1,8 @@
 /**
  * Graph shape invariant test suite.
  *
- * Drives 14 named graph shapes through the spine in every completion order of the
- * nodes due together, checking five invariants on each run. dm-73 expected failures
- * are managed through a single list so the fix removes them in one place.
+ * Drives named graph shapes through the spine in every completion order of the
+ * nodes due together, checking five invariants on each run.
  */
 import { describe, expect, it } from 'vitest'
 import { shapes, crossContainerReloopGraph } from './graph-shapes.ts'
@@ -12,7 +11,6 @@ import {
   checkCompletedOncePerVisit, checkJoinAfterBranches, checkNoDueDrop,
   checkDoneAndEnds, checkRedoInvariant,
 } from './invariants.ts'
-import { DM73_SHAPES } from './dm73-shapes.ts'
 import { Spine, validateGraph } from '../src/spine.ts'
 
 // ─── Structural validation ──────────────────────────────────────
@@ -27,47 +25,23 @@ describe('graph shapes validate', () => {
 
 // ─── Invariants across all orderings ─────────────────────────────
 
-const dm73ShapeNames = new Set(DM73_SHAPES.map(c => c.shape))
-
 describe('graph shape invariants', () => {
   for (const shape of shapes) {
     describe(shape.name, () => {
       const runs = shape.large ? seededOrders(shape, 42, 20) : allOrders(shape)
-      const isDm73 = dm73ShapeNames.has(shape.name)
 
       runs.forEach((result, i) => {
         it(`ordering ${i}`, () => {
           checkCompletedOncePerVisit(result)
           checkJoinAfterBranches(result)
-          if (!isDm73) {
-            checkNoDueDrop(result)
-            checkDoneAndEnds(result, shape)
-          } else if (result.final.status === 'done' && !result.final.halted) {
-            // dm-73 ordering that didn't trigger the bug — still check ends
-            checkDoneAndEnds(result, shape)
-          }
+          checkNoDueDrop(result)
+          checkDoneAndEnds(result, shape)
         })
       })
 
-      if (!isDm73) {
-        it('redo invariant', () => {
-          checkRedoInvariant(runs[0]!, shape)
-        })
-      }
-    })
-  }
-})
-
-// ─── dm-73 expected failures ─────────────────────────────────────
-
-describe('dm-73 expected failures', () => {
-  for (const entry of DM73_SHAPES) {
-    it.fails(`dm-73: ${entry.shape} — ${entry.scenario}`, () => {
-      const shape = shapes.find(s => s.name === entry.shape)!
-      const result = driveToEnd(shape.graph, shape, {
-        orderFn: entry.triggerOrderFn,
+      it('redo invariant', () => {
+        checkRedoInvariant(runs[0]!, shape)
       })
-      checkNoDueDrop(result)
     })
   }
 })
