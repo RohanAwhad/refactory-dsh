@@ -555,11 +555,12 @@ def test_self_hosted_refactory_target_resolves_to_target_copy(monkeypatch, tmp_p
 def test_worker_node_dispatch_uses_absolute_interpreter(tmp_path):
     """lower_workflow() dispatches worker_node with sys.executable, not bare python."""
     import sys
-    from refactory_dsh.ir import AgentNode, Workflow
+    from refactory_dsh.ir import AgentNode, AgentRole, Workflow
     wf = Workflow(
+        name='test',
         nodes={'test_node': AgentNode(
-            id='test_node', kind='agent', prompt_template='Do nothing.',
-            reads=(), writes=(), role='worker',
+            id='test_node', prompt_template='Do nothing.',
+            reads=set(), writes=set(), role=AgentRole.BUILDER,
         )},
         edges=[],
         start_node='test_node',
