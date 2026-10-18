@@ -884,9 +884,14 @@ def test_a_generate_command_that_fails_fails_the_check_and_says_why(tmp_path):
 
 
 def test_generate_runs_before_setup_so_setup_sees_generated_files(repo, tmp_path):
-    """A setup that needs generated files passes because generate runs first."""
+    """A setup that needs generated files passes because generate runs first.
+
+    With the old order (setup, then generate) this fails: setup sees stale
+    generated.txt before generate can update it.
+    """
     _commit(repo, "source.txt", "v1\n")
     _commit(repo, "generated.txt", "v1\n")
+    # The emit changes source.txt; generate copies it to generated.txt; setup diffs them.
     emit = render({"tool.py": "print('built')\n", "source.txt": "v2\n"})
     result = _design(
         tmp_path / "run", FakeModel(_answers(emit)),
