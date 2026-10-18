@@ -118,6 +118,40 @@ def _set_aside(workdir: Path, record: dict[str, Any], names: list[str]) -> str |
     return str(archive.relative_to(workdir))
 
 
+def _set_aside_stale_emit(workdir: Path, node: str, writes: list[str]) -> None:
+    """Move a previous attempt's surviving emit.txt before a new dispatch begins.
+
+    When emit is re-dispatched — after a materialise refusal, a failed check,
+    a CEO redo or a rerun — the previous attempt's emit.txt is moved under its
+    .refactory/agent-delivery/ folder at the start of dispatch, so the worker
+    writes a fresh one.  Only emit.txt is moved; other nodes' outputs stay in
+    place so those steps can revise their own work.
+    """
+    from refactory_dsh.repo_change import EMIT_FILE
+
+    if EMIT_FILE not in writes:
+        return
+    path = _path(workdir, EMIT_FILE)
+    if not path.exists():
+        return
+    # Find the latest receipt for this node (the one whose outputs we are moving).
+    latest: dict[str, Any] | None = None
+    for receipt_path in sorted((workdir / ROOT).glob('*/receipt.json')):
+        try:
+            receipt = json.loads(receipt_path.read_text())
+            if receipt.get('node') != node:
+                continue
+            if receipt.get('status') not in ('delivered', 'failed', 'superseded'):
+                continue
+            if latest is None or receipt.get('started', '') >= latest.get('started', ''):
+                latest = receipt
+        except (OSError, ValueError, KeyError):
+            continue
+    if latest is None:
+        return
+    _set_aside(workdir, latest, [EMIT_FILE])
+
+
 def _attempt_failed(workdir: Path, record: dict[str, Any]) -> bool:
     """Whether a finish for this pending delivery already ran and refused it."""
     try:
@@ -161,6 +195,8 @@ def begin(workdir: Path, node: str, prompt: str, writes: list[str], *, reuse: bo
     annotated, execution = _execution_contract(workdir, node, annotated, reads or [], writes, model_context)
     if previous is not None and previous['prompt'] == annotated:
         return previous
+    if previous is None:
+        _set_aside_stale_emit(workdir, node, writes)
     before = previous['before'] if previous is not None else {name: _fingerprint(workdir, name) for name in writes}
     # Taken here because every route dispatches through this bracket (walker, worker
     # bridge, CEO subagent), so a change an output-only node makes to the target is

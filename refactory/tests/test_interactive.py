@@ -14,7 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from refactory_dsh import dsh_runtime, interactive, registry, steering
+from refactory_dsh import dsh_profile, dsh_runtime, interactive, registry, steering
+from tests_support import _link_bundle, _profile
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 #: A mode with agent nodes, so "the ledger reaches the agents" has something to reach.
@@ -167,6 +168,15 @@ def test_the_graph_argv_names_the_route_the_context_resolved(monkeypatch, tmp_pa
     from refactory_dsh import model as model_module
     from refactory_dsh import workers
 
+    # The pre-flight profile check in interactive.run() needs a valid graph
+    # profile.  Set one up so the test reaches the monkeypatched worker.
+    home = tmp_path / "dsh-home"
+    _profile(home, "graph", ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
+    _link_bundle(home, "graph", dsh_profile.GRAPH_BUNDLE,
+                 ROOT / "packages" / "bundle" / "graph")
+    monkeypatch.setenv("DSH_HOME", str(home))
+    monkeypatch.delenv("REFACTORY_MODEL_DSH_HOME", raising=False)
+
     class RoutedClient:
         def __init__(self, **kwargs):
             self._given = kwargs
@@ -249,6 +259,15 @@ def test_headless_prints_gate_commands_when_stopped_at_user_gate(monkeypatch, tm
     steer --verdict and graph-control resume commands once, from interactive.py.
     """
     from refactory_dsh import workers
+
+    # The pre-flight profile check in interactive.run() needs a valid graph
+    # profile.  Set one up so the test reaches the monkeypatched worker.
+    home = tmp_path / "dsh-home"
+    _profile(home, "graph", ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
+    _link_bundle(home, "graph", dsh_profile.GRAPH_BUNDLE,
+                 ROOT / "packages" / "bundle" / "graph")
+    monkeypatch.setenv("DSH_HOME", str(home))
+    monkeypatch.delenv("REFACTORY_MODEL_DSH_HOME", raising=False)
 
     workdir = tmp_path / "run"
 
@@ -473,6 +492,32 @@ def test_gate_research_reads_facts_not_knobs(tmp_path):
     assert verdict == "proceed"
 
 
+def test_interactive_run_refuses_when_the_profile_links_to_another_checkout(
+    tmp_path, monkeypatch
+):
+    """The interactive path refuses before spawning when the profile is mismatched."""
+    from refactory_dsh import workers
+
+    home = tmp_path / "home"
+    # Create graph profile with bundle declared but symlink to another checkout.
+    _profile(home, "graph", ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
+    other = tmp_path / "other" / "packages" / "bundle" / "graph"
+    _link_bundle(home, "graph", dsh_profile.GRAPH_BUNDLE, other)
+    monkeypatch.setenv("DSH_HOME", str(home))
+    monkeypatch.delenv("REFACTORY_MODEL_DSH_HOME", raising=False)
+
+    def _no_spawn(argv, **kwargs):
+        raise AssertionError("DSH was spawned with a mismatched profile")
+
+    monkeypatch.setattr(workers, "run_graph_command", _no_spawn)
+    with pytest.raises(dsh_profile.ProfileError, match="other") as exc_info:
+        interactive.run(
+            WITH_A_GATE, workdir=tmp_path / "run", project=ROOT, headless=True,
+        )
+    assert dsh_profile.add_command() in str(exc_info.value)
+    assert not (tmp_path / "run").exists(), "a refused start must leave no run directory behind"
+
+
 @pytest.mark.parametrize("returncode", [0, 1])
 def test_a_cli_run_lists_its_warnings_when_it_ends(monkeypatch, tmp_path, capsys, returncode):
     """`refactory ceo` runs the configured graph, where nobody is made to read `ran`.
@@ -481,6 +526,15 @@ def test_a_cli_run_lists_its_warnings_when_it_ends(monkeypatch, tmp_path, capsys
     the run itself lists what its steps warned about, whether or not it succeeded.
     """
     from refactory_dsh import workers
+
+    # The pre-flight profile check in interactive.run() needs a valid graph
+    # profile.  Set one up so the test reaches the monkeypatched worker.
+    home = tmp_path / "dsh-home"
+    _profile(home, "graph", ["@deepseek-ai/dsh-base", dsh_profile.GRAPH_BUNDLE])
+    _link_bundle(home, "graph", dsh_profile.GRAPH_BUNDLE,
+                 ROOT / "packages" / "bundle" / "graph")
+    monkeypatch.setenv("DSH_HOME", str(home))
+    monkeypatch.delenv("REFACTORY_MODEL_DSH_HOME", raising=False)
 
     workdir = tmp_path / "run"
 
