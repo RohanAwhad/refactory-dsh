@@ -848,10 +848,12 @@ def test_the_open_payload_carries_the_runs_own_environment(tmp_path):
     assert isinstance(env, dict)
     assert env["REFACTORY_WORKDIR"] == str(workdir.resolve())
     assert env["REFACTORY_PROJECT"] == str(project)
-    assert env["PATH"].startswith(str(Path(sys.executable).parent) + ":"), env["PATH"]
     knobs = json.loads(env["REFACTORY_KNOBS"])
     assert isinstance(knobs, dict) and knobs, knobs
-    assert payload["dataCommand"] == "python -m refactory_dsh.items"
+    # After the fix, data/agent/gate commands use absolute interpreter paths.
+    assert payload["dataCommand"].endswith("-m refactory_dsh.items")
+    assert "/" in payload["dataCommand"].split()[0], (
+        "dataCommand should use an absolute interpreter path")
 
 
 def test_a_knob_override_reaches_the_node_environment(tmp_path):

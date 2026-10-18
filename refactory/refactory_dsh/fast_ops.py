@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 from typing import Any
@@ -183,7 +184,18 @@ def focused_check(ctx: Any) -> dict[str, Any]:
             # artifact directory.
             result = repo_change.run_check(ctx, command, timeout)
         else:
-            result = sandbox.run_command(command, workdir=Path(output), timeout_s=timeout, budget=budget)
+            # Create-mode: give an explicit environment with refactory's interpreter
+            # first, then the ambient PATH, so `python` resolves to refactory's venv
+            # even when the launching shell does not have it on PATH.
+            from refactory_dsh.paths import venv_bin
+            _bindir = str(venv_bin())
+            _ambient = os.environ.get("PATH", "")
+            _create_env = {
+                "PATH": f"{_bindir}{os.pathsep}{_ambient}" if _ambient else _bindir,
+                "VIRTUAL_ENV": str(Path(_bindir).parent),
+            }
+            result = sandbox.run_command(command, workdir=Path(output), timeout_s=timeout,
+                                         budget=budget, env=_create_env, exact_env=True)
         payload.update(status="pass" if result.ok else "fail", returncode=result.returncode,
                        stdout=result.stdout, stderr=result.stderr, timed_out=result.timed_out,
                        elapsed_s=result.elapsed_s)

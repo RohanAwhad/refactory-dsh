@@ -6,6 +6,7 @@ Refactory. Capabilities describe this adapter, not everything a product can do.
 from __future__ import annotations
 
 import json
+import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -245,27 +246,27 @@ def lower_workflow(workflow: Any, workdir: Path, model_context: dict[str, Any] |
         attempts = max(1, int(selected_context.get('attempts') or 1))
         per_completion = int(selected_context.get('timeout_s') or DEFAULT_TIMEOUT_S)
         command_timeout_s = node.timeout if node.timeout is not None else node_session_budget_s(attempts, per_completion)
-        node.dispatch_command = 'python -m refactory_dsh.worker_node ' + shlex.quote(str(spec))
+        node.dispatch_command = f'{sys.executable} -m refactory_dsh.worker_node ' + shlex.quote(str(spec))
         node.command_timeout_s = command_timeout_s
     return result
 
 
 def environment(context: dict[str, Any] | None) -> dict[str, str]:
-    """Nonsecret resolved context for graph-owned deterministic nested calls."""
+    """Nonsecret resolved context for graph-owned calls.
+
+    Does not set PATH or PYTHONPATH; the target's environment is applied by
+    model._environment() at node dispatch time.
+    """
     if not context:
         return {}
     result = {'REFACTORY_WORKER_CONTEXT': json.dumps(context, separators=(',', ':'))}
     # Tool subprocesses keep these ordinary runtime variables through DSH's
-    # credential scrub. A worker launched from its artifact directory still
-    # needs the selected project Python and the installed Refactory API.
+    # credential scrub.  PATH carries the target's Python when a worktree
+    # exists (set by model._environment at dispatch time); PYTHONPATH is not
+    # set, so a target that is refactory itself is tested from its own tree.
     if context.get('python_bin'):
-        import os
         bindir = str(context['python_bin'])
-        paths = [bindir, *os.environ.get('PATH', '').split(os.pathsep)]
-        imports = [str(Path(__file__).resolve().parent.parent), *os.environ.get('PYTHONPATH', '').split(os.pathsep)]
-        result.update(VENV_BIN=bindir, VIRTUAL_ENV=str(Path(bindir).parent),
-                      PATH=os.pathsep.join(dict.fromkeys(path for path in paths if path)),
-                      PYTHONPATH=os.pathsep.join(dict.fromkeys(path for path in imports if path)))
+        result.update(VENV_BIN=bindir, VIRTUAL_ENV=str(Path(bindir).parent))
     if context.get('budget_ledger'):
         result['REFACTORY_BUDGET_LEDGER'] = str(context['budget_ledger'])
     return result

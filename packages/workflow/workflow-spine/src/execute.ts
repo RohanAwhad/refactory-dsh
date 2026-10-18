@@ -53,7 +53,8 @@ function resourceCheck(node: NodeView, config: CommandRunnerConfig): number | un
   const ledger = config.env.REFACTORY_BUDGET_LEDGER ?? process.env.REFACTORY_BUDGET_LEDGER
   if (ledger === undefined) return undefined
   const phase = node.resource_role
-  const checked = spawnSync('python', ['-m', 'refactory_dsh.budgets', ledger, '--check', ...(phase === undefined ? [] : ['--phase', phase])], {
+  const pythonBin = config.env.REFACTORY_PYTHON_BIN ?? 'python'
+  const checked = spawnSync(pythonBin, ['-m', 'refactory_dsh.budgets', ledger, '--check', ...(phase === undefined ? [] : ['--phase', phase])], {
     cwd: config.workdir, env: { ...process.env, ...config.env }, encoding: 'utf8', timeout: 10_000,
   })
   if (checked.status !== 0) throw new Error(`Resource boundary refused: ${checked.stdout || checked.stderr || checked.error?.message}`)

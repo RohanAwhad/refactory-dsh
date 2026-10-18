@@ -195,12 +195,17 @@ From the terminal, `refactory runtime` reports nested defaults as JSON; `--provi
 ## Completion deadlines and interruption
 
 Worker contexts retain the selected Python environment (`VENV_BIN`, defaulting to
-the checkout's `.venv/bin`). Tool commands receive it first on `PATH` and receive
-the installed Refactory API on `PYTHONPATH`, even when their working directory is
-a run's artifact directory. DSH's normal credential scrub still applies to child
-processes; selecting a Python environment does not forward credential variables.
-A Design run's check in a worktree is the exception: it runs with the worktree's own
-environment, and the reviewers are given `.refactory/in-worktree`, which runs a command that way.
+the checkout's `.venv/bin`). Tool commands see the target project's own environment
+by default: when a worktree exists, its `.venv/bin` and `node_modules/.bin` lead
+`PATH`, matching `worktree.check_environment()`. Refactory's own source is not
+placed on `PYTHONPATH`, so a target that is refactory itself is tested from its
+worktree, not from the launcher's checkout. Refactory's own nested dispatch
+(worker_node, sandboxed validation) and its graph-runtime commands (data loader,
+agent delivery, steering) use absolute interpreter paths and do not depend on the
+worker's `PATH` or `PYTHONPATH`. DSH's normal credential scrub still applies to
+child processes. A Design run's check in a worktree uses the worktree's own
+environment (`check_environment`), and every role is given `.refactory/in-worktree`,
+which switches to the worktree directory and runs with a clean `env -i` environment.
 
 Token-limited DSH runs require the shipped in-process `spawn` and `fork` provider
 composition. An additional named provider with unverified nested telemetry is

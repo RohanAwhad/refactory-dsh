@@ -26,6 +26,8 @@ def _execution_contract(workdir: Path, node: str, prompt: str, reads: list[str],
                         *, set_aside: dict[str, str] | None = None) -> tuple[str, dict[str, Any]]:
     """Orient one node without making its worker discover the delivery protocol."""
     context = model_context or {}
+    # Absolute path to refactory's own Python, for nested dispatch (worker_node,
+    # sandboxed validation). This is NOT the target's interpreter.
     python = str(Path(context['python_bin']) / 'python') if context.get('python_bin') else sys.executable
     execution = {
         'node': node, 'workdir': str(workdir),

@@ -849,7 +849,7 @@ Worker routes and durable receipts over DSH's named-provider registry.
 
 - **`GraphTelemetry`** — One coordinator receipt; node subprocesses own distinct worker receipts.
 - **`account_usage`** — Keep measured DSH calls while exposing incomplete delegated coverage.
-- **`environment`** — Nonsecret resolved context for graph-owned deterministic nested calls.
+- **`environment`** — Nonsecret resolved context for graph-owned calls.
 - **`lower_workflow`** — Resolve explicit node workers before graph dispatch, preserving all edges.
 - **`permission_patch`** — Scope DSH bypass to this runtime, without leaking through child env.
 - **`provider_rows`** — Declare selected provider routes to a runtime that cannot see profiles.

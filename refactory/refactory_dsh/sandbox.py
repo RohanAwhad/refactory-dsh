@@ -54,7 +54,7 @@ _SECRET_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "AUTH")
 _ALLOWED_ENV = (
     "PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "PYTHONPATH", "VIRTUAL_ENV",
     "REFACTORY_WORKDIR", "REFACTORY_KNOBS", "DSH_WORKFLOW_NODE", "SYSTEMROOT",
-    "REFACTORY_BUDGET_LEDGER",
+    "REFACTORY_BUDGET_LEDGER", "REFACTORY_PYTHON_BIN",
 )
 
 
@@ -183,11 +183,10 @@ def is_secret(name: str) -> bool:
 def scrub(env: dict[str, str] | None = None) -> dict[str, str]:
     """The environment a sandboxed run sees: an allowlist, with secrets dropped.
 
-    The project's own `python` is put on the PATH: a brief's check runs in a
-    subprocess with none of the caller's environment, and "run the tests" means the
-    interpreter that has the project installed.
+    The caller's PATH passes through the allowlist unchanged; the worker
+    environment or check environment has already set it to the target's Python.
     """
-    from refactory_dsh.paths import venv_bin, project_root
+    from refactory_dsh.paths import project_root
 
     source = dict(os.environ if env is None else env)
     out: dict[str, str] = {}
@@ -197,10 +196,6 @@ def scrub(env: dict[str, str] | None = None) -> dict[str, str]:
         if is_secret(name):
             continue
         out[name] = source[name]
-    bindir = str(venv_bin())
-    existing = out.get("PATH", "")
-    out["PATH"] = f"{bindir}{os.pathsep}{existing}" if existing else bindir
-    out.setdefault("VIRTUAL_ENV", str(Path(bindir).parent))
     return out
 
 
