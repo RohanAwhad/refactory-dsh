@@ -18,9 +18,9 @@ uv sync --group reference                                      # add the test-ti
 
 `tests/test_ir_parity.py` compares `refactory_dsh/ir.py` with the reference graph
 language over every shipped mode. That reference is a **test-time oracle** and not
-a runtime dependency: it lives in the non-default `reference` group, so a plain
-`uv sync` does not install it and the parity tests skip with a reason
-`--toolchain-gate` reports.
+a runtime dependency: it lives in the non-default `reference` group. CI installs it
+so the parity tests run on every pull request; a local `uv sync --group reference`
+adds it for development.
 
 The DSH side, when you touch `packages/`:
 
@@ -57,11 +57,12 @@ No per-PR job installs Lean or mathlib (mathlib is a 7.4 GB checkout, and this s
 `.venv` from `uv.lock`'s default (`dev`) group and installs the pinned pnpm workspace
 with the eight packages' `lib/` built, then creates the DSH profiles above. It does
 **not** install the non-default `reference` group — the parity oracle, added with
-`uv sync --group reference`, whose tests skip with a reason without it — and it does
-not create `refactory/vendor/srf/graphs`, the legacy graph directory for the
-low-level `dsh --profile graph run` path; the public `uv run refactory ceo
-<package>/<mode>` route supplies its own graph directory. `.github/workflows/ci.yml`
-runs `install.sh` and asserts this default install, so the opt-ins stay opt-in.
+`uv sync --group reference` — and it does not create `refactory/vendor/srf/graphs`,
+the legacy graph directory for the low-level `dsh --profile graph run` path; the
+public `uv run refactory ceo <package>/<mode>` route supplies its own graph directory.
+`.github/workflows/ci.yml` runs `install.sh` for the default install, then adds the
+reference group so the IR parity tests run on every pull request; the reference stays
+out of the default install.
 
 **Use managed credentials for nested model execution.** Save the provider key through **Settings → Models → Edit → API key → Apply** in the DSH home used by the run. Exported keys and repository `.env` can serve the launching process, but nested smoke deliberately scrubs credential environment variables and changes `HOME`; the product carries the nonsecret DSH-home location so DSH can resolve its managed store. See [Models](models.md#credentials-for-nested-execution) for precedence and setup, and use `refactory doctor --provider deepseek-official --model deepseek-flash` to check downstream configuration before authoring. This check does not authenticate the key; unsupported custom runtimes report an explicit unverified warning. Deterministic modes, searches with `--optimizer random`, and offline tests do not need model credentials.
 
