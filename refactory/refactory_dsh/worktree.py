@@ -83,6 +83,12 @@ CHECK_ENV = ("LANG", "LC_ALL", "TMPDIR", "SYSTEMROOT")
 #: own, so tool caches stay out of the worktree and its diff (#330 E6).
 CHECK_HOME = Path(".refactory") / "check-home"
 
+#: The HOME the unchanged base is prepared and checked with (`base_check`): its own, never
+#: the attempt's. A setup that writes into HOME and keeps what it finds there -- a tool's
+#: profile link, a cache that records where it was built -- would otherwise leave every
+#: later check of the attempt reading the base's.
+BASE_CHECK_HOME = Path(".refactory") / "base-check-home"
+
 #: How long one install may take before it is reported as failed.
 INSTALL_TIMEOUT_S = 1800
 
