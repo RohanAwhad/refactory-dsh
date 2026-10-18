@@ -325,6 +325,7 @@ def test_a_new_project_gets_a_private_repository_whose_first_pull_request_holds_
     assert _remote_head(github, slug, branch) == git(project, "rev-parse", branch)
     assert git(project, "ls-tree", "--name-only", "main") == ""
     assert "Build a tool\nthat prints built." in pull["body"] and "python tool.py" in pull["body"]
+    assert "Written by a refactory design run" in pull["body"]
     url = f"https://github.com/{slug}/pull/1"
     assert result.facts["pull_request"] == url
     assert _record(run)["status"] == "opened" and _record(run)["verified"] is True
@@ -1221,6 +1222,255 @@ def test_the_pull_request_says_the_commits_are_the_runs_attempts(github, tmp_pat
     [pull] = _pulls(github, f"{LOGIN}/{NAME}")
     assert "the run's attempts" in pull["body"]
     assert "squash merge is recommended" not in pull["body"]
+
+
+# ── pull request text for kept-local deliveries (dm-86) ────────────────────
+
+def test_no_pr_run_leaves_pr_text_and_title_in_delivery_json(github, tmp_path, capsys):
+    """A --no-pr run that passes its reviews leaves pull-request.md with a non-empty
+    Summary and its title in delivery.json.
+
+    Fails without the change because _kept never writes BODY and never records title.
+    """
+    repo = git_repo(tmp_path / "repo")
+    _published(github, "acme/app", repo)
+    run = tmp_path / "run"
+    result = _design(run, mode=_mode(pr=False), target=str(repo))
+    assert result.exit_ok, result.error
+    # pull-request.md exists with a Summary section
+    body_path = run / delivery.BODY
+    assert body_path.exists(), "pull-request.md should exist for a --no-pr run with a worktree"
+    body_text = body_path.read_text()
+    assert "## Summary" in body_text
+    assert "Written by a refactory design run" in body_text
+    assert "Opened by a refactory design run" not in body_text
+    # delivery.json records title, pr_text, and finish
+    record = _record(run)
+    assert record["title"] and isinstance(record["title"], str)
+    assert record["pr_text"] == delivery.BODY
+    assert isinstance(record["finish"], list) and len(record["finish"]) > 0
+    # delivery_result includes the finish commands (reaching the person even without a warning)
+    assert "--body-file" in result.facts["delivery_result"]
+    assert "--title" in result.facts["delivery_result"]
+    # design.json inherits title
+    design = json.loads((run / "design.json").read_text())
+    assert design["delivery"]["title"]
+    # A deliberate --no-pr emits no warning
+    assert "run warning" not in capsys.readouterr().err
+
+
+def test_plan_changed_leaves_pr_text_and_finish_commands(github, tmp_path, capsys, monkeypatch):
+    """A plan that changed since the gate keeps the work local but still leaves
+    pull-request.md and finish commands.
+
+    Fails without the change because _kept never writes BODY and its warning has no
+    --body-file.
+    """
+    repo = git_repo(tmp_path / "repo")
+    _published(github, "acme/app", repo)
+    # A fork holding the same main, so the run's base is on it and only the repository differs.
+    fork = github / "acme/fork.git"
+    git(fork.parent, "init", "-q", "--bare", "-b", "main", fork.name)
+    (github / "acme/fork.json").write_text(json.dumps({"default_branch": "main"}))
+    git(repo, "push", "-q", "https://github.com/acme/fork.git", "main:refs/heads/main")
+    real = delivery.deliver_design
+
+    def repointed(ctx):
+        git(repo, "remote", "set-url", "origin", "https://github.com/acme/fork.git")
+        return real(ctx)
+
+    monkeypatch.setattr(delivery, "deliver_design", repointed)
+    run = tmp_path / "run"
+    result = _design(run, target=str(repo))
+    assert result.exit_ok, result.error
+    # pull-request.md exists
+    assert (run / delivery.BODY).exists()
+    body_text = (run / delivery.BODY).read_text()
+    assert "## Summary" in body_text
+    # The warning includes the complete command
+    err = capsys.readouterr().err
+    assert "--body-file" in err
+    assert "--title" in err
+    # delivery.json records title and finish
+    record = _record(run)
+    assert record["title"]
+    assert any("gh pr create" in cmd and "--body-file" in cmd for cmd in record["finish"])
+
+
+def test_push_refused_leaves_pr_text_and_finish_commands(github, tmp_path, capsys, monkeypatch):
+    """A push GitHub refuses keeps the work local but still leaves pull-request.md
+    and finish commands.
+
+    Fails without the change because _kept never writes BODY and its warning has no
+    --body-file.
+    """
+    repo = git_repo(tmp_path / "repo")
+    _published(github, "acme/app", repo)
+    real_push = delivery._push
+
+    def push_refused(*args, **kwargs):
+        raise delivery.NotDelivered("push refused by GitHub")
+
+    monkeypatch.setattr(delivery, "_push", push_refused)
+    run = tmp_path / "run"
+    result = _design(run, target=str(repo))
+    assert result.exit_ok, result.error
+    # pull-request.md exists
+    assert (run / delivery.BODY).exists()
+    body_text = (run / delivery.BODY).read_text()
+    assert "## Summary" in body_text
+    # The warning includes the complete commands
+    err = capsys.readouterr().err
+    assert "--body-file" in err
+    assert "--title" in err
+    # delivery.json records title and status
+    record = _record(run)
+    assert record["title"]
+    assert record["status"] == "kept local"
+    assert any("gh pr create" in cmd and "--body-file" in cmd for cmd in record["finish"])
+
+
+def test_no_worktree_writes_no_pr_text(github, tmp_path, monkeypatch):
+    """A run with no worktree writes no pull-request.md, no title, and no pr_text.
+
+    This test passes both before and after the change — it verifies the guard.
+    """
+    monkeypatch.chdir(tmp_path)
+    run = tmp_path / "run"
+    result = _design(run, mode=_mode(worktree=False))
+    assert result.exit_ok, result.error
+    assert not (run / delivery.BODY).exists()
+    record = _record(run)
+    assert not record.get("title")
+    assert "pr_text" not in record
+
+
+def test_finish_commands_open_a_pull_request_with_the_exact_title_and_body(github, tmp_path):
+    """Runs a --no-pr design, reads the finish commands from delivery.json, and
+    executes them against the test's fake GitHub.  Asserts a PR opens with the exact
+    title and body — proving nothing is left for a person to write.
+
+    Fails without the change because delivery.json has no finish field.
+    """
+    repo = git_repo(tmp_path / "repo")
+    _published(github, "acme/app", repo)
+    run = tmp_path / "run"
+    result = _design(run, mode=_mode(pr=False), target=str(repo))
+    assert result.exit_ok, result.error
+    record = _record(run)
+    finish = record["finish"]
+    assert len(finish) == 2, f"expected push + gh pr create, got {finish}"
+    # The push command uses https://github.com/ and :refs/heads/ (not origin)
+    push_cmd = finish[0]
+    assert "https://github.com/" in push_cmd
+    assert ":refs/heads/" in push_cmd
+    assert "origin" not in push_cmd
+    # Execute the push command
+    subprocess.run(push_cmd, shell=True, check=True, capture_output=True,
+                   env={**os.environ, "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}",
+                        "GIT_TERMINAL_PROMPT": "0"})
+    # Execute the gh pr create command
+    subprocess.run(finish[1], shell=True, check=True, capture_output=True,
+                   env={**os.environ, "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}",
+                        "FAKE_GH_ROOT": str(github)})
+    # A pull request was opened
+    [pull] = _pulls(github, "acme/app")
+    assert pull["title"] == record["title"]
+    body_text = (run / delivery.BODY).read_text()
+    assert pull["body"] == body_text
+
+
+def test_finish_commands_work_with_special_characters_in_title(github, tmp_path):
+    """A title containing a quote, a backtick, and a $ works through shell quoting.
+
+    Fails without the change because delivery.json has no finish field.
+    """
+    repo = git_repo(tmp_path / "repo")
+    _published(github, "acme/app", repo)
+    run = tmp_path / "run"
+    # A design doc whose heading has special characters, so _title picks them up.
+    tricky_brief = "Fix the audit's `gate` and $PATH handling"
+    tricky_design = (
+        "# Fix the audit's `gate` and $PATH handling\n\n"
+        "## Summary\n\nFix it properly.\n\n"
+        "## Rule and sites\n\n"
+        "- `ops.py:1` — **[changed]**\n\n"
+        "## Docs\n\n"
+        "- docs/models.md\n\n"
+        "## Changes\n\n"
+        "- ops.py\n"
+    )
+    answers = [RESEARCH_ANSWER, "perspectives", "one plan", tricky_design,
+               DESIGN_REVIEW_ANSWER, render({"tool.py": "print('built')\n"}),
+               *REVIEW_ANSWERS]
+    model = FakeModel(answers)
+    result = _mode(pr=False).run(
+        run, model=model, verdicts={"gate_strategy": "proceed"},
+        task={"name": NAME, "brief": tricky_brief, "check": "python tool.py",
+              "target": str(repo)},
+    )
+    assert result.exit_ok, result.error
+    record = _record(run)
+    finish = record["finish"]
+    assert len(finish) == 2
+    # Execute the commands
+    subprocess.run(finish[0], shell=True, check=True, capture_output=True,
+                   env={**os.environ, "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}",
+                        "GIT_TERMINAL_PROMPT": "0"})
+    subprocess.run(finish[1], shell=True, check=True, capture_output=True,
+                   env={**os.environ, "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}",
+                        "FAKE_GH_ROOT": str(github)})
+    [pull] = _pulls(github, "acme/app")
+    # The title contains the special characters intact
+    assert "'" in pull["title"] or "`" in pull["title"] or "$" in pull["title"]
+    assert pull["title"] == record["title"]
+
+
+def test_no_pr_finish_commands_are_complete(github, tmp_path, capsys):
+    """A --no-pr run whose target has a GitHub remote gets complete finish commands
+    with --repo, --title, and --body-file, and they appear in delivery_result.
+
+    Fails without the change because delivery.json has no finish field and
+    delivery_result has no commands.
+    """
+    repo = git_repo(tmp_path / "repo")
+    _published(github, "acme/app", repo)
+    run = tmp_path / "run"
+    result = _design(run, mode=_mode(pr=False), target=str(repo))
+    assert result.exit_ok, result.error
+    record = _record(run)
+    finish = record["finish"]
+    assert len(finish) == 2
+    gh_cmd = finish[1]
+    assert "--repo" in gh_cmd
+    assert "--title" in gh_cmd
+    assert "--body-file" in gh_cmd
+    # delivery_result carries the finish commands
+    dr = result.facts["delivery_result"]
+    assert "--body-file" in dr
+    assert "--title" in dr
+    # No warning for deliberate --no-pr
+    assert "run warning" not in capsys.readouterr().err
+
+
+def test_no_github_remote_says_so_plainly(github, tmp_path, capsys):
+    """A target with no GitHub remote gets no commands and a plain message.
+
+    The second correction says: say plainly that there is no GitHub repository.
+    """
+    run = tmp_path / "run"
+    result = _design(run, mode=_mode(pr=False))
+    assert result.exit_ok, result.error
+    # pull-request.md is still written (there IS a worktree)
+    assert (run / delivery.BODY).exists()
+    record = _record(run)
+    assert record.get("title")
+    # No commands because there's no remote
+    assert record.get("finish") == []
+    # delivery_result mentions no GitHub repository
+    dr = result.facts["delivery_result"]
+    assert "no GitHub repository" in dr
+    assert "pull request text is at" in dr
 
 
 def test_an_upstream_that_does_not_hold_the_base_is_not_where_the_pull_request_goes(github, tmp_path):

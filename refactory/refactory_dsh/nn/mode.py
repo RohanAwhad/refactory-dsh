@@ -223,7 +223,21 @@ class Mode:
         memory: Any = None,
         **kwargs: Any,
     ) -> RunResult:
-        """Execute the built graph once: this is the forward pass."""
+        """Execute the built graph once: this is the forward pass.
+
+        A required knob the run has no value for -- in its task or its knobs, which
+        carry the same facts -- or an empty or blank one, is refused before the work
+        directory is created. Its declared default is a placeholder, never a value.
+        """
+        from refactory_dsh.brief_guard import check_required_knobs
+
+        declared = self.parameters()
+        given = {**self.values(), **{name: value for name, value in (task or {}).items()
+                                     if name in declared and value not in (None, "")}}
+        violations = check_required_knobs(declared, given)
+        if violations:
+            raise ValueError(f"refactory: {violations[0][1]}")
+
         from .executor import execute
 
         return execute(

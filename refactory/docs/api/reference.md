@@ -23,7 +23,7 @@ The mode library: the ``nn`` of the harness world.
 | class | `Edge` | `(source: 'str', target: 'str', condition: 'str \| None' = None) -> None` |
 | class | `Graph` | `(*, auto_start: 'bool' = True) -> 'None'` |
 | class | `Invariant` | `(name: 'str', description: 'str', check: 'Callable[[Graph, Mapping[str, Any]], str \| None]') -> None` |
-| class | `Knob` | `(default: 'Any', kind: 'str' = 'float', lo: 'float \| None' = None, hi: 'float \| None' = None, enum: 'tuple[Any, ...]' = (), values: 'tuple[str, ...]' = (), frozen: 'bool' = False, description: 'str' = '') -> None` |
+| class | `Knob` | `(default: 'Any', kind: 'str' = 'float', lo: 'float \| None' = None, hi: 'float \| None' = None, enum: 'tuple[Any, ...]' = (), values: 'tuple[str, ...]' = (), frozen: 'bool' = False, description: 'str' = '', required: 'bool' = False) -> None` |
 | class | `Memory` | `(namespace: 'str', kind: 'str' = 'log', retention: 'str' = 'run', description: 'str' = '') -> None` |
 | class | `Mode` | `(state: 'dict[str, Any] \| None' = None) -> 'None'` |
 | class | `Node` | `(id: 'str', kind: 'str', call: 'str' = '', evaluator: 'str' = '', gate_kind: 'str' = 'fn', knobs: 'tuple[str, ...]' = (), reads: 'tuple[str, ...]' = (), writes: 'tuple[str, ...]' = (), produces: 'tuple[str, ...]' = (), prompt_template: 'str' = '', role: 'str' = 'ceo', tools: 'tuple[str, ...]' = (), max_iterations: 'int' = 1, notes: 'str' = '', blocking: 'bool' = True, score_effect: 'str' = 'affects', targets: 'tuple[str, ...]' = (), sources: 'tuple[str, ...]' = (), subgraph_entry: 'str' = '', subgraph_exit: 'str' = '', task_ref: 'str' = '', source_path: 'str' = '', source_format: 'str' = '', inline_items: 'tuple[dict[str, Any], ...]' = (), limit: 'int' = 0, resource_role: 'str \| None' = None) -> None` |
@@ -68,7 +68,7 @@ Typed parameters: the only thing an optimizer may write.
 
 | kind | name | signature |
 |---|---|---|
-| class | `Knob` | `(default: 'Any', kind: 'str' = 'float', lo: 'float \| None' = None, hi: 'float \| None' = None, enum: 'tuple[Any, ...]' = (), values: 'tuple[str, ...]' = (), frozen: 'bool' = False, description: 'str' = '') -> None` |
+| class | `Knob` | `(default: 'Any', kind: 'str' = 'float', lo: 'float \| None' = None, hi: 'float \| None' = None, enum: 'tuple[Any, ...]' = (), values: 'tuple[str, ...]' = (), frozen: 'bool' = False, description: 'str' = '', required: 'bool' = False) -> None` |
 | class | `KnobError` | `` |
 
 - **`Knob`** — A declared parameter: a default, a kind, and optional bounds.

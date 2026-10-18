@@ -1,0 +1,67 @@
+"""Refuse an empty or whitespace-only brief, and check required knobs.
+
+One module, two functions:
+
+- ``require_brief`` is the CLI guard: it checks the positional ``what`` before
+  anything is forwarded.
+- ``check_required_knobs`` is the run-start and V9 guard: it checks every
+  ``required=True`` str knob and returns the violations.  Used by ``Mode.run``
+  (the walker path), ``interactive.prepare`` (the DSH path) and V9 validation
+  (the optimizer/sandbox/registry path).
+
+A separate module because the CLI cannot import the prepare ops, the prepare ops
+cannot import the CLI, and ``nn/`` should not import either.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, Mapping
+
+if TYPE_CHECKING:
+    from refactory_dsh.nn.knob import Knob
+
+
+def require_brief(brief: str | None, *, source: str = "brief") -> None:
+    """Raise :class:`ValueError` when *brief* is missing, empty or whitespace-only.
+
+    ``source`` names the argument or knob that was empty (e.g. ``'what'`` from the
+    CLI positional, ``'brief'`` from knobs or the task dict).
+    """
+    if brief is None or not str(brief).strip():
+        raise ValueError(
+            f"refactory: {source} is empty or whitespace-only; "
+            "every authoring mode needs an idea to work from"
+        )
+
+
+def check_required_knobs(
+    declared: Mapping[str, "Knob"],
+    values: Mapping[str, Any],
+    *,
+    allow_defaults: bool = False,
+) -> list[tuple[str, str]]:
+    """Return ``(name, message)`` for every required knob whose value is empty.
+
+    A required knob's default is a placeholder: at run start (``Mode.run``,
+    ``interactive.prepare``) a value equal to it is still refused when blank. With
+    ``allow_defaults`` such a value is accepted instead, which is what V9 wants: it
+    validates a mode's structure and starting state, where nothing has been given yet.
+    """
+    violations: list[tuple[str, str]] = []
+    # declared may be a list when callers pass raw knob lists (e.g. nn.validate
+    # called with declared_knobs=[]).  Only dicts carry name→Knob pairs.
+    if not hasattr(declared, "items"):
+        return violations
+    for name, knob in declared.items():
+        if not getattr(knob, "required", False) or knob.kind != "str":
+            continue
+        value = values.get(name, knob.default)
+        if allow_defaults and value == knob.default:
+            continue
+        if not str(value).strip():
+            violations.append(
+                (name,
+                 f"required knob {name!r} has no value, or an empty or blank one; "
+                 "give it one")
+            )
+    return violations

@@ -50,6 +50,8 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
     name = str(task.get("name") or ctx.knob("name", "") or "").strip()
     brief = str(task.get("brief") or ctx.knob("brief", "") or "").strip()
     check = str(task.get("check") or ctx.knob("check", "") or "").strip()
+    from refactory_dsh.brief_guard import require_brief
+    require_brief(brief, source="brief")
     if not name and brief:
         from refactory_dsh.create_ops import _slug
 

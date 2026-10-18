@@ -66,6 +66,7 @@ def prepare(
     model_context: dict[str, Any] | None = None,
     resource_limits: dict[str, Any] | None = None,
     resume: bool = False,
+    headless: bool = False,
 ) -> tuple[str, Path]:
     """Lower the mode for a person to use, and leave the run ready to start.
 
@@ -74,20 +75,35 @@ def prepare(
     into the agent prompts; seeding afterwards would produce a run nobody steered.
     """
     workdir = Path(workdir).expanduser().resolve()
+    project = Path(project or project_root())
+    if not resume:
+        if "/" not in identifier:
+            raise ValueError(f"{identifier!r} is not a <package>/<mode> identifier")
+        Mode = registry.resolve(project, identifier)[1]
+        mode = Mode()
+        state = with_knobs(mode.state_dict(), list(knobs or []))
+        # A required knob's default is only a placeholder. A headless run has nobody to
+        # give the value later, so one with no value, or an empty or blank one, is refused
+        # here, before ownership creates the run directory. A session a person opens may
+        # start without it -- the idea comes in the conversation -- so there only a value
+        # given explicitly blank is refused. Every mode that declares one is covered.
+        from refactory_dsh.brief_guard import check_required_knobs
+        from refactory_dsh.nn.validate import declared_knobs
+
+        values = {name: entry["value"] for name, entry in (state.get("knobs") or {}).items()}
+        given = {str(part).partition("=")[0].strip() for part in knobs or [] if "=" in str(part)}
+        violations = [(name, message) for name, message in check_required_knobs(declared_knobs(state), values)
+                      if headless or name in given]
+        if violations:
+            raise ValueError(f"refactory: {violations[0][1]}")
     with ownership(workdir):
-        project = Path(project or project_root())
         if resume:
             if knobs or intent or model_context:
                 raise ValueError('resume retains saved knobs, instructions and route; changes require explicit invalidation')
             from refactory_dsh.recovery import prepare as recover
             name = identifier.replace('/', '-')
             return name, recover(workdir, name, resource_limits=resource_limits)
-        if "/" not in identifier:
-            raise ValueError(f"{identifier!r} is not a <package>/<mode> identifier")
         package, mode_name = identifier.split("/", 1)
-        Mode = registry.resolve(project, identifier)[1]
-        mode = Mode()
-        state = with_knobs(mode.state_dict(), list(knobs or []))
 
         # Absolute, because this directory becomes DSH's session cwd and DSH refuses a
         # relative one: `interactive <mode>` with no `--workdir` used to fail before the
@@ -276,7 +292,7 @@ def run(
             worker_backend = model_context.get('worker_backend', 'dsh')
         if not resume:
             name, graphs = prepare(
-                identifier, workdir=workdir, intent=intent, project=project, knobs=knobs, model_context=model_context, resource_limits=resource_limits,
+                identifier, workdir=workdir, intent=intent, project=project, knobs=knobs, model_context=model_context, resource_limits=resource_limits, headless=headless,
             )
         for pair in list(approve or []):
             gate, separator, value = str(pair).partition("=")
