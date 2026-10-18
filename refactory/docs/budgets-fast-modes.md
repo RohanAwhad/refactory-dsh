@@ -58,7 +58,7 @@ knob): the run gets a worktree of it on its own branch, from a pinned base
 (`--base`), and your checkout stays as it is. Without one it starts a new project
 in `~/refactory-projects/<name>`. Each attempt is a commit, written in `===FILE:`,
 `===EDIT:` and `===DELETE:` blocks, and the check runs in the worktree's own
-environment after `--setup` and `--generate` (whose tracked-file changes are amended into the attempt); see [models](models.md). Fast Design has no approval
+environment after `--generate` (whose tracked-file changes are amended into the attempt) and `--setup`; see [models](models.md). Fast Design has no approval
 gate, so it opens no pull request: its work stays on the run's branch, which
 `design.json` names. To open one, push the branch yourself; Design's delivery
 pushes only a base GitHub already has, so it cannot deliver that branch for you.
