@@ -1346,6 +1346,351 @@ describe('fork-branch redo reopens join and downstream', () => {
   })
 })
 
+describe('fork-branch redo reopens join and downstream', () => {
+  function designGraphWithSynth(): WorkflowGraph {
+    return {
+      name: 't', start_node: 'start',
+      nodes: {
+        start: { _type: 'AgentNode', id: 'start', role: 'builder', prompt_template: 'S', reads: [], writes: [] },
+        fork_qa: { _type: 'ForkNode', id: 'fork_qa', targets: ['health_checker', 'code_reviewer', 'qa_director'] },
+        health_checker: { _type: 'AgentNode', id: 'health_checker', role: 'reviewer', prompt_template: 'HC', reads: [], writes: [] },
+        code_reviewer: { _type: 'AgentNode', id: 'code_reviewer', role: 'reviewer', prompt_template: 'CR', reads: [], writes: [] },
+        qa_director: { _type: 'AgentNode', id: 'qa_director', role: 'reviewer', prompt_template: 'QD', reads: [], writes: [] },
+        join_qa: { _type: 'JoinNode', id: 'join_qa', sources: ['health_checker', 'code_reviewer', 'qa_director'] },
+        synth: { _type: 'AgentNode', id: 'synth', role: 'builder', prompt_template: 'SY', reads: [], writes: [] },
+        gate_qa: { _type: 'GateNode', id: 'gate_qa', evaluator_type: 'fn', evaluator_command: 'true', reads: [] },
+        end: { _type: 'AgentNode', id: 'end', role: 'builder', prompt_template: 'E', reads: [], writes: [] },
+      },
+      edges: [
+        { source: 'start', target: 'fork_qa' },
+        { source: 'fork_qa', target: 'join_qa' },
+        { source: 'join_qa', target: 'synth' },
+        { source: 'synth', target: 'gate_qa' },
+        { source: 'gate_qa', target: 'end', condition: 'proceed' },
+      ],
+    }
+  }
+
+  it('fork branch redo with design shape (with synth)', () => {
+    const spine = new Spine(designGraphWithSynth())
+    // Complete all nodes through end
+    spine.complete('start')
+    spine.complete('fork_qa')
+    spine.complete('health_checker')
+    spine.complete('code_reviewer')
+    spine.complete('qa_director')
+    spine.complete('join_qa')
+    spine.complete('synth')
+    spine.verdict('gate_qa', 'proceed')
+    spine.complete('end')
+    expect(spine.next().status).toBe('done')
+
+    // planRedo should include join and downstream, not siblings
+    const plan = spine.planRedo('code_reviewer')
+    const planSet = new Set(plan.nodes)
+    expect(planSet).toContain('code_reviewer')
+    expect(planSet).toContain('join_qa')
+    expect(planSet).toContain('synth')
+    expect(planSet).toContain('gate_qa')
+    expect(planSet).toContain('end')
+    expect(planSet).not.toContain('health_checker')
+    expect(planSet).not.toContain('qa_director')
+    expect(planSet).not.toContain('fork_qa')
+    expect(planSet).not.toContain('start')
+
+    // redo
+    spine.redo('code_reviewer')
+    expect(ids(spine)).toEqual(['code_reviewer'])
+
+    // Checkpoint round-trip: afters entry survives
+    const cp = JSON.parse(JSON.stringify(spine.checkpoint()))
+    const fresh = new Spine(designGraphWithSynth())
+    fresh.restore(cp)
+    expect(ids(fresh)).toEqual(['code_reviewer'])
+
+    // Walk through to completion
+    spine.complete('code_reviewer')
+    expect(ids(spine)).toEqual(['join_qa'])
+    spine.complete('join_qa')
+    expect(ids(spine)).toEqual(['synth'])
+    spine.complete('synth')
+    expect(ids(spine)).toEqual(['gate_qa'])
+    spine.verdict('gate_qa', 'proceed')
+    expect(ids(spine)).toEqual(['end'])
+    spine.complete('end')
+    expect(spine.next().status).toBe('done')
+
+    // Siblings stayed completed
+    expect(spine.state().completed).toContain('health_checker')
+    expect(spine.state().completed).toContain('qa_director')
+  })
+
+  it('multi-node branch redo (first node)', () => {
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'fork',
+      nodes: {
+        fork: { _type: 'ForkNode', id: 'fork', targets: ['a', 'c'] },
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', reads: [], writes: [] },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', reads: [], writes: [] },
+        c: { _type: 'AgentNode', id: 'c', role: 'builder', prompt_template: 'C', reads: [], writes: [] },
+        join: { _type: 'JoinNode', id: 'join', sources: ['b', 'c'] },
+        end: { _type: 'AgentNode', id: 'end', role: 'builder', prompt_template: 'E', reads: [], writes: [] },
+      },
+      edges: [
+        { source: 'fork', target: 'join' },
+        { source: 'a', target: 'b' },
+        { source: 'join', target: 'end' },
+      ],
+    }
+    const spine = new Spine(graph)
+    spine.complete('fork')
+    spine.complete('a')
+    spine.complete('b')
+    spine.complete('c')
+    spine.complete('join')
+    spine.complete('end')
+    expect(spine.next().status).toBe('done')
+
+    const plan = spine.planRedo('a')
+    const planSet = new Set(plan.nodes)
+    expect(planSet).toContain('a')
+    expect(planSet).toContain('b')
+    expect(planSet).toContain('join')
+    expect(planSet).toContain('end')
+    expect(planSet).not.toContain('c')
+    expect(planSet).not.toContain('fork')
+
+    spine.redo('a')
+    expect(ids(spine)).toEqual(['a'])
+    spine.complete('a')
+    expect(ids(spine)).toEqual(['b'])
+    spine.complete('b')
+    expect(ids(spine)).toEqual(['join'])
+    spine.complete('join')
+    expect(ids(spine)).toEqual(['end'])
+    spine.complete('end')
+    expect(spine.next().status).toBe('done')
+    expect(spine.state().completed).toContain('c')
+  })
+
+  it('multi-node branch redo (last node)', () => {
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'fork',
+      nodes: {
+        fork: { _type: 'ForkNode', id: 'fork', targets: ['a', 'c'] },
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', reads: [], writes: [] },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', reads: [], writes: [] },
+        c: { _type: 'AgentNode', id: 'c', role: 'builder', prompt_template: 'C', reads: [], writes: [] },
+        join: { _type: 'JoinNode', id: 'join', sources: ['b', 'c'] },
+        end: { _type: 'AgentNode', id: 'end', role: 'builder', prompt_template: 'E', reads: [], writes: [] },
+      },
+      edges: [
+        { source: 'fork', target: 'join' },
+        { source: 'a', target: 'b' },
+        { source: 'join', target: 'end' },
+      ],
+    }
+    const spine = new Spine(graph)
+    spine.complete('fork')
+    spine.complete('a')
+    spine.complete('b')
+    spine.complete('c')
+    spine.complete('join')
+    spine.complete('end')
+    expect(spine.next().status).toBe('done')
+
+    const plan = spine.planRedo('b')
+    const planSet = new Set(plan.nodes)
+    expect(planSet).toContain('b')
+    expect(planSet).toContain('join')
+    expect(planSet).toContain('end')
+    expect(planSet).not.toContain('a')
+    expect(planSet).not.toContain('c')
+    expect(planSet).not.toContain('fork')
+
+    spine.redo('b')
+    expect(ids(spine)).toEqual(['b'])
+    spine.complete('b')
+    expect(ids(spine)).toEqual(['join'])
+    spine.complete('join')
+    expect(ids(spine)).toEqual(['end'])
+    spine.complete('end')
+    expect(spine.next().status).toBe('done')
+    expect(spine.state().completed).toContain('a')
+    expect(spine.state().completed).toContain('c')
+  })
+
+  it('nested fork redo reopens both joins', () => {
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'outer_fork',
+      nodes: {
+        outer_fork: { _type: 'ForkNode', id: 'outer_fork', targets: ['inner_fork', 'z'] },
+        inner_fork: { _type: 'ForkNode', id: 'inner_fork', targets: ['x', 'y'] },
+        x: { _type: 'AgentNode', id: 'x', role: 'builder', prompt_template: 'X', reads: [], writes: [] },
+        y: { _type: 'AgentNode', id: 'y', role: 'builder', prompt_template: 'Y', reads: [], writes: [] },
+        inner_join: { _type: 'JoinNode', id: 'inner_join', sources: ['x', 'y'] },
+        tail: { _type: 'AgentNode', id: 'tail', role: 'builder', prompt_template: 'T', reads: [], writes: [] },
+        z: { _type: 'AgentNode', id: 'z', role: 'builder', prompt_template: 'Z', reads: [], writes: [] },
+        outer_join: { _type: 'JoinNode', id: 'outer_join', sources: ['tail', 'z'] },
+        end_node: { _type: 'AgentNode', id: 'end_node', role: 'builder', prompt_template: 'E', reads: [], writes: [] },
+      },
+      edges: [
+        { source: 'outer_fork', target: 'outer_join' },
+        { source: 'inner_fork', target: 'inner_join' },
+        { source: 'inner_join', target: 'tail' },
+        { source: 'outer_join', target: 'end_node' },
+      ],
+    }
+    const spine = new Spine(graph)
+    spine.complete('outer_fork')
+    // inner_fork and z are parallel — complete z first because completing a
+    // ForkNode replaces the entire cursor with its targets, dropping siblings.
+    spine.complete('z')
+    spine.complete('inner_fork')
+    // x and y are parallel from inner fork
+    spine.complete('x')
+    spine.complete('y')
+    // inner_join pops from afters
+    spine.complete('inner_join')
+    spine.complete('tail')
+    // outer_join pops from afters
+    spine.complete('outer_join')
+    spine.complete('end_node')
+    expect(spine.next().status).toBe('done')
+
+    const plan = spine.planRedo('x')
+    const planSet = new Set(plan.nodes)
+    expect(planSet).toContain('x')
+    expect(planSet).toContain('inner_join')
+    expect(planSet).toContain('tail')
+    expect(planSet).toContain('outer_join')
+    expect(planSet).toContain('end_node')
+    expect(planSet).not.toContain('y')
+    expect(planSet).not.toContain('z')
+    expect(planSet).not.toContain('inner_fork')
+    expect(planSet).not.toContain('outer_fork')
+
+    spine.redo('x')
+    expect(ids(spine)).toEqual(['x'])
+    spine.complete('x')
+    expect(ids(spine)).toEqual(['inner_join'])
+    spine.complete('inner_join')
+    expect(ids(spine)).toEqual(['tail'])
+    spine.complete('tail')
+    expect(ids(spine)).toEqual(['outer_join'])
+    spine.complete('outer_join')
+    expect(ids(spine)).toEqual(['end_node'])
+    spine.complete('end_node')
+    expect(spine.next().status).toBe('done')
+    expect(spine.state().completed).toContain('y')
+    expect(spine.state().completed).toContain('z')
+  })
+
+  it('expanded director child redo reopens successor', () => {
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'director',
+      nodes: {
+        director: {
+          _type: 'AgentNode', id: 'director', role: 'builder', prompt_template: 'D',
+          reads: [], writes: [],
+          expand: { role: 'worker', slug_field: 'slug', prompt_field: 'prompt', writes_template: '' },
+        },
+        end: { _type: 'AgentNode', id: 'end', role: 'builder', prompt_template: 'E', reads: [], writes: [] },
+      },
+      edges: [
+        { source: 'director', target: 'end' },
+      ],
+    }
+    const spine = new Spine(graph)
+    expect(ids(spine)).toEqual(['director'])
+    spine.expand('director', [{ slug: 'a', prompt: 'A' }, { slug: 'b', prompt: 'B' }])
+    expect(ids(spine)).toEqual(expect.arrayContaining(['director__a', 'director__b']))
+    spine.complete('director__a')
+    spine.complete('director__b')
+    // end pops from afters
+    expect(ids(spine)).toEqual(['end'])
+    spine.complete('end')
+    expect(spine.next().status).toBe('done')
+
+    const plan = spine.planRedo('director__a')
+    const planSet = new Set(plan.nodes)
+    expect(planSet).toContain('director__a')
+    expect(planSet).toContain('end')
+    expect(planSet).not.toContain('director__b')
+    expect(planSet).not.toContain('director')
+
+    spine.redo('director__a')
+    expect(ids(spine)).toEqual(['director__a'])
+    spine.complete('director__a')
+    expect(ids(spine)).toEqual(['end'])
+    spine.complete('end')
+    expect(spine.next().status).toBe('done')
+    expect(spine.state().completed).toContain('director__b')
+  })
+
+  it('continuation does not depend on join sources', () => {
+    // join_qa's sources names only health_checker, but code_reviewer is also a
+    // fork branch. The continuation comes from the fork's unconditional target,
+    // not from the join's sources list.
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'start',
+      nodes: {
+        start: { _type: 'AgentNode', id: 'start', role: 'builder', prompt_template: 'S', reads: [], writes: [] },
+        fork_qa: { _type: 'ForkNode', id: 'fork_qa', targets: ['health_checker', 'code_reviewer', 'qa_director'] },
+        health_checker: { _type: 'AgentNode', id: 'health_checker', role: 'reviewer', prompt_template: 'HC', reads: [], writes: [] },
+        code_reviewer: { _type: 'AgentNode', id: 'code_reviewer', role: 'reviewer', prompt_template: 'CR', reads: [], writes: [] },
+        qa_director: { _type: 'AgentNode', id: 'qa_director', role: 'reviewer', prompt_template: 'QD', reads: [], writes: [] },
+        join_qa: { _type: 'JoinNode', id: 'join_qa', sources: ['health_checker'] },
+        synth: { _type: 'AgentNode', id: 'synth', role: 'builder', prompt_template: 'SY', reads: [], writes: [] },
+        gate_qa: { _type: 'GateNode', id: 'gate_qa', evaluator_type: 'fn', evaluator_command: 'true', reads: [] },
+        end: { _type: 'AgentNode', id: 'end', role: 'builder', prompt_template: 'E', reads: [], writes: [] },
+      },
+      edges: [
+        { source: 'start', target: 'fork_qa' },
+        { source: 'fork_qa', target: 'join_qa' },
+        { source: 'join_qa', target: 'synth' },
+        { source: 'synth', target: 'gate_qa' },
+        { source: 'gate_qa', target: 'end', condition: 'proceed' },
+      ],
+    }
+    const spine = new Spine(graph)
+    spine.complete('start')
+    spine.complete('fork_qa')
+    spine.complete('health_checker')
+    spine.complete('code_reviewer')
+    spine.complete('qa_director')
+    spine.complete('join_qa')
+    spine.complete('synth')
+    spine.verdict('gate_qa', 'proceed')
+    spine.complete('end')
+    expect(spine.next().status).toBe('done')
+
+    // Even though join_qa.sources only names health_checker, redo of code_reviewer
+    // still reopens join_qa and downstream because the continuation comes from
+    // the fork's unconditional target, not from join sources.
+    const plan = spine.planRedo('code_reviewer')
+    const planSet = new Set(plan.nodes)
+    expect(planSet).toContain('code_reviewer')
+    expect(planSet).toContain('join_qa')
+    expect(planSet).toContain('synth')
+    expect(planSet).toContain('gate_qa')
+    expect(planSet).toContain('end')
+
+    spine.redo('code_reviewer')
+    expect(ids(spine)).toEqual(['code_reviewer'])
+    spine.complete('code_reviewer')
+    expect(ids(spine)).toEqual(['join_qa'])
+    spine.complete('join_qa')
+    expect(ids(spine)).toEqual(['synth'])
+    spine.complete('synth')
+    expect(ids(spine)).toEqual(['gate_qa'])
+    spine.verdict('gate_qa', 'proceed')
+    expect(ids(spine)).toEqual(['end'])
+    spine.complete('end')
+    expect(spine.next().status).toBe('done')
+  })
+})
+
 describe('iteration preservation on CEO redo', () => {
   function gateLoopGraph(): WorkflowGraph {
     return {
