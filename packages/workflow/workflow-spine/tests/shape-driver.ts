@@ -282,7 +282,9 @@ export function allOrders(shape: ShapeEntry): DriveResult[] {
       const permIndex = combination[cpCounter]
       cpCounter++
       if (permIndex === undefined) return sorted
-      return permIndex.map(i => sorted[i]!)
+      // Clip to actual length: with position-scoped scheduling, different orderings
+      // can produce different numbers of concurrent nodes at a given step.
+      return permIndex.filter(i => i < sorted.length).map(i => sorted[i]!)
     }
 
     results.push(driveToEnd(shape.graph, shape, { orderFn }))

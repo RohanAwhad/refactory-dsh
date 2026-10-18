@@ -620,8 +620,9 @@ export class Spine {
           for (const [container, continuation] of afters) {
             const body = this.containerBody(container, continuation)
             const hasInBody = cursor.some(pos => body.has(pos))
+            const hasActivePass = pass !== undefined && body.has(pass.node)
             const hasPendingCont = [...afters].some(([c2, cont2]) => c2 !== container && body.has(cont2))
-            if (!hasInBody && !hasPendingCont) {
+            if (!hasInBody && !hasActivePass && !hasPendingCont) {
               afters.delete(container)
               if (!cursor.includes(continuation)) cursor.push(continuation)
               drained = true
@@ -1005,6 +1006,8 @@ export class Spine {
         this.completed = this.completed.filter(entry => entry !== child)
       }
     }
+    // Remove old children from cursor so re-expansion doesn't leave stale entries
+    this.cursor = this.cursor.filter(entry => !entry.startsWith(prefix))
     this.edges = this.edges.filter(edge =>
       !(edge.source === director && edge.condition == null)
       && !(edge.source.startsWith(prefix) || edge.target.startsWith(prefix)),
@@ -1159,11 +1162,13 @@ export class Spine {
     for (const [container, continuation] of this.afters) {
       const body = this.containerBody(container, continuation)
       const hasCursorInBody = this.cursor.some(pos => body.has(pos))
+      // An active data pass keeps its data node's position virtually alive
+      const hasActivePass = this.pass !== undefined && body.has(this.pass.node)
       // Also check whether a pending inner continuation lies in this body
       const hasPendingCont = [...this.afters].some(
         ([c2, cont2]) => c2 !== container && body.has(cont2),
       )
-      if (!hasCursorInBody && !hasPendingCont) {
+      if (!hasCursorInBody && !hasActivePass && !hasPendingCont) {
         this.afters.delete(container)
         if (!this.cursor.includes(continuation)) {
           this.cursor.push(continuation)
