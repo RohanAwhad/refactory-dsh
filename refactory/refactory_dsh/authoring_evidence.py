@@ -170,7 +170,7 @@ def record(ctx: Any, outcome: dict[str, Any]) -> dict[str, Any]:
                "identity": identity(ctx.workdir, root), "requirements": requirements(ctx),
                "settings": {key: ctx.knob(key, None) for key in SETTINGS},
                "receipts": {name: hashlib.sha256((ctx.workdir / name).read_bytes()).hexdigest()
-                            for name in ("smoke.json", "revision.json", "focused-check.json", "check.txt")
+                            for name in ("smoke.json", "revision.json", "focused-check.json", "check.txt", "test-guardedness.json")
                             if (ctx.workdir / name).is_file()},
                "outputs": runtime_outputs(ctx), "validation": outcome}
     ctx.write_json(EVIDENCE, payload)
@@ -178,7 +178,7 @@ def record(ctx: Any, outcome: dict[str, Any]) -> dict[str, Any]:
     history = ctx.workdir / ".refactory" / "validation-history" / payload["id"]
     history.mkdir(parents=True, exist_ok=True)
     (history / EVIDENCE).write_text(json.dumps(payload, indent=2) + "\n")
-    for name in ("smoke.json", "revision.json", "check.txt", "focused-check.json", AUDIT):
+    for name in ("smoke.json", "revision.json", "check.txt", "focused-check.json", "test-guardedness.json", AUDIT):
         path = ctx.workdir / name
         if path.is_file():
             (history / name).write_bytes(path.read_bytes())

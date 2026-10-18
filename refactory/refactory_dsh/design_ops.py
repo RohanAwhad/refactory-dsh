@@ -304,11 +304,54 @@ def check_artifact(ctx: Any) -> str:
         "stdout": result.stdout, "stderr": result.stderr, "returncode": result.returncode,
         "timed_out": result.timed_out, "elapsed_s": result.elapsed_s}
     ctx.write_text("check.txt", detail or "ok\n")
+
+    # Whether the new tests fail without the change is evidence for the reviewers, passing
+    # or not; recorded before the receipt, which hashes it.
+    from refactory_dsh import base_check
+    guardedness = None
+    if worktree.recorded(ctx.workdir) is not None:
+        ctx.set_fact("inherited_failures", [])
+        try:
+            guardedness = base_check.compute_test_guardedness(
+                ctx, command, int(ctx.knob("check_timeout_s", 180)),
+            )
+        except Exception as exc:  # evidence, not a gate: say why it is missing
+            guardedness = {"unavailable": f"the new tests could not be run on the base: {exc}"}
+        if guardedness is not None:
+            ctx.write_json("test-guardedness.json", guardedness)
     evidence.record(ctx, outcome)
+
     if result.ok:
         ctx.set_fact("validation", "(the check passed)")
         return "proceed"
     evidence.stop_unrepairable(outcome["status"], detail)
+
+    # A failure the unchanged base has too is not the attempt's (`base_check.compare_failures`).
+    if worktree.recorded(ctx.workdir) is not None:
+        filtered = base_check.filter_check(
+            ctx, result, command, int(ctx.knob("check_timeout_s", 180)),
+            guardedness=guardedness,
+        )
+        if filtered.base_environment_failure:
+            evidence.stop_unrepairable(
+                "unavailable",
+                f"the base check could not run: {filtered.base_environment_failure}",
+            )
+        if filtered.all_excused:
+            validation_msg = f"(the check passed; {filtered.inherited_detail})"
+            ctx.set_fact("validation", validation_msg)
+            ctx.write_text("check.txt", validation_msg + "\n")
+            # The receipt the reviews and the audit check is this one, which passed.
+            outcome["status"] = "pass"
+            outcome["inherited_failures"] = sorted(filtered.inherited)
+            ctx.set_fact("inherited_failures", sorted(filtered.inherited))
+            evidence.record(ctx, outcome)
+            return "proceed"
+        if filtered.new_failures and filtered.inherited:
+            detail = filtered.new_failure_detail
+        if filtered.inherited_detail:
+            ctx.write_text("check.txt", detail + "\n\n" + filtered.inherited_detail + "\n")
+
     return repair(ctx, [detail])
 
 

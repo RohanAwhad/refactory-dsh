@@ -96,7 +96,8 @@ def _qa_nodes(graph: Graph, *, artifact: bool) -> None:
         "focused_qa", "agent", role="code_reviewer",
         prompt_template=QA_PROMPT + (ARTIFACT_QA if artifact else "") + REVIEW_CONTEXT + AUDIT_INSTRUCTIONS,
         resource_role="final_validation",
-        reads=("brief.json", "focused-check.json", "authoring-evidence.json"),
+        reads=("brief.json", "focused-check.json", "authoring-evidence.json")
+              + (("test-guardedness.json",) if artifact else ()),
         writes=("focused-qa.json", "intent-audit.json"),
         produces=("focused_qa",), notes="one light focused QA stage; no reviewer fan-out",
     ))

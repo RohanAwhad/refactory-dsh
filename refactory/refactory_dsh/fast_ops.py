@@ -198,12 +198,43 @@ def focused_check(ctx: Any) -> dict[str, Any]:
     ctx.write_json("focused-source.json", {"root": output, "files": _checked_files(Path(output)),
                                           "review_files": review_files})
     ctx.write_json("focused-check.json", payload)
+
+    from refactory_dsh import base_check
+    guardedness = None
+    if ctx.facts.get("artifact") and worktree.recorded(ctx.workdir) is not None:
+        ctx.set_fact("inherited_failures", [])
+        try:
+            guardedness = base_check.compute_test_guardedness(
+                ctx, command, float(ctx.knob("check_timeout_s", 60)),
+            )
+        except Exception as exc:  # evidence, not a gate: say why it is missing
+            guardedness = {"unavailable": f"the new tests could not be run on the base: {exc}"}
+        if guardedness is not None:
+            ctx.write_json("test-guardedness.json", guardedness)
     if payload["status"] == "fail":
         detail = f"requested runtime check failed (exit {payload.get('returncode')}): {payload.get('stderr') or payload.get('stdout')}"
         kind = evidence.failure_kind(detail, timed_out=bool(payload.get("timed_out")), returncode=payload.get("returncode"))
         if kind != "code_failure":
             evidence.record(ctx, {**payload, "status": kind})
             evidence.stop_unrepairable(kind, detail)
+
+        # A failure the unchanged base has too is not the attempt's.
+        if ctx.facts.get("artifact") and worktree.recorded(ctx.workdir) is not None:
+            filtered = base_check.filter_check(
+                ctx, result, command,
+                float(ctx.knob("check_timeout_s", 60)),
+                guardedness=guardedness,
+            )
+            if filtered.base_environment_failure:
+                evidence.stop_unrepairable(
+                    "unavailable",
+                    f"the base check could not run: {filtered.base_environment_failure}",
+                )
+            if filtered.all_excused:
+                payload["status"] = "pass"
+                payload["inherited_failures"] = sorted(filtered.inherited)
+                ctx.set_fact("inherited_failures", sorted(filtered.inherited))
+                ctx.write_json("focused-check.json", payload)
     if ctx.facts.get("package_path"):
         problems = evidence.current_problems(ctx)
         if problems:

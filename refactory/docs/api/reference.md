@@ -670,6 +670,7 @@ The steps a mode uses to change a repository: where it works, what lands, how it
 | function | `locate` | `(ctx: 'Any', name: 'str', task: 'dict[str, Any]', *, in_worktree: 'bool \| None' = None, needs_worktree: 'tuple[str, ...]' = (), output_only: 'tuple[str, ...]' = ()) -> 'dict[str, Any]'` |
 | function | `materialise` | `(ctx: 'Any', *, source: 'Path \| None' = None, files: 'tuple[str, ...]' = ()) -> 'dict[str, Any]'` |
 | function | `materialise_node` | `(**fields: 'Any') -> 'Node'` |
+| function | `prepare_commands` | `(ctx: 'Any', found: 'worktree.Worktree', env: 'dict[str, str]', home: 'Path', timeout: 'float', budget: 'Any', *, amend: 'bool' = True) -> 'tuple[worktree.Worktree, list[str]]'` |
 | function | `produces` | `() -> 'tuple[str, ...]'` |
 | function | `refused` | `(ctx: 'Any') -> 'str'` |
 | function | `report` | `(ctx: 'Any', name: 'str', payload: 'dict[str, Any]') -> 'dict[str, Any]'` |
@@ -681,6 +682,7 @@ The steps a mode uses to change a repository: where it works, what lands, how it
 - **`locate`** — Where the run works, as facts for the mode's prepare op to return.
 - **`materialise`** — Make the emitted files the run's artifact: a commit in its worktree, when it has one.
 - **`materialise_node`** — The op that applies ``emit.txt`` as the run's next attempt (`materialise`).
+- **`prepare_commands`** — Run the run's generate command, then its setup command, in a prepared worktree.
 - **`produces`** — The facts `locate` returns, for the prepare node's ``produces``.
 - **`refused`** — Why `materialise` could not apply the last ``emit.txt``; empty when it did.
 - **`report`** — Settle the run's place, write the mode's report ``name`` from ``payload``, and return it.

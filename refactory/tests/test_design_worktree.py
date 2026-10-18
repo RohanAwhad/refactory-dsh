@@ -1342,6 +1342,217 @@ def test_the_console_design_verb_takes_a_target_too(monkeypatch, tmp_path):
     assert {"--base", "v1", "--setup", "make", "--generate", "make"} <= set(seen[0])
 
 
+# ── base-comparison gate for inherited test failures (dm-80, dm-82) ─────────
+
+
+def test_inherited_failure_passes_check(tmp_path):
+    """A base with one failing test and an attempt that fixes what the brief asks
+    passes the check, with the inherited failure named."""
+    repo = git_repo(tmp_path / "repo")
+    _commit(repo, "test_base_broken.py", "def test_base_broken():\n    assert False\n")
+    result = _design(
+        tmp_path / "run",
+        FakeModel(_answers(render({"tool.py": "print('built')\n"}))),
+        target=str(repo),
+        check="python -m pytest -q",
+    )
+    assert result.exit_ok, result.error
+    check_txt = (tmp_path / "run" / "check.txt").read_text()
+    assert "inherited" in check_txt
+    assert "test_base_broken" in check_txt
+
+
+def test_inherited_failure_does_not_excuse_a_check_that_stopped_at_it(tmp_path):
+    """With -x nothing after the inherited failure ran, so the attempt is not excused."""
+    repo = git_repo(tmp_path / "repo")
+    _commit(repo, "test_base_broken.py", "def test_base_broken():\n    assert False\n")
+    fixed = render({"tool.py": "print('built')\n",
+                    "test_base_broken.py": "def test_base_broken():\n    assert True\n"})
+    result = _design(
+        tmp_path / "run",
+        FakeModel(_answers(render({"tool.py": "print('built')\n"}), fixed)),
+        target=str(repo),
+        check="python -m pytest -q -x",
+    )
+    assert result.exit_ok, result.error
+    payload = _report(tmp_path / "run")
+    assert git(Path(payload["target"]), "rev-list", "--count",
+               f"{payload['base']}..{payload['branch']}") == "2"
+
+
+def test_new_failure_introduced_by_attempt_is_refused(tmp_path):
+    """An attempt that adds a new failure is refused (attempt is spent)."""
+    repo = git_repo(tmp_path / "repo")
+    _commit(repo, "test_base_broken.py", "def test_base_broken():\n    assert False\n")
+    failing = render({"tool.py": "print('built')\n",
+                      "test_new.py": "def test_new_broken():\n    assert False\n"})
+    fixed = render({"tool.py": "print('built')\n",
+                    "test_new.py": "def test_new_broken():\n    assert True\n"})
+    result = _design(
+        tmp_path / "run",
+        FakeModel(_answers(failing, fixed)),
+        target=str(repo),
+        check="python -m pytest -q",
+    )
+    assert result.exit_ok, result.error
+    payload = _report(tmp_path / "run")
+    project = Path(payload["target"])
+    assert git(project, "rev-list", "--count",
+               f"{payload['base']}..{payload['branch']}") == "2"
+
+
+def test_brief_mentioned_failure_not_excused(tmp_path):
+    """A run whose brief is to fix the failing test is not excused."""
+    repo = git_repo(tmp_path / "repo")
+    _commit(repo, "test_fix_me.py", "def test_fix_me():\n    assert False\n")
+    not_fixed = render({"tool.py": "print('did not fix it')\n"})
+    fixed = render({"test_fix_me.py": "def test_fix_me():\n    assert True\n"})
+    result = DesignMode().run(
+        tmp_path / "run",
+        model=FakeModel(_answers(not_fixed, fixed)),
+        verdicts={"gate_strategy": "proceed"},
+        task={"name": NAME, "brief": "fix test_fix_me",
+              "check": "python -m pytest -q", "target": str(repo)},
+    )
+    assert result.exit_ok, result.error
+    payload = _report(tmp_path / "run")
+    project = Path(payload["target"])
+    assert git(project, "rev-list", "--count",
+               f"{payload['base']}..{payload['branch']}") == "2"
+
+
+def test_failure_in_a_test_file_the_attempt_changes_is_not_excused():
+    """A test file the attempt edits is the attempt's, wherever the runner ran from."""
+    from refactory_dsh.base_check import compare_failures
+    failing = {"tests/test_a.py::test_x"}
+    edited = compare_failures(failing, failing, ["pkg/tests/test_a.py"], "", "")
+    assert edited.new_failures == failing and not edited.all_excused
+    untouched = compare_failures(failing, failing, ["pkg/tool.py"], "", "")
+    assert untouched.inherited == failing and untouched.all_excused
+
+
+def test_inherited_failures_excuse_a_check_only_when_nothing_else_failed_or_went_unrun():
+    """Matched names are not enough: the last step must be the runner, run to completion."""
+    from refactory_dsh.base_check import excusal_blocker, parse_test_failures
+    out = "FAILED tests/test_a.py::test_x - assert False\n1 failed, 3 passed in 0.12s\n"
+    failures = parse_test_failures(out)
+    assert excusal_blocker("pnpm test && .venv/bin/python -m pytest -q tests 2>&1", out, failures) is None
+    assert excusal_blocker("python -m pytest -q -rfEx", out, failures) is None
+    # A step after the runner, or one the runner's failure skipped, is not accounted for.
+    assert "last step" in excusal_blocker("python -m pytest -q; ruff check .", out, failures)
+    vitest = " FAIL  tests/a.spec.ts > suite > works\n      Tests  1 failed | 9 passed (10)\n"
+    assert "never ran" in excusal_blocker("npx vitest run && pytest -q", vitest, parse_test_failures(vitest))
+    assert excusal_blocker("npx vitest run", vitest, parse_test_failures(vitest)) is None
+    # Stopping at the first failure hides every test after it.
+    assert "first failure" in excusal_blocker("python -m pytest -xq", out, failures)
+    # An error the summary counts but no name accounts for, or no summary at all.
+    errored = out.replace("1 failed, 3 passed", "1 failed, 3 passed, 1 error")
+    assert "not identified" in excusal_blocker("pytest -q", errored, failures)
+    assert "not identified" in excusal_blocker("pytest -q", "FAILED tests/test_a.py::test_x - x\n", failures)
+
+
+def test_a_test_module_the_attempt_breaks_is_its_failure():
+    """A collection error is a failure with a name; the base does not have it."""
+    from refactory_dsh.base_check import compare_failures, parse_test_failures
+    base = parse_test_failures("FAILED tests/test_a.py::test_x - x\n1 failed in 0.1s\n")
+    attempt = parse_test_failures("FAILED tests/test_a.py::test_x - x\n"
+                                  "ERROR tests/test_b.py - ImportError: cannot import name\n"
+                                  "1 failed, 1 error in 0.1s\n")
+    assert attempt == {"tests/test_a.py::test_x", "tests/test_b.py"}
+    result = compare_failures(base, attempt, [], "", "")
+    assert result.new_failures == {"tests/test_b.py"} and not result.all_excused
+
+
+def test_base_check_cannot_run_stops_unavailable(tmp_path):
+    """A base whose check cannot run stops the run as unavailable without spending an attempt."""
+    repo = git_repo(tmp_path / "repo")
+    result = DesignMode().run(
+        tmp_path / "run",
+        model=FakeModel(_answers(render({
+            "tool.py": "raise SystemExit(1)\n",
+            "setup.sh": "#!/bin/sh\necho ok\n",
+        }))),
+        verdicts={"gate_strategy": "proceed"},
+        task={"name": NAME, "brief": "a tool",
+              "check": "python tool.py", "target": str(repo),
+              "setup": "sh setup.sh"},
+    )
+    assert result.exit_ok is False
+    error = result.error or ""
+    assert ("unavailable" in error.lower() or "base" in error.lower()
+            or "setup" in error.lower())
+    assert not result.facts.get("attempts_used")
+
+
+def test_design_named_failure_not_excused(tmp_path):
+    """A test named in design.md is not excused even if the brief describes it obliquely."""
+    repo = git_repo(tmp_path / "repo")
+    _commit(repo, "test_oblique.py", "def test_oblique():\n    assert False\n")
+    not_fixed = render({"tool.py": "print('did not fix it')\n"})
+    fixed = render({"test_oblique.py": "def test_oblique():\n    assert True\n"})
+
+    class DesignNamingModel(FakeModel):
+        """Intercepts the design_doc prompt to write a design.md that names the test."""
+        def complete(self, prompt, *, system="", workdir=None):
+            answer = super().complete(prompt, system=system, workdir=workdir)
+            if "Write the design document" in prompt and workdir is not None:
+                design_path = Path(workdir) / "design.md"
+                if design_path.exists():
+                    existing = design_path.read_text()
+                else:
+                    existing = answer
+                design_path.write_text(
+                    existing + "\n\n## Tests to fix\n- test_oblique.py::test_oblique\n"
+                )
+            return answer
+
+    result = DesignMode().run(
+        tmp_path / "run",
+        model=DesignNamingModel(_answers(not_fixed, fixed)),
+        verdicts={"gate_strategy": "proceed"},
+        task={"name": NAME, "brief": "the validation test for contract X fails",
+              "check": "python -m pytest -q", "target": str(repo)},
+    )
+    assert result.exit_ok, result.error
+    payload = _report(tmp_path / "run")
+    project = Path(payload["target"])
+    assert git(project, "rev-list", "--count",
+               f"{payload['base']}..{payload['branch']}") == "2"
+
+
+def test_guardedness_record_shows_new_test_failing_on_base(tmp_path):
+    """dm-82: the record shows a new test failing on the base, and passing with the attempt."""
+    repo = git_repo(tmp_path / "repo")
+    result = _design(
+        tmp_path / "run",
+        FakeModel(_answers(render({
+            "tool.py": "BUILT = True\n",
+            "test_tool.py": "import tool\ndef test_tool_built():\n    assert tool.BUILT\n",
+        }))),
+        target=str(repo),
+        check="python -m pytest -q",
+    )
+    assert result.exit_ok, result.error
+    guardedness = json.loads((tmp_path / "run" / "test-guardedness.json").read_text())
+    assert "test_tool.py" in guardedness["new_test_files"]
+    found_guarding = False
+    for file_record in guardedness["results"]:
+        if file_record["file"] == "test_tool.py":
+            if file_record.get("tests"):
+                for t in file_record["tests"]:
+                    if t.get("on_base") == "fail":
+                        found_guarding = True
+            elif file_record.get("guarding"):
+                found_guarding = True
+    # The test imports `tool` which does not exist on the base, so it either
+    # fails on import (cannot_run_on_base) or fails on assertion — either way
+    # the record exists and the file is listed.
+    assert found_guarding or any(
+        r["file"] == "test_tool.py" and r.get("file_level") == "cannot_run_on_base"
+        for r in guardedness["results"]
+    ), f"test_tool.py should be guarding or cannot_run_on_base but got: {guardedness}"
+
+
 def test_the_design_mode_declares_the_knobs_the_ceo_passes():
     """`--target` reaches a knob the graph consumes, not one the runtime would refuse."""
     state = registry.resolve(REPO_ROOT, "default_pack/design")[1]().state_dict()

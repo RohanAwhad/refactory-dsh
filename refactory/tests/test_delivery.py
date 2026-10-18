@@ -92,7 +92,8 @@ def test_pr_title_never_cuts_inside_backticks():
 def test_pr_body_has_summary_verification_and_original_request(tmp_path):
     import subprocess
     ctx = _TitleCtx(
-        facts={"brief": "Build a tool\nthat prints built.", "check": "python tool.py", "name": "b2"},
+        facts={"brief": "Build a tool\nthat prints built.", "check": "python tool.py", "name": "b2",
+               "inherited_failures": ["tests/test_env.py::test_needs_profile"]},
         files={"design.md": "# The design heading\n\nFirst paragraph of the design.\n\n---\n"},
     )
     # Set up a minimal git repo so worktree.git works.
@@ -119,8 +120,32 @@ def test_pr_body_has_summary_verification_and_original_request(tmp_path):
     assert "## Verification" in body
     assert "python tool.py" in body
     assert "the health check, code review and QA found nothing blocking" in body
+    assert "`tests/test_env.py::test_needs_profile`" in body
     assert "## Original request" in body
     assert "Build a tool\nthat prints built." in body
+
+
+def test_pr_verification_names_inherited_failures_and_the_new_tests_on_the_base():
+    import json
+    ctx = _TitleCtx(
+        facts={"inherited_failures": ["tests/test_env.py::test_needs_profile"]},
+        files={"test-guardedness.json": json.dumps(
+            {"summary": {"guarding": 3, "not_guarding": 1, "cannot_run_on_base": 0, "total_new_tests": 4}})},
+    )
+    lines = delivery._base_evidence(ctx)
+    assert "`tests/test_env.py::test_needs_profile`" in lines
+    assert "3 of 4 fail without the change; 1 pass there, so they do not guard it" in lines
+
+
+def test_pr_verification_says_why_the_new_tests_were_not_run_on_the_base():
+    import json
+    ctx = _TitleCtx(files={"test-guardedness.json": json.dumps(
+        {"unavailable": "the base worktree could not be prepared: no uv"})})
+    assert "not run: the base worktree could not be prepared: no uv" in delivery._base_evidence(ctx)
+    assert delivery._base_evidence(_TitleCtx()) == ""
+    leaked = _TitleCtx(files={"test-guardedness.json": json.dumps(
+        {"unavailable": "setup failed: ANTHROPIC_API_KEY=sk-live-123 not accepted"})})
+    assert "sk-live-123" not in delivery._base_evidence(leaked)
 
 
 def _git_pair(tmp_path):

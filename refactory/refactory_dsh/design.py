@@ -464,7 +464,7 @@ class DesignMode(Mode):
                 "line that is exactly `VERDICT: PASS` or `VERDICT: FAIL`, and name every "
                 "ask with no evidence behind it."
             ),
-            reads=("brief.json", "design.md", "reviews/qa-synthesized.md"),
+            reads=("brief.json", "design.md", "reviews/qa-synthesized.md", "test-guardedness.json"),
             writes=("reviews/overwatch.md",),
             produces=("overwatch",),
             notes="audit the evidence behind the reviews",

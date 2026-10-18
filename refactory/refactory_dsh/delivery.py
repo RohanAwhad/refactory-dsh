@@ -938,6 +938,34 @@ def _title(ctx: Any) -> str:
     return _shorten(first, TITLE_LIMIT)
 
 
+def _base_evidence(ctx: Any) -> str:
+    """Verification lines from the base comparison: inherited failures and the new tests on the base."""
+    lines = ""
+    inherited = ctx.facts.get("inherited_failures") or []
+    if inherited:
+        lines += ("- **Inherited failures:** these also fail on the unchanged base and were not "
+                  "counted against the change: " + ", ".join(f"`{name}`" for name in inherited) + ".\n")
+    record = None
+    if ctx.exists("test-guardedness.json"):
+        try:
+            record = json.loads(ctx.read_text("test-guardedness.json"))
+        except ValueError:
+            record = None
+    if isinstance(record, dict) and record.get("unavailable"):
+        reason = _shorten(_public(str(record["unavailable"])).replace("\n", " "), 300)
+        lines += f"- **New tests on the base:** not run: {reason}.\n"
+    elif isinstance(record, dict) and record.get("summary", {}).get("total_new_tests"):
+        summary = record["summary"]
+        lines += (f"- **New tests on the base:** {summary.get('guarding', 0)} of "
+                  f"{summary['total_new_tests']} fail without the change"
+                  + (f"; {summary['not_guarding']} pass there, so they do not guard it"
+                     if summary.get("not_guarding") else "")
+                  + (f"; {summary['cannot_run_on_base']} cannot run on the base"
+                     if summary.get("cannot_run_on_base") else "")
+                  + ".\n")
+    return lines
+
+
 def _body(ctx: Any, found: worktree.Worktree) -> str:
     """The pull request's description: what changed, how it was verified, and the original request."""
     stat = worktree.git(Path(found.path), "diff", "--stat", found.base, found.head).strip("\n")
@@ -963,7 +991,8 @@ def _body(ctx: Any, found: worktree.Worktree) -> str:
         f"- **Check:** `{check_cmd}` passed in the run's worktree.\n"
         "- **Reviews:** the health check, code review and QA found nothing blocking, "
         "and the overwatch audit passed.\n"
-        f"- **Base:** `{found.base[:12]}`, with {attempts} attempt commit(s) on `{found.branch}`.\n"
+        + _base_evidence(ctx)
+        + f"- **Base:** `{found.base[:12]}`, with {attempts} attempt commit(s) on `{found.branch}`.\n"
         "- **Merging:** the branch's commits are the run's attempts, "
         "each the base plus that attempt's files, committed by Refactory; the change is their sum."
     )
