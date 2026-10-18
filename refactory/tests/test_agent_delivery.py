@@ -261,11 +261,14 @@ def test_redispatch_moves_previous_emit_txt_aside(tmp_path):
     # A new begin() for the same node moves the stale output
     record2 = agent_delivery.begin(tmp_path, 'emit', 'Write emit.txt again.', [EMIT_FILE])
     assert not (tmp_path / EMIT_FILE).exists(), 'stale emit.txt must be gone before re-dispatch'
-    # The moved file is under the previous receipt's refused/ folder
-    moved = tmp_path / agent_delivery.ROOT / record['id'] / 'refused'
+    # The moved file is under the previous receipt's previous/ folder
+    moved = tmp_path / agent_delivery.ROOT / record['id'] / 'previous'
     assert moved.exists() and list(moved.rglob(EMIT_FILE))
     # The new dispatch's before snapshot shows no emit.txt
     assert record2['before'][EMIT_FILE] is None
+    # The execution contract's set_aside field points to the moved copy
+    assert 'set_aside' in record2['execution']
+    assert EMIT_FILE in record2['execution']['set_aside']
     # A fresh write is treated as newly delivered
     (tmp_path / EMIT_FILE).write_text('===FILE: tool.py===\nprint(2)\n')
     receipt = agent_delivery.finish(tmp_path, 'emit', final_response='Done again.')
@@ -286,17 +289,103 @@ def test_redispatch_after_failed_delivery_starts_clean(tmp_path):
     # A new begin() for the same node moves the stale output
     record2 = agent_delivery.begin(tmp_path, 'emit', 'Write emit.txt again.', [EMIT_FILE])
     assert not (tmp_path / EMIT_FILE).exists(), 'stale emit.txt must be gone before re-dispatch'
-    moved = tmp_path / agent_delivery.ROOT / record['id'] / 'refused'
+    moved = tmp_path / agent_delivery.ROOT / record['id'] / 'previous'
     assert moved.exists() and list(moved.rglob(EMIT_FILE))
     assert record2['before'][EMIT_FILE] is None
 
 
-def test_redispatch_of_non_emit_node_leaves_its_output_in_place(tmp_path):
-    """A redispatch of a node writing another file (e.g. design.md) leaves that file in place."""
+def test_redispatch_of_non_emit_node_moves_its_output_aside(tmp_path):
+    """A redispatch of a node writing design.md moves it aside and reports it in set_aside."""
     record = agent_delivery.begin(tmp_path, 'design_doc', 'Write the design.', ['design.md'])
     (tmp_path / 'design.md').write_text('the design\n')
     agent_delivery.finish(tmp_path, 'design_doc', final_response='Done.')
     assert (tmp_path / 'design.md').exists()
-    # A new begin() for a non-emit node does NOT move its output aside
+    # A new begin() moves the write-only output aside
     record2 = agent_delivery.begin(tmp_path, 'design_doc', 'Revise the design.', ['design.md'])
-    assert (tmp_path / 'design.md').exists(), 'non-emit outputs must stay in place for revision'
+    assert not (tmp_path / 'design.md').exists(), 'write-only output must be moved aside on re-dispatch'
+    # The moved file is under the previous receipt's previous/ folder
+    moved = tmp_path / agent_delivery.ROOT / record['id'] / 'previous'
+    assert moved.exists() and list(moved.rglob('design.md'))
+    # The execution contract's set_aside field points to the moved copy
+    assert 'set_aside' in record2['execution']
+    assert 'design.md' in record2['execution']['set_aside']
+    prev_path = tmp_path / record2['execution']['set_aside']['design.md']
+    assert prev_path.read_text() == 'the design\n'
+    # The before snapshot shows design.md is gone
+    assert record2['before']['design.md'] is None
+    # A fresh write is treated as newly delivered
+    (tmp_path / 'design.md').write_text('revised design\n')
+    receipt = agent_delivery.finish(tmp_path, 'design_doc', final_response='Revised.')
+    assert receipt['status'] == 'delivered'
+
+
+def test_redispatch_reviewer_node_finds_previous_copy_in_contract(tmp_path):
+    """A reviewer re-dispatched finds its previous output moved and its path in set_aside."""
+    original_content = '# Code Review\nAll looks good.\n'
+    record = agent_delivery.begin(tmp_path, 'code_reviewer', 'Review the code.', ['review.md'])
+    (tmp_path / 'review.md').write_text(original_content)
+    agent_delivery.finish(tmp_path, 'code_reviewer', final_response='Done.')
+    assert (tmp_path / 'review.md').exists()
+    # Re-dispatch
+    record2 = agent_delivery.begin(tmp_path, 'code_reviewer', 'Review the code again.', ['review.md'])
+    # review.md is gone from the workdir
+    assert not (tmp_path / 'review.md').exists()
+    # The execution contract's set_aside dict maps 'review.md' to a path under agent-delivery
+    set_aside = record2['execution']['set_aside']
+    assert 'review.md' in set_aside
+    previous_path = tmp_path / set_aside['review.md']
+    assert '.refactory/agent-delivery/' in set_aside['review.md']
+    # The previous copy is readable at that path with the original content
+    assert previous_path.read_text() == original_content
+    # The before snapshot shows no review.md
+    assert record2['before']['review.md'] is None
+    # The prompt tells the worker about the moved outputs
+    assert 'previous outputs were moved' in record2['prompt']
+    assert 'write each output afresh' in record2['prompt']
+    # A fresh review.md counts as delivered
+    (tmp_path / 'review.md').write_text('# Code Review v2\nNeeds changes.\n')
+    receipt = agent_delivery.finish(tmp_path, 'code_reviewer', final_response='Done again.')
+    assert receipt['status'] == 'delivered'
+
+
+def test_redispatch_read_write_file_stays_in_place(tmp_path):
+    """A node that reads and writes the same file keeps it on re-dispatch."""
+    (tmp_path / 'state.json').write_text('{"step": 0}\n')
+    record = agent_delivery.begin(tmp_path, 'derive', 'Update state.', ['state.json'],
+                                  reads=['state.json'])
+    (tmp_path / 'state.json').write_text('{"step": 1}\n')
+    agent_delivery.finish(tmp_path, 'derive', final_response='Done.')
+    assert (tmp_path / 'state.json').exists()
+    # Re-dispatch: state.json stays because it is also a read
+    record2 = agent_delivery.begin(tmp_path, 'derive', 'Update state again.', ['state.json'],
+                                   reads=['state.json'])
+    assert (tmp_path / 'state.json').exists(), 'read-and-write file must stay in place'
+    assert (tmp_path / 'state.json').read_text() == '{"step": 1}\n'
+    # No set_aside in the execution contract (nothing moved)
+    assert record2['execution'].get('set_aside') is None
+    # The before snapshot shows the file is present
+    assert record2['before']['state.json'] is not None
+
+
+def test_first_dispatch_leaves_other_steps_output_in_place(tmp_path):
+    """A first dispatch does not move a file another step wrote."""
+    # Simulate another step having written design.md
+    (tmp_path / 'design.md').write_text('another step wrote this\n')
+    # First begin() for design_doc — no prior receipt exists
+    record = agent_delivery.begin(tmp_path, 'design_doc', 'Write the design.', ['design.md'])
+    assert (tmp_path / 'design.md').exists(), 'no-receipt file must stay in place'
+    assert (tmp_path / 'design.md').read_text() == 'another step wrote this\n'
+    # set_aside is absent or None
+    assert record['execution'].get('set_aside') is None
+
+
+def test_reused_pending_dispatch_moves_nothing(tmp_path):
+    """A reused pending dispatch does not move files — it keeps the original snapshot."""
+    record = agent_delivery.begin(tmp_path, 'emit', 'Write emit.txt.', ['emit.txt'])
+    # File is written but not finished — dispatch is still pending
+    (tmp_path / 'emit.txt').write_text('in progress\n')
+    # Reuse the pending dispatch (same prompt → early return)
+    record2 = agent_delivery.begin(tmp_path, 'emit', 'Write emit.txt.', ['emit.txt'], reuse=True)
+    # Same dispatch reused — nothing moved
+    assert record2['id'] == record['id']
+    assert (tmp_path / 'emit.txt').exists(), 'reused dispatch must not move files'
