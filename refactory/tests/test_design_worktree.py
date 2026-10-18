@@ -725,6 +725,33 @@ class _HookChangingModel(FakeModel):
         return answer
 
 
+def test_materialise_refusal_clears_emit_txt_before_redispatch(repo, tmp_path):
+    """After materialise refuses an emission, the stale emit.txt is gone before the next emit runs."""
+    bad_emission = _edit("app.py", ("print('not there')\n", "print('x')\n"))
+    good_emission = render({"tool.py": "print('built')\n"})
+    model = StaleEmitModel(_answers(bad_emission, good_emission))
+    result = _design(tmp_path / "run", model, target=str(repo))
+    assert result.exit_ok, result.error
+    # StaleEmitModel checks: if emit.txt existed when the second emit ran,
+    # it would have returned "emit.txt already contains the correct content"
+    # instead of the good_emission answer. The run succeeding proves emit.txt
+    # was gone.
+
+
+def test_check_failure_clears_emit_txt_before_redispatch(repo, tmp_path):
+    """After a failed check, the stale emit.txt is gone before the next emit runs."""
+    failing = render({"tool.py": "raise SystemExit(1)\n"})
+    fixed = render({"tool.py": "print('fixed')\n"})
+    model = StaleEmitModel(_answers(failing, fixed))
+    result = _design(tmp_path / "run", model, target=str(repo))
+    assert result.exit_ok, result.error
+    # StaleEmitModel would have intercepted the second emit if emit.txt survived.
+    # The run succeeding with the fixed code proves emit.txt was moved.
+    payload = _report(tmp_path / "run")
+    branch = payload["branch"]
+    assert git(Path(payload["target"]), "show", f"{branch}:tool.py") == "print('fixed')"
+
+
 def test_a_planning_step_that_changes_shared_hooks_fails_the_step(repo, tmp_path):
     """End-to-end: full design run, planning step changes hooks -> run fails (#347)."""
     model = _HookChangingModel(

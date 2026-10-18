@@ -10,6 +10,15 @@ from typing import Any
 
 from refactory_dsh.live import emit, read
 
+#: How long a resume waits for an exiting owner at a terminal status.
+#: Short enough that the CLI stays responsive; long enough to cover
+#: the normal exit delay after a headless run prints its next-commands.
+_OWNER_EXIT_TIMEOUT = 3.0
+
+#: Spine statuses an owner does not go on from by itself (a headless run records
+#: `refused` at a user gate); its owner exits after printing the next commands.
+OWNER_STOPPED = frozenset({'done', 'halted', 'failed', 'refused', 'cancelled'})
+
 
 def request(root: Path, action: str, *, node: str = '', text: str = '', revision: str = '',
             acknowledge_failure: bool = False) -> dict[str, Any]:
@@ -31,17 +40,22 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
                     'invalidated': deferred_plan.get('nodes', []),
                     'message': 'Replay will apply after concurrent work joins; confirm to queue.'}
         raise ValueError('node cannot safely be replayed at the current boundary')
+    owner_exiting = False
     if action == 'resume':
         from refactory_dsh import recovery
+        from refactory_dsh.console import _alive
         pid = saved.get('owner_pid')
-        if not pid:
+        if not pid or not _alive(pid):
             return recovery.start(root)
-        if pid:
-            import os
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                return recovery.start(root)
+        # An owner that stopped where it will not go on by itself is exiting: wait
+        # for it, then start a fresh one, rather than queue a control it never reads.
+        if read(root / '.refactory/spine-status.json').get('status') in OWNER_STOPPED:
+            deadline = time.monotonic() + _OWNER_EXIT_TIMEOUT
+            while time.monotonic() < deadline:
+                if not _alive(pid):
+                    return recovery.start(root)
+                time.sleep(0.1)
+            owner_exiting = True
     if action not in ('pause', 'resume', 'stop', 'rerun'):
         raise ValueError(f'unsupported graph control {action!r}')
     if action == 'rerun':
@@ -69,6 +83,8 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
         'status': 'queued',
         'message': 'Takes effect at the next graph boundary; no in-flight termination is claimed.',
     }
+    if owner_exiting:
+        result['owner_exiting'] = True
     if action == 'rerun' and isinstance(deferred_plan, dict) and not isinstance(immediate_plan, dict):
         result['deferred_nodes'] = deferred_plan.get('nodes', [])
     directory = root / '.refactory/graph-controls'

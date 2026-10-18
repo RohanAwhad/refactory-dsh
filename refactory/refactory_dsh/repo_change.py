@@ -61,6 +61,10 @@ OWNERS = Path(".factory") / "artifact-owners"
 #: it when a gate question could not be put, and the gate is still due.
 FINISHED = frozenset({"done", "halted", "failed"})
 
+#: The file emit writes its answer into. Materialise reads it; the mode declarations
+#: name it in emit's ``writes``; agent_delivery moves it aside before a re-dispatch.
+EMIT_FILE = "emit.txt"
+
 #: The agent node whose whole answer is `emit.txt`. Materialise writes the artifact
 #: from it, so a change it makes to the target directly bypasses materialise, the
 #: check and the reviews (#319); the agent-delivery bracket refuses that.
@@ -140,7 +144,7 @@ def materialise_node(**fields: Any) -> Node:
     """The op that applies ``emit.txt`` as the run's next attempt (`materialise`)."""
     return Node(**{
         "id": "materialise", "kind": "op", "call": f"{OPS}:materialise",
-        "reads": ("emit.txt",), "writes": ("changes.diff",),
+        "reads": (EMIT_FILE,), "writes": ("changes.diff",),
         "produces": ("artifact", "files", "commit", "change", "emission_refused"),
         "notes": "commit the emitted files on the run's branch, or write the artifact directory",
         **fields,
@@ -633,7 +637,7 @@ def materialise(ctx: Any, *, source: Path | None = None, files: tuple[str, ...] 
 def _commit_emission(ctx: Any) -> dict[str, Any]:
     """Apply emit.txt to the run's worktree as its next attempt; one a prune removed is added back."""
     found = worktree.require_current(ctx.workdir)
-    answer = ctx.read_text("emit.txt")
+    answer = ctx.read_text(EMIT_FILE)
     files, changed, deletes = _emitted(answer, edits=True)
     path = Path(found.path)
     digest = hashlib.sha256(answer.encode()).hexdigest()
@@ -687,7 +691,7 @@ def _materialise_directory(ctx: Any, source: Path | None, files: tuple[str, ...]
 
     Given ``source``, its ``files`` are copied in first; the artifact may not replace it.
     """
-    checked, _, _ = _emitted(ctx.read_text("emit.txt"), edits=False)
+    checked, _, _ = _emitted(ctx.read_text(EMIT_FILE), edits=False)
     root = _artifact_root(str(ctx.facts["name"]))
     _claim(str(ctx.facts["name"]), ctx.workdir)
     target_guard.warn_if_moved(ctx.workdir)
