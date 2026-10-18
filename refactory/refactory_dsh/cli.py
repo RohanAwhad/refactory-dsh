@@ -205,6 +205,13 @@ def cmd_ceo(args: argparse.Namespace) -> int:
         )
         return 2
 
+    from refactory_dsh.brief_guard import require_brief
+    try:
+        require_brief(target, source="what")
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
     authoring = authoring.removesuffix("_fast")
     check = str(args.check or "")
     if authoring == "design" and not check:

@@ -92,7 +92,7 @@ def prepare(
                     Path('.refactory/resource-usage.json'), Path('.refactory/workers'),
                     Path('.refactory/resume-request.json'), Path('.refactory/run-config.json'),
                     target_guard.RECORD, worktree.RECORD, worktree.PENDING, worktree.WRAPPER,
-                    worktree.CHECK_HOME, delivery.SHOWN, INVOCATION]
+                    worktree.CHECK_HOME, worktree.BASE_CHECK_HOME, delivery.SHOWN, INVOCATION]
         for relative in metadata:
             path = workdir / relative
             if not path.exists() and not path.is_symlink():

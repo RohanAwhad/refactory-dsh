@@ -15,7 +15,8 @@ from typing import Any
 KINDS = ("int", "float", "bool", "str", "enum")
 
 _SPEC_FIELDS = frozenset(
-    {"default", "kind", "lo", "hi", "enum", "frozen", "description", "values"}
+    {"default", "kind", "lo", "hi", "enum", "frozen", "description", "values",
+     "required"}
 )
 
 #: Textual moves for an open string knob.
@@ -60,10 +61,13 @@ class Knob:
     values: tuple[str, ...] = ()
     frozen: bool = False
     description: str = ""
+    required: bool = False
 
     def __post_init__(self) -> None:
         if self.kind not in KINDS:
             raise KnobError(f"unknown knob kind {self.kind!r}; known: {list(KINDS)}")
+        if self.required and self.kind != "str":
+            raise KnobError("only a 'str' knob may be required")
         if self.kind == "enum" and not self.enum:
             raise KnobError("an 'enum' knob must declare at least one accepted value")
         if self.kind != "enum" and self.enum:
@@ -128,6 +132,7 @@ class Knob:
             "values": list(self.values),
             "frozen": self.frozen,
             "description": self.description,
+            "required": self.required,
         }
 
     # ── what it accepts, and how to move it ────────────────────────────────
@@ -201,6 +206,7 @@ class Knob:
             values=tuple(spec.get("values") or ()),
             frozen=bool(spec.get("frozen", False)),
             description=str(spec.get("description", "")),
+            required=bool(spec.get("required", False)),
         )
 
 

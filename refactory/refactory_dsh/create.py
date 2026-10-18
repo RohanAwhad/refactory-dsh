@@ -118,7 +118,7 @@ class CreateMode(Mode):
                 description="the package to create (empty takes the name from the brief)",
             ),
             "brief": Knob(
-                "", "str",
+                "", "str", required=True,
                 description="what the package should do, in the asker's words",
             ),
             # `--mode edit`'s subject: the mode being revised. The walker passes it in

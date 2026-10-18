@@ -23,6 +23,11 @@ An edit inherits the source mode's Task and data-node requirements when no new
 emitted package's actual bindings, including `task_refs` and bindings per mode;
 its legacy `task_ref` field is populated when there is exactly one distinct Task.
 
+An empty or whitespace-only brief is refused before anything is provisioned.
+The positional `what` argument must contain at least one non-whitespace
+character for every authoring mode (design, create, edit and their fast
+variants). The refusal names which argument was empty.
+
 | option | what it does |
 |---|---|
 | `--mode <mode>` | `design` (the default), `create`, `edit`, `design_fast`, `create_fast`, `edit_fast`, or `<package>/<mode>`. |
