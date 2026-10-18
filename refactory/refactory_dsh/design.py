@@ -554,8 +554,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="write the artifact under .factory/artifacts instead of a worktree")
     parser.add_argument("--setup", default="", help="a command run in the worktree before each check, such as a build")
     parser.add_argument("--generate", default="",
-                        help="a command run in the worktree after setup, before each check; "
-                             "its tracked-file changes are amended into the attempt")
+                        help=repo_change.knobs()["generate"].description)
     parser.add_argument("--no-pr", action="store_true",
                         help="keep the work on the run's local branch instead of opening a pull request")
     parser.add_argument("--refine", default="", metavar="PR",
