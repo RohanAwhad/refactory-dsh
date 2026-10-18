@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from refactory_dsh import delivery, repo_change
+from refactory_dsh import delivery, design_contract, repo_change
 from refactory_dsh.create_ops import API, RESEARCH_SCHEMA
 from refactory_dsh.model import DEFAULT_TIMEOUT_S
 from refactory_dsh.nn import Graph, Knob, Mode, Node, RunResult
@@ -201,7 +201,8 @@ class DesignMode(Mode):
                 "number or range (e.g. `path/to/file.py:42` or `path/to/file.py:42-58`). "
                 "When claiming what the brief says, quote the brief's words verbatim. "
                 "The document holds only the final result — no 'Wait—', 'Actually', "
-                "'Let me reconsider' or other working-out."
+                "'Let me reconsider' or other working-out.\n\n"
+                + design_contract.prompt_contract()
             ),
             reads=("brief.json", "strategy.json", "reviews/design-review-feedback.txt"),
             writes=("design.md",),
@@ -238,7 +239,14 @@ class DesignMode(Mode):
                 "that asserts on values it built itself, or reads through a stand-in "
                 "the real code would not provide.\n"
                 "- A new mechanism where the code already has one that does the job, "
-                "naming the existing one.\n\n"
+                "naming the existing one.\n"
+                "- A place in the code that applies or restates the same rule the design "
+                "changes, found by searching the source, that the design leaves unchanged "
+                "without giving a reason. The '## Rule and sites' section must list every "
+                "such place; one marked `[left]` without a reason, or one you find that "
+                "the design does not list at all, is BLOCKING.\n"
+                "- A doc that describes the behaviour the design changes, found by "
+                "searching the docs, that the design's '## Docs' section leaves out.\n\n"
                 "List each finding as a line starting with `BLOCKING:` followed "
                 "by what is wrong.\n\n"
                 "End with a line that is exactly `VERDICT: PASS` when there are "

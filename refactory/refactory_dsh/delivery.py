@@ -925,20 +925,16 @@ def _shorten(text: str, limit: int) -> str:
 
 def _title(ctx: Any) -> str:
     """The pull request's title: from the design's heading, or the brief as a fallback."""
+    from refactory_dsh import design_contract
+
+    run_name = str(ctx.facts.get("name") or "")
     if ctx.exists("design.md"):
-        for line in ctx.read_text("design.md").splitlines():
-            stripped = line.strip()
-            if stripped.startswith("# "):
-                heading = stripped[2:].strip()
-                # Strip a "Design:" prefix (case-insensitive).
-                match = re.match(r'^[Dd]esign:\s*', heading)
-                if match:
-                    heading = heading[match.end():].strip()
-                if heading:
-                    return _shorten(heading, TITLE_LIMIT)
-    # Fallback: first line of the brief.
+        parsed = design_contract.parse(ctx.read_text("design.md"), run_name)
+        if parsed.title:
+            return _shorten(parsed.title, TITLE_LIMIT)
+    # Fallback: first sentence of the brief.
     brief = _public(str(ctx.facts.get("brief") or ""))
-    first = next((line.strip() for line in brief.splitlines() if line.strip()), "") or str(ctx.facts.get("name"))
+    first = next((line.strip() for line in brief.splitlines() if line.strip()), "") or run_name
     return _shorten(first, TITLE_LIMIT)
 
 
@@ -949,35 +945,26 @@ def _body(ctx: Any, found: worktree.Worktree) -> str:
     brief = _public(str(ctx.facts.get("brief") or "")).strip()
     check_cmd = _public(str(ctx.facts.get("check") or ""))
 
-    # Summary: the design's first paragraph (after heading, before blank line).
-    summary = ""
-    if ctx.exists("design.md"):
-        past_heading = False
-        para: list[str] = []
-        for line in ctx.read_text("design.md").splitlines():
-            stripped = line.strip()
-            if not past_heading:
-                if stripped.startswith("# "):
-                    past_heading = True
-                continue
-            if not stripped and para:
-                break
-            if stripped.startswith("---") and para:
-                break
-            if stripped:
-                para.append(stripped)
-        summary = " ".join(para)
+    from refactory_dsh import design_contract
+
+    run_name = str(ctx.facts.get("name") or "")
+    parsed = design_contract.parse(
+        ctx.read_text("design.md") if ctx.exists("design.md") else "", run_name
+    )
+    summary = parsed.summary
 
     sections = []
     if summary:
         sections.append(f"## Summary\n\n{summary}")
+    if parsed.has_contract and parsed.changes:
+        sections.append("## What changed\n\n" + "\n".join(f"- {item}" for item in parsed.changes))
     sections.append(
         f"## Verification\n\n"
         f"- **Check:** `{check_cmd}` passed in the run's worktree.\n"
         "- **Reviews:** the health check, code review and QA found nothing blocking, "
         "and the overwatch audit passed.\n"
         f"- **Base:** `{found.base[:12]}`, with {attempts} attempt commit(s) on `{found.branch}`.\n"
-        "- **Merging:** squash merge is recommended. The branch's commits are the run's attempts, "
+        "- **Merging:** the branch's commits are the run's attempts, "
         "each the base plus that attempt's files, committed by Refactory; the change is their sum."
     )
     sections.append(f"## Original request\n\n{brief}")

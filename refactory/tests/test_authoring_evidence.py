@@ -358,6 +358,96 @@ def test_gate_overwatch_code_reloop_spends_attempt(tmp_path):
     assert ctx.facts.get("attempts_used", 0) >= 1
 
 
+# ── design-document contract: clause-level audit ─────────────────────────
+
+
+def test_overwatch_audit_refuses_constraint_row_with_no_clauses(tmp_path):
+    """audit_problems refuses a constraint row whose clause list is empty."""
+    ctx = audit_context(tmp_path)
+    deliver_audit(ctx)
+    audit = ctx.read_json(evidence.AUDIT)
+    # Find a constraint/correction row and remove its clauses.
+    ev = ctx.read_json(evidence.EVIDENCE)
+    constraint_ids = {item["id"] for item in ev["requirements"]
+                      if item.get("kind") in ("correction", "constraint")}
+    if not constraint_ids:
+        # Add one so the test has something to check.
+        Ledger(tmp_path).note("constraint", "Apply rule A to every caller")
+        evidence.record(ctx, {"status": "pass", "command": "test", "stdout": "ok"})
+        deliver_audit(ctx)
+        audit = ctx.read_json(evidence.AUDIT)
+        ev = ctx.read_json(evidence.EVIDENCE)
+        constraint_ids = {item["id"] for item in ev["requirements"]
+                          if item.get("kind") in ("correction", "constraint")}
+    for row in audit["requirements"]:
+        if row["id"] in constraint_ids:
+            row.pop("clauses", None)
+            break
+    ctx.write_json(evidence.AUDIT, audit)
+    problems = evidence.audit_problems(ctx)
+    assert any("no clauses" in p for p in problems), f"expected clause check failure, got {problems}"
+
+
+def test_overwatch_audit_refuses_clause_with_no_evidence(tmp_path):
+    """audit_problems refuses a clause that lists no evidence."""
+    ctx = audit_context(tmp_path)
+    Ledger(tmp_path).note("constraint",
+                          "descendants(container, continuation), without following "
+                          "continuations and skipping retry edges as planRedo's walk does")
+    evidence.record(ctx, {"status": "pass", "command": "test", "stdout": "ok"})
+    deliver_audit(ctx)
+    audit = ctx.read_json(evidence.AUDIT)
+    ev = ctx.read_json(evidence.EVIDENCE)
+    constraint_ids = {item["id"] for item in ev["requirements"]
+                      if item.get("kind") in ("correction", "constraint")}
+    # Find the constraint row and give it clauses with one missing evidence.
+    for row in audit["requirements"]:
+        if row["id"] in constraint_ids:
+            row["clauses"] = [
+                {"clause": "descendants(container, continuation)",
+                 "evidence": [{"path": "artifact/answer.txt", "detail": "checked"}]},
+                {"clause": "skipping retry edges",
+                 "evidence": []},
+            ]
+            break
+    ctx.write_json(evidence.AUDIT, audit)
+    problems = evidence.audit_problems(ctx)
+    assert any("skipping retry edges" in p and "no evidence" in p for p in problems), (
+        f"expected clause evidence failure, got {problems}"
+    )
+
+
+def test_audit_instructions_ask_for_clauses():
+    """The AUDIT_INSTRUCTIONS text tells the overwatch agent to list clauses."""
+    assert "clauses" in evidence.AUDIT_INSTRUCTIONS
+    assert "every separate" in evidence.AUDIT_INSTRUCTIONS or "every distinct" in evidence.AUDIT_INSTRUCTIONS
+
+
+def test_fakemodel_writes_clauses_for_constraints(tmp_path):
+    """FakeModel's audit writer produces clause entries for constraint rows."""
+    ctx = audit_context(tmp_path)
+    Ledger(tmp_path).note("constraint", "Apply rule A; also apply rule B")
+    evidence.record(ctx, {"status": "pass", "command": "test", "stdout": "ok"})
+
+    from tests_support import FakeModel
+    model = FakeModel(["VERDICT: PASS"])
+    model.complete(
+        "Write intent-audit.json as ... " + evidence.AUDIT_INSTRUCTIONS,
+        workdir=str(tmp_path),
+    )
+    audit = json.loads((tmp_path / evidence.AUDIT).read_text())
+    ev = ctx.read_json(evidence.EVIDENCE)
+    constraint_ids = {item["id"] for item in ev["requirements"]
+                      if item.get("kind") in ("correction", "constraint")}
+    for row in audit["requirements"]:
+        if row["id"] in constraint_ids:
+            assert "clauses" in row, f"FakeModel should write clauses for constraint row {row['id']}"
+            assert len(row["clauses"]) >= 1
+            for clause in row["clauses"]:
+                assert clause.get("clause"), "clause text must not be empty"
+                assert clause.get("evidence"), "clause evidence must not be empty"
+
+
 # ── ask 4: failure message count matches attempts_used ────────────────────
 
 
