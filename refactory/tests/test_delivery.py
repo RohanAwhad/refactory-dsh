@@ -1388,9 +1388,22 @@ def test_finish_commands_work_with_special_characters_in_title(github, tmp_path)
     repo = git_repo(tmp_path / "repo")
     _published(github, "acme/app", repo)
     run = tmp_path / "run"
-    # Use a brief whose first sentence has special characters, which _title uses as fallback.
+    # A design doc whose heading has special characters, so _title picks them up.
     tricky_brief = "Fix the audit's `gate` and $PATH handling"
-    model = FakeModel(_answers(render({"tool.py": "print('built')\n"})))
+    tricky_design = (
+        "# Fix the audit's `gate` and $PATH handling\n\n"
+        "## Summary\n\nFix it properly.\n\n"
+        "## Rule and sites\n\n"
+        "- `ops.py:1` — **[changed]**\n\n"
+        "## Docs\n\n"
+        "- docs/models.md\n\n"
+        "## Changes\n\n"
+        "- ops.py\n"
+    )
+    answers = [RESEARCH_ANSWER, "perspectives", "one plan", tricky_design,
+               DESIGN_REVIEW_ANSWER, render({"tool.py": "print('built')\n"}),
+               *REVIEW_ANSWERS]
+    model = FakeModel(answers)
     result = _mode(pr=False).run(
         run, model=model, verdicts={"gate_strategy": "proceed"},
         task={"name": NAME, "brief": tricky_brief, "check": "python tool.py",
