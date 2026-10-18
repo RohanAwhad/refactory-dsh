@@ -84,7 +84,7 @@ def _qa_nodes(graph: Graph, *, artifact: bool) -> None:
         resource_role="final_validation",
         knobs=("check", "check_timeout_s"),
         reads=("emit.txt",) + (() if artifact else ("authoring-evidence.json", "smoke.json")),
-        writes=("focused-check.json", "focused-source.json", "authoring-evidence.json", "test-guardedness.json")
+        writes=("focused-check.json", "focused-source.json", "authoring-evidence.json")
                + (repo_change.CHECK_WRITES if artifact else ()),
         produces=("focused_check", "output_path", "review_files", "runtime_evidence")
                  + (repo_change.CHECK_PRODUCES if artifact else ()),

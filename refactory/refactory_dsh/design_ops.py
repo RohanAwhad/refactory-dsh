@@ -305,10 +305,12 @@ def check_artifact(ctx: Any) -> str:
         "timed_out": result.timed_out, "elapsed_s": result.elapsed_s}
     ctx.write_text("check.txt", detail or "ok\n")
 
-    # ── guardedness (unconditional: passing and failing) ──────────────
+    # Whether the new tests fail without the change is evidence for the reviewers, passing
+    # or not; recorded before the receipt, which hashes it.
     from refactory_dsh import base_check
     guardedness = None
     if worktree.recorded(ctx.workdir) is not None:
+        ctx.set_fact("inherited_failures", [])
         try:
             guardedness = base_check.compute_test_guardedness(
                 ctx, command, int(ctx.knob("check_timeout_s", 180)),
@@ -317,11 +319,6 @@ def check_artifact(ctx: Any) -> str:
             guardedness = {"unavailable": f"the new tests could not be run on the base: {exc}"}
         if guardedness is not None:
             ctx.write_json("test-guardedness.json", guardedness)
-    # ── end guardedness ───────────────────────────────────────────────
-
-    # Record evidence after guardedness so the receipt includes the
-    # correct test-guardedness.json hash; recording before it caused the
-    # QA gate to reloop with "authoritative receipt changed after validation".
     evidence.record(ctx, outcome)
 
     if result.ok:
@@ -329,7 +326,7 @@ def check_artifact(ctx: Any) -> str:
         return "proceed"
     evidence.stop_unrepairable(outcome["status"], detail)
 
-    # ── base comparison gate (failing checks only) ────────────────────
+    # A failure the unchanged base has too is not the attempt's (`base_check.compare_failures`).
     if worktree.recorded(ctx.workdir) is not None:
         filtered = base_check.filter_check(
             ctx, result, command, int(ctx.knob("check_timeout_s", 180)),
@@ -341,13 +338,10 @@ def check_artifact(ctx: Any) -> str:
                 f"the base check could not run: {filtered.base_environment_failure}",
             )
         if filtered.all_excused:
-            validation_msg = (
-                f"(the check passed; {filtered.inherited_detail})"
-            )
+            validation_msg = f"(the check passed; {filtered.inherited_detail})"
             ctx.set_fact("validation", validation_msg)
             ctx.write_text("check.txt", validation_msg + "\n")
-            # Re-record evidence with a passing status so downstream gates
-            # (gate_overwatch, gate_qa) see a valid runtime receipt.
+            # The receipt the reviews and the audit check is this one, which passed.
             outcome["status"] = "pass"
             outcome["inherited_failures"] = sorted(filtered.inherited)
             ctx.set_fact("inherited_failures", sorted(filtered.inherited))
@@ -359,7 +353,6 @@ def check_artifact(ctx: Any) -> str:
                 "check.txt",
                 detail + "\n\n" + filtered.inherited_detail + "\n",
             )
-    # ── end base comparison gate ──────────────────────────────────────
 
     return repair(ctx, [detail])
 

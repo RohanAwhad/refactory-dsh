@@ -100,9 +100,11 @@ NO_WORKTREE = "(this run has no worktree: `worktree` is off)"
 #: What a node that calls `run_check` writes and returns besides its own: an install that
 #: writes a lockfile amends the attempt (`worktree.ensure_environment`), and a generate
 #: command amends its tracked-file changes too, so the check rewrites ``changes.diff``
-#: and moves the ``commit`` and ``files`` facts to the amended one.
-CHECK_WRITES = ("changes.diff",)
-CHECK_PRODUCES = ("commit", "files")
+#: and moves the ``commit`` and ``files`` facts to the amended one. The base comparison
+#: (`base_check`) writes ``test-guardedness.json`` and names the failures it excused as
+#: ``inherited_failures``, empty when it excused none.
+CHECK_WRITES = ("changes.diff", "test-guardedness.json")
+CHECK_PRODUCES = ("commit", "files", "inherited_failures")
 
 
 # ── what a mode declares ──────────────────────────────────────────────────────
