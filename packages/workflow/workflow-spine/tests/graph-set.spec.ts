@@ -128,6 +128,21 @@ describe('invariant sanity checks', () => {
     expect(() => checkNoDueDrop(fakeResult)).toThrow(/checkNoDueDrop/)
   })
 
+  it('checkJoinAfterBranches rejects join before branch', () => {
+    const shape = shapes.find(s => s.name === 'forkSingleBranch')!
+    const result = driveToEnd(shape.graph, shape)
+    // Swap join before its branch in completedOrder to trigger the invariant
+    const idx = result.completedOrder.indexOf('join')
+    const hcIdx = result.completedOrder.indexOf('hc')
+    if (idx !== -1 && hcIdx !== -1) {
+      const bad = [...result.completedOrder]
+      bad[hcIdx] = 'join'
+      bad[idx] = 'hc'
+      const fakeResult = { ...result, completedOrder: bad }
+      expect(() => checkJoinAfterBranches(fakeResult)).toThrow(/checkJoinAfterBranches/)
+    }
+  })
+
   it('checkDoneAndEnds rejects non-done status', () => {
     const shape = shapes.find(s => s.name === 'linear')!
     const result = driveToEnd(shape.graph, shape)
