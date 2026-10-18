@@ -331,11 +331,11 @@ DESIGN_DOC_ANSWER = (
     "# Do the thing\n\n"
     "## Summary\n\nFix it properly.\n\n"
     "## Rule and sites\n\n"
-    "- `ops.py:1` — **[changed]**\n\n"
+    "- `tool.py:1` — **[changed]**\n\n"
     "## Docs\n\n"
     "- docs/models.md\n\n"
     "## Changes\n\n"
-    "- ops.py\n"
+    "- tool.py\n"
 )
 
 
