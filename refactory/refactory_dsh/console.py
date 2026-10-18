@@ -252,11 +252,13 @@ def _run_id(mode: str) -> str:
 
 #: The data node's item loader, as the composition mounts it. Spelled here
 #: because the console is the Python owner the Web composition reaches, and the
-#: graph bundle names the same module in its own `dataCommand`; the interpreter
-#: that resolves the bare `python` leads :func:`_node_environment`'s `PATH`.
-DATA_COMMAND = "python -m refactory_dsh.items"
-AGENT_COMMAND = "python -m refactory_dsh.agent_delivery"
-GATE_COMMAND = "python -m refactory_dsh.steering"
+#: graph bundle names the same module in its own `dataCommand`; each uses an
+#: absolute interpreter path so they do not depend on PATH.
+from refactory_dsh.paths import venv_bin as _venv_bin
+_REFACTORY_PYTHON = str(_venv_bin() / 'python')
+DATA_COMMAND = f"{_REFACTORY_PYTHON} -m refactory_dsh.items"
+AGENT_COMMAND = f"{_REFACTORY_PYTHON} -m refactory_dsh.agent_delivery"
+GATE_COMMAND = f"{_REFACTORY_PYTHON} -m refactory_dsh.steering"
 
 
 def _node_environment(
@@ -276,23 +278,18 @@ def _node_environment(
     ``REFACTORY_PROJECT`` and ``REFACTORY_KNOBS``, and
     ``refactory_dsh/items.py`` reads ``REFACTORY_WORKDIR``).
 
-    ``PATH`` leads with the run's interpreter so a node command's bare ``python``
-    resolves to the venv that has ``refactory_dsh`` installed, exactly as the
-    graph profile's ``commandEnv`` does.
+    Data, agent and gate commands use an absolute interpreter path; ``PATH`` is
+    not overridden.
     """
     from refactory_dsh import interactive, lowering, registry
-    from refactory_dsh.paths import venv_bin
 
     # The same mode with the same knob overrides `interactive.prepare` lowered,
     # through the same owner, so the environment cannot disagree with the graph.
     Mode = registry.resolve(project, mode)[1]
     state = interactive.with_knobs(Mode().state_dict(), list(knobs or []))
-    interpreter = str(venv_bin())
-    ambient = os.environ.get("PATH", "")
     return lowering.knob_environment(state, extra={
         "REFACTORY_WORKDIR": str(workdir),
         "REFACTORY_PROJECT": str(project),
-        "PATH": f"{interpreter}:{ambient}" if ambient else interpreter,
     })
 
 

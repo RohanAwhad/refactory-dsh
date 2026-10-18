@@ -300,6 +300,22 @@ class DshModelClient:
             result["REFACTORY_WORKER_RECEIPT"] = str(self._worker_receipt)
         from refactory_dsh.workers import environment
         result.update(environment(self.context()))
+        # Late-bind the target's environment: when the run's worktree exists,
+        # replace whatever PATH the subprocess inherited (which may still lead
+        # with refactory's venv from startup.ts or _node_environment) with the
+        # target's check_environment PATH.  Without a worktree (research,
+        # strategy), the inherited PATH passes through.
+        _workdir = os.environ.get('REFACTORY_WORKDIR', '')
+        if _workdir:
+            from refactory_dsh import worktree as _wt
+            _found = _wt.recorded(Path(_workdir))
+            if _found is not None:
+                _home = Path(_workdir).resolve() / _wt.CHECK_HOME
+                _home.mkdir(parents=True, exist_ok=True)
+                _target_env = _wt.check_environment(Path(_found.path), _home)
+                result['PATH'] = _target_env['PATH']
+                if 'VIRTUAL_ENV' in _target_env:
+                    result['VIRTUAL_ENV'] = _target_env['VIRTUAL_ENV']
         # An agent's own shell can run install commands that would rewrite the
         # target's hooks; suppress hook managers there too (#347).
         from refactory_dsh.worktree import HOOK_SUPPRESS

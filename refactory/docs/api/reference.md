@@ -572,6 +572,7 @@ Running code we did not write.
 | function | `missing_init` | `(root: 'Path') -> 'str'` |
 | function | `model_readiness` | `(workdir: 'Path', *, model_context: 'dict[str, str] \| None' = None, require_ready: 'bool' = True) -> 'dict[str, Any]'` |
 | function | `promote` | `(project: 'Path', name: 'str', *, note: 'str' = '') -> 'dict[str, Any]'` |
+| function | `refactory_env` | `(env: 'dict[str, str] \| None' = None) -> 'dict[str, str]'` |
 | function | `run_command` | `(command: 'str', *, workdir: 'Path', timeout_s: 'int' = 180, memory_mb: 'int' = 0, cpu_s: 'int \| None' = None, file_mb: 'int' = 64, env: 'dict[str, str] \| None' = None, budget: 'Any' = None, home: 'Path \| None' = None, exact_env: 'bool' = False, stdin: 'Any' = None) -> 'SandboxResult'` |
 | function | `run_sandboxed` | `(code: 'str', *, workdir: 'Path', timeout_s: 'int' = 180, memory_mb: 'int' = 2048, cpu_s: 'int' = 120, file_mb: 'int' = 64, env: 'dict[str, str] \| None' = None, forwarded: 'dict[str, str] \| None' = None) -> 'SandboxResult'` |
 | function | `scrub` | `(env: 'dict[str, str] \| None' = None) -> 'dict[str, str]'` |
@@ -588,6 +589,7 @@ Running code we did not write.
 - **`missing_init`** — Why a package root has no `__init__.py`, and what it holds instead.
 - **`model_readiness`** — Check the model path after the same scrub/HOME rewrite as real smoke.
 - **`promote`** — Mark a package trusted, explicitly, and record who did it.
+- **`refactory_env`** — ``scrub(env)`` with refactory's own interpreter first on PATH.
 - **`run_command`** — Run a shell command in the sandbox, bounded by time rather than memory.
 - **`run_sandboxed`** — Run a snippet in a subprocess with limits, from the workspace, scrubbed.
 - **`scrub`** — The environment a sandboxed run sees: an allowlist, with secrets dropped.
@@ -849,7 +851,7 @@ Worker routes and durable receipts over DSH's named-provider registry.
 
 - **`GraphTelemetry`** — One coordinator receipt; node subprocesses own distinct worker receipts.
 - **`account_usage`** — Keep measured DSH calls while exposing incomplete delegated coverage.
-- **`environment`** — Nonsecret resolved context for graph-owned deterministic nested calls.
+- **`environment`** — Nonsecret resolved context for graph-owned calls.
 - **`lower_workflow`** — Resolve explicit node workers before graph dispatch, preserving all edges.
 - **`permission_patch`** — Scope DSH bypass to this runtime, without leaking through child env.
 - **`provider_rows`** — Declare selected provider routes to a runtime that cannot see profiles.

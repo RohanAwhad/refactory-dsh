@@ -317,6 +317,7 @@ def _open_worktree(ctx: Any, name: str, task: dict[str, Any],
         else:
             print(f"refactory: {note}", file=sys.stderr)
     found = worktree.create(target, base, run_id, ctx.workdir)
+    worktree.write_wrapper(found, ctx.workdir)
     # Every step of a worktree run is held to its own worktree (#319, #347).
     # Changes to the target or the launcher checkout are warnings: another
     # session or person may be working there.
@@ -680,7 +681,7 @@ def _commit_emission(ctx: Any) -> dict[str, Any]:
                 f"The artifact is a git worktree of {advanced.target} on branch {advanced.branch}. "
                 f"The change under review is `git -C {advanced.path} diff {advanced.base[:12]}`, also "
                 f"saved as changes.diff in the run directory. Run commands with `{wrapper} <command>`, "
-                "which uses the worktree's own environment, not refactory's."
+                "which switches to the worktree directory and runs with a clean, check-equivalent environment (env -i)."
             )}
 
 
@@ -828,7 +829,9 @@ def run_check(ctx: Any, command: str, timeout: float) -> Any:
             raise ValueError("artifact location is stale or ambiguous; materialise again before checking")
         _require_owner(str(ctx.facts["name"]), ctx.workdir)
         target_guard.warn_if_moved(ctx.workdir)
-        return sandbox.run_command(command, workdir=root, timeout_s=timeout, budget=getattr(ctx, "budget", None))
+        # An artifact built for refactory: its check imports refactory_dsh.
+        return sandbox.run_command(command, workdir=root, timeout_s=timeout, budget=getattr(ctx, "budget", None),
+                                   env=sandbox.refactory_env(), exact_env=True)
     found, restored = worktree.restore(ctx.workdir)
     if found.head != str(ctx.facts.get("commit")):
         raise ValueError("the worktree is not at the attempt materialise committed; materialise again before checking")

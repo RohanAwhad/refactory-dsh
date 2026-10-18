@@ -55,6 +55,31 @@ def test_design_catches_known_defect_and_repairs_within_bound(tmp_path, monkeypa
     assert PLAN in client.prompts[1] and PLAN in client.prompts[3]
 
 
+def test_a_check_with_no_target_imports_refactory_however_the_shell_path_reads(tmp_path, monkeypatch):
+    """An artifact built for refactory is checked with refactory's interpreter, even when the
+    launching shell's PATH does not have refactory's venv (as `.venv/bin/refactory` leaves it)."""
+    import os
+
+    monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
+    # Refactory's interpreter is this one; the shell's `python` is one that cannot run it.
+    monkeypatch.setenv("VENV_BIN", str(Path(sys.executable).parent))
+    shell = tmp_path / "shell-bin"
+    shell.mkdir()
+    (shell / "python").write_text("#!/bin/sh\necho 'not refactory interpreter' >&2\nexit 3\n")
+    (shell / "python").chmod(0o755)
+    monkeypatch.setenv("PATH", os.pathsep.join([str(shell), "/usr/bin", "/bin"]))
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    mode = DesignFastMode()
+    state = mode.state_dict()
+    state["knobs"]["worktree"]["value"] = False  # the artifact directory, not a worktree
+    mode.load_state_dict(state)
+    run = mode.run(tmp_path / "run", model=FakeModel([PLAN, "===FILE: answer.py===\nanswer = 1\n", QA_PASS]),
+                   task={"name": "imports", "brief": "import refactory",
+                         "check": "python -c 'import refactory_dsh, answer'"})
+    assert run.exit_ok, run.error
+    assert json.loads((tmp_path / "run/fast-report.json").read_text())["runtime_check"]["status"] == "pass"
+
+
 def test_design_exhausted_repair_is_unresolved_and_has_no_success(tmp_path, monkeypatch):
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
     mode = DesignFastMode()

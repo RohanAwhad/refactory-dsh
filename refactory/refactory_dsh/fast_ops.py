@@ -183,7 +183,9 @@ def focused_check(ctx: Any) -> dict[str, Any]:
             # artifact directory.
             result = repo_change.run_check(ctx, command, timeout)
         else:
-            result = sandbox.run_command(command, workdir=Path(output), timeout_s=timeout, budget=budget)
+            # An artifact built for refactory: its check imports refactory_dsh.
+            result = sandbox.run_command(command, workdir=Path(output), timeout_s=timeout,
+                                         budget=budget, env=sandbox.refactory_env(), exact_env=True)
         payload.update(status="pass" if result.ok else "fail", returncode=result.returncode,
                        stdout=result.stdout, stderr=result.stderr, timed_out=result.timed_out,
                        elapsed_s=result.elapsed_s)

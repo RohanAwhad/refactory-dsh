@@ -436,6 +436,181 @@ def test_worker_shell_keeps_selected_python_through_actual_dsh_scrub(monkeypatch
     assert Path(actual['executable']).parent == Path(bindir)
     assert Path(actual['module']).resolve() == root / 'refactory/refactory_dsh/__init__.py'
     assert 'REFACTORY_TEST_SECRET' not in scrub(client._environment())
+    # After the environment fix, PYTHONPATH is absent from the scrubbed env.
+    assert 'PYTHONPATH' not in scrub(client._environment())
+
+
+@pytest.mark.parametrize('python_command', ['python3', 'declared'])
+def test_agent_tool_subprocess_imports_target_package_not_refactory_source(monkeypatch, tmp_path, python_command):
+    """A real target venv's packages are importable and refactory_dsh from the
+    driver's source tree is not on the import path."""
+    import os
+    import shlex
+    import shutil
+    import sys
+    root = Path(__file__).resolve().parents[2]
+    modules = list((root / 'node_modules/.pnpm').glob(
+        '@deepseek-ai+dsh-subprocess@*/node_modules/@deepseek-ai/dsh-subprocess/lib/index.js'))
+    if not modules:
+        pytest.skip('pinned DSH subprocess package not installed')
+    node = shutil.which('node')
+    # Create a real target venv with a tiny sentinel package.
+    target_root = tmp_path / 'target'
+    target_root.mkdir()
+    target_venv = target_root / '.venv'
+    subprocess.run([sys.executable, '-m', 'venv', str(target_venv)], check=True)
+    target_bindir = str(target_venv / 'bin')
+    # Write a small sentinel module into the target venv's site-packages.
+    site_dir = list(target_venv.glob('lib/python*/site-packages'))[0]
+    sentinel = site_dir / 'target_sentinel'
+    sentinel.mkdir()
+    (sentinel / '__init__.py').write_text('PRESENT = True\n')
+    # Build the worker environment simulating what model._environment() produces
+    # when a worktree exists: PATH leads with the target's .venv/bin, no PYTHONPATH.
+    bash_dir = os.path.dirname(shutil.which('bash') or '')
+    monkeypatch.setenv('PATH', os.pathsep.join(part for part in (target_bindir, bash_dir) if part))
+    monkeypatch.delenv('PYTHONPATH', raising=False)
+    monkeypatch.setenv('REFACTORY_TEST_SECRET', 'not-a-real-secret')
+    client = DshModelClient(python_bin=target_bindir)
+    expression = (
+        'import json,sys;'
+        'import target_sentinel;'
+        'rdsh_ok=False;rdsh_file="";'
+        'exec("try:\\n import refactory_dsh\\n rdsh_ok=True;rdsh_file=refactory_dsh.__file__\\nexcept ImportError:\\n pass");'
+        'print(json.dumps({"sentinel":target_sentinel.PRESENT,"rdsh_ok":rdsh_ok,"rdsh_file":rdsh_file}))'
+    )
+    from refactory_dsh.agent_delivery import begin
+    delivery = begin(tmp_path, 'runtime-check', 'Import the target package.', [], model_context=client.context())
+    executable = delivery['execution']['python'] if python_command == 'declared' else 'python3'
+    command = shlex.quote(executable) + ' -c ' + shlex.quote(expression)
+    from refactory_dsh.sandbox import scrub
+    script = (f'import {{scrubbedParentEnv}} from {json.dumps(modules[0].as_uri())};'
+              'import {spawnSync} from "node:child_process";'
+              'const env=scrubbedParentEnv(); if("REFACTORY_TEST_SECRET" in env)throw Error("secret leaked");'
+              f'const p=spawnSync("bash",["-c",{json.dumps(command)}],{{env,encoding:"utf8"}});'
+              'process.stdout.write(p.stdout);process.stderr.write(p.stderr);process.exit(p.status??1);')
+    result = subprocess.run([node, '--input-type=module', '-e', script], cwd=tmp_path,
+                            env=client._environment(), capture_output=True, text=True, check=True)
+    actual = json.loads(result.stdout)
+    # 1. The target package imports successfully.
+    assert actual['sentinel'] is True, "target_sentinel should be importable"
+    # 2. refactory_dsh either cannot be imported (not in target venv) or its __file__
+    #    does not point to refactory's source tree.
+    if actual['rdsh_ok']:
+        assert str(root) not in actual['rdsh_file'], (
+            f"refactory_dsh should NOT resolve to the driver's source tree, got {actual['rdsh_file']}")
+    # 3. PYTHONPATH is not in the scrubbed environment.
+    assert 'PYTHONPATH' not in scrub(client._environment())
+
+
+def test_self_hosted_refactory_target_resolves_to_target_copy(monkeypatch, tmp_path):
+    """For a target that IS a refactory checkout, the agent's python imports
+    the target's refactory_dsh, not the driver's."""
+    import os
+    import shlex
+    import shutil
+    import sys
+    root = Path(__file__).resolve().parents[2]
+    modules = list((root / 'node_modules/.pnpm').glob(
+        '@deepseek-ai+dsh-subprocess@*/node_modules/@deepseek-ai/dsh-subprocess/lib/index.js'))
+    if not modules:
+        pytest.skip('pinned DSH subprocess package not installed')
+    node = shutil.which('node')
+    # Create a real venv and a fake refactory_dsh in the target.
+    target_root = tmp_path / 'target'
+    target_root.mkdir()
+    target_venv = target_root / '.venv'
+    subprocess.run([sys.executable, '-m', 'venv', str(target_venv)], check=True)
+    target_bindir = str(target_venv / 'bin')
+    # Install a sentinel refactory_dsh in the target venv.
+    site_dir = list(target_venv.glob('lib/python*/site-packages'))[0]
+    pkg_dir = site_dir / 'refactory_dsh'
+    pkg_dir.mkdir()
+    (pkg_dir / '__init__.py').write_text('SENTINEL = "target_copy"\n')
+    # Build the worker environment.
+    bash_dir = os.path.dirname(shutil.which('bash') or '')
+    monkeypatch.setenv('PATH', os.pathsep.join(part for part in (target_bindir, bash_dir) if part))
+    monkeypatch.delenv('PYTHONPATH', raising=False)
+    client = DshModelClient(python_bin=target_bindir)
+    expression = 'import json,refactory_dsh; print(json.dumps({"file": refactory_dsh.__file__}))'
+    from refactory_dsh.agent_delivery import begin
+    delivery = begin(tmp_path, 'runtime-check', 'Import refactory_dsh.', [], model_context=client.context())
+    executable = delivery['execution']['python']
+    command = shlex.quote(executable) + ' -c ' + shlex.quote(expression)
+    script = (f'import {{scrubbedParentEnv}} from {json.dumps(modules[0].as_uri())};'
+              'import {spawnSync} from "node:child_process";'
+              'const env=scrubbedParentEnv();'
+              f'const p=spawnSync("bash",["-c",{json.dumps(command)}],{{env,encoding:"utf8"}});'
+              'process.stdout.write(p.stdout);process.stderr.write(p.stderr);process.exit(p.status??1);')
+    result = subprocess.run([node, '--input-type=module', '-e', script], cwd=tmp_path,
+                            env=client._environment(), capture_output=True, text=True, check=True)
+    actual = json.loads(result.stdout)
+    # __file__ must be under the target, not under the driver's source tree.
+    assert str(target_root) in actual['file'], (
+        f"refactory_dsh.__file__ should be under {target_root}, got {actual['file']}")
+    assert str(root / 'refactory') not in actual['file'], (
+        f"refactory_dsh.__file__ must NOT be from the driver's source, got {actual['file']}")
+
+
+def test_worker_node_dispatch_uses_absolute_interpreter(tmp_path):
+    """lower_workflow() dispatches worker_node with sys.executable, not bare python."""
+    import sys
+    from refactory_dsh.ir import AgentNode, AgentRole, Workflow
+    wf = Workflow(
+        name='test',
+        nodes={'test_node': AgentNode(
+            id='test_node', prompt_template='Do nothing.',
+            reads=set(), writes=set(), role=AgentRole.BUILDER,
+        )},
+        edges=[],
+        start_node='test_node',
+    )
+    client = DshModelClient()
+    from refactory_dsh.workers import lower_workflow
+    lowered = lower_workflow(wf, tmp_path, client.context())
+    dispatch = lowered.nodes['test_node'].dispatch_command
+    # Must start with an absolute path, not bare 'python'
+    assert dispatch.startswith(sys.executable), (
+        f"dispatch_command should start with sys.executable ({sys.executable}), got: {dispatch}")
+    assert '/python' in dispatch.split()[0] or dispatch.split()[0] == sys.executable
+    # Verify the absolute path can actually run refactory_dsh
+    result = subprocess.run(
+        [sys.executable, '-c', 'import refactory_dsh; print(refactory_dsh.__file__)'],
+        capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_create_mode_check_still_imports_refactory_dsh(tmp_path):
+    """Create-mode validation through run_sandboxed still works after the change.
+
+    run_sandboxed uses sys.executable (absolute path) and sets PYTHONPATH to
+    refactory's source, so refactory_dsh is always importable there. This test
+    passes both before and after the change; it guards against regression.
+    """
+    import os
+    from refactory_dsh import sandbox as _sandbox
+    code = 'import json, refactory_dsh; print(json.dumps({"file": refactory_dsh.__file__}))'
+    result = _sandbox.run_sandboxed(code, workdir=tmp_path, env=dict(os.environ))
+    assert result.ok, f"run_sandboxed should succeed: {result.stderr}"
+    assert 'refactory_dsh' in result.payload.get('file', ''), (
+        f"refactory_dsh should be importable in run_sandboxed: {result.payload}")
+
+
+def test_refactory_env_puts_refactorys_interpreter_first_and_keeps_the_scrubbed_rest(monkeypatch):
+    """The environment a check of a refactory artifact runs with: refactory's interpreter
+    first however the shell's PATH reads, and everything scrub keeps (HOME, LANG) kept."""
+    import os
+    from refactory_dsh import sandbox as _sandbox
+    from refactory_dsh.paths import venv_bin
+    bindir = str(venv_bin())
+    monkeypatch.setenv('PATH', os.pathsep.join(p for p in os.environ.get('PATH', '').split(os.pathsep) if p != bindir))
+    monkeypatch.setenv('HOME', '/home/someone')
+    monkeypatch.setenv('SOME_API_KEY', 'secret')
+    env = _sandbox.refactory_env()
+    assert env['PATH'].split(os.pathsep)[0] == bindir
+    assert env['PATH'].split(os.pathsep).count(bindir) == 1
+    assert env['HOME'] == '/home/someone'
+    assert 'SOME_API_KEY' not in env
 
 
 def test_coordinator_and_node_account_separately_without_double_count(tmp_path):

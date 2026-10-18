@@ -126,10 +126,9 @@ def test_the_environment_is_an_allowlist_with_secrets_dropped():
         "PATH": "/usr/bin", "HOME": "/home/x", "DEEPSEEK_API_KEY": "sk-secret",
         "AWS_SECRET_ACCESS_KEY": "shh", "MY_TOKEN": "t", "SOMETHING_RANDOM": "v",
     })
-    assert "/usr/bin" in scrubbed["PATH"], "the caller's PATH is kept"
-    assert scrubbed["PATH"].startswith(str(venv_bin())), (
-        "the project's own python comes first, because a check means the interpreter "
-        "that has the project installed"
+    assert scrubbed["PATH"] == "/usr/bin", (
+        "the caller's PATH passes through unchanged; the worker environment "
+        "or check environment has already set it to the target's Python"
     )
     assert "DEEPSEEK_API_KEY" not in scrubbed
     assert "AWS_SECRET_ACCESS_KEY" not in scrubbed

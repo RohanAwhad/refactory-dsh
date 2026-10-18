@@ -966,10 +966,13 @@ def amend(found: Worktree, run: Path, paths: list[str], message: str) -> Worktre
 
 
 def write_wrapper(found: Worktree, run: Path) -> Path:
-    """Leave the script reviewers run commands through: the worktree, with its check environment.
+    """Leave the script every role runs commands through: the worktree, with its check environment.
 
-    Workers inherit refactory's own ``PATH`` and ``PYTHONPATH``, so a reviewer that ran
-    a target's tests directly would import the launcher's code, not the worktree's.
+    Reviewers and other roles run commands through this wrapper to get ``cwd``
+    switched to the worktree and a pristine ``env -i`` environment matching the
+    check. The wrapper strips all inherited variables for reproducible,
+    check-equivalent execution, and provides dual access: agent tooling for
+    run-directory files, plus this wrapper for isolated check commands.
     """
     run = Path(run).resolve()
     script = run / WRAPPER

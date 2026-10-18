@@ -55,15 +55,6 @@ function resolveDep(override: string | undefined, homeRelative: string, fallback
 const DEFAULT_GRAPHS_DIR = resolveDep(process.env.SRF_GRAPHS, 'refactory/vendor/srf/graphs', join(process.cwd(), 'refactory/vendor/srf/graphs'))
 const DEFAULT_VENV_BIN = resolveDep(process.env.VENV_BIN, '.venv/bin', join(process.cwd(), '.venv/bin'))
 
-/**
- * The data node's item loader.
- *
- * Resolved by module, not by path: the run's interpreter leads PATH in
- * `commandEnv`, exactly as `refactory_dsh.run` for a deterministic node is.
- */
-const DATA_COMMAND = 'python -m refactory_dsh.items'
-const AGENT_COMMAND = 'python -m refactory_dsh.agent_delivery'
-const GATE_COMMAND = 'python -m refactory_dsh.steering'
 
 /** Everything the run needs, resolved once from the command line. */
 export interface GraphStartupValues {
@@ -182,7 +173,8 @@ export function apply(ctx: Context): void {
       // the checkout is known: the directory the profile was started in.
       REFACTORY_PROJECT: process.cwd(),
       REFACTORY_INTENT: taskName,
-      PATH: ambientPath === '' ? pythonBin : `${pythonBin}:${ambientPath}`,
+      PATH: ambientPath,
+      REFACTORY_PYTHON_BIN: `${pythonBin}/python`,
     }
 
     ctx.provide(GRAPH_STARTUP_SERVICE, {
@@ -212,9 +204,9 @@ export function apply(ctx: Context): void {
       provider: options.provider === undefined ? undefined : String(options.provider),
       model: options.model === undefined ? undefined : String(options.model),
       pythonBin,
-      dataCommand: DATA_COMMAND,
-      agentCommand: AGENT_COMMAND,
-      gateCommand: GATE_COMMAND,
+      dataCommand: `${pythonBin}/python -m refactory_dsh.items`,
+      agentCommand: `${pythonBin}/python -m refactory_dsh.agent_delivery`,
+      gateCommand: `${pythonBin}/python -m refactory_dsh.steering`,
       chat: options.chat === true,
     } satisfies GraphStartupValues)
   })
