@@ -103,7 +103,7 @@ export function checkDoneAndEnds(result: DriveResult, shape: ShapeEntry): void {
     throw new Error(`checkDoneAndEnds: halted: ${result.final.halted.reason}`)
   }
 
-  // Check B: verify sinks through halt mechanism
+  // Check B: verify sinks through halt mechanism (strict equality)
   const retrySet = computeRetryEdgeSet(result.graph)
   const expectedSinks = computeRealSinks(result.graph, retrySet)
 
@@ -140,6 +140,11 @@ export function checkDoneAndEnds(result: DriveResult, shape: ShapeEntry): void {
   const partialSpine = replayTo(shape.graph, shape, eventsBeforeSink)
   const saved = JSON.parse(JSON.stringify(partialSpine.checkpoint())) as Record<string, unknown>
   const savedState = saved['state'] as Record<string, unknown>
+  const savedCompleted = (savedState['completed'] ?? []) as string[]
+  const savedSkipped = (savedState['skipped'] ?? []) as string[]
+  const partialFinished = new Set([...savedCompleted, ...savedSkipped])
+  const expectedUnreached = expectedSinks.filter(id => !partialFinished.has(id))
+
   savedState['cursor'] = []
   const checkSpine = new Spine(shape.graph)
   checkSpine.restore(saved)
@@ -147,27 +152,39 @@ export function checkDoneAndEnds(result: DriveResult, shape: ShapeEntry): void {
   if (checkNext.status !== 'done') {
     throw new Error(`checkDoneAndEnds (halt check): emptied cursor should give 'done', got '${checkNext.status}'`)
   }
-  if (!checkNext.halted) {
-    // If no halt, that means all sinks were already reached (alternative ends).
-    // This is valid when the shape has multiple sinks and another was already
-    // completed before our last sink.
-    const alreadyReached = expectedSinks.some(id =>
-      id !== lastSinkId && finished.has(id),
-    )
-    if (!alreadyReached) {
-      throw new Error(`checkDoneAndEnds (halt check): emptied cursor before last sink should halt as incomplete`)
+
+  if (expectedUnreached.length === 0) {
+    // All sinks were already reached before the last one; no halt expected
+    if (checkNext.halted) {
+      throw new Error(
+        `checkDoneAndEnds (halt check): all expected sinks already reached, but got halted: ${checkNext.halted.reason}`,
+      )
     }
   } else {
-    // Verify the unreached list contains the last sink
-    const unreached = new Set(checkNext.halted.unreached ?? [])
-    if (!unreached.has(lastSinkId)) {
-      // Check if another sink was already reached
-      const alreadyReached = expectedSinks.some(id =>
-        id !== lastSinkId && finished.has(id),
+    // Sinks not yet reached — expect halted.unreached to match exactly
+    if (!checkNext.halted) {
+      throw new Error(
+        `checkDoneAndEnds (halt check): expected halted with unreached [${expectedUnreached.join(', ')}]`,
       )
-      if (!alreadyReached) {
+    }
+    if (checkNext.halted.reason !== 'incomplete') {
+      throw new Error(
+        `checkDoneAndEnds (halt check): expected reason 'incomplete', got '${checkNext.halted.reason}'`,
+      )
+    }
+    const actualUnreached = new Set(checkNext.halted.unreached ?? [])
+    const expectedUnreachedSet = new Set(expectedUnreached)
+    for (const id of actualUnreached) {
+      if (!expectedUnreachedSet.has(id)) {
         throw new Error(
-          `checkDoneAndEnds (halt check): unreached should contain ${lastSinkId}; got [${[...unreached].join(', ')}]`,
+          `checkDoneAndEnds (halt check): unreached contains ${id} which is not an expected sink`,
+        )
+      }
+    }
+    for (const id of expectedUnreachedSet) {
+      if (!actualUnreached.has(id)) {
+        throw new Error(
+          `checkDoneAndEnds (halt check): expected sink ${id} missing from unreached [${[...actualUnreached].join(', ')}]`,
         )
       }
     }
@@ -269,21 +286,48 @@ export function checkRedoInvariant(result: DriveResult, shape: ShapeEntry): void
       gatePolicy: noReloopPolicy,
     })
 
-    // The re-completed nodes should be within the forward closure
-    const reCompletedNodes = new Set(redoResult.completedOrder)
+    // The re-completed nodes should be exactly the forward closure's
+    // previously completed nodes, and nothing outside the closure.
+    // Use the spine's actual completed list (not just completedOrder) because
+    // some nodes are completed internally (e.g. DataNode via endPass).
+    const redoState = redoResult.spine.state() as { completed: string[] }
+    const reCompletedNodes = new Set(redoState.completed)
+    const previouslyCompleted = new Set(state.completed)
 
+    // Nodes completed after redo that are outside the closure: only check
+    // nodes that were NOT already completed before redo (i.e. not invalidated).
+    // After redo, the spine invalidates all nodes in plan.nodes. The nodes
+    // remaining in completed are those outside the affected set. Only newly
+    // completed nodes (not in the pre-redo completed set minus the invalidated
+    // ones) should be within the closure.
+    const survivingCompleted = new Set(
+      state.completed.filter(id => !expectedClosure.has(id)),
+    )
     for (const n of reCompletedNodes) {
-      if (!expectedClosure.has(n)) {
+      if (!expectedClosure.has(n) && !survivingCompleted.has(n)) {
         throw new Error(
           `checkRedoInvariant: redo(${nodeId}) re-completed ${n} which is outside the forward closure`,
         )
       }
     }
 
-    // The redo should end done
+    for (const n of expectedClosure) {
+      if (previouslyCompleted.has(n) && !reCompletedNodes.has(n)) {
+        throw new Error(
+          `checkRedoInvariant: redo(${nodeId}) did not re-complete ${n} which was previously completed and is in the forward closure`,
+        )
+      }
+    }
+
+    // The redo should end done with no incomplete halt
     if (redoResult.final.status !== 'done') {
       throw new Error(
         `checkRedoInvariant: redo(${nodeId}) did not end done, status: ${redoResult.final.status}`,
+      )
+    }
+    if (redoResult.final.halted) {
+      throw new Error(
+        `checkRedoInvariant: redo(${nodeId}) ended with halt: ${redoResult.final.halted.reason}`,
       )
     }
   }
