@@ -277,10 +277,52 @@ def check_artifact(ctx: Any) -> str:
         "timed_out": result.timed_out, "elapsed_s": result.elapsed_s}
     ctx.write_text("check.txt", detail or "ok\n")
     evidence.record(ctx, outcome)
+
+    # ── guardedness (unconditional: passing and failing) ──────────────
+    from refactory_dsh import base_check
+    guardedness = None
+    if worktree.recorded(ctx.workdir) is not None:
+        try:
+            guardedness = base_check.compute_test_guardedness(
+                ctx, command, int(ctx.knob("check_timeout_s", 180)),
+            )
+        except Exception:
+            pass  # guardedness is evidence, not a gate
+        if guardedness is not None:
+            ctx.write_json("test-guardedness.json", guardedness)
+    # ── end guardedness ───────────────────────────────────────────────
+
     if result.ok:
         ctx.set_fact("validation", "(the check passed)")
         return "proceed"
     evidence.stop_unrepairable(outcome["status"], detail)
+
+    # ── base comparison gate (failing checks only) ────────────────────
+    if worktree.recorded(ctx.workdir) is not None:
+        filtered = base_check.filter_check(
+            ctx, result, command, int(ctx.knob("check_timeout_s", 180)),
+            guardedness=guardedness,
+        )
+        if filtered.base_environment_failure:
+            evidence.stop_unrepairable(
+                "unavailable",
+                f"the base check could not run: {filtered.base_environment_failure}",
+            )
+        if filtered.all_excused:
+            validation_msg = (
+                f"(the check passed; {filtered.inherited_detail})"
+            )
+            ctx.set_fact("validation", validation_msg)
+            ctx.write_text("check.txt", validation_msg + "\n")
+            return "proceed"
+        if filtered.new_failures and filtered.inherited:
+            detail = filtered.new_failure_detail
+            ctx.write_text(
+                "check.txt",
+                detail + "\n\n" + filtered.inherited_detail + "\n",
+            )
+    # ── end base comparison gate ──────────────────────────────────────
+
     return repair(ctx, [detail])
 
 

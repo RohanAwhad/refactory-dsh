@@ -84,7 +84,7 @@ def _qa_nodes(graph: Graph, *, artifact: bool) -> None:
         resource_role="final_validation",
         knobs=("check", "check_timeout_s"),
         reads=("emit.txt",) + (() if artifact else ("authoring-evidence.json", "smoke.json")),
-        writes=("focused-check.json", "focused-source.json", "authoring-evidence.json")
+        writes=("focused-check.json", "focused-source.json", "authoring-evidence.json", "test-guardedness.json")
                + (repo_change.CHECK_WRITES if artifact else ()),
         produces=("focused_check", "output_path", "review_files", "runtime_evidence")
                  + (repo_change.CHECK_PRODUCES if artifact else ()),
@@ -96,7 +96,7 @@ def _qa_nodes(graph: Graph, *, artifact: bool) -> None:
         "focused_qa", "agent", role="code_reviewer",
         prompt_template=QA_PROMPT + (ARTIFACT_QA if artifact else "") + REVIEW_CONTEXT + AUDIT_INSTRUCTIONS,
         resource_role="final_validation",
-        reads=("brief.json", "focused-check.json", "authoring-evidence.json"),
+        reads=("brief.json", "focused-check.json", "authoring-evidence.json", "test-guardedness.json"),
         writes=("focused-qa.json", "intent-audit.json"),
         produces=("focused_qa",), notes="one light focused QA stage; no reviewer fan-out",
     ))

@@ -855,4 +855,8 @@ def report(ctx: Any, name: str, payload: dict[str, Any]) -> dict[str, Any]:
     worktree.record_outcome(found, "succeeded")
     projects.record_run(Path(found.target), run=ctx.workdir, branch=found.branch, base=found.base,
                         status="succeeded")
+    # Clean up the base worktree (created by base_check for the base comparison gate)
+    from refactory_dsh import base_check
+    run_id = Path(found.path).name.removeprefix("run-")
+    base_check.remove_base_worktree(Path(found.target), run_id)
     return payload

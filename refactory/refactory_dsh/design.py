@@ -302,7 +302,7 @@ class DesignMode(Mode):
             "check", "gate", evaluator=f"{OPS}:check_artifact", role="validation",
             resource_role="final_validation",
             reads=("brief.json",),
-            writes=("check.txt", "validation.txt", "authoring-evidence.json", *repo_change.CHECK_WRITES),
+            writes=("check.txt", "validation.txt", "authoring-evidence.json", "test-guardedness.json", *repo_change.CHECK_WRITES),
             produces=("validation", "check_attempts_used", "attempts_used", "runtime_evidence",
                       *repo_change.CHECK_PRODUCES),
             knobs=("check_attempts", "check_timeout_s"),
@@ -456,7 +456,7 @@ class DesignMode(Mode):
                 "line that is exactly `VERDICT: PASS` or `VERDICT: FAIL`, and name every "
                 "ask with no evidence behind it."
             ),
-            reads=("brief.json", "design.md", "reviews/qa-synthesized.md"),
+            reads=("brief.json", "design.md", "reviews/qa-synthesized.md", "test-guardedness.json"),
             writes=("reviews/overwatch.md",),
             produces=("overwatch",),
             notes="audit the evidence behind the reviews",
