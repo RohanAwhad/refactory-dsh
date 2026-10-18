@@ -66,7 +66,7 @@ class DesignMode(Mode):
             # As in create: the walker passes these in the run's task, and a run on
             # DSH carries them as knobs.
             "name": Knob("", "str", description="the artifact to design (empty takes the name from the brief)"),
-            "brief": Knob("", "str", description="what to build, in the asker's words"),
+            "brief": Knob("", "str", required=True, description="what to build, in the asker's words"),
             "check": Knob("", "str", description="the command that decides whether the artifact works"),
             # Where the run works (#351), as any mode that changes a repository declares it
             # (`repo_change`), and how its work is delivered once its reviews pass (#350).

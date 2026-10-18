@@ -89,6 +89,22 @@ def prepare(
         mode = Mode()
         state = with_knobs(mode.state_dict(), list(knobs or []))
 
+        # Refuse required knobs that are empty before any directory, worktree or
+        # model call is provisioned.  This is the DSH entry-point guard: every
+        # mode that declares a required knob is covered, not just the built-ins.
+        from refactory_dsh.brief_guard import check_required_knobs
+        from refactory_dsh.nn.validate import declared_knobs as _declared_knobs
+
+        _decl = _declared_knobs(state)
+        _vals = {name: entry["value"] for name, entry in (state.get("knobs") or {}).items()}
+        _violations = check_required_knobs(_decl, _vals)
+        if _violations:
+            knob_name, message = _violations[0]
+            raise ValueError(
+                f"refactory: {knob_name} is empty or whitespace-only; "
+                "every authoring mode needs an idea to work from"
+            )
+
         # Absolute, because this directory becomes DSH's session cwd and DSH refuses a
         # relative one: `interactive <mode>` with no `--workdir` used to fail before the
         # graph started, on the default root that is relative by design.

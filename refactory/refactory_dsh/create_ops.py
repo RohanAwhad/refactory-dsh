@@ -220,6 +220,8 @@ def prepare(ctx: Any) -> dict[str, Any]:
     # knobs, because DSH's task is the CEO's prompt. Both are the same fact.
     name = str(task.get("name") or ctx.knob("name", "") or "").strip()
     brief = str(task.get("brief") or ctx.knob("brief", "") or "").strip()
+    from refactory_dsh.brief_guard import require_brief
+    require_brief(brief, source="brief")
     if not name and brief:
         # "an idea" is enough to start: the name is how the result is found later, and
         # a slug of the brief is a better answer than refusing to begin.

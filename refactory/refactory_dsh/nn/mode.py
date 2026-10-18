@@ -223,7 +223,26 @@ class Mode:
         memory: Any = None,
         **kwargs: Any,
     ) -> RunResult:
-        """Execute the built graph once: this is the forward pass."""
+        """Execute the built graph once: this is the forward pass.
+
+        A required knob whose value differs from its default but is empty or
+        whitespace-only is refused before the work directory is created.  The
+        built-in modes pass their brief through the task dict rather than the
+        knob value, so a default placeholder is accepted here; the DSH path
+        (``interactive.prepare``) checks after the knobs are assembled.
+        """
+        from refactory_dsh.brief_guard import check_required_knobs
+
+        violations = check_required_knobs(
+            self.parameters(), self.values(), allow_defaults=True,
+        )
+        if violations:
+            name, message = violations[0]
+            raise ValueError(
+                f"refactory: {name} is empty or whitespace-only; "
+                "every authoring mode needs an idea to work from"
+            )
+
         from .executor import execute
 
         return execute(

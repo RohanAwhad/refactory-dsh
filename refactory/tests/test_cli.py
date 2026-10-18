@@ -17,8 +17,11 @@ import pytest
 import contextlib
 import io as _io
 
-from refactory_dsh import cli, dsh_profile
+from refactory_dsh import cli, dsh_profile, nn
 from refactory_dsh import console as _console_mod
+from refactory_dsh.brief_guard import require_brief, check_required_knobs
+from refactory_dsh.nn.knob import Knob, KnobError
+from refactory_dsh.nn.validate import validate_state, Issue
 from refactory_dsh.readable import format_status
 from refactory_dsh.paths import REPO_ROOT
 from tests_support import _link_bundle, _profile
@@ -697,3 +700,184 @@ def test_graph_control_is_readable_by_default_and_json_behind_flag(tmp_path):
         if key in per_request_keys:
             continue
         assert payload.get(key) == console_payload.get(key), f"--json and console disagree on {key}"
+
+
+# ── empty-brief refusal ───────────────────────────────────────────────────
+
+
+def test_ceo_refuses_an_empty_brief(monkeypatch, capsys):
+    """``refactory ceo ""`` with an authoring mode must exit 2 and forward nothing."""
+    seen: list[list[str]] = []
+    monkeypatch.setattr(cli, "_forward", lambda module, argv: seen.append(argv) or 0)
+    code = cli.main(["ceo", "", "--mode", "design", "--name", "x", "--check", "true"])
+    assert code == 2, "an empty brief must be refused"
+    assert seen == [], "nothing must be forwarded when the brief is empty"
+    captured = capsys.readouterr()
+    assert "empty or whitespace-only" in captured.err
+    assert "what" in captured.err
+
+
+def test_ceo_refuses_a_whitespace_only_brief(monkeypatch, capsys):
+    """``refactory ceo "   "`` with an authoring mode must exit 2 and forward nothing."""
+    seen: list[list[str]] = []
+    monkeypatch.setattr(cli, "_forward", lambda module, argv: seen.append(argv) or 0)
+    code = cli.main(["ceo", "   ", "--mode", "design", "--name", "x", "--check", "true"])
+    assert code == 2, "a whitespace-only brief must be refused"
+    assert seen == [], "nothing must be forwarded when the brief is whitespace"
+    captured = capsys.readouterr()
+    assert "empty or whitespace-only" in captured.err
+
+
+def test_require_brief_unit():
+    """The shared guard function raises on None, empty and whitespace; passes otherwise."""
+    require_brief("valid idea")  # must not raise
+    with pytest.raises(ValueError, match="empty or whitespace-only"):
+        require_brief("")
+    with pytest.raises(ValueError, match="empty or whitespace-only"):
+        require_brief("   ")
+    with pytest.raises(ValueError, match="empty or whitespace-only"):
+        require_brief(None)
+    with pytest.raises(ValueError, match="what"):
+        require_brief("", source="what")
+
+
+def test_knob_required_flag():
+    """The ``required`` flag on Knob: construction, round-trip and refusal on non-str."""
+    k = Knob("", "str", required=True)
+    assert k.required is True
+    with pytest.raises(KnobError, match="only a 'str' knob may be required"):
+        Knob(0, "int", required=True)
+    spec = k.spec()
+    assert spec["required"] is True
+    rebuilt = Knob.from_spec(spec)
+    assert rebuilt.required is True
+    assert Knob("", "str", required=False).spec()["required"] is False
+
+
+def test_v9_refuses_empty_required_knob():
+    """V9 validation catches a non-default empty required knob."""
+    from refactory_dsh.nn.graph import Graph, Node
+
+    graph = Graph()
+    graph.add(Node("work", "op", call="refactory_dsh.create_ops:prepare", knobs=("brief",)))
+    state = {
+        "version": 1,
+        "graph": graph.to_state(),
+        "knobs": {
+            "brief": {
+                "value": " ",
+                "spec": Knob("", "str", required=True, description="idea").spec(),
+            },
+        },
+    }
+    issues = validate_state(state, resolve_calls=False)
+    v9_required = [i for i in issues if i.code == "V9" and "empty or whitespace-only" in i.message]
+    assert len(v9_required) == 1, f"expected one V9 required-knob issue, got {[str(i) for i in issues]}"
+
+    # A non-empty value produces no such issue.
+    state["knobs"]["brief"]["value"] = "a real idea"
+    issues2 = validate_state(state, resolve_calls=False)
+    v9_required2 = [i for i in issues2 if i.code == "V9" and "empty or whitespace-only" in i.message]
+    assert v9_required2 == []
+
+
+def test_v9_allows_default_empty_required_knob():
+    """V9 does not flag a required knob whose value equals its default placeholder."""
+    from refactory_dsh.nn.graph import Graph, Node
+
+    graph = Graph()
+    graph.add(Node("work", "op", call="refactory_dsh.create_ops:prepare", knobs=("brief",)))
+    state = {
+        "version": 1,
+        "graph": graph.to_state(),
+        "knobs": {
+            "brief": {
+                "value": "",
+                "spec": Knob("", "str", required=True, description="idea").spec(),
+            },
+        },
+    }
+    issues = validate_state(state, resolve_calls=False)
+    v9_required = [i for i in issues if i.code == "V9" and "empty or whitespace-only" in i.message]
+    assert v9_required == [], (
+        "V9 must not flag a required knob whose value equals its default; "
+        f"got {[str(i) for i in v9_required]}"
+    )
+
+
+def test_mode_run_refuses_empty_required_knob(tmp_path):
+    """Mode.run refuses an empty required knob before the workdir is created."""
+    from refactory_dsh.nn.graph import Graph, Node
+
+    class StubMode(nn.Mode):
+        name = "stub"
+
+        @classmethod
+        def declare(cls):
+            return {"brief": Knob("", "str", required=True, description="idea")}
+
+        def build(self):
+            graph = Graph()
+            graph.add(Node("work", "op", call="refactory_dsh.create_ops:prepare", knobs=("brief",)))
+            return graph
+
+    mode = StubMode()
+    state = mode.state_dict()
+    state["knobs"]["brief"]["value"] = "   "
+    mode.load_state_dict(state)
+    run_dir = tmp_path / "should-not-exist"
+    with pytest.raises(ValueError, match="empty or whitespace-only"):
+        mode.run(run_dir)
+    assert not run_dir.exists(), "run directory must not be created when a required knob is empty"
+
+
+def test_interactive_prepare_refuses_empty_required_knob(tmp_path, monkeypatch):
+    """interactive.prepare refuses an empty required knob before lowering."""
+    from refactory_dsh import interactive, registry
+    from refactory_dsh.nn.graph import Graph, Node
+
+    class StubMode(nn.Mode):
+        name = "stub"
+
+        @classmethod
+        def declare(cls):
+            return {"brief": Knob("", "str", required=True, description="idea")}
+
+        def build(self):
+            graph = Graph()
+            graph.add(Node("work", "op", call="refactory_dsh.create_ops:prepare", knobs=("brief",)))
+            return graph
+
+    monkeypatch.setattr(registry, "resolve", lambda project, identifier: ("stub_pack", StubMode))
+
+    workdir = tmp_path / "run-test"
+    with pytest.raises(ValueError, match="empty or whitespace-only"):
+        interactive.prepare(
+            "stub_pack/stub",
+            workdir=workdir,
+            knobs=["brief=   "],
+        )
+
+
+def test_prepare_ops_refuse_an_empty_brief_with_a_name():
+    """create_ops.prepare and design_ops.prepare_design refuse an empty brief when a name is given."""
+    from unittest.mock import MagicMock
+
+    from refactory_dsh import create_ops, design_ops
+
+    ctx = MagicMock()
+    ctx.task = {"name": "x", "brief": ""}
+    ctx.knob = lambda name, default="": default
+    ctx.workdir = Path(".")
+
+    with pytest.raises(ValueError, match="empty or whitespace-only"):
+        create_ops.prepare(ctx)
+
+    with pytest.raises(ValueError, match="empty or whitespace-only"):
+        design_ops.prepare_design(ctx)
+
+
+def test_cli_docs_mention_empty_brief_refusal():
+    """The CLI reference documents the empty-brief refusal."""
+    cli_md = (REPO_ROOT / "docs" / "cli.md").read_text()
+    assert "whitespace" in cli_md

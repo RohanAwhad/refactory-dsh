@@ -41,7 +41,7 @@ RULES: dict[str, str] = {
     "V7": "every knob a node consumes must be declared, and every declared knob "
           "must be consumed by some node",
     "V8": "every call and evaluator must resolve to a real callable",
-    "V9": "every knob value must be of the declared kind and within its bounds",
+    "V9": "every knob value must be of the declared kind and within its bounds; a required knob must be non-empty",
     "V10": "every cycle must pass through a gate; after explicit reloop edges are "
            "removed, each remaining cyclic region must have exactly one gate",
     "V11": "every declared port must be a file some node on a path writes",
@@ -280,6 +280,14 @@ def validate(
             issues.append(Issue("V9", str(exc), knob=name))
     for name in sorted(set(declared_knobs) - set(values)):
         issues.append(Issue("V9", "knob has no value", knob=name))
+
+    # V9 required-knob check.  allow_defaults=True so the starting state (whose
+    # required knobs are empty placeholders) passes structural validation; only a
+    # candidate that actively sets an empty value is refused.
+    from refactory_dsh.brief_guard import check_required_knobs as _check_req
+
+    for knob_name, message in _check_req(declared_knobs, values, allow_defaults=True):
+        issues.append(Issue("V9", message, knob=knob_name))
 
     # V10: determine retry ownership before a candidate executes any work.
     from .loops import loop_edges
