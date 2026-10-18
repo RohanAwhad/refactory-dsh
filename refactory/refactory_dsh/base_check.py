@@ -307,10 +307,20 @@ def _changed_files_in_test_dirs(path: Path, base: str, test_files: list[str]) ->
     """All new or changed files in the same directories as the test files.
 
     Covers helpers, fixtures and other files the tests import (correction 3).
+    The project root is excluded: a test at the root imports production code,
+    and copying that code into the base worktree defeats the guardedness check.
+    Only proper test subdirectories are considered.
     """
     if not test_files:
         return []
     test_dirs = {str(Path(tf).parent) for tf in test_files}
+    # A test file at the project root (parent == ".") means every changed file
+    # in the root would be copied — including production code the test is meant
+    # to exercise.  Exclude the root so only actual test subdirectories supply
+    # helpers and fixtures.
+    test_dirs.discard(".")
+    if not test_dirs:
+        return []
     all_changed = _all_changed_files(path, base)
     return [
         f for f in all_changed
