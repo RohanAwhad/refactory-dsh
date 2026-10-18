@@ -173,7 +173,10 @@ export function apply(ctx: Context): void {
       // the checkout is known: the directory the profile was started in.
       REFACTORY_PROJECT: process.cwd(),
       REFACTORY_INTENT: taskName,
-      PATH: ambientPath,
+      // An op node's command is lowered as a bare `python -m refactory_dsh.run` (lowering.RUNNER),
+      // so graphs name no machine path; the run's interpreter leading PATH is what resolves it.
+      // Agents get the target's own PATH at dispatch instead (model._environment).
+      PATH: ambientPath === '' ? pythonBin : `${pythonBin}:${ambientPath}`,
       REFACTORY_PYTHON_BIN: `${pythonBin}/python`,
     }
 

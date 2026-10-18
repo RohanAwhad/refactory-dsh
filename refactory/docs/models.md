@@ -202,7 +202,10 @@ placed on `PYTHONPATH`, so a target that is refactory itself is tested from its
 worktree, not from the launcher's checkout. Refactory's own nested dispatch
 (worker_node, sandboxed validation) and its graph-runtime commands (data loader,
 agent delivery, steering) use absolute interpreter paths and do not depend on the
-worker's `PATH` or `PYTHONPATH`. DSH's normal credential scrub still applies to
+worker's `PATH` or `PYTHONPATH`. An op node's command is the portable `python -m
+refactory_dsh.run` (no machine path is baked into a graph), so the graph's command
+environment keeps the run's interpreter first on `PATH` to resolve it; an agent's
+own `PATH` is replaced by the worktree's when it is dispatched. DSH's normal credential scrub still applies to
 child processes. A Design run's check in a worktree uses the worktree's own
 environment (`check_environment`), and every role is given `.refactory/in-worktree`,
 which switches to the worktree directory and runs with a clean `env -i` environment.
