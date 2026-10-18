@@ -681,6 +681,160 @@ describe('incomplete cursor drain', () => {
       expect(result.halted).toBeUndefined()
     }
   })
+
+  it('data body exit is not a graph sink — halts as incomplete naming finish', () => {
+    // Graph shaped like dataset_probe: items → body → exit (same node), items → finish
+    const graph: WorkflowGraph = {
+      name: 't',
+      start_node: 'items',
+      nodes: {
+        items: { _type: 'DataNode', id: 'items', task: 'probe', subgraph_entry: 'work', subgraph_exit: 'work' },
+        work: { _type: 'FnNode', id: 'work', writes: [], command: '' },
+        finish: { _type: 'FnNode', id: 'finish', writes: [], command: '' },
+      },
+      edges: [{ source: 'items', target: 'finish' }],
+    }
+    const spine = new Spine(graph)
+    spine.startPass('items', 1)
+    spine.complete('work')
+    spine.endPass()
+    // Now cursor is at ['finish']. Save checkpoint and tamper to simulate lost continuation.
+    const saved = JSON.parse(JSON.stringify(spine.checkpoint()))
+    saved.state.cursor = []
+    saved.state.completed = ['items', 'work']
+    delete saved.state.pass
+    const second = new Spine(graph)
+    second.restore(saved)
+    const result = second.next()
+    expect(result.status).toBe('done')
+    if (result.status === 'done') {
+      expect(result.halted).toBeDefined()
+      expect(result.halted!.reason).toBe('incomplete')
+      expect(result.halted!.unreached).toEqual(['finish'])
+    }
+  })
+
+  it('data graph run to completion finishes done', () => {
+    const graph: WorkflowGraph = {
+      name: 't',
+      start_node: 'items',
+      nodes: {
+        items: { _type: 'DataNode', id: 'items', task: 'probe', subgraph_entry: 'work', subgraph_exit: 'work' },
+        work: { _type: 'FnNode', id: 'work', writes: [], command: '' },
+        finish: { _type: 'FnNode', id: 'finish', writes: [], command: '' },
+      },
+      edges: [{ source: 'items', target: 'finish' }],
+    }
+    const spine = new Spine(graph)
+    spine.startPass('items', 1)
+    spine.complete('work')
+    spine.endPass()
+    spine.complete('finish')
+    const result = spine.next()
+    expect(result.status).toBe('done')
+    if (result.status === 'done') {
+      expect(result.halted).toBeUndefined()
+    }
+  })
+
+  it('fork graph incomplete drain still names only the real sink', () => {
+    const graph: WorkflowGraph = {
+      name: 't',
+      start_node: 'fork',
+      nodes: {
+        fork: { _type: 'ForkNode', id: 'fork', targets: ['c1', 'c2'] },
+        c1: { _type: 'AgentNode', id: 'c1', role: 'reviewer', prompt_template: 'r1', writes: [], reads: [] },
+        c2: { _type: 'AgentNode', id: 'c2', role: 'reviewer', prompt_template: 'r2', writes: [], reads: [] },
+        join: { _type: 'JoinNode', id: 'join', sources: ['c1', 'c2'] },
+        end: { _type: 'FnNode', id: 'end', writes: [], command: '' },
+      },
+      edges: [
+        { source: 'fork', target: 'join' },
+        { source: 'join', target: 'end' },
+      ],
+    }
+    const spine = new Spine(graph)
+    spine.complete('fork')
+    spine.complete('c1')
+    spine.complete('c2')
+    spine.complete('join')
+    // Save checkpoint with join completed but end not reached
+    const saved = JSON.parse(JSON.stringify(spine.checkpoint()))
+    saved.state.cursor = []
+    saved.state.completed = ['fork', 'c1', 'c2', 'join']
+    const second = new Spine(graph)
+    second.restore(saved)
+    const result = second.next()
+    expect(result.status).toBe('done')
+    if (result.status === 'done') {
+      expect(result.halted).toBeDefined()
+      expect(result.halted!.reason).toBe('incomplete')
+      expect(result.halted!.unreached).toEqual(['end'])
+    }
+  })
+
+  it('director graph incomplete drain names the successor, not expanded children', () => {
+    const graph: WorkflowGraph = {
+      name: 't',
+      start_node: 'dir',
+      nodes: {
+        dir: {
+          _type: 'AgentNode', id: 'dir', role: 'worker', prompt_template: 'D', writes: [], reads: [],
+          expand: { plan: 'p.json', role: 'worker', slug_field: 'slug', prompt_field: 'prompt', writes_template: '' },
+        },
+        after: { _type: 'FnNode', id: 'after', writes: [], command: '' },
+      },
+      edges: [{ source: 'dir', target: 'after' }],
+    }
+    const spine = new Spine(graph)
+    spine.expand('dir', [{ slug: 'x', prompt: 'p1' }, { slug: 'y', prompt: 'p2' }])
+    spine.complete('dir__x')
+    spine.complete('dir__y')
+    // After completing both children, cursor drains, afters pops 'after'
+    // Save checkpoint and tamper to simulate incomplete drain
+    const saved = JSON.parse(JSON.stringify(spine.checkpoint()))
+    saved.state.cursor = []
+    saved.state.completed = ['dir', 'dir__x', 'dir__y']
+    const second = new Spine(graph)
+    second.restore(saved)
+    const result = second.next()
+    expect(result.status).toBe('done')
+    if (result.status === 'done') {
+      expect(result.halted).toBeDefined()
+      expect(result.halted!.reason).toBe('incomplete')
+      expect(result.halted!.unreached).toEqual(['after'])
+    }
+  })
+
+  it('graph with data node and several alternative ends', () => {
+    const graph: WorkflowGraph = {
+      name: 't',
+      start_node: 'items',
+      nodes: {
+        items: { _type: 'DataNode', id: 'items', task: 'probe', subgraph_entry: 'work', subgraph_exit: 'work' },
+        work: { _type: 'FnNode', id: 'work', writes: [], command: '' },
+        gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'fn', evaluator_command: 'true', reads: [] },
+        end_a: { _type: 'FnNode', id: 'end_a', writes: [], command: '' },
+        end_b: { _type: 'FnNode', id: 'end_b', writes: [], command: '' },
+      },
+      edges: [
+        { source: 'items', target: 'gate' },
+        { source: 'gate', target: 'end_a', condition: 'proceed' },
+        { source: 'gate', target: 'end_b', condition: 'alt' },
+      ],
+    }
+    const spine = new Spine(graph)
+    spine.startPass('items', 1)
+    spine.complete('work')
+    spine.endPass()
+    spine.verdict('gate', 'proceed')
+    spine.complete('end_a')
+    const result = spine.next()
+    expect(result.status).toBe('done')
+    if (result.status === 'done') {
+      expect(result.halted).toBeUndefined()
+    }
+  })
 })
 
 describe('gate refusal reason persistence', () => {
