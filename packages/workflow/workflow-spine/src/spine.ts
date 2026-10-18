@@ -545,19 +545,19 @@ export class Spine {
     }
   }
 
-  /** Graph sinks: nodes with no outgoing edge that are not fork branch targets or join sources. */
+  /** Graph sinks: nodes the scheduler has nowhere to go after. */
   private sinks(): string[] {
-    const forkTargets = new Set<string>()
-    const joinSources = new Set<string>()
+    const dataBodyExits = new Set<string>()
     for (const node of this.nodes.values()) {
-      if (node._type === 'ForkNode') for (const t of node.targets ?? []) forkTargets.add(t)
-      if (node._type === 'JoinNode') for (const s of node.sources ?? []) joinSources.add(s)
+      if (node._type === 'DataNode' && node.subgraph_exit !== undefined) {
+        dataBodyExits.add(node.subgraph_exit)
+      }
     }
     const result: string[] = []
     for (const id of this.nodes.keys()) {
       if (this.outgoing(id).length > 0) continue
-      if (forkTargets.has(id)) continue
-      if (joinSources.has(id)) continue
+      if (this.continuationOf(id) !== undefined) continue
+      if (dataBodyExits.has(id)) continue
       result.push(id)
     }
     return result
