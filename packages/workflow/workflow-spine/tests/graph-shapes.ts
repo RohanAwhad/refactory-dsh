@@ -324,6 +324,35 @@ export const designGraph: ShapeEntry = {
   fixedVerdicts: {}, large: true,
 }
 
+// ─── Shape 13: crossContainerReloop (constructor-refused) ────────
+
+/**
+ * A graph whose gate inside a fork branch has a reloop edge to a node outside
+ * the fork body. The Spine constructor refuses this at load, and validateGraph
+ * returns an issue for it. NOT included in the invariant shapes array.
+ */
+export const crossContainerReloopGraph: WorkflowGraph = {
+  name: 'crossContainerReloop', start_node: 'start',
+  nodes: {
+    start:       { _type: 'AgentNode', id: 'start', role: 'r', prompt_template: '', writes: [], reads: [] },
+    fork:        { _type: 'ForkNode', id: 'fork', targets: ['branch_work', 'other'] },
+    branch_work: { _type: 'AgentNode', id: 'branch_work', role: 'r', prompt_template: '', writes: [], reads: [] },
+    branch_gate: { _type: 'GateNode', id: 'branch_gate', evaluator_type: 'fn', evaluator_command: 'true', reads: [] },
+    branch_end:  { _type: 'AgentNode', id: 'branch_end', role: 'r', prompt_template: '', writes: [], reads: [] },
+    other:       { _type: 'AgentNode', id: 'other', role: 'r', prompt_template: '', writes: [], reads: [] },
+    join:        { _type: 'JoinNode', id: 'join', sources: ['branch_end', 'other'] },
+    end:         { _type: 'AgentNode', id: 'end', role: 'r', prompt_template: '', writes: [], reads: [] },
+  },
+  edges: [
+    { source: 'start', target: 'fork' },
+    { source: 'fork', target: 'join' },
+    { source: 'branch_work', target: 'branch_gate' },
+    { source: 'branch_gate', target: 'start', condition: 'reloop' },
+    { source: 'branch_gate', target: 'branch_end', condition: 'proceed' },
+    { source: 'join', target: 'end' },
+  ],
+}
+
 // ─── All shapes ──────────────────────────────────────────────────
 
 export const shapes: ShapeEntry[] = [

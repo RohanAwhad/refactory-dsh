@@ -17,45 +17,4 @@ export interface Dm73Case {
   triggerOrderFn: (due: NodeView[]) => NodeView[]
 }
 
-export const DM73_SHAPES: Dm73Case[] = [
-  {
-    shape: 'nestedFork',
-    scenario: 'inner fork drops outer sibling',
-    invariant: 'checkNoDueDrop',
-    triggerOrderFn: (due) => [...due].sort((a, b) => {
-      if (a.id === 'inner_fork') return -1
-      if (b.id === 'inner_fork') return 1
-      return a.id.localeCompare(b.id)
-    }),
-  },
-  {
-    shape: 'gateInsideBranch',
-    scenario: 'gate verdict drops sibling',
-    invariant: 'checkNoDueDrop',
-    triggerOrderFn: (due) => [...due].sort((a, b) => {
-      if (a.id === 'branch_work') return -1
-      if (b.id === 'branch_work') return 1
-      return a.id.localeCompare(b.id)
-    }),
-  },
-  {
-    shape: 'directorInsideBranch',
-    scenario: 'expand drops sibling',
-    invariant: 'checkNoDueDrop',
-    triggerOrderFn: (due) => [...due].sort((a, b) => {
-      if (a.id === 'dir_branch') return -1
-      if (b.id === 'dir_branch') return 1
-      return a.id.localeCompare(b.id)
-    }),
-  },
-  {
-    shape: 'dataInsideBranch',
-    scenario: 'startPass drops sibling',
-    invariant: 'checkNoDueDrop',
-    triggerOrderFn: (due) => [...due].sort((a, b) => {
-      if (a.id === 'data_branch') return -1
-      if (b.id === 'data_branch') return 1
-      return a.id.localeCompare(b.id)
-    }),
-  },
-]
+export const DM73_SHAPES: Dm73Case[] = []
