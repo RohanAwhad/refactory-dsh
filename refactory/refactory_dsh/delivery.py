@@ -144,7 +144,8 @@ def knobs() -> dict[str, Knob]:
         "pr": Knob(True, "bool", frozen=True,
                    description="open a pull request once the reviews pass: into the target's default "
                                "branch, or a new project's own GitHub repository; off keeps the work "
-                               "on the run's local branch"),
+                               "on the run's local branch, with its pull request text in pull-request.md "
+                               "and finishing commands in delivery.json"),
         "repo_owner": Knob("", "str", frozen=True,
                            description="the GitHub account or organisation a new project's repository "
                                        "is created under (default: the account gh is logged in to)"),
@@ -738,9 +739,23 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
     """
     approved = dict(ctx.facts.get("delivery_plan") or {})
     found = worktree.recorded(ctx.workdir)
-    if found is None or approved.get("action") in (None, "none"):
-        return _kept(ctx, approved, found, str(approved.get("why") or "it was never planned"))
+
+    # No worktree: nothing to write.
+    if found is None:
+        return _kept(ctx, approved, found, str(approved.get("why") or "it was never planned"),
+                     title="", finish=[])
+
+    # All paths with a worktree write the pull request text once.
     found = worktree.require_current(ctx.workdir)
+    title = _write_pr_text(ctx, found)
+
+    # ── action "none" (--no-pr, never planned) ──────────────────────────
+    if approved.get("action") in (None, "none"):
+        finish = _finish_commands(ctx, found, title)
+        return _kept(ctx, approved, found, str(approved.get("why") or "it was never planned"),
+                     title=title, finish=finish)
+
+    # ── from here on, delivery was planned ──────────────────────────────
     if found.head != str(ctx.facts.get("commit")):
         raise ValueError(f"the run's branch {found.branch} is at {found.head[:12]}, not at the attempt its "
                          f"reviews passed, {str(ctx.facts.get('commit'))[:12]}; nothing was delivered")
@@ -748,25 +763,30 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
     now = plan(Path(found.target), base=found.base, branch=found.branch, head=found.head,
                rev=str(inputs.get("rev") or ""), enabled=bool(inputs["enabled"]), owner=inputs["owner"],
                visibility=inputs["visibility"], refine=inputs["refine"])
+    repo_slug = now.get("repo") or approved.get("repo")
+    finish = _finish_commands(ctx, found, title, repo_slug)
     if now["action"] == "none":
-        return _kept(ctx, approved, found, str(now["why"]))
+        return _kept(ctx, approved, found, str(now["why"]), title=title, finish=finish)
     if not matches(now, approved) or now.get("branch") != approved.get("branch"):
         return _kept(ctx, approved, found, f"delivery would now be different from what the approval gate "
-                                           f"showed: it {now['summary']}")
+                                           f"showed: it {now['summary']}",
+                     title=title, finish=finish)
     try:
-        outcome = _deliver(ctx, found, now)
+        outcome = _deliver(ctx, found, now, title=title)
     except NotDelivered as reason:
-        return _kept(ctx, approved, found, str(reason), reason.pull_request, reason.pushed)
+        return _kept(ctx, approved, found, str(reason), reason.pull_request, reason.pushed,
+                     title=title, finish=finish)
     except Unverified as error:
         _record(ctx, {"status": "unverified", "pull_request": error.url, "head": found.head, "why": str(error),
                       "plan": approved.get("summary"), "at": datetime.now(timezone.utc).isoformat()})
         projects.record_delivery(Path(found.target), branch=found.branch, pull_request=error.url,
                                  status="unverified")
         raise
-    return _delivered(ctx, approved, found, outcome)
+    return _delivered(ctx, approved, found, outcome, title=title)
 
 
-def _deliver(ctx: Any, found: worktree.Worktree, planned: dict[str, Any]) -> dict[str, Any]:
+def _deliver(ctx: Any, found: worktree.Worktree, planned: dict[str, Any], *,
+             title: str = "") -> dict[str, Any]:
     """Push and open, or push onto the refined pull request; never a second pull request."""
     path, slug, branch = Path(found.path), str(planned["repo"]), str(planned["branch"])
     if planned["action"] == "refine":
@@ -792,8 +812,8 @@ def _deliver(ctx: Any, found: worktree.Worktree, planned: dict[str, Any]) -> dic
         status = "already open" if existing.get("headRefOid") == found.head else "updated"
         url = str(existing["url"])
         return {"status": status, "pull_request": _after_push(lambda: _verified(url, found.head), slug, branch, url)}
-    body = ctx.write_text(BODY, _body(ctx, found))
-    opened = _after_push(lambda: _open(path, slug, branch, str(planned["into"]), _title(ctx), body), slug, branch)
+    body = Path(ctx.workdir) / BODY
+    opened = _after_push(lambda: _open(path, slug, branch, str(planned["into"]), title, body), slug, branch)
     url = next((line.strip() for line in reversed(opened.splitlines()) if "/pull/" in line), opened.strip())
     return {"status": "opened", "pull_request": _after_push(lambda: _verified(url, found.head), slug, branch, url)}
 
@@ -997,9 +1017,43 @@ def _body(ctx: Any, found: worktree.Worktree) -> str:
         "each the base plus that attempt's files, committed by Refactory; the change is their sum."
     )
     sections.append(f"## Original request\n\n{brief}")
-    sections.append(f"---\n\nOpened by a refactory design run once its reviews passed.\n\n"
+    sections.append(f"---\n\nWritten by a refactory design run once its reviews passed.\n\n"
                     f"```\n{stat}\n```")
     return "\n\n".join(sections) + "\n"
+
+
+def _write_pr_text(ctx: Any, found: worktree.Worktree) -> str:
+    """Write ``pull-request.md`` once and return the title.  The single call site."""
+    title = _title(ctx)
+    ctx.write_text(BODY, _body(ctx, found))
+    return title
+
+
+def _finish_commands(ctx: Any, found: worktree.Worktree, title: str,
+                     repo_slug: str | None = None) -> list[str]:
+    """Shell commands that finish a kept-local delivery from any directory.
+
+    When ``repo_slug`` is provided it is used directly; otherwise the repository is
+    resolved from the target the way :func:`plan` does.  When no GitHub repository can
+    be found, returns an empty list — the caller says so plainly.
+    """
+    slug = repo_slug
+    if slug is None:
+        try:
+            info = _remote(Path(found.target))
+            if info is not None:
+                slug = info[1]
+        except NotDelivered:
+            slug = None
+    if slug is None:
+        return []
+    body_path = str(Path(ctx.workdir).resolve() / BODY)
+    wt_path = str(Path(found.path).resolve())
+    return [
+        f"git -C {shlex.quote(wt_path)} push {shlex.quote(_url(slug))} {found.head}:refs/heads/{found.branch}",
+        (f"gh pr create --repo {slug} --head {found.branch}"
+         f" --title {shlex.quote(title)} --body-file {shlex.quote(body_path)}"),
+    ]
 
 
 def _record(ctx: Any, record: dict[str, Any]) -> None:
@@ -1011,36 +1065,59 @@ def _record(ctx: Any, record: dict[str, Any]) -> None:
 
 
 def _delivered(ctx: Any, approved: dict[str, Any], found: worktree.Worktree,
-               outcome: dict[str, Any]) -> dict[str, Any]:
+               outcome: dict[str, Any], *, title: str = "") -> dict[str, Any]:
     url = str(outcome["pull_request"])
-    record = {"status": outcome["status"], "pull_request": url, "repository": approved.get("repo"),
-              "branch": approved.get("branch"), "head": found.head, "verified": True,
-              "plan": approved.get("summary"), "at": datetime.now(timezone.utc).isoformat()}
+    record: dict[str, Any] = {
+        "status": outcome["status"], "pull_request": url, "repository": approved.get("repo"),
+        "branch": approved.get("branch"), "head": found.head, "verified": True,
+        "plan": approved.get("summary"), "at": datetime.now(timezone.utc).isoformat(),
+    }
+    if title:
+        record["title"] = title
+        record["pr_text"] = BODY
     _record(ctx, record)
     projects.record_delivery(Path(found.target), branch=found.branch, pull_request=url, status=outcome["status"])
     return {"delivery_result": f"{outcome['status']}: {url}, at {found.head[:12]}", "pull_request": url}
 
 
 def _kept(ctx: Any, approved: dict[str, Any], found: worktree.Worktree | None, why: str,
-          pull_request: str = "", pushed: str = "") -> dict[str, Any]:
+          pull_request: str = "", pushed: str = "", *,
+          title: str = "", finish: list[str] | None = None) -> dict[str, Any]:
     """Nothing delivered: say why, and where the work is, as a run warning unless the person chose it.
 
     ``pull_request`` is one GitHub already had for the branch, which stays in the record;
     ``pushed`` is where the branch already is on GitHub, when delivery stopped after it.
+    ``title`` and ``finish`` carry the pull request text and the commands to open it by hand.
     """
     branch = found.branch if found is not None else ""
-    record = {"status": "kept local", "why": why, "branch": branch, "head": found.head if found else "",
-              "pull_request": pull_request, "pushed": pushed, "plan": approved.get("summary"),
-              "at": datetime.now(timezone.utc).isoformat()}
+    record: dict[str, Any] = {
+        "status": "kept local", "why": why, "branch": branch, "head": found.head if found else "",
+        "pull_request": pull_request, "pushed": pushed, "plan": approved.get("summary"),
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+    if title:
+        record["title"] = title
+        record["pr_text"] = BODY
+        record["finish"] = finish or []
     _record(ctx, record)
     if found is not None:
         projects.record_delivery(Path(found.target), branch=branch, pull_request=pull_request,
                                  status="pushed, no pull request" if pushed and not pull_request else "kept local")
-    if pushed:
-        where = (f"; the branch {branch} is already on GitHub, as {pushed}, so a redo of deliver, or "
-                 f"`gh pr create --repo {pushed.split(':')[0]} --head {branch}`, finishes it")
+    # Build the human-readable ``where`` from the finish commands.
+    finish_cmds = finish or []
+    gh_cmd = next((cmd for cmd in finish_cmds if cmd.startswith("gh pr create")), "")
+    if pushed and gh_cmd:
+        where = (f"; the branch {branch} is already on GitHub, as {pushed}; to finish: {gh_cmd}")
+    elif finish_cmds:
+        where = f"; to finish: {' && '.join(finish_cmds)}"
+    elif title and found is not None:
+        body_path = str(Path(ctx.workdir).resolve() / BODY)
+        where = (f"; there is no GitHub repository to open a pull request in;"
+                 f" the work is on branch {branch}; pull request text is at {body_path}")
+    elif found is not None:
+        where = f"; the work stays on the local branch {branch} of {found.target}"
     else:
-        where = f"; the work stays on the local branch {branch} of {found.target}" if found is not None else ""
+        where = ""
     if found is not None and not approved.get("chosen"):
         said = f"{pull_request} was not updated" if pull_request else "no pull request was opened"
         target_guard.warn(f"{said}: {why}{where}")
