@@ -276,7 +276,6 @@ def check_artifact(ctx: Any) -> str:
         "stdout": result.stdout, "stderr": result.stderr, "returncode": result.returncode,
         "timed_out": result.timed_out, "elapsed_s": result.elapsed_s}
     ctx.write_text("check.txt", detail or "ok\n")
-    evidence.record(ctx, outcome)
 
     # ── guardedness (unconditional: passing and failing) ──────────────
     from refactory_dsh import base_check
@@ -291,6 +290,11 @@ def check_artifact(ctx: Any) -> str:
         if guardedness is not None:
             ctx.write_json("test-guardedness.json", guardedness)
     # ── end guardedness ───────────────────────────────────────────────
+
+    # Record evidence after guardedness so the receipt includes the
+    # correct test-guardedness.json hash; recording before it caused the
+    # QA gate to reloop with "authoritative receipt changed after validation".
+    evidence.record(ctx, outcome)
 
     if result.ok:
         ctx.set_fact("validation", "(the check passed)")

@@ -12,6 +12,15 @@ import pytest
 # have to be importable by name rather than only by path.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+# The editable install of refactory_dsh points at this checkout's refactory/
+# directory, but an inherited PYTHONPATH (e.g. from the refactory runtime that
+# runs a check inside a worktree) can shadow it with the main repo's copy,
+# loading the base version of changed modules.  Prepending the local refactory/
+# directory ensures this checkout's code is always what the tests import.
+_refactory_dir = str(Path(__file__).resolve().parent.parent)
+if _refactory_dir not in sys.path:
+    sys.path.insert(0, _refactory_dir)
+
 # The credential probe and the hook that skips the marked tests live together in
 # `model_credential`, and a module imported by a test is not a plugin: its hooks are
 # never called unless it is registered. Registering it here is what makes the skip

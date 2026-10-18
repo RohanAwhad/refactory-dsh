@@ -1226,9 +1226,9 @@ def test_inherited_failure_passes_check(tmp_path):
         check="python -m pytest -q",
     )
     assert result.exit_ok, result.error
-    validation = result.facts.get("validation", "")
-    assert "inherited" in validation
-    assert "test_base_broken" in validation
+    check_txt = (tmp_path / "run" / "check.txt").read_text()
+    assert "inherited" in check_txt
+    assert "test_base_broken" in check_txt
 
 
 def test_new_failure_introduced_by_attempt_is_refused(tmp_path):
