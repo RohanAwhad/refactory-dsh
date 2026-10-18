@@ -98,6 +98,21 @@ def prepare(
         _decl = _declared_knobs(state)
         _vals = {name: entry["value"] for name, entry in (state.get("knobs") or {}).items()}
         _violations = check_required_knobs(_decl, _vals, allow_defaults=True)
+        if not _violations:
+            # with_knobs strips values, so "brief=   " becomes "" in the state,
+            # matching the default and passing the allow_defaults gate above.
+            # Catch explicitly overridden knobs whose stripped value is empty.
+            _explicit = {
+                str(p).partition("=")[0].strip()
+                for p in (knobs or []) if "=" in str(p)
+            }
+            for _name in _explicit:
+                _knob = _decl.get(_name)
+                if _knob and getattr(_knob, "required", False) and _knob.kind == "str":
+                    if not str(_vals.get(_name, _knob.default)).strip():
+                        _violations.append(
+                            (_name, f"required knob {_name!r} is empty or whitespace-only; "
+                             "it must have a non-empty value"))
         if _violations:
             knob_name, message = _violations[0]
             raise ValueError(
