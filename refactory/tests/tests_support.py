@@ -326,6 +326,18 @@ DESIGN_REVIEW_ANSWER = (
     "All brief references verified.\n\nVERDICT: PASS"
 )
 
+#: A contract-compliant design.md answer for design-mode's design_doc agent.
+DESIGN_DOC_ANSWER = (
+    "# Do the thing\n\n"
+    "## Summary\n\nFix it properly.\n\n"
+    "## Rule and sites\n\n"
+    "- `ops.py:1` — **[changed]**\n\n"
+    "## Docs\n\n"
+    "- docs/models.md\n\n"
+    "## Changes\n\n"
+    "- ops.py\n"
+)
+
 
 def create_script(name: str, emits: list[str]) -> list[str]:
     """The whole answer script, with the given emit answers in the order used.
@@ -379,11 +391,19 @@ class FakeModel:
 
             root = Path(workdir)
             baseline = json.loads((root / "authoring-evidence.json").read_text())
-            (root / "intent-audit.json").write_text(json.dumps({"requirements": [
-                {"id": item["id"], "requirement": item["text"], "status": "pass",
-                 "evidence": [{"path": "authoring-evidence.json", "detail": "scripted fixture inspected the executed result"}]}
-                for item in baseline["requirements"]
-            ]}))
+            audit_rows = []
+            for item in baseline["requirements"]:
+                row = {"id": item["id"], "requirement": item.get("text", item.get("path", "")),
+                       "status": "pass",
+                       "evidence": [{"path": "authoring-evidence.json",
+                                     "detail": "scripted fixture inspected the executed result"}]}
+                if item.get("kind") in ("correction", "constraint"):
+                    text = item.get("text", "")
+                    row["clauses"] = [{"clause": text,
+                                       "evidence": [{"path": "authoring-evidence.json",
+                                                      "detail": "full constraint verified"}]}]
+                audit_rows.append(row)
+            (root / "intent-audit.json").write_text(json.dumps({"requirements": audit_rows}))
         return answer
 
 
