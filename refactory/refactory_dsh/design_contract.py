@@ -138,6 +138,8 @@ def parse(text: str, run_name: str = "") -> DesignContract:
                 reason = ""
                 path_text = body[:m_left.start()].strip().rstrip("—–-:").strip()
             else:
+                # No marker: the design has not said whether this change covers it.
+                status = "unmarked"
                 path_text = body
             rule_sites.append({"path": path_text, "status": status, "reason": reason})
 
@@ -204,6 +206,11 @@ def left_without_reason(parsed: DesignContract) -> list[str]:
     """Sites marked ``[left]`` with no reason."""
     return [site["path"] for site in parsed.rule_sites
             if site["status"] == "left" and not site["reason"]]
+
+
+def unmarked_sites(parsed: DesignContract) -> list[str]:
+    """Sites listed without a ``[changed]`` or ``[left: <reason>]`` marker."""
+    return [site["path"] for site in parsed.rule_sites if site["status"] == "unmarked"]
 
 
 def title_is_run_name(text: str, run_name: str) -> bool:

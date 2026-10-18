@@ -233,6 +233,12 @@ def gate_design_review(ctx: Any) -> str:
                 "rule-site(s) marked [left] without a reason: "
                 + ", ".join(left_no_reason)
             )
+        unmarked = design_contract.unmarked_sites(parsed)
+        if unmarked:
+            problems.append(
+                "rule-site(s) with no [changed] or [left: <reason>] marker: "
+                + ", ".join(unmarked)
+            )
         if design_contract.title_is_run_name(design_text, run_name):
             problems.append(
                 "the design's title is the run name; it must say what the change does"

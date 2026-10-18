@@ -1070,6 +1070,35 @@ def test_a_design_missing_a_contract_part_reloops_before_the_gate(tmp_path):
     assert "Rule and sites" in verdict.reason
 
 
+def test_a_rule_site_without_a_marker_reloops_before_the_gate(tmp_path):
+    """A site the design lists without saying whether the change covers it reloops."""
+    import refactory_dsh.design_ops as ops
+
+    design_text = (
+        "# Make the gate check constraints\n\n"
+        "## Summary\n\nSplit constraints into clauses.\n\n"
+        "## Rule and sites\n\n"
+        "- `authoring_evidence.py:154` \u2014 **[changed]**\n"
+        "- `create_ops.py:1696` \u2014 the overwatch gate\n\n"
+        "## Docs\n\n"
+        "- docs/models.md \u2014 add section\n\n"
+        "## Changes\n\n"
+        "- authoring_evidence.py\n"
+    )
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({"source": str(tmp_path), "name": "b17_clauses",
+                      "design_review_attempts_used": 0})
+    (tmp_path / "reviews").mkdir(parents=True, exist_ok=True)
+    ctx.write_text("reviews/design-review.md",
+                   "All confirmed.\n\nVERDICT: PASS\n")
+    ctx.write_text("design.md", design_text)
+    ctx.write_json("brief.json", {"name": "b17_clauses", "brief": "split constraints"})
+    verdict = ops.gate_design_review(ctx)
+    assert verdict == "reloop"
+    assert "create_ops.py:1696" in verdict.reason
+    assert "authoring_evidence.py:154" not in verdict.reason
+
+
 def test_a_design_whose_title_is_the_run_name_reloops(tmp_path):
     """The gate catches a title that equals the run name."""
     import refactory_dsh.design_ops as ops
