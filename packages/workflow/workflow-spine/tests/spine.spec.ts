@@ -456,8 +456,9 @@ describe('rewinding across a fork', () => {
     bare.verdict('gate', 'reloop')
     expect(ids(bare)).toEqual(['a'])
 
-    // The gate is itself a branch of the fork whose rewind passes it.
-    const branching = new Spine({
+    // A gate that is itself a branch of a fork whose reloop target is outside
+    // the fork body is refused at load time (cross-container reloop).
+    expect(() => new Spine({
       name: 't',
       start_node: 'a',
       nodes: {
@@ -475,13 +476,7 @@ describe('rewinding across a fork', () => {
         { source: 'gate', target: 'a', condition: 'reloop' },
         { source: 'gate', target: 'end', condition: 'proceed' },
       ],
-    })
-    branching.complete('a')
-    branching.complete('fork')
-    branching.complete('c1')
-    expect(ids(branching)).toEqual(['gate'])
-    branching.verdict('gate', 'reloop')
-    expect(ids(branching)).toEqual(['a'])
+    })).toThrow(/gate gate is inside container fork.*reloop target a is outside/)
   })
 
   it('rewinds through a node two branches share without visiting it twice', () => {
