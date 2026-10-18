@@ -207,6 +207,14 @@ def left_without_reason(parsed: DesignContract) -> list[str]:
             if site["status"] == "left" and not site["reason"]]
 
 
+def title_is_run_name(text: str, run_name: str) -> bool:
+    """True when the H1 heading, after stripping the Design: prefix, equals the run name or starts with it and leaves nothing after the separator."""
+    if not run_name:
+        return False
+    raw = _strip_prefix(_h1(text.splitlines()))
+    return bool(raw) and not _strip_run_name(raw, run_name)
+
+
 def prompt_contract() -> str:
     """The text the design_doc prompt appends."""
     return (

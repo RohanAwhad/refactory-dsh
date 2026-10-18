@@ -624,13 +624,14 @@ def test_a_remote_url_is_read_as_github_only_on_github():
 # ── every route that starts a design run says how it is delivered ──────────
 def _launched(monkeypatch) -> list[list[str]]:
     """What a `refactory ceo` run would have handed DSH; nothing is launched."""
-    from refactory_dsh import workers
+    from refactory_dsh import workers, interactive
 
     class _Run:
         returncode = 0
 
     seen: list[list[str]] = []
     monkeypatch.setattr(workers, "run_graph_command", lambda argv, **kwargs: seen.append(argv) or _Run())
+    monkeypatch.setattr(interactive, "require_build", lambda: None)
     return seen
 
 

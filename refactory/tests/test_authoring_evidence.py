@@ -124,6 +124,10 @@ def deliver_audit(ctx, *, omitted=(), exclusion=None):
                            if item["id"] == exclusion), {})
             row.update(status="excluded", reason="explanation excluded", user_change=exclusion,
                        user_quote=change.get("text", ""))
+        if item.get("kind") in ("correction", "constraint"):
+            row["clauses"] = [{"clause": item.get("text", ""),
+                               "evidence": [{"path": "artifact/answer.txt",
+                                             "detail": "full constraint verified"}]}]
         rows.append(row)
     ctx.write_json(evidence.AUDIT, {"requirements": rows})
     ctx.write_text("reviews/overwatch.md", "VERDICT: PASS")
