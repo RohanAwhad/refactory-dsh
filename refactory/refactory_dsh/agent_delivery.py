@@ -22,7 +22,8 @@ CONTRACT_END = '<!-- end refactory worker execution -->'
 
 
 def _execution_contract(workdir: Path, node: str, prompt: str, reads: list[str],
-                        writes: list[str], model_context: dict[str, Any] | None) -> tuple[str, dict[str, Any]]:
+                        writes: list[str], model_context: dict[str, Any] | None,
+                        *, set_aside: dict[str, str] | None = None) -> tuple[str, dict[str, Any]]:
     """Orient one node without making its worker discover the delivery protocol."""
     context = model_context or {}
     python = str(Path(context['python_bin']) / 'python') if context.get('python_bin') else sys.executable
@@ -40,6 +41,8 @@ def _execution_contract(workdir: Path, node: str, prompt: str, reads: list[str],
         authoring = delivery_identity(workdir)
         if authoring is not None:
             execution['authoring'] = authoring
+    if set_aside:
+        execution['set_aside'] = set_aside
     # A repeated view may already contain our block. Replace only that block;
     # the task and the current steering ledger remain intact.
     start = prompt.find(CONTRACT_START)
@@ -58,6 +61,11 @@ def _execution_contract(workdir: Path, node: str, prompt: str, reads: list[str],
         'with a brief completion response; do not execute later workflow stages or wait for a receipt. '
         'Do not duplicate a file artifact in the final response. If no output file is declared, return the requested result.'
     )
+    if set_aside:
+        instructions += (
+            ' This step\'s previous outputs were moved to the paths listed in set_aside.'
+            ' Read them there when the task revises earlier work, and write each output afresh at its declared path.'
+        )
     block = f'{CONTRACT_START}\n{instructions}\n{json.dumps(execution, indent=2)}\n{CONTRACT_END}'
     return f'{block}\n\n{prompt}', execution
 
@@ -94,18 +102,22 @@ def _fingerprint(workdir: Path, name: str) -> dict[str, Any] | None:
             'inode': stat.st_ino}
 
 
-def _set_aside(workdir: Path, record: dict[str, Any], names: list[str]) -> str | None:
-    """Move a refused attempt's outputs out of the run, kept beside its receipt.
+def _set_aside(workdir: Path, record: dict[str, Any], names: list[str],
+               subfolder: str = 'refused') -> str | None:
+    """Move an attempt's outputs out of the run, kept beside its receipt.
 
     Left in place, a refused output is what the redo's worker finds, and it answers that
     the file is already right rather than writing it afresh. On the CEO's route the redo
     is judged against the snapshot from before the refused attempt, where that same file
     would count as newly delivered.
+
+    *subfolder* selects the archive directory under the receipt: ``refused`` for
+    target-guard refusals, ``previous`` for outputs set aside before a re-dispatch.
     """
     if not names:
         return None
-    refused = workdir / ROOT / record['id'] / 'refused'
-    archive = refused / str(sum(1 for _ in refused.glob('*')))
+    parent = workdir / ROOT / record['id'] / subfolder
+    archive = parent / str(sum(1 for _ in parent.glob('*')))
     moved: list[Path] = []
     for name in sorted(names, key=lambda value: len(Path(value).parts)):
         relative = Path(name)
@@ -118,22 +130,20 @@ def _set_aside(workdir: Path, record: dict[str, Any], names: list[str]) -> str |
     return str(archive.relative_to(workdir))
 
 
-def _set_aside_stale_emit(workdir: Path, node: str, writes: list[str]) -> None:
-    """Move a previous attempt's surviving emit.txt before a new dispatch begins.
+def _set_aside_stale_outputs(workdir: Path, node: str, reads: list[str],
+                              writes: list[str]) -> dict[str, str] | None:
+    """Move a previous attempt's surviving write-only outputs before a new dispatch.
 
-    When emit is re-dispatched — after a materialise refusal, a failed check,
-    a CEO redo or a rerun — the previous attempt's emit.txt is moved under its
-    .refactory/agent-delivery/ folder at the start of dispatch, so the worker
-    writes a fresh one.  Only emit.txt is moved; other nodes' outputs stay in
-    place so those steps can revise their own work.
+    On re-dispatch — after a materialise refusal, a failed check, a CEO redo or
+    a rerun — each declared output that is write-only (not also read) and still
+    exists on disk is moved under the latest receipt's .refactory/agent-delivery/
+    folder, so the worker writes each one fresh.  An output the node also reads
+    stays in place (it must be read before writing anyway).  An output with no
+    receipt from this node is left alone (some other step wrote it).
     """
-    from refactory_dsh.repo_change import EMIT_FILE
-
-    if EMIT_FILE not in writes:
-        return
-    path = _path(workdir, EMIT_FILE)
-    if not path.exists():
-        return
+    write_only = [w for w in writes if w not in reads]
+    if not write_only:
+        return None
     # Find the latest receipt for this node (the one whose outputs we are moving).
     latest: dict[str, Any] | None = None
     for receipt_path in sorted((workdir / ROOT).glob('*/receipt.json')):
@@ -148,8 +158,15 @@ def _set_aside_stale_emit(workdir: Path, node: str, writes: list[str]) -> None:
         except (OSError, ValueError, KeyError):
             continue
     if latest is None:
-        return
-    _set_aside(workdir, latest, [EMIT_FILE])
+        return None
+    to_move = [name for name in write_only if _path(workdir, name).exists()]
+    if not to_move:
+        return None
+    archive = _set_aside(workdir, latest, to_move, subfolder='previous')
+    if archive is None:
+        return None
+    # Absolute, like the contract's inputs and outputs.
+    return {name: str(workdir / archive / name) for name in to_move}
 
 
 def _attempt_failed(workdir: Path, record: dict[str, Any]) -> bool:
@@ -192,11 +209,11 @@ def begin(workdir: Path, node: str, prompt: str, writes: list[str], *, reuse: bo
     ledger_text = ledger.path.read_text() if ledger.exists() else ""
     entries = parse_entries(ledger_text)
     annotated = prompt_with_ledger(prompt, ledger, entries=entries)
-    annotated, execution = _execution_contract(workdir, node, annotated, reads or [], writes, model_context)
+    set_aside = _set_aside_stale_outputs(workdir, node, reads or [], writes) if previous is None else None
+    annotated, execution = _execution_contract(workdir, node, annotated, reads or [], writes, model_context,
+                                               set_aside=set_aside)
     if previous is not None and previous['prompt'] == annotated:
         return previous
-    if previous is None:
-        _set_aside_stale_emit(workdir, node, writes)
     before = previous['before'] if previous is not None else {name: _fingerprint(workdir, name) for name in writes}
     # Taken here because every route dispatches through this bracket (walker, worker
     # bridge, CEO subagent), so a change an output-only node makes to the target is
