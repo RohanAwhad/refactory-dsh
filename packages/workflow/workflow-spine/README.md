@@ -166,6 +166,38 @@ None.
 
 **Runtime invariant:** No runtime invariant companion is published because the spine's cursor, gate verdicts, and iteration counters are read only through the `wf_*` tools the plugin registers on the session's fiber.
 
+-----
+
+## Graph Shape Invariant Suite
+
+Every scheduler change must pass the graph shape invariant suite:
+
+```sh
+pnpm exec vitest run packages/workflow/workflow-spine
+```
+
+The suite (`tests/graph-set.spec.ts`) drives 14 named graph shapes through the
+spine in every completion order of the nodes due together, checking five
+invariants on each run:
+
+1. Every node completes once per visit.
+2. A join completes only after every branch of its own fork, and before anything
+   after it.
+3. No node that became due is dropped: it completes or is explicitly skipped.
+4. The run ends done with no incomplete halt, and the graph's real ends are
+   reached.
+5. After the run, for every completed non-gate node, a redo re-runs exactly the
+   nodes after it (not its siblings) and ends done.
+
+### Adding a shape
+
+1. Define the `WorkflowGraph` in `tests/graph-shapes.ts` and add a `ShapeEntry`
+   to the `shapes` array with its metadata (`directors`, `dataPasses`,
+   `gatesWithReloop`, `fixedVerdicts`, `large`).
+2. If the shape triggers dm-73 in certain orderings, add its entry to the
+   `DM73_SHAPES` list in `tests/dm73-shapes.ts`.
+3. Run the suite — the driver and invariants pick up the new shape automatically.
+
 ## Live intent and progress
 
 `wf_open` accepts an optional `intent`. Refactory records that purpose before

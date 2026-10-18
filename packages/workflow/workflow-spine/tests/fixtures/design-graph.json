@@ -1,0 +1,281 @@
+{
+  "name": "design",
+  "start_node": "prepare",
+  "nodes": {
+    "check": {
+      "id": "check",
+      "evaluator_type": "fn",
+      "max_iterations": 8,
+      "_type": "GateNode"
+    },
+    "code_reviewer": {
+      "id": "code_reviewer",
+      "role": "ceo",
+      "max_iterations": 1,
+      "_type": "AgentNode"
+    },
+    "deliver": {
+      "id": "deliver",
+      "_type": "FnNode"
+    },
+    "design_doc": {
+      "id": "design_doc",
+      "role": "ceo",
+      "max_iterations": 1,
+      "_type": "AgentNode"
+    },
+    "design_review": {
+      "id": "design_review",
+      "role": "ceo",
+      "max_iterations": 1,
+      "_type": "AgentNode"
+    },
+    "emit": {
+      "id": "emit",
+      "role": "ceo",
+      "max_iterations": 1,
+      "_type": "AgentNode"
+    },
+    "fork_qa": {
+      "id": "fork_qa",
+      "targets": [
+        "health_checker",
+        "code_reviewer",
+        "qa_director"
+      ],
+      "_type": "ForkNode"
+    },
+    "gate_design_review": {
+      "id": "gate_design_review",
+      "evaluator_type": "fn",
+      "max_iterations": 4,
+      "_type": "GateNode"
+    },
+    "gate_overwatch": {
+      "id": "gate_overwatch",
+      "evaluator_type": "fn",
+      "max_iterations": 12,
+      "_type": "GateNode"
+    },
+    "gate_qa": {
+      "id": "gate_qa",
+      "evaluator_type": "fn",
+      "max_iterations": 12,
+      "_type": "GateNode"
+    },
+    "gate_research": {
+      "id": "gate_research",
+      "evaluator_type": "fn",
+      "max_iterations": 8,
+      "_type": "GateNode"
+    },
+    "gate_strategy": {
+      "id": "gate_strategy",
+      "evaluator_type": "user",
+      "max_iterations": 4,
+      "_type": "GateNode"
+    },
+    "health_checker": {
+      "id": "health_checker",
+      "role": "ceo",
+      "max_iterations": 1,
+      "_type": "AgentNode"
+    },
+    "join_qa": {
+      "id": "join_qa",
+      "sources": [
+        "health_checker",
+        "code_reviewer",
+        "qa_director"
+      ],
+      "_type": "JoinNode"
+    },
+    "materialise": {
+      "id": "materialise",
+      "_type": "FnNode"
+    },
+    "overwatch": {
+      "id": "overwatch",
+      "role": "ceo",
+      "max_iterations": 1,
+      "_type": "AgentNode"
+    },
+    "prepare": {
+      "id": "prepare",
+      "_type": "FnNode"
+    },
+    "qa_director": {
+      "id": "qa_director",
+      "role": "ceo",
+      "max_iterations": 1,
+      "_type": "AgentNode"
+    },
+    "record_findings": {
+      "id": "record_findings",
+      "_type": "FnNode"
+    },
+    "report": {
+      "id": "report",
+      "_type": "FnNode"
+    },
+    "research_director": {
+      "id": "research_director",
+      "role": "ceo",
+      "max_iterations": 1,
+      "_type": "AgentNode"
+    },
+    "strategy_director": {
+      "id": "strategy_director",
+      "role": "ceo",
+      "max_iterations": 1,
+      "_type": "AgentNode"
+    },
+    "synthesize_qa": {
+      "id": "synthesize_qa",
+      "_type": "FnNode"
+    },
+    "synthesize_strategy": {
+      "id": "synthesize_strategy",
+      "role": "ceo",
+      "max_iterations": 1,
+      "_type": "AgentNode"
+    }
+  },
+  "edges": [
+    {
+      "source": "check",
+      "target": "emit",
+      "condition": "reloop"
+    },
+    {
+      "source": "check",
+      "target": "fork_qa",
+      "condition": "proceed"
+    },
+    {
+      "source": "design_doc",
+      "target": "design_review",
+      "condition": null
+    },
+    {
+      "source": "design_review",
+      "target": "gate_design_review",
+      "condition": null
+    },
+    {
+      "source": "emit",
+      "target": "materialise",
+      "condition": null
+    },
+    {
+      "source": "fork_qa",
+      "target": "join_qa",
+      "condition": null
+    },
+    {
+      "source": "gate_design_review",
+      "target": "design_doc",
+      "condition": "reloop"
+    },
+    {
+      "source": "gate_design_review",
+      "target": "gate_strategy",
+      "condition": "proceed"
+    },
+    {
+      "source": "gate_overwatch",
+      "target": "emit",
+      "condition": "reloop"
+    },
+    {
+      "source": "gate_overwatch",
+      "target": "overwatch",
+      "condition": "audit"
+    },
+    {
+      "source": "gate_overwatch",
+      "target": "report",
+      "condition": "proceed"
+    },
+    {
+      "source": "gate_qa",
+      "target": "emit",
+      "condition": "reloop"
+    },
+    {
+      "source": "gate_qa",
+      "target": "overwatch",
+      "condition": "proceed"
+    },
+    {
+      "source": "gate_research",
+      "target": "research_director",
+      "condition": "reloop"
+    },
+    {
+      "source": "gate_research",
+      "target": "strategy_director",
+      "condition": "proceed"
+    },
+    {
+      "source": "gate_strategy",
+      "target": "emit",
+      "condition": "proceed"
+    },
+    {
+      "source": "gate_strategy",
+      "target": "synthesize_strategy",
+      "condition": "reloop"
+    },
+    {
+      "source": "join_qa",
+      "target": "synthesize_qa",
+      "condition": null
+    },
+    {
+      "source": "materialise",
+      "target": "check",
+      "condition": null
+    },
+    {
+      "source": "overwatch",
+      "target": "gate_overwatch",
+      "condition": null
+    },
+    {
+      "source": "prepare",
+      "target": "research_director",
+      "condition": null
+    },
+    {
+      "source": "record_findings",
+      "target": "gate_research",
+      "condition": null
+    },
+    {
+      "source": "report",
+      "target": "deliver",
+      "condition": null
+    },
+    {
+      "source": "research_director",
+      "target": "record_findings",
+      "condition": null
+    },
+    {
+      "source": "strategy_director",
+      "target": "synthesize_strategy",
+      "condition": null
+    },
+    {
+      "source": "synthesize_qa",
+      "target": "gate_qa",
+      "condition": null
+    },
+    {
+      "source": "synthesize_strategy",
+      "target": "design_doc",
+      "condition": null
+    }
+  ]
+}
