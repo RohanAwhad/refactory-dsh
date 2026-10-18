@@ -985,7 +985,29 @@ def _merge_target(ctx: Any, path: Path, slug: str, into: str, generate: str,
     )
 
     if result.returncode == 0:
-        # Clean merge — no conflicts.
+        # Clean merge — no file-level conflicts.  When the run declares a generate
+        # command, run it on the merged tree: git's three-way merge may have picked
+        # the base's version of a generated file (only the base changed it), but the
+        # generate command might produce different content for the combined sources.
+        if generate:
+            from refactory_dsh import sandbox as _sbx
+            _mhome = Path(ctx.workdir).resolve() / ".refactory" / "merge-gen-home"
+            _mhome.mkdir(parents=True, exist_ok=True)
+            _menv = worktree.check_environment(path, _mhome)
+            _sbx.run_command(generate, workdir=path, timeout_s=300, env=_menv,
+                             home=_mhome, exact_env=True)
+            # If generate changed any tracked files, amend the merge commit so the
+            # delivered tree includes the regenerated content.
+            _gen_changed = worktree.git(path, "diff", "--name-only").strip()
+            if _gen_changed:
+                for _gf in _gen_changed.splitlines():
+                    subprocess.run(["git", "-C", str(path), "add", "--", _gf.strip()],
+                                   capture_output=True, timeout=60)
+                subprocess.run(
+                    ["git", "-C", str(path), *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
+                     "commit", "--amend", "--no-edit", "--no-verify"],
+                    capture_output=True, text=True, timeout=300, env=merge_env,
+                )
         merge_sha = worktree.git(path, "rev-parse", "HEAD").strip()
         return MergeResult(merge_commit=merge_sha)
 
@@ -1363,6 +1385,8 @@ def _delivered(ctx: Any, approved: dict[str, Any], found: worktree.Worktree,
         record["merge_check"] = "passed on the merged result"
     else:
         record["head"] = found.head
+    if merge is not None and merge.conflicts:
+        record["merge_conflicts"] = merge.conflicts
     if title:
         record["title"] = title
         record["pr_text"] = BODY
