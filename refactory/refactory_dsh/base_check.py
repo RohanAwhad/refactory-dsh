@@ -502,7 +502,7 @@ def run_base_check(ctx: Any, command: str, timeout: float) -> BaseCheckResult:
         _write_cache(ctx.workdir, key, result)
         return result
 
-    home = Path(ctx.workdir).resolve() / worktree.CHECK_HOME
+    home = Path(ctx.workdir).resolve() / worktree.BASE_CHECK_HOME
     home.mkdir(parents=True, exist_ok=True)
     budget = getattr(ctx, "budget", None)
     env = worktree.check_environment(base_path, home)
@@ -601,7 +601,7 @@ def compute_test_guardedness(
             copied.append(dst)
 
     # Run the test files against the base source
-    home = Path(ctx.workdir).resolve() / worktree.CHECK_HOME
+    home = Path(ctx.workdir).resolve() / worktree.BASE_CHECK_HOME
     env = worktree.check_environment(base_path, home)
     budget = getattr(ctx, "budget", None)
 

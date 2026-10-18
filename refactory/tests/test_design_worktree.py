@@ -1463,6 +1463,33 @@ def test_a_test_module_the_attempt_breaks_is_its_failure():
     assert result.new_failures == {"tests/test_b.py"} and not result.all_excused
 
 
+def test_the_base_is_prepared_with_its_own_home_not_the_attempts(tmp_path):
+    """A setup that writes into HOME and keeps what it finds there (as a tool's profile link
+    does) must not leave the attempt's checks reading the base's.
+
+    The first attempt fails in generate, before its own setup runs, so the base comparison
+    prepares the base first. Sharing a HOME, the base's marker would stay, and the second
+    attempt's check would fail on it however good the emission (b20b, dm-88)."""
+    repo = git_repo(tmp_path / "repo")
+    broken = render({"tool.py": "print('built')\n", "gen.sh": "exit 1\n"})
+    fixed = render({"tool.py": "print('built')\n", "gen.sh": "exit 0\n"})
+    result = _design(
+        tmp_path / "run",
+        FakeModel(_answers(broken, fixed)),
+        _mode(generate="[ ! -f gen.sh ] || sh gen.sh",
+              setup='[ -f "$HOME/built-in" ] || pwd > "$HOME/built-in"'),
+        target=str(repo),
+        check='test "$(cat "$HOME/built-in")" = "$(pwd)"',
+    )
+    assert result.exit_ok, result.error
+    payload = _report(tmp_path / "run")
+    assert git(Path(payload["target"]), "rev-list", "--count",
+               f"{payload['base']}..{payload['branch']}") == "2"
+    attempt_home = tmp_path / "run" / ".refactory" / "check-home" / "built-in"
+    base_home = tmp_path / "run" / ".refactory" / "base-check-home" / "built-in"
+    assert attempt_home.read_text().strip() != base_home.read_text().strip()
+
+
 def test_base_check_cannot_run_stops_unavailable(tmp_path):
     """A base whose check cannot run stops the run as unavailable without spending an attempt."""
     repo = git_repo(tmp_path / "repo")
