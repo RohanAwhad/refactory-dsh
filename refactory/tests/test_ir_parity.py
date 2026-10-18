@@ -21,7 +21,13 @@ import pytest
 
 from refactory_dsh import lowering, registry
 
-from reference_ir import needs_factory, reference_lowering, reference_workflow
+from reference_ir import (
+    check_extension_coverage,
+    needs_factory,
+    reference_lowering,
+    reference_workflow,
+    strip_extension_keys,
+)
 
 pytestmark = [pytest.mark.toolchain("factory"), needs_factory]
 
@@ -46,8 +52,10 @@ IDS = [identifier for identifier, _state in CORPUS]
 
 
 def _serialized(workflow: Any) -> bytes:
-    """The exact bytes a written graph carries, without the pretty-printing."""
-    return json.dumps(workflow.to_dict(), default=str).encode()
+    """The shared-vocabulary bytes of a workflow, for byte-parity comparison."""
+    return json.dumps(
+        strip_extension_keys(workflow.to_dict()), default=str
+    ).encode()
 
 
 #: The shipped modes the reference validator refuses, with the issue it reports.
@@ -99,3 +107,14 @@ def test_the_reference_validator_accepts_a_shipped_mode(identifier, state):
     assert issues == [recorded], (
         f"{identifier} is refused for a different reason than the recorded one"
     )
+
+
+def test_every_local_only_field_is_declared_as_an_extension():
+    """A field added to the IR and not named in EXTENSION_FIELDS fails here.
+
+    This is the parity guard: the reference cannot catch a field it does not
+    know about, so every local-only field must be declared as an extension or
+    actually exist in the reference.  The reverse is also checked: a field
+    declared as an extension that the reference now has is stale.
+    """
+    check_extension_coverage()
