@@ -850,7 +850,10 @@ def test_the_open_payload_carries_the_runs_own_environment(tmp_path):
     assert env["REFACTORY_PROJECT"] == str(project)
     knobs = json.loads(env["REFACTORY_KNOBS"])
     assert isinstance(knobs, dict) and knobs, knobs
-    # After the fix, data/agent/gate commands use absolute interpreter paths.
+    # An op node's bare `python -m refactory_dsh.run` resolves through this PATH.
+    from refactory_dsh.paths import venv_bin
+    assert env["PATH"].split(":")[0] == str(venv_bin()), env["PATH"]
+    # Data, agent and gate commands use absolute interpreter paths.
     assert payload["dataCommand"].endswith("-m refactory_dsh.items")
     assert "/" in payload["dataCommand"].split()[0], (
         "dataCommand should use an absolute interpreter path")

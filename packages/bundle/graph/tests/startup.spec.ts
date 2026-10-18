@@ -64,6 +64,7 @@ describe('graph command-line provider', () => {
     expect(values?.commandEnv.SRF_TASK).toBe('circle_packing')
     expect(values?.commandEnv.SRF_BUDGET).toBe('7')
     expect(values?.commandEnv.REFACTORY_INTENT).toBe('circle_packing')
+    expect(values?.commandEnv.PATH?.startsWith('/venv/bin:')).toBe(true)
     expect(values?.commandEnv.REFACTORY_PYTHON_BIN).toBe('/venv/bin/python')
   })
 
@@ -116,7 +117,7 @@ describe('graph command-line provider', () => {
     delete process.env.PATH
     try {
       const { values } = boot(required(dir))
-      expect(values?.commandEnv.PATH).toBe('')
+      expect(values?.commandEnv.PATH).toBe('/venv/bin')
     } finally {
       process.env.PATH = saved
     }
@@ -144,6 +145,7 @@ describe('graph command-line provider', () => {
       const args = ['--mode', 'probe', '--task', 't', '--workdir', join(scratch, 'work')]
       const first = boot(args, overridden.apply)
       expect(first.values?.graph).toEqual({ name: 'from-env' })
+      expect(first.values?.commandEnv.PATH?.startsWith('/python:')).toBe(true)
       expect(first.values?.commandEnv.REFACTORY_PYTHON_BIN).toBe('/python/python')
 
       delete process.env.SRF_GRAPHS
@@ -159,6 +161,7 @@ describe('graph command-line provider', () => {
       const rooted = await import('../src/startup.ts')
       const second = boot(args, rooted.apply)
       expect(second.values?.graph).toEqual({ name: 'from-home' })
+      expect(second.values?.commandEnv.PATH?.startsWith(`${home}/.venv/bin:`)).toBe(true)
       expect(second.values?.commandEnv.REFACTORY_PYTHON_BIN).toBe(`${home}/.venv/bin/python`)
     } finally {
       for (const [key, value] of Object.entries(saved)) {

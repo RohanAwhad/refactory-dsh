@@ -278,18 +278,24 @@ def _node_environment(
     ``REFACTORY_PROJECT`` and ``REFACTORY_KNOBS``, and
     ``refactory_dsh/items.py`` reads ``REFACTORY_WORKDIR``).
 
-    Data, agent and gate commands use an absolute interpreter path; ``PATH`` is
-    not overridden.
+    ``PATH`` leads with the run's interpreter so an op node's bare ``python -m
+    refactory_dsh.run`` (`lowering.RUNNER`) resolves to the venv that has
+    ``refactory_dsh`` installed, exactly as the graph profile's ``commandEnv`` does.
+    Agents get the target's own PATH when they are dispatched (`model._environment`).
     """
     from refactory_dsh import interactive, lowering, registry
+    from refactory_dsh.paths import venv_bin
 
     # The same mode with the same knob overrides `interactive.prepare` lowered,
     # through the same owner, so the environment cannot disagree with the graph.
     Mode = registry.resolve(project, mode)[1]
     state = interactive.with_knobs(Mode().state_dict(), list(knobs or []))
+    interpreter = str(venv_bin())
+    ambient = os.environ.get("PATH", "")
     return lowering.knob_environment(state, extra={
         "REFACTORY_WORKDIR": str(workdir),
         "REFACTORY_PROJECT": str(project),
+        "PATH": f"{interpreter}:{ambient}" if ambient else interpreter,
     })
 
 
