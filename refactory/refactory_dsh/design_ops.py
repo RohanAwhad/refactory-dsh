@@ -366,13 +366,28 @@ def report_artifact(ctx: Any) -> dict[str, Any]:
         # stale sign-off.
         worktree.require_current(ctx.workdir)
     require_completion(ctx)
-    payload = repo_change.report(ctx, "design.json", {
+    ev = ctx.read_json("authoring-evidence.json", None)
+    audit = ctx.read_json("intent-audit.json", None)
+    report_payload: dict[str, Any] = {
         "name": ctx.facts.get("name"),
         "artifact": ctx.facts.get("artifact"),
         "files": ctx.facts.get("files", []),
         "check": ctx.facts.get("check"),
         "checked": True,
-        "validation_evidence": ctx.read_json("authoring-evidence.json", None),
-        "intent_audit": ctx.read_json("intent-audit.json", None),
-    })
+        "validation_evidence": ev,
+        "intent_audit": audit,
+    }
+    # Surface process notes with their followed/not-followed statement.
+    process_notes = (ev or {}).get("process_notes", [])
+    if process_notes:
+        audit_notes = {item["id"]: item for item in (audit or {}).get("process_notes", [])
+                       if isinstance(item, dict)}
+        report_payload["process_notes"] = [
+            {**note, **({"followed": audit_notes[note["id"]]["followed"],
+                         "detail": audit_notes[note["id"]].get("detail", "")}
+                        if note["id"] in audit_notes and isinstance(audit_notes[note["id"]].get("followed"), bool)
+                        else {"followed": None, "detail": "compliance not verified by audit"})}
+            for note in process_notes
+        ]
+    payload = repo_change.report(ctx, "design.json", report_payload)
     return {"designed": json.dumps(payload, default=str)}

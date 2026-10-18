@@ -98,7 +98,7 @@ def _find_marker(body: str, pattern: str) -> re.Match | None:
 
     A match whose start has an odd number of backtick characters before it
     is inside an inline code span and is skipped.  This prevents
-    ``\`[changed]\``` (mentioned in prose) from shadowing the real
+    a backticked mention of the marker in prose from shadowing the real
     ``**[changed]**`` marker later on the same line.
     """
     for m in re.finditer(pattern, body, re.IGNORECASE):

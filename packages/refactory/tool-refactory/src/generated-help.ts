@@ -1400,6 +1400,21 @@ export const CHAT = {
         "positional": false,
         "required": false,
         "type": "string"
+      },
+      "scope": {
+        "default": "product",
+        "description": "product (default) notes become auditable requirements; process notes record run-level directives that are visible but not auditable",
+        "enum": [
+          "product",
+          "process"
+        ],
+        "flags": [
+          "--scope"
+        ],
+        "nargs": null,
+        "positional": false,
+        "required": false,
+        "type": "string"
       }
     },
     "fields": {
@@ -1407,14 +1422,16 @@ export const CHAT = {
       "kind": "kind",
       "note": "note",
       "run": "run",
-      "runsRoot": "runs_root"
+      "runsRoot": "runs_root",
+      "scope": "scope"
     },
     "order": [
       "run",
       "runsRoot",
       "intent",
       "note",
-      "kind"
+      "kind",
+      "scope"
     ],
     "purpose": "Read or append to the run\u2019s intent ledger. CLI/panel also expose gate answers and boundary controls; chat only exposes notes, constraints and seed.",
     "required": [
@@ -1691,6 +1708,14 @@ export const PARAMETERS = {
     },
     "type": "array"
   },
+  "scope": {
+    "description": "steer: product (default) notes become auditable requirements; process notes record run-level directives that are visible but not auditable (console scope). Read help topic=steer for defaults and constraints.",
+    "enum": [
+      "product",
+      "process"
+    ],
+    "type": "string"
+  },
   "section": {
     "description": "docs: section ID from the docs index (console section). Read help topic=docs for defaults and constraints.",
     "type": "string"
@@ -1726,4 +1751,4 @@ export const PARAMETERS = {
   }
 } as const
 export const OPERATING_GUIDE = "# CEO operating guide\n\nRefactory runs explicit graphs. The runtime owns node order, branches, checks,\nevidence, user gates and recovery. Drive the selected graph; do not reproduce its\nworkers in conversation or mark work complete from prose alone.\n\nStart with `refactory` action `help`. Read `help` with `topic` equal to a mode ID\nor operation for its live arguments, defaults, constraints, examples and interface\nroutes. `modes` lists installed packages, including packages added since build.\nCoverage warnings mean guidance may be missing or stale. Read `docs` with `query`\nfor search, or `page`, optional `section`, `offset` and `limit` for bounded reads.\nUse the returned IDs and continuation offsets. Help and docs carry schema, build\nand documentation identities. These APIs read shipped product docs; no shell,\nsource-code search or web access is needed for product discovery.\n\nCreate and Edit produce reusable mode packages. Design produces a software\nartifact. Canonical validation precedes QA and final intent review. Fast variants retain\nfocused QA and bounded repair. Edit allow_regression skips original execution and\ncomparison, while revised validation remains mandatory. Run uses a mode\nonce; Optimize (`start`) searches a scored mode. Read the mode's ports, required\ninputs and user gates before choosing. When a person is present, use `wf_open`\nwith the mode, knobs, intent and a fresh absolute workdir. Continue with the\nworkflow tools. The runtime asks user gates; never invent their verdicts.\nHeadless approvals require an explicit user-approved answer and `headless: true`.\n\nFor optimization, inspect `strategies` and `profiles`; `profile-resolve` previews\nsettings and the contract. `start` returns a durable run ID. Read incremental\n`status` using its offset, then candidates, artifacts and winner evidence. A run\ncan outlive a chat. A stopped, failed or unmeasured run is not success. Recovery\nrequires a known saved boundary; use the documented CLI or panel recovery route.\n\n`workers` explains effective worker routing and provenance. New runs load\n`refactory.workers.json` at the project root. Explicit profile/launch settings\nwin; node overrides beat role overrides, which beat the run route. This file\nselects graph workers, not this CEO's conversational model. Backend changes are\nconfigured through the file, CLI or panel. Native authentication stays in its\nexisting stores. New worker permissions default to `skip`; token caps are unset\nunless requested, and native workers do not support whole-tree token caps.\n\nUse `runtime` for configured credential readiness, which is not authentication\nproof. Follow explicit task and fixture constraints without asking again. Keep\nbuild/docs identity with evidence, and distinguish a generated receipt from\nchecks that establish the requested output.\n" as const
-export const BUILD_ID = "42af2dd1d8d677923a25f24c44c0b3eb0a9145053d4ccf9aa5286603ab4d1999" as const
+export const BUILD_ID = "6d38011a22301e170f41a901b7631c1fa7b086c38a9ba46066fce0ddcab6dc1f" as const
