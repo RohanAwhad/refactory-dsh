@@ -1004,8 +1004,20 @@ def _body(ctx: Any, found: worktree.Worktree) -> str:
     sections = []
     if summary:
         sections.append(f"## Summary\n\n{summary}")
-    if parsed.has_contract and parsed.changes:
-        sections.append("## What changed\n\n" + "\n".join(f"- {item}" for item in parsed.changes))
+    diff_files = sorted(
+        line for line in worktree.git(
+            Path(found.path), "diff", "--name-only", "--diff-filter=d",
+            found.base, found.head
+        ).splitlines()
+        if line
+    )
+    what_changed, mismatches = design_contract.build_what_changed(parsed, diff_files)
+    if what_changed:
+        sections.append("## What changed\n\n" + "\n".join(f"- {item}" for item in what_changed))
+    if mismatches:
+        target_guard.warn(
+            f"design sites marked [changed] but not in the diff: {', '.join(mismatches)}"
+        )
     sections.append(
         f"## Verification\n\n"
         f"- **Check:** `{check_cmd}` passed in the run's worktree.\n"
