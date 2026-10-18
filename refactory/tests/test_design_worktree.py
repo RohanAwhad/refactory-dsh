@@ -883,6 +883,20 @@ def test_a_generate_command_that_fails_fails_the_check_and_says_why(tmp_path):
     assert "the generate command `exit 3` failed" in (failed_generate.error or "")
 
 
+def test_generate_runs_before_setup_so_setup_sees_generated_files(repo, tmp_path):
+    """A setup that needs generated files passes because generate runs first."""
+    _commit(repo, "source.txt", "v1\n")
+    _commit(repo, "generated.txt", "v1\n")
+    emit = render({"tool.py": "print('built')\n", "source.txt": "v2\n"})
+    result = _design(
+        tmp_path / "run", FakeModel(_answers(emit)),
+        _mode(generate="cp source.txt generated.txt",
+              setup="diff -q source.txt generated.txt"),
+        target=str(repo),
+    )
+    assert result.exit_ok, result.error
+
+
 def test_a_lockfile_the_install_writes_is_part_of_the_attempt_the_reviewers_see(repo, tmp_path, monkeypatch):
     """A new Node project has no lockfile: the one its install writes is committed, not refused."""
     stub(tmp_path / "bin", "npm", "echo '{\"lockfileVersion\": 3}' > package-lock.json")
