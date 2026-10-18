@@ -47,6 +47,10 @@ def check_required_knobs(
     are placeholders) passes structural validation; the run-start check does not.
     """
     violations: list[tuple[str, str]] = []
+    # declared may be a list when callers pass raw knob lists (e.g. nn.validate
+    # called with declared_knobs=[]).  Only dicts carry name→Knob pairs.
+    if not hasattr(declared, "items"):
+        return violations
     for name, knob in declared.items():
         if not getattr(knob, "required", False) or knob.kind != "str":
             continue

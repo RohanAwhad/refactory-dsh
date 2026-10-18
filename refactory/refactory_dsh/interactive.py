@@ -97,7 +97,7 @@ def prepare(
 
         _decl = _declared_knobs(state)
         _vals = {name: entry["value"] for name, entry in (state.get("knobs") or {}).items()}
-        _violations = check_required_knobs(_decl, _vals)
+        _violations = check_required_knobs(_decl, _vals, allow_defaults=True)
         if _violations:
             knob_name, message = _violations[0]
             raise ValueError(

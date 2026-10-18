@@ -171,7 +171,7 @@ def test_prepare_refuses_a_run_with_nothing_to_build(tmp_path):
     from refactory_dsh import create_ops
     from refactory_dsh.nn import RunContext
 
-    with pytest.raises(ValueError, match="needs what to build"):
+    with pytest.raises(ValueError, match="empty or whitespace-only"):
         create_ops.prepare(RunContext(tmp_path, knobs={}, facts={}, task={}))
 
 

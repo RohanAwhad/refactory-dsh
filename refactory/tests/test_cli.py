@@ -879,5 +879,5 @@ def test_prepare_ops_refuse_an_empty_brief_with_a_name():
 
 def test_cli_docs_mention_empty_brief_refusal():
     """The CLI reference documents the empty-brief refusal."""
-    cli_md = (REPO_ROOT / "docs" / "cli.md").read_text()
+    cli_md = (REPO_ROOT / "refactory" / "docs" / "cli.md").read_text()
     assert "whitespace" in cli_md
