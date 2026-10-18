@@ -25,12 +25,12 @@
 #     own `web` template (the harness's `web` is never written to) — idempotently
 #     (`REFACTORY_SKIP_DSH_PROFILE=1` skips both).
 #
-# It deliberately leaves out the two opt-in, non-shipping pieces, and the CI gate in
-# `.github/workflows/ci.yml` asserts this default install rather than them:
+# It deliberately leaves out the two opt-in, non-shipping pieces. CI runs
+# `install.sh` for this default install, then adds the reference group so the IR
+# parity tests run on every pull request; the reference stays out of the default:
 #
 #   * the non-default `reference` group (remote-factory, providing `factory`/`srf`),
-#     a test-time oracle added with `uv sync --group reference`. Without it the
-#     parity tests skip with a reason rather than fail.
+#     a test-time oracle added with `uv sync --group reference`.
 #   * `refactory/vendor/srf/graphs`, the legacy graph directory for the low-level
 #     `dsh --profile graph run` path. The public `uv run refactory ceo
 #     <package>/<mode>` route lowers the mode and supplies its own graph directory,
