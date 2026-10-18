@@ -503,6 +503,11 @@ def status(run_root: Path, *, after: int = 0) -> dict[str, Any]:
             state = "finished"
     from refactory_dsh import live, run_state
     activity = live.snapshot(run_root)
+    # Compute owner liveness before the start-failure check needs it.
+    checkpoint = _read_json(run_root / '.refactory/spine-checkpoint.json')
+    owner = checkpoint.get('owner_pid')
+    owner_alive = (True if (isinstance(owner, int) and _alive(owner)) else
+                   False if isinstance(owner, int) else None)
     # Supervision-history and start-failure enrich the activity dict.
     sup_history = run_state.read_supervision_history(run_root)
     if sup_history:
@@ -516,10 +521,6 @@ def status(run_root: Path, *, after: int = 0) -> dict[str, Any]:
             state = 'failed'
             activity['start_failure'] = start_failure.get('reason', '')
     resources = activity.get('resources') or {}
-    checkpoint = _read_json(run_root / '.refactory/spine-checkpoint.json')
-    owner = checkpoint.get('owner_pid')
-    owner_alive = (True if (isinstance(owner, int) and _alive(owner)) else
-                   False if isinstance(owner, int) else None)
     running = _running(run_root, console) or owner_alive is True
     if resources.get('exhausted') and not finished:
         state = 'failed'
