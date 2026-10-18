@@ -545,7 +545,12 @@ export class Spine {
     }
   }
 
-  /** Graph sinks: nodes the scheduler has nowhere to go after. */
+  /**
+   * Graph sinks: nodes the scheduler has nowhere to go after. A node with an
+   * outgoing edge continues along it; a node inside a fork's or an expanded
+   * director's body continues at that container's continuation
+   * ({@link continuationOf}); a data node's body exit returns to its data node.
+   */
   private sinks(): string[] {
     const dataBodyExits = new Set<string>()
     for (const node of this.nodes.values()) {

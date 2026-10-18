@@ -117,7 +117,10 @@ A run whose cursor empties before reaching a graph sink — for example after
 a redo that dropped the work due, or a skip that bypassed the remaining
 path — halts with the names of the unreached sinks. The halt is visible in
 `refactory status` (state `halted`, finished) and makes `refactory ceo`
-exit non-zero.
+exit non-zero. A sink is a node the scheduler has nowhere to go after: not a
+node with an outgoing edge, not a fork branch or a director's child (they
+continue at the join or the director's successor), and not a data node's
+per-item exit (it returns to its data node).
 
 ### Forward-only invalidation
 
