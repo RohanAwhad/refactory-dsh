@@ -268,6 +268,23 @@ def _progress_at(workdir: Path) -> dict[str, Any]:
     return progress
 
 
+def refactory_env(env: dict[str, str] | None = None) -> dict[str, str]:
+    """``scrub(env)`` with refactory's own interpreter first on PATH.
+
+    For a check of an artifact built for refactory outside any worktree (create mode, a
+    fast run with no target): its ``python`` must import ``refactory_dsh`` however the
+    launching shell's PATH reads, and `scrub` does not add it.
+    """
+    from refactory_dsh.paths import venv_bin
+
+    out = scrub(env)
+    bindir = str(venv_bin())
+    rest = [entry for entry in out.get("PATH", "").split(os.pathsep) if entry and entry != bindir]
+    out["PATH"] = os.pathsep.join([bindir, *rest])
+    out["VIRTUAL_ENV"] = str(Path(bindir).parent)
+    return out
+
+
 def run_sandboxed(
     code: str,
     *,

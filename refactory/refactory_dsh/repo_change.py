@@ -829,18 +829,9 @@ def run_check(ctx: Any, command: str, timeout: float) -> Any:
             raise ValueError("artifact location is stale or ambiguous; materialise again before checking")
         _require_owner(str(ctx.facts["name"]), ctx.workdir)
         target_guard.warn_if_moved(ctx.workdir)
-        # Create-mode: give an explicit environment with refactory's interpreter
-        # first, then the ambient PATH, so `python` resolves to refactory's venv
-        # even when the launching shell does not have it on PATH.
-        from refactory_dsh.paths import venv_bin
-        _bindir = str(venv_bin())
-        _ambient = os.environ.get("PATH", "")
-        _create_env = {
-            "PATH": f"{_bindir}{os.pathsep}{_ambient}" if _ambient else _bindir,
-            "VIRTUAL_ENV": str(Path(_bindir).parent),
-        }
-        return sandbox.run_command(command, workdir=root, timeout_s=timeout,
-                                   budget=getattr(ctx, "budget", None), env=_create_env, exact_env=True)
+        # An artifact built for refactory: its check imports refactory_dsh.
+        return sandbox.run_command(command, workdir=root, timeout_s=timeout, budget=getattr(ctx, "budget", None),
+                                   env=sandbox.refactory_env(), exact_env=True)
     found, restored = worktree.restore(ctx.workdir)
     if found.head != str(ctx.facts.get("commit")):
         raise ValueError("the worktree is not at the attempt materialise committed; materialise again before checking")

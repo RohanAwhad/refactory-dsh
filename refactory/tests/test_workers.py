@@ -596,31 +596,21 @@ def test_create_mode_check_still_imports_refactory_dsh(tmp_path):
         f"refactory_dsh should be importable in run_sandboxed: {result.payload}")
 
 
-def test_create_mode_run_command_imports_refactory_dsh_without_venv_on_path(tmp_path, monkeypatch):
-    """With venv_bin() removed from os.environ's PATH, a create-mode check
-    running `python -c "import refactory_dsh"` still succeeds because the
-    non-worktree check path gives an explicit environment with venv_bin() first."""
+def test_refactory_env_puts_refactorys_interpreter_first_and_keeps_the_scrubbed_rest(monkeypatch):
+    """The environment a check of a refactory artifact runs with: refactory's interpreter
+    first however the shell's PATH reads, and everything scrub keeps (HOME, LANG) kept."""
     import os
     from refactory_dsh import sandbox as _sandbox
     from refactory_dsh.paths import venv_bin
-    # Strip refactory's venv from PATH to simulate a launcher that didn't add it.
     bindir = str(venv_bin())
-    original_path = os.environ.get('PATH', '')
-    stripped = os.pathsep.join(
-        part for part in original_path.split(os.pathsep)
-        if part != bindir
-    )
-    monkeypatch.setenv('PATH', stripped)
-    # Build the explicit create-mode environment, as repo_change.run_check does.
-    _ambient = stripped
-    create_env = {
-        "PATH": f"{bindir}{os.pathsep}{_ambient}" if _ambient else bindir,
-        "VIRTUAL_ENV": str(Path(bindir).parent),
-    }
-    command = 'python -c "import refactory_dsh; print(refactory_dsh.__file__)"'
-    result = _sandbox.run_command(command, workdir=tmp_path, env=create_env, exact_env=True)
-    assert result.ok, f"create-mode check should succeed: {result.stderr}"
-    assert 'refactory_dsh' in result.stdout
+    monkeypatch.setenv('PATH', os.pathsep.join(p for p in os.environ.get('PATH', '').split(os.pathsep) if p != bindir))
+    monkeypatch.setenv('HOME', '/home/someone')
+    monkeypatch.setenv('SOME_API_KEY', 'secret')
+    env = _sandbox.refactory_env()
+    assert env['PATH'].split(os.pathsep)[0] == bindir
+    assert env['PATH'].split(os.pathsep).count(bindir) == 1
+    assert env['HOME'] == '/home/someone'
+    assert 'SOME_API_KEY' not in env
 
 
 def test_coordinator_and_node_account_separately_without_double_count(tmp_path):
