@@ -75,36 +75,152 @@ def _head_sha(driver: Path) -> str:
     return _git(["rev-parse", "HEAD"], cwd=driver).stdout.strip()
 
 
+def _make_executable_driver(base: Path, marker: str = "A") -> Path:
+    """Create a git repo where ``python -m refactory_dsh.interactive`` prints the marker.
+
+    Unlike :func:`_make_driver`, this driver's ``interactive.py`` is a stub
+    that imports and prints the marker value, so a pinned interpreter can run
+    it as a subprocess without any third-party dependencies.
+    """
+    driver = base / "driver"
+    driver.mkdir(parents=True)
+    _git(["init"], cwd=driver)
+    _git(["config", "user.email", "test@test.com"], cwd=driver)
+    _git(["config", "user.name", "Test"], cwd=driver)
+
+    pkg = driver / "refactory" / "refactory_dsh"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "__marker__.py").write_text(f"MARKER = {marker!r}\n")
+    # A stub interactive module: when run with ``python -m``, it prints the
+    # marker and exits, regardless of extra CLI arguments.
+    (pkg / "interactive.py").write_text(
+        "from refactory_dsh.__marker__ import MARKER\n"
+        "print(f'MARKER={MARKER}')\n"
+    )
+
+    _git(["add", "-A"], cwd=driver)
+    _git(["commit", "-m", f"commit {marker}"], cwd=driver)
+    return driver
+
+
+def _pin_with_lightweight_venv(
+    driver: Path, key: str, home: Path,
+) -> "pin.PinnedCheckout":
+    """Pin *key* with ``python -m venv`` and a ``.pth`` file (no network).
+
+    The correction requires the decisive test to need no network.  This
+    helper creates the git worktree and a standard-library venv, then makes
+    ``refactory_dsh`` importable through a ``.pth`` file pointing at the
+    checkout's ``refactory/`` directory.
+    """
+    from refactory_dsh import pin
+
+    pinned_dir = home / "pinned" / key
+    checkout_dest = pinned_dir / "checkout"
+    pinned_dir.mkdir(parents=True, exist_ok=True)
+
+    if not checkout_dest.exists():
+        result = _git(
+            ["worktree", "add", "--detach", str(checkout_dest), key], cwd=driver,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"git worktree add failed: {result.stderr}")
+
+        # Lightweight venv — no uv, no network
+        subprocess.run(
+            [sys.executable, "-m", "venv", str(checkout_dest / ".venv")],
+            check=True, capture_output=True,
+        )
+        # Make refactory_dsh importable from the pinned checkout
+        site_packages = next(
+            (checkout_dest / ".venv" / "lib").glob("python*/site-packages")
+        )
+        (site_packages / "driver.pth").write_text(
+            str(checkout_dest / "refactory") + "\n"
+        )
+
+        (pinned_dir / "pin.json").write_text(json.dumps({
+            "key": key,
+            "source_repo": str(driver.resolve()),
+            "dirty": False,
+            "diff_hash": "",
+            "runs": [],
+        }))
+        (pinned_dir / ".pin-ready").write_text("2")
+
+    dsh_home = pinned_dir / "dsh_home"
+    dsh_home.mkdir(exist_ok=True)
+
+    return pin.PinnedCheckout(
+        key=key,
+        checkout_path=checkout_dest,
+        dsh_home=dsh_home,
+        interpreter=str(checkout_dest / ".venv" / "bin" / "python"),
+        dirty=False,
+        diff_hash="",
+        untracked_included=False,
+    )
+
+
 class TestResumeAfterDriverMoves:
-    """The decisive test: pin at A, move to B, verify A's pin is unchanged."""
+    """The decisive test: pin at A, move to B, execute A's pinned code."""
 
-    def test_pinned_checkout_preserves_marker(self, tmp_path: Path) -> None:
+    def test_owner_executes_pinned_code(self, tmp_path: Path) -> None:
+        """Start the resumed owner through _build_owner_argv and _start_child.
+
+        Pin at commit A, move the driver to commit B, then start a child
+        process under the pinned A interpreter through the real supervisor
+        path.  The child prints ``MARKER=A`` (from the pinned checkout's
+        code), proving pinned machinery is actually executed.  A new pin at
+        B prints ``MARKER=B``.
+        """
         from refactory_dsh import pin
+        from refactory_dsh.supervisor import _build_owner_argv, _start_child
 
-        driver = _make_driver(tmp_path, marker="A")
+        driver = _make_executable_driver(tmp_path, "A")
         sha_a = _head_sha(driver)
+        home = tmp_path / "rfhome"
+        pinned_a = _pin_with_lightweight_venv(driver, sha_a, home)
 
-        # Pin at commit A
-        pinned_a = pin.ensure_pinned(driver, refactory_home=tmp_path / "rfhome")
-        assert pinned_a.key == sha_a
-        assert pinned_a.dirty is False
-
-        # Read marker from pinned checkout
-        marker_file = pinned_a.checkout_path / "refactory" / "refactory_dsh" / "__marker__.py"
-        assert "MARKER = 'A'" in marker_file.read_text()
-
-        # Move driver to commit B
+        # Move the driver to commit B
         sha_b = _commit_marker(driver, "B")
-        assert sha_b != sha_a
 
-        # The pinned checkout at A still has marker A
-        assert "MARKER = 'A'" in marker_file.read_text()
+        # --- resumed run at A ---
+        root_a = tmp_path / "run_a"
+        (root_a / ".refactory").mkdir(parents=True)
+        (root_a / ".refactory" / "run-config.json").write_text(json.dumps({
+            "mode": "test/marker",
+            "project": str(tmp_path),
+            "pinned_interpreter": pinned_a.interpreter,
+            "pinned_dsh_home": str(pinned_a.dsh_home),
+            "pinned_key": pinned_a.key,
+        }))
 
-        # A new pin picks up commit B
-        pinned_b = pin.ensure_pinned(driver, refactory_home=tmp_path / "rfhome")
-        assert pinned_b.key == sha_b
-        marker_b = pinned_b.checkout_path / "refactory" / "refactory_dsh" / "__marker__.py"
-        assert "MARKER = 'B'" in marker_b.read_text()
+        argv_a, _, _ = _build_owner_argv(root_a)
+        assert argv_a[0] == pinned_a.interpreter
+
+        child_a = _start_child(root_a)
+        child_a.wait(timeout=30)
+        log_a = (root_a / "recovery.log").read_text()
+        assert "MARKER=A" in log_a, f"expected MARKER=A, got: {log_a!r}"
+
+        # --- new run at B ---
+        pinned_b = _pin_with_lightweight_venv(driver, sha_b, home)
+        root_b = tmp_path / "run_b"
+        (root_b / ".refactory").mkdir(parents=True)
+        (root_b / ".refactory" / "run-config.json").write_text(json.dumps({
+            "mode": "test/marker",
+            "project": str(tmp_path),
+            "pinned_interpreter": pinned_b.interpreter,
+            "pinned_dsh_home": str(pinned_b.dsh_home),
+            "pinned_key": pinned_b.key,
+        }))
+
+        child_b = _start_child(root_b)
+        child_b.wait(timeout=30)
+        log_b = (root_b / "recovery.log").read_text()
+        assert "MARKER=B" in log_b, f"expected MARKER=B, got: {log_b!r}"
 
     def test_configuration_fingerprints_stable(self, tmp_path: Path) -> None:
         """Fingerprints computed on the pinned checkout are stable after driver moves."""
@@ -208,40 +324,54 @@ class TestCleanupKeepsReferencedRemovesUnreferenced:
 
         home = tmp_path / "rfhome"
 
-        # Create two drivers with different commits
+        # Create three drivers with different commits
         driver1 = _make_driver(tmp_path / "d1", marker="E1")
         driver2 = _make_driver(tmp_path / "d2", marker="E2")
+        driver3 = _make_driver(tmp_path / "d3", marker="E3")
 
         pinned1 = pin.ensure_pinned(driver1, refactory_home=home)
         pinned2 = pin.ensure_pinned(driver2, refactory_home=home)
+        pinned3 = pin.ensure_pinned(driver3, refactory_home=home)
 
         # Create run directories
         run1 = tmp_path / "run1"
         run2 = tmp_path / "run2"
+        run3 = tmp_path / "run3"
         run1.mkdir()
         run2.mkdir()
+        run3.mkdir()
 
         pin.register_run(pinned1.key, run1, refactory_home=home)
         pin.register_run(pinned2.key, run2, refactory_home=home)
+        pin.register_run(pinned3.key, run3, refactory_home=home)
 
-        # Make run1 non-terminal (still active)
+        # Make run1 non-terminal (paused — resumable)
         (run1 / ".refactory").mkdir(parents=True)
         (run1 / ".refactory" / "spine-status.json").write_text(
             json.dumps({"status": "paused"})
         )
 
-        # Make run2 terminal (done)
+        # Make run2 terminal (done — not resumable)
         (run2 / ".refactory").mkdir(parents=True)
         (run2 / ".refactory" / "spine-status.json").write_text(
             json.dumps({"status": "done"})
+        )
+
+        # Make run3 failed (resumable with --acknowledge-failure)
+        (run3 / ".refactory").mkdir(parents=True)
+        (run3 / ".refactory" / "spine-status.json").write_text(
+            json.dumps({"status": "failed"})
         )
 
         result = pin.cleanup(refactory_home=home)
 
         assert pinned1.key in result["kept"]
         assert pinned2.key in result["removed"]
+        # failed is resumable via --acknowledge-failure — cleanup keeps it
+        assert pinned3.key in result["kept"]
         assert (home / "pinned" / pinned1.key).is_dir()
         assert not (home / "pinned" / pinned2.key).exists()
+        assert (home / "pinned" / pinned3.key).is_dir()
 
 
 class TestPinnedCheckoutComparison:

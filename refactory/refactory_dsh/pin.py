@@ -559,9 +559,10 @@ def cleanup(*, refactory_home: Path | None = None) -> dict[str, list[str]]:
                 # No spine status = might still be starting
                 referenced = True
                 break
-            if not run_state.is_terminal(status):
-                # Non-terminal includes: ready, executing, paused, halted,
-                # waiting_user, refused — all are resumable
+            # Only 'done' and 'cancelled' are truly finished for cleanup.
+            # 'failed' is resumable with --acknowledge-failure, so its
+            # pinned machinery must be preserved.
+            if status not in ('done', 'cancelled'):
                 referenced = True
                 break
 
