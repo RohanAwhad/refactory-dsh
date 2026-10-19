@@ -84,6 +84,23 @@ def prepare(root: Path, name: str, *, resource_limits: dict[str, Any] | None = N
     allowed = {'ready', 'paused', 'halted', 'done', 'cancelled', 'waiting_user', 'refused'}
     if acknowledge_failed:
         allowed.add('failed')
+    # An executing checkpoint is allowed only when a matching acknowledgement exists
+    # in the resume-request.json file (written by graph_control.acknowledge).
+    if saved.get('status') == 'executing':
+        existing_request = root / '.refactory/resume-request.json'
+        ack_ok = False
+        if existing_request.is_file():
+            try:
+                existing = json.loads(existing_request.read_text())
+                if (existing.get('acknowledge_executing') is True
+                        and existing.get('checkpoint_sha256') == hashlib.sha256(payload).hexdigest()):
+                    ack_ok = True
+            except (OSError, json.JSONDecodeError, ValueError):
+                pass
+        if not ack_ok:
+            raise ValueError('last node outcome is unknown or failed; inspect side effects before any explicit rerun')
+        # With a valid acknowledgement, treat as halted for recovery purposes
+        allowed.add('executing')
     if saved.get('status') not in allowed:
         raise ValueError('last node outcome is unknown or failed; inspect side effects before any explicit rerun')
     for pending in (root / '.refactory/agent-delivery/pending').glob('*.json'):
@@ -107,6 +124,10 @@ def prepare(root: Path, name: str, *, resource_limits: dict[str, Any] | None = N
     request_data: dict[str, Any] = {'checkpoint_sha256': hashlib.sha256(payload).hexdigest()}
     if acknowledge_failed:
         request_data['acknowledge_failed'] = True
+    # Carry the acknowledge_executing flag through so the spine's
+    # restoreRequested() also accepts the executing checkpoint.
+    if saved.get('status') == 'executing':
+        request_data['acknowledge_executing'] = True
     temporary.write_text(json.dumps(request_data))
     temporary.replace(request)
     return root / 'graphs'

@@ -845,7 +845,7 @@ Worker routes and durable receipts over DSH's named-provider registry.
 | function | `permission_patch` | `(route: 'dict[str, Any]') -> 'list[dict[str, Any]]'` |
 | function | `provider_rows` | `(route: 'dict[str, Any]', provider_config: 'dict[str, Any] \| None') -> 'list[dict[str, Any]]'` |
 | function | `resolve_route` | `(base: 'dict[str, Any]', *, role: 'str' = 'worker', node: 'str' = '', role_routes: 'dict[str, Any] \| None' = None, node_routes: 'dict[str, Any] \| None' = None) -> 'dict[str, Any]'` |
-| function | `run_graph_command` | `(argv: 'list[str]', *, workdir: 'Path', context: 'dict[str, Any]', timeout: 'float \| None' = None, env: 'dict[str, str] \| None' = None, **kwargs: 'Any') -> 'Any'` |
+| function | `run_graph_command` | `(argv: 'list[str]', *, workdir: 'Path', context: 'dict[str, Any]', timeout: 'float \| None' = None, env: 'dict[str, str] \| None' = None, stop_condition: 'Any \| None' = None, **kwargs: 'Any') -> 'Any'` |
 | function | `validate_route` | `(route: 'dict[str, Any]') -> 'dict[str, Any]'` |
 | function | `write_patch` | `(path: 'Path', runtime_root: 'Path', route: 'dict[str, Any]', provider_config: 'dict[str, Any] \| None' = None) -> 'None'` |
 

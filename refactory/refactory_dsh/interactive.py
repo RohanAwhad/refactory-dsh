@@ -336,6 +336,18 @@ def run(
             if remaining is not None:
                 timeout_s = min(timeout_s, remaining) if timeout_s else remaining
         owner_start = int(time.time() * 1000) / 1000
+        # dm-93: for headless runs, provide a stop condition that polls
+        # spine-status.json. When the status is terminal, close stdin so the
+        # coordinator's final report still gets written, wait a grace period,
+        # then end the owner's process group the way run_owned/run_graph_command
+        # already end it on a timeout.
+        stop_condition = None
+        if headless:
+            from refactory_dsh import run_state as _rs
+
+            def _terminal_stop() -> bool:
+                return _rs.spine_status(workdir) in _rs.TERMINAL
+            stop_condition = _terminal_stop
         try:
             if model_context is not None or resource_limits:
                 from refactory_dsh.model import DshModelClient
@@ -344,61 +356,65 @@ def run(
                 # Keep their native policy instead of upgrading them to skip.
                 context = model_context or DshModelClient(permission_mode='default').context()
                 code = run_graph_command(argv, workdir=workdir, context=context, cwd=str(REPO_ROOT),
-                                         timeout=timeout_s, env=env, **inherited).returncode
+                                         timeout=timeout_s, env=env,
+                                         stop_condition=stop_condition, **inherited).returncode
             else:
-                code = run_owned(argv, cwd=str(REPO_ROOT), timeout=timeout_s, env=env, **inherited).returncode
+                code = run_owned(argv, cwd=str(REPO_ROOT), timeout=timeout_s, env=env,
+                                 stop_condition=stop_condition, **inherited).returncode
         finally:
             if budget is not None:
                 budget.pause()
-        # In headless mode, when the run stopped at a user gate, print the exact
-        # commands a person uses to answer it and resume. Printed once, only here.
-        if headless and code != 0:
-            try:
-                from refactory_dsh import console
-                due_gates = console.gates(workdir)
-                for gate_info in due_gates:
-                    gate_id = gate_info["id"]
-                    prompt = gate_info.get("prompt", "")
-                    verdicts = gate_info.get("verdicts", [])
-                    verdicts_str = ", ".join(verdicts)
-                    print(f"refactory: {gate_id} is waiting for a person.", file=sys.stderr)
-                    if prompt:
-                        for line in prompt.splitlines():
-                            print(f"  {line}", file=sys.stderr)
-                    print(f"  Answer it with one of {verdicts_str} (add --note \"...\" to say why):", file=sys.stderr)
-                    print(f"    refactory steer --run {workdir} --verdict {gate_id}=<verdict>", file=sys.stderr)
-                    print(f"  Then continue the run:", file=sys.stderr)
-                    print(f"    refactory graph-control resume --run {workdir}", file=sys.stderr)
-            except (OSError, ValueError, KeyError, TypeError):
-                pass  # gate diagnostic; do not mask the run's exit code
-            # A run that stopped short of its end names the nodes it never reached;
-            # the gate diagnostic above says nothing for that case.
-            try:
-                import json
-                recorded = json.loads((workdir / ".refactory" / "spine-status.json").read_text())
-                if recorded.get("status") == "halted" and recorded.get("error"):
-                    print(f"refactory: the run stopped early: {recorded['error']}", file=sys.stderr)
-            except (OSError, ValueError, AttributeError):
-                pass  # diagnostic only; do not mask the run's exit code
-        # Inline supervision for headless runs: if the owner exited and the
-        # run needs supervision, respawn it within the same process.
-        if headless and code != 0:
-            try:
-                from refactory_dsh.supervisor import supervise
-                result = supervise(workdir, first_exit_code=code, owner_start_time=owner_start)
-                if result is not None:
-                    code = result
-            except Exception:
-                pass  # supervision is best-effort; don't mask the run's exit code
-        if code == 0:
-            summary = run_summary(workdir)
-            if summary:
-                print(summary)
-        # Whatever the exit code: a warning matters most on a run that went wrong.
-        warned = run_warnings(workdir)
-        if warned:
-            print(warned, file=sys.stderr)
-        return code
+    # ── dm-94: ownership released; inline supervision runs outside ──
+    # In headless mode, when the run stopped at a user gate, print the exact
+    # commands a person uses to answer it and resume. Printed once, only here.
+    if headless and code != 0:
+        try:
+            from refactory_dsh import console
+            due_gates = console.gates(workdir)
+            for gate_info in due_gates:
+                gate_id = gate_info["id"]
+                prompt = gate_info.get("prompt", "")
+                verdicts = gate_info.get("verdicts", [])
+                verdicts_str = ", ".join(verdicts)
+                print(f"refactory: {gate_id} is waiting for a person.", file=sys.stderr)
+                if prompt:
+                    for line in prompt.splitlines():
+                        print(f"  {line}", file=sys.stderr)
+                print(f"  Answer it with one of {verdicts_str} (add --note \"...\" to say why):", file=sys.stderr)
+                print(f"    refactory steer --run {workdir} --verdict {gate_id}=<verdict>", file=sys.stderr)
+                print(f"  Then continue the run:", file=sys.stderr)
+                print(f"    refactory graph-control resume --run {workdir}", file=sys.stderr)
+        except (OSError, ValueError, KeyError, TypeError):
+            pass  # gate diagnostic; do not mask the run's exit code
+        # A run that stopped short of its end names the nodes it never reached;
+        # the gate diagnostic above says nothing for that case.
+        try:
+            import json
+            recorded = json.loads((workdir / ".refactory" / "spine-status.json").read_text())
+            if recorded.get("status") == "halted" and recorded.get("error"):
+                print(f"refactory: the run stopped early: {recorded['error']}", file=sys.stderr)
+        except (OSError, ValueError, AttributeError):
+            pass  # diagnostic only; do not mask the run's exit code
+    # Inline supervision for headless runs: if the owner exited and the
+    # run needs supervision, respawn it within the same process.
+    # dm-94: runs outside ownership so a consumed resume can start a new owner.
+    if headless and code != 0:
+        try:
+            from refactory_dsh.supervisor import supervise
+            result = supervise(workdir, first_exit_code=code, owner_start_time=owner_start)
+            if result is not None:
+                code = result
+        except Exception:
+            pass  # supervision is best-effort; don't mask the run's exit code
+    if code == 0:
+        summary = run_summary(workdir)
+        if summary:
+            print(summary)
+    # Whatever the exit code: a warning matters most on a run that went wrong.
+    warned = run_warnings(workdir)
+    if warned:
+        print(warned, file=sys.stderr)
+    return code
 
 
 #: The facts worth showing a person who just ran a mode, in the order they read them.

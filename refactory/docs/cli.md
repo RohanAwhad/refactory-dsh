@@ -205,7 +205,7 @@ The read verbs pass through the console's own `--project`, `--runs-root`, `--aft
 | `refactory projects [--json]` | the projects Design runs work on, with each run's branch and how it ended. |
 | `refactory projects prune [<name>] [--succeeded]` | remove the worktrees and branches that ended runs no longer need; `--succeeded` also removes succeeded runs' worktrees, keeping their branches. |
 | `refactory profile-save --name <name> --spec <JSON>` | save an immutable configuration version. |
-| `refactory graph-control [--node <id>]` | control a graph run through the spine: pause, resume or stop it. |
+| `refactory graph-control [--node <id>]` | control a graph run through the spine: pause, resume, stop, acknowledge, amend-command, or withdraw a control. |
 | `refactory ui --port <n> --no-open` | start the [browser GUI](interfaces.md) without opening a browser. |
 
 

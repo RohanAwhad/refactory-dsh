@@ -713,7 +713,14 @@ export function apply(ctx: Context, config: Config): void {
     const bytes = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
     if (createHash('sha256').update(bytes).digest('hex') !== request.checkpoint_sha256) throw new Error('checkpoint changed after recovery was requested')
     const saved = JSON.parse(bytes.toString())
-    if (saved.status === 'executing') throw new Error('unknown side-effect outcome; automatic replay refused')
+    if (saved.status === 'executing') {
+      if (request.acknowledge_executing !== true) throw new Error('unknown side-effect outcome; automatic replay refused')
+      // With acknowledge_executing, treat as halted for restore purposes.
+      // The checkpoint stays as-is; the spine sees an executing checkpoint
+      // accepted only because the person inspected the side effects.
+      saved.state.halted = undefined
+      saved.state.pause_before = []
+    }
     if (saved.status === 'failed' && request.acknowledge_failed !== true) throw new Error('last node outcome failed; pass acknowledge_failed to resume from this state')
     if (saved.state.halted?.reason === 'cancelled') delete saved.state.halted
     saved.state.pause_before = []
@@ -842,6 +849,7 @@ export function apply(ctx: Context, config: Config): void {
         else if (request.action === 'stop') { spine.stopAtBoundary(); receipt.message = 'Stopped at graph boundary; no further nodes will dispatch.' }
         else if (request.action === 'rerun') {
           const target = String(request.target)
+          const isCommandCorrection = request.source === 'amend-command'
           const deferredNodes = request.deferred_nodes as string[] | undefined
 
           if (Array.isArray(deferredNodes) && deferredNodes.length > 0) {
@@ -871,7 +879,7 @@ export function apply(ctx: Context, config: Config): void {
             const checkpoint = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
             if (createHash('sha256').update(checkpoint).digest('hex') !== request.revision) throw new Error('graph changed since preview; preview invalidation again')
           }
-          const plan = spine.planRedo(target)
+          const plan = spine.planRedo(target, isCommandCorrection ? { commandCorrection: true } : undefined)
           const nodes = (spine.checkpoint().graph as WorkflowGraph).nodes
           if (typeof request.text === 'string' && request.text.trim() !== '' && !['AgentNode', 'LLMNode'].includes(nodes[target]?._type ?? '')) {
             throw new Error('this node has no editable prompt; correct its source with explicit invalidation')
@@ -880,7 +888,11 @@ export function apply(ctx: Context, config: Config): void {
             recordStatus(spine, workdir, 'executing')
             runtimeBridge(`${dataCommand} reset`, workdir, env, { ...plan, state, archiveArtifacts: true })
           }
-          spine.redo(target)
+          if (isCommandCorrection) {
+            spine.redoCommandCorrection(target)
+          } else {
+            spine.redo(target)
+          }
           const gateReason = spine.gateReasonFor(target)
           const rerunText = typeof request.text === 'string' && request.text.trim() !== '' ? request.text.trim() : ''
           if (gateReason !== undefined || rerunText !== '') {

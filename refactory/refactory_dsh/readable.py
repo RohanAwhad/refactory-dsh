@@ -174,6 +174,26 @@ def format_graph_control(payload: dict[str, Any]) -> str:
         fm = last_failed.get('message', '')
         lines.append(f"Last failed control: {fa} — {fm}.")
 
+    if status == 'acknowledged':
+        message = payload.get('message', '')
+        files = payload.get('files', [])
+        lines.append(f"Acknowledged: {message}")
+        if files:
+            lines.append(f"Set aside {len(files)} file(s):")
+            for f in files:
+                lines.append(f"  {f.get('original_path', '?')}")
+    elif status == 'withdrawn':
+        control_id = payload.get('control_id', '')
+        lines.append(f"Withdrawn control {control_id}.")
+    elif action == 'amend-command':
+        field = payload.get('field', '')
+        old_val = payload.get('old_value', '')
+        new_val = payload.get('new_value', '')
+        message = payload.get('message', '')
+        lines.append(message or f"Corrected {field}: {old_val!r} \u2192 {new_val!r}.")
+    elif status == 'signalled':
+        lines.append(payload.get('message', f"Sent SIGTERM to lingering owner."))
+
     # Name an owner this call started -- a resume of a run whose owner is gone, or a
     # rerun of a failed run -- so it reads apart from a control queued for a live one.
     owner = payload['owner'] if isinstance(payload.get('owner'), dict) else payload
