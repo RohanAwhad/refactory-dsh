@@ -98,7 +98,11 @@ def run_owned(argv: list[str], *, timeout: float | None = None,
 
 def _communicate_with_stop(proc: subprocess.Popen, *, timeout: float | None,
                            stop_condition: Any, label: str) -> tuple[Any, Any]:
-    """Poll stop_condition while waiting for the process; end it on terminal status."""
+    """Poll stop_condition while waiting for the process; end it on terminal status.
+
+    The condition must hold for the entire grace period: a status that goes
+    failed -> executing during that window (a node retry) does not end the owner.
+    """
     import time as _time
 
     deadline = _time.monotonic() + timeout if timeout else None
@@ -112,17 +116,30 @@ def _communicate_with_stop(proc: subprocess.Popen, *, timeout: float | None,
         except Exception:
             should_stop = False
         if should_stop:
-            # Close stdin to signal EOF to the coordinator
+            # Wait the grace period; the process may exit on its own
+            try:
+                proc.wait(timeout=STOP_CONDITION_GRACE_S)
+                break  # exited during grace period
+            except subprocess.TimeoutExpired:
+                pass
+            # Re-check: only stop if the condition still holds after the full
+            # grace period.  A transient failed -> executing transition (a node
+            # retry) resets the condition and keeps the owner alive.
+            try:
+                still_stopped = stop_condition()
+            except Exception:
+                still_stopped = False
+            if not still_stopped:
+                continue  # condition no longer holds; keep polling
+            # Still terminal after full grace period — close stdin and terminate
             if proc.stdin is not None:
                 try:
                     proc.stdin.close()
                 except OSError:
                     pass
-            # Wait a grace period for the coordinator's final report
             try:
-                proc.wait(timeout=STOP_CONDITION_GRACE_S)
+                proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                # Grace period expired; terminate the process group
                 shutdown(proc, label=label)
             break
         try:

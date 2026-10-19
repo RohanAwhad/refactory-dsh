@@ -14,7 +14,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -258,7 +258,7 @@ def test_acknowledge_executing_checkpoint(tmp_path):
 
 def test_acknowledge_before_refuses(tmp_path):
     """Without acknowledgment, recovery.prepare() still refuses an executing checkpoint."""
-    root = tmp_path
+    root = tmp_path.resolve()
     refactory = root / '.refactory'
     refactory.mkdir(parents=True, exist_ok=True)
 
@@ -266,7 +266,7 @@ def test_acknowledge_before_refuses(tmp_path):
     checkpoint: dict[str, Any] = {
         'status': 'executing',
         'run_id': str(root),
-        'graph': {'name': 'test'},
+        'graph': {'name': 'test-run'},
         'owner_pid': dead_pid,
         'file_fingerprints': {},
     }
@@ -403,7 +403,7 @@ def test_acknowledge_refused_while_supervisor_alive(tmp_path):
 
 def test_executing_still_refuses_without_acknowledge(tmp_path):
     """Without acknowledge, recovery.prepare() refuses an executing checkpoint."""
-    root = tmp_path
+    root = tmp_path.resolve()
     refactory = root / '.refactory'
     refactory.mkdir(parents=True, exist_ok=True)
 
@@ -411,7 +411,7 @@ def test_executing_still_refuses_without_acknowledge(tmp_path):
     checkpoint: dict[str, Any] = {
         'status': 'executing',
         'run_id': str(root),
-        'graph': {'name': 'test'},
+        'graph': {'name': 'test-run'},
         'owner_pid': dead_pid,
         'file_fingerprints': {},
     }
@@ -518,3 +518,44 @@ def test_acknowledge_then_prepare_accepts(tmp_path):
     # Now prepare should accept
     result = recovery.prepare(root, 'test-run')
     assert result == root / 'graphs'
+
+
+# ── T13: Transient failed status does not stop the owner ──────────────────
+
+def test_transient_failed_does_not_stop_owner():
+    """A status that goes failed->executing within the grace period does not stop the owner.
+
+    When a node fails and the graph retries it, spine-status.json briefly shows
+    'failed' then 'executing' again. The stop condition must hold for the entire
+    grace period: a transient terminal status must not end the owner.
+    """
+    import subprocess as _sp
+    from refactory_dsh import owned_process
+
+    call_count = 0
+
+    def transient_stop():
+        nonlocal call_count
+        call_count += 1
+        return call_count == 1  # True on first check, False on re-check
+
+    proc = MagicMock(spec=_sp.Popen)
+    proc.args = ['test']
+    proc.stdin = None
+    proc.returncode = 0
+
+    # poll(): None (running), None (running after re-check continue), 0 (exited)
+    proc.poll.side_effect = [None, None, 0]
+
+    # wait(): always timeout — process doesn't exit during grace/poll waits
+    proc.wait.side_effect = _sp.TimeoutExpired('test', 0.01)
+
+    with patch.object(owned_process, 'STOP_CONDITION_GRACE_S', 0.01), \
+         patch.object(owned_process, 'shutdown') as mock_shutdown:
+        owned_process._communicate_with_stop(
+            proc, timeout=10, stop_condition=transient_stop, label='test')
+
+    # The process was NOT shut down because the condition became false
+    mock_shutdown.assert_not_called()
+    # The condition was checked at least twice (once to trigger, once to verify)
+    assert call_count >= 2

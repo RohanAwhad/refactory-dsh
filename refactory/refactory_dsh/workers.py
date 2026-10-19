@@ -376,21 +376,36 @@ def run_graph_command(argv: list[str], *, workdir: Path, context: dict[str, Any]
                 telemetry.checkpoint()
                 if deadline is not None and time.monotonic() >= deadline:
                     raise subprocess.TimeoutExpired(argv, timeout)
-                # dm-93: poll stop_condition; when terminal, close stdin and
-                # wait a grace period so the coordinator writes its final report.
+                # dm-93: poll stop_condition; when terminal, wait the grace
+                # period and re-check before acting.  A transient failed ->
+                # executing transition (a node retry) must not end the owner.
                 if stop_condition is not None:
                     try:
                         should_stop = stop_condition()
                     except Exception:
                         should_stop = False
                     if should_stop:
+                        # Wait grace period; the process may exit on its own
+                        try:
+                            code = process.wait(timeout=STOP_CONDITION_GRACE_S)
+                            break
+                        except subprocess.TimeoutExpired:
+                            pass
+                        # Re-check: only stop if condition still holds after grace
+                        try:
+                            still_stopped = stop_condition()
+                        except Exception:
+                            still_stopped = False
+                        if not still_stopped:
+                            continue  # no longer terminal; keep polling
+                        # Still terminal — close stdin and terminate
                         if process.stdin is not None:
                             try:
                                 process.stdin.close()
                             except OSError:
                                 pass
                         try:
-                            code = process.wait(timeout=STOP_CONDITION_GRACE_S)
+                            code = process.wait(timeout=5)
                             break
                         except subprocess.TimeoutExpired:
                             shutdown(process, label='graph runtime')

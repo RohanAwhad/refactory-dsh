@@ -198,7 +198,6 @@ def _acknowledge(root: Path, checkpoint: Path, saved: dict[str, Any]) -> dict[st
             # Got the lock — no supervisor is running; release it
             fcntl.flock(sfd, fcntl.LOCK_UN)
         except (BlockingIOError, OSError):
-            os.close(sfd)
             raise ValueError(
                 'a supervisor process holds supervisor.lock; '
                 'stop it before acknowledging'
