@@ -739,8 +739,18 @@ def test_real_child_no_self_refusal(tmp_path):
             rr.unlink()
         return original_start(r)
 
-    with patch.object(sv, '_start_child', side_effect=_intercept_start):
-        sv.supervise(root, max_respawns=0)
+    def _timeout_handler(signum, frame):
+        raise TimeoutError('child did not exit within 30s')
+    prev_alarm = signal.signal(signal.SIGALRM, _timeout_handler)
+    signal.alarm(30)
+    try:
+        with patch.object(sv, '_start_child', side_effect=_intercept_start):
+            sv.supervise(root, max_respawns=0)
+    except TimeoutError:
+        pytest.fail('child hung: recovery.prepare() may have refused silently')
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, prev_alarm)
 
     # Positive: the child's recovery.prepare() re-created resume-request.json.
     rr = root / '.refactory/resume-request.json'

@@ -235,9 +235,9 @@ def supervise(root: Path, *, max_respawns: int | None = None,
                                      run_state.spine_status(root), reason=str(exc))
                 return None
 
+            child_start_time = int(time.time() * 1000) / 1000
             child = _start_child(root)
             _current_child = child
-            child_start_time = time.time()
 
             # Clear start-failure from a previous cycle if we got this far
             if sf_path.exists():
@@ -248,7 +248,7 @@ def supervise(root: Path, *, max_respawns: int | None = None,
         else:
             # Inline host: the owner already ran and exited
             child = None
-            child_start_time = owner_start_time if owner_start_time is not None else time.time()
+            child_start_time = owner_start_time if owner_start_time is not None else int(time.time() * 1000) / 1000
 
         while True:
             if child is not None:
@@ -284,9 +284,9 @@ def supervise(root: Path, *, max_respawns: int | None = None,
                     record_start_failure(root, pid_for_record, exit_code,
                                          spine_before, spine_after, reason=str(exc))
                     return last_exit_code if inline else None
+                child_start_time = int(time.time() * 1000) / 1000
                 child = _start_child(root)
                 _current_child = child
-                child_start_time = time.time()
                 # Clear any start-failure from the previous child
                 if sf_path.exists():
                     try:
@@ -337,9 +337,9 @@ def supervise(root: Path, *, max_respawns: int | None = None,
                 'supervisor_pid': os.getpid(),
             }
 
+            child_start_time = int(time.time() * 1000) / 1000
             child = _start_child(root)
             _current_child = child
-            child_start_time = time.time()
             history_entry['child_pid'] = child.pid
 
             _append_supervision_history(root, history_entry)

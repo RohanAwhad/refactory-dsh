@@ -335,7 +335,7 @@ def run(
             remaining = budget.remaining_s('final_validation')
             if remaining is not None:
                 timeout_s = min(timeout_s, remaining) if timeout_s else remaining
-        owner_start = time.time()
+        owner_start = int(time.time() * 1000) / 1000
         try:
             if model_context is not None or resource_limits:
                 from refactory_dsh.model import DshModelClient
