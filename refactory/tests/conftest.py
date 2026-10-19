@@ -44,6 +44,45 @@ def _isolate_refactory_home(tmp_path_factory: pytest.TempPathFactory, monkeypatc
         monkeypatch.delenv(name, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _no_pin(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace machinery pinning with a noop so existing tests do not trigger real pins.
+
+    Tests in ``test_pin.py`` opt back in with the ``use_real_pin`` marker and
+    exercise the real preparation path with their own temporary driver repos.
+    Production pins by default; this fixture isolates the test suite the same way
+    ``_isolate_refactory_home`` isolates the project registry.
+    """
+    if request.node.get_closest_marker("use_real_pin"):
+        return  # test_pin.py opts in to real pinning
+
+    from refactory_dsh import pin as _pin_mod
+
+    def _noop_ensure_pinned(checkout_root, *, refactory_home=None):
+        """Return a PinnedCheckout that points at the current process's checkout.
+
+        The returned ``dsh_home`` is whatever ``DSH_HOME`` the test set up, so
+        ``dsh_profile.require(home=...)`` checks the test's profile, not a
+        non-existent pinned one.  ``interpreter`` is the current
+        ``sys.executable``, so no re-exec happens.
+        """
+        dsh_home_str = os.environ.get("DSH_HOME", "")
+        dsh_home = Path(dsh_home_str) if dsh_home_str else Path.home() / ".dsh"
+        return _pin_mod.PinnedCheckout(
+            key="test-noop",
+            checkout_path=checkout_root,
+            dsh_home=dsh_home,
+            interpreter=sys.executable,
+            dirty=False,
+            diff_hash="",
+            untracked_included=False,
+        )
+
+    monkeypatch.setattr(_pin_mod, "ensure_pinned", _noop_ensure_pinned)
+    monkeypatch.setattr(_pin_mod, "reexec_if_needed", lambda pinned: None)
+    monkeypatch.setattr(_pin_mod, "register_run", lambda key, run_dir, **kw: None)
+
+
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
         "--run-integration",
@@ -76,6 +115,11 @@ def pytest_configure(config: pytest.Config) -> None:
         "needs_model_credential: needs a model credential the authoring sandbox "
         "accepts; the tests/model_credential.py hook skips it with a stated reason "
         "when this machine has none",
+    )
+    config.addinivalue_line(
+        "markers",
+        "use_real_pin: opt in to real machinery pinning; the autouse _no_pin "
+        "fixture is skipped so pin.ensure_pinned creates a real worktree",
     )
 
 

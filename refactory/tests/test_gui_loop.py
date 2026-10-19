@@ -785,7 +785,7 @@ def test_the_console_forwards_a_seeded_knob_into_the_resolved_config(monkeypatch
 
     captured: dict[str, dict[str, Any]] = {}
 
-    def fake_spawn(mode, root, config, *, project):
+    def fake_spawn(mode, root, config, *, project, pinned_interpreter="", pinned_dsh_home=""):
         captured["config"] = config
 
         class Process:

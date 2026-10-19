@@ -3,6 +3,10 @@
 Each test creates a temporary git repository as the "driver checkout" and a
 temporary ``~/.refactory`` (isolated by conftest's ``REFACTORY_HOME`` env var).
 Each test fails without the pin implementation.
+
+The ``use_real_pin`` marker opts these tests back in to real pinning —
+conftest's autouse ``_no_pin`` fixture is skipped so ``pin.ensure_pinned``
+creates real git worktrees.
 """
 from __future__ import annotations
 
@@ -13,6 +17,9 @@ import sys
 from pathlib import Path
 
 import pytest
+
+# All tests in this module need real pinning, not the noop fixture.
+pytestmark = pytest.mark.use_real_pin
 
 
 def _git(args: list[str], cwd: Path, **kwargs) -> subprocess.CompletedProcess[str]:
