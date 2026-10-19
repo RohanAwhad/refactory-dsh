@@ -569,6 +569,124 @@ def test_audit_reloop_through_design_graph(tmp_path, monkeypatch):
     )
 
 
+# ── dm-33: process notes ─────────────────────────────────────────────────
+
+
+def test_process_note_does_not_become_requirement(tmp_path):
+    """A constraint with scope='process' is excluded from requirements()
+    and does not block gate_overwatch."""
+    ctx = audit_context(tmp_path)
+    Ledger(tmp_path).note("constraint", "add a row to the audit table", scope="process")
+    evidence.record(ctx, {"status": "pass", "command": "test", "stdout": "42"})
+
+    reqs = evidence.requirements(ctx)
+    req_texts = [r.get("text", "") for r in reqs]
+    assert not any("add a row" in t for t in req_texts), (
+        "process note became a requirement"
+    )
+
+    deliver_audit(ctx)
+    result = create_ops.gate_overwatch(ctx)
+    assert str(result) == "proceed", f"process note blocked the gate: {result}"
+
+
+def test_process_note_handling_is_recorded_in_evidence(tmp_path):
+    """The evidence payload contains a process_notes list with the note."""
+    ctx = audit_context(tmp_path)
+    Ledger(tmp_path).note("constraint", "add a row to the audit table", scope="process")
+    evidence.record(ctx, {"status": "pass", "command": "test", "stdout": "42"})
+
+    ev = ctx.read_json(evidence.EVIDENCE)
+    assert "process_notes" in ev, "evidence payload has no process_notes field"
+    assert len(ev["process_notes"]) == 1
+    assert ev["process_notes"][0]["text"] == "add a row to the audit table"
+    assert ev["process_notes"][0]["scope"] == "process"
+
+
+def test_product_note_still_requires_product_evidence(tmp_path):
+    """A product constraint is still a requirement and fails when evidence is missing."""
+    ctx = audit_context(tmp_path)
+    Ledger(tmp_path).note("constraint", "do not add numpy")
+    evidence.record(ctx, {"status": "pass", "command": "test", "stdout": "42"})
+
+    reqs = evidence.requirements(ctx)
+    assert any(r.get("text") == "do not add numpy" for r in reqs), (
+        "product constraint is not a requirement"
+    )
+
+    deliver_audit(ctx, omitted={r["id"] for r in reqs if r.get("text") == "do not add numpy"})
+    problems = evidence.audit_problems(ctx)
+    assert any("no requirement evidence" in p for p in problems), (
+        f"omitting product evidence did not fail: {problems}"
+    )
+
+
+def test_self_citation_still_refused_for_product_note(tmp_path):
+    """intent-audit.json cannot be cited as evidence for a product requirement."""
+    ctx = audit_context(tmp_path)
+    Ledger(tmp_path).note("constraint", "do not add numpy")
+    evidence.record(ctx, {"status": "pass", "command": "test", "stdout": "42"})
+
+    # Deliver an audit that cites intent-audit.json for the constraint.
+    from refactory_dsh.agent_delivery import begin, finish
+
+    begin(ctx.workdir, "overwatch", "Audit each ask", ["reviews/overwatch.md", evidence.AUDIT])
+    ev = ctx.read_json(evidence.EVIDENCE)
+    rows = []
+    for item in ev["requirements"]:
+        row = {"id": item["id"], "requirement": item.get("text", ""),
+               "status": "pass",
+               "evidence": [{"path": "artifact/answer.txt", "detail": "verified"}]}
+        if item.get("kind") in ("correction", "constraint"):
+            # Cite intent-audit.json for the constraint — should be refused.
+            row["evidence"] = [{"path": evidence.AUDIT, "detail": "self-cited"}]
+            row["clauses"] = [{"clause": item.get("text", ""),
+                               "evidence": [{"path": evidence.AUDIT,
+                                              "detail": "self-cited"}]}]
+        rows.append(row)
+    ctx.write_json(evidence.AUDIT, {"requirements": rows})
+    ctx.write_text("reviews/overwatch.md", "VERDICT: PASS")
+    finish(ctx.workdir, "overwatch")
+
+    problems = evidence.audit_problems(ctx)
+    assert any("missing or invalid evidence reference" in p for p in problems), (
+        f"self-citation was not refused: {problems}"
+    )
+
+
+def test_console_steer_passes_scope(tmp_path):
+    """The console's --scope argument reaches ledger.note()."""
+    from refactory_dsh import console
+
+    root = tmp_path / "run"
+    root.mkdir()
+    Ledger.seed(root, "build a mode for circle packing")
+
+    payload = console._steer(
+        root, note="add a row to the audit", kind="constraint", scope="process"
+    )
+    entries = payload["entries"]
+    process_entries = [e for e in entries if e.get("scope") == "process"]
+    assert len(process_entries) == 1
+    assert process_entries[0]["text"] == "add a row to the audit"
+
+
+def test_gui_tool_steer_exposes_scope():
+    """The coverage.json chat mapping includes scope so the GUI tool can pass it."""
+    coverage_path = Path(__file__).resolve().parent.parent / "refactory_dsh" / "data" / "coverage.json"
+    coverage_data = json.loads(coverage_path.read_text())
+    steer_chat = coverage_data["operations"]["steer"]["chat"]
+    assert "scope" in steer_chat["fields"], "scope not in steer chat fields"
+    assert steer_chat["fields"]["scope"] == "scope"
+    assert "scope" in steer_chat["order"], "scope not in steer chat order"
+
+
+def test_audit_instructions_mention_process_notes():
+    """The overwatch audit instructions tell the agent about process notes."""
+    assert "process_notes" in evidence.AUDIT_INSTRUCTIONS
+    assert "followed" in evidence.AUDIT_INSTRUCTIONS
+
+
 @pytest.mark.parametrize("cls", [CreateMode, EditMode, CreateFastMode, EditFastMode])
 def test_native_smoke_gate_keeps_the_requested_execution_timeout(cls):
     from refactory_dsh.lowering import to_workflow

@@ -501,13 +501,26 @@ def status(run_root: Path, *, after: int = 0) -> dict[str, Any]:
         state = SPINE_STATES.get(str(spine.get("status")), state)
         if finished and not halted:
             state = "finished"
-    from refactory_dsh import live
+    from refactory_dsh import live, run_state
     activity = live.snapshot(run_root)
-    resources = activity.get('resources') or {}
+    # Compute owner liveness before the start-failure check needs it.
     checkpoint = _read_json(run_root / '.refactory/spine-checkpoint.json')
     owner = checkpoint.get('owner_pid')
     owner_alive = (True if (isinstance(owner, int) and _alive(owner)) else
                    False if isinstance(owner, int) else None)
+    # Supervision-history and start-failure enrich the activity dict.
+    sup_history = run_state.read_supervision_history(run_root)
+    if sup_history:
+        activity['respawn_count'] = len(sup_history)
+        activity['last_respawn'] = sup_history[-1].get('at', '')
+    start_failure = run_state.read_start_failure(run_root)
+    if start_failure and owner_alive is not True:
+        sf_spine = start_failure.get('spine_status_at_exit', '')
+        current_spine = str(spine.get('status', ''))
+        if current_spine == sf_spine or not current_spine:
+            state = 'failed'
+            activity['start_failure'] = start_failure.get('reason', '')
+    resources = activity.get('resources') or {}
     running = _running(run_root, console) or owner_alive is True
     if resources.get('exhausted') and not finished:
         state = 'failed'
@@ -541,6 +554,17 @@ def _state(run_root: Path, events: list[dict[str, Any]], console: dict[str, Any]
     with a console record and no live process did not finish, and saying
     "running" would leave a reader waiting forever for a run that is gone.
     """
+    # A start-failure with a dead owner overrides the spine state.
+    from refactory_dsh import run_state
+    sf = run_state.read_start_failure(run_root)
+    if sf:
+        checkpoint = _read_json(run_root / '.refactory/spine-checkpoint.json')
+        pid = checkpoint.get('owner_pid')
+        if isinstance(pid, int) and not _alive(pid):
+            sf_spine = sf.get('spine_status_at_exit', '')
+            current_spine = _spine(run_root).get('status', '')
+            if current_spine == sf_spine or not current_spine:
+                return 'failed'
     phase = search_phase(run_root)
     if phase in ("running", "died", "failed"):
         return phase
@@ -628,25 +652,8 @@ def _running(run_root: Path, console: dict[str, Any]) -> bool:
     return bool(pid) and _alive(int(pid))
 
 
-def _alive(pid: int) -> bool:
-    """Whether the process is running.
-
-    ``kill(pid, 0)`` succeeds for a zombie, and a run this process spawned and
-    never waited on stays a zombie until it is reaped -- so a finished run would
-    read as alive from the very process that started it.
-    """
-    try:
-        if os.waitpid(pid, os.WNOHANG)[0] == pid:
-            return False
-    except ChildProcessError:
-        pass  # not our child: the signal probe below is the only answer
-    except OSError:
-        return False
-    try:
-        os.kill(pid, 0)
-    except (ProcessLookupError, PermissionError):
-        return False
-    return True
+# Factored to run_state to avoid circular imports (supervisor → console → supervisor).
+from refactory_dsh.run_state import is_alive as _alive
 
 
 def _checkpoint_owner_pid(run_root: Path) -> int | None:
@@ -836,6 +843,7 @@ def _steer(
     seed: str | None = None,
     note: str | None = None,
     kind: str = "info",
+    scope: str = "product",
     verdicts: tuple[str, ...] | list[str] = (),
     with_gates: bool = False,
     control: str | None = None,
@@ -866,7 +874,7 @@ def _steer(
     if seed is not None:
         Ledger.seed(run_root, seed)
     if note is not None:
-        ledger.note(kind, note)
+        ledger.note(kind, note, scope=scope)
     recorded_scopes: dict[str, str] = {}
     for pair in verdicts:
         gate, _, value = str(pair).partition("=")
@@ -1291,6 +1299,11 @@ def _parser() -> argparse.ArgumentParser:
         help="a constraint must be respected; the others are context",
     )
     steer.add_argument(
+        "--scope", default="product", choices=["product", "process"],
+        help="product (default) notes become auditable requirements; process notes "
+             "record run-level directives that are visible but not auditable",
+    )
+    steer.add_argument(
         "--verdict", action="append", default=[],
         help="record a one-use gate answer as <gate>=<value> (repeatable), scoped "
              "to the current declared review inputs; changed inputs require a fresh answer",
@@ -1696,6 +1709,7 @@ def main(argv: list[str] | None = None) -> int:
             payload = _steer(
                 _root_for(args, project),
                 seed=args.seed, note=args.note, kind=args.kind,
+                scope=args.scope,
                 verdicts=args.verdict, with_gates=args.gates,
                 control=asked,
                 target=args.keep or args.reject,

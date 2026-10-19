@@ -352,3 +352,18 @@ def test_deleted_source_goes_to_builder(tmp_path):
     assert kind == "code_failure"
     # stop_unrepairable does not raise for code_failure
     evidence.stop_unrepairable(kind, "some detail")
+
+
+def test_a_failure_naming_only_a_basename_is_not_explained_by_an_unbuilt_package():
+    """A line mentioning some other package's `index.js` is not this package's missing entry point.
+
+    Fails without the change: the basename alone counted as a match, so the run stopped as unbuilt
+    instead of sending a real failure to the builder.
+    """
+    from refactory_dsh.unbuilt_check import UnbuiltPackage, failures_explained_by_unbuilt
+
+    unbuilt = [UnbuiltPackage(name="foo", directory="packages/foo", entry_point="packages/foo/lib/index.js")]
+    other = "FAILED tests/test_web.py::test_bundle - Error: Cannot find module 'packages/bar/lib/index.js'"
+    assert not failures_explained_by_unbuilt(other, unbuilt)
+    exact = "Error: Cannot find module '/repo/packages/foo/lib/index.js'"
+    assert failures_explained_by_unbuilt(exact, unbuilt)

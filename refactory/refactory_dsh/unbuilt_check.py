@@ -12,7 +12,6 @@ passed in, nothing is stored in a ContextVar or module global.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -287,8 +286,6 @@ def failures_explained_by_unbuilt(
         return False
     # Collect the exact entry-point paths (repo-relative)
     missing_paths = {pkg.entry_point for pkg in unbuilt}
-    # Also add the basename of each missing entry point
-    missing_basenames = {os.path.basename(ep) for ep in missing_paths}
     # Find failure lines: lines with FAILED, ERROR, FAIL, MODULE_NOT_FOUND,
     # ModuleNotFoundError, Cannot find module, failed to import
     import re
@@ -306,6 +303,8 @@ def failures_explained_by_unbuilt(
         return False
     for line in failure_lines:
         # Check if the line mentions an exact entry-point path
-        if not any(ep in line for ep in missing_paths) and not any(bn in line for bn in missing_basenames):
+        # Only the exact repo-relative path counts (an absolute path contains it): a bare
+        # basename such as `index.js` also names files in packages that are built.
+        if not any(ep in line for ep in missing_paths):
             return False
     return True

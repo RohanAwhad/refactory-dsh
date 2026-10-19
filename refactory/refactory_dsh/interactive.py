@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -334,6 +335,7 @@ def run(
             remaining = budget.remaining_s('final_validation')
             if remaining is not None:
                 timeout_s = min(timeout_s, remaining) if timeout_s else remaining
+        owner_start = int(time.time() * 1000) / 1000
         try:
             if model_context is not None or resource_limits:
                 from refactory_dsh.model import DshModelClient
@@ -378,6 +380,16 @@ def run(
                     print(f"refactory: the run stopped early: {recorded['error']}", file=sys.stderr)
             except (OSError, ValueError, AttributeError):
                 pass  # diagnostic only; do not mask the run's exit code
+        # Inline supervision for headless runs: if the owner exited and the
+        # run needs supervision, respawn it within the same process.
+        if headless and code != 0:
+            try:
+                from refactory_dsh.supervisor import supervise
+                result = supervise(workdir, first_exit_code=code, owner_start_time=owner_start)
+                if result is not None:
+                    code = result
+            except Exception:
+                pass  # supervision is best-effort; don't mask the run's exit code
         if code == 0:
             summary = run_summary(workdir)
             if summary:

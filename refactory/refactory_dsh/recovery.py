@@ -113,7 +113,12 @@ def prepare(root: Path, name: str, *, resource_limits: dict[str, Any] | None = N
 
 
 def start(root: Path, *, acknowledge_failed: bool = False) -> dict[str, Any]:
-    """Resume a known stopped boundary in a fresh owned process, same identity."""
+    """Resume a known stopped boundary via a detached supervisor process.
+
+    The supervisor (``python -m refactory_dsh.supervisor <root>``) starts the
+    owner child, waits on it, and respawns transient exits automatically.  One
+    supervisor per run, held by a file lock.
+    """
     import subprocess
     import sys
     from refactory_dsh.run_ownership import ownership
@@ -125,13 +130,16 @@ def start(root: Path, *, acknowledge_failed: bool = False) -> dict[str, Any]:
         # its parent as the still-active owner. The child repeats validation;
         # an intervening invocation can refuse this queued request safely.
         prepare(root, config['mode'].replace('/', '-'), acknowledge_failed=acknowledge_failed)
-    with (root / 'recovery.log').open('ab') as output:
-        child = subprocess.Popen([sys.executable, '-m', 'refactory_dsh.interactive', config['mode'],
-            '--workdir', str(root), '--headless', '--resume'], cwd=config['project'],
+    supervisor_log = root / '.refactory/supervisor.log'
+    supervisor_log.parent.mkdir(parents=True, exist_ok=True)
+    with supervisor_log.open('ab') as output:
+        child = subprocess.Popen([sys.executable, '-m', 'refactory_dsh.supervisor', str(root)],
+            cwd=config['project'],
             env={**os.environ, 'PYTHONUNBUFFERED': '1'}, stdout=output, stderr=subprocess.STDOUT,
             start_new_session=True)
-    # Record the resumed launcher's PID in the console's launch record so that
+    # Record the supervisor's PID in the console's launch record so that
     # console.stop finds and signals it exactly as it does a launched run's.
+    # The supervisor forwards signals to its child.
     from refactory_dsh.console import CONSOLE_FILE
     console_path = root / CONSOLE_FILE
     try:

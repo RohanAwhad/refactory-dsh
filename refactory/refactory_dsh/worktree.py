@@ -888,7 +888,8 @@ def _installs(found: Worktree) -> list[list[str]]:
     return commands
 
 
-def ensure_environment(found: Worktree, run: Path, budget: Any = None) -> tuple[Worktree, list[str], dict[str, Any] | None]:
+def ensure_environment(found: Worktree, run: Path, budget: Any = None, *,
+                       commit_lockfiles: bool = True) -> tuple[Worktree, list[str], dict[str, Any] | None]:
     """Install what the worktree's manifests declare, once per their content; say what went wrong.
 
     Lazily: before the first check, and again only when a manifest changed, the last
@@ -903,6 +904,10 @@ def ensure_environment(found: Worktree, run: Path, budget: Any = None) -> tuple[
     problems as text a failed check reports, and the prep-failure dict (step, returncode,
     timed_out) of the first failing install when one failed; an installer that is missing
     is reported as unavailable, which no code repair can fix.
+
+    When ``commit_lockfiles`` is False the installs still run but lockfiles are not
+    amended into the attempt.  Delivery uses this for the merged tree, where amending
+    would corrupt the worktree record.
     """
     from refactory_dsh import sandbox
 
@@ -937,7 +942,7 @@ def ensure_environment(found: Worktree, run: Path, budget: Any = None) -> tuple[
             (path / ".venv" / MARKER).write_text("created by refactory for this run's checks\n")
     left = _loose(path) - before
     lockfiles = sorted(name for name in {*_tracked_edits(path), *left} if name in LOCKFILES)
-    if lockfiles:
+    if lockfiles and commit_lockfiles:
         found = amend(found, run, lockfiles, "lockfile written by an install")
     record = _json(record_path)
     _write_json(record_path, {

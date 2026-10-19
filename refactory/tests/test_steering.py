@@ -674,6 +674,46 @@ def test_marking_consumed_is_identity_safe(tmp_path):
     )
 
 
+# ── scope: product vs process notes ────────────────────────────────────────
+
+
+def test_note_scope_roundtrips_through_ledger(tmp_path):
+    """A process note is persisted with (process) in the header and read back."""
+    ledger = Ledger.seed(tmp_path, "build a mode")
+    ledger.note("constraint", "add a row to the audit table", scope="process")
+    ledger.note("correction", "fix the explanation", scope="product")
+    ledger.note("info", "just context")
+
+    entries = Ledger(tmp_path).entries()
+    # Initial Idea, then three notes.
+    assert entries[1]["kind"] == "constraint"
+    assert entries[1]["scope"] == "process"
+    assert entries[1]["text"] == "add a row to the audit table"
+
+    assert entries[2]["kind"] == "correction"
+    assert entries[2]["scope"] == "product"
+
+    assert entries[3]["kind"] == "info"
+    assert entries[3]["scope"] == "product"  # default
+
+    # Backward compatibility: a ledger with no scope annotation defaults to product.
+    raw = (
+        "# User Intent Ledger\n\n"
+        "## [2026-01-01T00:00:00+00:00] Initial Idea\nold request\n\n"
+        "## [2026-01-01T00:00:01+00:00] constraint\nold constraint\n"
+    )
+    parsed = steering.parse_entries(raw)
+    assert parsed[0]["scope"] == "product"
+    assert parsed[1]["scope"] == "product"
+
+
+def test_note_rejects_invalid_scope(tmp_path):
+    """An unknown scope is refused, not silently accepted as product."""
+    ledger = Ledger.seed(tmp_path, "build a mode")
+    with pytest.raises(SteeringError, match="unknown note scope"):
+        ledger.note("info", "something", scope="unknown")
+
+
 def test_the_dsh_runtime_loads_the_ledger_into_its_agent_nodes(tmp_path, monkeypatch):
     """The runtime that ships gets the ledger too, not only the walker.
 
