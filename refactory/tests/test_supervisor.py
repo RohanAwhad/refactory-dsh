@@ -4,6 +4,8 @@ paths, and the resume-pending dance.
 """
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import json
 import os
 import signal
@@ -45,6 +47,56 @@ def _make_run_dir(tmp_path: Path, *, status: str = 'executing', owner_pid: int |
     }))
     (refactory / 'invocation.json').write_text(json.dumps({'id': 'test-inv'}))
     return tmp_path
+
+
+def _make_valid_run_dir(tmp_path: Path, *, status: str = 'ready',
+                        mode: str = 'demo/run', project: str | None = None) -> Path:
+    """Create a run directory that recovery.prepare() accepts.
+
+    Extends _make_run_dir with configuration_fingerprints so that a real
+    child process calling recovery.prepare() succeeds past fingerprint
+    validation.
+    """
+    from refactory_dsh.recovery import fingerprint as _fp
+    root = tmp_path
+    project_path = project or str(root)
+    refactory = root / '.refactory'
+    refactory.mkdir(parents=True, exist_ok=True)
+    # Source file for configuration fingerprints
+    source = root / 'mode.py'
+    source.write_text('answer = 42\n')
+    config = {
+        'mode': mode,
+        'project': project_path,
+        'configuration_fingerprints': {str(source): _fp(source)},
+    }
+    (refactory / 'run-config.json').write_text(json.dumps(config))
+    dead = _dead_pid()
+    checkpoint: dict[str, Any] = {
+        'run_id': str(root),
+        'graph': {'name': mode.replace('/', '-')},
+        'status': status,
+        'owner_pid': dead,
+        'file_fingerprints': {},
+    }
+    (refactory / 'spine-checkpoint.json').write_text(json.dumps(checkpoint))
+    (refactory / 'spine-status.json').write_text(json.dumps({'status': status}))
+    (refactory / 'invocation.json').write_text(json.dumps({'id': 'test-inv'}))
+    return root
+
+
+def _dsh_available() -> bool:
+    """Check if DSH build and profile are available for end-to-end tests."""
+    try:
+        from refactory_dsh.paths import require_build
+        require_build()
+    except Exception:
+        return False
+    try:
+        from refactory_dsh import dsh_profile
+        return dsh_profile.requirement() is None
+    except Exception:
+        return False
 
 
 def _dead_pid() -> int:
@@ -422,9 +474,11 @@ def test_pending_resume_end_to_end(tmp_path):
     """An exiting owner, one resume, and a new owner starting without a second command."""
     root = _make_run_dir(tmp_path, status='refused', owner_pid=_dead_pid())
 
-    # Simulate: write resume-pending.json, then run supervisor which picks it up
+    # Write resume-pending.json with the correct checkpoint SHA
+    checkpoint_bytes = (root / '.refactory/spine-checkpoint.json').read_bytes()
+    correct_sha = hashlib.sha256(checkpoint_bytes).hexdigest()
     pending = root / '.refactory/resume-pending.json'
-    pending.write_text(json.dumps({'at': '2026-10-17T15:30:00+00:00', 'checkpoint_sha256': 'abc'}))
+    pending.write_text(json.dumps({'at': '2026-10-17T15:30:00+00:00', 'checkpoint_sha256': correct_sha}))
 
     call_count = 0
 
@@ -640,7 +694,7 @@ def test_headless_inline_respawn(tmp_path):
 
     with patch.object(sv, '_start_child', side_effect=mock_start_child):
         with patch('refactory_dsh.recovery.prepare', side_effect=mock_prepare):
-            final_code = sv.supervise_inline(root, exit_code=1, max_respawns=3)
+            final_code = sv.supervise(root, first_exit_code=1, max_respawns=3)
 
     assert final_code == 0
     assert call_count == 1
@@ -652,8 +706,172 @@ def test_headless_deliberate_stop_no_respawn(tmp_path):
     """A deliberate stop during a headless run is never respawned."""
     root = _make_run_dir(tmp_path, status='paused', owner_pid=_dead_pid())
 
-    final_code = sv.supervise_inline(root, exit_code=0, max_respawns=3)
+    final_code = sv.supervise(root, first_exit_code=0, max_respawns=3)
 
     assert final_code == 0
     history = run_state.read_supervision_history(root)
     assert len(history) == 0
+
+
+# ── Item 1: real child no self-refusal ─────────────────────────────────────
+
+
+@pytest.mark.skipif(not _dsh_available(), reason='DSH build/profile not available')
+def test_real_child_no_self_refusal(tmp_path):
+    """The supervisor does not write the child's PID into the checkpoint,
+    so the child's recovery.prepare() succeeds instead of refusing itself.
+
+    Positive assertion: the child re-creates resume-request.json (written
+    only after recovery.prepare() passes the owner-alive check).  The
+    supervisor's own prepare() writes the same file first; the wrapper
+    deletes it before starting the child so only the child's write is
+    observed.
+    """
+    root = _make_valid_run_dir(tmp_path, status='ready')
+
+    original_start = sv._start_child
+
+    def _intercept_start(r: Path) -> Any:
+        # Delete resume-request.json left by the supervisor's own prepare()
+        # so only the child's prepare() can recreate it.
+        rr = r / '.refactory/resume-request.json'
+        if rr.exists():
+            rr.unlink()
+        return original_start(r)
+
+    with patch.object(sv, '_start_child', side_effect=_intercept_start):
+        sv.supervise(root, max_respawns=0)
+
+    # Positive: the child's recovery.prepare() re-created resume-request.json.
+    rr = root / '.refactory/resume-request.json'
+    log_content = ''
+    log_path = root / 'recovery.log'
+    if log_path.exists():
+        log_content = log_path.read_text(errors='replace')[:1000]
+    assert rr.exists(), (
+        f"Child's recovery.prepare() did not write resume-request.json. "
+        f"recovery.log: {log_content}"
+    )
+    data = json.loads(rr.read_text())
+    expected_sha = hashlib.sha256(
+        (root / '.refactory/spine-checkpoint.json').read_bytes()
+    ).hexdigest()
+    assert data['checkpoint_sha256'] == expected_sha
+
+
+# ── Item 2: stop prevents respawn ──────────────────────────────────────────
+
+
+def test_stop_before_status_not_respawned(tmp_path):
+    """A stop requested during the child's run prevents respawn,
+    even when the spine status is still 'executing'."""
+    root = _make_run_dir(tmp_path, status='executing', owner_pid=_dead_pid())
+
+    class FakeChild:
+        def __init__(self) -> None:
+            self.pid = 50001
+            self.returncode = 1
+        def wait(self) -> None:
+            # Stop is requested while the child is running
+            stop = root / '.refactory/stop-requested.json'
+            stop.parent.mkdir(parents=True, exist_ok=True)
+            stop.write_text(json.dumps({'pid': self.pid, 'at': round(time.time(), 3)}))
+        def poll(self) -> int:
+            return self.returncode
+
+    def mock_start_child(r: Path) -> Any:
+        return FakeChild()
+
+    def mock_prepare(r: Path, name: str, **kw: Any) -> Path:
+        return r / 'graphs'
+
+    with patch.object(sv, '_start_child', side_effect=mock_start_child):
+        with patch('refactory_dsh.recovery.prepare', side_effect=mock_prepare):
+            sv.supervise(root, max_respawns=3)
+
+    # No respawn — the stop was deliberate
+    history = run_state.read_supervision_history(root)
+    assert len(history) == 0
+
+
+def test_stop_time_compared_to_owner_start(tmp_path):
+    """A stop before the owner started does not block; a stop after does."""
+    root = _make_run_dir(tmp_path, status='executing', owner_pid=_dead_pid())
+    now = time.time()
+    # Stop from 100s ago
+    (root / '.refactory/stop-requested.json').write_text(
+        json.dumps({'pid': 99999, 'at': now - 100}))
+    # Owner started 10s ago — stop is old, supervision continues
+    assert run_state.needs_supervision(root, since=now - 10) is True
+    # Owner started 200s ago — stop happened after start, supervision blocked
+    assert run_state.needs_supervision(root, since=now - 200) is False
+
+
+# ── Item 3: nesting prevention via lock ────────────────────────────────────
+
+
+def test_no_nested_supervision_via_lock(tmp_path):
+    """While a supervisor holds the lock, another supervise() returns
+    immediately — the lock prevents nesting."""
+    root = _make_run_dir(tmp_path, status='executing', owner_pid=_dead_pid())
+
+    # Hold the lock as the parent supervisor would
+    lock_path = root / '.refactory/supervisor.lock'
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        # Inline host returns the exit code when it cannot acquire the lock
+        result = sv.supervise(root, first_exit_code=1, max_respawns=3)
+        assert result == 1
+
+        # Detached host returns None
+        result2 = sv.supervise(root, max_respawns=3)
+        assert result2 is None
+
+        # No supervision activity whatsoever
+        history = run_state.read_supervision_history(root)
+        assert len(history) == 0
+    finally:
+        os.close(lock_fd)
+
+
+# ── Item 4: resume-pending SHA validation ──────────────────────────────────
+
+
+def test_resume_pending_wrong_sha_rejected(tmp_path):
+    """A resume-pending.json with a wrong checkpoint_sha256 is dropped."""
+    root = _make_run_dir(tmp_path, status='refused', owner_pid=_dead_pid())
+    pending = root / '.refactory/resume-pending.json'
+    pending.write_text(json.dumps({
+        'at': '2026-10-17T15:30:00+00:00',
+        'checkpoint_sha256': 'wrong-sha-value',
+    }))
+
+    result = sv._read_resume_pending(root)
+
+    assert result is None
+    assert not pending.exists()
+    # A start-failure was recorded with the mismatch reason
+    failure = run_state.read_start_failure(root)
+    assert failure is not None
+    assert 'mismatch' in failure['reason'].lower()
+
+
+def test_resume_pending_correct_sha_consumed(tmp_path):
+    """A resume-pending.json with the correct checkpoint_sha256 is consumed."""
+    root = _make_run_dir(tmp_path, status='refused', owner_pid=_dead_pid())
+    checkpoint_bytes = (root / '.refactory/spine-checkpoint.json').read_bytes()
+    correct_sha = hashlib.sha256(checkpoint_bytes).hexdigest()
+    pending = root / '.refactory/resume-pending.json'
+    pending.write_text(json.dumps({
+        'at': '2026-10-17T15:30:00+00:00',
+        'checkpoint_sha256': correct_sha,
+    }))
+
+    result = sv._read_resume_pending(root)
+
+    assert result is not None
+    assert result['checkpoint_sha256'] == correct_sha
+    assert not pending.exists()

@@ -111,11 +111,14 @@ When an owner process exits and the run's spine status is neither terminal nor d
 |--------|--------|
 | Respawn limit | `REFACTORY_MAX_RESPAWNS` environment variable (default 3, 0 disables). |
 | History | Each respawn is logged to `.refactory/supervision-history.json` and to `.refactory/events.jsonl`. |
-| Detached process | The supervisor (`python -m refactory_dsh.supervisor`) outlives the CLI or GUI that launched it. One per run, held by `.refactory/supervisor.lock`. |
+| Detached process | The supervisor (`python -m refactory_dsh.supervisor`) outlives the CLI or GUI that launched it. One per run, held by `.refactory/supervisor.lock`. `console.json` keeps the supervisor's PID; the supervisor forwards SIGINT/SIGTERM to its child. |
 | Transient vs deterministic | A `recovery.prepare()` refusal (e.g. "last node outcome is unknown or failed") is deterministic — recorded as a start failure and not retried. Only transient exits (crash, kill, model outage) are respawned. |
 | Start-failure recording | An owner that exits before advancing the spine status writes `.refactory/start-failure.json` with the reason. `refactory status` reports `state: failed` with the reason, instead of the stale spine state. |
 | Single-resume | A resume requested while the old owner is still exiting is filed as `.refactory/resume-pending.json` and honoured automatically when the old owner finishes exiting. No second command needed (dm-81). |
-| Headless inline | A fresh headless run (`refactory ceo --headless`, `interactive.run(headless=True)`) applies the same supervision loop inline after the owner exits. |
+| Headless inline | A fresh headless run calls the unified `supervise()` function with `first_exit_code`, sharing the lock, signal forwarding, resume-pending consumption, and start-failure recording with the detached host. |
+| Stop-requested guard | After each child exit, `needs_supervision` checks `.refactory/stop-requested.json`; a stop requested at or after the child's start time prevents respawn. An older stop does not block a resumed run. |
+| Resume-pending validation | `resume-pending.json` is consumed only when its `checkpoint_sha256` matches the current `spine-checkpoint.json`; a mismatched pending is deleted and reported in `start-failure.json`. |
+| Nesting prevention | The `supervisor.lock` prevents a supervised child from running its own supervision loop. A child's attempt to call `supervise()` fails the non-blocking flock and returns immediately. |
 | Supervisor killed | If the supervisor itself is killed (`SIGKILL`), the owner child continues in its own session. The run is then unsupervised — exactly as today. A manual `refactory graph-control resume` is the fallback. |
 
 ### Replay a failed run

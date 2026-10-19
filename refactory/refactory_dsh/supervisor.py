@@ -7,6 +7,7 @@ transient exits up to a bounded number of times.
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import logging
 import os
@@ -91,47 +92,55 @@ def _append_supervision_history(root: Path, entry: dict[str, Any]) -> None:
 
 
 def _read_resume_pending(root: Path) -> dict | None:
-    """Read and remove resume-pending.json if present."""
+    """Read and remove resume-pending.json if present and SHA-valid.
+
+    The file is consumed only when its ``checkpoint_sha256`` matches the
+    current ``spine-checkpoint.json`` bytes.  A mismatch means the checkpoint
+    has changed since the resume was requested; the stale pending is deleted
+    and a start-failure is recorded so that the mismatch is visible in
+    ``refactory status``.
+    """
     path = root / '.refactory/resume-pending.json'
     if not path.exists():
         return None
     try:
         data = json.loads(path.read_text())
-        path.unlink(missing_ok=True)
-        return data if isinstance(data, dict) else None
     except (OSError, json.JSONDecodeError):
         try:
             path.unlink(missing_ok=True)
         except OSError:
             pass
         return None
-
-
-def _update_checkpoint_pid(root: Path, pid: int) -> None:
-    """Update owner_pid in spine-checkpoint.json."""
-    path = root / '.refactory/spine-checkpoint.json'
+    if not isinstance(data, dict):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
+    # Validate checkpoint_sha256
+    checkpoint_path = root / '.refactory/spine-checkpoint.json'
     try:
-        data = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
-        data = {}
-    if isinstance(data, dict):
-        data['owner_pid'] = pid
-        tmp = path.with_suffix('.tmp')
-        tmp.write_text(json.dumps(data))
-        tmp.replace(path)
-
-
-def _update_console_pid(root: Path, pid: int) -> None:
-    """Update pid in console.json."""
-    from refactory_dsh.console import CONSOLE_FILE
-    path = root / CONSOLE_FILE
+        current_sha = hashlib.sha256(checkpoint_path.read_bytes()).hexdigest()
+    except OSError:
+        current_sha = None
+    pending_sha = data.get('checkpoint_sha256')
+    if current_sha is None or pending_sha != current_sha:
+        reason = (f'resume-pending.json dropped: checkpoint SHA mismatch '
+                  f'(pending {pending_sha}, current {current_sha})')
+        logger.warning('%s', reason)
+        record_start_failure(root, os.getpid(), 0,
+                             run_state.spine_status(root), run_state.spine_status(root),
+                             reason=reason)
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
     try:
-        data = json.loads(path.read_text()) if path.exists() else {}
-    except (OSError, json.JSONDecodeError):
-        data = {}
-    if isinstance(data, dict):
-        data['pid'] = pid
-        path.write_text(json.dumps(data, indent=2))
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return data
 
 
 def _build_owner_argv(root: Path) -> tuple[list[str], str]:
@@ -159,16 +168,29 @@ def _start_child(root: Path) -> subprocess.Popen:
     return child
 
 
-def supervise(root: Path, *, max_respawns: int | None = None) -> None:
+def supervise(root: Path, *, max_respawns: int | None = None,
+              first_exit_code: int | None = None,
+              owner_start_time: float | None = None) -> int | None:
     """The main supervision loop.
 
     Acquires an exclusive lock, starts and watches the owner child,
     respawns on transient exits, records start failures, and consumes
     resume-pending.json.
+
+    When *first_exit_code* is given (inline host), the loop begins with
+    that exit code instead of starting an initial child.  Returns the
+    final child exit code as ``int`` in that case, or ``None`` for the
+    detached host.
+
+    The lock also prevents nesting: a supervised child that calls
+    ``supervise()`` itself fails the non-blocking flock and returns
+    immediately, because ``Popen`` does not pass the lock descriptor to
+    children and the parent still holds the file lock.
     """
     root = Path(root).resolve()
     if max_respawns is None:
         max_respawns = max_respawns_from_env()
+    inline = first_exit_code is not None
 
     # Acquire exclusive lock
     lock_path = root / '.refactory/supervisor.lock'
@@ -178,7 +200,7 @@ def supervise(root: Path, *, max_respawns: int | None = None) -> None:
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except (BlockingIOError, OSError):
         os.close(lock_fd)
-        return  # another supervisor is running
+        return first_exit_code  # another supervisor is running
 
     _signal_exit = False
     _current_child: subprocess.Popen | None = None
@@ -196,44 +218,59 @@ def supervise(root: Path, *, max_respawns: int | None = None) -> None:
     signal.signal(signal.SIGTERM, _handle_signal)
 
     respawn_count = 0
+    last_exit_code = first_exit_code
+    sf_path = root / '.refactory/start-failure.json'
+
     try:
-        # Initial prepare + start
         config = json.loads((root / '.refactory/run-config.json').read_text())
         name = config['mode'].replace('/', '-')
         from refactory_dsh import recovery
-        try:
-            recovery.prepare(root, name)
-        except ValueError as exc:
-            record_start_failure(root, os.getpid(), 1, run_state.spine_status(root),
-                                 run_state.spine_status(root), reason=str(exc))
-            return
 
-        child = _start_child(root)
-        _current_child = child
-        _update_checkpoint_pid(root, child.pid)
-        _update_console_pid(root, child.pid)
-
-        # Clear start-failure from a previous cycle if we got this far
-        sf_path = root / '.refactory/start-failure.json'
-        if sf_path.exists():
+        if not inline:
+            # Detached host: initial prepare + start
             try:
-                sf_path.unlink()
-            except OSError:
-                pass
+                recovery.prepare(root, name)
+            except ValueError as exc:
+                record_start_failure(root, os.getpid(), 1, run_state.spine_status(root),
+                                     run_state.spine_status(root), reason=str(exc))
+                return None
+
+            child = _start_child(root)
+            _current_child = child
+            child_start_time = time.time()
+
+            # Clear start-failure from a previous cycle if we got this far
+            if sf_path.exists():
+                try:
+                    sf_path.unlink()
+                except OSError:
+                    pass
+        else:
+            # Inline host: the owner already ran and exited
+            child = None
+            child_start_time = owner_start_time if owner_start_time is not None else time.time()
 
         while True:
-            start_time = time.monotonic()
-            spine_before = run_state.spine_status(root)
+            if child is not None:
+                start_time = time.monotonic()
+                spine_before = run_state.spine_status(root)
 
-            child.wait()
-            exit_code = child.returncode
+                child.wait()
+                exit_code = child.returncode
+                last_exit_code = exit_code
 
-            elapsed = time.monotonic() - start_time
-            spine_after = run_state.spine_status(root)
+                elapsed = time.monotonic() - start_time
+                spine_after = run_state.spine_status(root)
+            else:
+                # First iteration of inline host
+                exit_code = first_exit_code  # type: ignore[assignment]
+                last_exit_code = exit_code
+                spine_before = run_state.spine_status(root)
+                spine_after = spine_before
+                elapsed = 0.0
 
             if _signal_exit:
-                # We received a signal — do not respawn
-                return
+                return last_exit_code if inline else None
 
             # Check for resume-pending.json (dm-81 fix)
             pending = _read_resume_pending(root)
@@ -243,13 +280,13 @@ def supervise(root: Path, *, max_respawns: int | None = None) -> None:
                 try:
                     recovery.prepare(root, name)
                 except ValueError as exc:
-                    record_start_failure(root, child.pid, exit_code,
+                    pid_for_record = child.pid if child is not None else os.getpid()
+                    record_start_failure(root, pid_for_record, exit_code,
                                          spine_before, spine_after, reason=str(exc))
-                    return
+                    return last_exit_code if inline else None
                 child = _start_child(root)
                 _current_child = child
-                _update_checkpoint_pid(root, child.pid)
-                _update_console_pid(root, child.pid)
+                child_start_time = time.time()
                 # Clear any start-failure from the previous child
                 if sf_path.exists():
                     try:
@@ -258,29 +295,33 @@ def supervise(root: Path, *, max_respawns: int | None = None) -> None:
                         pass
                 continue
 
-            # Record start failure if the child exited quickly with no status change
-            if elapsed < START_FAILURE_WINDOW_S and spine_before == spine_after and exit_code != 0:
+            # Check if supervision is needed — single decision function
+            if not run_state.needs_supervision(root, since=child_start_time):
+                return last_exit_code if inline else None
+
+            # Supervision is needed — record start failure if the child
+            # exited quickly with no status change (a deliberate stop has
+            # already returned above via needs_supervision).
+            if child is not None and elapsed < START_FAILURE_WINDOW_S and spine_before == spine_after and exit_code != 0:
                 record_start_failure(root, child.pid, exit_code, spine_before, spine_after)
 
-            # Check if supervision is needed
-            if not run_state.needs_supervision(root):
-                return
-
-            # Supervision is needed — classify the exit
+            # Classify the exit
             if respawn_count >= max_respawns:
+                pid_for_record = child.pid if child is not None else os.getpid()
                 reason = f'supervision exhausted after {respawn_count} respawn(s)'
-                record_start_failure(root, child.pid, exit_code, spine_before, spine_after,
+                record_start_failure(root, pid_for_record, exit_code, spine_before, spine_after,
                                      reason=reason)
-                return
+                return last_exit_code if inline else None
 
             # Try recovery.prepare() to distinguish transient vs deterministic
             try:
                 recovery.prepare(root, name)
             except ValueError as exc:
                 # Deterministic refusal — do not retry
-                record_start_failure(root, child.pid, exit_code, spine_before, spine_after,
+                pid_for_record = child.pid if child is not None else os.getpid()
+                record_start_failure(root, pid_for_record, exit_code, spine_before, spine_after,
                                      reason=str(exc))
-                return
+                return last_exit_code if inline else None
             except Exception:
                 # Transient I/O or other error — treat as transient
                 pass
@@ -298,9 +339,8 @@ def supervise(root: Path, *, max_respawns: int | None = None) -> None:
 
             child = _start_child(root)
             _current_child = child
+            child_start_time = time.time()
             history_entry['child_pid'] = child.pid
-            _update_checkpoint_pid(root, child.pid)
-            _update_console_pid(root, child.pid)
 
             _append_supervision_history(root, history_entry)
 
@@ -322,76 +362,6 @@ def supervise(root: Path, *, max_respawns: int | None = None) -> None:
 
     finally:
         os.close(lock_fd)
-
-
-def supervise_inline(root: Path, exit_code: int, *, max_respawns: int | None = None) -> int:
-    """Inline supervision for headless interactive.run().
-
-    After the owner exits, apply the same supervision decision as the detached
-    supervisor.  Returns the final exit code.
-    """
-    root = Path(root).resolve()
-    if max_respawns is None:
-        max_respawns = max_respawns_from_env()
-
-    config = json.loads((root / '.refactory/run-config.json').read_text())
-    name = config['mode'].replace('/', '-')
-
-    respawn_count = 0
-    current_code = exit_code
-
-    while True:
-        spine_after = run_state.spine_status(root)
-
-        if not run_state.needs_supervision(root):
-            return current_code
-
-        if respawn_count >= max_respawns:
-            reason = f'supervision exhausted after {respawn_count} respawn(s)'
-            record_start_failure(root, os.getpid(), current_code,
-                                 spine_after, spine_after, reason=reason)
-            return current_code
-
-        # Classify the exit: transient or deterministic
-        from refactory_dsh import recovery
-        try:
-            recovery.prepare(root, name)
-        except ValueError as exc:
-            record_start_failure(root, os.getpid(), current_code,
-                                 spine_after, spine_after, reason=str(exc))
-            return current_code
-        except Exception:
-            pass  # transient I/O error — treat as transient
-
-        respawn_count += 1
-        history_entry = {
-            'at': datetime.now(timezone.utc).isoformat(),
-            'attempt': respawn_count,
-            'reason': f'owner exited with code {current_code}; spine status {spine_after!r} is not terminal',
-            'exit_code_of_previous': current_code,
-            'spine_status': spine_after,
-            'supervisor_pid': os.getpid(),
-        }
-
-        child = _start_child(root)
-        history_entry['child_pid'] = child.pid
-        _update_checkpoint_pid(root, child.pid)
-        _update_console_pid(root, child.pid)
-
-        _append_supervision_history(root, history_entry)
-
-        try:
-            from refactory_dsh.live import emit
-            emit(root, 'supervisor_respawn', state='respawned',
-                 summary=f'inline respawn #{respawn_count}: {history_entry["reason"]}',
-                 child_pid=child.pid, attempt=respawn_count)
-        except Exception:
-            pass
-
-        child.wait()
-        current_code = child.returncode
-
-    return current_code
 
 
 if __name__ == '__main__':

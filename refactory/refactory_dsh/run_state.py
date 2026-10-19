@@ -55,8 +55,14 @@ def spine_status(root: Path) -> str:
         return ''
 
 
-def needs_supervision(root: Path) -> bool:
-    """True when the run needs automatic supervision (owner dead, not terminal/paused)."""
+def needs_supervision(root: Path, *, since: float | None = None) -> bool:
+    """True when the run needs automatic supervision (owner dead, not terminal/paused).
+
+    When *since* is given (epoch seconds from ``time.time()``), a
+    ``stop-requested.json`` whose ``at`` is at or after *since* suppresses
+    supervision — the stop was deliberate for this owner.  An older stop
+    (from a previous owner) does not block a resumed run's supervision.
+    """
     root = Path(root)
     status = spine_status(root)
     if not status:
@@ -65,6 +71,17 @@ def needs_supervision(root: Path) -> bool:
         return False
     if is_deliberately_paused(status):
         return False
+    # A stop requested since the current owner started is deliberate.
+    if since is not None:
+        stop_path = root / '.refactory/stop-requested.json'
+        if stop_path.exists():
+            try:
+                stop_data = json.loads(stop_path.read_text())
+                stop_at = stop_data.get('at')
+                if isinstance(stop_at, (int, float)) and stop_at >= since:
+                    return False
+            except (OSError, json.JSONDecodeError, ValueError):
+                pass
     # Check owner liveness
     try:
         checkpoint = json.loads((root / '.refactory/spine-checkpoint.json').read_text())
