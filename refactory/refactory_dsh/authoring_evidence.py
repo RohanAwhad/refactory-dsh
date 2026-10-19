@@ -297,6 +297,32 @@ def audit_problems(ctx: Any) -> list[str]:
     return problems
 
 
+def check_failure_kind(
+    result: Any,
+    *,
+    budget: Any = None,
+) -> str:
+    """Classify a check's failure from structural signals, never from its output.
+
+    A check's stdout and stderr are the target project's text.  Word-scanning
+    them for ``credentials``, ``ModuleNotFoundError`` or ``timed out``
+    misclassifies ordinary test failures.  Only exit code, timeout flag, signal
+    and budget state decide the kind.
+    """
+    if budget is not None:
+        snapshot = budget.snapshot() if hasattr(budget, "snapshot") else {}
+        if snapshot.get("exhausted"):
+            return "resource_exhausted"
+    if getattr(result, "timed_out", False):
+        return "uncertain"
+    rc = getattr(result, "returncode", None)
+    if rc is not None and rc < 0:
+        return "uncertain"
+    if rc in (126, 127):
+        return "unavailable"
+    return "code_failure"
+
+
 def failure_kind(detail: str, *, timed_out: bool = False, returncode: int | None = None) -> str:
     lowered = detail.lower()
     if any(word in lowered for word in ("budget exhausted", "resource exhausted", "reserve retained", "budgetexhausted")):

@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 from typing import Any
 
-from refactory_dsh import create_ops, design_ops, repo_change, sandbox, worktree
+from refactory_dsh import create_ops, design_ops, repo_change, sandbox, unbuilt_check, worktree
 from refactory_dsh import authoring_evidence as evidence
 from refactory_dsh.nn import Verdict
 
@@ -215,13 +215,14 @@ def focused_check(ctx: Any) -> dict[str, Any]:
             ctx.write_json("test-guardedness.json", guardedness)
     if payload["status"] == "fail":
         detail = f"requested runtime check failed (exit {payload.get('returncode')}): {payload.get('stderr') or payload.get('stdout')}"
-        kind = evidence.failure_kind(detail, timed_out=bool(payload.get("timed_out")), returncode=payload.get("returncode"))
+        kind = evidence.check_failure_kind(result, budget=getattr(ctx, "budget", None))
         if kind != "code_failure":
             evidence.record(ctx, {**payload, "status": kind})
             evidence.stop_unrepairable(kind, detail)
 
         # A failure the unchanged base has too is not the attempt's.
-        if ctx.facts.get("artifact") and worktree.recorded(ctx.workdir) is not None:
+        found = worktree.recorded(ctx.workdir) if ctx.facts.get("artifact") else None
+        if found is not None:
             filtered = base_check.filter_check(
                 ctx, result, command,
                 float(ctx.knob("check_timeout_s", 60)),
@@ -232,10 +233,19 @@ def focused_check(ctx: Any) -> dict[str, Any]:
                     "unavailable",
                     f"the base check could not run: {filtered.base_environment_failure}",
                 )
+
+            # Diagnose unbuilt packages from the worktree's own manifests.
+            wt_path = Path(found.path)
+            unbuilt = unbuilt_check.scan_unbuilt_packages(wt_path, found.base, found.head)
+            unbuilt_msg = unbuilt_check.format_unbuilt_diagnosis(unbuilt) if unbuilt else ""
+
             if filtered.all_excused:
                 payload["status"] = "pass"
                 payload["inherited_failures"] = sorted(filtered.inherited)
                 ctx.set_fact("inherited_failures", sorted(filtered.inherited))
+                if unbuilt_msg:
+                    check_text = ctx.read_text("focused-check.json") if ctx.exists("focused-check.json") else ""
+                    ctx.write_text("check.txt", f"(the check passed; inherited failures excused)\n\n{unbuilt_msg}\n")
                 ctx.write_json("focused-check.json", payload)
     if ctx.facts.get("package_path"):
         problems = evidence.current_problems(ctx)
@@ -285,16 +295,25 @@ def gate_qa(ctx: Any) -> str:
             findings.append("focused QA must explicitly list findings and checks not run")
         else:
             findings.extend(str(item) for item in qa["findings"] if str(item).strip())
-    if check.get("status") == "fail":
-        findings.append(f"requested runtime check failed (exit {check.get('returncode')})")
-    # Keep concrete runtime diagnostics ahead of the coverage/freshness findings.
-    if check.get("status") == "fail":
-        findings[-1] += f": {check.get('stderr') or check.get('stdout')}"
+    check_failed = check.get("status") == "fail"
+    if check_failed:
+        check_output = check.get("stderr") or check.get("stdout") or ""
+        findings.append(f"requested runtime check failed (exit {check.get('returncode')}): {check_output}")
     findings.extend(evidence.current_problems(ctx, ("focused_qa",)))
     findings.extend(evidence.audit_problems(ctx))
     if findings:
-        detail = "\n".join(findings)
-        evidence.stop_unrepairable(evidence.failure_kind(detail), detail)
+        # Classify only refactory's own text; check stderr/stdout is target text
+        # and must not be word-scanned (correction 1: gate_qa classifies target text).
+        if check_failed:
+            refactory_findings = [
+                f for f in findings
+                if not f.startswith("requested runtime check failed")
+            ]
+        else:
+            refactory_findings = findings
+        if refactory_findings:
+            refactory_detail = "\n".join(refactory_findings)
+            evidence.stop_unrepairable(evidence.failure_kind(refactory_detail), refactory_detail)
         return _repair(ctx, findings)
     ctx.set_fact("qa_passed", True)
     ctx.write_json("fast-report.json", _report(ctx, "qa_passed", []))
