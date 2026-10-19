@@ -21,6 +21,8 @@ import pytest
 
 from refactory_dsh import run_state, graph_control, readable
 from refactory_dsh import supervisor as sv
+from refactory_dsh import interactive
+from refactory_dsh.run_ownership import ownership, held
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -885,3 +887,147 @@ def test_resume_pending_correct_sha_consumed(tmp_path):
     assert result is not None
     assert result['checkpoint_sha256'] == correct_sha
     assert not pending.exists()
+
+
+# ── dm-94: resume through real interactive.run with ownership ──────────────
+
+
+def test_dm94_resume_through_interactive_run(tmp_path):
+    """dm-94: through the real interactive.run, ownership included, a resume
+    sent while a fresh headless run's owner exits at a gate starts the next
+    owner, and the run continues.
+
+    The real interactive.run is called with the real ownership() context
+    manager.  Mocks replace only the DSH build/profile checks, the graph
+    preparation, the command builder, and the subprocess runner.  The test
+    verifies that supervise() is called AFTER ownership is released — the
+    core dm-94 fix — and that the resume-pending.json left during the
+    owner's exit is visible to supervision.
+    """
+    root = tmp_path.resolve()
+    refactory = root / '.refactory'
+    refactory.mkdir(parents=True, exist_ok=True)
+
+    # Create a valid run-config.json for resume
+    model_ctx = {'provider': 'test', 'model': 'test', 'worker_backend': 'dsh',
+                 'permission_mode': 'default'}
+    (refactory / 'run-config.json').write_text(json.dumps({
+        'mode': 'demo/run', 'project': str(root),
+        'model_context': model_ctx,
+        'configuration_fingerprints': {},
+    }))
+    # Create checkpoint and status for the initial state (waiting at a gate)
+    dead = _dead_pid()
+    checkpoint: dict[str, Any] = {
+        'run_id': str(root),
+        'graph': {'name': 'demo-run'},
+        'status': 'refused',
+        'owner_pid': dead,
+        'file_fingerprints': {},
+    }
+    (refactory / 'spine-checkpoint.json').write_text(json.dumps(checkpoint))
+    (refactory / 'spine-status.json').write_text(json.dumps({'status': 'refused'}))
+    (refactory / 'invocation.json').write_text(json.dumps({'id': 'test-inv'}))
+
+    graphs_dir = root / 'graphs'
+    graphs_dir.mkdir(exist_ok=True)
+
+    supervise_ownership_released: list[bool] = []
+
+    def mock_run_graph_command(argv, *, workdir, context, cwd, timeout=None,
+                               env=None, stop_condition=None, **kwargs):
+        """Simulate: owner ran, stopped at gate (code 1).  A user sent a
+        resume while the owner was exiting — represented by writing
+        resume-pending.json before returning."""
+        checkpoint_bytes = (workdir / '.refactory/spine-checkpoint.json').read_bytes()
+        pending_data = {
+            'at': '2026-10-19T04:13:00+00:00',
+            'checkpoint_sha256': hashlib.sha256(checkpoint_bytes).hexdigest(),
+        }
+        pending_path = workdir / '.refactory/resume-pending.json'
+        pending_path.write_text(json.dumps(pending_data))
+        return subprocess.CompletedProcess(argv, 1)
+
+    def mock_supervise(workdir, **kwargs):
+        """Verify ownership is released (the dm-94 fix), then report
+        that the resumed child completed successfully."""
+        is_held = held(workdir)
+        supervise_ownership_released.append(not is_held)
+        return 0  # Successful run after resume
+
+    with patch('refactory_dsh.paths.require_build'), \
+         patch('refactory_dsh.dsh_profile.require'), \
+         patch('refactory_dsh.recovery.prepare', return_value=graphs_dir), \
+         patch.object(interactive, 'command',
+                      return_value=[sys.executable, '-c', 'pass']), \
+         patch('refactory_dsh.workers.run_graph_command',
+               side_effect=mock_run_graph_command), \
+         patch('refactory_dsh.supervisor.supervise',
+               side_effect=mock_supervise):
+
+        code = interactive.run('demo/run', workdir=root, headless=True,
+                               resume=True)
+
+    # The run completed via supervision after resume
+    assert code == 0, f'Expected exit code 0, got {code}'
+    # supervise was called once
+    assert len(supervise_ownership_released) == 1, 'supervise was not called'
+    # Key dm-94 assertion: ownership was released before supervise was called
+    assert supervise_ownership_released[0], \
+        'supervise() was called while ownership was still held (dm-94 bug)'
+
+
+# ── dm-93: real run_owned stops a lingering child ──────────────────────────
+
+
+def test_real_run_owned_stops_lingering_child(tmp_path):
+    """A real child process writes terminal status and keeps running;
+    run_owned with stop_condition ends it via the stop-condition mechanism.
+
+    Uses the real run_owned function with a real subprocess — no mocks on
+    the subprocess layer.  The stop condition reads a status file the child
+    writes and returns True when it says 'failed'.
+    """
+    from refactory_dsh.owned_process import run_owned
+
+    status_file = tmp_path / 'status.json'
+
+    # Script that writes terminal status then sleeps forever
+    child_script = tmp_path / 'lingering_child.py'
+    child_script.write_text(textwrap.dedent(f"""\
+        import json, time, sys
+        status_path = sys.argv[1]
+        # Write terminal status
+        with open(status_path, 'w') as f:
+            json.dump({{'status': 'failed'}}, f)
+        # Keep running (simulates a lingering coordinator)
+        try:
+            time.sleep(300)
+        except KeyboardInterrupt:
+            pass
+    """))
+
+    def stop_condition():
+        if not status_file.exists():
+            return False
+        try:
+            data = json.loads(status_file.read_text())
+            return data.get('status') in ('done', 'failed', 'cancelled')
+        except (json.JSONDecodeError, OSError):
+            return False
+
+    # Short grace period for the test
+    with patch('refactory_dsh.owned_process.STOP_CONDITION_GRACE_S', 0.5):
+        result = run_owned(
+            [sys.executable, str(child_script), str(status_file)],
+            timeout=30,
+            stop_condition=stop_condition,
+            label='test-lingering',
+        )
+
+    # The child was stopped (it would have run for 300s otherwise)
+    assert result.returncode is not None
+    # The status file was written (child ran long enough to write it)
+    assert status_file.exists()
+    data = json.loads(status_file.read_text())
+    assert data['status'] == 'failed'

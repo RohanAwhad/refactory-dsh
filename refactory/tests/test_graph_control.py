@@ -559,3 +559,137 @@ def test_transient_failed_does_not_stop_owner():
     mock_shutdown.assert_not_called()
     # The condition was checked at least twice (once to trigger, once to verify)
     assert call_count >= 2
+
+
+# ── T14: Stale stop from previous owner does not stop a later rerun ───────
+
+def test_stale_stop_not_queued_for_terminal_run(tmp_path):
+    """graph-control stop on a terminal run with a live owner signals
+    directly and creates no queued control file.  A later rerun therefore
+    sees no stale stop.
+
+    This proves the end-to-end property: 'a stale stop from a previous
+    owner never stops the next one' — because a stop on a terminal run
+    never creates a queued control in the first place (direct signal).
+    """
+    root = tmp_path
+    refactory = root / '.refactory'
+    refactory.mkdir(parents=True, exist_ok=True)
+
+    # Terminal run with a "live" owner (use current PID)
+    checkpoint: dict[str, Any] = {
+        'status': 'failed',
+        'run_id': str(root),
+        'graph': {'name': 'test-run'},
+        'owner_pid': os.getpid(),
+        'file_fingerprints': {},
+    }
+    (refactory / 'spine-checkpoint.json').write_text(json.dumps(checkpoint))
+    (refactory / 'spine-status.json').write_text(json.dumps({'status': 'failed'}))
+    (refactory / 'run-config.json').write_text(json.dumps({
+        'mode': 'test/run', 'project': str(root),
+    }))
+    (refactory / 'invocation.json').write_text(json.dumps({'id': 'test-inv'}))
+
+    # Patch os.kill to avoid actually sending SIGTERM to this process
+    killed_pids: list[int] = []
+    original_kill = os.kill
+
+    def mock_kill(pid: int, sig: int) -> None:
+        if sig != 0:
+            killed_pids.append(pid)
+        else:
+            original_kill(pid, sig)
+
+    with patch('refactory_dsh.graph_control.os.kill', side_effect=mock_kill):
+        result = graph_control.request(root, 'stop')
+
+    # Direct signal, not queued
+    assert result['status'] == 'signalled'
+    assert os.getpid() in killed_pids
+
+    # No control file was created in graph-controls/
+    controls_dir = refactory / 'graph-controls'
+    if controls_dir.exists():
+        queued = list(controls_dir.glob('*.json'))
+        assert len(queued) == 0, f'Stale stop controls found: {queued}'
+
+    # A later rerun would see no stale stop
+    controls = graph_control.queued_controls(root)
+    assert len(controls) == 0, 'Stale stop visible to a later owner'
+
+
+def test_withdraw_then_rerun_not_stopped(tmp_path):
+    """A queued stop from a previous owner is withdrawn; a subsequent
+    rerun through the supervisor proceeds without being stopped.
+    """
+    from refactory_dsh import supervisor as sv
+
+    root = tmp_path
+    refactory = root / '.refactory'
+    refactory.mkdir(parents=True, exist_ok=True)
+
+    dead = _dead_pid()
+    checkpoint: dict[str, Any] = {
+        'status': 'halted',
+        'run_id': str(root),
+        'graph': {'name': 'test-run'},
+        'owner_pid': dead,
+        'file_fingerprints': {},
+    }
+    (refactory / 'spine-checkpoint.json').write_text(json.dumps(checkpoint))
+    (refactory / 'spine-status.json').write_text(json.dumps({'status': 'halted'}))
+    (refactory / 'run-config.json').write_text(json.dumps({
+        'mode': 'test/run', 'project': str(root),
+    }))
+    (refactory / 'invocation.json').write_text(json.dumps({'id': 'test-inv'}))
+
+    # Queue a stop control (simulating a previous owner's stop)
+    controls_dir = refactory / 'graph-controls'
+    controls_dir.mkdir(parents=True, exist_ok=True)
+    old_stop_id = 'old-stop-from-previous-owner'
+    (controls_dir / f'{old_stop_id}.json').write_text(json.dumps({
+        'id': old_stop_id, 'action': 'stop', 'status': 'queued',
+    }))
+
+    # Verify the stale stop is listed in status
+    controls = graph_control.queued_controls(root)
+    assert len(controls) == 1
+    assert controls[0]['action'] == 'stop'
+
+    # Withdraw it
+    result = graph_control.request(root, 'withdraw', node=old_stop_id)
+    assert result['status'] == 'withdrawn'
+
+    # After withdraw, no controls remain
+    controls = graph_control.queued_controls(root)
+    assert len(controls) == 0
+
+    # Supervise: the new run completes without being stopped
+    class FakeChild:
+        def __init__(self) -> None:
+            self.pid = 50001
+            self.returncode = 0
+        def wait(self) -> None:
+            pass
+        def poll(self) -> int:
+            return 0
+
+    def mock_start_child(r: Path) -> Any:
+        (r / '.refactory/spine-status.json').write_text(
+            json.dumps({'status': 'done'}))
+        return FakeChild()
+
+    def mock_prepare(r: Path, name: str, **kw: Any) -> Path:
+        return r / 'graphs'
+
+    with patch.object(sv, '_start_child', side_effect=mock_start_child), \
+         patch('refactory_dsh.recovery.prepare', side_effect=mock_prepare):
+        sv.supervise(root, max_respawns=3)
+
+    # Run completed without being stopped
+    status = run_state.spine_status(root)
+    assert status == 'done'
+    # No respawn was needed (ran clean)
+    history = run_state.read_supervision_history(root)
+    assert len(history) == 0
