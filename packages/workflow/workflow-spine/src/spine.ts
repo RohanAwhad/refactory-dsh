@@ -1290,7 +1290,7 @@ export class Spine {
       }
     }
     if (this.hasConcurrentWork()) {
-      if (!opts?.deferred) {
+      if (!opts?.deferred && !opts?.commandCorrection) {
         throw new Error('redo cannot discard concurrent branches; finish the fork before reopening completed work')
       }
     }
