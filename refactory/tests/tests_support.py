@@ -397,6 +397,18 @@ class FakeModel:
         self.prompts.append(prompt)
         self.workdirs.append(workdir)
         answer = self.answers.pop(0) if self.answers else ""
+        # Scripted pitfalls fixtures: agent_delivery's capture_final writes the
+        # model's text answer to writes[0] (pitfalls.json), but pitfalls.md
+        # (writes[1]) must also exist for delivery to succeed.  Write it as a
+        # side-effect, matching the intent-audit fixture below.
+        if answer and "pitfalls researcher" in prompt and workdir is not None:
+            from pathlib import Path
+
+            root = Path(workdir)
+            root.mkdir(parents=True, exist_ok=True)
+            (root / "pitfalls.md").write_text(
+                "# Pitfalls\n\n(scripted fixture)\n"
+            )
         # Scripted review fixtures explicitly deliver the new evidence-map artifact.
         # Adversarial coverage/waiver tests supply their own maps instead.
         if answer and "Write intent-audit.json as" in prompt and workdir is not None:
