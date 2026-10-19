@@ -214,6 +214,142 @@ def test_overwatch_quoted_blocking_example_is_not_a_finding():
     assert blocking_findings(text) == []
 
 
+# ── finding-scope filter tests ─────────────────────────────────────────────
+
+
+def test_classify_finding_structured_worktree_file_stays_blocking():
+    """``BLOCKING: refactory/x.py: problem`` stays blocking — it names a worktree file."""
+    from refactory_dsh.create_ops import classify_finding
+
+    owners = {"design.md": "design_doc", "strategy.json": "synthesize_strategy"}
+    is_blocking, step = classify_finding(
+        "refactory/refactory_dsh/x.py: does not implement design.md's Rule 2",
+        owners,
+    )
+    assert is_blocking is True
+    assert step is None
+
+
+def test_classify_finding_structured_run_doc_downgraded():
+    """``BLOCKING: design.md: markers are in backticks`` is downgraded."""
+    from refactory_dsh.create_ops import classify_finding
+
+    owners = {"design.md": "design_doc", "strategy.json": "synthesize_strategy"}
+    is_blocking, step = classify_finding(
+        "design.md: site markers are in backticks",
+        owners,
+    )
+    assert is_blocking is False
+    assert step == "design_doc"
+
+
+def test_classify_finding_freeform_stays_blocking():
+    """``BLOCKING: the change does not do what design.md says`` stays blocking."""
+    from refactory_dsh.create_ops import classify_finding
+
+    owners = {"design.md": "design_doc"}
+    is_blocking, step = classify_finding(
+        "the change does not do what design.md says",
+        owners,
+    )
+    assert is_blocking is True
+    assert step is None
+
+
+def test_classify_finding_no_path_stays_blocking():
+    """A finding citing no file paths at all is conservatively blocking."""
+    from refactory_dsh.create_ops import classify_finding
+
+    owners = {"design.md": "design_doc"}
+    is_blocking, step = classify_finding(
+        "the tests are incomplete",
+        owners,
+    )
+    assert is_blocking is True
+
+
+def test_run_doc_owners_from_declarations(tmp_path):
+    """``_run_doc_owners`` reads the graph's declarations.json correctly."""
+    import json
+    from refactory_dsh.create_ops import _run_doc_owners
+
+    decls = {
+        "design_doc": {"kind": "agent", "reads": [], "writes": ["design.md"], "produces": []},
+        "synthesize_strategy": {"kind": "agent", "reads": [], "writes": ["strategy.json"], "produces": []},
+        "prepare": {"kind": "op", "reads": [], "writes": ["brief.json", "research-review.txt"], "produces": []},
+        "emit": {"kind": "agent", "reads": [], "writes": ["emit.txt"], "produces": []},
+        "memory": ["some_memory"],  # non-dict entry, should be skipped
+    }
+    (tmp_path / ".refactory").mkdir()
+    (tmp_path / ".refactory" / "declarations.json").write_text(json.dumps(decls))
+
+    owners = _run_doc_owners(tmp_path)
+    assert owners["design.md"] == "design_doc"
+    assert owners["strategy.json"] == "synthesize_strategy"
+    assert owners["brief.json"] == "prepare"
+    assert owners["emit.txt"] == "emit"
+    assert "research-review.txt" in owners
+
+
+def test_scope_filter_with_custom_graph_document(tmp_path):
+    """A graph whose plan document has a different name is routed to that node."""
+    import json
+    from refactory_dsh.create_ops import scope_filter_findings
+
+    decls = {
+        "custom_planner": {"kind": "agent", "reads": [], "writes": ["plan.md"], "produces": []},
+        "emit": {"kind": "agent", "reads": [], "writes": ["emit.txt"], "produces": []},
+    }
+    (tmp_path / ".refactory").mkdir()
+    (tmp_path / ".refactory" / "declarations.json").write_text(json.dumps(decls))
+
+    findings = ["plan.md: the plan is incomplete"]
+    blocking, notes = scope_filter_findings(findings, tmp_path)
+    assert blocking == []
+    assert len(notes) == 1
+    assert "custom_planner" in notes[0]
+    assert "plan.md" in notes[0]
+
+
+def test_classify_finding_exact_path_match(tmp_path):
+    """``design.md`` matches the writes declaration exactly, not ``docs/design.md``."""
+    from refactory_dsh.create_ops import classify_finding
+
+    owners = {"design.md": "design_doc"}
+    # An exact match is downgraded.
+    is_blocking, step = classify_finding("design.md: markers wrong", owners)
+    assert is_blocking is False
+    assert step == "design_doc"
+    # A worktree file with a different path stays blocking.
+    is_blocking2, step2 = classify_finding("docs/design.md: wrong content", owners)
+    assert is_blocking2 is True
+    assert step2 is None
+
+
+def test_scope_filter_mixed_findings(tmp_path):
+    """A mix of run-doc and worktree findings is split correctly."""
+    import json
+    from refactory_dsh.create_ops import scope_filter_findings
+
+    decls = {
+        "design_doc": {"kind": "agent", "reads": [], "writes": ["design.md"], "produces": []},
+    }
+    (tmp_path / ".refactory").mkdir()
+    (tmp_path / ".refactory" / "declarations.json").write_text(json.dumps(decls))
+
+    findings = [
+        "design.md: site markers are in backticks",
+        "refactory/refactory_dsh/x.py: does not implement Rule 2",
+        "the tests are incomplete",
+    ]
+    blocking, notes = scope_filter_findings(findings, tmp_path)
+    assert len(blocking) == 2
+    assert "refactory/refactory_dsh/x.py: does not implement Rule 2" in blocking
+    assert "the tests are incomplete" in blocking
+    assert len(notes) == 1
+    assert "design_doc" in notes[0]
+
+
 def test_reviews_quoting_markers_are_not_findings():
     """b13a's own code review quoted the inputs it checked, some in double-backtick spans."""
     text = (

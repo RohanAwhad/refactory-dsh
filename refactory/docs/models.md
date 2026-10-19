@@ -111,7 +111,7 @@ The design_doc node writes `design.md` following a defined contract. The contrac
 
 1. **An H1 heading** that says what the change does (never the run name or artifact name).
 2. **`## Summary`** — a prose summary of the problem and the change.
-3. **`## Rule and sites`** — the rule the change makes or corrects, and every place in the code that applies or restates it, each cited with file path and line range, each marked `[changed]` or `[left: <reason>]`.
+3. **`## Rule and sites`** — the rule the change makes or corrects, and every place in the code that applies or restates it, each cited with file path and line range, each marked `[changed]` or `[left: <reason>]`. Markers are accepted in bare, bold, backtick-wrapped, and colon-description forms (`[changed]`, `**[changed]**`, `` `[changed]` ``, `[changed: description]`), with the bare form as canonical. The parser carries a colon description into the "What changed" section of the PR body. `[new]` is treated as equivalent to `changed`. The three consumers are: the PR body "What changed" (`delivery.py` `build_what_changed`), the design review gate marker check (`design_ops.py` `gate_design_review` via `unmarked_sites`), and the run warnings (`delivery.py` `target_guard.warn` via mismatch detection). Misspelled markers (e.g. `[chnaged]`) are caught by the design review gate before the approval gate, while `design_doc` can still fix them.
 4. **`## Docs`** — the docs that describe the changed behaviour, with their planned updates.
 5. **`## Changes`** — the list of files the change adds or modifies.
 
