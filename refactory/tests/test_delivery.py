@@ -2096,16 +2096,24 @@ def test_conflict_path_regenerates_all_files(github, tmp_path, monkeypatch):
     """Both generated files are regenerated after the merge, even when only one
     conflicted.
 
-    Fails without the change: gen2.txt has stale base-side content from git's
-    three-way merge, because only conflicted files had generate run on them.
+    Fails without the change: gen2.txt has a stale line count (2 instead of 3)
+    from git's three-way merge, because only conflicted files had generate run
+    on them in the conflict path.
     """
     repo = git_repo(tmp_path / "repo")
-    # gen.sh: produce two generated files from separate sources.
+    # gen.sh: gen1.txt combines two inputs on one line (so both sides changing
+    # a different input creates a single-line conflict); gen2.txt is a line-
+    # count header plus the content of source2.txt — non-linear, so git's
+    # auto-merge gives a stale count when both sides added lines.
     (repo / "gen.sh").write_text(
-        "cat source1.txt > gen1.txt\n"
-        "cat source2.txt > gen2.txt\n"
+        "#!/bin/sh\n"
+        'printf "%s%s\\n" "$(cat input_a.txt)" "$(cat input_b.txt)" > gen1.txt\n'
+        "n=$(cat source2.txt | wc -l)\n"
+        'printf "count:%d\\n" "$n" > gen2.txt\n'
+        "cat source2.txt >> gen2.txt\n"
     )
-    (repo / "source1.txt").write_text("alpha\n")
+    (repo / "input_a.txt").write_text("A\n")
+    (repo / "input_b.txt").write_text("B\n")
     (repo / "source2.txt").write_text("original\n")
     subprocess.run(["bash", "gen.sh"], cwd=str(repo), check=True, capture_output=True)
     git(repo, "add", ".")
@@ -2118,22 +2126,26 @@ def test_conflict_path_regenerates_all_files(github, tmp_path, monkeypatch):
     def advance_main_then_deliver(ctx):
         other = tmp_path / "other"
         git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(other))
-        # Base changes source1 (creates a generated conflict in gen1.txt)
-        # and also changes source2 (gen2.txt merges cleanly from git's perspective).
-        (other / "source1.txt").write_text("gamma\n")
-        (other / "source2.txt").write_text("base-updated\n")
+        # Base changes input_b (creates a conflict in gen1.txt because the run
+        # changes input_a) and appends to source2.txt (gen2.txt merges cleanly
+        # from git's perspective but its line-count header becomes stale).
+        (other / "input_b.txt").write_text("B-base\n")
+        (other / "source2.txt").write_text("original\nbase-line\n")
         subprocess.run(["bash", "gen.sh"], cwd=str(other), check=True, capture_output=True)
         git(other, "add", ".")
         git(other, "-c", "user.name=t", "-c", "user.email=t@example.com",
-            "commit", "-q", "-m", "base updates both sources")
+            "commit", "-q", "-m", "base updates both inputs")
         git(other, "push", "-q", "origin", "main")
         return real(ctx)
 
     monkeypatch.setattr(delivery, "deliver_design", advance_main_then_deliver)
 
     run = tmp_path / "run"
-    # The run changes source1.txt.
-    result = _design(run, {"tool.py": "print('built')\n", "source1.txt": "alpha\nbeta\n"},
+    # The run changes input_a (making gen1.txt conflict) and prepends to
+    # source2.txt (so the merged tree has 3 lines, not 2).
+    result = _design(run, {"tool.py": "print('built')\n",
+                           "input_a.txt": "A-run\n",
+                           "source2.txt": "run-line\noriginal\n"},
                      target=str(repo), check="python tool.py",
                      generate="bash gen.sh")
     assert result.exit_ok, result.error
@@ -2143,13 +2155,12 @@ def test_conflict_path_regenerates_all_files(github, tmp_path, monkeypatch):
     assert record.get("merge_commit")
     merge_commit = record["merge_commit"]
 
-    # Both generated files have regenerated content from the merged tree.
+    # gen1.txt: merged inputs (A-run from run + B-base from base) on one line.
     gen1 = git(bare, "show", f"{merge_commit}:gen1.txt")
+    assert "A-run" in gen1 and "B-base" in gen1
+    # gen2.txt: regenerated on the merged tree (3 lines), not stale (count:2).
     gen2 = git(bare, "show", f"{merge_commit}:gen2.txt")
-    # gen1.txt: generated from merged sources (alpha + beta from run, gamma from base).
-    assert "alpha" in gen1 and "beta" in gen1
-    # gen2.txt: should be regenerated from the merged source2.txt, not stale.
-    assert "base-updated" in gen2
+    assert "count:3" in gen2
 
 
 def test_modify_delete_conflict(github, tmp_path, monkeypatch):
@@ -2330,7 +2341,7 @@ def test_redo_after_merge_pushed(github, tmp_path, monkeypatch):
     real = delivery.deliver_design
 
     def advance_main_and_fail_verify(ctx):
-        """First delivery: advance main, then fail at verify."""
+        """First delivery: advance main, then sabotage _verified via stale-view."""
         other = tmp_path / "other"
         if not other.exists():
             git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(other))
@@ -2339,30 +2350,18 @@ def test_redo_after_merge_pushed(github, tmp_path, monkeypatch):
             git(other, "-c", "user.name=t", "-c", "user.email=t@example.com",
                 "commit", "-q", "-m", "base moves")
             git(other, "push", "-q", "origin", "main")
+        # Make _verified fail: fake_gh returns stale headRefOid for "headRefOid,url" queries.
+        (github / "stale-view").write_text("0" * 40)
+        monkeypatch.setattr(delivery, "VERIFY_ATTEMPTS", 1)
         return real(ctx)
-
-    # First run: advance main and make _verified raise after the push, so delivery
-    # records the push as "kept local" with push info.
-    real_gh = delivery._gh
-
-    def fail_at_pr_view_headrefoid(*args, **kwargs):
-        """Make _verified fail by returning a wrong headRefOid."""
-        result = real_gh(*args, **kwargs)
-        if args[:2] == ("pr", "view") and "headRefOid" in str(args):
-            import json as _j
-            parsed = _j.loads(result)
-            if "headRefOid" in parsed:
-                parsed["headRefOid"] = "0" * 40
-                return _j.dumps(parsed)
-        return result
 
     monkeypatch.setattr(delivery, "deliver_design", advance_main_and_fail_verify)
     run = tmp_path / "run"
     result = _design(run, {"tool.py": "print('built')\n"},
                      target=str(repo), check="python tool.py")
 
-    # The first run may have failed due to the Unverified error, or may have
-    # ended as "kept local" because _verified raised. Either way the branch is on GitHub.
+    # The first run failed (Unverified) or ended otherwise; the branch should
+    # be on GitHub because the push succeeded before _verified failed.
     branch = json.loads((run / "design.json").read_text())["branch"]
     first_remote = _remote_head(github, slug, branch)
 
@@ -2370,10 +2369,13 @@ def test_redo_after_merge_pushed(github, tmp_path, monkeypatch):
         # If no push happened, the base did not actually move; skip the redo test.
         return
 
-    # Redo: DesignMode.resume picks up where it left off.
+    # Redo: remove the sabotage, then call deliver_design directly (as the
+    # existing redo tests do), not DesignMode.resume which refuses a node
+    # whose side-effect outcome is unknown.
+    (github / "stale-view").unlink(missing_ok=True)
     monkeypatch.setattr(delivery, "deliver_design", real)
-    resumed = DesignMode.resume(run, model=FakeModel([]))
-    assert resumed.exit_ok, resumed.error
+    monkeypatch.setattr(delivery, "VERIFY_ATTEMPTS", 5)
+    delivery.deliver_design(nn.RunContext(run, facts=result.facts, enforce_writes=False))
 
     record2 = _record(run)
     assert record2["status"] in ("opened", "already open", "updated"), f"redo status: {record2['status']}"
@@ -2394,7 +2396,7 @@ def test_dependency_install_for_merged_tree(github, tmp_path, monkeypatch):
     Fails without the change: ensure_environment is never called for the merged tree.
     """
     repo = git_repo(tmp_path / "repo")
-    (repo / "pyproject.toml").write_text('[project]\nname = "example"\n')
+    (repo / "pyproject.toml").write_text('[project]\nname = "example"\nversion = "0.1.0"\n')
     git(repo, "add", ".")
     git(repo, "commit", "-q", "-m", "base with pyproject")
     slug = "acme/merge-deps"
@@ -2407,7 +2409,7 @@ def test_dependency_install_for_merged_tree(github, tmp_path, monkeypatch):
         other = tmp_path / "other"
         git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(other))
         # Base changes pyproject.toml.
-        (other / "pyproject.toml").write_text('[project]\nname = "example"\ndependencies = ["requests"]\n')
+        (other / "pyproject.toml").write_text('[project]\nname = "example"\nversion = "0.1.0"\ndependencies = ["requests"]\n')
         git(other, "add", ".")
         git(other, "-c", "user.name=t", "-c", "user.email=t@example.com",
             "commit", "-q", "-m", "base adds dependency")
@@ -2455,8 +2457,6 @@ def test_merge_fails_no_conflicted_files(github, tmp_path, monkeypatch):
     string, not into a separate abandoned field.
     """
     repo = git_repo(tmp_path / "repo")
-    git(repo, "add", ".")
-    git(repo, "commit", "-q", "-m", "base")
     slug = "acme/merge-noconflict"
     bare = _published(github, slug, repo)
 
