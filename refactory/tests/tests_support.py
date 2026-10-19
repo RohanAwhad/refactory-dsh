@@ -290,6 +290,17 @@ def strategy_answer(name: str) -> str:
 #: The research answer is the plan array the gate checks, not a sentence about having
 #: researched: a prose answer is exactly the failure the gate exists to catch, so a
 #: fixture that fed one would be testing the bug.
+#: A valid pitfalls answer for the pitfalls_researcher agent node.
+PITFALLS_ANSWER = json.dumps([
+    {
+        "id": "PIT-001",
+        "risk": "high",
+        "category": "pinning_tests",
+        "evidence": "tests/test_example.py:10",
+        "prescription": "keep the assertion or deliberately change it with a reason",
+    },
+])
+
 RESEARCH_ANSWER = json.dumps([
     {
         "focus": "which API surface the package builds against",
@@ -335,7 +346,9 @@ DESIGN_DOC_ANSWER = (
     "## Docs\n\n"
     "- docs/models.md\n\n"
     "## Changes\n\n"
-    "- tool.py\n"
+    "- tool.py\n\n"
+    "## Anti-patterns to avoid\n\n"
+    "- PIT-001: addressed at `tool.py:1`\n"
 )
 
 

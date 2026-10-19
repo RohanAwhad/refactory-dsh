@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from refactory_dsh import delivery, design_contract, repo_change
+from refactory_dsh import delivery, design_contract, pitfalls, repo_change
 from refactory_dsh.create_ops import API, RESEARCH_SCHEMA
 from refactory_dsh.model import DEFAULT_TIMEOUT_S
 from refactory_dsh.nn import Graph, Knob, Mode, Node, RunResult
@@ -63,6 +63,11 @@ class DesignMode(Mode):
                 description="how many times the design review may reloop before proceeding "
                             "to the approval gate with its remaining findings",
             ),
+            "pitfalls_attempts": Knob(
+                2, "int", lo=1, hi=5,
+                description="how many times the pitfalls step may be retried when its "
+                            "output is invalid",
+            ),
             # As in create: the walker passes these in the run's task, and a run on
             # DSH carries them as knobs.
             "name": Knob("", "str", description="the artifact to design (empty takes the name from the brief)"),
@@ -80,10 +85,11 @@ class DesignMode(Mode):
             "prepare", "op", call=f"{OPS}:prepare_design",
             knobs=("name", "brief", "check", *repo_change.knob_names(), *delivery.knobs()),
             writes=("brief.json", "research-review.txt", "check.txt", "delivery.md",
-                    "reviews/design-review-feedback.txt"),
+                    "reviews/design-review-feedback.txt", "pitfalls-review.txt"),
             produces=("name", "brief", "check", "validation", "research_review", "research_scope", "qa_gate",
                       "overwatch_review", "design_review_feedback", "design_review_findings",
-                      *repo_change.produces(), "delivery", "delivery_plan"),
+                      *repo_change.produces(), "delivery", "delivery_plan",
+                      "has_pitfalls_step", "pitfalls", "pitfalls_review"),
             notes="read the brief and the command that decides whether it is done",
         ))
 
@@ -133,10 +139,59 @@ class DesignMode(Mode):
             notes="proceed only when the plan is a plan and its findings exist",
         ))
         graph.add(Node(
+            "pitfalls_researcher", "agent",
+            prompt_template=(
+                "Artifact name: {{name}}\nBrief: {{brief}}\n"
+                "Repository: {{source}}\n\n"
+                "## What the research found\n{{research}}\n\n"
+                "## What was wrong with the last attempt\n{{pitfalls_review}}\n\n"
+                "You are the pitfalls researcher. Before any strategy or design exists, "
+                "identify the risks a correct design must account for. Read the repository "
+                "and the brief, and produce a risk-ranked list of pitfalls.\n\n"
+                "For each pitfall, provide:\n"
+                "- **id**: a short identifier in the format PIT-001, PIT-002, etc.\n"
+                "- **risk**: high, medium, or low.\n"
+                "- **category**: exactly one of:\n"
+                "  - `pinning_tests` — tests that pin current behaviour. Name the file, "
+                "the line, and the exact assertion text. Say whether the change must keep "
+                "it or deliberately change it.\n"
+                "  - `repo_conventions` — the repository's own rules and conventions, "
+                "taken from its code, docs and agent instructions (CLAUDE.md, AGENTS.md, "
+                "CONTRIBUTING, or similar) with citations. Never use a built-in list.\n"
+                "  - `shared_state` — other writers and readers of the files, environment "
+                "variables, HOME, locks, and processes the change touches.\n"
+                "  - `callers` — callers of the code being changed, and the user paths "
+                "each serves.\n"
+                "  - `imitated_steps` — the existing step the change imitates, and the "
+                "settings it reads.\n"
+                "  - `scope_boundaries` — modes and paths that must not change.\n"
+                "- **evidence**: file:line citation(s) from the repository.\n"
+                "- **prescription**: what a correct design must do about it.\n\n"
+                "Sort by risk (high first). Write `pitfalls.json` as a JSON array of "
+                "these objects. Then write `pitfalls.md` as a human-readable rendering "
+                "of the same list. Do not read strategy.json or design.md — this step "
+                "is independent of them."
+            ),
+            reads=("brief.json", "research-plan.json"),
+            writes=("pitfalls.json", "pitfalls.md"),
+            produces=("pitfalls",),
+            notes="identify risk-ranked pitfalls before strategy, independent of any design",
+        ))
+        graph.add(Node(
+            "gate_pitfalls", "gate", evaluator=f"{OPS}:gate_pitfalls",
+            reads=("pitfalls.json",),
+            writes=("pitfalls-review.txt",),
+            produces=("pitfalls_review", "pitfalls_attempts_used"),
+            knobs=("pitfalls_attempts",),
+            max_iterations=8,
+            notes="proceed only when pitfalls.json is valid; reloop to pitfalls_researcher otherwise",
+        ))
+        graph.add(Node(
             "strategy_director", "agent",
             prompt_template=(
                 "Artifact name: {{name}}\nBrief: {{brief}}\n"
                 "It is built in {{source}}; read what is there before choosing.\n\n"
+                "## Pitfalls\n{{pitfalls}}\n\n"
                 "## What the research found\n{{research}}\n\n"
                 "You are the strategy director. From the research, choose between two "
                 "and five perspectives on how this artifact could be built — including "
@@ -147,7 +202,7 @@ class DesignMode(Mode):
                 "\"intent_items\"}` objects, where `intent_items` lists the asks from "
                 "the brief that perspective covers. Every ask must be covered."
             ),
-            reads=("brief.json", "research-plan.json"),
+            reads=("brief.json", "research-plan.json", "pitfalls.json"),
             writes=("strategy-plan.json",),
             produces=("strategy_plan",),
             notes="choose the perspectives and record what each one covers",
@@ -157,6 +212,7 @@ class DesignMode(Mode):
             prompt_template=(
                 "Artifact name: {{name}}\nBrief: {{brief}}\nIt is built in {{source}}.\n"
                 "The check, run from {{check_root}}:\n    {{check}}\n\n"
+                "## Pitfalls\n{{pitfalls}}\n\n"
                 "## What the research found\n{{research}}\n\n"
                 "## The perspectives\n{{strategy_plan}}\n\n"
                 + _ACCEPTANCE_BASELINE
@@ -171,7 +227,7 @@ class DesignMode(Mode):
                 "formats, plan acceptance by an established consuming application or "
                 "independent format reader, not just a parser the artifact author writes."
             ),
-            reads=("brief.json", "research-plan.json", "strategy-plan.json"),
+            reads=("brief.json", "research-plan.json", "strategy-plan.json", "pitfalls.json"),
             writes=("strategy.json",),
             produces=("strategy",),
             notes="compile the perspectives into one plan",
@@ -184,6 +240,7 @@ class DesignMode(Mode):
                 "Artifact name: {{name}}\nBrief: {{brief}}\nIt is built in {{source}}.\n"
                 "The check, run from {{check_root}}:\n    {{check}}\n\n"
                 "## The plan\n{{strategy}}\n\n"
+                "## Pitfalls\n{{pitfalls}}\n\n"
                 "## What the design review found\n{{design_review_feedback}}\n\n"
                 + _ACCEPTANCE_BASELINE
                 + "Write the design document for this artifact: every file it will "
@@ -203,8 +260,16 @@ class DesignMode(Mode):
                 "The document holds only the final result — no 'Wait—', 'Actually', "
                 "'Let me reconsider' or other working-out.\n\n"
                 + design_contract.prompt_contract()
+                + "\n\n"
+                "6. `## Anti-patterns to avoid` (when the research produced pitfalls) — "
+                "for each pitfall id from the pitfalls analysis, either address it by "
+                "naming the site (a backticked `path:line` from Rule and sites) or the "
+                "section (§ heading name) that handles it, or set it aside with "
+                "`[set-aside: <reason>]`. A high-risk pitfall that is missing or set "
+                "aside without a reason fails the contract.\n"
             ),
-            reads=("brief.json", "strategy.json", "reviews/design-review-feedback.txt"),
+            reads=("brief.json", "strategy.json", "reviews/design-review-feedback.txt",
+                   "pitfalls.json"),
             writes=("design.md",),
             produces=("design",),
             notes="write the design document the code is written from",
@@ -217,6 +282,11 @@ class DesignMode(Mode):
         graph.add(Node(
             "design_review", "agent",
             prompt_template=(
+                "## Pitfalls\n{{pitfalls}}\n\n"
+                "For every high-risk pitfall, confirm the design accounts for it in its "
+                "Anti-patterns section — either addressed with a site or section that "
+                "handles it, or set aside with a reason. A high pitfall that is missing "
+                "from the Anti-patterns section is BLOCKING.\n\n"
                 "Artifact name: {{name}}\nBrief: {{brief}}\n"
                 "Source: {{source}}\n\n"
                 "## Previous feedback\n{{design_review_feedback}}\n\n"
@@ -252,7 +322,8 @@ class DesignMode(Mode):
                 "End with a line that is exactly `VERDICT: PASS` when there are "
                 "no blocking findings, or `VERDICT: FAIL` when there are any."
             ),
-            reads=("brief.json", "design.md", "reviews/design-review-feedback.txt"),
+            reads=("brief.json", "design.md", "reviews/design-review-feedback.txt",
+                   "pitfalls.json"),
             writes=("reviews/design-review.md",),
             produces=("design_review_text",),
             notes="review the design for open alternatives and unconfirmed claims",
@@ -260,7 +331,8 @@ class DesignMode(Mode):
         graph.add(Node(
             "gate_design_review", "gate",
             evaluator=f"{OPS}:gate_design_review",
-            reads=("reviews/design-review.md", "design.md", "brief.json"),
+            reads=("reviews/design-review.md", "design.md", "brief.json",
+                   "pitfalls.json"),
             writes=("reviews/design-review-feedback.txt",),
             produces=("design_review_feedback", "design_review_attempts_used",
                       "design_review_findings"),
@@ -362,6 +434,9 @@ class DesignMode(Mode):
         graph.add(Node(
             "code_reviewer", "agent",
             prompt_template=(
+                "## Pitfalls\n{{pitfalls}}\n\n"
+                "Check the built change against every high-risk pitfall. A high pitfall "
+                "the code contradicts is BLOCKING.\n\n"
                 "Artifact directory (absolute): {{artifact}}\n"
                 "Read and run the delivered files at this exact path; do not infer it "
                 "from your working directory. {{change}}\n\n"
@@ -381,7 +456,7 @@ class DesignMode(Mode):
                 "`reviews/code-review.md`. A defect that would stop the artifact working "
                 "is written as `BLOCKING:` followed by the file and what is wrong."
             ),
-            reads=("brief.json", "design.md", "emit.txt"),
+            reads=("brief.json", "design.md", "emit.txt", "pitfalls.json"),
             writes=("reviews/code-review.md",),
             produces=("code_review",),
             notes="review the emitted files against the design",
@@ -498,7 +573,10 @@ class DesignMode(Mode):
         graph.connect("research_director", "record_findings")
         graph.connect("record_findings", "gate_research")
         graph.connect("gate_research", "research_director", condition="reloop")
-        graph.connect("gate_research", "strategy_director", condition="proceed")
+        graph.connect("gate_research", "pitfalls_researcher", condition="proceed")
+        graph.connect("pitfalls_researcher", "gate_pitfalls")
+        graph.connect("gate_pitfalls", "pitfalls_researcher", condition="reloop")
+        graph.connect("gate_pitfalls", "strategy_director", condition="proceed")
         graph.connect("strategy_director", "synthesize_strategy")
         graph.connect("synthesize_strategy", "design_doc")
         graph.connect("design_doc", "design_review")
