@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # never called unless it is registered. Registering it here is what makes the skip
 # fire, and it is also why the probe can stay deferred -- pytest calls the hook only
 # at collection, and only this conftest pulls the module in.
-pytest_plugins = ("model_credential",)
+pytest_plugins = ("model_credential", "repo_guard")
 
 # PROMPT_MUTATE and expandable-KNOB_MUTATE shell out to `claude` by default.
 # For the fast, deterministic harness we point that at /bin/true (empty output),

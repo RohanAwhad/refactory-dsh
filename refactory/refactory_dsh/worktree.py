@@ -250,6 +250,86 @@ def is_run_worktree(path: Path) -> bool:
     return path.resolve().is_relative_to(root().resolve()) and (path / ".git").is_file()
 
 
+def _config_value(config_file: Path, key: str, *, boolean: bool = False) -> str | None:
+    """Read a single git-config key from a config file.
+
+    Returns the stripped value when the key is set (exit 0), ``None`` when the key is
+    unset (exit 1), and raises ``ValueError`` on any other failure — matching ``git()``'s
+    error contract.
+    """
+    cmd = ["git", "config", "--file", str(config_file)]
+    if boolean:
+        cmd.append("--type=bool")
+    cmd += ["--get", key]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ValueError(f"git config --get {key} could not run: {error}") from error
+    if result.returncode == 0:
+        return result.stdout.strip()
+    if result.returncode == 1:
+        return None
+    raise ValueError(f"git config --get {key} failed: {result.stderr.strip()}")
+
+
+def _isolate_hooks(target: Path, worktree_path: Path) -> bool:
+    """Give the worktree its own hooks path so a hook manager writes there, not to the shared hooks.
+
+    Enables ``extensions.worktreeConfig`` on the target (the only change to the shared
+    config) and sets a per-worktree ``core.hooksPath`` pointing to an isolated directory
+    inside the worktree's own git dir.  Returns True when isolation was enabled, False
+    when skipped because the target's common config sets ``core.bare=true`` or
+    ``core.worktree``, which conflict with ``extensions.worktreeConfig``.
+    """
+    from refactory_dsh import target_guard
+
+    common = Path(git(target, "rev-parse", "--path-format=absolute", "--git-common-dir").strip())
+    config_file = common / "config"
+
+    # ── check for blocking config in the common config file ─────────────
+    bare = _config_value(config_file, "core.bare", boolean=True)
+    if bare == "true":
+        target_guard.warn(
+            "hook isolation skipped: target config sets core.bare=true, "
+            "which conflicts with extensions.worktreeConfig")
+        return False
+
+    worktree_val = _config_value(config_file, "core.worktree")
+    if worktree_val is not None:
+        target_guard.warn(
+            "hook isolation skipped: target config sets core.worktree, "
+            "which conflicts with extensions.worktreeConfig")
+        return False
+
+    # ── enable extensions.worktreeConfig (read-before-write, lock retry) ──
+    ext_val = _config_value(config_file, "extensions.worktreeConfig")
+    need_write = ext_val is None or ext_val.lower() != "true"
+
+    if need_write:
+        for attempt in range(4):
+            try:
+                git(target, "config", "extensions.worktreeConfig", "true")
+                break
+            except ValueError as exc:
+                if "config.lock" not in str(exc) and "could not lock config file" not in str(exc):
+                    raise
+                # Another process may have set it while we waited.
+                retry_val = _config_value(config_file, "extensions.worktreeConfig")
+                if retry_val is not None and retry_val.lower() == "true":
+                    break
+                if attempt < 3:
+                    time.sleep(0.1)
+                else:
+                    raise
+
+    # ── per-worktree hooks path ─────────────────────────────────────────
+    wt_git_dir = Path(git(worktree_path, "rev-parse", "--absolute-git-dir").strip())
+    hooks_dir = wt_git_dir / "hooks.isolated"
+    hooks_dir.mkdir(exist_ok=True)
+    git(worktree_path, "config", "--worktree", "core.hooksPath", str(hooks_dir))
+    return True
+
+
 def create(target: Path, rev: str, run_id: str, run: Path) -> Worktree:
     """Give ``run`` its own worktree of ``target``, on a new branch from ``rev``'s commit.
 
@@ -288,6 +368,7 @@ def create(target: Path, rev: str, run_id: str, run: Path) -> Worktree:
             if not _branch_exists(target, branch):
                 record_path.unlink(missing_ok=True)
             raise
+    _isolate_hooks(target, path)
     found = Worktree(path=str(path), branch=branch, base=base, head=git(path, "rev-parse", "HEAD").strip(),
                      target=str(target), run=str(run))
     _write_json(run / RECORD, asdict(found))
@@ -311,6 +392,7 @@ def _readd(target: Path, path: Path, branch: str) -> None:
     if _registered(target, path, branch):
         git(target, "worktree", "remove", str(path))
     git(target, *NO_HOOKS, "worktree", "add", "-q", str(path), branch)
+    _isolate_hooks(target, path)
 
 
 def _branch_exists(target: Path, branch: str) -> bool:
@@ -804,18 +886,51 @@ def check_environment(path: Path, home: Path) -> dict[str, str]:
     return env
 
 
+def _shared_snapshot(target: Path) -> dict:
+    """A snapshot of the git configuration and hooks the worktree shares with the target.
+
+    Returns ``{"config_lines": [...], "hook_files": {"name": "sha256hex", ...},
+    "hooks_dir": "<path>"}``.  The ``hooks_dir`` key carries the path so
+    ``_shared_digest`` can re-read raw bytes for backward-compatible hashing.
+    The exclusion rules match what ``shared_changed`` ignores: ``submodule.`` lines
+    (initialising submodules is refactory's own doing) and the
+    ``extensions.worktreeconfig=`` line ``_isolate_hooks`` sets.
+    """
+    common = Path(git(target, "rev-parse", "--path-format=absolute", "--git-common-dir").strip())
+    settings = git(target, "config", "--file", str(common / "config"), "--list").splitlines()
+    config_lines = [
+        line for line in settings
+        if not line.startswith("submodule.")
+        and not line.lower().startswith("extensions.worktreeconfig=")
+    ]
+    hook_files: dict[str, str] = {}
+    hooks_dir = common / "hooks"
+    if hooks_dir.is_dir():
+        for item in sorted(hooks_dir.glob("*")):
+            if item.is_file():
+                hook_files[item.name] = hashlib.sha256(item.read_bytes()).hexdigest()
+    return {"config_lines": config_lines, "hook_files": hook_files, "hooks_dir": str(hooks_dir)}
+
+
+def _shared_digest(snapshot: dict) -> str:
+    """A SHA-256 hex digest of a shared-state snapshot.
+
+    Feeds raw file bytes (not hex-digest strings) to match the digest the code
+    produced before the snapshot/digest split.  The snapshot carries per-file hashes
+    for the guard's comparison; the digest re-reads raw bytes so existing worktree
+    records stay compatible.
+    """
+    digest = hashlib.sha256()
+    digest.update("\n".join(snapshot["config_lines"]).encode())
+    hooks_dir = Path(snapshot["hooks_dir"])
+    for name in sorted(snapshot["hook_files"]):
+        digest.update(name.encode() + b"\0" + (hooks_dir / name).read_bytes())
+    return digest.hexdigest()
+
+
 def _shared_state(target: Path) -> str:
     """A digest of the git configuration and hooks the worktree shares with the target."""
-    common = Path(git(target, "rev-parse", "--path-format=absolute", "--git-common-dir").strip())
-    digest = hashlib.sha256()
-    # Initialising a worktree's submodules records them in this configuration, which is
-    # refactory's own doing and changes nothing the person relies on.
-    settings = git(target, "config", "--file", str(common / "config"), "--list").splitlines()
-    digest.update("\n".join(line for line in settings if not line.startswith("submodule.")).encode())
-    for item in sorted((common / "hooks").glob("*")):
-        if item.is_file():
-            digest.update(item.name.encode() + b"\0" + item.read_bytes())
-    return digest.hexdigest()
+    return _shared_digest(_shared_snapshot(target))
 
 
 def _loose(path: Path) -> set[str]:

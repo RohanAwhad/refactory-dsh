@@ -19,6 +19,7 @@ export default defineConfig({
     // CSS pipeline and resolve those imports from this workspace's root.
     server: { deps: { inline: [/@deepseek-ai\//] } },
     // Forked workers: Node 24 has aborted in its CJS lexer from worker threads.
+    globalSetup: ['./vitest.global-setup.ts'],
     pool: 'forks',
     coverage: {
       provider: 'v8',
