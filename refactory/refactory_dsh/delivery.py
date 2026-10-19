@@ -1436,10 +1436,27 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
     elif merge is not None and merge.check_failed:
         merge_line = (f"- **Merge:** the reviewed commit was delivered; the check failed on "
                       f"the merged result: {merge.check_failed[:200]}.\n")
+    # Command corrections
+    command_corrections = ""
+    command_history = ctx.facts.get('command_history', [])
+    if isinstance(command_history, list):
+        for entry in command_history:
+            if isinstance(entry, dict):
+                corr_field = entry.get('field', '?')
+                corr_old = entry.get('old_value', '?')
+                corr_new = entry.get('new_value', '?')
+                corr_note = entry.get('note', '')
+                corr_at = entry.get('at', '?')
+                command_corrections += (
+                    f"- **\u26a0 {corr_field} command corrected** at {corr_at}: "
+                    f"`{corr_old}` \u2192 `{corr_new}`"
+                    + (f" ({corr_note})" if corr_note else "") + ".\n")
+
     verification = (
         f"## Verification\n\n"
         f"- **Check:** `{check_cmd}` passed in the run's worktree.\n"
-        "- **Reviews:** the health check, code review and QA found nothing blocking, "
+        + command_corrections
+        + "- **Reviews:** the health check, code review and QA found nothing blocking, "
         "and the overwatch audit passed.\n"
         + _base_evidence(ctx)
         + f"- **Base:** `{found.base[:12]}`, with {attempts} attempt commit(s) on `{found.branch}`.\n"

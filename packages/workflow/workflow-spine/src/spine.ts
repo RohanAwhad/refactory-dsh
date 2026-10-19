@@ -1254,28 +1254,40 @@ export class Spine {
   }
 
   /** Describe invalidation before the runtime archives and clears current facts. */
-  planRedo(node: string, opts?: { deferred?: boolean }): RedoPlan {
+  planRedo(node: string, opts?: { deferred?: boolean; commandCorrection?: boolean }): RedoPlan {
     if (this.isPaused()) throw new Error(`run paused before ${this.pausedAt().join(', ')}; explicitly unpause before reopening work`)
     const body = this.nodes.get(node)
     if (body === undefined) throw new Error(`unknown node ${node}`)
     if (body._type === 'GateNode') {
-      // Find the agent whose edge leads into this gate.
-      const incoming = this.edges.filter(edge => edge.target === node && edge.condition == null)
-      const upstream = incoming.length === 1 ? incoming[0]!.source : undefined
-      if (upstream !== undefined) {
+      // Gates are command-correctable when the correction targets the gate's evaluator.
+      if (!opts?.commandCorrection) {
+        // Find the agent whose edge leads into this gate.
+        const incoming = this.edges.filter(edge => edge.target === node && edge.condition == null)
+        const upstream = incoming.length === 1 ? incoming[0]!.source : undefined
+        if (upstream !== undefined) {
+          throw new Error(
+            `${node} is a gate; replay ${upstream} instead, which re-runs ${upstream}, this gate and what follows, not the loop body`
+          )
+        }
         throw new Error(
-          `${node} is a gate; replay ${upstream} instead, which re-runs ${upstream}, this gate and what follows, not the loop body`
+          `${node} is a gate; replay the upstream agent instead, which re-runs that agent, this gate and what follows, not the loop body`
         )
       }
-      throw new Error(
-        `${node} is a gate; replay the upstream agent instead, which re-runs that agent, this gate and what follows, not the loop body`
-      )
     }
     if (body._type === 'DataNode') {
       throw new Error(`node ${node} iterates its items; redo a completed node in its body or upstream`)
     }
     if (!this.completed.includes(node)) {
-      throw new Error(`node ${node} has not completed, so there is nothing to redo`)
+      if (!opts?.commandCorrection) {
+        throw new Error(`node ${node} has not completed, so there is nothing to redo`)
+      }
+      // Command correction: the node is due (in cursor) or was never completed.
+      // Accept it: plan the forward invalidation from this node.
+      if (!this.cursor.includes(node)) {
+        throw new Error(
+          `node ${node} is neither completed nor due; command correction requires a due or completed node`
+        )
+      }
     }
     if (this.hasConcurrentWork()) {
       if (!opts?.deferred) {
@@ -1303,6 +1315,36 @@ export class Spine {
     }
     return { requested: node, start, nodes: [...affected], resetPass,
       restartData: [...affected].filter(id => this.nodes.get(id)?._type === 'DataNode') }
+  }
+
+  /** Reopen a due node with a command correction and invalidate forward descendants. */
+  redoCommandCorrection(node: string): SpineNext {
+    const plan = this.planRedo(node, { commandCorrection: true })
+    const affected = new Set(plan.nodes)
+    this.invalidateNodes(affected, true, false)
+    if (plan.resetPass) this.pass = undefined
+    else if (this.pass !== undefined) this.pass.finished = false
+    this.cursor = this.cursor.filter(id => !affected.has(id))
+    for (const [container, continuation] of this.afters) {
+      if (affected.has(continuation)) this.afters.delete(container)
+    }
+    this.halted = undefined
+    if (!this.cursor.includes(plan.start)) this.cursor.unshift(plan.start)
+    const rearms: Array<{ container: string; continuation: string }> = []
+    const seen = new Set<string>()
+    for (const n of plan.nodes) {
+      const cont = this.continuationOf(n)
+      if (cont !== undefined && affected.has(cont.continuation) && !affected.has(cont.container)
+          && cont.continuation !== plan.start && !this.cursor.includes(cont.continuation) && !seen.has(cont.continuation)) {
+        seen.add(cont.continuation)
+        rearms.push(cont)
+      }
+    }
+    for (const { container, continuation } of rearms) {
+      this.afters.set(container, continuation)
+    }
+    this.log.push(`command correction redid ${node} at ${plan.start}; invalidated ${plan.nodes.join(', ')}`)
+    return this.next()
   }
 
   /** Reopen work and invalidate descendants; prompts and historical log remain. */

@@ -344,13 +344,14 @@ class GraphTelemetry:
 
 def run_graph_command(argv: list[str], *, workdir: Path, context: dict[str, Any],
                       timeout: float | None = None, env: dict[str, str] | None = None,
+                      stop_condition: Any | None = None,
                       **kwargs: Any) -> Any:
     """Inherit terminal IO while polling graph resource and coordinator receipts."""
     import os
     import subprocess
     import time
     from refactory_dsh.budgets import RunBudget
-    from refactory_dsh.owned_process import _termination_as_exit, shutdown
+    from refactory_dsh.owned_process import _termination_as_exit, shutdown, STOP_CONDITION_GRACE_S
 
     environment_values = {**os.environ, **(env or {})}
     ledger = context.get('budget_ledger') or environment_values.get('REFACTORY_BUDGET_LEDGER')
@@ -375,6 +376,26 @@ def run_graph_command(argv: list[str], *, workdir: Path, context: dict[str, Any]
                 telemetry.checkpoint()
                 if deadline is not None and time.monotonic() >= deadline:
                     raise subprocess.TimeoutExpired(argv, timeout)
+                # dm-93: poll stop_condition; when terminal, close stdin and
+                # wait a grace period so the coordinator writes its final report.
+                if stop_condition is not None:
+                    try:
+                        should_stop = stop_condition()
+                    except Exception:
+                        should_stop = False
+                    if should_stop:
+                        if process.stdin is not None:
+                            try:
+                                process.stdin.close()
+                            except OSError:
+                                pass
+                        try:
+                            code = process.wait(timeout=STOP_CONDITION_GRACE_S)
+                            break
+                        except subprocess.TimeoutExpired:
+                            shutdown(process, label='graph runtime')
+                            telemetry.finish('stopped', 'stop condition (terminal status)')
+                            return subprocess.CompletedProcess(argv, process.returncode or 1)
                 try:
                     code = process.wait(timeout=0.1)
                     break

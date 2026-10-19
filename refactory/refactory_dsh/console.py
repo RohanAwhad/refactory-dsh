@@ -503,6 +503,17 @@ def status(run_root: Path, *, after: int = 0) -> dict[str, Any]:
             state = "finished"
     from refactory_dsh import live, run_state
     activity = live.snapshot(run_root)
+    # Report command corrections from facts.json
+    facts_data = _read_json(run_root / 'facts.json')
+    command_history = facts_data.get('command_history', [])
+    if isinstance(command_history, list) and command_history:
+        activity['command_corrections'] = len(command_history)
+        activity['last_correction'] = command_history[-1]
+    # Report queued controls
+    from refactory_dsh.graph_control import queued_controls
+    qc = queued_controls(run_root)
+    if qc:
+        activity['queued_controls'] = qc
     # Compute owner liveness before the start-failure check needs it.
     checkpoint = _read_json(run_root / '.refactory/spine-checkpoint.json')
     owner = checkpoint.get('owner_pid')
@@ -514,6 +525,8 @@ def status(run_root: Path, *, after: int = 0) -> dict[str, Any]:
         activity['respawn_count'] = len(sup_history)
         activity['last_respawn'] = sup_history[-1].get('at', '')
     start_failure = run_state.read_start_failure(run_root)
+    if start_failure and start_failure.get('suggested_command'):
+        activity['suggested_command'] = start_failure['suggested_command']
     if start_failure and owner_alive is not True:
         sf_spine = start_failure.get('spine_status_at_exit', '')
         current_spine = str(spine.get('status', ''))
@@ -1269,10 +1282,17 @@ def _parser() -> argparse.ArgumentParser:
     watch.add_argument("--interval", type=float, default=1.0, help="reader interval in seconds (minimum 0.1)")
 
     graph_control = add(sub.add_parser("graph-control", help="preview or queue a graph boundary control"))
-    graph_control.add_argument("action", choices=["pause", "resume", "stop", "preview", "rerun"])
+    graph_control.add_argument("action", choices=[
+        "pause", "resume", "stop", "preview", "rerun",
+        "acknowledge", "amend-command", "withdraw",
+    ])
     graph_control.add_argument("--node", default="")
     graph_control.add_argument("--text", default="")
     graph_control.add_argument("--revision", default="")
+    graph_control.add_argument("--check", default="", help="new check command (amend-command)")
+    graph_control.add_argument("--setup", default="", help="new setup command (amend-command)")
+    graph_control.add_argument("--generate", default="", help="new generate command (amend-command)")
+    graph_control.add_argument("--note", default="", help="why the command was changed (amend-command)")
     graph_control.add_argument(
         "--acknowledge-failure", action="store_true", default=False,
         dest="acknowledge_failure",
@@ -1683,11 +1703,22 @@ def main(argv: list[str] | None = None) -> int:
         elif args.verb == "graph-control":
             from refactory_dsh.graph_control import request
             try:
-                payload = request(
-                    _root_for(args, project), args.action,
-                    node=args.node, text=args.text, revision=args.revision,
-                    acknowledge_failure=getattr(args, 'acknowledge_failure', False),
-                )
+                if args.action == 'amend-command':
+                    fields = [(f, getattr(args, f)) for f in ('check', 'setup', 'generate') if getattr(args, f)]
+                    if len(fields) != 1:
+                        raise ConsoleError('exactly one of --check, --setup, --generate is required')
+                    field_name, field_value = fields[0]
+                    payload = request(
+                        _root_for(args, project), 'amend-command',
+                        field=field_name, value=field_value, note=getattr(args, 'note', ''),
+                        acknowledge_failure=getattr(args, 'acknowledge_failure', False),
+                    )
+                else:
+                    payload = request(
+                        _root_for(args, project), args.action,
+                        node=args.node, text=args.text, revision=args.revision,
+                        acknowledge_failure=getattr(args, 'acknowledge_failure', False),
+                    )
             except ValueError as error:
                 raise ConsoleError(str(error)) from error
             from refactory_dsh import readable

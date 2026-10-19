@@ -219,6 +219,7 @@ def supervise(root: Path, *, max_respawns: int | None = None,
 
     respawn_count = 0
     last_exit_code = first_exit_code
+    _from_resume_pending = False
     sf_path = root / '.refactory/start-failure.json'
 
     try:
@@ -231,8 +232,13 @@ def supervise(root: Path, *, max_respawns: int | None = None,
             try:
                 recovery.prepare(root, name)
             except ValueError as exc:
+                reason = str(exc)
                 record_start_failure(root, os.getpid(), 1, run_state.spine_status(root),
-                                     run_state.spine_status(root), reason=str(exc))
+                                     run_state.spine_status(root), reason=reason)
+                # Suggest the acknowledge command when the refusal is about
+                # unknown or failed outcome (dm-70)
+                if 'unknown or failed' in reason or 'outcome is unknown' in reason:
+                    _write_suggested_command(root, f'refactory graph-control acknowledge --run {root}')
                 return None
 
             child_start_time = int(time.time() * 1000) / 1000
@@ -272,6 +278,17 @@ def supervise(root: Path, *, max_respawns: int | None = None,
             if _signal_exit:
                 return last_exit_code if inline else None
 
+            # dm-94: when a child started for a consumed resume exits before
+            # the spine's status changes, record a start failure so a person's
+            # resume is never consumed silently.
+            if _from_resume_pending and child is not None:
+                if spine_before == spine_after and exit_code != 0:
+                    child_reason = _last_log_lines(root)
+                    record_start_failure(root, child.pid, exit_code,
+                                         spine_before, spine_after,
+                                         reason=f'resume consumed but child failed: {child_reason}')
+            _from_resume_pending = False
+
             # Check for resume-pending.json (dm-81 fix)
             pending = _read_resume_pending(root)
             if pending is not None:
@@ -280,11 +297,15 @@ def supervise(root: Path, *, max_respawns: int | None = None,
                 try:
                     recovery.prepare(root, name)
                 except ValueError as exc:
+                    reason = str(exc)
                     pid_for_record = child.pid if child is not None else os.getpid()
                     record_start_failure(root, pid_for_record, exit_code,
-                                         spine_before, spine_after, reason=str(exc))
+                                         spine_before, spine_after, reason=reason)
+                    if 'unknown or failed' in reason or 'outcome is unknown' in reason:
+                        _write_suggested_command(root, f'refactory graph-control acknowledge --run {root}')
                     return last_exit_code if inline else None
                 child_start_time = int(time.time() * 1000) / 1000
+                _from_resume_pending = True
                 child = _start_child(root)
                 _current_child = child
                 # Clear any start-failure from the previous child
@@ -318,9 +339,12 @@ def supervise(root: Path, *, max_respawns: int | None = None,
                 recovery.prepare(root, name)
             except ValueError as exc:
                 # Deterministic refusal — do not retry
+                reason = str(exc)
                 pid_for_record = child.pid if child is not None else os.getpid()
                 record_start_failure(root, pid_for_record, exit_code, spine_before, spine_after,
-                                     reason=str(exc))
+                                     reason=reason)
+                if 'unknown or failed' in reason or 'outcome is unknown' in reason:
+                    _write_suggested_command(root, f'refactory graph-control acknowledge --run {root}')
                 return last_exit_code if inline else None
             except Exception:
                 # Transient I/O or other error — treat as transient
@@ -362,6 +386,22 @@ def supervise(root: Path, *, max_respawns: int | None = None,
 
     finally:
         os.close(lock_fd)
+
+
+def _write_suggested_command(root: Path, command: str) -> None:
+    """Write suggested_command into start-failure.json if it exists."""
+    sf_path = root / '.refactory/start-failure.json'
+    if not sf_path.exists():
+        return
+    try:
+        sf = json.loads(sf_path.read_text())
+        if isinstance(sf, dict):
+            sf['suggested_command'] = command
+            tmp = sf_path.with_suffix('.tmp')
+            tmp.write_text(json.dumps(sf, indent=2))
+            tmp.replace(sf_path)
+    except (OSError, json.JSONDecodeError):
+        pass
 
 
 if __name__ == '__main__':

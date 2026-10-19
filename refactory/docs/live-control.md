@@ -75,7 +75,7 @@ uv run refactory graph-control stop --run /absolute/run
 
 Process cancellation is separate: `refactory stop --run RUN_DIR` requests interruption of the run's current owner process (from the console launch record, or from the spine checkpoint when the launch record is absent or stale, matching how `refactory status` determines `owner_alive`). Inspect the receipt and subsequent activity for confirmation; sending a signal is not proof that every worker terminated. Stopping a reader does not issue either kind of stop.
 
-A control that cannot be applied — a stale revision, an unsupported action, a node that is not safely replayable — is recorded with `status: failed` in the receipt. The failure reason is also journaled as a run warning, visible in `refactory status` and in the receipt shown by `refactory graph-control`'s own output. The owner removes the control file once it applies or refuses the control. A deferred rerun stays queued until concurrent work joins.
+A control that cannot be applied — a stale revision, an unsupported action, a node that is not safely replayable — is recorded with `status: failed` in the receipt. The failure reason is also journaled as a run warning, visible in `refactory status` and in the receipt shown by `refactory graph-control`'s own output. The owner removes the control file once it applies or refuses the control. A deferred rerun stays queued until concurrent work joins. `refactory status` lists the queued controls, so a person sees what a next owner would apply.
 
 To change completed work, choose a completed node and prompt correction, press **Preview affected results**, inspect the invalidated nodes, then **Confirm correction and rerun**. The console equivalent is `graph-control preview --node NODE`, followed by `graph-control rerun --node NODE --text "CORRECTION" --revision REVISION` with the returned revision and the same `--run`. The owner refuses a stale preview. Prior evidence is archived and dependent results invalidated before execution; a note alone does not silently rewrite completed work. Unsafe replay plans, including unsettled concurrent work, are refused.
 
@@ -115,11 +115,77 @@ When an owner process exits and the run's spine status is neither terminal nor d
 | Transient vs deterministic | A `recovery.prepare()` refusal (e.g. "last node outcome is unknown or failed") is deterministic — recorded as a start failure and not retried. Only transient exits (crash, kill, model outage) are respawned. |
 | Start-failure recording | An owner that exits before advancing the spine status writes `.refactory/start-failure.json` with the reason. `refactory status` reports `state: failed` with the reason, instead of the stale spine state. |
 | Single-resume | A resume requested while the old owner is still exiting is filed as `.refactory/resume-pending.json` and honoured automatically when the old owner finishes exiting. No second command needed (dm-81). |
-| Headless inline | A fresh headless run calls the unified `supervise()` function with `first_exit_code`, sharing the lock, signal forwarding, resume-pending consumption, and start-failure recording with the detached host. |
+| Headless inline | A fresh headless run calls the unified `supervise()` function with `first_exit_code`, sharing the lock, signal forwarding, resume-pending consumption, and start-failure recording with the detached host. The inline host supervises only after the run's ownership is released (dm-94), so a consumed resume can start a new owner. |
+| Terminal-status exit | A headless run's owner exits once its graph reaches a terminal status (done, failed, cancelled): the coordinator does not continue on stdin, whatever the profile. `graph-control stop` on a run whose graph is terminal and whose owner lingers stops the owner directly via SIGTERM. |
 | Stop-requested guard | After each child exit, `needs_supervision` checks `.refactory/stop-requested.json`; a stop requested at or after the child's start time prevents respawn. An older stop does not block a resumed run. |
 | Resume-pending validation | `resume-pending.json` is consumed only when its `checkpoint_sha256` matches the current `spine-checkpoint.json`; a mismatched pending is deleted and reported in `start-failure.json`. |
 | Nesting prevention | The `supervisor.lock` prevents a supervised child from running its own supervision loop. A child's attempt to call `supervise()` fails the non-blocking flock and returns immediately. |
 | Supervisor killed | If the supervisor itself is killed (`SIGKILL`), the owner child continues in its own session. The run is then unsupervised — exactly as today. A manual `refactory graph-control resume` is the fallback. |
+
+### Correct a run's command
+
+When a run's setup, check or generate command is wrong for the work, correct it
+with `amend-command` and continue:
+
+```bash
+uv run refactory graph-control amend-command --run /absolute/run \
+    --check 'pnpm test && python -m pytest -q tests' --note 'added pytest'
+```
+
+Exactly one of `--check`, `--setup`, `--generate` is required. The change is
+recorded in `facts.json` as an explicit, timestamped entry in `command_history`,
+with the old value, the new value and the person's note. It appears in
+`refactory status` and in the pull request's Verification section. It is never
+a silent overwrite of facts.json.
+
+The handler finds which node to rerun from the graph's declarations — the
+earliest due or completed node whose operation reads the amended fact — and
+queues a rerun control with `source: 'amend-command'`. The spine consumes it
+at its next boundary using `commandCorrection` semantics, which accept due
+nodes that have not yet completed. Forward descendants are invalidated through
+the existing redo machinery. The step that failed with the old command is
+retried with the new one, without anyone editing the checkpoint.
+
+Follow with `refactory graph-control resume --run /absolute/run` to start a new
+owner. For a failed checkpoint, add `--acknowledge-failure` to the amend-command.
+
+### Acknowledge an executing checkpoint
+
+When the owner dies while nodes are running, the checkpoint stays `executing`.
+Recovery refuses it as an unknown outcome. Acknowledge it as your statement
+that you inspected the side effects:
+
+```bash
+uv run refactory graph-control acknowledge --run /absolute/run
+```
+
+This writes an acknowledgement bound to the checkpoint's SHA, moves pending
+delivery markers and outputs whose fingerprints differ from the checkpoint's
+recorded values under `.refactory/set-aside/<timestamp>/`, never deleting them,
+and lists them in the command's output and in a `manifest.json` inside the
+directory.
+
+For a fork with some branches completed before the crash: completed branches'
+outputs match the checkpoint's recorded fingerprints and stay in place.
+Only in-flight branches' partial outputs differ and are set aside. After
+resume, the spine re-dispatches only the incomplete branches from the cursor.
+When all branches complete, the join reads outputs from both the preserved
+completed branches and the re-dispatched ones.
+
+Acknowledge refuses while the owner or the supervisor is alive. When the
+supervisor stops on the dm-70 refusal, `start-failure.json` and
+`refactory status` name this command as the next step.
+
+### Withdraw a queued control
+
+A queued control that was never applied can be removed:
+
+```bash
+uv run refactory graph-control withdraw --run /absolute/run --node <control_id>
+```
+
+This refuses if the control has already been applied (receipt `status: applied`).
+Use `refactory status` to see which controls are queued.
 
 ### Replay a failed run
 
