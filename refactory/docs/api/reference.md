@@ -727,6 +727,7 @@ The one command: `refactory`.
 | function | `cmd_ceo` | `(args: 'argparse.Namespace') -> 'int'` |
 | function | `cmd_doctor` | `(args: 'argparse.Namespace') -> 'int'` |
 | function | `cmd_list` | `(args: 'argparse.Namespace') -> 'int'` |
+| function | `cmd_pin` | `(args: 'argparse.Namespace') -> 'int'` |
 | function | `cmd_ui` | `(args: 'argparse.Namespace') -> 'int'` |
 | function | `main` | `(argv: 'list[str] \| None' = None) -> 'int'` |
 | function | `slug` | `(text: 'str', *, words: 'int' = 3) -> 'str'` |
@@ -735,6 +736,7 @@ The one command: `refactory`.
 - **`cmd_ceo`** — Describe what you want: an authoring mode, or a mode to run.
 - **`cmd_doctor`** — Whether this machine can run a mode, and what to do about anything missing.
 - **`cmd_list`** — What this checkout can do.
+- **`cmd_pin`** — Manage pinned machinery checkouts.
 - **`cmd_ui`** — The GUI, launched from this checkout (the panel and the tool both live here).
 - **`main`** — Dispatch one verb onto the module that owns it.
 - **`slug`** — A name for what was asked for, when the asker did not give one.

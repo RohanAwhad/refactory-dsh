@@ -625,6 +625,30 @@
       "purpose": "Manage installed mode packages through registry subcommands; read their help before mutations.",
       "reviewed_schema": "be7bcd90aa83a34d63c41828e491c54b431cab1fdcea3ce59520246693aebaf0"
     },
+    "cli:pin": {
+      "doc": "refactory/docs/cli.md",
+      "examples": [
+        {
+          "arguments": {
+            "pin_verb": "cleanup"
+          },
+          "explanation": "Remove pinned checkout copies that no live or resumable run refers to; copies for active, paused, halted or refused runs are kept."
+        },
+        {
+          "arguments": {
+            "pin_verb": "list"
+          },
+          "explanation": "Show all pinned checkout keys, their referenced runs, disk usage and whether the driver was dirty at pin time."
+        }
+      ],
+      "interfaces": {
+        "chat": "Unavailable as a direct chat mutation; use the documented CLI/panel route.",
+        "cli": "refactory pin",
+        "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
+      },
+      "purpose": "Manage pinned machinery checkouts: remove unreferenced copies or list pinned keys and their runs.",
+      "reviewed_schema": "0c2b63c8efba26f286195378ee889f284542a341366159189347ae17e5cc7100"
+    },
     "cli:projects": {
       "doc": "refactory/docs/cli.md",
       "examples": [

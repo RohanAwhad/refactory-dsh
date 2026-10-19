@@ -5416,6 +5416,56 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 }
 ```
 
+## cli:pin
+
+Manage pinned machinery checkouts: remove unreferenced copies or list pinned keys and their runs.
+
+Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
+
+```json
+{
+  "description": "manage pinned machinery checkouts",
+  "doc": "refactory/docs/cli.md",
+  "examples": [
+    {
+      "arguments": {
+        "pin_verb": "cleanup"
+      },
+      "explanation": "Remove pinned checkout copies that no live or resumable run refers to; copies for active, paused, halted or refused runs are kept."
+    },
+    {
+      "arguments": {
+        "pin_verb": "list"
+      },
+      "explanation": "Show all pinned checkout keys, their referenced runs, disk usage and whether the driver was dirty at pin time."
+    }
+  ],
+  "interfaces": {
+    "chat": "Unavailable as a direct chat mutation; use the documented CLI/panel route.",
+    "cli": "refactory pin",
+    "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
+  },
+  "parameters": {
+    "pin_verb": {
+      "default": null,
+      "description": "",
+      "enum": [
+        "cleanup",
+        "list"
+      ],
+      "flags": [],
+      "nargs": "A...",
+      "position": 0,
+      "positional": true,
+      "required": true,
+      "type": "string"
+    }
+  },
+  "purpose": "Manage pinned machinery checkouts: remove unreferenced copies or list pinned keys and their runs.",
+  "reviewed_schema": "0c2b63c8efba26f286195378ee889f284542a341366159189347ae17e5cc7100"
+}
+```
+
 ## cli:projects
 
 List the projects design runs work on, with each run's branch and how it ended, or prune the worktrees and branches that ended runs no longer need.
