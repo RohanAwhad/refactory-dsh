@@ -190,7 +190,21 @@ def test_contract_design_gives_title_summary_and_changes(tmp_path):
     assert title == "Enforce clause-level audit coverage"
     assert title != "b17_clauses"
 
-    base, head = _git_pair(tmp_path)
+    import subprocess as sp
+    sp.run(["git", "init", str(tmp_path)], capture_output=True, check=True)
+    sp.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t"], capture_output=True, check=True)
+    sp.run(["git", "-C", str(tmp_path), "config", "user.name", "T"], capture_output=True, check=True)
+    (tmp_path / "f.txt").write_text("a\n")
+    sp.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    sp.run(["git", "-C", str(tmp_path), "commit", "-m", "init"], capture_output=True, check=True)
+    base = sp.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                  capture_output=True, text=True, check=True).stdout.strip()
+    (tmp_path / "g.txt").write_text("b\n")
+    (tmp_path / "authoring_evidence.py").write_text("# new\n")
+    sp.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    sp.run(["git", "-C", str(tmp_path), "commit", "-m", "work"], capture_output=True, check=True)
+    head = sp.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                  capture_output=True, text=True, check=True).stdout.strip()
     from types import SimpleNamespace
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
@@ -198,6 +212,294 @@ def test_contract_design_gives_title_summary_and_changes(tmp_path):
     assert "clause-level checking" in body
     assert "## What changed" in body
     assert "authoring_evidence.py" in body
+    assert "adds clause rows" in body
+
+
+def test_what_changed_uses_sites_not_bullets(tmp_path):
+    """Contract design with test-plan Changes bullets yields What changed
+    from [changed] sites only, not those bullets.
+
+    Uses site lines from b21b, including one where ``[changed]`` appears
+    inside backticks before the real **[changed]** marker.
+
+    Fails without the change: old _body (delivery.py:1007-1008) renders
+    parsed.changes, which includes 'Return code is 2'.
+    """
+    from refactory_dsh import design_contract
+
+    design_text = (
+        "# Build What changed from sites\n\n"
+        "## Summary\n\nFix the What changed section.\n\n"
+        "## Rule and sites\n\n"
+        "- `refactory/refactory_dsh/design_contract.py:96-155` \u2014 `parse()` builds "
+        "`rule_sites` dicts. Currently drops text after `[changed]`. "
+        "**[changed]** captures that text as a `'description'` field in each site dict.\n"
+        "- `refactory/refactory_dsh/delivery.py:989-1022` \u2014 `_body()` renders the PR body. "
+        "**[changed]** replaces those lines with a call to `build_what_changed`.\n"
+        "- `refactory/refactory_dsh/delivery.py:1025-1029` \u2014 `_write_pr_text()` calls "
+        "`_body()`. **[left: inherits the fix through `_body()`]**\n\n"
+        "## Docs\n\n- `docs/models.md` \u2014 update\n\n"
+        "## Changes\n\n"
+        "- Return code is 2\n"
+        "- `seen == []`\n"
+    )
+
+    # Verify the backtick-escaped marker is handled: description is captured
+    # from the second [changed] (the bold one), not the first (inside backticks).
+    parsed = design_contract.parse(design_text, "test_run")
+    changed = [s for s in parsed.rule_sites if s['status'] == 'changed']
+    assert len(changed) == 2
+    assert changed[0]['description'] == "captures that text as a `'description'` field in each site dict"
+    assert changed[1]['description'] == "replaces those lines with a call to `build_what_changed`"
+
+    ctx = _TitleCtx(
+        facts={"brief": "Fix what changed", "check": "pytest", "name": "test_run"},
+        files={"design.md": design_text},
+    )
+
+    import subprocess as sp
+    sp.run(["git", "init", str(tmp_path)], capture_output=True, check=True)
+    sp.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t"], capture_output=True, check=True)
+    sp.run(["git", "-C", str(tmp_path), "config", "user.name", "T"], capture_output=True, check=True)
+    (tmp_path / "f.txt").write_text("a\n")
+    sp.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    sp.run(["git", "-C", str(tmp_path), "commit", "-m", "init"], capture_output=True, check=True)
+    base = sp.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                  capture_output=True, text=True, check=True).stdout.strip()
+    for f in ["refactory/refactory_dsh/design_contract.py",
+              "refactory/refactory_dsh/delivery.py"]:
+        p = tmp_path / f
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("# changed\n")
+    sp.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    sp.run(["git", "-C", str(tmp_path), "commit", "-m", "work"], capture_output=True, check=True)
+    head = sp.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                  capture_output=True, text=True, check=True).stdout.strip()
+
+    from types import SimpleNamespace
+    found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
+    body = delivery._body(ctx, found)
+
+    assert "## What changed" in body
+    assert "design_contract.py" in body
+    assert "delivery.py" in body
+    assert "Return code is 2" not in body
+    assert "seen == []" not in body
+
+
+def test_diff_file_with_no_site_appears_by_name(tmp_path):
+    """A file in the diff with no matching [changed] site appears by name.
+
+    Uses a site line from b20b: ``delivery.py:795`` \u2014 **[changed]**.
+    The diff also touches test_delivery.py, which has no site.
+
+    Fails without the change: old _body renders parsed.changes (the Changes
+    section bullets); the diff file not in any site is not listed.
+    """
+    design_text = (
+        "# Write PR text once\n\n"
+        "## Summary\n\nA kept delivery has no PR text.\n\n"
+        "## Rule and sites\n\n"
+        "- `refactory/refactory_dsh/delivery.py:795` \u2014 the only place `BODY` is written "
+        "today, inside `_deliver`. **[changed]** \u2014 this write is removed.\n"
+        "- `refactory/refactory_dsh/delivery.py:926-938` \u2014 `_title()` computes the PR title. "
+        "**[left: read-only; called from `_write_pr_text`]**\n\n"
+        "## Docs\n\n- `docs/models.md` \u2014 update delivery paragraph\n\n"
+        "## Changes\n\n"
+        "- `refactory/refactory_dsh/delivery.py`\n"
+    )
+
+    ctx = _TitleCtx(
+        facts={"brief": "PR text for kept", "check": "pytest", "name": "b20b"},
+        files={"design.md": design_text},
+    )
+
+    import subprocess as sp
+    sp.run(["git", "init", str(tmp_path)], capture_output=True, check=True)
+    sp.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t"], capture_output=True, check=True)
+    sp.run(["git", "-C", str(tmp_path), "config", "user.name", "T"], capture_output=True, check=True)
+    (tmp_path / "f.txt").write_text("a\n")
+    sp.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    sp.run(["git", "-C", str(tmp_path), "commit", "-m", "init"], capture_output=True, check=True)
+    base = sp.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                  capture_output=True, text=True, check=True).stdout.strip()
+    for f in ["refactory/refactory_dsh/delivery.py",
+              "refactory/tests/test_delivery.py"]:
+        p = tmp_path / f
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("# changed\n")
+    sp.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    sp.run(["git", "-C", str(tmp_path), "commit", "-m", "work"], capture_output=True, check=True)
+    head = sp.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                  capture_output=True, text=True, check=True).stdout.strip()
+
+    from types import SimpleNamespace
+    found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
+    body = delivery._body(ctx, found)
+
+    assert "refactory/tests/test_delivery.py" in body
+
+
+def test_changed_site_outside_diff_excluded(tmp_path, capsys):
+    """A [changed] site whose file is not in the diff is excluded from
+    What changed, and the mismatch is reported via target_guard.warn.
+
+    Uses site lines from b20d (``nn/knob.py:49-81``) and b21b
+    (``delivery.py:989-1022``).  The diff touches only delivery.py.
+
+    Fails without the change: old _body renders parsed.changes (the Changes
+    section bullets), not the sites. The bullets include knob.py.
+    """
+    design_text = (
+        "# Refuse empty briefs\n\n"
+        "## Summary\n\nEmpty briefs should be refused.\n\n"
+        "## Rule and sites\n\n"
+        "- `refactory/refactory_dsh/delivery.py:989-1022` \u2014 `_body()` renders the PR body. "
+        "**[changed]** replaces the What changed source.\n"
+        "- `refactory/refactory_dsh/nn/knob.py:49-81` (`Knob` dataclass) \u2014 "
+        "**[changed]** Add `required: bool = False` field.\n\n"
+        "## Docs\n\n- `docs/models.md` \u2014 update\n\n"
+        "## Changes\n\n"
+        "- `refactory/refactory_dsh/delivery.py`\n"
+        "- `refactory/refactory_dsh/nn/knob.py`\n"
+    )
+
+    ctx = _TitleCtx(
+        facts={"brief": "Refuse empty", "check": "pytest", "name": "b20d"},
+        files={"design.md": design_text},
+    )
+
+    import subprocess as sp
+    sp.run(["git", "init", str(tmp_path)], capture_output=True, check=True)
+    sp.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t"], capture_output=True, check=True)
+    sp.run(["git", "-C", str(tmp_path), "config", "user.name", "T"], capture_output=True, check=True)
+    (tmp_path / "f.txt").write_text("a\n")
+    sp.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    sp.run(["git", "-C", str(tmp_path), "commit", "-m", "init"], capture_output=True, check=True)
+    base = sp.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                  capture_output=True, text=True, check=True).stdout.strip()
+    # Only delivery.py is in the diff; knob.py is NOT
+    p = tmp_path / "refactory/refactory_dsh/delivery.py"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("# changed\n")
+    sp.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    sp.run(["git", "-C", str(tmp_path), "commit", "-m", "work"], capture_output=True, check=True)
+    head = sp.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                  capture_output=True, text=True, check=True).stdout.strip()
+
+    from types import SimpleNamespace
+    found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
+    body = delivery._body(ctx, found)
+
+    assert "delivery.py" in body
+    assert "knob.py" not in body
+    err = capsys.readouterr().err
+    assert "knob.py" in err
+
+
+def test_pre_contract_design_lists_diff_files(tmp_path):
+    """A pre-contract design (no ## Summary, ## Rule and sites, etc.)
+    lists the diff's files in What changed.
+
+    Fails without the change: old _body skips What changed entirely for
+    pre-contract designs (parsed.has_contract is False at delivery.py:1007).
+    """
+    design_text = "# Fix something\n\nThe old oracle is stale.\n"
+
+    ctx = _TitleCtx(
+        facts={"brief": "Fix it", "check": "pytest", "name": "b15b"},
+        files={"design.md": design_text},
+    )
+
+    import subprocess as sp
+    sp.run(["git", "init", str(tmp_path)], capture_output=True, check=True)
+    sp.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t"], capture_output=True, check=True)
+    sp.run(["git", "-C", str(tmp_path), "config", "user.name", "T"], capture_output=True, check=True)
+    (tmp_path / "f.txt").write_text("a\n")
+    sp.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    sp.run(["git", "-C", str(tmp_path), "commit", "-m", "init"], capture_output=True, check=True)
+    base = sp.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                  capture_output=True, text=True, check=True).stdout.strip()
+    (tmp_path / "alpha.py").write_text("# alpha\n")
+    (tmp_path / "beta.py").write_text("# beta\n")
+    sp.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    sp.run(["git", "-C", str(tmp_path), "commit", "-m", "work"], capture_output=True, check=True)
+    head = sp.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                  capture_output=True, text=True, check=True).stdout.strip()
+
+    from types import SimpleNamespace
+    found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
+    body = delivery._body(ctx, found)
+
+    assert "## What changed" in body
+    assert "alpha.py" in body
+    assert "beta.py" in body
+
+
+def test_build_what_changed_with_real_design():
+    """build_what_changed with site lines from b20b (multiple [changed] for
+    delivery.py) and b20d (knob.py, design.py) against their diff files.
+
+    Multiple [changed] sites in delivery.py become one item; each diff file
+    appears exactly once; no mismatches.
+    """
+    from refactory_dsh import design_contract
+
+    design_text = (
+        "# Test real design\n\n"
+        "## Summary\n\nReal design test.\n\n"
+        "## Rule and sites\n\n"
+        "- `refactory/refactory_dsh/delivery.py:795` \u2014 the only place `BODY` is written "
+        "today, inside `_deliver`. **[changed]** \u2014 this write is removed.\n"
+        "- `refactory/refactory_dsh/delivery.py:729-766` \u2014 `deliver_design()` orchestrates "
+        "the whole step. **[changed]** \u2014 restructured.\n"
+        "- `refactory/refactory_dsh/delivery.py:138-159` \u2014 `knobs()` declares the `pr` knob. "
+        "**[changed]** \u2014 appended finishing commands.\n"
+        "- `refactory/refactory_dsh/delivery.py:926-938` \u2014 `_title()` computes the PR title. "
+        "**[left: read-only; called from `_write_pr_text`]**\n"
+        "- `refactory/refactory_dsh/nn/knob.py:49-81` (`Knob` dataclass) \u2014 "
+        "**[changed]** Add `required: bool = False` field.\n"
+        "- `refactory/refactory_dsh/design.py:69` (brief knob declaration) \u2014 "
+        "**[changed]** Change to `required=True`.\n\n"
+        "## Docs\n\n- `docs/models.md` \u2014 update\n\n"
+        "## Changes\n\n"
+        "- `refactory/refactory_dsh/delivery.py`\n"
+        "- `refactory/refactory_dsh/nn/knob.py`\n"
+    )
+
+    parsed = design_contract.parse(design_text, "test_real")
+
+    # Diff files from a mix of b20b and b20d
+    diff_files = [
+        "refactory/refactory_dsh/delivery.py",
+        "refactory/refactory_dsh/design.py",
+        "refactory/refactory_dsh/nn/knob.py",
+        "refactory/tests/test_delivery.py",
+    ]
+
+    items, mismatches = design_contract.build_what_changed(parsed, diff_files)
+
+    # No mismatches: every [changed] site matches a diff file
+    assert mismatches == [], f"unexpected mismatches: {mismatches}"
+    # One item per diff file
+    assert len(items) == 4, f"expected 4 items, got {len(items)}: {items}"
+
+    # delivery.py: three [changed] sites merged into one item
+    assert items[0].startswith("refactory/refactory_dsh/delivery.py")
+    assert "this write is removed" in items[0]
+    assert "restructured" in items[0]
+    assert "appended finishing commands" in items[0]
+
+    # design.py: one [changed] site
+    assert "refactory/refactory_dsh/design.py" in items[1]
+    assert "Change to `required=True`" in items[1]
+
+    # knob.py: one [changed] site
+    assert "refactory/refactory_dsh/nn/knob.py" in items[2]
+    assert "Add `required: bool = False` field" in items[2]
+
+    # test_delivery.py: no site, appears by name only
+    assert items[3] == "refactory/tests/test_delivery.py"
 
 
 @pytest.mark.parametrize("heading,run_name,expected_not_equal", [
@@ -1394,11 +1696,11 @@ def test_finish_commands_work_with_special_characters_in_title(github, tmp_path)
         "# Fix the audit's `gate` and $PATH handling\n\n"
         "## Summary\n\nFix it properly.\n\n"
         "## Rule and sites\n\n"
-        "- `ops.py:1` — **[changed]**\n\n"
+        "- `tool.py:1` — **[changed]**\n\n"
         "## Docs\n\n"
         "- docs/models.md\n\n"
         "## Changes\n\n"
-        "- ops.py\n"
+        "- tool.py\n"
     )
     answers = [RESEARCH_ANSWER, "perspectives", "one plan", tricky_design,
                DESIGN_REVIEW_ANSWER, render({"tool.py": "print('built')\n"}),

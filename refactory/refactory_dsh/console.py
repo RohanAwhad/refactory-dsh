@@ -843,6 +843,7 @@ def _steer(
     seed: str | None = None,
     note: str | None = None,
     kind: str = "info",
+    scope: str = "product",
     verdicts: tuple[str, ...] | list[str] = (),
     with_gates: bool = False,
     control: str | None = None,
@@ -873,7 +874,7 @@ def _steer(
     if seed is not None:
         Ledger.seed(run_root, seed)
     if note is not None:
-        ledger.note(kind, note)
+        ledger.note(kind, note, scope=scope)
     recorded_scopes: dict[str, str] = {}
     for pair in verdicts:
         gate, _, value = str(pair).partition("=")
@@ -1298,6 +1299,11 @@ def _parser() -> argparse.ArgumentParser:
         help="a constraint must be respected; the others are context",
     )
     steer.add_argument(
+        "--scope", default="product", choices=["product", "process"],
+        help="product (default) notes become auditable requirements; process notes "
+             "record run-level directives that are visible but not auditable",
+    )
+    steer.add_argument(
         "--verdict", action="append", default=[],
         help="record a one-use gate answer as <gate>=<value> (repeatable), scoped "
              "to the current declared review inputs; changed inputs require a fresh answer",
@@ -1703,6 +1709,7 @@ def main(argv: list[str] | None = None) -> int:
             payload = _steer(
                 _root_for(args, project),
                 seed=args.seed, note=args.note, kind=args.kind,
+                scope=args.scope,
                 verdicts=args.verdict, with_gates=args.gates,
                 control=asked,
                 target=args.keep or args.reject,

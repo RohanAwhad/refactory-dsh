@@ -53,6 +53,14 @@ Steering notes added with `refactory steer --kind info` record context that agen
 see but the audit does not require evidence for. Use `--kind correction` or
 `--kind constraint` for asks the audit must cover.
 
+Use `--scope process` for notes about the run itself (e.g. "add a row to the
+audit table", "record timestamps in a specific format"). A process note remains
+visible to agents and is recorded in the evidence payload, but does not become
+an auditable requirement — because the audit cannot cite itself as evidence for
+a directive about its own behavior. Process notes are reported on in a separate
+non-blocking section of the intent audit and appear in the run report and pull
+request, so a person sees each one and whether it was followed.
+
 ## Apply a control at its boundary
 
 Optimizer notes, keep/reject and pause/resume/stop apply at generation boundaries. Graph controls apply at the next graph boundary and can wait for admitted work to settle. External workers accept new instructions at a subsequent node boundary, not as an in-flight prompt edit. A queued control receipt is a request, not confirmation of application.

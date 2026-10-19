@@ -93,6 +93,20 @@ def _h1(lines: list[str]) -> str:
     return ""
 
 
+def _find_marker(body: str, pattern: str) -> re.Match | None:
+    """Find the first match of *pattern* not inside a backtick span.
+
+    A match whose start has an odd number of backtick characters before it
+    is inside an inline code span and is skipped.  This prevents
+    a backticked mention of the marker in prose from shadowing the real
+    ``**[changed]**`` marker later on the same line.
+    """
+    for m in re.finditer(pattern, body, re.IGNORECASE):
+        if body[:m.start()].count('`') % 2 == 0:
+            return m
+    return None
+
+
 def parse(text: str, run_name: str = "") -> DesignContract:
     """Parse a design.md into its contract parts."""
     lines = text.splitlines()
@@ -123,12 +137,16 @@ def parse(text: str, run_name: str = "") -> DesignContract:
             body = (line[2:] if line.startswith("- ") or line.startswith("* ") else line).strip()
             status = "changed"
             reason = ""
-            m_changed = re.search(r'\[changed\]', body, re.IGNORECASE)
-            m_left_reason = re.search(r'\[left:\s*(.*?)\]', body, re.IGNORECASE)
-            m_left = re.search(r'\[left\]', body, re.IGNORECASE)
+            desc = ""
+            m_changed = _find_marker(body, r'\*{0,2}\[changed\]\*{0,2}')
+            m_left_reason = _find_marker(body, r'\*{0,2}\[left:\s*(.*?)\]\*{0,2}')
+            m_left = _find_marker(body, r'\*{0,2}\[left\]\*{0,2}')
             if m_changed:
                 status = "changed"
                 path_text = body[:m_changed.start()].strip().rstrip("—–-:").strip()
+                desc = body[m_changed.end():].strip()
+                desc = re.sub(r'^[—–\-:\s]+', '', desc).strip()
+                desc = desc.rstrip('.')
             elif m_left_reason:
                 status = "left"
                 reason = m_left_reason.group(1).strip()
@@ -141,7 +159,7 @@ def parse(text: str, run_name: str = "") -> DesignContract:
                 # No marker: the design has not said whether this change covers it.
                 status = "unmarked"
                 path_text = body
-            rule_sites.append({"path": path_text, "status": status, "reason": reason})
+            rule_sites.append({"path": path_text, "status": status, "reason": reason, "description": desc})
 
         docs_lines = _section_lines(lines, DOCS)
         docs = [{"path": b, "update": ""} for b in _bullets(docs_lines)]
@@ -211,6 +229,98 @@ def left_without_reason(parsed: DesignContract) -> list[str]:
 def unmarked_sites(parsed: DesignContract) -> list[str]:
     """Sites listed without a ``[changed]`` or ``[left: <reason>]`` marker."""
     return [site["path"] for site in parsed.rule_sites if site["status"] == "unmarked"]
+
+
+def _extract_file_path(site_path: str) -> str:
+    """Extract the file path from a site's ``path`` text.
+
+    Takes the first backticked token, or the text before the first " — ",
+    and strips its ``:line-range`` suffix.  For example::
+
+        `delivery.py:989-1022` — `_body()` renders the PR body
+        →  delivery.py
+
+        `nn/knob.py:49-81` (`Knob` dataclass)
+        →  nn/knob.py
+    """
+    text = site_path.strip()
+    m = re.match(r'`([^`]+)`', text)
+    if m:
+        path = m.group(1).strip()
+    else:
+        idx = text.find(' \u2014 ')
+        path = text[:idx].strip() if idx >= 0 else text
+    return re.sub(r':\d+(-\d+)?$', '', path)
+
+
+def _site_matches_diff(site_path: str, diff_files: list[str]) -> str | None:
+    """Return the diff file that matches *site_path*, or ``None``.
+
+    Extracts the file path from the first backticked token or text before
+    " \u2014 ", strips ``:line-range`` suffixes, and matches against *diff_files*.
+    Prefers an exact path match.  Accepts a basename/suffix match only when
+    exactly one diff file matches.
+    """
+    cleaned = _extract_file_path(site_path)
+    if not cleaned:
+        return None
+    for df in diff_files:
+        if df == cleaned:
+            return df
+    suffix_matches = [df for df in diff_files if df.endswith('/' + cleaned)]
+    if len(suffix_matches) == 1:
+        return suffix_matches[0]
+    return None
+
+
+def build_what_changed(
+    parsed: DesignContract, diff_files: list[str],
+) -> tuple[list[str], list[str]]:
+    """Build the "What changed" list from ``[changed]`` sites cross-checked
+    against the diff.
+
+    Returns ``(items, mismatches)``:
+
+    - ``items``: one line per changed file for the PR body.  Multiple
+      ``[changed]`` sites in the same file are merged into one item with
+      their descriptions joined by ``; ``.
+    - ``mismatches``: file paths of sites marked ``[changed]`` whose file
+      is not in the diff.
+
+    For a pre-contract design (``not parsed.has_contract``), returns the
+    diff file list as items with no mismatches.
+    """
+    if not parsed.has_contract:
+        return (list(diff_files), [])
+
+    changed_sites = [s for s in parsed.rule_sites if s['status'] == 'changed']
+
+    file_descriptions: dict[str, list[str]] = {}
+    mismatches: list[str] = []
+
+    for site in changed_sites:
+        diff_file = _site_matches_diff(site['path'], diff_files)
+        if diff_file is not None:
+            descs = file_descriptions.setdefault(diff_file, [])
+            desc = site.get('description', '')
+            if desc:
+                descs.append(desc)
+        else:
+            extracted = _extract_file_path(site['path'])
+            mismatches.append(extracted if extracted else site['path'])
+
+    items: list[str] = []
+    for diff_file in diff_files:
+        if diff_file in file_descriptions:
+            descs = file_descriptions[diff_file]
+            if descs:
+                items.append(f"{diff_file} \u2014 {'; '.join(descs)}")
+            else:
+                items.append(diff_file)
+        else:
+            items.append(diff_file)
+
+    return (items, mismatches)
 
 
 def title_is_run_name(text: str, run_name: str) -> bool:
