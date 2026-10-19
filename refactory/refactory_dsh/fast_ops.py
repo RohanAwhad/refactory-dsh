@@ -244,8 +244,30 @@ def focused_check(ctx: Any) -> dict[str, Any]:
                 payload["inherited_failures"] = sorted(filtered.inherited)
                 ctx.set_fact("inherited_failures", sorted(filtered.inherited))
                 if unbuilt_msg:
-                    check_text = ctx.read_text("focused-check.json") if ctx.exists("focused-check.json") else ""
                     ctx.write_text("check.txt", f"(the check passed; inherited failures excused)\n\n{unbuilt_msg}\n")
+                ctx.write_json("focused-check.json", payload)
+            else:
+                # New failures exist — wire unbuilt diagnosis the same way
+                # as design_ops.check_artifact does.
+                if filtered.new_failures and filtered.inherited:
+                    detail = filtered.new_failure_detail
+                if filtered.inherited_detail:
+                    inherited_part = filtered.inherited_detail
+                    if unbuilt_msg:
+                        inherited_part = inherited_part + "\n\n" + unbuilt_msg
+                    ctx.write_text("check.txt", detail + "\n\n" + inherited_part + "\n")
+                elif unbuilt_msg:
+                    ctx.write_text("check.txt", detail + "\n\n" + unbuilt_msg + "\n")
+                # When every new failure names an exact missing entry-point
+                # path, stop without spending a builder attempt.
+                if unbuilt and unbuilt_check.failures_explained_by_unbuilt(detail, unbuilt):
+                    raise ValueError(
+                        f"check failed because of unbuilt packages; code repair was not attempted.\n{unbuilt_msg}"
+                    )
+                # Otherwise store the diagnosis so gate_qa prepends it to
+                # the builder's feedback.
+                if unbuilt_msg:
+                    payload["unbuilt_diagnosis"] = unbuilt_msg
                 ctx.write_json("focused-check.json", payload)
     if ctx.facts.get("package_path"):
         problems = evidence.current_problems(ctx)
@@ -301,6 +323,10 @@ def gate_qa(ctx: Any) -> str:
         findings.append(f"requested runtime check failed (exit {check.get('returncode')}): {check_output}")
     findings.extend(evidence.current_problems(ctx, ("focused_qa",)))
     findings.extend(evidence.audit_problems(ctx))
+    # Prepend unbuilt-package diagnosis so the builder sees it first.
+    unbuilt_diag = check.get("unbuilt_diagnosis", "")
+    if unbuilt_diag:
+        findings.insert(0, unbuilt_diag)
     if findings:
         # Classify only refactory's own text; check stderr/stdout is target text
         # and must not be word-scanned (correction 1: gate_qa classifies target text).
