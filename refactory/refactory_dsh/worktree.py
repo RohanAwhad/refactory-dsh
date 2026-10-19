@@ -303,7 +303,7 @@ def _isolate_hooks(target: Path, worktree_path: Path) -> bool:
 
     # ── enable extensions.worktreeConfig (read-before-write, lock retry) ──
     ext_val = _config_value(config_file, "extensions.worktreeConfig")
-    need_write = ext_val is None or ext_val.strip().lower() != "true"
+    need_write = ext_val is None or ext_val.lower() != "true"
 
     if need_write:
         for attempt in range(4):
@@ -315,7 +315,7 @@ def _isolate_hooks(target: Path, worktree_path: Path) -> bool:
                     raise
                 # Another process may have set it while we waited.
                 retry_val = _config_value(config_file, "extensions.worktreeConfig")
-                if retry_val is not None and retry_val.strip().lower() == "true":
+                if retry_val is not None and retry_val.lower() == "true":
                     break
                 if attempt < 3:
                     time.sleep(0.1)
