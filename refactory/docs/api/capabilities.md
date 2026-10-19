@@ -7406,6 +7406,16 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     },
     {
       "condition": "reloop",
+      "source": "gate_pitfalls",
+      "target": "pitfalls_researcher"
+    },
+    {
+      "condition": "proceed",
+      "source": "gate_pitfalls",
+      "target": "strategy_director"
+    },
+    {
+      "condition": "reloop",
       "source": "gate_qa",
       "target": "emit"
     },
@@ -7415,14 +7425,14 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "target": "overwatch"
     },
     {
+      "condition": "proceed",
+      "source": "gate_research",
+      "target": "pitfalls_researcher"
+    },
+    {
       "condition": "reloop",
       "source": "gate_research",
       "target": "research_director"
-    },
-    {
-      "condition": "proceed",
-      "source": "gate_research",
-      "target": "strategy_director"
     },
     {
       "condition": "proceed",
@@ -7448,6 +7458,11 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "condition": null,
       "source": "overwatch",
       "target": "gate_overwatch"
+    },
+    {
+      "condition": null,
+      "source": "pitfalls_researcher",
+      "target": "gate_pitfalls"
     },
     {
       "condition": null,
@@ -7496,6 +7511,10 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     },
     {
       "id": "gate_overwatch",
+      "user": false
+    },
+    {
+      "id": "gate_pitfalls",
       "user": false
     },
     {
@@ -7595,6 +7614,17 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "role": "ceo"
     },
     {
+      "call": "refactory_dsh.design_ops:gate_pitfalls",
+      "gate_kind": "fn",
+      "id": "gate_pitfalls",
+      "kind": "gate",
+      "knobs": [
+        "pitfalls_attempts"
+      ],
+      "notes": "proceed only when pitfalls.json is valid; reloop to pitfalls_researcher otherwise",
+      "role": "ceo"
+    },
+    {
       "call": "refactory_dsh.create_ops:gate_qa",
       "gate_kind": "fn",
       "id": "gate_qa",
@@ -7653,6 +7683,14 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "kind": "agent",
       "knobs": [],
       "notes": "audit the evidence behind the reviews",
+      "role": "ceo"
+    },
+    {
+      "call": "",
+      "id": "pitfalls_researcher",
+      "kind": "agent",
+      "knobs": [],
+      "notes": "identify risk-ranked pitfalls before strategy, independent of any design",
       "role": "ceo"
     },
     {
@@ -7831,6 +7869,18 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "value": "",
       "values": []
     },
+    "pitfalls_attempts": {
+      "default": 2,
+      "description": "how many times the pitfalls step may be retried when its output is invalid",
+      "frozen": false,
+      "kind": "int",
+      "range": [
+        1,
+        5
+      ],
+      "value": 2,
+      "values": []
+    },
     "pr": {
       "default": true,
       "description": "open a pull request once the reviews pass: into the target's default branch, or a new project's own GitHub repository; off keeps the work on the run's local branch, with its pull request text in pull-request.md and finishing commands in delivery.json",
@@ -7982,7 +8032,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`). The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-    "reviewed_schema": "7a1c01edb782b0e2700fc55e658599cadf6caedde3ac8823f0a301d907fb11eb"
+    "reviewed_schema": "9a7202d6169cd6a02eba15bc52dc69e730c04d0622ccf515b363d7b929812eb9"
   }
 }
 ```
