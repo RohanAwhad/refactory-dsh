@@ -2420,7 +2420,7 @@ def test_dependency_install_for_merged_tree(github, tmp_path, monkeypatch):
         def _spy_ensure(found, run, budget=None, *, commit_lockfiles=True):
             ensure_calls.append({"commit_lockfiles": commit_lockfiles})
             # Don't actually install anything; just return no problems.
-            return found, []
+            return found, [], None
 
         monkeypatch.setattr(worktree, "ensure_environment", _spy_ensure)
         return real(ctx)

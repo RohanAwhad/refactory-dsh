@@ -888,8 +888,8 @@ def _installs(found: Worktree) -> list[list[str]]:
     return commands
 
 
-def ensure_environment(found: Worktree, run: Path, budget: Any = None,
-                       *, commit_lockfiles: bool = True) -> tuple[Worktree, list[str]]:
+def ensure_environment(found: Worktree, run: Path, budget: Any = None, *,
+                       commit_lockfiles: bool = True) -> tuple[Worktree, list[str], dict[str, Any] | None]:
     """Install what the worktree's manifests declare, once per their content; say what went wrong.
 
     Lazily: before the first check, and again only when a manifest changed, the last
@@ -900,9 +900,10 @@ def ensure_environment(found: Worktree, run: Path, budget: Any = None,
     the attempt, so the change and its reviewers include it; anything else an install
     leaves untracked is recorded, so the clean-up before each attempt keeps it. A
     Python environment refactory created is marked, so :func:`check_environment` adopts
-    only that one. Returns the worktree, whose head an amended lockfile moves, and the
-    problems, as text a failed check reports; an installer that is missing is reported
-    as unavailable, which no code repair can fix.
+    only that one. Returns the worktree, whose head an amended lockfile moves, the
+    problems as text a failed check reports, and the prep-failure dict (step, returncode,
+    timed_out) of the first failing install when one failed; an installer that is missing
+    is reported as unavailable, which no code repair can fix.
 
     When ``commit_lockfiles`` is False the installs still run but lockfiles are not
     amended into the attempt.  Delivery uses this for the merged tree, where amending
@@ -918,13 +919,16 @@ def ensure_environment(found: Worktree, run: Path, budget: Any = None,
     done = _json(record_path).get("environment") or {}
     if (done.get("key") == key and not done.get("problems")
             and all((path / name).exists() for name in done.get("made", []))):
-        return found, []
+        return found, [], None
     problems: list[str] = []
+    prep_fail: dict[str, Any] | None = None
     before = _loose(path)
     for command in _installs(found):
         shown = " ".join(command)
         if shutil.which(command[0]) is None:
             problems.append(f"UNAVAILABLE: {command[0]} is not installed, so `{shown}` could not run")
+            if prep_fail is None:
+                prep_fail = {"step": shown, "returncode": 127, "timed_out": False}
             continue
         result = sandbox.run_command(
             shlex.join(command), workdir=path, timeout_s=INSTALL_TIMEOUT_S, file_mb=INSTALL_FILE_MB,
@@ -932,6 +936,8 @@ def ensure_environment(found: Worktree, run: Path, budget: Any = None,
         if not result.ok:
             detail = "\n".join((result.problem(), result.stderr or "", result.stdout or "")).strip()
             problems.append(f"`{shown}` failed: {detail[-2000:]}")
+            if prep_fail is None:
+                prep_fail = {"step": shown, "returncode": result.returncode, "timed_out": result.timed_out}
         elif command[0] == "uv" and (path / ".venv").is_dir():
             (path / ".venv" / MARKER).write_text("created by refactory for this run's checks\n")
     left = _loose(path) - before
@@ -946,7 +952,7 @@ def ensure_environment(found: Worktree, run: Path, budget: Any = None,
                         "made": [name for name in (".venv", "node_modules") if (path / name).is_dir()],
                         "at": datetime.now(timezone.utc).isoformat()},
     })
-    return found, problems
+    return found, problems, prep_fail
 
 
 def amend(found: Worktree, run: Path, paths: list[str], message: str) -> Worktree:

@@ -17,7 +17,7 @@ import re as _re
 from pathlib import Path
 from typing import Any
 
-from refactory_dsh import delivery, repo_change, sandbox, worktree
+from refactory_dsh import delivery, repo_change, sandbox, unbuilt_check, worktree
 from refactory_dsh.nn import Verdict
 
 _FILE_EXT_RE = _re.compile(
@@ -301,8 +301,8 @@ def check_artifact(ctx: Any) -> str:
     command = str(ctx.facts["check"])
     result = repo_change.run_check(ctx, command, int(ctx.knob("check_timeout_s", 180)))
     detail = "\n".join((result.problem(), result.stdout or "", result.stderr or "")).strip()
-    outcome = {"command": command, "status": "pass" if result.ok else evidence.failure_kind(
-        detail, timed_out=result.timed_out, returncode=result.returncode),
+    outcome = {"command": command, "status": "pass" if result.ok else evidence.check_failure_kind(
+        result, budget=getattr(ctx, "budget", None)),
         "stdout": result.stdout, "stderr": result.stderr, "returncode": result.returncode,
         "timed_out": result.timed_out, "elapsed_s": result.elapsed_s}
     ctx.write_text("check.txt", detail or "ok\n")
@@ -329,7 +329,8 @@ def check_artifact(ctx: Any) -> str:
     evidence.stop_unrepairable(outcome["status"], detail)
 
     # A failure the unchanged base has too is not the attempt's (`base_check.compare_failures`).
-    if worktree.recorded(ctx.workdir) is not None:
+    found = worktree.recorded(ctx.workdir)
+    if found is not None:
         filtered = base_check.filter_check(
             ctx, result, command, int(ctx.knob("check_timeout_s", 180)),
             guardedness=guardedness,
@@ -339,8 +340,19 @@ def check_artifact(ctx: Any) -> str:
                 "unavailable",
                 f"the base check could not run: {filtered.base_environment_failure}",
             )
+
+        # Diagnose unbuilt packages from the worktree's own manifests.
+        wt_path = Path(found.path)
+        unbuilt = unbuilt_check.scan_unbuilt_packages(wt_path, found.base, found.head)
+        unbuilt_msg = unbuilt_check.format_unbuilt_diagnosis(unbuilt) if unbuilt else ""
+
         if filtered.all_excused:
-            validation_msg = f"(the check passed; {filtered.inherited_detail})"
+            inherited_detail = filtered.inherited_detail
+            if unbuilt_msg and inherited_detail:
+                inherited_detail = inherited_detail + "\n\n" + unbuilt_msg
+            elif unbuilt_msg:
+                inherited_detail = unbuilt_msg
+            validation_msg = f"(the check passed; {inherited_detail})"
             ctx.set_fact("validation", validation_msg)
             ctx.write_text("check.txt", validation_msg + "\n")
             # The receipt the reviews and the audit check is this one, which passed.
@@ -352,7 +364,22 @@ def check_artifact(ctx: Any) -> str:
         if filtered.new_failures and filtered.inherited:
             detail = filtered.new_failure_detail
         if filtered.inherited_detail:
-            ctx.write_text("check.txt", detail + "\n\n" + filtered.inherited_detail + "\n")
+            inherited_part = filtered.inherited_detail
+            if unbuilt_msg:
+                inherited_part = inherited_part + "\n\n" + unbuilt_msg
+            ctx.write_text("check.txt", detail + "\n\n" + inherited_part + "\n")
+        elif unbuilt_msg:
+            ctx.write_text("check.txt", detail + "\n\n" + unbuilt_msg + "\n")
+
+        # When every new failure names an exact missing entry-point path,
+        # stop without spending a builder attempt.
+        if unbuilt and unbuilt_check.failures_explained_by_unbuilt(detail, unbuilt):
+            raise ValueError(
+                f"check failed because of unbuilt packages; code repair was not attempted.\n{unbuilt_msg}"
+            )
+        # Otherwise prepend the diagnosis so the builder sees it.
+        if unbuilt_msg:
+            detail = unbuilt_msg + "\n\n" + detail
 
     return repair(ctx, [detail])
 

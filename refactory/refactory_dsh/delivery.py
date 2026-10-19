@@ -1268,7 +1268,7 @@ def _check_merged(ctx: Any, found: worktree.Worktree, merge_commit: str,
     if reviewed_manifests != merge_manifests:
         from dataclasses import replace as _replace
         found_for_merge = _replace(found, head=merge_commit)
-        found_for_merge, env_problems = worktree.ensure_environment(
+        found_for_merge, env_problems, _ = worktree.ensure_environment(
             found_for_merge, ctx.workdir, budget, commit_lockfiles=False)
         if env_problems:
             problems.extend(env_problems)
@@ -1276,7 +1276,7 @@ def _check_merged(ctx: Any, found: worktree.Worktree, merge_commit: str,
     env = worktree.check_environment(path, home)
 
     # Run generate+setup (amend=False: do not amend the merge commit).
-    _found_after, prep_problems = repo_change.prepare_commands(
+    _found_after, prep_problems, _ = repo_change.prepare_commands(
         ctx, found, env, home, check_timeout_s, budget, amend=False)
     problems.extend(prep_problems)
 
