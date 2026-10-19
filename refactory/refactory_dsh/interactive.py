@@ -27,6 +27,7 @@ from refactory_dsh.dsh_runtime import TASK
 from refactory_dsh.paths import REPO_ROOT, dsh_command, require_build, venv_bin, project_root
 from refactory_dsh.run_ownership import ownership
 from refactory_dsh.owned_process import run_owned
+from refactory_dsh import pin as _pin
 
 #: Where an interactive run lives when no work directory is named.
 DEFAULT_ROOT = Path(".factory/interactive")
@@ -68,6 +69,7 @@ def prepare(
     resource_limits: dict[str, Any] | None = None,
     resume: bool = False,
     headless: bool = False,
+    pinned: _pin.PinnedCheckout | None = None,
 ) -> tuple[str, Path]:
     """Lower the mode for a person to use, and leave the run ready to start.
 
@@ -136,10 +138,20 @@ def prepare(
         import json
         from refactory_dsh.recovery import configuration_fingerprints
 
-        (workdir / '.refactory/run-config.json').write_text(json.dumps({'mode': identifier,
+        run_config: dict[str, Any] = {'mode': identifier,
             'project': str(project.resolve()), 'knobs': knobs or [], 'model_context': model_context,
             'resource_limits': resource_limits,
-            'configuration_fingerprints': configuration_fingerprints(workdir, identifier, project)}))
+            'configuration_fingerprints': configuration_fingerprints(workdir, identifier, project)}
+        if pinned is not None:
+            run_config['pinned_key'] = pinned.key
+            run_config['pinned_interpreter'] = pinned.interpreter
+            run_config['pinned_checkout'] = str(pinned.checkout_path)
+            run_config['pinned_dsh_home'] = str(pinned.dsh_home)
+            run_config['pinned_dirty'] = pinned.dirty
+            run_config['pinned_diff_hash'] = pinned.diff_hash
+            run_config['pinned_untracked_included'] = pinned.untracked_included
+            _pin.register_run(pinned.key, workdir)
+        (workdir / '.refactory/run-config.json').write_text(json.dumps(run_config))
         return name, graphs
 
 
@@ -244,8 +256,12 @@ def run(
     # Pre-flight: both checks raise on failure before ownership() creates
     # the run directory, so a refused start leaves nothing behind.
     require_build()
+    # Pin the machinery before any profile check, then re-exec if needed.
+    pinned = _pin.ensure_pinned(REPO_ROOT)
+    _pin.reexec_if_needed(pinned)
+    # After re-exec (or if already pinned), check profiles against pinned DSH_HOME.
     from refactory_dsh import dsh_profile
-    dsh_profile.require()
+    dsh_profile.require(home=str(pinned.dsh_home))
     with ownership(workdir) as owner:
         if resume:
             if source or source_format not in ('', 'directory') or approve or knobs or intent or model_context or provider or model or bool(worker_backend) or effort or permission_mode or role_routes or node_routes:
@@ -294,6 +310,7 @@ def run(
         if not resume:
             name, graphs = prepare(
                 identifier, workdir=workdir, intent=intent, project=project, knobs=knobs, model_context=model_context, resource_limits=resource_limits, headless=headless,
+                pinned=pinned,
             )
         for pair in list(approve or []):
             gate, separator, value = str(pair).partition("=")

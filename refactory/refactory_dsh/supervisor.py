@@ -143,25 +143,35 @@ def _read_resume_pending(root: Path) -> dict | None:
     return data
 
 
-def _build_owner_argv(root: Path) -> tuple[list[str], str]:
-    """Build the owner command line from run-config.json. Returns (argv, project)."""
+def _build_owner_argv(root: Path) -> tuple[list[str], str, dict]:
+    """Build the owner command line from run-config.json.
+
+    Returns (argv, project, config).  When ``pinned_interpreter`` is present
+    in the config, the pinned interpreter is used instead of ``sys.executable``.
+    """
     config = json.loads((root / '.refactory/run-config.json').read_text())
     mode = config['mode']
     project = config.get('project', '.')
-    argv = [sys.executable, '-m', 'refactory_dsh.interactive', mode,
+    interpreter = config.get('pinned_interpreter') or sys.executable
+    argv = [interpreter, '-m', 'refactory_dsh.interactive', mode,
             '--workdir', str(root), '--headless', '--resume']
-    return argv, project
+    return argv, project, config
 
 
 def _start_child(root: Path) -> subprocess.Popen:
     """Start the owner child process."""
-    argv, project = _build_owner_argv(root)
+    argv, project, config = _build_owner_argv(root)
     log_path = root / 'recovery.log'
     log_path.parent.mkdir(parents=True, exist_ok=True)
     output = log_path.open('ab')
+    env = {**os.environ, 'PYTHONUNBUFFERED': '1'}
+    pinned_dsh_home = config.get('pinned_dsh_home')
+    if pinned_dsh_home:
+        env['DSH_HOME'] = pinned_dsh_home
+        env['REFACTORY_MODEL_DSH_HOME'] = pinned_dsh_home
     child = subprocess.Popen(
         argv, cwd=project,
-        env={**os.environ, 'PYTHONUNBUFFERED': '1'},
+        env=env,
         stdout=output, stderr=subprocess.STDOUT,
         start_new_session=True,
     )

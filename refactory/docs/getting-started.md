@@ -15,11 +15,14 @@ uv run refactory list
 
 The repository must be accessible to your GitHub account. `uv` manages the Python environment. Run `./install.sh` again after every pull, then restart any running GUI; see [Updating](../../README.md#updating).
 
-> **Multiple checkouts.** The DSH graph profile links to whichever checkout
-> last ran `install.sh`. A run from a different checkout (a second clone, a
-> worktree, a contributor's branch) will refuse and name the command that
-> relinks the profile. Run `install.sh` from the checkout you want to use, or
-> run the named `dsh plugin --profile graph add` command it prints.
+> **Multiple checkouts.** Each run now pins its machinery at launch: a
+> runnable git worktree of the driver's commit is created under
+> `~/.refactory/pinned/`, with its own `.venv`, `node_modules`, build and DSH
+> profiles.  Moving a checkout no longer breaks running runs — a new run picks
+> up whatever the driver has at launch, and an existing run keeps the code it
+> was started with.  `install.sh` is still required once per checkout to create
+> the initial DSH profiles and build bundles, but each run's pin isolates it
+> from later checkout changes.
 
 ## 2. Try a search without a model
 

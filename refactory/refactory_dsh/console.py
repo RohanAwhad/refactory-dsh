@@ -213,15 +213,22 @@ def start(
     }
     (root / CONSOLE_FILE).write_text(json.dumps(console, indent=2))
 
-    process = _spawn(mode, root, {"resolved_config": str(snapshot_path)}, project=project)
+    # Pin the machinery before spawning children.
+    from refactory_dsh import pin as _pin
+    from refactory_dsh.paths import REPO_ROOT
+    pinned = _pin.ensure_pinned(REPO_ROOT)
+    process = _spawn(mode, root, {"resolved_config": str(snapshot_path)}, project=project,
+                     pinned_interpreter=pinned.interpreter, pinned_dsh_home=str(pinned.dsh_home))
     console["pid"] = process.pid
     (root / CONSOLE_FILE).write_text(json.dumps(console, indent=2))
     return console
 
 
-def _spawn(mode: str, root: Path, config: dict[str, Any], *, project: Path) -> subprocess.Popen:
+def _spawn(mode: str, root: Path, config: dict[str, Any], *, project: Path,
+           pinned_interpreter: str = "", pinned_dsh_home: str = "") -> subprocess.Popen:
     """The run, in a process that does not die with this one."""
-    argv = [sys.executable, "-m", "refactory_dsh.loop", mode, "--runs-root", str(root)]
+    interpreter = pinned_interpreter or sys.executable
+    argv = [interpreter, "-m", "refactory_dsh.loop", mode, "--runs-root", str(root)]
     for key, value in sorted(config.items()):
         if value is None or value is False:
             continue
@@ -232,13 +239,17 @@ def _spawn(mode: str, root: Path, config: dict[str, Any], *, project: Path) -> s
         else:
             argv += [flag] if value is True else [flag, str(value)]
     log = (root / f"{root.name}.log").open("wb")
+    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    if pinned_dsh_home:
+        env["DSH_HOME"] = pinned_dsh_home
+        env["REFACTORY_MODEL_DSH_HOME"] = pinned_dsh_home
     return subprocess.Popen(
         argv,
         cwd=str(project),
         stdout=log,
         stderr=subprocess.STDOUT,
         start_new_session=True,
-        env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        env=env,
     )
 
 
@@ -351,10 +362,19 @@ def _open_mode(
 
     root = Path(workdir).expanduser().resolve()
     try:
+        # Pin before lowering: hosts do not re-exec themselves, they start
+        # children under the pinned interpreter.
+        from refactory_dsh import pin as _pin_mod
+        from refactory_dsh.paths import REPO_ROOT as _REPO_ROOT
+        _pinned = _pin_mod.ensure_pinned(_REPO_ROOT)
         name, graphs = interactive.prepare(mode, workdir=root, project=project, knobs=knobs, intent=intent,
+                                           pinned=_pinned,
                                            **({"model_context": model_context} if model_context else {}),
                                            **({"resource_limits": resource_limits} if resource_limits else {}))
         command_env = _node_environment(mode, project=project, workdir=root, knobs=knobs)
+        if _pinned:
+            command_env["DSH_HOME"] = str(_pinned.dsh_home)
+            command_env["REFACTORY_DSH_HOME"] = str(_pinned.checkout_path)
         from refactory_dsh import workers
         context = json.loads((root / '.refactory/run-config.json').read_text())['model_context']
         command_env.update(workers.environment(context))

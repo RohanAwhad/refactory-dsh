@@ -209,6 +209,18 @@ The read verbs pass through the console's own `--project`, `--runs-root`, `--aft
 | `refactory ui --port <n> --no-open` | start the [browser GUI](interfaces.md) without opening a browser. |
 
 
+## Pinned machinery
+
+| command | what it does |
+|---|---|
+| `refactory pin cleanup` | Remove pinned checkout copies that no live or resumable run refers to. A pinned copy is kept as long as any run whose `run-config.json` names it is not in a terminal spine state. |
+| `refactory pin list` | Show pinned keys, their referenced runs, and whether the driver was dirty at pin time. |
+
+Each run pins the driver checkout at launch.  Moving the driver to a new commit
+no longer breaks runs already launched.  Two runs at the same commit share one
+pinned copy.  See [Pinned machinery](live-control.md#pinned-machinery) for the
+lifecycle.
+
 ## Model selection and runtime limits
 
 Read [Models](models.md) for managed credentials, resolved routing, worker receipts and unsupported backend capabilities. A random seed does not make provider responses deterministic. Candidate counts, elapsed time and tokens have separate limits; repeated trials and final holdout measurements consume the shared resource allocation. Token enforcement occurs at usage boundaries and can overshoot during an in-flight request.

@@ -121,6 +121,42 @@ When an owner process exits and the run's spine status is neither terminal nor d
 | Nesting prevention | The `supervisor.lock` prevents a supervised child from running its own supervision loop. A child's attempt to call `supervise()` fails the non-blocking flock and returns immediately. |
 | Supervisor killed | If the supervisor itself is killed (`SIGKILL`), the owner child continues in its own session. The run is then unsupervised — exactly as today. A manual `refactory graph-control resume` is the fallback. |
 
+### Pinned machinery
+
+Each run pins the driver checkout's machinery at launch.  A runnable git
+worktree is created at the driver's exact commit (or dirty state) under
+`~/.refactory/pinned/<key>/checkout/` with its own `.venv`, `node_modules`,
+build and DSH profiles.  The launch process re-execs under the pinned
+checkout's interpreter, so every process the run spawns — the owner, the
+coordinator, workers, the supervisor and recovery — executes the pinned code.
+
+**At launch:** `pin.ensure_pinned()` resolves the driver's commit (or creates
+a synthetic commit for dirty state via `git stash create`), creates or reuses
+the pinned worktree, and `pin.reexec_if_needed()` replaces the process with
+the pinned interpreter.  After re-exec, `REPO_ROOT`, `sys.executable`,
+`dsh_command()` and `venv_bin()` all resolve to the pinned checkout.
+
+**At resume:** The supervisor and `recovery.start()` read `pinned_interpreter`
+and `pinned_dsh_home` from `run-config.json` and use them instead of
+`sys.executable`.  The resumed owner runs the same pinned code the run was
+launched with.
+
+**DSH_HOME:** Every process that spawns Node/DSH children sets
+`DSH_HOME` to the pinned `dsh_home`, so the coordinator, workers and headless
+profile all use the pinned checkout's profiles and bundles.
+
+**Configuration fingerprints:** After re-exec, `configuration_fingerprints()`
+resolves paths relative to the re-exec'd `REPO_ROOT` (the pinned checkout).
+The guard fires only if the pinned checkout itself changes (which should not
+happen), not when the live driver moves.
+
+**Dirty checkouts:** A dirty driver is pinned with its diff recorded.
+`run-config.json` carries `pinned_dirty: true` and `pinned_diff_hash`.
+
+**Cleanup:** `refactory pin cleanup` removes pinned copies whose registered
+runs are all terminal.  It never removes one that a live or resumable run
+refers to.  `refactory pin list` shows the pinned keys and their runs.
+
 ### Replay a failed run
 
 When a run's owner has exited after a failure, `--resume` refuses the

@@ -338,6 +338,36 @@ def cmd_ui(args: argparse.Namespace) -> int:
     return subprocess.call(forwarded, cwd=str(REPO_ROOT))
 
 
+def cmd_pin(args: argparse.Namespace) -> int:
+    """Manage pinned machinery checkouts."""
+    from refactory_dsh import pin
+
+    if args.pin_verb == "cleanup":
+        result = pin.cleanup()
+        if result["removed"]:
+            for key in result["removed"]:
+                print(f"  removed  {key}")
+        if result["kept"]:
+            for key in result["kept"]:
+                print(f"  kept     {key}")
+        if not result["removed"] and not result["kept"]:
+            print("  no pinned checkouts")
+        return 0
+    if args.pin_verb == "list":
+        pins = pin.list_pins()
+        if not pins:
+            print("  no pinned checkouts")
+            return 0
+        for entry in pins:
+            dirty = " (dirty)" if entry.get("dirty") else ""
+            runs = entry.get("runs", [])
+            print(f"  {entry.get('key', '?')}{dirty}  {len(runs)} run(s)")
+            for run_dir in runs:
+                print(f"    {run_dir}")
+        return 0
+    return 2
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Whether this machine can run a mode, and what to do about anything missing."""
     checks: list[tuple[str, bool | None, str]] = []
@@ -652,6 +682,13 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor", help="check local prerequisites and sandbox credential configuration (no model request)")
     doctor.add_argument("--provider", default="", help="provider route to check (default: DSH settings)")
     doctor.add_argument("--model", default="", help="model selection to report (default: DSH settings)")
+
+    # Pin management
+    pin_parser = sub.add_parser("pin", help="manage pinned machinery checkouts")
+    pin_sub = pin_parser.add_subparsers(dest="pin_verb", required=True)
+    pin_sub.add_parser("cleanup", help="remove pinned copies no live or resumable run refers to")
+    pin_sub.add_parser("list", help="show pinned keys, their runs and state")
+
     return parser
 
 
@@ -737,6 +774,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_ui(args)
     if args.verb == "doctor":
         return cmd_doctor(args)
+    if args.verb == "pin":
+        return cmd_pin(args)
     if args.verb == "package":  # handled before argparse; kept for completeness
         return _forward("refactory_dsh.registry", [])
     parser.error(f"unknown verb {args.verb!r}")  # pragma: no cover - argparse rejects first

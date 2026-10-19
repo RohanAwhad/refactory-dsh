@@ -130,12 +130,18 @@ def start(root: Path, *, acknowledge_failed: bool = False) -> dict[str, Any]:
         # its parent as the still-active owner. The child repeats validation;
         # an intervening invocation can refuse this queued request safely.
         prepare(root, config['mode'].replace('/', '-'), acknowledge_failed=acknowledge_failed)
+    pinned_interpreter = config.get('pinned_interpreter') or sys.executable
+    pinned_dsh_home = config.get('pinned_dsh_home')
     supervisor_log = root / '.refactory/supervisor.log'
     supervisor_log.parent.mkdir(parents=True, exist_ok=True)
+    env = {**os.environ, 'PYTHONUNBUFFERED': '1'}
+    if pinned_dsh_home:
+        env['DSH_HOME'] = pinned_dsh_home
+        env['REFACTORY_MODEL_DSH_HOME'] = pinned_dsh_home
     with supervisor_log.open('ab') as output:
-        child = subprocess.Popen([sys.executable, '-m', 'refactory_dsh.supervisor', str(root)],
+        child = subprocess.Popen([pinned_interpreter, '-m', 'refactory_dsh.supervisor', str(root)],
             cwd=config['project'],
-            env={**os.environ, 'PYTHONUNBUFFERED': '1'}, stdout=output, stderr=subprocess.STDOUT,
+            env=env, stdout=output, stderr=subprocess.STDOUT,
             start_new_session=True)
     # Record the supervisor's PID in the console's launch record so that
     # console.stop finds and signals it exactly as it does a launched run's.
