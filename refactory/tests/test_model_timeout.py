@@ -293,22 +293,20 @@ def test_all_agent_nodes_get_command_timeout_s(tmp_path, monkeypatch):
 
 
 def test_console_open_refuses_invalid_model_timeout():
-    """console open with --model-timeout 0 raises ConsoleError before _open_mode().
+    """console open with --model-timeout 0 is refused with exit code 2.
 
-    Fails without fix: the invalid value reaches _open_mode().
+    Fails without fix: the invalid value reaches _open_mode() without validation.
     """
-    from refactory_dsh.console import ConsoleError
+    from refactory_dsh.console import main
+    import io
+    from contextlib import redirect_stdout
 
-    # Parse args through the console's own parser
-    from refactory_dsh.console import _parser
-
-    parser = _parser()
-    args = parser.parse_args(["open", "test/mode", "--workdir", "/tmp/test", "--model-timeout", "0"])
-
-    # The validation happens inside main(), at the verb handler. Simulate it.
-    model_timeout_s = getattr(args, 'model_timeout_s', None)
-    assert model_timeout_s == 0
-    assert not (1 <= model_timeout_s <= 7200)
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        code = main(["open", "test/mode", "--workdir", "/tmp/test", "--model-timeout", "0"])
+    assert code == 2
+    output = buf.getvalue()
+    assert "model-timeout" in output
 
 
 # ---------------------------------------------------------------------------
@@ -375,3 +373,122 @@ def test_interactive_path_inherits_timeout_via_worker_context(tmp_path, monkeypa
 
     budget = node_session_budget_s(3, 120)
     assert budget == 3 * 120 + NODE_DISPATCH_OVERHEAD_S
+
+
+# ---------------------------------------------------------------------------
+# 12. Open verb inherits timeout_s from REFACTORY_WORKER_CONTEXT (no flag)
+# ---------------------------------------------------------------------------
+
+
+def test_open_verb_inherits_timeout_from_worker_context(monkeypatch):
+    """The open verb, invoked without --model-timeout but with
+    REFACTORY_WORKER_CONTEXT carrying timeout_s: 120, passes a model_context
+    without timeout_s to _open_mode. DshModelClient then inherits it from
+    the environment.
+
+    This is how the interactive CEO path works: index.ts:1544 builds the
+    console open command without --model-timeout, and the value reaches
+    DshModelClient through REFACTORY_WORKER_CONTEXT inheritance (model.py:200).
+
+    Fails without fix: N/A (existing inheritance mechanism). Regression guard
+    for the interactive CEO → console open path (gate correction #2).
+    """
+    worker_ctx = json.dumps({"timeout_s": 120, "provider": "", "model": ""})
+    monkeypatch.setenv("REFACTORY_WORKER_CONTEXT", worker_ctx)
+
+    captured: dict[str, Any] = {}
+
+    def fake_open_mode(mode, *, project=None, workdir=None, knobs=None,
+                       intent="", model_context=None, resource_limits=None):
+        captured["model_context"] = model_context
+        return {"mode": mode, "run": str(workdir), "name": "test"}
+
+    monkeypatch.setattr("refactory_dsh.console._open_mode", fake_open_mode)
+
+    from refactory_dsh.console import main
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        code = main(["open", "test/mode", "--workdir", "/tmp/testrun"])
+
+    assert code == 0
+    mc = captured.get("model_context", {})
+    # No --model-timeout flag → mc has no timeout_s key
+    assert "timeout_s" not in mc
+
+    # DshModelClient constructed with mc inherits timeout_s from REFACTORY_WORKER_CONTEXT
+    from refactory_dsh.model import DshModelClient, node_session_budget_s, NODE_DISPATCH_OVERHEAD_S
+
+    client = DshModelClient(**mc)
+    ctx = client.context()
+    assert ctx["timeout_s"] == 120
+    assert node_session_budget_s(3, 120) == 3 * 120 + NODE_DISPATCH_OVERHEAD_S
+
+
+# ---------------------------------------------------------------------------
+# 13. Resume keeps saved timeout_s
+# ---------------------------------------------------------------------------
+
+
+def test_resume_keeps_saved_timeout(tmp_path, monkeypatch):
+    """A resumed run uses the saved model_context's timeout_s: 500.
+
+    Fails without fix: N/A (existing behavior). Regression guard: run()
+    with resume=True loads model_context from run-config.json, and the
+    context passed to run_graph_command carries timeout_s: 500.
+    """
+    monkeypatch.setenv("REFACTORY_WORKER_CONTEXT", "{}")
+
+    config_dir = tmp_path / ".refactory"
+    config_dir.mkdir()
+    (config_dir / "run-config.json").write_text(json.dumps({
+        "mode": "test/mode",
+        "project": str(tmp_path),
+        "knobs": [],
+        "model_context": {
+            "timeout_s": 500, "provider": "", "model": "",
+            "worker_backend": "dsh", "permission_mode": "default",
+        },
+        "resource_limits": None,
+        "configuration_fingerprints": {},
+    }))
+
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr("refactory_dsh.interactive.require_build", lambda: None)
+
+    import refactory_dsh.dsh_profile as _dp
+    monkeypatch.setattr(_dp, "require", lambda: None)
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def fake_ownership(wd):
+        yield 999
+
+    monkeypatch.setattr("refactory_dsh.interactive.ownership", fake_ownership)
+    monkeypatch.setattr("refactory_dsh.interactive.prepare",
+                        lambda *a, **kw: ("test", []))
+    monkeypatch.setattr("refactory_dsh.interactive.command",
+                        lambda *a, **kw: ["echo", "test"])
+    monkeypatch.setattr("refactory_dsh.interactive.run_summary", lambda wd: "")
+    monkeypatch.setattr("refactory_dsh.interactive.run_warnings", lambda wd: "")
+
+    class FakeResult:
+        returncode = 0
+
+    import refactory_dsh.workers as _w
+
+    def fake_run_graph(argv, *, workdir=None, context=None, **kw):
+        captured["context"] = context
+        return FakeResult()
+
+    monkeypatch.setattr(_w, "run_graph_command", fake_run_graph)
+
+    from refactory_dsh.interactive import run
+
+    code = run("test/mode", workdir=tmp_path, resume=True)
+    assert code == 0
+    assert captured["context"]["timeout_s"] == 500
