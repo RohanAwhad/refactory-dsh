@@ -1018,6 +1018,7 @@ export function apply(ctx: Context, config: Config): void {
         failure: {
           ok: false,
           command: waiting.id,
+          nodeId: waiting.id,
           exitCode: null,
           stdout: '',
           stderr: '',
