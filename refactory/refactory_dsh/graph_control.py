@@ -8,6 +8,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from datetime import datetime, timezone
+
 from refactory_dsh.live import emit, read
 
 #: How long a resume waits for an exiting owner at a terminal status.
@@ -40,10 +42,9 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
                     'invalidated': deferred_plan.get('nodes', []),
                     'message': 'Replay will apply after concurrent work joins; confirm to queue.'}
         raise ValueError('node cannot safely be replayed at the current boundary')
-    owner_exiting = False
     if action == 'resume':
         from refactory_dsh import recovery
-        from refactory_dsh.console import _alive
+        from refactory_dsh.run_state import is_alive as _alive
         pid = saved.get('owner_pid')
         if not pid or not _alive(pid):
             return recovery.start(root)
@@ -55,7 +56,18 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
                 if not _alive(pid):
                     return recovery.start(root)
                 time.sleep(0.1)
-            owner_exiting = True
+            # dm-81 fix: write resume-pending.json so the supervisor (or a new
+            # recovery.start) picks it up once the owner exits — no second command.
+            pending_path = root / '.refactory/resume-pending.json'
+            pending_path.parent.mkdir(parents=True, exist_ok=True)
+            checkpoint_bytes = (root / '.refactory/spine-checkpoint.json').read_bytes()
+            pending_data = {
+                'at': datetime.now(timezone.utc).isoformat(),
+                'checkpoint_sha256': hashlib.sha256(checkpoint_bytes).hexdigest(),
+            }
+            tmp = pending_path.with_suffix('.tmp')
+            tmp.write_text(json.dumps(pending_data))
+            tmp.replace(pending_path)
     if action not in ('pause', 'resume', 'stop', 'rerun'):
         raise ValueError(f'unsupported graph control {action!r}')
     if action == 'rerun':
@@ -83,8 +95,9 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
         'status': 'queued',
         'message': 'Takes effect at the next graph boundary; no in-flight termination is claimed.',
     }
-    if owner_exiting:
-        result['owner_exiting'] = True
+    if action == 'resume' and (root / '.refactory/resume-pending.json').exists():
+        result['resume_pending'] = True
+        result['message'] = 'Resume is pending; a new owner will start when the current one exits.'
     if action == 'rerun' and isinstance(deferred_plan, dict) and not isinstance(immediate_plan, dict):
         result['deferred_nodes'] = deferred_plan.get('nodes', [])
     directory = root / '.refactory/graph-controls'

@@ -41,7 +41,7 @@ def test_start_releases_ownership_before_launch(monkeypatch, tmp_path):
         thread.join()
         assert not errors
         assert acquired
-        assert '--resume' in argv
+        assert 'refactory_dsh.supervisor' in argv
         return SimpleNamespace(pid=123)
 
     monkeypatch.setattr('subprocess.Popen', popen)
