@@ -48,7 +48,8 @@ When the target branch has moved since the run started, delivery merges it into 
 run's branch with a merge commit before pushing. Conflicts in files the run's generate
 command produces are resolved by re-running the generate command; a conflict in any
 other file is not resolved automatically. The merged result is re-checked; if the check
-fails, the merge is not delivered and the run says why.
+fails, the reviewed commit is delivered instead, and the pull request and delivery.json
+name the check failure.
 """
 
 from __future__ import annotations
@@ -149,6 +150,7 @@ class MergeResult:
     merge_commit: str = ""            # 40-char SHA when a merge commit was made, empty otherwise
     conflicts: list[str] = dataclasses.field(default_factory=list)  # authored-file paths that conflicted
     check_failed: str = ""            # failure reason when the merge-check failed, empty on success
+    abandoned: str = ""               # reason the merge was abandoned (step + error)
 
 
 def knobs() -> dict[str, Knob]:
@@ -821,22 +823,24 @@ def _deliver(ctx: Any, found: worktree.Worktree, planned: dict[str, Any], *,
     reviewed_commit = found.head  # the commit the reviews passed on
 
     # ── merge the target branch in when it has moved ──────────────────
-    merge = _merge_target(ctx, path, slug, into, generate, reviewed_commit)
+    check_timeout_s = float(ctx.knob("check_timeout_s", 180))
+    merge = _merge_target(ctx, path, slug, into, generate, reviewed_commit,
+                          check_timeout_s, str(planned["branch"]))
     if merge.merge_commit:
-        check_failure = _check_merged(ctx, found, merge.merge_commit, reviewed_commit)
+        check_failure = _check_merged(ctx, found, merge.merge_commit, reviewed_commit,
+                                      check_timeout_s)
         if check_failure:
             merge = MergeResult(check_failed=check_failure)
+            target_guard.warn(f"the check failed on the merged result: {check_failure[:500]}; "
+                              "delivering the reviewed commit")
     push_head = merge.merge_commit or found.head
 
     # ── rewrite the PR body with merge information ────────────────────
-    if merge.merge_commit or merge.conflicts or merge.check_failed:
+    if merge.merge_commit or merge.conflicts or merge.check_failed or merge.abandoned:
         ctx.write_text(BODY, _body(ctx, found, merge=merge))
 
-    if merge.check_failed:
-        reason = NotDelivered(f"the base changed under it: the check failed on the merged result: "
-                              f"{merge.check_failed[:500]}")
-        reason.merge = merge  # type: ignore[attr-defined]
-        raise reason
+    if merge.abandoned:
+        target_guard.warn(f"merge abandoned: {merge.abandoned[:500]}; delivering the reviewed commit")
 
     if planned["action"] == "refine":
         url = str(planned["pull_request"])
@@ -947,13 +951,70 @@ def _settled(step: Any) -> Any:
             time.sleep(VERIFY_WAIT_S * (attempt + 1))
 
 
+def _commit_parents(path: Path, sha: str) -> list[str]:
+    """The parent SHAs of commit ``sha`` in the repo at ``path``."""
+    try:
+        output = worktree.git(path, "rev-parse", f"{sha}^@")
+        return [s for s in output.strip().splitlines() if s.strip()]
+    except ValueError:
+        return []
+
+
+def _is_ancestor(path: Path, maybe_ancestor: str, descendant: str) -> bool:
+    """Whether ``maybe_ancestor`` is an ancestor of ``descendant``."""
+    try:
+        worktree.git(path, "merge-base", "--is-ancestor", maybe_ancestor, descendant)
+        return True
+    except ValueError:
+        return False
+
+
+def _abandon_merge(path: Path, reviewed_commit: str) -> None:
+    """Best-effort: abort any in-progress merge and reset to the reviewed commit."""
+    try:
+        worktree.git(path, *worktree.NO_HOOKS, "merge", "--abort")
+    except ValueError:
+        pass
+    worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", reviewed_commit)
+
+
+def _regenerate_merge(ctx: Any, path: Path, generate: str, check_timeout_s: float,
+                      merge_env: dict[str, str]) -> str | None:
+    """Run generate on the merged tree and amend the merge commit.
+
+    Returns None on success, or an error string when generate fails.
+    This is the shared post-merge regeneration used by both the clean and
+    conflict paths.
+    """
+    from refactory_dsh import sandbox as _sbx
+
+    _mhome = Path(ctx.workdir).resolve() / ".refactory" / "merge-gen-home"
+    _mhome.mkdir(parents=True, exist_ok=True)
+    _menv = worktree.check_environment(path, _mhome)
+    gen_result = _sbx.run_command(generate, workdir=path, timeout_s=check_timeout_s,
+                                  env=_menv, home=_mhome, exact_env=True)
+    if not gen_result.ok:
+        detail = (gen_result.stderr or gen_result.stdout or gen_result.problem() or "").strip()
+        return f"generate failed on the merged tree: {detail[:500]}"
+    _gen_changed = worktree.git(path, "diff", "--name-only").strip()
+    if _gen_changed:
+        worktree.git(path, *worktree.NO_HOOKS, "add", "--", *_gen_changed.splitlines())
+        worktree.git(path, *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
+                     "commit", "--amend", "--no-edit", "--no-verify", env=merge_env)
+    return None
+
+
 def _merge_target(ctx: Any, path: Path, slug: str, into: str, generate: str,
-                  reviewed_commit: str) -> MergeResult:
+                  reviewed_commit: str, check_timeout_s: float,
+                  branch: str) -> MergeResult:
     """Merge the current tip of ``into`` into the run's branch, when it has moved.
 
     Conflicts in files the generate command produces are resolved by re-running the
     generate command. A conflict in any other file is not resolved automatically:
     delivery proceeds from the reviewed commit and names the conflicts.
+
+    Every git step uses ``worktree.git`` with ``worktree.NO_HOOKS`` so hooks are
+    suppressed and failures raise ``ValueError``.
     """
     # Find the current tip of the target branch on GitHub.
     try:
@@ -970,44 +1031,47 @@ def _merge_target(ctx: Any, path: Path, slug: str, into: str, generate: str,
     _fetch(path, slug, f"refs/heads/{into}")
 
     # If the target tip is already an ancestor of HEAD, no merge is needed.
-    try:
-        worktree.git(path, "merge-base", "--is-ancestor", target_tip, "HEAD")
+    if _is_ancestor(path, target_tip, "HEAD"):
         return MergeResult()
-    except ValueError:
-        pass  # not an ancestor — merge needed
+
+    # ── Redo idempotency: check if the remote branch already holds our merge ──
+    try:
+        remote_heads = _heads(path, slug)
+        branch_ref = f"refs/heads/{branch}"
+        if branch_ref in remote_heads:
+            remote_tip = remote_heads[branch_ref]
+            _fetch(path, slug, f"refs/heads/{branch}")
+            parents = _commit_parents(path, remote_tip)
+            if len(parents) == 2 and parents[0] == reviewed_commit:
+                # This is this run's merge commit.
+                if _is_ancestor(path, target_tip, parents[1]):
+                    # Target has not moved since the first merge: reuse the commit.
+                    worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", remote_tip)
+                    return MergeResult(merge_commit=remote_tip)
+                else:
+                    # Target moved further: build on the existing merge.
+                    worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", remote_tip)
+                    # Fall through to the merge logic below, which will merge target_tip.
+    except (NotDelivered, ValueError):
+        pass  # cannot check redo state — proceed with a fresh merge
 
     # Attempt the merge.
     merge_env = {**os.environ, **worktree.COMMITTER}
-    result = subprocess.run(
-        ["git", "-C", str(path), *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
-         "merge", "--no-edit", "--no-verify", target_tip],
-        capture_output=True, text=True, timeout=300, env=merge_env,
-    )
+    try:
+        worktree.git(path, *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
+                     "merge", "--no-edit", "--no-verify", target_tip, env=merge_env)
+        clean_merge = True
+    except ValueError as exc:
+        clean_merge = False
+        merge_error = str(exc)
 
-    if result.returncode == 0:
-        # Clean merge — no file-level conflicts.  When the run declares a generate
-        # command, run it on the merged tree: git's three-way merge may have picked
-        # the base's version of a generated file (only the base changed it), but the
-        # generate command might produce different content for the combined sources.
+    if clean_merge:
+        # Clean merge — no file-level conflicts.
         if generate:
-            from refactory_dsh import sandbox as _sbx
-            _mhome = Path(ctx.workdir).resolve() / ".refactory" / "merge-gen-home"
-            _mhome.mkdir(parents=True, exist_ok=True)
-            _menv = worktree.check_environment(path, _mhome)
-            _sbx.run_command(generate, workdir=path, timeout_s=300, env=_menv,
-                             home=_mhome, exact_env=True)
-            # If generate changed any tracked files, amend the merge commit so the
-            # delivered tree includes the regenerated content.
-            _gen_changed = worktree.git(path, "diff", "--name-only").strip()
-            if _gen_changed:
-                for _gf in _gen_changed.splitlines():
-                    subprocess.run(["git", "-C", str(path), "add", "--", _gf.strip()],
-                                   capture_output=True, timeout=60)
-                subprocess.run(
-                    ["git", "-C", str(path), *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
-                     "commit", "--amend", "--no-edit", "--no-verify"],
-                    capture_output=True, text=True, timeout=300, env=merge_env,
-                )
+            regen_err = _regenerate_merge(ctx, path, generate, check_timeout_s, merge_env)
+            if regen_err is not None:
+                _abandon_merge(path, reviewed_commit)
+                return MergeResult(abandoned=regen_err)
         merge_sha = worktree.git(path, "rev-parse", "HEAD").strip()
         return MergeResult(merge_commit=merge_sha)
 
@@ -1019,20 +1083,16 @@ def _merge_target(ctx: Any, path: Path, slug: str, into: str, generate: str,
     conflicting = [f for f in conflict_output.strip().splitlines() if f.strip()]
 
     if not conflicting:
-        # Merge failed for a reason other than file conflicts.
-        worktree.git(path, *worktree.NO_HOOKS, "merge", "--abort")
-        return MergeResult(conflicts=["(merge failed: " + (result.stderr or result.stdout).strip()[:200] + ")"])
+        # Merge failed for a reason other than file conflicts (e.g. untracked file).
+        _abandon_merge(path, reviewed_commit)
+        return MergeResult(abandoned="git merge failed: " + merge_error.strip()[:500])
 
     if not generate:
         # No generate command — all conflicts are authored-file conflicts.
-        worktree.git(path, *worktree.NO_HOOKS, "merge", "--abort")
+        _abandon_merge(path, reviewed_commit)
         return MergeResult(conflicts=conflicting)
 
-    # ── The practical approach: classify conflicts as generated or authored ──
-    # For each conflicting file, determine if the generate command produces it:
-    # resolve to base's side → run generate → content A
-    # resolve to run's side → run generate → content B
-    # if A == B, the file is generated (use A); otherwise it is authored.
+    # ── Classify conflicts as generated or authored ──
     from refactory_dsh import sandbox
 
     home = Path(ctx.workdir).resolve() / ".refactory" / "merge-gen-home"
@@ -1041,65 +1101,88 @@ def _merge_target(ctx: Any, path: Path, slug: str, into: str, generate: str,
 
     authored_conflicts: list[str] = []
 
-    # Save the conflict state for each file, then test both sides.
+    # Resolve all conflicts to base's side (--theirs = target = base).
     for cfile in conflicting:
-        # Resolve to base's side (--theirs is the branch being merged in = target = base)
-        subprocess.run(
-            ["git", "-C", str(path), "checkout", "--theirs", "--", cfile],
-            capture_output=True, timeout=60,
-        )
-    # Stage to clear the conflict markers so generate can run.
-    for cfile in conflicting:
-        subprocess.run(
-            ["git", "-C", str(path), "add", "--", cfile],
-            capture_output=True, timeout=60,
-        )
-    # Complete the merge with base's versions of conflicting files.
-    subprocess.run(
-        ["git", "-C", str(path), *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
-         "commit", "--no-edit", "--no-verify"],
-        capture_output=True, text=True, timeout=300, env=merge_env,
-    )
+        try:
+            worktree.git(path, *worktree.NO_HOOKS, "checkout", "--theirs", "--", cfile)
+        except ValueError as exc:
+            # e.g. modify/delete conflict — classify as authored
+            authored_conflicts.append(cfile)
+            continue
+    if authored_conflicts:
+        # At least one file could not be resolved — abandon the merge.
+        _abandon_merge(path, reviewed_commit)
+        return MergeResult(conflicts=authored_conflicts)
+
+    # Stage to clear conflict markers so generate can run.
+    try:
+        for cfile in conflicting:
+            worktree.git(path, *worktree.NO_HOOKS, "add", "--", cfile)
+        worktree.git(path, *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
+                     "commit", "--no-edit", "--no-verify", env=merge_env)
+    except ValueError as exc:
+        _abandon_merge(path, reviewed_commit)
+        return MergeResult(abandoned=f"git commit (base-side merge) failed: {exc}")
+
     # Run generate on this tree (base side) to get content A.
-    sandbox.run_command(generate, workdir=path, timeout_s=300, env=env, home=home, exact_env=True)
+    gen_a = sandbox.run_command(generate, workdir=path, timeout_s=check_timeout_s,
+                                env=env, home=home, exact_env=True)
+    if not gen_a.ok:
+        # Generate failed on the base side — classify all conflicting files as authored.
+        _abandon_merge(path, reviewed_commit)
+        return MergeResult(conflicts=conflicting)
+
     content_a: dict[str, bytes] = {}
     for cfile in conflicting:
         fpath = path / cfile
         content_a[cfile] = fpath.read_bytes() if fpath.exists() else b""
 
-    # Now reset to the reviewed commit and redo with run's side.
+    # Reset to the reviewed commit and redo with run's side.
     worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", reviewed_commit)
 
     # Merge again.
-    result2 = subprocess.run(
-        ["git", "-C", str(path), *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
-         "merge", "--no-edit", "--no-verify", target_tip],
-        capture_output=True, text=True, timeout=300, env=merge_env,
-    )
-
-    if result2.returncode == 0:
+    try:
+        worktree.git(path, *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
+                     "merge", "--no-edit", "--no-verify", target_tip, env=merge_env)
         # This time it merged cleanly — shouldn't happen, but handle it.
+        if generate:
+            regen_err = _regenerate_merge(ctx, path, generate, check_timeout_s, merge_env)
+            if regen_err is not None:
+                _abandon_merge(path, reviewed_commit)
+                return MergeResult(abandoned=regen_err)
         merge_sha = worktree.git(path, "rev-parse", "HEAD").strip()
         return MergeResult(merge_commit=merge_sha)
+    except ValueError:
+        pass  # expected — same conflicts
 
-    # Resolve to run's side (--ours is HEAD = run's branch).
+    # Resolve to run's side (--ours = HEAD = run's branch).
     for cfile in conflicting:
-        subprocess.run(
-            ["git", "-C", str(path), "checkout", "--ours", "--", cfile],
-            capture_output=True, timeout=60,
-        )
-    for cfile in conflicting:
-        subprocess.run(
-            ["git", "-C", str(path), "add", "--", cfile],
-            capture_output=True, timeout=60,
-        )
-    subprocess.run(
-        ["git", "-C", str(path), *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
-         "commit", "--no-edit", "--no-verify"],
-        capture_output=True, text=True, timeout=300, env=merge_env,
-    )
+        try:
+            worktree.git(path, *worktree.NO_HOOKS, "checkout", "--ours", "--", cfile)
+        except ValueError:
+            authored_conflicts.append(cfile)
+            continue
+    if authored_conflicts:
+        _abandon_merge(path, reviewed_commit)
+        return MergeResult(conflicts=authored_conflicts)
+
+    try:
+        for cfile in conflicting:
+            worktree.git(path, *worktree.NO_HOOKS, "add", "--", cfile)
+        worktree.git(path, *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
+                     "commit", "--no-edit", "--no-verify", env=merge_env)
+    except ValueError as exc:
+        _abandon_merge(path, reviewed_commit)
+        return MergeResult(abandoned=f"git commit (run-side merge) failed: {exc}")
+
     # Run generate on this tree (run's side) to get content B.
-    sandbox.run_command(generate, workdir=path, timeout_s=300, env=env, home=home, exact_env=True)
+    gen_b = sandbox.run_command(generate, workdir=path, timeout_s=check_timeout_s,
+                                env=env, home=home, exact_env=True)
+    if not gen_b.ok:
+        # Generate failed on the run side — classify all conflicting files as authored.
+        _abandon_merge(path, reviewed_commit)
+        return MergeResult(conflicts=conflicting)
+
     content_b: dict[str, bytes] = {}
     for cfile in conflicting:
         fpath = path / cfile
@@ -1116,46 +1199,51 @@ def _merge_target(ctx: Any, path: Path, slug: str, into: str, generate: str,
         return MergeResult(conflicts=authored_conflicts)
 
     # All conflicting files are generated — build the final merge commit.
-    # Reset to reviewed commit and redo the merge one more time with the generated content.
     worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", reviewed_commit)
 
-    result3 = subprocess.run(
-        ["git", "-C", str(path), *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
-         "merge", "--no-edit", "--no-verify", target_tip],
-        capture_output=True, text=True, timeout=300, env=merge_env,
-    )
+    try:
+        worktree.git(path, *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
+                     "merge", "--no-edit", "--no-verify", target_tip, env=merge_env)
+    except ValueError:
+        pass  # expected — same conflicts
 
     # Resolve conflicts using the generated content (content_a == content_b, use A).
     for cfile in conflicting:
         fpath = path / cfile
         fpath.parent.mkdir(parents=True, exist_ok=True)
         fpath.write_bytes(content_a[cfile])
-        subprocess.run(
-            ["git", "-C", str(path), "add", "--", cfile],
-            capture_output=True, timeout=60,
-        )
+    try:
+        for cfile in conflicting:
+            worktree.git(path, *worktree.NO_HOOKS, "add", "--", cfile)
+        worktree.git(path, *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
+                     "commit", "--no-edit", "--no-verify", env=merge_env)
+    except ValueError as exc:
+        _abandon_merge(path, reviewed_commit)
+        return MergeResult(abandoned=f"git commit (final merge) failed: {exc}")
 
-    # Complete the merge commit.
-    subprocess.run(
-        ["git", "-C", str(path), *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
-         "commit", "--no-edit", "--no-verify"],
-        capture_output=True, text=True, timeout=300, env=merge_env,
-    )
+    # ── Shared post-merge regeneration (both paths converge here) ──
+    if generate:
+        regen_err = _regenerate_merge(ctx, path, generate, check_timeout_s, merge_env)
+        if regen_err is not None:
+            _abandon_merge(path, reviewed_commit)
+            return MergeResult(abandoned=regen_err)
 
     merge_sha = worktree.git(path, "rev-parse", "HEAD").strip()
     return MergeResult(merge_commit=merge_sha)
 
 
 def _check_merged(ctx: Any, found: worktree.Worktree, merge_commit: str,
-                  reviewed_commit: str) -> str:
+                  reviewed_commit: str, check_timeout_s: float) -> str:
     """Run the check on the merged result; return the failure reason, or empty on success.
 
     The environment is built the same way as ``_check_in_worktree`` in ``repo_change.py``:
     HOME under the run directory, ``check_environment()`` for PATH, and
-    ``prepare_commands()`` for generate+setup. Dependencies are already installed from
-    the attempt's own check, so ``ensure_environment`` is not called again (it would
-    try to amend a lockfile into the reviewed commit while the worktree is at the merge).
+    ``prepare_commands()`` for generate+setup. Dependencies are installed for the merged
+    tree when its manifests differ from the reviewed commit's, using
+    ``ensure_environment(commit_lockfiles=False)`` to avoid amending lockfiles into the
+    reviewed commit.
     """
+    import hashlib as _hl
     from refactory_dsh import sandbox, repo_change
 
     path = Path(found.path)
@@ -1163,11 +1251,34 @@ def _check_merged(ctx: Any, found: worktree.Worktree, merge_commit: str,
     home.mkdir(parents=True, exist_ok=True)
 
     budget = getattr(ctx, "budget", None)
+    problems: list[str] = []
+
+    # ── Install dependencies when manifests changed ──
+    reviewed_manifests: dict[str, str] = {}
+    for name in worktree.MANIFESTS:
+        try:
+            content = worktree.git(path, "show", f"{reviewed_commit}:{name}")
+            reviewed_manifests[name] = _hl.sha256(content.encode()).hexdigest()
+        except ValueError:
+            pass  # file does not exist in the reviewed commit
+    merge_manifests: dict[str, str] = {}
+    for name in worktree.MANIFESTS:
+        if (path / name).is_file():
+            merge_manifests[name] = _hl.sha256((path / name).read_bytes()).hexdigest()
+    if reviewed_manifests != merge_manifests:
+        from dataclasses import replace as _replace
+        found_for_merge = _replace(found, head=merge_commit)
+        found_for_merge, env_problems = worktree.ensure_environment(
+            found_for_merge, ctx.workdir, budget, commit_lockfiles=False)
+        if env_problems:
+            problems.extend(env_problems)
+
     env = worktree.check_environment(path, home)
 
     # Run generate+setup (amend=False: do not amend the merge commit).
-    _found_after, problems = repo_change.prepare_commands(
-        ctx, found, env, home, 300.0, budget, amend=False)
+    _found_after, prep_problems = repo_change.prepare_commands(
+        ctx, found, env, home, check_timeout_s, budget, amend=False)
+    problems.extend(prep_problems)
 
     if problems:
         worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", reviewed_commit)
@@ -1177,7 +1288,7 @@ def _check_merged(ctx: Any, found: worktree.Worktree, merge_commit: str,
     if not check:
         return ""
 
-    result = sandbox.run_command(check, workdir=path, timeout_s=300, budget=budget,
+    result = sandbox.run_command(check, workdir=path, timeout_s=check_timeout_s, budget=budget,
                                  env=env, home=home, exact_env=True)
     if result.ok:
         return ""
@@ -1320,9 +1431,11 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
     elif merge is not None and merge.conflicts:
         merge_line = (f"- **Merge:** not merged; conflicts in "
                       f"{', '.join(f'`{f}`' for f in merge.conflicts)}.\n")
+    elif merge is not None and merge.abandoned:
+        merge_line = (f"- **Merge:** not merged; merge abandoned: {merge.abandoned[:200]}.\n")
     elif merge is not None and merge.check_failed:
-        merge_line = (f"- **Merge:** not merged; the check failed on the merged result: "
-                      f"{merge.check_failed[:200]}.\n")
+        merge_line = (f"- **Merge:** the reviewed commit was delivered; the check failed on "
+                      f"the merged result: {merge.check_failed[:200]}.\n")
     verification = (
         f"## Verification\n\n"
         f"- **Check:** `{check_cmd}` passed in the run's worktree.\n"
@@ -1425,6 +1538,10 @@ def _delivered(ctx: Any, approved: dict[str, Any], found: worktree.Worktree,
         record["head"] = found.head
     if merge is not None and merge.conflicts:
         record["merge_conflicts"] = merge.conflicts
+    if merge is not None and merge.check_failed:
+        record["merge_check_failed"] = merge.check_failed
+    if merge is not None and merge.abandoned:
+        record["merge_abandoned"] = merge.abandoned
     if title:
         record["title"] = title
         record["pr_text"] = BODY
@@ -1454,6 +1571,8 @@ def _kept(ctx: Any, approved: dict[str, Any], found: worktree.Worktree | None, w
         record["merge_conflicts"] = merge.conflicts
     if merge is not None and merge.check_failed:
         record["merge_check_failed"] = merge.check_failed
+    if merge is not None and merge.abandoned:
+        record["merge_abandoned"] = merge.abandoned
     if title:
         record["title"] = title
         record["pr_text"] = BODY
