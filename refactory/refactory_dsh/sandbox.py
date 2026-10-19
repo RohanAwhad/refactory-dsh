@@ -75,6 +75,7 @@ class SandboxResult:
     timeout_s: int | None = None
     elapsed_s: float | None = None
     progress: dict[str, Any] = field(default_factory=dict)
+    prep_failure: dict[str, Any] | None = None
 
     def problem(self) -> str:
         if self.timed_out:

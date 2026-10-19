@@ -375,7 +375,7 @@ def _ensure_base_worktree(ctx: Any) -> tuple[Path, worktree.Worktree]:
 
     # Prepare the environment (installs)
     budget = getattr(ctx, "budget", None)
-    _, problems = worktree.ensure_environment(base_found, ctx.workdir, budget)
+    _, problems, _ = worktree.ensure_environment(base_found, ctx.workdir, budget)
     if problems:
         unavailable = [p for p in problems if "UNAVAILABLE:" in p]
         if unavailable:
@@ -511,7 +511,7 @@ def run_base_check(ctx: Any, command: str, timeout: float) -> BaseCheckResult:
     # (repo_change.prepare_commands), without amending anything on the base.
     from refactory_dsh.repo_change import prepare_commands
 
-    _, problems = prepare_commands(ctx, base_found, env, home, timeout, budget, amend=False)
+    _, problems, _ = prepare_commands(ctx, base_found, env, home, timeout, budget, amend=False)
     if problems:
         detail = "on the base: " + "\n".join(problems)
         result = BaseCheckResult(

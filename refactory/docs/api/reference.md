@@ -564,7 +564,7 @@ Running code we did not write.
 | kind | name | signature |
 |---|---|---|
 | class | `SandboxError` | `` |
-| class | `SandboxResult` | `(ok: 'bool', payload: 'dict[str, Any]' = <factory>, returncode: 'int' = 0, stdout: 'str' = '', stderr: 'str' = '', timed_out: 'bool' = False, timeout_s: 'int \| None' = None, elapsed_s: 'float \| None' = None, progress: 'dict[str, Any]' = <factory>) -> None` |
+| class | `SandboxResult` | `(ok: 'bool', payload: 'dict[str, Any]' = <factory>, returncode: 'int' = 0, stdout: 'str' = '', stderr: 'str' = '', timed_out: 'bool' = False, timeout_s: 'int \| None' = None, elapsed_s: 'float \| None' = None, progress: 'dict[str, Any]' = <factory>, prep_failure: 'dict[str, Any] \| None' = None) -> None` |
 | function | `ast_check` | `(name: 'str', project: 'Path \| None' = None) -> 'list[str]'` |
 | function | `describe_package` | `(name: 'str', *, project: 'Path \| None' = None, include_contracts: 'bool' = False, **kwargs: 'Any') -> 'SandboxResult'` |
 | function | `is_secret` | `(name: 'str') -> 'bool'` |
@@ -672,7 +672,7 @@ The steps a mode uses to change a repository: where it works, what lands, how it
 | function | `locate` | `(ctx: 'Any', name: 'str', task: 'dict[str, Any]', *, in_worktree: 'bool \| None' = None, needs_worktree: 'tuple[str, ...]' = (), output_only: 'tuple[str, ...]' = ()) -> 'dict[str, Any]'` |
 | function | `materialise` | `(ctx: 'Any', *, source: 'Path \| None' = None, files: 'tuple[str, ...]' = ()) -> 'dict[str, Any]'` |
 | function | `materialise_node` | `(**fields: 'Any') -> 'Node'` |
-| function | `prepare_commands` | `(ctx: 'Any', found: 'worktree.Worktree', env: 'dict[str, str]', home: 'Path', timeout: 'float', budget: 'Any', *, amend: 'bool' = True) -> 'tuple[worktree.Worktree, list[str]]'` |
+| function | `prepare_commands` | `(ctx: 'Any', found: 'worktree.Worktree', env: 'dict[str, str]', home: 'Path', timeout: 'float', budget: 'Any', *, amend: 'bool' = True) -> 'tuple[worktree.Worktree, list[str], dict[str, Any] \| None]'` |
 | function | `produces` | `() -> 'tuple[str, ...]'` |
 | function | `refused` | `(ctx: 'Any') -> 'str'` |
 | function | `report` | `(ctx: 'Any', name: 'str', payload: 'dict[str, Any]') -> 'dict[str, Any]'` |

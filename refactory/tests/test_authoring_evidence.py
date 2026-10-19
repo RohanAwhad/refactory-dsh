@@ -264,10 +264,13 @@ def test_signal_death_stops_check_artifact_without_attempt(tmp_path, monkeypatch
 
     # Monkeypatch repo_change so check_artifact never touches the real filesystem
     # or worktree machinery: it sees the signal-death SandboxResult directly.
+    # The prep_failure field is what _check_in_worktree now sets when an install
+    # is killed by a signal (returncode < 0).
     monkeypatch.setattr(repo_change, "refused", lambda ctx: "")
     monkeypatch.setattr(repo_change, "run_check", lambda ctx, cmd, timeout: sandbox.SandboxResult(
         ok=False, returncode=1, stderr="the worktree's environment could not be prepared:\n"
-        "`pnpm install --frozen-lockfile` failed: killed by SIGABRT", stdout=""))
+        "`pnpm install --frozen-lockfile` failed: killed by SIGABRT", stdout="",
+        prep_failure={"step": "pnpm install --frozen-lockfile", "returncode": -6, "timed_out": False}))
 
     # check_artifact must raise ValueError matching "uncertain" — stop_unrepairable's
     # message — proving the run does not reloop into emit or spend an attempt.
@@ -276,6 +279,31 @@ def test_signal_death_stops_check_artifact_without_attempt(tmp_path, monkeypatch
 
     # No attempt was spent: repair() is never reached because stop_unrepairable raises first.
     assert not ctx.facts.get("attempts_used")
+
+
+def test_prep_failure_nonzero_reaches_builder():
+    """A preparation failure exiting non-zero without a signal is code_failure.
+
+    The builder may have broken a manifest, so it still goes to the builder.
+    """
+    from dataclasses import dataclass, field
+
+    @dataclass
+    class FakeResult:
+        ok: bool = False
+        timed_out: bool = False
+        returncode: int = 1
+        stdout: str = ""
+        stderr: str = "setup command failed"
+        prep_failure: dict = field(default_factory=lambda: {"step": "pnpm run build", "returncode": 1, "timed_out": False})
+        def problem(self) -> str:
+            return ""
+
+    result = FakeResult()
+    kind = evidence.check_failure_kind(result)
+    assert kind == "code_failure"
+    # stop_unrepairable does not raise for code_failure — failure reaches the builder
+    evidence.stop_unrepairable(kind, "setup failed")
 
 
 # ── asks 2 and 3: Initial Idea and info are not requirements ──────────────

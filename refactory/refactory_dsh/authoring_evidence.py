@@ -318,6 +318,16 @@ def check_failure_kind(
     rc = getattr(result, "returncode", None)
     if rc is not None and rc < 0:
         return "uncertain"
+    # Preparation step failure (install, generate, setup) — structural.
+    prep = getattr(result, "prep_failure", None)
+    if isinstance(prep, dict):
+        if prep.get("timed_out"):
+            return "uncertain"
+        prep_rc = prep.get("returncode")
+        if isinstance(prep_rc, int) and prep_rc < 0:
+            return "uncertain"
+        if prep_rc in (126, 127):
+            return "unavailable"
     if rc in (126, 127):
         return "unavailable"
     return "code_failure"

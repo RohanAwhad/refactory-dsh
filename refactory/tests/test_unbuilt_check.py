@@ -344,6 +344,7 @@ def test_deleted_source_goes_to_builder(tmp_path):
         returncode: int = 1
         stdout: str = ""
         stderr: str = "MODULE_NOT_FOUND: packages/bar/lib/index.js"
+        prep_failure: object = None
         def problem(self) -> str:
             return ""
 
