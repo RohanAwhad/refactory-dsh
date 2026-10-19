@@ -140,6 +140,13 @@ _READY_MARKER = ".pin-ready"
 # Old markers with a different or missing version trigger re-preparation.
 _READY_VERSION = "2"
 
+# Spine states where cleanup may remove the pinned checkout.  Unlike
+# ``run_state.TERMINAL`` (which includes ``failed``), this excludes it:
+# a failed run is resumable with ``--acknowledge-failure``, and removing
+# its pinned machinery before the person decides would break the resume.
+# ``refused`` is also resumable (a gate refusal does not end the run).
+_CLEANUP_REMOVABLE = frozenset({"done", "cancelled"})
+
 
 def _prepare_worktree(
     key: str,
@@ -559,10 +566,7 @@ def cleanup(*, refactory_home: Path | None = None) -> dict[str, list[str]]:
                 # No spine status = might still be starting
                 referenced = True
                 break
-            # Only 'done' and 'cancelled' are truly finished for cleanup.
-            # 'failed' is resumable with --acknowledge-failure, so its
-            # pinned machinery must be preserved.
-            if status not in ('done', 'cancelled'):
+            if status not in _CLEANUP_REMOVABLE:
                 referenced = True
                 break
 
