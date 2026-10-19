@@ -74,7 +74,9 @@ current applicable ledger, merged reviews and final runtime evidence. It writes
 `reviews/overwatch.md` plus `intent-audit.json`. Fast focused QA writes its existing
 report plus the same intent map. The map covers every baseline id: `brief`,
 `strategy`, explicit `criterion-N` rows when supplied, `design`/`plan`, and current
-`ledger-N` instructions, including the initial idea. Compound asks must be decomposed into separate rows even
+product-scoped `ledger-N` instructions, including the initial idea.
+Process-scoped notes (`--scope process`) are recorded in the evidence payload
+under `process_notes` but are not baseline requirements. Compound asks must be decomposed into separate rows even
 when they share an id. Each row identifies the requirement, status and supporting
 individual file paths with concrete command/output or source findings. Directories,
 line-number suffixes and the audit itself cannot serve as evidence references.

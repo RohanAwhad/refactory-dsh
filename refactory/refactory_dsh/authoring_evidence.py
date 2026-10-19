@@ -70,6 +70,13 @@ AUDIT_INSTRUCTIONS = (
     "A pass needs a supporting file and specific evidence; an exclusion needs the "
     "actual explicit user change id, exact user_quote and reason. Report omissions as fail/unverified "
     "with precise reasons, even if other reviewers passed.\n"
+    "If authoring-evidence.json contains a non-empty \"process_notes\" list, write a "
+    "\"process_notes\" key in intent-audit.json as [{\"id\":\"ledger-N\", "
+    "\"text\":\"the directive\", \"followed\":true|false, "
+    "\"detail\":\"where in the run artifacts this was or was not followed\"}]. "
+    "Cite run artifacts other than intent-audit.json. Process notes are not "
+    "baseline requirements and never block the gate; this section is informational "
+    "so a person reviewing the run can see whether each directive was honoured.\n"
 )
 
 
@@ -158,6 +165,8 @@ def requirements(ctx: Any) -> list[dict[str, str]]:
                                   for index, item in enumerate(criteria))
     for index, entry in enumerate(intent(ctx.workdir)):
         if entry["kind"] in ("correction", "constraint"):
+            if entry.get("scope") == "process":
+                continue
             result.append({"id": f"ledger-{index + 1}", "text": entry["text"], "kind": entry["kind"]})
     return result
 
@@ -166,8 +175,15 @@ def record(ctx: Any, outcome: dict[str, Any]) -> dict[str, Any]:
     root = str(ctx.facts.get("artifact") or ctx.facts.get("package_path") or "")
     if not root or not Path(root).is_dir():
         raise ValueError("runtime evidence needs the delivered package/artifact directory")
+    reqs = requirements(ctx)
+    process_notes = [
+        {"id": f"ledger-{index + 1}", "text": entry["text"], "kind": entry["kind"], "scope": "process"}
+        for index, entry in enumerate(intent(ctx.workdir))
+        if entry["kind"] in ("correction", "constraint") and entry.get("scope") == "process"
+    ]
     payload = {"schema": 1, "id": uuid.uuid4().hex,
-               "identity": identity(ctx.workdir, root), "requirements": requirements(ctx),
+               "identity": identity(ctx.workdir, root), "requirements": reqs,
+               "process_notes": process_notes,
                "settings": {key: ctx.knob(key, None) for key in SETTINGS},
                "receipts": {name: hashlib.sha256((ctx.workdir / name).read_bytes()).hexdigest()
                             for name in ("smoke.json", "revision.json", "focused-check.json", "check.txt", "test-guardedness.json")

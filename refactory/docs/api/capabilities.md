@@ -3798,14 +3798,16 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "kind": "kind",
       "note": "note",
       "run": "run",
-      "runsRoot": "runs_root"
+      "runsRoot": "runs_root",
+      "scope": "scope"
     },
     "order": [
       "run",
       "runsRoot",
       "intent",
       "note",
-      "kind"
+      "kind",
+      "scope"
     ],
     "required": [
       "run"
@@ -3977,6 +3979,21 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "required": false,
       "type": "string"
     },
+    "scope": {
+      "default": "product",
+      "description": "product (default) notes become auditable requirements; process notes record run-level directives that are visible but not auditable",
+      "enum": [
+        "product",
+        "process"
+      ],
+      "flags": [
+        "--scope"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "string"
+    },
     "seed": {
       "default": null,
       "description": "the request this run is for",
@@ -4015,7 +4032,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     }
   },
   "purpose": "Read or append to the run\u2019s intent ledger. CLI/panel also expose gate answers and boundary controls; chat only exposes notes, constraints and seed.",
-  "reviewed_schema": "79e772f6d213848272ffa48a4f009e9ad9b09af4cc08f5a32dc4d9543d2898b2"
+  "reviewed_schema": "c3a42de5f6185bb5ad9ff8cb2349f43a09c4013b5b493b2f12eb7a69311da410"
 }
 ```
 

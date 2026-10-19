@@ -1298,8 +1298,20 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
     sections = []
     if summary:
         sections.append(f"## Summary\n\n{summary}")
-    if parsed.has_contract and parsed.changes:
-        sections.append("## What changed\n\n" + "\n".join(f"- {item}" for item in parsed.changes))
+    diff_files = sorted(
+        line for line in worktree.git(
+            Path(found.path), "diff", "--name-only", "--diff-filter=d",
+            found.base, found.head
+        ).splitlines()
+        if line
+    )
+    what_changed, mismatches = design_contract.build_what_changed(parsed, diff_files)
+    if what_changed:
+        sections.append("## What changed\n\n" + "\n".join(f"- {item}" for item in what_changed))
+    if mismatches:
+        target_guard.warn(
+            f"design sites marked [changed] but not in the diff: {', '.join(mismatches)}"
+        )
     merge_line = ""
     if merge is not None and merge.merge_commit:
         into = str((ctx.facts.get("delivery_plan") or {}).get("into", ""))
@@ -1311,7 +1323,7 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
     elif merge is not None and merge.check_failed:
         merge_line = (f"- **Merge:** not merged; the check failed on the merged result: "
                       f"{merge.check_failed[:200]}.\n")
-    sections.append(
+    verification = (
         f"## Verification\n\n"
         f"- **Check:** `{check_cmd}` passed in the run's worktree.\n"
         "- **Reviews:** the health check, code review and QA found nothing blocking, "
@@ -1322,10 +1334,36 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
         + "- **Merging:** the branch's commits are the run's attempts, "
         "each the base plus that attempt's files, committed by Refactory; the change is their sum."
     )
+    verification += _process_notes_section(ctx)
+    sections.append(verification)
     sections.append(f"## Original request\n\n{brief}")
     sections.append(f"---\n\nWritten by a refactory design run once its reviews passed.\n\n"
                     f"```\n{stat}\n```")
     return "\n\n".join(sections) + "\n"
+
+
+def _process_notes_section(ctx: Any) -> str:
+    """Non-blocking summary of process-scoped steering notes for the PR body."""
+    from refactory_dsh import authoring_evidence as evidence
+
+    audit = ctx.read_json(evidence.AUDIT, None) if ctx.exists(evidence.AUDIT) else None
+    ev = ctx.read_json(evidence.EVIDENCE, None) if ctx.exists(evidence.EVIDENCE) else None
+    notes = (ev or {}).get("process_notes", [])
+    if not notes:
+        return ""
+    audit_notes = {item["id"]: item for item in (audit or {}).get("process_notes", [])
+                   if isinstance(item, dict)}
+    lines = ["\n- **Process notes** (non-blocking):"]
+    for note in notes:
+        nid = note.get("id", "")
+        info = audit_notes.get(nid)
+        if info and isinstance(info.get("followed"), bool):
+            status = "followed" if info["followed"] else "not followed"
+            detail = info.get("detail", "")
+            lines.append(f"  - `{nid}`: {status}" + (f" — {detail}" if detail else ""))
+        else:
+            lines.append(f"  - `{nid}`: recorded; compliance not verified by audit")
+    return "\n".join(lines)
 
 
 def _write_pr_text(ctx: Any, found: worktree.Worktree) -> str:

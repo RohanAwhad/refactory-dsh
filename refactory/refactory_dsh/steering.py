@@ -47,6 +47,11 @@ LEDGER = "intent-ledger.md"
 #: note with a different tone.
 KINDS: tuple[str, ...] = ("info", "correction", "constraint")
 
+#: The scopes a note can have. A product note is an auditable requirement when its
+#: kind is correction or constraint. A process note is about the run itself and is
+#: never an auditable requirement because the audit cannot cite itself as evidence.
+SCOPES: tuple[str, ...] = ("product", "process")
+
 #: The entry kind a gate verdict is recorded under. Separate from the three the
 #: person writes, because a verdict is a decision the run routed on, not something
 #: the person said about it, and a resumed run has to tell them apart.
@@ -115,17 +120,26 @@ class Ledger:
         ledger.path.write_text(f"# User Intent Ledger\n\n## [{_now()}] Initial Idea\n{text}\n")
         return ledger
 
-    def note(self, kind: str, text: str) -> dict[str, Any]:
-        """Append one thing the user said. Returns the entry as it was recorded."""
+    def note(self, kind: str, text: str, *, scope: str = "product") -> dict[str, Any]:
+        """Append one thing the user said. Returns the entry as it was recorded.
+
+        ``scope`` is ``'product'`` (default) or ``'process'``. A process note is
+        about the run's own behaviour (e.g. "add a row to the audit table") and is
+        never an auditable requirement, because the audit cannot cite itself as
+        evidence for a directive about its own behaviour.
+        """
         if kind not in KINDS:
             raise SteeringError(f"unknown note kind {kind!r}; known: {list(KINDS)}")
+        if scope not in SCOPES:
+            raise SteeringError(f"unknown note scope {scope!r}; known: {list(SCOPES)}")
         body = (text or "").strip()
         if not body:
             raise SteeringError("an empty note records nothing and dilutes the ledger")
-        entry = {"at": _now(), "kind": kind, "text": body}
+        entry = {"at": _now(), "kind": kind, "text": body, "scope": scope}
         self.root.mkdir(parents=True, exist_ok=True)
+        suffix = " (process)" if scope == "process" else ""
         with self.path.open("a") as handle:
-            handle.write(f"\n## [{entry['at']}] {kind}\n{body}\n")
+            handle.write(f"\n## [{entry['at']}] {kind}{suffix}\n{body}\n")
         return entry
 
     def verdict(
@@ -293,7 +307,12 @@ def parse_entries(text: str) -> list[dict[str, Any]]:
                 current["text"] = "\n".join(body).strip()
                 found.append(current)
             stamp, _, kind = line[4:].partition("] ")
-            current = {"at": stamp, "kind": kind.strip(), "text": ""}
+            kind = kind.strip()
+            scope = "product"
+            if kind.endswith(" (process)"):
+                kind = kind[:-len(" (process)")].strip()
+                scope = "process"
+            current = {"at": stamp, "kind": kind, "text": "", "scope": scope}
             body = []
         elif current is not None:
             body.append(line)
@@ -525,6 +544,7 @@ __all__ = [
     "KINDS",
     "LEDGER",
     "PLACEHOLDER",
+    "SCOPES",
     "VERDICT_KIND",
     "Ledger",
     "SteeringError",
