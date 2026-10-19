@@ -277,7 +277,7 @@ def test_acknowledge_before_refuses(tmp_path):
         'configuration_fingerprints': {},
     }))
 
-    with pytest.raises(ValueError, match='unknown or failed'):
+    with pytest.raises(ValueError, match='outcome is unknown'):
         recovery.prepare(root, 'test-run')
 
 
@@ -422,7 +422,7 @@ def test_executing_still_refuses_without_acknowledge(tmp_path):
         'configuration_fingerprints': {},
     }))
 
-    with pytest.raises(ValueError, match='unknown or failed'):
+    with pytest.raises(ValueError, match='outcome is unknown'):
         recovery.prepare(root, 'test-run')
 
 
