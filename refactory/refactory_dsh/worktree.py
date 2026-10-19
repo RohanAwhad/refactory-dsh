@@ -250,6 +250,28 @@ def is_run_worktree(path: Path) -> bool:
     return path.resolve().is_relative_to(root().resolve()) and (path / ".git").is_file()
 
 
+def _config_value(config_file: Path, key: str, *, boolean: bool = False) -> str | None:
+    """Read a single git-config key from a config file.
+
+    Returns the stripped value when the key is set (exit 0), ``None`` when the key is
+    unset (exit 1), and raises ``ValueError`` on any other failure — matching ``git()``'s
+    error contract.
+    """
+    cmd = ["git", "config", "--file", str(config_file)]
+    if boolean:
+        cmd.append("--type=bool")
+    cmd += ["--get", key]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ValueError(f"git config --get {key} could not run: {error}") from error
+    if result.returncode == 0:
+        return result.stdout.strip()
+    if result.returncode == 1:
+        return None
+    raise ValueError(f"git config --get {key} failed: {result.stderr.strip()}")
+
+
 def _isolate_hooks(target: Path, worktree_path: Path) -> bool:
     """Give the worktree its own hooks path so a hook manager writes there, not to the shared hooks.
 
@@ -265,46 +287,23 @@ def _isolate_hooks(target: Path, worktree_path: Path) -> bool:
     config_file = common / "config"
 
     # ── check for blocking config in the common config file ─────────────
-    # core.bare=true and core.worktree both conflict with extensions.worktreeConfig:
-    # git's documentation says that with the extension on, these settings in the
-    # common config apply to every worktree and must move to the main worktree's
-    # config.worktree.
-    try:
-        result = subprocess.run(
-            ["git", "config", "--file", str(config_file), "--type=bool", "--get", "core.bare"],
-            capture_output=True, text=True, timeout=10)
-        if result.returncode == 0 and result.stdout.strip() == "true":
-            target_guard.warn(
-                "hook isolation skipped: target config sets core.bare=true, "
-                "which conflicts with extensions.worktreeConfig")
-            return False
-        if result.returncode not in (0, 1):
-            raise ValueError(f"git config --get core.bare failed: {result.stderr.strip()}")
-    except (OSError, subprocess.SubprocessError) as error:
-        raise ValueError(f"could not check target config: {error}") from error
+    bare = _config_value(config_file, "core.bare", boolean=True)
+    if bare == "true":
+        target_guard.warn(
+            "hook isolation skipped: target config sets core.bare=true, "
+            "which conflicts with extensions.worktreeConfig")
+        return False
 
-    try:
-        result = subprocess.run(
-            ["git", "config", "--file", str(config_file), "--get", "core.worktree"],
-            capture_output=True, text=True, timeout=10)
-        if result.returncode == 0:
-            target_guard.warn(
-                "hook isolation skipped: target config sets core.worktree, "
-                "which conflicts with extensions.worktreeConfig")
-            return False
-        if result.returncode not in (0, 1):
-            raise ValueError(f"git config --get core.worktree failed: {result.stderr.strip()}")
-    except (OSError, subprocess.SubprocessError) as error:
-        raise ValueError(f"could not check target config: {error}") from error
+    worktree_val = _config_value(config_file, "core.worktree")
+    if worktree_val is not None:
+        target_guard.warn(
+            "hook isolation skipped: target config sets core.worktree, "
+            "which conflicts with extensions.worktreeConfig")
+        return False
 
     # ── enable extensions.worktreeConfig (read-before-write, lock retry) ──
-    try:
-        result = subprocess.run(
-            ["git", "config", "--file", str(config_file), "--get", "extensions.worktreeConfig"],
-            capture_output=True, text=True, timeout=10)
-        need_write = result.returncode != 0 or result.stdout.strip().lower() != "true"
-    except (OSError, subprocess.SubprocessError):
-        need_write = True
+    ext_val = _config_value(config_file, "extensions.worktreeConfig")
+    need_write = ext_val is None or ext_val.strip().lower() != "true"
 
     if need_write:
         for attempt in range(4):
@@ -315,15 +314,9 @@ def _isolate_hooks(target: Path, worktree_path: Path) -> bool:
                 if "config.lock" not in str(exc) and "could not lock config file" not in str(exc):
                     raise
                 # Another process may have set it while we waited.
-                try:
-                    result = subprocess.run(
-                        ["git", "config", "--file", str(config_file), "--get",
-                         "extensions.worktreeConfig"],
-                        capture_output=True, text=True, timeout=10)
-                    if result.returncode == 0 and result.stdout.strip().lower() == "true":
-                        break
-                except (OSError, subprocess.SubprocessError):
-                    pass
+                retry_val = _config_value(config_file, "extensions.worktreeConfig")
+                if retry_val is not None and retry_val.strip().lower() == "true":
+                    break
                 if attempt < 3:
                     time.sleep(0.1)
                 else:
@@ -896,7 +889,9 @@ def check_environment(path: Path, home: Path) -> dict[str, str]:
 def _shared_snapshot(target: Path) -> dict:
     """A snapshot of the git configuration and hooks the worktree shares with the target.
 
-    Returns ``{"config_lines": [...], "hook_files": {"name": "sha256hex", ...}}``.
+    Returns ``{"config_lines": [...], "hook_files": {"name": "sha256hex", ...},
+    "hooks_dir": "<path>"}``.  The ``hooks_dir`` key carries the path so
+    ``_shared_digest`` can re-read raw bytes for backward-compatible hashing.
     The exclusion rules match what ``shared_changed`` ignores: ``submodule.`` lines
     (initialising submodules is refactory's own doing) and the
     ``extensions.worktreeconfig=`` line ``_isolate_hooks`` sets.
@@ -914,15 +909,22 @@ def _shared_snapshot(target: Path) -> dict:
         for item in sorted(hooks_dir.glob("*")):
             if item.is_file():
                 hook_files[item.name] = hashlib.sha256(item.read_bytes()).hexdigest()
-    return {"config_lines": config_lines, "hook_files": hook_files}
+    return {"config_lines": config_lines, "hook_files": hook_files, "hooks_dir": str(hooks_dir)}
 
 
 def _shared_digest(snapshot: dict) -> str:
-    """A SHA-256 hex digest of a shared-state snapshot."""
+    """A SHA-256 hex digest of a shared-state snapshot.
+
+    Feeds raw file bytes (not hex-digest strings) to match the digest the code
+    produced before the snapshot/digest split.  The snapshot carries per-file hashes
+    for the guard's comparison; the digest re-reads raw bytes so existing worktree
+    records stay compatible.
+    """
     digest = hashlib.sha256()
     digest.update("\n".join(snapshot["config_lines"]).encode())
+    hooks_dir = Path(snapshot["hooks_dir"])
     for name in sorted(snapshot["hook_files"]):
-        digest.update(name.encode() + b"\0" + snapshot["hook_files"][name].encode())
+        digest.update(name.encode() + b"\0" + (hooks_dir / name).read_bytes())
     return digest.hexdigest()
 
 

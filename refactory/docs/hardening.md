@@ -561,7 +561,13 @@ reported the change only at materialise, 45 minutes later.
   guards that fail the test suite when any test changes the repository's hooks,
   config, or worktree list (attributed to the session). Session-wide
   `REFACTORY_HOME` prevents subprocesses from writing worktrees into the real
-  refactory home.
+  refactory home. The guard reports itself inactive, with the reason, when it
+  cannot take a snapshot (e.g. not a git repository, or python not found).
+- `test_worktree.py`: `test_shared_state_digest_matches_old_formula` (digest
+  backward compatibility), `test_session_guard_resolves_symlinked_tmp_root`
+  (symlinked temp root resolution), `test_session_guard_reports_inactive_on_non_git_dir`,
+  `test_vitest_guard_reports_inactive_when_python_missing`,
+  `test_vitest_guard_reports_inactive_on_non_git_dir` (inactive guard reporting).
 
 **Known limit.** A hook manager that writes `core.hooksPath` itself, as husky
 does with `git config core.hooksPath .husky/_`, writes the common config even

@@ -1111,7 +1111,9 @@ def test_session_guard_catches_worktree_in_tmp(tmp_path):
         capture_output=True, text=True, timeout=60, cwd=str(test_repo))
     combined = result.stdout + result.stderr
     assert result.returncode != 0, f"guard should have failed:\n{combined}"
-    assert "worktree" in combined.lower()
+    assert "test_adds_worktree PASSED" in combined
+    assert "FAIL: worktree added by session:" in combined
+    assert "bad-wt" in combined
 
 
 @pytest.mark.parametrize("variant", ["hook", "config"])
@@ -1145,13 +1147,15 @@ def test_session_guard_catches_hook_or_config_change(tmp_path, variant):
     combined = result.stdout + result.stderr
     assert result.returncode != 0, f"guard should have failed:\n{combined}"
     if variant == "hook":
-        assert "hook" in combined.lower()
+        assert "test_changes_hook PASSED" in combined
+        assert "FAIL: hook added: pre-commit" in combined
     else:
-        assert "config" in combined.lower()
+        assert "test_changes_config PASSED" in combined
+        assert "FAIL: config line added: user.name=BadActor" in combined
 
 
 def test_session_guard_catches_subprocess_worktree_in_refactory_home(tmp_path):
-    """The guard fails when a subprocess creates a worktree under the inherited REFACTORY_HOME (scenario c)."""
+    """The guard fails when a subprocess creates a worktree under REFACTORY_HOME set by the guard (scenario c)."""
     tests_dir = Path(__file__).resolve().parent
     test_repo = tmp_path / "guarded-repo-c"
     git_repo(test_repo)
@@ -1174,12 +1178,21 @@ def test_session_guard_catches_subprocess_worktree_in_refactory_home(tmp_path):
         "                     str(tmp_path / 'run')], check=True)\n"
     )
 
+    # Isolate TMPDIR and REFACTORY_HOME so only the guard's own override puts
+    # the worktree into session space.
+    sub_tmpdir = tmp_path / "sub-tmp"
+    sub_tmpdir.mkdir()
+    outer_home = tmp_path / "outer-home"
+    outer_home.mkdir()
+
     result = subprocess.run(
         [sys.executable, "-m", "pytest", "-xvs", str(test_repo / "test_bad.py")],
-        capture_output=True, text=True, timeout=60, cwd=str(test_repo))
+        capture_output=True, text=True, timeout=60, cwd=str(test_repo),
+        env={**os.environ, "TMPDIR": str(sub_tmpdir), "REFACTORY_HOME": str(outer_home)})
     combined = result.stdout + result.stderr
     assert result.returncode != 0, f"guard should have failed:\n{combined}"
-    assert "worktree" in combined.lower()
+    assert "test_subprocess_creates_worktree PASSED" in combined
+    assert "FAIL: worktree added by session:" in combined
 
 
 def test_session_guard_reports_external_worktree_without_failing(tmp_path):
@@ -1213,22 +1226,102 @@ def test_session_guard_reports_external_worktree_without_failing(tmp_path):
     assert str(external_wt) in combined, f"should report the external worktree path:\n{combined}"
 
 
+def test_shared_state_digest_matches_old_formula(repo, tmp_path):
+    """_shared_state returns the same digest the old code returned for the same state."""
+    import hashlib as _hashlib
+    from refactory_dsh.worktree import _shared_state
+
+    common = Path(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+    hooks_dir = common / "hooks"
+    hooks_dir.mkdir(exist_ok=True)
+    (hooks_dir / "pre-commit").write_text("#!/bin/sh\necho hook\n")
+    (hooks_dir / "post-commit").write_text("#!/bin/sh\necho post\n")
+
+    # Old formula: config text, then name + "\0" + raw bytes per hook, sorted.
+    config_text = git(repo, "config", "--file", str(common / "config"), "--list")
+    settings = config_text.splitlines()
+    config_lines = [
+        line for line in settings
+        if not line.startswith("submodule.")
+        and not line.lower().startswith("extensions.worktreeconfig=")
+    ]
+    expected = _hashlib.sha256()
+    expected.update("\n".join(config_lines).encode())
+    for item in sorted(hooks_dir.glob("*")):
+        if item.is_file():
+            expected.update(item.name.encode() + b"\0" + item.read_bytes())
+
+    assert _shared_state(repo) == expected.hexdigest()
+
+
+def test_session_guard_resolves_symlinked_tmp_root(tmp_path):
+    """The guard catches a worktree under a tmp root reached through a symlink."""
+    tests_dir = Path(__file__).resolve().parent
+    test_repo = tmp_path / "guarded-repo-sym"
+    git_repo(test_repo)
+    (test_repo / "conftest.py").write_text(_guard_conftest(tests_dir))
+
+    real_tmp = tmp_path / "real-tmp"
+    real_tmp.mkdir()
+    linked_tmp = tmp_path / "linked-tmp"
+    linked_tmp.symlink_to(real_tmp)
+
+    # The bad test creates its worktree under tempfile.mkdtemp() which uses the
+    # symlinked TMPDIR, while git reports the resolved path.
+    (test_repo / "test_bad.py").write_text(
+        "import subprocess, tempfile\nfrom pathlib import Path\n\n"
+        "def test_adds_worktree(tmp_path):\n"
+        f"    repo = Path({str(test_repo)!r})\n"
+        "    wt = Path(tempfile.mkdtemp(prefix='bad-wt-'))\n"
+        "    subprocess.run(['git', '-C', str(repo), 'worktree', 'add',\n"
+        "                    str(wt), 'HEAD'], check=True, capture_output=True)\n"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-xvs", str(test_repo / "test_bad.py")],
+        capture_output=True, text=True, timeout=60, cwd=str(test_repo),
+        env={**os.environ, "TMPDIR": str(linked_tmp)})
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0, f"guard should have failed:\n{combined}"
+    assert "test_adds_worktree PASSED" in combined
+    assert "FAIL: worktree added by session:" in combined
+    assert "bad-wt" in combined
+
+
+def test_session_guard_reports_inactive_on_non_git_dir(tmp_path):
+    """The pytest guard reports inactive when run on a directory that is not a git repo."""
+    tests_dir = Path(__file__).resolve().parent
+    test_dir = tmp_path / "not-a-repo"
+    test_dir.mkdir()
+    (test_dir / "conftest.py").write_text(_guard_conftest(tests_dir))
+    (test_dir / "test_ok.py").write_text(
+        "def test_passes():\n"
+        "    assert True\n"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-xvs", str(test_dir / "test_ok.py"),
+         "--rootdir", str(test_dir)],
+        capture_output=True, text=True, timeout=60, cwd=str(test_dir))
+    combined = result.stdout + result.stderr
+    assert "repository guard inactive:" in combined, (
+        f"should report guard inactive:\n{combined}")
+
+
 @pytest.mark.toolchain("node")
 def test_vitest_guard_catches_mismatch(tmp_path):
     """The vitest globalSetup fails a vitest run that changes the repository's hooks.
 
-    Vitest 4 honours a thrown error in globalSetup teardown: it logs the error and
-    exits non-zero. process.exitCode = 1 is set as belt-and-suspenders.
+    Points globalSetup at the real vitest.global-setup.ts with the test repository
+    as root, so this test exercises the real guard file.  Removing the teardown throw
+    from vitest.global-setup.ts makes this test fail.
     """
     repo_root = Path(__file__).resolve().parent.parent.parent
     vitest_bin = repo_root / "node_modules" / ".bin" / "vitest"
-    python_bin = repo_root / ".venv" / "bin" / "python"
-    guard_py = Path(__file__).resolve().parent / "repo_guard.py"
+    real_setup = repo_root / "vitest.global-setup.ts"
 
     if not vitest_bin.is_file():
         pytest.skip("vitest not found at node_modules/.bin/vitest")
-    if not python_bin.is_file():
-        pytest.skip(".venv/bin/python not found")
 
     test_repo = tmp_path / "vitest-guarded"
     git_repo(test_repo)
@@ -1238,52 +1331,19 @@ def test_vitest_guard_catches_mismatch(tmp_path):
     # Symlink node_modules so vitest can resolve its dependencies.
     (tmp_path / "node_modules").symlink_to(repo_root / "node_modules")
 
-    setup_mjs = tmp_path / "guard-setup.mjs"
-    setup_mjs.write_text(
-        "import { spawnSync } from 'node:child_process'\n"
-        "import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'\n"
-        "import { tmpdir } from 'node:os'\n"
-        "import { resolve } from 'node:path'\n"
-        f"const python = {json.dumps(str(python_bin))}\n"
-        f"const guard = {json.dumps(str(guard_py))}\n"
-        f"const repo = {json.dumps(str(test_repo))}\n"
-        "let snapshotFile, guardHome\n"
-        "export function setup() {\n"
-        "  guardHome = mkdtempSync(resolve(tmpdir(), 'vt-guard-'))\n"
-        "  process.env.REFACTORY_HOME = resolve(guardHome, 'home')\n"
-        "  process.env.REFACTORY_PROJECTS_DIR = resolve(guardHome, 'projects')\n"
-        "  const r = spawnSync(python, [guard, 'snapshot', repo], "
-        "{encoding:'utf-8',timeout:30000})\n"
-        "  if (r.status !== 0) { console.warn('snapshot failed:', r.stderr); return }\n"
-        "  snapshotFile = resolve(guardHome, 'snapshot.json')\n"
-        "  writeFileSync(snapshotFile, r.stdout)\n"
-        "}\n"
-        "export function teardown() {\n"
-        "  if (!snapshotFile) return\n"
-        "  const r = spawnSync(python, [guard, 'compare', repo, snapshotFile,\n"
-        "    '--temp-root', tmpdir(), '--refactory-home', "
-        "resolve(guardHome, 'home')],\n"
-        "    {encoding:'utf-8',timeout:30000})\n"
-        "  try { rmSync(guardHome, {recursive:true,force:true}) } catch {}\n"
-        "  if (r.status !== 0) {\n"
-        "    process.exitCode = 1\n"
-        "    throw new Error('[repo-guard] ' + (r.stderr || 'repository changed'))\n"
-        "  }\n"
-        "}\n"
-    )
-
     vitest_cfg = tmp_path / "vitest.config.mjs"
     vitest_cfg.write_text(
         "import { defineConfig } from 'vitest/config'\n"
         "export default defineConfig({\n"
         "  test: {\n"
         "    include: ['**/*.spec.mjs'],\n"
-        f"    globalSetup: [{json.dumps(str(setup_mjs))}],\n"
+        f"    root: {json.dumps(str(test_repo))},\n"
+        f"    globalSetup: [{json.dumps(str(real_setup))}],\n"
         "  },\n"
         "})\n"
     )
 
-    bad_spec = tmp_path / "bad.spec.mjs"
+    bad_spec = test_repo / "bad.spec.mjs"
     bad_spec.write_text(
         "import { writeFileSync } from 'node:fs'\n"
         "import { test, expect } from 'vitest'\n"
@@ -1302,3 +1362,100 @@ def test_vitest_guard_catches_mismatch(tmp_path):
         f"vitest should have exited non-zero:\n{combined}")
     assert "repo-guard" in combined.lower(), (
         f"output should mention repo-guard:\n{combined}")
+
+
+@pytest.mark.toolchain("node")
+def test_vitest_guard_reports_inactive_when_python_missing(tmp_path):
+    """The vitest guard prints inactive when the venv's python does not exist."""
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    vitest_bin = repo_root / "node_modules" / ".bin" / "vitest"
+    real_setup = repo_root / "vitest.global-setup.ts"
+
+    if not vitest_bin.is_file():
+        pytest.skip("vitest not found at node_modules/.bin/vitest")
+
+    test_repo = tmp_path / "vitest-no-python"
+    git_repo(test_repo)
+
+    # Symlink node_modules so vitest can resolve its dependencies.
+    (tmp_path / "node_modules").symlink_to(repo_root / "node_modules")
+
+    # Derive a globalSetup from the real vitest.global-setup.ts by replacing
+    # the python path with a nonexistent one.
+    real_text = real_setup.read_text()
+    patched_text = real_text.replace(
+        "const python = resolve(dir, '.venv', 'bin', 'python')",
+        "const python = '/nonexistent/venv/bin/python'",
+    )
+    assert patched_text != real_text, "patch target not found in vitest.global-setup.ts"
+    derived_setup = tmp_path / "derived-global-setup.ts"
+    derived_setup.write_text(patched_text)
+
+    vitest_cfg = tmp_path / "vitest.config.mjs"
+    vitest_cfg.write_text(
+        "import { defineConfig } from 'vitest/config'\n"
+        "export default defineConfig({\n"
+        "  test: {\n"
+        "    include: ['**/*.spec.mjs'],\n"
+        f"    root: {json.dumps(str(test_repo))},\n"
+        f"    globalSetup: [{json.dumps(str(derived_setup))}],\n"
+        "  },\n"
+        "})\n"
+    )
+
+    (test_repo / "ok.spec.mjs").write_text(
+        "import { test, expect } from 'vitest'\n"
+        "test('passes', () => { expect(true).toBe(true) })\n"
+    )
+
+    result = subprocess.run(
+        [str(vitest_bin), "run", "--config", str(vitest_cfg)],
+        capture_output=True, text=True, timeout=60, cwd=str(tmp_path))
+    combined = result.stdout + result.stderr
+    assert result.returncode == 0, (
+        f"vitest should pass when guard is inactive:\n{combined}")
+    assert "repository guard inactive:" in combined, (
+        f"should report guard inactive:\n{combined}")
+
+
+@pytest.mark.toolchain("node")
+def test_vitest_guard_reports_inactive_on_non_git_dir(tmp_path):
+    """The vitest guard reports inactive when the repo is not a git checkout."""
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    vitest_bin = repo_root / "node_modules" / ".bin" / "vitest"
+    real_setup = repo_root / "vitest.global-setup.ts"
+
+    if not vitest_bin.is_file():
+        pytest.skip("vitest not found at node_modules/.bin/vitest")
+
+    test_dir = tmp_path / "not-a-repo"
+    test_dir.mkdir()
+
+    # Symlink node_modules so vitest can resolve its dependencies.
+    (tmp_path / "node_modules").symlink_to(repo_root / "node_modules")
+
+    vitest_cfg = tmp_path / "vitest.config.mjs"
+    vitest_cfg.write_text(
+        "import { defineConfig } from 'vitest/config'\n"
+        "export default defineConfig({\n"
+        "  test: {\n"
+        "    include: ['**/*.spec.mjs'],\n"
+        f"    root: {json.dumps(str(test_dir))},\n"
+        f"    globalSetup: [{json.dumps(str(real_setup))}],\n"
+        "  },\n"
+        "})\n"
+    )
+
+    (test_dir / "ok.spec.mjs").write_text(
+        "import { test, expect } from 'vitest'\n"
+        "test('passes', () => { expect(true).toBe(true) })\n"
+    )
+
+    result = subprocess.run(
+        [str(vitest_bin), "run", "--config", str(vitest_cfg)],
+        capture_output=True, text=True, timeout=60, cwd=str(tmp_path))
+    combined = result.stdout + result.stderr
+    assert result.returncode == 0, (
+        f"vitest should pass when guard is inactive:\n{combined}")
+    assert "repository guard inactive:" in combined, (
+        f"should report guard inactive:\n{combined}")

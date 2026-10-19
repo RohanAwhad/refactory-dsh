@@ -12,18 +12,36 @@
 
 import { resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 
 const dir = import.meta.dirname
 const python = resolve(dir, '.venv', 'bin', 'python')
 const guard = resolve(dir, 'refactory', 'tests', 'repo_guard.py')
-const repo = dir
 
+let repo = ''
 let snapshotFile: string | undefined
 let guardHome: string
 
-export function setup() {
+export function setup(project?: { config?: { root?: string } }) {
+  repo = project?.config?.root ?? process.cwd()
+
+  if (!existsSync(python)) {
+    console.log(`repository guard inactive: python not found at ${python}`)
+    return
+  }
+
+  // Not a git checkout — report inactive rather than throw, so pnpm test
+  // works in a tarball checkout that has a venv.
+  const gitCheck = spawnSync('git', ['-C', repo, 'rev-parse', '--is-inside-work-tree'], {
+    encoding: 'utf-8',
+    timeout: 10_000,
+  })
+  if (gitCheck.status !== 0) {
+    console.log(`repository guard inactive: ${repo} is not a git repository`)
+    return
+  }
+
   guardHome = mkdtempSync(resolve(tmpdir(), 'vitest-guard-home-'))
   process.env.REFACTORY_HOME = resolve(guardHome, 'home')
   process.env.REFACTORY_PROJECTS_DIR = resolve(guardHome, 'projects')
@@ -33,8 +51,7 @@ export function setup() {
     timeout: 30_000,
   })
   if (result.status !== 0) {
-    console.warn('[repo-guard] could not take snapshot:', result.stderr)
-    return
+    throw new Error(`[repo-guard] could not take snapshot: ${result.stderr}`)
   }
   snapshotFile = resolve(guardHome, 'snapshot.json')
   writeFileSync(snapshotFile, result.stdout)

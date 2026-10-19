@@ -101,16 +101,16 @@ def _is_session_worktree(
     wt_path: str, temp_roots: list[str], refactory_home: str | None,
 ) -> bool:
     """Whether a worktree path is inside one of the session's own spaces."""
-    p = Path(wt_path)
+    p = Path(wt_path).resolve()
     for root in temp_roots:
         try:
-            if root and p.is_relative_to(root):
+            if root and p.is_relative_to(Path(root).resolve()):
                 return True
         except (TypeError, ValueError):
             pass
     if refactory_home:
         try:
-            if p.is_relative_to(refactory_home):
+            if p.is_relative_to(Path(refactory_home).resolve()):
                 return True
         except (TypeError, ValueError):
             pass
@@ -121,6 +121,7 @@ def _is_session_worktree(
 
 _GUARD_KEY = pytest.StashKey[dict]()
 _GUARD_CHANGES_KEY = pytest.StashKey[tuple]()
+_GUARD_INACTIVE_KEY = pytest.StashKey[str]()
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
@@ -129,8 +130,9 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 
     try:
         snapshot = _take_snapshot(repo)
-    except (ValueError, OSError):
-        return  # not a git repo or cannot read; nothing to guard
+    except (ValueError, OSError) as exc:
+        session.config.stash[_GUARD_INACTIVE_KEY] = str(exc)
+        return
 
     # Session-wide REFACTORY_HOME so subprocesses don't write into the real one.
     guard_home = Path(tempfile.mkdtemp(prefix="repo-guard-home-"))
@@ -160,7 +162,8 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     repo = Path(stored["repo"])
     try:
         after = _take_snapshot(repo)
-    except (ValueError, OSError):
+    except (ValueError, OSError) as exc:
+        session.config.stash[_GUARD_INACTIVE_KEY] = str(exc)
         return
 
     failures, warnings = _compare_snapshots(
@@ -187,6 +190,10 @@ def pytest_terminal_summary(
     config: pytest.Config,
 ) -> None:
     """Report what the repository guard found."""
+    inactive = config.stash.get(_GUARD_INACTIVE_KEY, None)
+    if inactive is not None:
+        terminalreporter.write_line(f"repository guard inactive: {inactive}")
+
     changes = config.stash.get(_GUARD_CHANGES_KEY, None)
     if changes is None:
         return
