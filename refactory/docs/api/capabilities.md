@@ -1832,6 +1832,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "required": false,
       "type": "string"
     },
+    "model_timeout_s": {
+      "default": null,
+      "description": "seconds one model completion may take before it is called hung (default: 1800)",
+      "flags": [
+        "--model-timeout"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "integer"
+    },
     "node_routes": {
       "default": null,
       "description": "",
@@ -1966,7 +1977,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     }
   },
   "purpose": "Prepare a mode and resolved project worker context for graph execution. Chat uses wf_open with knobs, intent and an absolute workdir, then workflow tools drive the graph.",
-  "reviewed_schema": "a7943a841396507067d718a2e348763e028db58edc79c140d0fbb48884aaf7e3"
+  "reviewed_schema": "d0384bfee436aa3e8a60b363bee74a2ab9b7d9e5125f75908835ecba12f2a286"
 }
 ```
 
@@ -4569,6 +4580,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "required": false,
       "type": "string"
     },
+    "model_timeout_s": {
+      "default": null,
+      "description": "seconds one model completion may take before it is called hung (default: 1800); sets the per-completion limit for every agent step",
+      "flags": [
+        "--model-timeout"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "integer"
+    },
     "name": {
       "default": "",
       "description": "the package or artifact name (default: from what you said)",
@@ -4832,7 +4854,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     }
   },
   "purpose": "Run a named mode or author a package/artifact from a brief in the terminal; worker file defaults apply at preparation. CEO conversation and graph worker routes are distinct.",
-  "reviewed_schema": "87dce677805e168eca7f531ba916bf2b45635225867cb1f461420fafc80f3862"
+  "reviewed_schema": "054734e27c8a8bda0075d478425f857975ffb609ea6ec2e2a6d1a6c7d4e400c5"
 }
 ```
 
