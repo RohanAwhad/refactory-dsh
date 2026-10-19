@@ -40,7 +40,7 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
     # ── amend-command: correct a run's setup/check/generate command ──
     if action == 'amend-command':
         return _amend_command(root, checkpoint, saved, field=field, value=value, note=note,
-                              acknowledge_failure=acknowledge_failure)
+                              node=node, acknowledge_failure=acknowledge_failure)
 
     # ── withdraw: remove a queued control that was never applied ──
     if action == 'withdraw':
@@ -314,16 +314,15 @@ def _withdraw(root: Path, control_id: str) -> dict[str, Any]:
 # ── amend-command ──────────────────────────────────────────────────────────
 
 def _amend_command(root: Path, checkpoint: Path, saved: dict[str, Any], *,
-                   field: str, value: str, note: str,
+                   field: str, value: str, note: str, node: str = '',
                    acknowledge_failure: bool) -> dict[str, Any]:
     """Correct a run's setup, check or generate command and queue a rerun.
 
     The field and new value are recorded in facts.json's command_history as
-    an explicit, timestamped entry. The handler finds which node to rerun
-    from the graph's declarations: the earliest due or completed node whose
-    op reads the amended fact. A rerun control with source='amend-command'
-    is queued; the spine consumes it with commandCorrection semantics that
-    accept due nodes.
+    an explicit, timestamped entry. The node rerun is the one the person names
+    (``node``), or else the run's single due node: the one that stopped with the
+    old command. A rerun control with source='amend-command' is queued; the spine
+    consumes it with commandCorrection semantics that accept due nodes.
     """
     # Reject if checkpoint is executing — must acknowledge first
     if saved.get('status') == 'executing':
@@ -352,6 +351,9 @@ def _amend_command(root: Path, checkpoint: Path, saved: dict[str, Any], *,
     if old_value == value:
         raise ValueError(f'{field} is already {value!r}; no change needed')
 
+    # Resolved before anything is written, so a refusal leaves the run as it was.
+    target_node = _find_rerun_target(saved, node)
+
     # Append to command_history
     history = facts.get('command_history', [])
     if not isinstance(history, list):
@@ -370,9 +372,6 @@ def _amend_command(root: Path, checkpoint: Path, saved: dict[str, Any], *,
     tmp = facts_path.with_suffix('.tmp')
     tmp.write_text(json.dumps(facts, indent=2))
     tmp.replace(facts_path)
-
-    # Find which node to rerun from the graph's declarations.
-    target_node = _find_rerun_target(root, saved, field)
 
     # Queue a rerun control targeting the relevant node
     invocation_data = read(root / '.refactory/invocation.json')
@@ -418,73 +417,25 @@ def _amend_command(root: Path, checkpoint: Path, saved: dict[str, Any], *,
     return result
 
 
-def _find_rerun_target(root: Path, saved: dict[str, Any], field: str) -> str:
-    """Find the earliest due or completed node whose operation reads the amended fact.
+def _find_rerun_target(saved: dict[str, Any], node: str = '') -> str:
+    """The node a command correction reruns: the one the person names, or the run's single due node.
 
-    Looks at the graph inside the checkpoint to find nodes, then checks the run's
-    declarations (produces lists) to identify which nodes consume the fact.
-    For setup/check/generate the consuming node is typically the check gate (the node
-    whose evaluator runs repo_change.prepare_commands and then the check command).
-    Falls back to looking for a node named after the field if declarations are unavailable.
+    A run is corrected because a node stopped with the old command, and that node is
+    the one left due in the checkpoint's cursor, whatever the mode or graph. Which node
+    reads setup, check or generate is not guessed from node names or file names: with
+    more than one due node, or none, the person names the node with ``--node``.
     """
-    from refactory_dsh.lowering import read_declarations
-
-    graph = saved.get('graph', {})
-    nodes = graph.get('nodes', {})
-    cursor = saved.get('state', saved).get('cursor', [])
-    completed = saved.get('state', saved).get('completed', [])
-
-    # Read the run's declarations to find which nodes' ops produce or consume the fact.
-    declarations = read_declarations(root)
-
-    # Strategy: find all nodes whose declaration lists check-related writes or whose
-    # id/type matches the field. The check command, setup and generate all run inside
-    # nodes whose evaluator or command references prepare_commands / run_check.
-    candidates: list[str] = []
-    check_writes = {'check.txt', 'validation.txt', 'authoring-evidence.json'}
-
-    for node_id, node_body in nodes.items():
-        if not isinstance(node_body, dict):
-            continue
-        node_type = node_body.get('_type', '')
-        decl = declarations.get(node_id, {})
-        node_writes = set(decl.get('writes', []) + (node_body.get('writes') or []))
-
-        if field in ('check', 'setup'):
-            # The check gate runs setup + check
-            if node_writes & check_writes:
-                candidates.append(node_id)
-            elif 'check' in node_id.lower() and node_type == 'GateNode':
-                candidates.append(node_id)
-        elif field == 'generate':
-            # The materialise FnNode runs the generate command
-            if 'materialise' in node_id.lower() or 'materialize' in node_id.lower():
-                candidates.append(node_id)
-            elif node_writes & check_writes:
-                candidates.append(node_id)
-
-    # If we found candidates, pick the earliest one that is due (in cursor) or completed
-    if candidates:
-        for c in candidates:
-            if c in cursor:
-                return c
-        for c in candidates:
-            if c in completed:
-                return c
-        return candidates[0]
-
-    # Fallback: look for a node named after the field
-    if field in nodes:
-        return field
-
-    # Last resort: look for any node in the cursor
-    if cursor:
+    graph_nodes = (saved.get('graph') or {}).get('nodes') or {}
+    state = saved.get('state') if isinstance(saved.get('state'), dict) else saved
+    cursor = [n for n in (state.get('cursor') or []) if isinstance(n, str)]
+    if node:
+        if node not in graph_nodes:
+            raise ValueError(f'no node {node!r} in this run\'s graph')
+        return node
+    if len(cursor) == 1:
         return cursor[0]
-
-    raise ValueError(
-        f'cannot find a node to rerun for amended field {field!r}; '
-        f'the graph has no node whose operation reads this fact'
-    )
+    due = ', '.join(cursor) if cursor else 'none'
+    raise ValueError(f'name the node to rerun with --node: the run has {len(cursor)} due node(s) ({due})')
 
 
 def queued_controls(root: Path) -> list[dict[str, Any]]:

@@ -428,6 +428,62 @@ def test_executing_still_refuses_without_acknowledge(tmp_path):
 
 # ── T9: Amend-command refuses invalid inputs ──────────────────────────────
 
+def _set_cursor(root: Path, cursor: list[str]) -> None:
+    checkpoint_path = root / '.refactory/spine-checkpoint.json'
+    checkpoint = json.loads(checkpoint_path.read_text())
+    checkpoint['state']['cursor'] = cursor
+    checkpoint_path.write_text(json.dumps(checkpoint))
+
+
+def _queued_target(root: Path) -> str:
+    controls = list((root / '.refactory/graph-controls').glob('*.json'))
+    assert len(controls) == 1
+    return json.loads(controls[0].read_text())['target']
+
+
+def test_amend_reruns_the_due_node_whatever_it_is_called(tmp_path):
+    """The rerun target is the node left due, not one guessed from node or file names.
+
+    Fails without the change: the target was chosen by heuristics (writes named
+    check.txt, node ids containing "check" or "materialise"), so a due node with
+    another name in another mode's graph was not the one rerun.
+    """
+    root = _make_run_dir(tmp_path, status='halted', owner_pid=_dead_pid())
+    checkpoint_path = root / '.refactory/spine-checkpoint.json'
+    checkpoint = json.loads(checkpoint_path.read_text())
+    checkpoint['graph']['nodes']['verify_build'] = {
+        '_type': 'FnNode', 'id': 'verify_build', 'command': 'true', 'reads': [], 'writes': []}
+    checkpoint['state']['cursor'] = ['verify_build']
+    checkpoint_path.write_text(json.dumps(checkpoint))
+    result = graph_control.request(root, 'amend-command', field='setup', value='make build')
+    assert result['rerun_target'] == 'verify_build'
+    assert _queued_target(root) == 'verify_build'
+
+
+def test_amend_reruns_the_node_the_person_names(tmp_path):
+    root = _make_run_dir(tmp_path, status='halted', owner_pid=_dead_pid())
+    result = graph_control.request(root, 'amend-command', field='generate', value='gen',
+                                   node='materialise')
+    assert result['rerun_target'] == 'materialise'
+    assert _queued_target(root) == 'materialise'
+
+
+def test_amend_refuses_to_guess_and_changes_nothing(tmp_path):
+    """With several due nodes and none named, it refuses before writing facts.json.
+
+    Fails without the change: the first node in the cursor was rerun, whichever it was.
+    """
+    root = _make_run_dir(tmp_path, status='halted', owner_pid=_dead_pid(),
+                         check_cmd='wrong command')
+    _set_cursor(root, ['check', 'materialise'])
+    with pytest.raises(ValueError, match='name the node to rerun with --node'):
+        graph_control.request(root, 'amend-command', field='check', value='right command')
+    assert json.loads((root / 'facts.json').read_text())['check'] == 'wrong command'
+    assert not list((root / '.refactory/graph-controls').glob('*.json'))
+    with pytest.raises(ValueError, match="no node 'nope'"):
+        graph_control.request(root, 'amend-command', field='check', value='right command', node='nope')
+
+
 def test_amend_invalid_field(tmp_path):
     root = _make_run_dir(tmp_path, status='halted', owner_pid=_dead_pid())
     with pytest.raises(ValueError, match="must be 'check', 'setup', or 'generate'"):

@@ -1711,6 +1711,7 @@ def main(argv: list[str] | None = None) -> int:
                     payload = request(
                         _root_for(args, project), 'amend-command',
                         field=field_name, value=field_value, note=getattr(args, 'note', ''),
+                        node=args.node,
                         acknowledge_failure=getattr(args, 'acknowledge_failure', False),
                     )
                 else:
