@@ -1193,6 +1193,7 @@ def test_session_guard_catches_subprocess_worktree_in_refactory_home(tmp_path):
     assert result.returncode != 0, f"guard should have failed:\n{combined}"
     assert "test_subprocess_creates_worktree PASSED" in combined
     assert "FAIL: worktree added by session:" in combined
+    assert "sub_bad_01" in combined
 
 
 def test_session_guard_reports_external_worktree_without_failing(tmp_path):
