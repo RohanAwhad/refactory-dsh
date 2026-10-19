@@ -365,6 +365,13 @@ def run(
             if budget is not None:
                 budget.pause()
     # ── dm-94: ownership released; inline supervision runs outside ──
+    # dm-95: promote ready+last_failure to run-level failed before any reader
+    # (status, supervisor) sees an unretried node failure as still active.
+    try:
+        from refactory_dsh.run_state import promote_unretried_failure
+        promote_unretried_failure(workdir)
+    except Exception:
+        pass  # promotion is best-effort; do not mask the run's exit code
     # In headless mode, when the run stopped at a user gate, print the exact
     # commands a person uses to answer it and resume. Printed once, only here.
     if headless and code != 0:

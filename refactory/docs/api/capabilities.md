@@ -1291,7 +1291,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 
 ## graph-control
 
-Preview or queue boundary pause/resume/stop/rerun/acknowledge/amend-command/withdraw controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. acknowledge transitions an executing checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly.
+Preview or queue boundary pause/resume/stop/rerun/acknowledge/amend-command/withdraw controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. resume --acknowledge-failure also starts an owner for a failed checkpoint. acknowledge transitions an executing or failed checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly.
 
 Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-control.md)
 
@@ -1313,7 +1313,7 @@ Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-con
         "action": "acknowledge",
         "run": "/tmp/example-run"
       },
-      "explanation": "Acknowledge an executing checkpoint whose owner died: moves pending delivery markers and mismatched outputs to set-aside, writes an SHA-bound acknowledgement so recovery accepts the executing checkpoint."
+      "explanation": "Acknowledge an executing or failed checkpoint whose owner died: moves pending delivery markers and mismatched outputs to set-aside, writes an SHA-bound acknowledgement so recovery accepts the checkpoint."
     },
     {
       "arguments": {
@@ -1481,7 +1481,7 @@ Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-con
       "type": "string"
     }
   },
-  "purpose": "Preview or queue boundary pause/resume/stop/rerun/acknowledge/amend-command/withdraw controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. acknowledge transitions an executing checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly.",
+  "purpose": "Preview or queue boundary pause/resume/stop/rerun/acknowledge/amend-command/withdraw controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. resume --acknowledge-failure also starts an owner for a failed checkpoint. acknowledge transitions an executing or failed checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly.",
   "reviewed_schema": "f6939effaa49d5d7309bd21577197ddd6583f8d8d3849bb0fc83d722370e976b"
 }
 ```

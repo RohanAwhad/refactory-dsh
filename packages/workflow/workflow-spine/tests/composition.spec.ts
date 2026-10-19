@@ -173,6 +173,7 @@ describe('the cursor status a run leaves behind', () => {
   it('records the failed node\'s own stderr, not only its exit code', async () => {
     // "exit code 4" sends a reader back to re-run the node to find out why; the
     // stderr is the reason, and the run directory is where a reader looks.
+    // dm-95: a node failure writes status ready with last_failure, not failed.
     const workdir = scratch()
     const { ctx } = await mount({
       workdir,
@@ -186,12 +187,13 @@ describe('the cursor status a run leaves behind', () => {
     })
     ctx.provide('shell', shell(() => ({ exitCode: 4, stderr: 'broken on purpose\n' })))
     await expect(call(ctx, 'wf_next')).resolves.toMatchObject({ status: 'failed', exit_code: 4 })
-    const recorded = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8')) as { status: string; error: string }
-    expect(recorded.status).toBe('failed')
-    expect(recorded.error).toContain('broken on purpose')
+    const recorded = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8')) as { status: string; last_failure?: { node: string; error: string } }
+    expect(recorded.status).toBe('ready')
+    expect(recorded.last_failure).toMatchObject({ node: 'run', error: expect.stringContaining('broken on purpose') })
   })
 
   it('records the exit code alone when a failed node said nothing', async () => {
+    // dm-95: a node failure writes status ready with last_failure, not failed.
     const workdir = scratch()
     const { ctx } = await mount({
       workdir,
@@ -205,8 +207,36 @@ describe('the cursor status a run leaves behind', () => {
     })
     ctx.provide('shell', shell(() => ({ exitCode: 4 })))
     await expect(call(ctx, 'wf_next')).resolves.toMatchObject({ status: 'failed' })
-    const recorded = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8')) as { error: string }
-    expect(recorded.error).toBe('run exited with code 4')
+    const recorded = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8')) as { status: string; last_failure?: { node: string; error: string } }
+    expect(recorded.status).toBe('ready')
+    expect(recorded.last_failure).toMatchObject({ node: 'run', error: 'run exited with code 4' })
+  })
+
+  it('a node failure writes ready with last_failure and an ISO timestamp, not run-level failed', async () => {
+    // dm-95: the combination status=ready AND last_failure present is produced by
+    // real spine code, and both spine-status.json and spine-checkpoint.json agree.
+    const workdir = scratch()
+    const { ctx } = await mount({
+      workdir,
+      executeCommands: true,
+      graph: {
+        name: 't',
+        start_node: 'run',
+        nodes: { run: { _type: 'FnNode', id: 'run', command: 'run-it', reads: [], writes: [] } },
+        edges: [],
+      },
+    })
+    ctx.provide('shell', shell(() => ({ exitCode: 1, stderr: 'something broke' })))
+    const result = await call(ctx, 'wf_next') as { status: string }
+    expect(result.status).toBe('failed')
+    const statusRecord = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8'))
+    expect(statusRecord.status).toBe('ready')
+    expect(statusRecord.last_failure).toBeDefined()
+    expect(statusRecord.last_failure.node).toBe('run')
+    expect(statusRecord.last_failure.error).toContain('something broke')
+    expect(statusRecord.last_failure.at).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+    const checkpoint = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'), 'utf8'))
+    expect(checkpoint.status).toBe('ready')
   })
 
   it('refuses dispatch when the recovery checkpoint cannot be written', async () => {
