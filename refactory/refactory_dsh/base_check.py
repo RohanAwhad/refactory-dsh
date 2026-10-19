@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from refactory_dsh import sandbox, worktree
-from refactory_dsh.worktree import _json as _read_json, NO_HOOKS
+from refactory_dsh.worktree import _json as _read_json, NO_HOOKS, _isolate_hooks
 
 # ── parse test failures ──────────────────────────────────────────────────
 
@@ -361,6 +361,8 @@ def _ensure_base_worktree(ctx: Any) -> tuple[Path, worktree.Worktree]:
             raise ValueError(
                 f"could not create base worktree for {found.base}: {exc}"
             ) from exc
+
+    _isolate_hooks(target, base_path)
 
     # Build a Worktree descriptor for the base; use a synthetic branch name so
     # ensure_environment's record path does not collide with the run's own.

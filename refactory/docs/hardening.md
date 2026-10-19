@@ -518,7 +518,7 @@ worktree of the repository, so the person's checkout changed before anything was
 approved. The target guard held only `emit` to its declared output; the run
 reported the change only at materialise, 45 minutes later.
 
-**The three-part fix.**
+**The four-part fix.**
 
 1. **Suppress hook managers.** `HOOK_SUPPRESS` in `worktree.py` sets
    `LEFTHOOK=0` and `HUSKY=0` in every environment a run uses: `_install_env`,
@@ -535,6 +535,12 @@ reported the change only at materialise, 45 minutes later.
    with `OUTPUT_ONLY = ("emit",)` at `target_guard.record`. The watch/strayed
    bracket that catches emit editing the target now catches a planning step
    doing so. `OUTPUT_ONLY` stays `("emit",)` — design's steps are design's own.
+4. **Per-worktree hook isolation.** Every worktree refactory creates gets its own
+   hooks path via `extensions.worktreeConfig` and a per-worktree `core.hooksPath`
+   pointing to an isolated directory inside the worktree's git dir. A hook manager
+   that runs inside the worktree (via `git rev-parse --git-path hooks`) writes into
+   this isolated directory, not the shared `.git/hooks/`. This closes the gap where
+   a hook manager that ignores its suppress variable still rewrites the shared hooks.
 
 **Held by.**
 
@@ -546,11 +552,24 @@ reported the change only at materialise, 45 minutes later.
   changes the target is refused.
 - `test_design_worktree.py`: end-to-end — a planning step that changes shared
   hooks fails the design run.
+- `test_worktree.py`: `test_worktree_gets_isolated_hooks_path_and_hook_manager_leaves_target_unchanged`,
+  `test_hook_isolation_skipped_when_target_has_core_bare`,
+  `test_hook_isolation_skipped_when_target_has_core_worktree`,
+  `test_no_hooks_overrides_worktree_hooks_path`,
+  `test_config_lock_does_not_block_isolate_hooks_when_extension_already_set`.
+- `repo_guard.py` (pytest) and `vitest.global-setup.ts` (vitest): session-level
+  guards that fail the test suite when any test changes the repository's hooks,
+  config, or worktree list (attributed to the session). Session-wide
+  `REFACTORY_HOME` prevents subprocesses from writing worktrees into the real
+  refactory home.
 
-**Known limit.** The hook suppression relies on each hook manager honouring its
-own disable variable. A hook manager that ignores `LEFTHOOK=0` or `HUSKY=0`
-would still install hooks. The per-step `shared_changed` check catches that
-case and names the step.
+**Known limit.** A hook manager that writes `core.hooksPath` itself, as husky
+does with `git config core.hooksPath .husky/_`, writes the common config even
+with isolation on. `HOOK_SUPPRESS` (`HUSKY=0`) stops husky, and `shared_changed`
+reports any such change. Hook isolation cannot be enabled when the target's
+common config sets `core.bare=true` or `core.worktree`; for such targets the run
+falls back to `HOOK_SUPPRESS` and `shared_changed`, and emits a warning naming
+the reason.
 
 ---
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -918,3 +919,386 @@ def test_identity_outside_a_worktree_still_counts_every_file(tmp_path):
     (tmp_path / "pkg" / "lib").mkdir()
     (tmp_path / "pkg" / "lib" / "built.js").write_text("built\n")
     assert list(authoring_evidence.source_files(tmp_path / "pkg")) == ["lib/built.js"]
+
+
+# ── per-worktree hook isolation (#dm-96) ───────────────────────────────────
+
+
+@pytest.mark.toolchain("lefthook")
+def test_worktree_gets_isolated_hooks_path_and_hook_manager_leaves_target_unchanged(repo, tmp_path):
+    """A worktree refactory creates has its own hooks path; lefthook writes there, not to shared hooks."""
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    lefthook = repo_root / "node_modules" / ".bin" / "lefthook"
+    if not lefthook.is_file():
+        pytest.skip("lefthook not found at node_modules/.bin/lefthook")
+
+    # Commit lefthook.yml so the worktree sees it.
+    (repo / "lefthook.yml").write_text("pre-commit:\n  commands:\n    echo:\n      run: echo ok\n")
+    git(repo, "add", "lefthook.yml")
+    git(repo, "commit", "-q", "-m", "add lefthook config")
+
+    from refactory_dsh.worktree import _shared_snapshot
+    before = _shared_snapshot(repo)
+
+    found = worktree.create(repo, "HEAD", "hook_iso_001", _run(tmp_path))
+    wt_path = Path(found.path)
+
+    # The worktree has its own hooks path inside its git dir.
+    wt_git_dir = Path(git(wt_path, "rev-parse", "--absolute-git-dir"))
+    hooks_isolated = wt_git_dir / "hooks.isolated"
+    assert hooks_isolated.is_dir()
+    assert git(wt_path, "config", "--worktree", "core.hooksPath") == str(hooks_isolated)
+
+    # git rev-parse --git-path hooks respects core.hooksPath.
+    hooks_resolved = Path(git(wt_path, "rev-parse", "--git-path", "hooks"))
+    if not hooks_resolved.is_absolute():
+        hooks_resolved = wt_path / hooks_resolved
+    assert hooks_resolved.resolve() == hooks_isolated.resolve()
+
+    # Real lefthook writes into the isolated directory, not the shared hooks.
+    result = subprocess.run(
+        [str(lefthook), "install"], cwd=str(wt_path),
+        capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, f"lefthook install failed: {result.stderr}"
+    assert (hooks_isolated / "pre-commit").is_file(), "lefthook should write to hooks.isolated"
+
+    # Target's shared state is unchanged (after exclusions).
+    after = _shared_snapshot(repo)
+    assert before["hook_files"] == after["hook_files"], "target hooks should be unchanged"
+    assert before["config_lines"] == after["config_lines"], "target config lines should be unchanged"
+
+    # shared_changed returns False because only excluded lines differ.
+    assert worktree.shared_changed(found) is False
+
+    # But a real change to shared hooks is still detected.
+    common = Path(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+    (common / "hooks").mkdir(exist_ok=True)
+    (common / "hooks" / "pre-push").write_text("#!/bin/sh\n")
+    assert worktree.shared_changed(found) is True
+
+
+def test_standin_hook_manager_writes_to_isolated_hooks(repo, tmp_path):
+    """A tool that uses git rev-parse --git-path hooks writes to the isolated dir, not shared hooks."""
+    found = worktree.create(repo, "HEAD", "hook_iso_002", _run(tmp_path))
+    wt_path = Path(found.path)
+
+    # Stand-in hook manager: resolves the hooks dir the way lefthook does.
+    hooks_dir = Path(git(wt_path, "rev-parse", "--git-path", "hooks"))
+    if not hooks_dir.is_absolute():
+        hooks_dir = wt_path / hooks_dir
+    hook_path = hooks_dir / "pre-commit"
+    hook_path.parent.mkdir(parents=True, exist_ok=True)
+    hook_path.write_text("#!/bin/sh\necho standin\n")
+
+    # The hook was written to the isolated dir, not the shared hooks.
+    wt_git_dir = Path(git(wt_path, "rev-parse", "--absolute-git-dir"))
+    assert hook_path.resolve().is_relative_to((wt_git_dir / "hooks.isolated").resolve())
+
+    from refactory_dsh.worktree import _shared_snapshot
+    snapshot = _shared_snapshot(repo)
+    assert "pre-commit" not in snapshot["hook_files"], "shared hooks must not have pre-commit"
+
+
+def test_hook_isolation_skipped_when_target_has_core_bare(repo, tmp_path, capsys):
+    """A target with core.bare=true is not changed; the run says why."""
+    git(repo, "config", "core.bare", "true")
+    found = worktree.create(repo, "HEAD", "hook_bare_001", _run(tmp_path))
+
+    # extensions.worktreeConfig should NOT be set.
+    common = Path(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+    result = subprocess.run(
+        ["git", "config", "--file", str(common / "config"), "--get", "extensions.worktreeConfig"],
+        capture_output=True, text=True)
+    assert result.returncode != 0, "extensions.worktreeConfig should not be set"
+
+    captured = capsys.readouterr()
+    assert "core.bare" in captured.err
+
+
+def test_hook_isolation_skipped_when_target_has_core_worktree(repo, tmp_path, capsys):
+    """A target with core.worktree is not changed; the run says why."""
+    git(repo, "config", "core.worktree", str(repo))
+    found = worktree.create(repo, "HEAD", "hook_cwt_001", _run(tmp_path))
+
+    common = Path(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+    result = subprocess.run(
+        ["git", "config", "--file", str(common / "config"), "--get", "extensions.worktreeConfig"],
+        capture_output=True, text=True)
+    assert result.returncode != 0, "extensions.worktreeConfig should not be set"
+
+    captured = capsys.readouterr()
+    assert "core.worktree" in captured.err
+
+
+def test_no_hooks_overrides_worktree_hooks_path(repo, tmp_path):
+    """NO_HOOKS (-c core.hooksPath=/dev/null) overrides the worktree's core.hooksPath.
+
+    Uses a post-commit hook (not stopped by --no-verify) so NO_HOOKS is what blocks it.
+    """
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "hook_noh_001", run)
+    wt_path = Path(found.path)
+
+    wt_git_dir = Path(git(wt_path, "rev-parse", "--absolute-git-dir"))
+    hooks_dir = wt_git_dir / "hooks.isolated"
+
+    marker = tmp_path / "hook-ran"
+    hook = hooks_dir / "post-commit"
+    hook.write_text(f"#!/bin/sh\ntouch {marker}\n")
+    hook.chmod(0o755)
+
+    # commit_attempt uses NO_HOOKS: hook should NOT run.
+    worktree.commit_attempt(run, {Path("nohooks.txt"): "test\n"}, "no-hooks attempt")
+    assert not marker.exists(), "NO_HOOKS should prevent post-commit from running"
+
+    # Positive control: a plain git commit in the worktree runs the hook.
+    (wt_path / "control.txt").write_text("control\n")
+    git(wt_path, "add", "control.txt")
+    git(wt_path, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "control")
+    assert marker.exists(), "positive control: post-commit hook should have run"
+
+
+def test_config_lock_does_not_block_isolate_hooks_when_extension_already_set(repo, tmp_path):
+    """With the extension already on, _isolate_hooks succeeds despite a held config.lock."""
+    from refactory_dsh.worktree import _isolate_hooks
+
+    git(repo, "config", "extensions.worktreeConfig", "true")
+
+    wt_path = tmp_path / "lock-test-wt"
+    git(repo, "worktree", "add", str(wt_path), "HEAD")
+
+    common = Path(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+    lock = common / "config.lock"
+    lock.write_text("held by test\n")
+    try:
+        result = _isolate_hooks(repo, wt_path)
+        assert result is True, "_isolate_hooks should have succeeded"
+        hooks_path = git(wt_path, "config", "--worktree", "core.hooksPath")
+        assert "hooks.isolated" in hooks_path
+    finally:
+        lock.unlink(missing_ok=True)
+
+
+# ── session-level repository guard ────────────────────────────────────────
+
+
+def _guard_conftest(tests_dir: Path) -> str:
+    """A conftest.py that loads the real repo_guard module."""
+    return (
+        f"import sys\nsys.path.insert(0, {str(tests_dir)!r})\n"
+        "pytest_plugins = ('repo_guard',)\n"
+    )
+
+
+def test_session_guard_catches_worktree_in_tmp(tmp_path):
+    """The guard fails a session whose test adds a worktree under tmp_path (scenario a)."""
+    tests_dir = Path(__file__).resolve().parent
+    test_repo = tmp_path / "guarded-repo-a"
+    git_repo(test_repo)
+    (test_repo / "conftest.py").write_text(_guard_conftest(tests_dir))
+
+    (test_repo / "test_bad.py").write_text(
+        "import subprocess\nfrom pathlib import Path\n\n"
+        "def test_adds_worktree(tmp_path):\n"
+        f"    repo = Path({str(test_repo)!r})\n"
+        "    wt = tmp_path / 'bad-wt'\n"
+        "    subprocess.run(['git', '-C', str(repo), 'worktree', 'add',\n"
+        "                    str(wt), 'HEAD'], check=True, capture_output=True)\n"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-xvs", str(test_repo / "test_bad.py")],
+        capture_output=True, text=True, timeout=60, cwd=str(test_repo))
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0, f"guard should have failed:\n{combined}"
+    assert "worktree" in combined.lower()
+
+
+@pytest.mark.parametrize("variant", ["hook", "config"])
+def test_session_guard_catches_hook_or_config_change(tmp_path, variant):
+    """The guard fails when a test rewrites a hook (hook) or a config line (config) (scenario b)."""
+    tests_dir = Path(__file__).resolve().parent
+    test_repo = tmp_path / "guarded-repo-b"
+    git_repo(test_repo)
+    common = Path(git(test_repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+    (common / "hooks").mkdir(exist_ok=True)
+    (test_repo / "conftest.py").write_text(_guard_conftest(tests_dir))
+
+    if variant == "hook":
+        (test_repo / "test_bad.py").write_text(
+            "from pathlib import Path\n\n"
+            "def test_changes_hook():\n"
+            f"    hook = Path({str(common / 'hooks' / 'pre-commit')!r})\n"
+            "    hook.write_text('#!/bin/sh\\necho bad\\n')\n"
+        )
+    else:
+        (test_repo / "test_bad.py").write_text(
+            "import subprocess\n\n"
+            "def test_changes_config():\n"
+            f"    subprocess.run(['git', '-C', {str(test_repo)!r},\n"
+            "                     'config', 'user.name', 'BadActor'], check=True)\n"
+        )
+
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-xvs", str(test_repo / "test_bad.py")],
+        capture_output=True, text=True, timeout=60, cwd=str(test_repo))
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0, f"guard should have failed:\n{combined}"
+    if variant == "hook":
+        assert "hook" in combined.lower()
+    else:
+        assert "config" in combined.lower()
+
+
+def test_session_guard_catches_subprocess_worktree_in_refactory_home(tmp_path):
+    """The guard fails when a subprocess creates a worktree under the inherited REFACTORY_HOME (scenario c)."""
+    tests_dir = Path(__file__).resolve().parent
+    test_repo = tmp_path / "guarded-repo-c"
+    git_repo(test_repo)
+    (test_repo / "conftest.py").write_text(_guard_conftest(tests_dir))
+
+    script = tmp_path / "create_worktree.py"
+    script.write_text(
+        "import os, sys\nfrom pathlib import Path\n"
+        "from refactory_dsh import worktree\n"
+        f"repo = Path({str(test_repo)!r})\n"
+        "run_dir = Path(sys.argv[1])\n"
+        "run_dir.mkdir(parents=True, exist_ok=True)\n"
+        "worktree.create(repo, 'HEAD', 'sub_bad_01', run_dir)\n"
+    )
+
+    (test_repo / "test_bad.py").write_text(
+        "import subprocess, sys\nfrom pathlib import Path\n\n"
+        "def test_subprocess_creates_worktree(tmp_path):\n"
+        f"    subprocess.run([sys.executable, {str(script)!r},\n"
+        "                     str(tmp_path / 'run')], check=True)\n"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-xvs", str(test_repo / "test_bad.py")],
+        capture_output=True, text=True, timeout=60, cwd=str(test_repo))
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0, f"guard should have failed:\n{combined}"
+    assert "worktree" in combined.lower()
+
+
+def test_session_guard_reports_external_worktree_without_failing(tmp_path):
+    """The guard reports but does not fail when a worktree is added outside the session's temp space (scenario d)."""
+    tests_dir = Path(__file__).resolve().parent
+    test_repo = tmp_path / "guarded-repo-d"
+    git_repo(test_repo)
+    (test_repo / "conftest.py").write_text(_guard_conftest(tests_dir))
+
+    # This path is OUTSIDE the subprocess's temp space.
+    external_wt = tmp_path / "external-wt"
+
+    sub_tmpdir = tmp_path / "sub-tmp"
+    sub_tmpdir.mkdir()
+
+    (test_repo / "test_external.py").write_text(
+        "import subprocess\nfrom pathlib import Path\n\n"
+        "def test_adds_external_worktree():\n"
+        f"    repo = Path({str(test_repo)!r})\n"
+        f"    wt = Path({str(external_wt)!r})\n"
+        "    subprocess.run(['git', '-C', str(repo), 'worktree', 'add',\n"
+        "                    str(wt), 'HEAD'], check=True, capture_output=True)\n"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-xvs", str(test_repo / "test_external.py")],
+        capture_output=True, text=True, timeout=60, cwd=str(test_repo),
+        env={**os.environ, "TMPDIR": str(sub_tmpdir)})
+    combined = result.stdout + result.stderr
+    assert result.returncode == 0, f"guard should have passed:\n{combined}"
+    assert str(external_wt) in combined, f"should report the external worktree path:\n{combined}"
+
+
+@pytest.mark.toolchain("node")
+def test_vitest_guard_catches_mismatch(tmp_path):
+    """The vitest globalSetup fails a vitest run that changes the repository's hooks.
+
+    Vitest 4 honours a thrown error in globalSetup teardown: it logs the error and
+    exits non-zero. process.exitCode = 1 is set as belt-and-suspenders.
+    """
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    vitest_bin = repo_root / "node_modules" / ".bin" / "vitest"
+    python_bin = repo_root / ".venv" / "bin" / "python"
+    guard_py = Path(__file__).resolve().parent / "repo_guard.py"
+
+    if not vitest_bin.is_file():
+        pytest.skip("vitest not found at node_modules/.bin/vitest")
+    if not python_bin.is_file():
+        pytest.skip(".venv/bin/python not found")
+
+    test_repo = tmp_path / "vitest-guarded"
+    git_repo(test_repo)
+    common = Path(git(test_repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+    (common / "hooks").mkdir(exist_ok=True)
+
+    # Symlink node_modules so vitest can resolve its dependencies.
+    (tmp_path / "node_modules").symlink_to(repo_root / "node_modules")
+
+    setup_mjs = tmp_path / "guard-setup.mjs"
+    setup_mjs.write_text(
+        "import { spawnSync } from 'node:child_process'\n"
+        "import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'\n"
+        "import { tmpdir } from 'node:os'\n"
+        "import { resolve } from 'node:path'\n"
+        f"const python = {json.dumps(str(python_bin))}\n"
+        f"const guard = {json.dumps(str(guard_py))}\n"
+        f"const repo = {json.dumps(str(test_repo))}\n"
+        "let snapshotFile, guardHome\n"
+        "export function setup() {\n"
+        "  guardHome = mkdtempSync(resolve(tmpdir(), 'vt-guard-'))\n"
+        "  process.env.REFACTORY_HOME = resolve(guardHome, 'home')\n"
+        "  process.env.REFACTORY_PROJECTS_DIR = resolve(guardHome, 'projects')\n"
+        "  const r = spawnSync(python, [guard, 'snapshot', repo], "
+        "{encoding:'utf-8',timeout:30000})\n"
+        "  if (r.status !== 0) { console.warn('snapshot failed:', r.stderr); return }\n"
+        "  snapshotFile = resolve(guardHome, 'snapshot.json')\n"
+        "  writeFileSync(snapshotFile, r.stdout)\n"
+        "}\n"
+        "export function teardown() {\n"
+        "  if (!snapshotFile) return\n"
+        "  const r = spawnSync(python, [guard, 'compare', repo, snapshotFile,\n"
+        "    '--temp-root', tmpdir(), '--refactory-home', "
+        "resolve(guardHome, 'home')],\n"
+        "    {encoding:'utf-8',timeout:30000})\n"
+        "  try { rmSync(guardHome, {recursive:true,force:true}) } catch {}\n"
+        "  if (r.status !== 0) {\n"
+        "    process.exitCode = 1\n"
+        "    throw new Error('[repo-guard] ' + (r.stderr || 'repository changed'))\n"
+        "  }\n"
+        "}\n"
+    )
+
+    vitest_cfg = tmp_path / "vitest.config.mjs"
+    vitest_cfg.write_text(
+        "import { defineConfig } from 'vitest/config'\n"
+        "export default defineConfig({\n"
+        "  test: {\n"
+        "    include: ['**/*.spec.mjs'],\n"
+        f"    globalSetup: [{json.dumps(str(setup_mjs))}],\n"
+        "  },\n"
+        "})\n"
+    )
+
+    bad_spec = tmp_path / "bad.spec.mjs"
+    bad_spec.write_text(
+        "import { writeFileSync } from 'node:fs'\n"
+        "import { test, expect } from 'vitest'\n"
+        f"test('changes hooks', () => {{\n"
+        f"  writeFileSync({json.dumps(str(common / 'hooks' / 'pre-commit'))}, "
+        "'#!/bin/sh\\necho bad\\n')\n"
+        "  expect(true).toBe(true)\n"
+        "})\n"
+    )
+
+    result = subprocess.run(
+        [str(vitest_bin), "run", "--config", str(vitest_cfg)],
+        capture_output=True, text=True, timeout=60, cwd=str(tmp_path))
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0, (
+        f"vitest should have exited non-zero:\n{combined}")
+    assert "repo-guard" in combined.lower(), (
+        f"output should mention repo-guard:\n{combined}")
