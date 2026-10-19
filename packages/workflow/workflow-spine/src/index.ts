@@ -1240,7 +1240,7 @@ export function apply(ctx: Context, config: Config): void {
       recordStatus(spine, workdir,
         spine.isHalted() ? 'halted' : spine.isPaused() ? 'paused' : 'ready',
         undefined,
-        { node: failure.command, error: failDetail })
+        { node: failure.nodeId, error: failDetail })
       return json({
         status: 'failed',
         node: failure.command,
