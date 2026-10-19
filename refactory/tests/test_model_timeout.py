@@ -269,13 +269,13 @@ def test_all_agent_nodes_get_command_timeout_s(tmp_path, monkeypatch):
     would fall back to commandTimeoutMs. Regression guard.
     """
     monkeypatch.setenv("REFACTORY_WORKER_CONTEXT", "{}")
-    from refactory_dsh.ir import AgentNode, Workflow, GateNode
+    from refactory_dsh.ir import AgentNode, AgentRole, Workflow, GateNode
     from refactory_dsh.model import DshModelClient, NODE_DISPATCH_OVERHEAD_S
     from refactory_dsh.workers import lower_workflow
 
     # Build a minimal workflow with one agent node
-    agent = AgentNode(id="draft", prompt_template="write something", reads=[], writes=[])
-    workflow = Workflow(nodes={"draft": agent}, edges=[])
+    agent = AgentNode(id="draft", prompt_template="write something", role=AgentRole.BUILDER)
+    workflow = Workflow(name="test", nodes={"draft": agent}, edges=[], start_node="draft")
 
     client = DshModelClient(timeout_s=2000)
     ctx = client.context()
