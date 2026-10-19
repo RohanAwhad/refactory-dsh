@@ -1291,7 +1291,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 
 ## graph-control
 
-Preview or queue boundary pause/resume/stop/rerun controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected.
+Preview or queue boundary pause/resume/stop/rerun/acknowledge/amend-command/withdraw controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. acknowledge transitions an executing checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly.
 
 Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-control.md)
 
@@ -1307,6 +1307,30 @@ Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-con
         "run": "/tmp/example-run"
       },
       "explanation": "Preview or queue boundary pause/resume/stop/rerun controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected."
+    },
+    {
+      "arguments": {
+        "action": "acknowledge",
+        "run": "/tmp/example-run"
+      },
+      "explanation": "Acknowledge an executing checkpoint whose owner died: moves pending delivery markers and mismatched outputs to set-aside, writes an SHA-bound acknowledgement so recovery accepts the executing checkpoint."
+    },
+    {
+      "arguments": {
+        "action": "amend-command",
+        "check": "pnpm test && python -m pytest -q tests",
+        "note": "added pytest to the check",
+        "run": "/tmp/example-run"
+      },
+      "explanation": "Correct a run's check (or --setup / --generate) command: records the change in facts.json command_history, queues a rerun control with commandCorrection semantics so the spine accepts a due node."
+    },
+    {
+      "arguments": {
+        "action": "withdraw",
+        "node": "control-id-to-remove",
+        "run": "/tmp/example-run"
+      },
+      "explanation": "Remove a queued control that was never applied, so it does not affect the next owner. Refuses if the control has already been applied."
     }
   ],
   "interfaces": {
@@ -1334,7 +1358,10 @@ Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-con
         "resume",
         "stop",
         "preview",
-        "rerun"
+        "rerun",
+        "acknowledge",
+        "amend-command",
+        "withdraw"
       ],
       "flags": [],
       "nargs": null,
@@ -1343,11 +1370,44 @@ Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-con
       "required": true,
       "type": "string"
     },
+    "check": {
+      "default": "",
+      "description": "new check command (amend-command)",
+      "flags": [
+        "--check"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "string"
+    },
+    "generate": {
+      "default": "",
+      "description": "new generate command (amend-command)",
+      "flags": [
+        "--generate"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "string"
+    },
     "node": {
       "default": "",
       "description": "",
       "flags": [
         "--node"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "string"
+    },
+    "note": {
+      "default": "",
+      "description": "why the command was changed (amend-command)",
+      "flags": [
+        "--note"
       ],
       "nargs": null,
       "positional": false,
@@ -1398,6 +1458,17 @@ Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-con
       "required": false,
       "type": "string"
     },
+    "setup": {
+      "default": "",
+      "description": "new setup command (amend-command)",
+      "flags": [
+        "--setup"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "string"
+    },
     "text": {
       "default": "",
       "description": "",
@@ -1410,8 +1481,8 @@ Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-con
       "type": "string"
     }
   },
-  "purpose": "Preview or queue boundary pause/resume/stop/rerun controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected.",
-  "reviewed_schema": "5ddc5ba8edfa2aef1a5adccb09e138505d1a64e4b73c8ba47813b36b275618e0"
+  "purpose": "Preview or queue boundary pause/resume/stop/rerun/acknowledge/amend-command/withdraw controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. acknowledge transitions an executing checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly.",
+  "reviewed_schema": "f6939effaa49d5d7309bd21577197ddd6583f8d8d3849bb0fc83d722370e976b"
 }
 ```
 

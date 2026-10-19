@@ -124,6 +124,10 @@ def prepare(root: Path, name: str, *, resource_limits: dict[str, Any] | None = N
     request_data: dict[str, Any] = {'checkpoint_sha256': hashlib.sha256(payload).hexdigest()}
     if acknowledge_failed:
         request_data['acknowledge_failed'] = True
+    # Carry the acknowledge_executing flag through so the spine's
+    # restoreRequested() also accepts the executing checkpoint.
+    if saved.get('status') == 'executing':
+        request_data['acknowledge_executing'] = True
     temporary.write_text(json.dumps(request_data))
     temporary.replace(request)
     return root / 'graphs'
