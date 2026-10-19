@@ -256,12 +256,24 @@ def run(
     # Pre-flight: both checks raise on failure before ownership() creates
     # the run directory, so a refused start leaves nothing behind.
     require_build()
-    # Pin the machinery before any profile check, then re-exec if needed.
-    pinned = _pin.ensure_pinned(REPO_ROOT)
-    _pin.reexec_if_needed(pinned)
-    # After re-exec (or if already pinned), check profiles against pinned DSH_HOME.
+    if resume:
+        # Resume uses the run's ORIGINAL pinned checkout so the resumed owner
+        # executes the same code the run was launched with, even after the
+        # driver moves to a newer commit.
+        pinned = _pin.read_pinned(workdir)
+        if pinned:
+            _pin.reexec_if_needed(pinned)
+    else:
+        # New run: pin the current driver state and re-exec if needed.
+        pinned = _pin.ensure_pinned(REPO_ROOT)
+        _pin.reexec_if_needed(pinned)
+    # After re-exec (or if already pinned), check profiles.
     from refactory_dsh import dsh_profile
-    dsh_profile.require(home=str(pinned.dsh_home))
+    if pinned:
+        dsh_profile.require(home=str(pinned.dsh_home))
+    else:
+        # Pre-pinning run being resumed; fall back to the machine's profile.
+        dsh_profile.require()
     with ownership(workdir) as owner:
         if resume:
             if source or source_format not in ('', 'directory') or approve or knobs or intent or model_context or provider or model or bool(worker_backend) or effort or permission_mode or role_routes or node_routes:

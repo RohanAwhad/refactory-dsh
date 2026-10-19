@@ -135,6 +135,10 @@ def _refactory_home(override: Path | None = None) -> Path:
 
 
 _READY_MARKER = ".pin-ready"
+# Bumped when the preparation logic changes in a way that invalidates
+# previously-prepared checkouts (e.g. the rename-after-uv-sync fix).
+# Old markers with a different or missing version trigger re-preparation.
+_READY_VERSION = "2"
 
 
 def _prepare_worktree(
@@ -143,19 +147,27 @@ def _prepare_worktree(
     pinned_dir: Path,
     dirty: bool,
 ) -> tuple[float, int]:
-    """Create the pinned worktree and prepare it. Returns (seconds, disk_bytes)."""
+    """Create the pinned worktree and prepare it. Returns (seconds, disk_bytes).
+
+    The worktree is created directly at its final location (``checkout/``)
+    rather than a temporary name, because ``uv sync`` records the checkout
+    path in the editable-install finder module.  Renaming the directory
+    afterwards would leave the finder with stale paths and every ``import
+    refactory_dsh`` under the pinned interpreter would fail with
+    ``ModuleNotFoundError``.  The per-key lock in ``ensure_pinned`` and the
+    ``.pin-ready`` marker provide the atomicity guarantee instead.
+    """
     start = time.monotonic()
     checkout_dest = pinned_dir / "checkout"
-    tmp_checkout = pinned_dir / "checkout.preparing"
 
     # Create temporary ref for the worktree
     ref_name = f"refs/refactory/pin/{key}"
-    _git(["update-ref", ref_name, key], cwd=checkout_root).check_returncode
+    _git(["update-ref", ref_name, key], cwd=checkout_root).check_returncode()
 
     try:
-        # Create worktree
+        # Create worktree directly at final location
         result = _git(
-            ["worktree", "add", "--detach", str(tmp_checkout), key],
+            ["worktree", "add", "--detach", str(checkout_dest), key],
             cwd=checkout_root,
         )
         if result.returncode != 0:
@@ -164,26 +176,23 @@ def _prepare_worktree(
         # If dirty, we need to apply the dirty state
         if dirty:
             # Reset to the synthetic commit's tree
-            _git(["checkout", "--force", key], cwd=tmp_checkout)
+            _git(["checkout", "--force", key], cwd=checkout_dest)
 
         # Prepare the venv
-        _prepare_venv(tmp_checkout)
+        _prepare_venv(checkout_dest)
 
         # Prepare node_modules and build
-        _prepare_node(tmp_checkout)
+        _prepare_node(checkout_dest)
 
         # Provision DSH profiles
         dsh_home_dir = pinned_dir / "dsh_home"
-        _provision_profiles(tmp_checkout, dsh_home_dir)
+        _provision_profiles(checkout_dest, dsh_home_dir)
 
         # Link credentials
         _link_credentials(dsh_home_dir)
 
-        # Move to final location
-        tmp_checkout.rename(checkout_dest)
-
         # Write ready marker
-        (pinned_dir / _READY_MARKER).write_text("")
+        (pinned_dir / _READY_MARKER).write_text(_READY_VERSION)
     finally:
         # Delete temporary ref
         _git(["update-ref", "-d", ref_name], cwd=checkout_root)
@@ -341,21 +350,20 @@ def ensure_pinned(
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
         ready_marker = pinned_dir / _READY_MARKER
-        if not ready_marker.exists():
-            # Clean up any failed previous preparation
+        _marker_valid = (
+            ready_marker.exists()
+            and ready_marker.read_text().strip() == _READY_VERSION
+        )
+        if not _marker_valid:
+            # Clean up any failed or outdated previous preparation
+            if ready_marker.exists():
+                ready_marker.unlink(missing_ok=True)
             if checkout_dest.exists():
                 try:
                     _git(["worktree", "remove", "--force", str(checkout_dest)],
                          cwd=checkout_root)
                 except Exception:
                     shutil.rmtree(checkout_dest, ignore_errors=True)
-            prep_dir = pinned_dir / "checkout.preparing"
-            if prep_dir.exists():
-                try:
-                    _git(["worktree", "remove", "--force", str(prep_dir)],
-                         cwd=checkout_root)
-                except Exception:
-                    shutil.rmtree(prep_dir, ignore_errors=True)
 
             elapsed, disk_bytes = _prepare_worktree(key, checkout_root, pinned_dir, dirty)
 
