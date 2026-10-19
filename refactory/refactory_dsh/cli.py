@@ -104,6 +104,8 @@ def _run_argv(identifier: str, args: argparse.Namespace) -> list[str]:
         forwarded += ["--provider", str(args.provider)]
     if args.model:
         forwarded += ["--model", str(args.model)]
+    if getattr(args, 'model_timeout_s', None) is not None:
+        forwarded += ["--model-timeout", str(args.model_timeout_s)]
     for key in ("worker_backend", "effort", "permission_mode", "max_elapsed_s", "max_tokens", "validation_reserve_s", "validation_reserve_tokens"):
         value = getattr(args, key, None)
         if value is not None and value != "":
@@ -184,6 +186,13 @@ def cmd_ceo(args: argparse.Namespace) -> int:
     if args.review_comments and not args.refine:
         print("refactory: --review-comments goes with --refine: they are the pull request's comments",
               file=sys.stderr)
+        return 2
+    model_timeout_s = getattr(args, 'model_timeout_s', None)
+    if model_timeout_s is not None and not (1 <= model_timeout_s <= 7200):
+        print(
+            f"refactory: --model-timeout must be between 1 and 7200 seconds, got {model_timeout_s}",
+            file=sys.stderr,
+        )
         return 2
     runs_a_mode = "/" in mode if mode else _names_a_mode(target)
     # A named mode takes them as its knobs; one that does not declare them refuses them by name.
@@ -296,6 +305,8 @@ def cmd_ceo(args: argparse.Namespace) -> int:
     # with nobody sitting there, and it is an explicit act rather than a default.
     for pair in args.verdict:
         forwarded += ["--approve", pair]
+    if getattr(args, 'model_timeout_s', None) is not None:
+        forwarded += ["--model-timeout", str(args.model_timeout_s)]
     for key in ("worker_backend", "effort", "permission_mode", "max_elapsed_s", "max_tokens", "validation_reserve_s", "validation_reserve_tokens"):
         value = getattr(args, key, None)
         if value is not None and value != "":
@@ -573,6 +584,11 @@ def build_parser() -> argparse.ArgumentParser:
                           "run's steering")
     for key in ("worker_backend", "effort", "permission_mode"):
         ceo.add_argument("--" + key.replace("_", "-"), default="")
+    ceo.add_argument(
+        "--model-timeout", type=int, default=None, dest="model_timeout_s",
+        help="seconds one model completion may take before it is called hung "
+             "(default: 1800); sets the per-completion limit for every agent step",
+    )
     for key in ("max_elapsed_s", "max_tokens", "validation_reserve_s", "validation_reserve_tokens"):
         ceo.add_argument("--" + key.replace("_", "-"), type=int if "tokens" in key else float, default=None)
     ceo.add_argument(
