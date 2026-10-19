@@ -693,8 +693,8 @@ def test_installs_run_once_per_manifest_content_and_again_when_it_changes(repo, 
     _python_project(repo)
     run = _run(tmp_path)
     found = worktree.create(repo, "HEAD", "5555eeee4444", run)
-    assert worktree.ensure_environment(found, run) == (found, [])
-    assert worktree.ensure_environment(found, run) == (found, [])
+    assert worktree.ensure_environment(found, run) == (found, [], None)
+    assert worktree.ensure_environment(found, run) == (found, [], None)
     assert (bin_dir / "calls.log").read_text().count("uv sync") == 1
     assert (Path(found.path) / ".venv" / worktree.MARKER).exists()
     (Path(found.path) / "pyproject.toml").write_text("[project]\nname = 'y'\n")
@@ -755,7 +755,7 @@ def test_a_lockfile_an_install_writes_is_amended_into_the_attempt(repo, tmp_path
     run = _run(tmp_path)
     found = worktree.create(repo, "HEAD", "4444ffff5555", run)
     attempt = worktree.commit_attempt(run, {Path("package.json"): "{}\n"}, "attempt 1")
-    amended, problems = worktree.ensure_environment(attempt, run)
+    amended, problems, _pf = worktree.ensure_environment(attempt, run)
     assert problems == [] and amended.head != attempt.head
     assert worktree.recorded(run) == amended
     assert git(Path(found.path), "rev-list", "--count", f"{found.base}..HEAD") == "1", "one commit per attempt"
@@ -772,7 +772,7 @@ def test_a_lockfile_written_before_any_attempt_never_rewrites_the_base(repo, tmp
     git(repo, "commit", "-q", "-m", "js")
     run = _run(tmp_path)
     found = worktree.create(repo, "HEAD", "4646ffff5555", run)
-    amended, _problems = worktree.ensure_environment(found, run)
+    amended, _problems, _pf = worktree.ensure_environment(found, run)
     assert git(Path(found.path), "rev-parse", f"{amended.head}^") == found.base == git(repo, "rev-parse", "main")
 
 
@@ -905,8 +905,11 @@ def test_signal_killed_install_propagates_signal_name(repo, tmp_path, monkeypatc
         )
 
     monkeypatch.setattr(sandbox, "run_command", fake_run_command)
-    _, problems = worktree.ensure_environment(found, run)
+    _, problems, prep_fail = worktree.ensure_environment(found, run)
     assert any("killed by SIGABRT" in p for p in problems)
+    assert prep_fail is not None
+    assert prep_fail["returncode"] == -6
+    assert prep_fail["step"] == "uv sync --all-groups"
 
 
 def test_identity_outside_a_worktree_still_counts_every_file(tmp_path):
