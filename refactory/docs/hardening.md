@@ -757,16 +757,20 @@ Deterministic (non-crash) failures — a non-zero exit that repeats — are cach
 as before. The base is prepared at most twice per attempt, so the check node's
 time limit still holds.
 
-## 12. Convergence extra attempt (dm-109)
+## 12. Rolling convergence (dm-109)
 
-When the last allowed attempt strictly reduced the set of failing tests and none
-of the remaining failures is new to any prior attempt, one extra attempt is
-granted (bounded by the `convergence_extra_attempts` knob, default 1, never
-unbounded). The convergence check requires: (a) a non-empty current failure set;
-(b) a strict subset of the previous attempt's failure set; (c) every current
-failure existed in at least one prior attempt; (d) the runner completed fully
-(excusal_blocker returns None). An empty failure set is not progress. The extra
-attempt is recorded in the run and the PR's Verification section.
+After the regular check attempts are spent, another check attempt is granted each
+time the attempt's parsed failure set is non-empty, a strict subset of the previous
+attempt's set, contains no failure that was not in an earlier attempt, and the
+runner completed fully (excusal_blocker returns None).  The extension stops the
+first time the set does not strictly shrink.  Hard cap: at most 8 check attempts
+in total (counting the regular ones), controlled by the `check_attempt_cap` knob
+(default 8).  Setting it to 0 or to a value at or below the regular check
+attempts disables the extension.  An empty failure set is not progress.  The
+overall `attempts` cap does not refuse an attempt this rule granted: granted
+attempts are counted separately via `convergence_extras_used`.  The count of
+granted attempts and the failure count at each attempt are recorded in the run
+and the PR's Verification section.
 
 ## 13. Repair feedback augmentation (dm-109)
 

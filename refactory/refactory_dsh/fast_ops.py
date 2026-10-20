@@ -138,14 +138,18 @@ def _repair(ctx: Any, findings: list[str], *, kind: str = "check") -> str:
         ctx.set_fact("review_repairs_used", kind_used + 1)
 
     if used >= limit:
-        # R6: convergence check before raising — grant one extra attempt when
+        # R6: rolling convergence — grant another check attempt each time
         # the failure set is a non-empty strict subset of the previous one.
+        # Repeats at every attempt past the regular limit, up to
+        # check_attempt_cap total check attempts (counting regular ones).
         if kind == "check":
             from refactory_dsh import base_check as _bc
             history = list(ctx.facts.get("check_failures_history", []))
             extras_used = int(ctx.facts.get("convergence_extras_used", 0))
-            extras_limit = int(ctx.knob("convergence_extra_attempts", 1))
-            if extras_used < extras_limit and len(history) >= 2:
+            cap = int(ctx.knob("check_attempt_cap", 8))
+            kind_used = int(ctx.facts.get("check_repairs_used", 0))
+            # 0 or a value at or below the regular limit disables extension.
+            if cap > limit and kind_used < cap and len(history) >= 2:
                 current = set(history[-1])
                 previous = set(history[-2])
                 check_command = str(ctx.facts.get("check") or "").strip()
@@ -162,6 +166,12 @@ def _repair(ctx: Any, findings: list[str], *, kind: str = "check") -> str:
                     ctx.set_fact("repairs_used", used + 1)
                     ctx.write_json("fast-report.json", _report(ctx, "repairing", findings))
                     return Verdict("reloop", feedback)
+            if cap > limit and kind_used >= cap:
+                ctx.write_json("fast-report.json", _report(ctx, "unresolved", findings))
+                raise ValueError(
+                    f"check attempt cap ({cap}) reached after {kind_used} "
+                    f"repair(s) (check failure): {feedback}"
+                )
 
         ctx.write_json("fast-report.json", _report(ctx, "unresolved", findings))
         label = "check" if kind == "check" else "review"

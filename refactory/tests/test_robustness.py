@@ -518,7 +518,7 @@ def test_converging_run_gets_extra_attempt(tmp_path):
         ],
         "check_attempts_used": 2,
         "attempts_used": 2,
-    }, knobs={"check_attempts": 3, "attempts": 3, "convergence_extra_attempts": 1})
+    }, knobs={"check_attempts": 3, "attempts": 3, "check_attempt_cap": 8})
 
     feedback = "FAILED tests/test_a.py::test_a\n= 1 failed in 0.5s ="
 
@@ -548,7 +548,7 @@ def test_non_converging_run_exhausts(tmp_path):
         ],
         "check_attempts_used": 2,
         "attempts_used": 2,
-    }, knobs={"check_attempts": 3, "attempts": 3, "convergence_extra_attempts": 1})
+    }, knobs={"check_attempts": 3, "attempts": 3, "check_attempt_cap": 8})
 
     feedback = "FAILED tests/test_a.py::test_a\nFAILED tests/test_b.py::test_b\nFAILED tests/test_c.py::test_c\n= 3 failed in 0.5s ="
     ctx.write_text("validation.txt", "")
@@ -571,9 +571,144 @@ def test_empty_failure_set_is_not_convergence(tmp_path):
         ],
         "check_attempts_used": 2,
         "attempts_used": 2,
-    }, knobs={"check_attempts": 3, "attempts": 3, "convergence_extra_attempts": 1})
+    }, knobs={"check_attempts": 3, "attempts": 3, "check_attempt_cap": 8})
 
     feedback = "everything crashed"
+    ctx.write_text("validation.txt", "")
+
+    with pytest.raises(ValueError, match="check attempts exhausted"):
+        repair(ctx, [feedback])
+
+
+def test_rolling_convergence_shrinks_across_many_attempts(tmp_path):
+    """Failures shrink 5→4→3→2→1 across attempts past the regular 3: every one
+    is granted, and the run passes on the next attempt (R6 rolling convergence).
+
+    Driven through repair() with progressive history updates.
+    """
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    all_tests = [f"tests/test_{c}.py::test_{c}" for c in "abcde"]
+    # Start with 3 regular attempts: 5 failures each time until the 3rd, then
+    # shrinking starts.  We simulate the history building up attempt by attempt.
+    # Regular attempt 1: 5 failures.  Regular attempt 2: 5 failures.
+    # Regular attempt 3 (kind_used=3, at limit): 4 failures → grant #1.
+    # Extra attempt 4 (kind_used=4): 3 failures → grant #2.
+    # Extra attempt 5 (kind_used=5): 2 failures → grant #3.
+    # Extra attempt 6 (kind_used=6): 1 failure → grant #4.
+    # Extra attempt 7 (kind_used=7): passes!  (no repair() call)
+    failure_counts = [5, 5, 4, 3, 2, 1]
+    history: list[list[str]] = []
+
+    for i, fc in enumerate(failure_counts):
+        ctx = _Ctx(run_dir, facts={
+            "check": "python -m pytest -q tests/",
+            "check_failures_history": list(history),
+            "check_attempts_used": i,
+            "attempts_used": i,
+            "convergence_extras_used": max(0, i - 2),
+            "convergence_granted": i > 2,
+        }, knobs={"check_attempts": 3, "attempts": 3, "check_attempt_cap": 8})
+        ctx.write_text("validation.txt", "")
+
+        failures = all_tests[:fc]
+        history.append(failures)
+        ctx.facts["check_failures_history"] = list(history)
+
+        feedback_lines = [f"FAILED {t}" for t in failures]
+        feedback_lines.append(f"= {fc} failed in 0.5s =")
+        feedback = "\n".join(feedback_lines)
+
+        result = repair(ctx, [feedback])
+        assert isinstance(result, Verdict), f"attempt {i+1} should be granted, got raise"
+        assert str(result) == "reloop"
+
+    # After all 6 calls, extras_used should be 4 (attempts 3-6 were granted).
+    assert ctx.facts.get("convergence_extras_used") == 4
+
+
+def test_rolling_convergence_stalls(tmp_path):
+    """Failures shrink and then stay the same: the run stops at the stall (R6).
+
+    Regular attempts: [5, 5, 4].  Extra attempt: [4] — same as previous, not a
+    strict subset.  repair() raises.
+    """
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    all_tests = [f"tests/test_{c}.py::test_{c}" for c in "abcde"]
+
+    ctx = _Ctx(run_dir, facts={
+        "check": "python -m pytest -q tests/",
+        "check_failures_history": [
+            all_tests[:5],       # attempt 1: 5
+            all_tests[:5],       # attempt 2: 5
+            all_tests[:4],       # attempt 3: 4 → granted
+            all_tests[:4],       # attempt 4: 4 — stalled
+        ],
+        "check_attempts_used": 3,
+        "attempts_used": 3,
+        "convergence_extras_used": 1,
+    }, knobs={"check_attempts": 3, "attempts": 3, "check_attempt_cap": 8})
+
+    feedback_lines = [f"FAILED {t}" for t in all_tests[:4]]
+    feedback_lines.append("= 4 failed in 0.5s =")
+    feedback = "\n".join(feedback_lines)
+    ctx.write_text("validation.txt", "")
+
+    with pytest.raises(ValueError, match="check attempts exhausted"):
+        repair(ctx, [feedback])
+
+
+def test_rolling_convergence_hits_cap(tmp_path):
+    """Failures keep shrinking past 8 attempts: the run stops at the cap of 8,
+    saying it reached the cap (R6).
+    """
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    # Build a history where failures shrink every attempt for 8 attempts.
+    # 10 test names so we can keep shrinking past 8.
+    all_tests = [f"tests/test_{i}.py::test_{i}" for i in range(10)]
+    history = [all_tests[:10-i] for i in range(8)]
+    # Now at attempt 8 (kind_used=8), cap=8, kind_used >= cap → cap error.
+
+    ctx = _Ctx(run_dir, facts={
+        "check": "python -m pytest -q tests/",
+        "check_failures_history": history,
+        "check_attempts_used": 7,
+        "attempts_used": 7,
+        "convergence_extras_used": 5,
+    }, knobs={"check_attempts": 3, "attempts": 3, "check_attempt_cap": 8})
+
+    feedback_lines = [f"FAILED {t}" for t in all_tests[:2]]
+    feedback_lines.append("= 2 failed in 0.5s =")
+    feedback = "\n".join(feedback_lines)
+    ctx.write_text("validation.txt", "")
+
+    with pytest.raises(ValueError, match="check attempt cap"):
+        repair(ctx, [feedback])
+
+
+def test_new_failure_is_never_granted(tmp_path):
+    """A new failure appearing is never granted, even if the set is smaller (R6)."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    ctx = _Ctx(run_dir, facts={
+        "check": "python -m pytest -q tests/",
+        "check_failures_history": [
+            ["tests/test_a.py::test_a", "tests/test_b.py::test_b",
+             "tests/test_c.py::test_c"],
+            # Shrunk to 1, but it's a NEW test not in any prior set.
+            ["tests/test_NEW.py::test_NEW"],
+        ],
+        "check_attempts_used": 2,
+        "attempts_used": 2,
+    }, knobs={"check_attempts": 3, "attempts": 3, "check_attempt_cap": 8})
+
+    feedback = "FAILED tests/test_NEW.py::test_NEW\n= 1 failed in 0.5s ="
     ctx.write_text("validation.txt", "")
 
     with pytest.raises(ValueError, match="check attempts exhausted"):
@@ -862,7 +997,7 @@ def test_fast_repair_convergence_grants_extra(tmp_path):
         ],
         "repairs_used": 1,
         "check_repairs_used": 1,
-    }, knobs={"repair_attempts": 1, "convergence_extra_attempts": 1})
+    }, knobs={"repair_attempts": 1, "check_attempt_cap": 8})
 
     feedback_parts = ["FAILED tests/test_a.py::test_a\n= 1 failed in 0.5s ="]
 
@@ -885,9 +1020,33 @@ def test_fast_repair_non_convergence_raises(tmp_path):
         ],
         "repairs_used": 1,
         "check_repairs_used": 1,
-    }, knobs={"repair_attempts": 1, "convergence_extra_attempts": 1})
+    }, knobs={"repair_attempts": 1, "check_attempt_cap": 8})
 
     feedback_parts = ["FAILED tests/test_a.py::test_a\nFAILED tests/test_b.py::test_b\n= 2 failed in 0.5s ="]
 
     with pytest.raises(ValueError, match="unresolved"):
         fast_repair(ctx, feedback_parts, kind="check")
+
+
+def test_fast_repair_rolling_convergence_hits_cap(tmp_path):
+    """fast_ops._repair stops at the check_attempt_cap (R6 rolling convergence)."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    all_tests = [f"tests/test_{i}.py::test_{i}" for i in range(10)]
+    history = [all_tests[:10-i] for i in range(8)]
+
+    ctx = _Ctx(run_dir, facts={
+        "check": "python -m pytest -q tests/",
+        "check_failures_history": history,
+        "repairs_used": 7,
+        "check_repairs_used": 8,
+        "convergence_extras_used": 5,
+    }, knobs={"repair_attempts": 3, "check_attempt_cap": 8})
+
+    feedback_lines = [f"FAILED {t}" for t in all_tests[:2]]
+    feedback_lines.append("= 2 failed in 0.5s =")
+    feedback = "\n".join(feedback_lines)
+
+    with pytest.raises(ValueError, match="check attempt cap"):
+        fast_repair(ctx, [feedback], kind="check")

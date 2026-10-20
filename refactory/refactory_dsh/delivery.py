@@ -1551,11 +1551,16 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
     base_note = ctx.facts.get('base_unavailable')
     if base_note:
         verification += f"\n- **Base comparison:** {base_note}"
-    # R6: note when a convergence extra attempt was granted.
-    conv_note = ctx.facts.get('convergence_granted')
-    if conv_note:
-        verification += ("\n- **Convergence:** an extra attempt was granted "
-                         "because the run was converging.")
+    # R6: note when convergence extra attempts were granted.
+    extras_count = int(ctx.facts.get('convergence_extras_used', 0))
+    if extras_count:
+        history = list(ctx.facts.get('check_failures_history', []))
+        # Show the failure count at each convergence-granted attempt.
+        counts = [str(len(h)) for h in history]
+        verification += (
+            f"\n- **Convergence:** {extras_count} extra attempt(s) granted "
+            f"because the run was converging (failure counts: {', '.join(counts)})."
+        )
     verification += _process_notes_section(ctx)
     sections.append(verification)
     sections.append(f"## Original request\n\n{brief}")
