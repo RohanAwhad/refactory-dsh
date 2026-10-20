@@ -1291,6 +1291,10 @@ def test_design_fast_base_double_crash_continues_with_note(tmp_path, monkeypatch
     stub_bin = tmp_path / "stub_bin"
     stub_bin.mkdir()
     uv_script = stub_bin / "uv"
+    # The stub must symlink the real Python into .venv/bin so that the
+    # check command ``python tool.py`` actually executes tool.py.  A
+    # fake shell script that just echoes text would make every check
+    # pass, and the base comparison would never be triggered.
     uv_script.write_text(
         f"#!/bin/sh\n"
         f'f="{counter_file}"\n'
@@ -1298,8 +1302,7 @@ def test_design_fast_base_double_crash_continues_with_note(tmp_path, monkeypatch
         f'n=$((n + 1)); echo $n > "$f"\n'
         f'if [ $n -ge 2 ] && [ $n -le 5 ]; then exit 134; fi\n'
         f'mkdir -p .venv/bin\n'
-        f"printf '#!/bin/sh\\necho stub-python\\n' > .venv/bin/python\n"
-        f'chmod +x .venv/bin/python\n'
+        f'ln -sf "{sys.executable}" .venv/bin/python\n'
     )
     uv_script.chmod(0o755)
     monkeypatch.setenv("PATH", f"{stub_bin}{os.pathsep}{os.environ['PATH']}")
