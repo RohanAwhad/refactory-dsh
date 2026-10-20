@@ -668,6 +668,13 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor", help="check local prerequisites and sandbox credential configuration (no model request)")
     doctor.add_argument("--provider", default="", help="provider route to check (default: DSH settings)")
     doctor.add_argument("--model", default="", help="model selection to report (default: DSH settings)")
+
+    # ── pin management ──
+    pin_group = sub.add_parser("pin", help="manage driver pins")
+    pin_sub = pin_group.add_subparsers(dest="pin_action")
+    pin_sub.add_parser("list", help="list all pins with commit, creation time and driver checkout")
+    pin_sub.add_parser("prune", help="remove pins no run refers to")
+
     return parser
 
 
@@ -753,9 +760,40 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_ui(args)
     if args.verb == "doctor":
         return cmd_doctor(args)
+    if args.verb == "pin":
+        return _cmd_pin(args)
     if args.verb == "package":  # handled before argparse; kept for completeness
         return _forward("refactory_dsh.registry", [])
     parser.error(f"unknown verb {args.verb!r}")  # pragma: no cover - argparse rejects first
+    return 2
+
+
+def _cmd_pin(args: argparse.Namespace) -> int:
+    """Manage driver pins: list and prune."""
+    from refactory_dsh import pin
+
+    action = getattr(args, "pin_action", None)
+    if action == "list":
+        pins = pin.list_pins()
+        if not pins:
+            print("no pins")
+            return 0
+        for entry in pins:
+            commit = entry.get("commit", "?")[:12]
+            created = entry.get("created", "?")
+            driver = entry.get("driver_checkout", "?")
+            runs = entry.get("runs", [])
+            print(f"  {commit}  created {created}  driver {driver}  runs {len(runs)}")
+        return 0
+    if action == "prune":
+        pruned = pin.prune_pins()
+        if pruned:
+            for sha in pruned:
+                print(f"  pruned {sha[:12]}")
+        else:
+            print("nothing to prune")
+        return 0
+    print("usage: refactory pin {list,prune}", file=sys.stderr)
     return 2
 
 

@@ -123,8 +123,17 @@ def prepare(root: Path, name: str, *, resource_limits: dict[str, Any] | None = N
     expected_configuration = config.get('configuration_fingerprints')
     if not isinstance(expected_configuration, dict) or not expected_configuration:
         raise ValueError('saved run has no configuration fingerprints; automatic recovery cannot verify its source')
+    # Translate fingerprint paths from recorded checkout to current REPO_ROOT
+    # so that a re-exec'd process compares against the pin's files.
+    from refactory_dsh.paths import REPO_ROOT
+    driver = config.get('driver', {})
+    driver_checkout = driver.get('checkout', '')
+    repo_root_str = str(REPO_ROOT)
     for name, expected in expected_configuration.items():
-        if _configuration_fingerprint(Path(name)) != expected:
+        actual_name = name
+        if driver_checkout and name.startswith(driver_checkout) and driver_checkout != repo_root_str:
+            actual_name = repo_root_str + name[len(driver_checkout):]
+        if _configuration_fingerprint(Path(actual_name)) != expected:
             raise ValueError(f'prepared configuration {name!r} changed; dependent results need explicit invalidation')
     if resource_limits:
         from refactory_dsh.budgets import ResourceLimits, RunBudget
@@ -161,10 +170,17 @@ def start(root: Path, *, acknowledge_failed: bool = False) -> dict[str, Any]:
         # its parent as the still-active owner. The child repeats validation;
         # an intervening invocation can refuse this queued request safely.
         prepare(root, config['mode'].replace('/', '-'), acknowledge_failed=acknowledge_failed)
+    # ── pin: detect drift and use the pin's interpreter ──
+    from refactory_dsh import pin as _pin
+    _drift = _pin.detect_drift(config)
+    python_exe = sys.executable
+    if _drift is not None:
+        _pin_checkout = _pin.resolve_pin(config['driver'], run_dir=root)
+        python_exe = str(_pin.pin_python(_pin_checkout))
     supervisor_log = root / '.refactory/supervisor.log'
     supervisor_log.parent.mkdir(parents=True, exist_ok=True)
     with supervisor_log.open('ab') as output:
-        child = subprocess.Popen([sys.executable, '-m', 'refactory_dsh.supervisor', str(root)],
+        child = subprocess.Popen([python_exe, '-m', 'refactory_dsh.supervisor', str(root)],
             cwd=config['project'],
             env={**os.environ, 'PYTHONUNBUFFERED': '1'}, stdout=output, stderr=subprocess.STDOUT,
             start_new_session=True)

@@ -112,9 +112,18 @@ def run_on_dsh(
     # directory and the runner reads them from there.
     lowering.write_declarations(state, workdir)
 
+    # ── pin: read the driver's profile from the run's config ──
+    _dsh_profile_name = "graph"
+    try:
+        _run_config_path = workdir / ".refactory" / "run-config.json"
+        if _run_config_path.exists():
+            import refactory_dsh.pin as _pin_mod
+            _dsh_profile_name = _pin_mod.driver_profile(workdir)
+    except Exception:
+        pass
     command = [
         *dsh_command(root=Path(context["runtime_root"]) if context else None, cli=context.get("dsh_cli") if context else None),
-        "--profile", "graph", "run",
+        "--profile", _dsh_profile_name, "run",
         "--mode", name,
         "--task", TASK,
         "--budget", "1",

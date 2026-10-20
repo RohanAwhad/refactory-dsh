@@ -171,7 +171,7 @@ export function apply(ctx: Context): void {
       // them is the run, not the checkout. The project — where `.factory/packages`
       // and the packages of modes live — has to be said out loud, and this is where
       // the checkout is known: the directory the profile was started in.
-      REFACTORY_PROJECT: process.cwd(),
+      REFACTORY_PROJECT: process.env.REFACTORY_PROJECT || process.cwd(),
       REFACTORY_INTENT: taskName,
       // An op node's command is lowered as a bare `python -m refactory_dsh.run` (lowering.RUNNER),
       // so graphs name no machine path; the run's interpreter leading PATH is what resolves it.

@@ -124,4 +124,5 @@ if [ -n "$PLAN" ]; then
 fi
 
 cd "$DSH_ROOT"
+export REFACTORY_GUI_MODE=1
 exec "${DSH[@]}" --profile "$PROFILE" "${FORWARDED[@]}"

@@ -148,7 +148,22 @@ def _build_owner_argv(root: Path) -> tuple[list[str], str]:
     config = json.loads((root / '.refactory/run-config.json').read_text())
     mode = config['mode']
     project = config.get('project', '.')
-    argv = [sys.executable, '-m', 'refactory_dsh.interactive', mode,
+    # ── pin: use the pin's interpreter when the driver has drifted ──
+    python_exe = sys.executable
+    driver = config.get('driver')
+    if driver is not None:
+        if driver.get('pin_checkout'):
+            from refactory_dsh.pin import pin_python
+            pin_py = pin_python(Path(driver['pin_checkout']))
+            if pin_py.exists():
+                python_exe = str(pin_py)
+        else:
+            from refactory_dsh import pin as _pin
+            _drift = _pin.detect_drift(config)
+            if _drift is not None:
+                _pin_checkout = _pin.resolve_pin(driver, run_dir=root)
+                python_exe = str(_pin.pin_python(_pin_checkout))
+    argv = [python_exe, '-m', 'refactory_dsh.interactive', mode,
             '--workdir', str(root), '--headless', '--resume']
     return argv, project
 

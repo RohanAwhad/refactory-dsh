@@ -201,21 +201,38 @@ SPINE_LIB = Path("packages") / "workflow" / "workflow-spine" / "lib" / "index.js
 
 
 def require_build(root: Path | None = None) -> None:
-    """Refuse immediately when the spine build is missing.
+    """Refuse immediately when the spine build is missing, and rebuild stale builds.
 
     Running from source (SOURCE_CLI_ENTRY exists) skips the check: tsx
     compiles on the fly. Otherwise, the built bundle at SPINE_LIB must
-    exist. Raises RuntimeError naming ``pnpm run build`` as the fix.
+    exist. After the existence check, the workspace stamp is compared.
+    When stale and not under a GUI, ``pnpm run build`` is run automatically.
+    When stale and under a GUI, ``RuntimeError`` is raised asking the person
+    to restart.
     """
     selected = Path(root) if root is not None else dsh_root()
     if (selected / SOURCE_CLI_ENTRY).exists():
         return  # running from source; tsx handles it
-    if (selected / SPINE_LIB).exists():
-        return
-    raise RuntimeError(
-        "the workflow-spine build is missing; run `pnpm run build` "
-        "from the checkout root"
-    )
+    if not (selected / SPINE_LIB).exists():
+        raise RuntimeError(
+            "the workflow-spine build is missing; run `pnpm run build` "
+            "from the checkout root"
+        )
+    # ── workspace stamp check ──
+    stamp_file = selected / "packages" / "workflow" / "workflow-spine" / "lib" / ".workspace-stamp"
+    if stamp_file.exists():
+        from refactory_dsh.pin import workspace_stamp as _ws
+        saved_stamp = stamp_file.read_text().strip()
+        current_stamp = _ws(selected)
+        if current_stamp is not None and saved_stamp != current_stamp:
+            if os.environ.get("REFACTORY_GUI_MODE"):
+                raise RuntimeError(
+                    "the build is stale; restart the GUI to pick up changes — "
+                    "run `pnpm run build` and relaunch"
+                )
+            import logging
+            logging.getLogger(__name__).info("workspace build is stale; rebuilding")
+            subprocess.run(["pnpm", "run", "build"], cwd=str(selected), check=True)
 
 
 def python() -> Path:

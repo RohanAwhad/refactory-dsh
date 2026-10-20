@@ -140,6 +140,8 @@ def prepare(
             'project': str(project.resolve()), 'knobs': knobs or [], 'model_context': model_context,
             'resource_limits': resource_limits,
             'configuration_fingerprints': configuration_fingerprints(workdir, identifier, project)}))
+        from refactory_dsh import pin
+        pin.record_driver(workdir / '.refactory/run-config.json')
         return name, graphs
 
 
@@ -164,9 +166,15 @@ def command(
     script that the run it gets is the run it got before.
     """
     _, mode_name = identifier.split("/", 1)
+    _profile = "graph"
+    try:
+        from refactory_dsh import pin as _pin_mod
+        _profile = _pin_mod.driver_profile(workdir)
+    except Exception:
+        pass
     argv = [
         *dsh_command(),
-        "--profile", "graph", "run",
+        "--profile", _profile, "run",
         "--mode", name,
         "--task", TASK,
         "--budget", "1",
@@ -254,6 +262,14 @@ def run(
             import json
 
             saved = json.loads((workdir / '.refactory/run-config.json').read_text())
+            # ── pin: detect drift and re-exec under the pin ──
+            from refactory_dsh import pin as _pin
+            _drift = _pin.detect_drift(saved)
+            if _drift is not None:
+                _pin_checkout = _pin.resolve_pin(saved['driver'], run_dir=workdir)
+                if REPO_ROOT.resolve() != Path(_pin_checkout).resolve():
+                    _pin_py = str(_pin.pin_python(_pin_checkout))
+                    os.execv(_pin_py, [_pin_py, '-m', 'refactory_dsh.interactive', *sys.argv[1:]])
             if saved.get('mode') != identifier:
                 raise ValueError('saved run belongs to a different mode')
             # Resource allocation is the only override accepted by recovery.

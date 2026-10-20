@@ -38,6 +38,7 @@ import { commandOf, isDeterministic, runDataCommand, runDeterministic, runWarnin
 import type { CommandFailure, CommandOutcome } from './execute.ts'
 import type { WorkflowGraph } from './types.ts'
 import { validateBuild } from './build-stamp.ts'
+import { validateWorkspaceBuild } from './workspace-stamp.ts'
 import { presentCall, presentResult, presentationMeta } from './present.ts'
 
 export { Spine, validateGraph } from './spine.ts'
@@ -491,6 +492,12 @@ export function apply(ctx: Context, config: Config): void {
   // arrive).
   try {
     validateBuild()
+  } catch (err) {
+    process.stderr.write(`\n${err instanceof Error ? err.message : String(err)}\n\n`)
+    process.exit(1)
+  }
+  try {
+    validateWorkspaceBuild()
   } catch (err) {
     process.stderr.write(`\n${err instanceof Error ? err.message : String(err)}\n\n`)
     process.exit(1)
@@ -1525,7 +1532,13 @@ export function apply(ctx: Context, config: Config): void {
             + '`python -m refactory_dsh.console open`)',
           )
         }
-        const argv = [...config.openArgs, args.mode]
+        const argv = [...config.openArgs]
+        // Pass the session's cwd as the project so the run uses the right one.
+        const sessionCwd = session.header?.cwd
+        if (typeof sessionCwd === 'string' && sessionCwd !== '') {
+          argv.push('--project', sessionCwd)
+        }
+        argv.push(args.mode)
         // The console refuses without a workdir, so an absent one is derived from
         // the session and the mode rather than dropped. The payload's `run` is
         // still the authority on where the run actually landed.

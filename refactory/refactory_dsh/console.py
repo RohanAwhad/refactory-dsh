@@ -254,11 +254,26 @@ def _run_id(mode: str) -> str:
 #: because the console is the Python owner the Web composition reaches, and the
 #: graph bundle names the same module in its own `dataCommand`; each uses an
 #: absolute interpreter path so they do not depend on PATH.
-from refactory_dsh.paths import venv_bin as _venv_bin
-_REFACTORY_PYTHON = str(_venv_bin() / 'python')
-DATA_COMMAND = f"{_REFACTORY_PYTHON} -m refactory_dsh.items"
-AGENT_COMMAND = f"{_REFACTORY_PYTHON} -m refactory_dsh.agent_delivery"
-GATE_COMMAND = f"{_REFACTORY_PYTHON} -m refactory_dsh.steering"
+def _refactory_python() -> str:
+    """The Python interpreter for node commands, resolved at call time.
+
+    After a re-exec under a pin, ``venv_bin()`` returns the pin's ``.venv/bin``,
+    so the commands point to the pin's Python.
+    """
+    from refactory_dsh.paths import venv_bin
+    return str(venv_bin() / 'python')
+
+
+def _data_command() -> str:
+    return f"{_refactory_python()} -m refactory_dsh.items"
+
+
+def _agent_command() -> str:
+    return f"{_refactory_python()} -m refactory_dsh.agent_delivery"
+
+
+def _gate_command() -> str:
+    return f"{_refactory_python()} -m refactory_dsh.steering"
 
 
 def _node_environment(
@@ -369,9 +384,9 @@ def _open_mode(
         "graph": str((graphs / f"{name}{SUFFIX}").resolve()),
         "declarations": str((root / DECLARATIONS).resolve()),
         "commandEnv": command_env,
-        "dataCommand": DATA_COMMAND,
-        "agentCommand": AGENT_COMMAND,
-        "gateCommand": GATE_COMMAND,
+        "dataCommand": _data_command(),
+        "agentCommand": _agent_command(),
+        "gateCommand": _gate_command(),
     }
 
 
