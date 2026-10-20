@@ -340,6 +340,72 @@ def test_edit_revision_of_differs_from_name(tmp_path, monkeypatch):
     assert (source_shared / "__init__.py").read_text() == "CHANGED = True\n"
 
 
+def test_staged_package_can_import_shared_workspace_package(tmp_path, monkeypatch):
+    """A staged package whose ops import another workspace package validates.
+
+    On main, ``check_package`` ran with the shared project and both packages were
+    on the import path.  With staging, ``check_package`` passes
+    ``project_override`` pointing to the staging base, so the subprocess saw only
+    the staged workspace and failed with "No module named refactory_packages.base_ws".
+    After the fix, ``verify_sandboxed`` receives ``shared_project`` and installs
+    the shared workspace behind the staging root so the staged copy wins for its
+    own name and every other package still resolves.
+    """
+    project = _make_project(tmp_path)
+    monkeypatch.setattr("refactory_dsh.paths.project_for_nodes", lambda: project)
+    monkeypatch.setattr("refactory_dsh.create_ops.project_for_nodes", lambda: project)
+
+    # Shared workspace has a helper package ``base_ws``.
+    base_pkg = registry.workspace_root(project) / "base_ws"
+    base_pkg.mkdir(parents=True, exist_ok=True)
+    (base_pkg / "__init__.py").write_text(
+        "from refactory_dsh.nn import Package\n"
+        "HELPER = 42\n"
+        "PACKAGE = Package(name='base_ws')\n"
+    )
+
+    # The staged package ``new_pkg`` imports from ``base_ws``.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    staging_base = run_dir / STAGING_DIR
+    new_pkg = staging_base / ".factory" / "packages" / "new_pkg"
+    new_pkg.mkdir(parents=True, exist_ok=True)
+    (new_pkg / "__init__.py").write_text(
+        "from refactory_packages.base_ws import HELPER\n"
+        "from refactory_dsh.nn import Package\n"
+        "from .mode import MyMode\n\n"
+        "PACKAGE = Package(name='new_pkg', modes=(MyMode,),"
+        " ops=('refactory_packages.new_pkg.ops',))\n"
+    )
+    (new_pkg / "mode.py").write_text(
+        "from refactory_dsh import nn\n"
+        "OPS = 'refactory_packages.new_pkg.ops'\n\n"
+        "class MyMode(nn.Mode):\n"
+        "    name = 'mymode'\n"
+        "    @classmethod\n"
+        "    def declare(cls):\n"
+        "        return {'target': nn.Knob(1, 'int', lo=1, hi=9)}\n"
+        "    def build(self):\n"
+        "        g = nn.Graph()\n"
+        "        g.add(nn.Node('start', 'op', call=OPS + ':start',"
+        " writes=('out.json',), produces=('v',)))\n"
+        "        return g\n"
+        "    def score(self, run):\n"
+        "        return 1.0\n"
+    )
+    (new_pkg / "ops.py").write_text(
+        "from refactory_packages.base_ws import HELPER\n\n"
+        "def start(ctx):\n"
+        "    ctx.write_json('out.json', {'v': HELPER})\n"
+        "    return {'v': HELPER}\n"
+    )
+
+    from refactory_dsh.create_ops import check_package
+    problems = check_package("new_pkg", project_override=staging_base)
+    import_problems = [p for p in problems if "base_ws" in p or "does not import" in p]
+    assert not import_problems, f"Staged package cannot import shared workspace package: {import_problems}"
+
+
 def test_edit_into_existing_destination_succeeds(tmp_path, monkeypatch):
     """An edit whose destination already exists at prepare is not falsely refused.
 

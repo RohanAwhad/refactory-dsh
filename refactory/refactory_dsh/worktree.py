@@ -486,24 +486,55 @@ def copy_uncommitted(target: Path, worktree_path: Path, run: Path) -> list[dict[
         entries.append({"path": rel, "kind": "deleted", "sha256": ""})
 
     # Copy files that exist in the working tree.
+    # Symlink safety: recreate symlinks as symlinks (os.readlink + os.symlink)
+    # instead of copying the target's contents.  This prevents two hazards:
+    #   1. A retargeted tracked absolute symlink being written through,
+    #      overwriting the old link's target outside the worktree.
+    #   2. An untracked symlink to a credentials file having its contents
+    #      committed into the run's base and delivered with the PR.
+    # Before writing any destination, unlink it if it is already a symlink so
+    # we never follow an existing link to a location outside the worktree.
+    # Regular-file destinations whose resolved path escapes the worktree (e.g.
+    # because a parent component is a symlink) are refused.
+    wt_resolved = worktree_path.resolve()
     for rel in sorted(copy_paths):
         source = target / rel
         dest = worktree_path / rel
-        if not source.exists():
+        if not source.exists() and not source.is_symlink():
             # The person deleted it after staging, or it's gone; treat as deleted.
-            if dest.exists():
+            if dest.exists() or dest.is_symlink():
                 dest.unlink()
             entries.append({"path": rel, "kind": "deleted", "sha256": ""})
             continue
-        try:
-            content = source.read_bytes()
-        except OSError:
-            continue
-        sha = _hl.sha256(content).hexdigest()
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(content)
-        kind = "untracked" if rel in untracked_set else "modified"
-        entries.append({"path": rel, "kind": kind, "sha256": sha})
+        # Unlink an existing destination symlink before writing anything,
+        # so we never write through a link to outside the worktree.
+        if dest.is_symlink():
+            dest.unlink()
+        if source.is_symlink():
+            # Recreate the symlink faithfully rather than copying the target
+            # file's contents.
+            link_target = os.readlink(source)
+            os.symlink(link_target, dest)
+            sha = _hl.sha256(link_target.encode()).hexdigest()
+            kind = "untracked" if rel in untracked_set else "modified"
+            entries.append({"path": rel, "kind": kind, "sha256": sha})
+        else:
+            # Refuse a regular-file destination that resolves outside the
+            # worktree (a parent directory might be a symlink).
+            resolved_dest = dest.resolve()
+            if not (str(resolved_dest).startswith(str(wt_resolved) + os.sep)
+                    or resolved_dest == wt_resolved):
+                entries.append({"path": rel, "kind": "refused", "sha256": ""})
+                continue
+            try:
+                content = source.read_bytes()
+            except OSError:
+                continue
+            sha = _hl.sha256(content).hexdigest()
+            dest.write_bytes(content)
+            kind = "untracked" if rel in untracked_set else "modified"
+            entries.append({"path": rel, "kind": kind, "sha256": sha})
 
     if not entries:
         return entries

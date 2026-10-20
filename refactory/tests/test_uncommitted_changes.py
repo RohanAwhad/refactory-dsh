@@ -228,6 +228,88 @@ def test_untracked_in_subdirectory_and_names_with_spaces(repo, tmp_path):
     assert "my file.txt" in base_tree
 
 
+def test_symlink_retarget_leaves_old_target_untouched(repo, tmp_path):
+    """A retargeted tracked symlink leaves its old target untouched.
+
+    Before the fix, ``copy_uncommitted`` used ``read_bytes``/``write_bytes``
+    which followed the existing symlink in the worktree and overwrote the old
+    target file outside the worktree.  After the fix, symlinks are recreated
+    with ``os.readlink`` + ``os.symlink``.
+    """
+    import os as _os
+
+    # Create an external file that the symlink points to.
+    ext_dir = tmp_path / "external"
+    ext_dir.mkdir()
+    old_target = ext_dir / "old_target.txt"
+    old_target.write_text("precious data\n")
+    new_target = ext_dir / "new_target.txt"
+    new_target.write_text("new data\n")
+
+    # Commit a tracked symlink pointing to old_target.
+    link_path = repo / "tracked_link"
+    _os.symlink(str(old_target), str(link_path))
+    git(repo, "add", "tracked_link")
+    git(repo, "commit", "-q", "-m", "add tracked symlink")
+
+    # Retarget the symlink (the person's uncommitted change).
+    link_path.unlink()
+    _os.symlink(str(new_target), str(link_path))
+
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "symlnk0001", run)
+    entries = worktree.copy_uncommitted(repo, Path(found.path), run)
+
+    paths = {e["path"] for e in entries}
+    assert "tracked_link" in paths
+
+    wt_link = Path(found.path) / "tracked_link"
+    # The worktree must have a symlink, not a regular file.
+    assert wt_link.is_symlink(), "tracked_link should be a symlink in the worktree"
+    assert _os.readlink(str(wt_link)) == str(new_target)
+
+    # The old target file must be untouched.
+    assert old_target.read_text() == "precious data\n", \
+        "the old symlink target must not be overwritten"
+
+
+def test_untracked_symlink_outside_repo_recreated_as_link(repo, tmp_path):
+    """An untracked symlink to a file outside the repository is recreated as a link.
+
+    Before the fix, ``copy_uncommitted`` followed the symlink and committed the
+    target file's contents.  After the fix, the symlink is recreated faithfully.
+    """
+    import os as _os
+
+    # Create an external file (simulating credentials or other sensitive data).
+    creds = tmp_path / "secrets" / "api_key.txt"
+    creds.parent.mkdir(parents=True)
+    creds.write_text("sk-secret-12345\n")
+
+    # Create an untracked symlink to it in the repo.
+    link_path = repo / "ext_link"
+    _os.symlink(str(creds), str(link_path))
+
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "symlnk0002", run)
+    entries = worktree.copy_uncommitted(repo, Path(found.path), run)
+
+    paths = {e["path"] for e in entries}
+    assert "ext_link" in paths
+
+    wt_link = Path(found.path) / "ext_link"
+    # Must be a symlink, not a regular file containing the credentials.
+    assert wt_link.is_symlink(), "ext_link should be a symlink, not a regular file"
+    assert _os.readlink(str(wt_link)) == str(creds)
+
+    # The entry's hash should be the hash of the link target string, not the
+    # file content.
+    import hashlib
+    ext_entry = next(e for e in entries if e["path"] == "ext_link")
+    expected_sha = hashlib.sha256(str(creds).encode()).hexdigest()
+    assert ext_entry["sha256"] == expected_sha
+
+
 def test_include_uncommitted_knob_through_prepare(repo, tmp_path):
     """The include_uncommitted knob drives copy_uncommitted through _open_worktree.
 

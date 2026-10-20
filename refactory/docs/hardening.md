@@ -737,7 +737,8 @@ is unchanged. `SandboxResult.cwd_outside` carries the escaped directory, which
 `design_ops` and `fast_ops` record as `cwd_escaped` in the check outcome.
 
 **What it does not catch.** An intermediate `cd` that returns before the command
-ends. A subshell that `cd`s.
+ends. A subshell that `cd`s. A symlink whose target resolves outside the worktree
+is caught by `pwd -P` because the trap resolves both paths.
 
 **Test.** `test_cwd_escape.py`: `cd /tmp` is flagged; `cd <subdir>` is not; `exit 3`
 keeps status 3; the sentinel never reaches stdout or stderr.
@@ -758,7 +759,43 @@ succeed in their own staging directories.
 intact; a reloop does not refuse itself; an edit whose source changed mid-run refuses;
 an edit whose `revision_of` differs from its name copies from the source.
 
-## 21. Copy-on-register atomicity (#351)
+## 21. Symlink safety in copy_uncommitted (#351)
+
+**What should happen.** `copy_uncommitted` must not follow symlinks.  A tracked
+absolute symlink that was retargeted must not overwrite the old target outside the
+worktree.  An untracked symlink to a credentials file must be recreated as a link,
+not have its contents committed.
+
+**How it works.** `worktree.copy_uncommitted` checks `source.is_symlink()` before
+reading contents.  Symlinks are recreated with `os.readlink` + `os.symlink`; the
+hash records the link target string, not the file content.  Before writing any
+destination, an existing symlink at that path is unlinked so writes never follow
+a stale link.  Regular-file destinations whose resolved path escapes the worktree
+(e.g. a parent component is a symlink) are refused.
+
+**Test.** `test_uncommitted_changes.py`:
+`test_symlink_retarget_leaves_old_target_untouched` — a retargeted tracked
+symlink is recreated as a link and the old target is untouched;
+`test_untracked_symlink_outside_repo_recreated_as_link` — an untracked symlink
+to an external file is recreated as a link, not as the file's contents.
+
+## 22. Staged package validation resolves other workspace packages (#351)
+
+**What should happen.** A staged package whose ops import from another workspace
+package (e.g. `from refactory_packages.base_ws import ops`) validates and
+registers, as on main.
+
+**How it works.** `check_package` passes `shared_project=project_for_nodes()` to
+`verify_sandboxed` when `project_override` is given.  The subprocess installs the
+shared workspace behind the staging root via
+`registry.install_workspace(shared, project_override=staging)`, so the staged
+copy wins for its own name and every other package still resolves.
+
+**Test.** `test_staging_isolation.py:test_staged_package_can_import_shared_workspace_package`
+— a staged package that imports `HELPER` from a shared workspace package validates
+without import errors.
+
+## 23. Copy-on-register atomicity (#351)
 
 **How it works.** `register()` writes the staged package to a temporary sibling
 directory, renames the old package aside, renames the new one in, then deletes the

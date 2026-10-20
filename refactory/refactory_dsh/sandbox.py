@@ -639,6 +639,7 @@ def verify_sandboxed(
     name: str,
     *,
     project: Path | None = None,
+    shared_project: Path | None = None,
     requires_data_node: bool = False,
     requires_task_ref: str = "",
     requires_task_refs: tuple[str, ...] = (),
@@ -653,6 +654,11 @@ def verify_sandboxed(
     only place a generated package is loaded, and it is loaded somewhere that
     cannot reach the driver's filesystem, environment, or imports.
 
+    ``shared_project``, when given alongside ``project``, puts the shared
+    workspace's packages on the import path behind the staging root so that a
+    staged package can import from other workspace packages (e.g.
+    ``from refactory_packages.base_ws import ops``).
+
     Answers in one call what would otherwise be three: there is no read-only way
     to ask whether model-written code is a usable mode.
     """
@@ -660,12 +666,20 @@ def verify_sandboxed(
     required_tasks = tuple(dict.fromkeys(
         ref for ref in (*requires_task_refs, requires_task_ref) if ref
     ))
+    _shared_str = str(shared_project) if shared_project else ""
     code = (
         "import json\n"
         "import importlib\n"
         "from pathlib import Path\n"
         "from refactory_dsh import registry\n"
         "from refactory_dsh.nn import validate_state\n"
+        # When a shared project is given alongside a staging project, install
+        # the shared workspace first (appended) and the staging workspace at
+        # position 0 so the staged package wins for its own name while every
+        # other workspace package still resolves.
+        f"_shared = {_shared_str!r}\n"
+        "if _shared:\n"
+        f"    registry.install_workspace(Path(_shared), project_override=Path({str(project)!r}))\n"
         "problems = []\n"
         f"requires_data_node = {bool(requires_data_node)!r}\n"
         f"required_tasks = {required_tasks!r}\n"

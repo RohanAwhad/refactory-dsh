@@ -1046,8 +1046,11 @@ def check_package(
     """
     from refactory_dsh import sandbox
 
+    shared_project = project_for_nodes() if project_override else None
     project = project_override or project_for_nodes()
     registry.install_workspace(project)
+    if shared_project:
+        registry.install_workspace(shared_project)
     root = registry.workspace_root(project) / name
     if not root.is_dir():
         return [f"no directory at {root}"]
@@ -1075,6 +1078,7 @@ def check_package(
     checked = sandbox.verify_sandboxed(
         name,
         project=project,
+        shared_project=shared_project,
         requires_data_node=requires_data_node,
         requires_task_ref=requires_task_ref,
         requires_task_refs=requires_task_refs,
