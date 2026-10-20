@@ -9,6 +9,7 @@
  * graph: the spine holds the node bodies it was given, so an amendment mutates
  * the graph object itself.
  */
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -664,6 +665,265 @@ describe('applyControls integration', () => {
     expect(next.feedback?.a).toBe('one-shot fix')
     // The control file was consumed.
     expect(existsSync(join(workdir, '.refactory', 'graph-controls', '1.json'))).toBe(false)
+  })
+
+  it('feedback sidecar is written by drain and reaches the dispatched node manifest (dm-110)', async () => {
+    const workdir = scratch()
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', reads: [], writes: [],
+             dispatch_command: 'echo dispatched' },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', reads: [], writes: [] },
+      },
+      edges: [{ source: 'a', target: 'b' }],
+    }
+    const ctx = await mount(graph, { workdir, executeCommands: true })
+    // First wf_next dispatches 'a' and writes the prompt file.
+    const executed: Array<{ command: string; env: Record<string, string> }> = []
+    ctx.provide('shell', {
+      resolve: (request: { command: string; workdir?: string; timeoutMs?: number; env?: Record<string, string>; sandboxPolicy?: unknown }) => ({
+        command: request.command, workdir: request.workdir ?? process.cwd(),
+        timeoutMs: request.timeoutMs ?? 10_000, onExpiry: 'kill',
+        stdoutMaxBytes: 1_000_000, env: request.env, sandboxPolicy: request.sandboxPolicy,
+      }),
+      execute: async (spec: { command: string; env?: Record<string, string> }) => {
+        executed.push({ command: spec.command, env: spec.env ?? {} })
+        return { result: async () => ({
+          exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 10_000,
+          stdout: { text: '', truncated: false }, stderr: { text: '', truncated: false },
+        }) }
+      },
+    })
+    await call(ctx, 'wf_next')
+    // Node 'a' is auto-completed by the shell (dispatch_command exits with code 0).
+    // Read checkpoint and compute its revision (written after 'a' completed).
+    const cpBytes = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
+    const revision = createHash('sha256').update(cpBytes).digest('hex')
+    // Queue a rerun control with text.
+    writeRerunControl(workdir, 'a', { revision, text: 'MARKER-dm110-fix-this' })
+    // The next wf_next triggers applyControls which sets feedback, then drain writes the sidecar.
+    executed.length = 0
+    await call(ctx, 'wf_next')
+    // The feedback sidecar should exist.
+    const fbFile = join(workdir, '.refactory', 'prompts', 'a.feedback.md')
+    expect(existsSync(fbFile)).toBe(true)
+    expect(readFileSync(fbFile, 'utf8')).toContain('MARKER-dm110-fix-this')
+    // The manifest in the environment should reference the feedback file.
+    const lastExec = executed[executed.length - 1]
+    expect(lastExec).toBeDefined()
+    const manifest = JSON.parse(lastExec!.env?.DSH_WORKFLOW_NODE ?? '{}')
+    expect(manifest.feedback_file).toBe(fbFile)
+  })
+
+  it('gate reloop reason reaches the reloop target feedback sidecar (dm-110)', async () => {
+    const workdir = scratch()
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', reads: [], writes: [],
+             dispatch_command: 'echo dispatched' },
+        gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'fn',
+                evaluator_command: 'echo gate-eval', reads: [] },
+        c: { _type: 'AgentNode', id: 'c', role: 'builder', prompt_template: 'C', reads: [], writes: [] },
+      },
+      edges: [
+        { source: 'a', target: 'gate' },
+        { source: 'gate', target: 'a', condition: 'reloop' },
+        { source: 'gate', target: 'c', condition: 'proceed' },
+      ],
+    }
+    const ctx = await mount(graph, { workdir, executeCommands: true })
+    let callCount = 0
+    ctx.provide('shell', {
+      resolve: (request: { command: string; workdir?: string; timeoutMs?: number; env?: Record<string, string>; sandboxPolicy?: unknown }) => ({
+        command: request.command, workdir: request.workdir ?? process.cwd(),
+        timeoutMs: request.timeoutMs ?? 10_000, onExpiry: 'kill',
+        stdoutMaxBytes: 1_000_000, env: request.env, sandboxPolicy: request.sandboxPolicy,
+      }),
+      execute: async (spec: { command: string }) => {
+        callCount += 1
+        // First two calls: 'a' runs then gate evaluates.
+        // Gate returns "GATE-REASON\nreloop" the first time.
+        if (spec.command.includes('gate-eval')) {
+          return { result: async () => ({
+            exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 10_000,
+            stdout: { text: 'GATE-REASON-TEXT\nreloop', truncated: false },
+            stderr: { text: '', truncated: false },
+          }) }
+        }
+        return { result: async () => ({
+          exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 10_000,
+          stdout: { text: '', truncated: false }, stderr: { text: '', truncated: false },
+        }) }
+      },
+    })
+    // First wf_next: runs 'a', then runs gate which reloops back to 'a'.
+    await call(ctx, 'wf_next')
+    // After the reloop, 'a' should be dispatched again with the gate reason as feedback.
+    const fbFile = join(workdir, '.refactory', 'prompts', 'a.feedback.md')
+    expect(existsSync(fbFile)).toBe(true)
+    expect(readFileSync(fbFile, 'utf8')).toContain('GATE-REASON-TEXT')
+  })
+
+  it('drain dispatches to real worker_node.execute and feedback reaches prompt (dm-110 e2e)', async () => {
+    // Cross-boundary test: the TypeScript spine's drain() writes the feedback
+    // sidecar and manifest, a real shell runs the Python dispatch command, and
+    // the real worker_node.execute() reads the sidecar.  This is the test that
+    // catches a format mismatch between drain() and worker_node.py — neither
+    // side tested alone can.
+    const workdir = scratch()
+
+    // Write the worker spec the dispatch helper will hand to execute().
+    const specsDir = join(workdir, '.refactory', 'worker-specs')
+    mkdirSync(specsDir, { recursive: true })
+    const specPath = join(specsDir, 'a-spec.json')
+    writeFileSync(specPath, JSON.stringify({
+      schema_version: 1, node_id: 'a', prompt: 'Build it.',
+      reads: [], writes: [],
+      model_context: { provider: 'test', model: 'test' },
+    }))
+
+    // Write the Python dispatch helper.  It calls the real worker_node.execute()
+    // with a scripted model and records the prompt to a file the test reads.
+    const helperPath = join(workdir, 'dispatch_helper.py')
+    writeFileSync(helperPath, [
+      '#!/usr/bin/env python3',
+      '"""Cross-boundary dm-110 test helper: dispatch command that wraps',
+      'worker_node.execute() with a scripted model recording the prompt."""',
+      'import json, os, sys',
+      'from pathlib import Path',
+      'from unittest import mock',
+      '',
+      'spec_path = sys.argv[1]',
+      'spec = json.loads(Path(spec_path).read_text())',
+      'workdir = Path.cwd()',
+      'manifest = json.loads(os.environ.get("DSH_WORKFLOW_NODE", "{}"))',
+      'node_id = manifest.get("id", "unknown")',
+      '',
+      'counter_file = workdir / ".refactory" / f"dm110-visit-{node_id}.txt"',
+      'counter_file.parent.mkdir(parents=True, exist_ok=True)',
+      'v = int(counter_file.read_text()) + 1 if counter_file.exists() else 1',
+      'counter_file.write_text(str(v))',
+      '',
+      'captured = []',
+      '',
+      'class M:',
+      '    def __init__(self, **k): pass',
+      '    def for_node(self, n): return self',
+      '    def complete(self, p, workdir=None):',
+      '        captured.append(p); return "done"',
+      '    def context(self): return {"provider": "test", "model": "test"}',
+      '    def route(self): return {"worker_backend": "dsh"}',
+      '',
+      'class D:',
+      '    @staticmethod',
+      '    def begin(w, n, p, ws, **k):',
+      '        captured.append(p); return {"prompt": p, "node": n, "status": "pending"}',
+      '    @staticmethod',
+      '    def finish(w, n, **k): return {"node": n, "status": "delivered"}',
+      '    @staticmethod',
+      '    def _path(w, name): return Path(w) / name',
+      '',
+      'with mock.patch("refactory_dsh.model.DshModelClient", M), \\',
+      '     mock.patch("refactory_dsh.agent_delivery.begin", D.begin), \\',
+      '     mock.patch("refactory_dsh.agent_delivery.finish", D.finish), \\',
+      '     mock.patch("refactory_dsh.agent_delivery._path", D._path), \\',
+      '     mock.patch("refactory_dsh.run._knobs", return_value={}), \\',
+      '     mock.patch("refactory_dsh.run._read_facts", return_value={}), \\',
+      '     mock.patch("refactory_dsh.nn.executor.render", side_effect=lambda p, c: p), \\',
+      '     mock.patch("refactory_dsh.nn.executor.RunContext"):',
+      '    from refactory_dsh import worker_node',
+      '    worker_node.execute(spec, workdir)',
+      '',
+      'out = workdir / ".refactory" / f"dm110-prompt-{v}-{node_id}.txt"',
+      'out.write_text(json.dumps(captured))',
+    ].join('\n'))
+
+    const pythonBin = join(process.cwd(), '.venv', 'bin', 'python')
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'Build it.',
+             reads: [], writes: [],
+             dispatch_command: `${pythonBin} ${helperPath} ${specPath}` },
+      },
+      edges: [],
+    }
+    const ctx = await mount(graph, { workdir, executeCommands: true })
+
+    // A shell that really runs the command, so worker_node.py runs for real.
+    ctx.provide('shell', {
+      resolve: (request: { command: string; workdir?: string; timeoutMs?: number; env?: Record<string, string>; sandboxPolicy?: unknown }) => ({
+        command: request.command, workdir: request.workdir ?? process.cwd(),
+        timeoutMs: request.timeoutMs ?? 30_000, onExpiry: 'kill',
+        stdoutMaxBytes: 1_000_000, env: request.env, sandboxPolicy: request.sandboxPolicy,
+      }),
+      execute: async (spec: { command: string; workdir?: string; timeoutMs?: number; env?: Record<string, string> }) => {
+        const started = spawnSync('/bin/sh', ['-c', spec.command], {
+          cwd: spec.workdir, encoding: 'utf8', timeout: spec.timeoutMs,
+          env: { ...process.env, ...(spec.env ?? {}) },
+        })
+        return { result: async () => ({
+          exitCode: started.status ?? 0, signal: started.signal,
+          timedOut: false, aborted: false, timeoutMs: spec.timeoutMs ?? 30_000,
+          stdout: { text: started.stdout ?? '', truncated: false },
+          stderr: { text: started.stderr ?? '', truncated: false },
+        }) }
+      },
+    })
+
+    // Visit 1: dispatch without feedback.
+    await call(ctx, 'wf_next')
+    const v1File = join(workdir, '.refactory', 'dm110-prompt-1-a.txt')
+    expect(existsSync(v1File)).toBe(true)
+    const v1 = JSON.parse(readFileSync(v1File, 'utf8')) as string[]
+    expect(v1.some(p => p.includes('Feedback for this visit'))).toBe(false)
+    expect(v1.some(p => p.includes('Build it.'))).toBe(true)
+
+    // Get checkpoint revision and queue a rerun with text.
+    const cpBytes = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
+    const revision = createHash('sha256').update(cpBytes).digest('hex')
+    writeRerunControl(workdir, 'a', { revision, text: 'MARKER-dm110-cross-boundary-fix' })
+
+    // Visit 2: dispatch with feedback.
+    await call(ctx, 'wf_next')
+    const v2File = join(workdir, '.refactory', 'dm110-prompt-2-a.txt')
+    expect(existsSync(v2File)).toBe(true)
+    const v2 = JSON.parse(readFileSync(v2File, 'utf8')) as string[]
+    expect(v2.some(p => p.includes('## Feedback for this visit'))).toBe(true)
+    expect(v2.some(p => p.includes('MARKER-dm110-cross-boundary-fix'))).toBe(true)
+    expect(v2.some(p => p.includes('Build it.'))).toBe(true)
+  })
+
+  it('feedback sidecar is not written when no feedback exists, so stale files are not read (dm-110)', async () => {
+    const workdir = scratch()
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', reads: [], writes: [],
+             dispatch_command: 'echo dispatched' },
+      },
+      edges: [],
+    }
+    const ctx = await mount(graph, { workdir, executeCommands: true })
+    ctx.provide('shell', {
+      resolve: (request: { command: string; workdir?: string; timeoutMs?: number; env?: Record<string, string>; sandboxPolicy?: unknown }) => ({
+        command: request.command, workdir: request.workdir ?? process.cwd(),
+        timeoutMs: request.timeoutMs ?? 10_000, onExpiry: 'kill',
+        stdoutMaxBytes: 1_000_000, env: request.env, sandboxPolicy: request.sandboxPolicy,
+      }),
+      execute: async () => ({
+        result: async () => ({
+          exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 10_000,
+          stdout: { text: '', truncated: false }, stderr: { text: '', truncated: false },
+        }),
+      }),
+    })
+    // First wf_next: runs 'a' with no feedback — no sidecar should exist.
+    await call(ctx, 'wf_next')
+    const fbFile = join(workdir, '.refactory', 'prompts', 'a.feedback.md')
+    expect(existsSync(fbFile)).toBe(false)
   })
 
   it('deferred rerun control survives concurrent work and applies after join', async () => {
