@@ -1,10 +1,10 @@
 """Pin lifecycle: record, detect drift, create, resolve and prune driver pins.
 
-A run records its driver checkout at launch. When the driver later moves (commit
-changes or fingerprinted files differ), the run lazily creates a pin: a prepared
-git worktree at the original commit with a commit-specific DSH profile
-(``graph-pin-<commit12>``) in the person's own DSH home. Credentials stay in
-``~/.dsh``; DSH_HOME is never changed.
+A run records its driver checkout at launch.  When the driver later moves
+(commit changes or fingerprinted files differ), the run lazily creates a pin:
+a prepared git worktree at the original commit with a commit-specific DSH
+profile (``graph-pin-<commit12>``) in the person's own DSH home.  Credentials
+stay in ``~/.dsh``; DSH_HOME is never changed.
 """
 from __future__ import annotations
 
