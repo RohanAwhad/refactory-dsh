@@ -444,6 +444,80 @@ def test_main_bridge_accepts_templates_inside_substituted_values(tmp_path, monke
     assert '{{templates}}' in record['prompt']
 
 
+def test_main_bridge_no_warning_for_keys_in_steering_ledger(tmp_path, monkeypatch):
+    """A ledger entry containing {{x}} does not produce an unresolved key warning."""
+    import io
+    from refactory_dsh.steering import STEERING_START, STEERING_END
+    (tmp_path / 'facts.json').write_text(json.dumps({'artifact_name': 'ok'}))
+    Ledger.seed(tmp_path, 'test brief with {{x}} inside')
+    # The steering ledger folds the brief (which contains {{x}}) into the template.
+    # The scan should strip the STEERING block and not warn about {{x}}.
+    payload = json.dumps({
+        'action': 'begin', 'node': 'emit',
+        'prompt': 'Build {{artifact_name}}.', 'writes': ['out.txt'], 'reads': [],
+    })
+    captured = io.StringIO()
+    monkeypatch.setattr('sys.stdin', io.StringIO(payload))
+    monkeypatch.setattr('sys.stdout', captured)
+    monkeypatch.chdir(tmp_path)
+    code = agent_delivery.main()
+    assert code == 0
+    data = json.loads(captured.getvalue())
+    # Should not contain 'x' as an unresolved key
+    unresolved = data.get('unresolved_keys', [])
+    assert 'x' not in unresolved
+
+
+def test_main_bridge_finish_records_sent_prompt(tmp_path, monkeypatch):
+    """begin then finish through main() records sent_prompt_hash, sent_prompt_path and unresolved_keys in receipt."""
+    import io
+    (tmp_path / 'facts.json').write_text(json.dumps({'artifact_name': 'val'}))
+    Ledger.seed(tmp_path, 'test')
+
+    # Step 1: begin
+    begin_payload = json.dumps({
+        'action': 'begin', 'node': 'emit',
+        'prompt': 'Build {{artifact_name}}.', 'writes': ['out.txt'], 'reads': [],
+    })
+    begin_out = io.StringIO()
+    monkeypatch.setattr('sys.stdin', io.StringIO(begin_payload))
+    monkeypatch.setattr('sys.stdout', begin_out)
+    monkeypatch.chdir(tmp_path)
+    assert agent_delivery.main() == 0
+    begin_data = json.loads(begin_out.getvalue())
+    assert 'prompt' in begin_data
+
+    # Write the output file
+    (tmp_path / 'out.txt').write_text('done\n')
+
+    # Step 2: finish with sent_prompt_hash, sent_prompt and unresolved_keys
+    import hashlib
+    sent_text = 'The full prompt including Build val.'
+    sent_hash = hashlib.sha256(sent_text.encode()).hexdigest()
+    finish_payload = json.dumps({
+        'action': 'finish', 'node': 'emit',
+        'sent_prompt_hash': sent_hash,
+        'sent_prompt': sent_text,
+        'unresolved_keys': ['some_key'],
+    })
+    finish_out = io.StringIO()
+    monkeypatch.setattr('sys.stdin', io.StringIO(finish_payload))
+    monkeypatch.setattr('sys.stdout', finish_out)
+    assert agent_delivery.main() == 0
+
+    # Verify receipt.json
+    delivery_dirs = list((tmp_path / '.refactory/agent-delivery').glob('*/receipt.json'))
+    assert len(delivery_dirs) == 1
+    receipt = json.loads(delivery_dirs[0].read_text())
+    assert receipt['sent_prompt_hash'] == sent_hash
+    assert 'sent_prompt_path' in receipt
+    assert receipt['unresolved_keys'] == ['some_key']
+    # Verify sent-prompt.txt was written
+    sent_path = delivery_dirs[0].parent / 'sent-prompt.txt'
+    assert sent_path.exists()
+    assert sent_path.read_text() == sent_text
+
+
 def test_receipt_records_prompt_hash(tmp_path):
     """begin() and finish() include prompt_hash in the receipt."""
     Ledger.seed(tmp_path, 'test')

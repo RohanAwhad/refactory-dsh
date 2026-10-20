@@ -220,17 +220,25 @@ describe('workflow-spine real composition', () => {
   })
 
   it('CEO system prompt includes delegation and review discipline rules (Sacred Rules 8/9)', async () => {
-    const ctx = await setup()
+    // Use a non-default tool prefix so a hardcoded 'wf_' fails the test.
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(UserQuestionService)
+    ctx.on('user-questions/request', request => Promise.resolve({
+      answers: request.questions.map(question => ({ id: question.id, selected: ['proceed'] })),
+    }))
+    await ctx.plugin(workflowSpine, { graph, toolPrefix: 'x', maxIterations: 3 })
     const assembly = await ctx.systemPrompt.assemble()
-    const spineSection = assembly.sections.find(s => s.name === 'tool:wf-spine')
+    const spineSection = assembly.sections.find(s => s.name === 'tool:x-spine')
     expect(spineSection).toBeDefined()
     expect(spineSection!.text).toContain('orchestrator')
     expect(spineSection!.text).toContain('Delegate')
     expect(spineSection!.text).toContain('Never take over')
     // Verify tool prefix is used, not hardcoded 'wf_'
-    expect(spineSection!.text).toContain('wf_edit')
-    expect(spineSection!.text).toContain('wf_redo')
-    expect(spineSection!.text).toContain('review steps')
+    expect(spineSection!.text).toContain('x_edit')
+    expect(spineSection!.text).toContain('x_redo')
+    expect(spineSection!.text).toContain('review nodes')
     expect(spineSection!.text).toContain('not a reason to skip')
     expect(spineSection!.text).toContain('Never recommend skipping a check gate')
   })

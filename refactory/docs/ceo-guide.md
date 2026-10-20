@@ -51,7 +51,7 @@ instructions (wf_edit set-prompt/append-prompt, then wf_redo) or stop. Never
 take over the agent's work yourself.
 
 Every change that produces a pull request must pass through the graph's review
-steps: health check, code review, focused QA, and overwatch audit. "The change
+nodes. "The change
 is small" or "the code is already correct" is not a reason to skip them.
 
 Never recommend skipping a check gate. When a check cannot run (sandbox limit,

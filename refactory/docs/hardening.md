@@ -680,7 +680,7 @@ and the fail-open case when no run is open.
 - `post_checks` and fork/join are unused (§5).
 - The GUI is not audited here at all. Its defects were tracked as issues #60–#73, and the panel's behaviour is held by `packages/client/ui-refactory/tests/` and [tutorial 7](tutorials/07-pick-and-watch-from-the-panel.md).
 
-## 8. Check sandbox file-size limit, truncation guard, signal classification and attempt counters (#330, #348 E8, #349)
+## 15. Check sandbox file-size limit, truncation guard, signal classification and attempt counters (#330, #348 E8, #349)
 
 **File-size limit raised.**  The check's `RLIMIT_FSIZE` was 64 MB (`DEFAULT_FILE_MB = 64`) while installs got 16 GB (`INSTALL_FILE_MB = 16384`).  A check that wrote a coverage database, build artifact, sqlite file or test fixture over 64 MB was killed by SIGXFSZ and misread as a code failure.  `DEFAULT_FILE_MB` is now 16384, matching `INSTALL_FILE_MB`, because a check runs the project's full test suite, which writes the same class of files an install does.
 
@@ -697,7 +697,7 @@ This is an exit-code-only check with no text scanning.
 
 **Tests.** `tests/test_check_sandbox.py` has one test per fix: a 100 MB file write passes, exit 137/152/153 are classified as uncertain, exit 134/135/139 are code_failure, exit 1 is still code_failure, the create materialiser refuses truncated text, review reloops do not consume check attempts, and each limit's stop message names itself.
 
-## 9. Delivery envelope covers the merged check (dm-107)
+## 16. Delivery envelope covers the merged check (dm-107)
 
 The deliver node's `command_timeout_s` is computed at lowering as
 `_check_envelope_s + INSTALL_TIMEOUT_S + NODE_DISPATCH_OVERHEAD_S`. At defaults
@@ -721,7 +721,7 @@ asserts it exceeds 600 s with `check_timeout_s=1800`;
 `test_synthetic_deliver_op_gets_delivery_envelope` asserts that a custom op under
 another name that declares the knob gets the envelope.
 
-## 10. Goal completion requires a finished run (#347, C1)
+## 17. Goal completion requires a finished run (#347, C1)
 
 Goals were marked complete from runs that had failed before review. `spine.next()`
 reports a halted run as `done`, so the CEO believed it. The fix: a `tools/pre-execute`
@@ -743,7 +743,7 @@ status change, interactive mode workdir resolution, and forgery prevention via
 `.refactory/` write denial.
 `confine-writes.spec.ts`: test that subagent writes to `.refactory/` are denied.
 
-## 11. Cancelled approval rewrite (#347, C3)
+## 18. Cancelled approval rewrite (#347, C3)
 
 Session #319 treated a cancelled `ask_user_question` as permission and implemented,
 committed and pushed without opening a mode. The fix: a `tools/post-execute` listener
@@ -754,7 +754,7 @@ approved: stop and wait for the person."
 **Held by.** `cancel-approval.spec.ts`: five tests covering the three cancellation codes,
 a successful result, and cancellation of a different tool.
 
-## 12. CEO-dispatched prompt integrity (#347, C2)
+## 19. CEO-dispatched prompt integrity (#347, C2)
 
 When the CEO ran a graph's agent step through its own subagent, the prompt could arrive
 with unrendered `{{templates}}`, and retries were rewritten: in #317 the CEO told
@@ -765,7 +765,7 @@ itself (not substituted values) are recorded as a warning in the bridge result a
 receipt, not refused — the steering ledger folds the brief verbatim into every template,
 so a brief containing `{{word}}` must not block begin. A spine `tools/pre-execute`
 listener records each prompt the CEO sends through `subagent`, `subagent_fork`, and
-`send_message`, keyed by session and node. Prompts are cleared on delivery completion
+`send_message`, keyed by run (workdir) and node. Prompts are cleared on delivery completion
 and on fresh dispatch (not on reuse, so parallel reviewers keep their recorded prompts).
 For review and audit nodes, `wf_done` checks only the latest recorded prompt for the
 node's current delivery and refuses when it does not contain the pending delivery's
@@ -774,9 +774,10 @@ contain, not under every due node, so a rewritten retry targeting one node canno
 satisfy another.  The spine fails closed: when the reviewer list cannot be fetched,
 all nodes are treated as reviewers; when the in-memory prompt cache is empty after a
 restart, it re-reads `prompt.txt` from the pending delivery via a bridge action.  The
-receipt records `prompt_hash`, `prompt_path`, `sent_prompt_hash` and, when present,
-`unresolved_keys`.  Unresolved template keys returned by the bridge are recorded as
-run warnings in events.jsonl and stored in the receipt.
+receipt records `prompt_hash`, `prompt_path`, `sent_prompt_hash`, `sent_prompt_path`
+and, when present, `unresolved_keys`.  Unresolved template keys returned by the bridge
+are recorded as run warnings in events.jsonl (once per delivery) and stored in the
+receipt.  The sent prompt text is written to `<delivery>/sent-prompt.txt`.
 
 **Held by.** `test_agent_delivery.py`: `test_main_bridge_renders_templates_before_begin`,
 `test_main_bridge_warns_unrendered_templates`,
@@ -787,7 +788,7 @@ for wf_done validation of reviewer nodes including rewritten-retry refusal, in-d
 rewrite refusal, parallel reviewer acceptance, reviewer-list-fetch fail-closed behavior,
 faithful-A/rewritten-A′/faithful-B refusal, and unresolved template key recording.
 
-## 13. Sacred Rules 8 and 9
+## 20. Sacred Rules 8 and 9
 
 Sacred Rules 8 (do not do another agent's job) and 9 (do not skip QA verification) from
 remote-factory's CEO instructions were not in the spine's CEO instructions. Both rules
@@ -799,24 +800,25 @@ the graph's review steps.
 **Held by.** `plugin.spec.ts`: `'CEO system prompt includes delegation and review
 discipline rules (Sacred Rules 8/9)'` asserts the section contains the key phrases.
 
-## 14. Check-not-run reporting (#363)
+## 21. Check-not-run reporting (#363)
 
 When a check could not run, the CEO recommended "Skip check gate and continue
 (Recommended)". The fix: `delivery.py`'s `_body()` derives the Check line from the
-authoring evidence's `validation.status` field (set to `'pass'` only when the check
-passes at `design_ops.py:428-429`). When validation is absent or `status` is not
-`'pass'` and a check command exists, the PR says "did not run" instead of "passed".
-The Reviews line checks audit requirement rows for status `pass` or `excluded` (not
-`BLOCKING`, which is not a valid audit status). The
-`require_completion` gate allows through when validation is absent (the check was never
-attempted or was explicitly skipped by the person), so a skipped check can reach the
-PR. The run report (`design_ops.py`) derives `"checked"` from the same evidence. The
-CEO instructions explicitly forbid recommending skipping a check gate.
+`validation.status` field in `authoring-evidence.json` (set to `'pass'` only when the
+check passes at `design_ops.py:428-429`). When validation is absent, the PR says "did
+not run"; when validation has a non-pass status, it says "failed". The Reviews line
+checks audit requirement rows: every row must have status `pass` and at least one row
+must exist. The run report (`design_ops.py`) derives `"checked"` from the same
+evidence. The CEO instructions explicitly forbid recommending skipping a check gate.
 
 **Held by.** `test_delivery.py`: `test_pr_verification_says_check_did_not_run_when_validation_fact_is_absent`,
 `test_pr_verification_says_check_passed_when_validation_fact_is_set`,
-`test_pr_reviews_line_says_audit_did_not_pass_on_fail_row`, and
-`test_pr_reviews_line_says_audit_did_not_pass_on_unverified_row`.
+`test_pr_reviews_line_says_audit_did_not_pass_on_fail_row`,
+`test_pr_reviews_line_says_audit_did_not_pass_on_unverified_row`,
+`test_pr_reviews_line_not_passed_on_excluded_row_without_user_change`,
+`test_pr_reviews_line_not_passed_on_empty_requirements`,
+`test_pr_check_line_says_failed_when_validation_failed`,
+and `test_run_report_checked_false_when_check_did_not_run`.
 
 ---
 

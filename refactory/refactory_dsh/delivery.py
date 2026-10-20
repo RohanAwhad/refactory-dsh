@@ -1513,22 +1513,28 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
     if check_passed:
         check_line = f"- **Check:** `{check_cmd}` passed in the run's worktree.\n"
     elif check_cmd:
-        check_line = f"- **Check:** `{check_cmd}` **did not run**.\n"
+        check_ran_and_failed = (ev_data is not None
+                                and isinstance(ev_data.get('validation'), dict)
+                                and ev_data['validation'].get('status') != 'pass')
+        if check_ran_and_failed:
+            check_line = f"- **Check:** `{check_cmd}` **failed**.\n"
+        else:
+            check_line = f"- **Check:** `{check_cmd}` **did not run**.\n"
     else:
         check_line = ""
 
     def _audit_passed() -> bool:
         try:
             audit_data = _json.loads(ctx.read_text(evidence.AUDIT)) if ctx.exists(evidence.AUDIT) else None
-        except Exception:
+        except (OSError, ValueError, KeyError, TypeError):
             return False
         if audit_data is None or not isinstance(audit_data, dict):
             return False
         rows = audit_data.get('requirements', [])
-        if not isinstance(rows, list):
+        if not isinstance(rows, list) or len(rows) == 0:
             return False
         return all(
-            isinstance(r, dict) and r.get('status') in ('pass', 'excluded') for r in rows
+            isinstance(r, dict) and r.get('status') == 'pass' for r in rows
         )
 
     if ev_data is not None and check_passed and _audit_passed():
@@ -1550,16 +1556,6 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
     )
     verification += _process_notes_section(ctx)
     sections.append(verification)
-    # Extract issue-close references from the brief (e.g. "Close #347 and #363")
-    import re as _re
-    _close_refs: set[str] = set()
-    for _cm in _re.finditer(
-        r'(?i)(?:close|closes|closing)\s+(?:#\d+(?:\s*(?:,|and)\s*)?)+', brief
-    ):
-        for _ref in _re.findall(r'#(\d+)', _cm.group(0)):
-            _close_refs.add(_ref)
-    if _close_refs:
-        sections.append("\n".join(f"Closes #{r}" for r in sorted(_close_refs, key=int)))
 
     sections.append(f"## Original request\n\n{brief}")
     sections.append(f"---\n\nWritten by a refactory design run once its reviews passed.\n\n"
@@ -1575,7 +1571,7 @@ def _process_notes_section(ctx: Any) -> str:
     def _safe_read_json(name: str) -> Any:
         try:
             return _json.loads(ctx.read_text(name))
-        except Exception:
+        except (OSError, ValueError, KeyError, TypeError):
             return None
 
     audit = _safe_read_json(evidence.AUDIT) if ctx.exists(evidence.AUDIT) else None

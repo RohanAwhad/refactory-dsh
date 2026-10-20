@@ -457,5 +457,13 @@ else:
       typeof w.summary === 'string' && w.summary.includes('unresolved template key'))
     expect(unresolvedWarning).toBeDefined()
     expect(unresolvedWarning.summary).toContain('unknown_key')
+
+    // Second wf_next should NOT add duplicate warnings (warn once per delivery)
+    await root.tools.get('wf_next')!.execute({}, {} as never)
+    const events2 = rfs(eventsPath, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l))
+    const warnings2 = events2.filter((e: Record<string, unknown>) => e.kind === 'run_warning'
+      && typeof e.summary === 'string' && (e.summary as string).includes('unresolved template key'))
+    // Should still be the same count (warned once, not twice)
+    expect(warnings2.length).toBe(warnings.length)
   })
 })

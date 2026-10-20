@@ -345,14 +345,17 @@ describe('goal completion guard (#347, C1)', () => {
     expect(text).toContain('halted')
   })
 
-  it('completion_override survives a rewrite with the same status', async () => {
+  it('completion_override survives a rewrite with the same status via recordStatus', async () => {
     const workdir = scratch()
     const dir = join(workdir, '.refactory')
     mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, 'invocation.json'), JSON.stringify({ id: 'inv-1' }))
+
+    // Write override for 'ready' status — wf_next will call recordStatus
+    // with 'ready' (node 'a' is due), so the override should survive.
     writeStatus(workdir, {
-      schema_version: 1, status: 'halted',
-      completion_override: { confirmed_status: 'halted', invocation: 'inv-1', at: '2026-01-01T00:00:00Z' },
+      schema_version: 1, status: 'ready',
+      completion_override: { confirmed_status: 'ready', invocation: 'inv-1', at: '2026-01-01T00:00:00Z' },
     })
 
     const root = new Context()
@@ -361,16 +364,13 @@ describe('goal completion guard (#347, C1)', () => {
     registerStubs(root)
     await root.plugin(spinePlugin, configuredConfig({ workdir }))
 
-    // Drive spine to write a new status record with the same 'halted' status
-    // by completing a node — it writes 'done', but we can verify override persistence
-    // by re-reading: the recordStatus for 'done' clears the 'halted' override, which is correct.
-    // Instead, verify directly: write halted again with the override present, read it back.
-    writeStatus(workdir, {
-      schema_version: 1, status: 'halted',
-      completion_override: { confirmed_status: 'halted', invocation: 'inv-1', at: '2026-01-01T00:00:00Z' },
-    })
+    // wf_next calls report() → recordStatus() with 'ready' (node 'a' is due).
+    // recordStatus reads the existing file, sees the override for 'ready' with
+    // matching invocation, and preserves it in the new record.
+    await root.tools.get('wf_next')!.execute({}, {} as never)
+
     const record = JSON.parse(readFileSync(join(dir, 'spine-status.json'), 'utf8'))
     expect(record.completion_override).toBeDefined()
-    expect(record.completion_override.confirmed_status).toBe('halted')
+    expect(record.completion_override.confirmed_status).toBe('ready')
   })
 })

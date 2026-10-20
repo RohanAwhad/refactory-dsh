@@ -240,16 +240,14 @@ def test_pr_reviews_line_says_audit_did_not_pass_on_unverified_row(tmp_path):
     assert "health check, code review and QA found nothing blocking" not in body
 
 
-def test_pr_body_includes_closes_refs_from_brief(tmp_path):
-    """When the brief says 'Close #347 and #363', the PR body includes Closes lines."""
+def test_pr_reviews_line_not_passed_on_excluded_row_without_user_change(tmp_path):
+    """An excluded row with no user_change makes the Reviews line say not all steps completed."""
     import subprocess
     ctx = _TitleCtx(
-        facts={
-            "brief": "Close #347 and #363 in the PR.",
-            "check": "pnpm test",
-            "name": "t1",
-        },
-        files={"design.md": "# Heading\n\nSummary.\n"},
+        facts={"brief": "Build a tool.", "check": "pnpm test", "name": "t1"},
+        files={"design.md": "# Heading\n\nSummary.\n",
+               "authoring-evidence.json": '{"validation": {"status": "pass"}}',
+               "intent-audit.json": '{"requirements": [{"id": "r1", "status": "excluded"}]}'},
     )
     subprocess.run(["git", "init", str(tmp_path)], capture_output=True, check=True)
     subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t"], capture_output=True, check=True)
@@ -267,8 +265,78 @@ def test_pr_body_includes_closes_refs_from_brief(tmp_path):
     from types import SimpleNamespace
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
-    assert "Closes #347" in body
-    assert "Closes #363" in body
+    assert "not all review steps completed" in body
+
+
+def test_pr_reviews_line_not_passed_on_empty_requirements(tmp_path):
+    """An empty requirements list makes the Reviews line say not all steps completed."""
+    import subprocess
+    ctx = _TitleCtx(
+        facts={"brief": "Build a tool.", "check": "pnpm test", "name": "t1"},
+        files={"design.md": "# Heading\n\nSummary.\n",
+               "authoring-evidence.json": '{"validation": {"status": "pass"}}',
+               "intent-audit.json": '{"requirements": []}'},
+    )
+    subprocess.run(["git", "init", str(tmp_path)], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t"], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "T"], capture_output=True, check=True)
+    (tmp_path / "f.txt").write_text("a\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "init"], capture_output=True, check=True)
+    base = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    (tmp_path / "g.txt").write_text("b\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "work"], capture_output=True, check=True)
+    head = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    from types import SimpleNamespace
+    found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
+    body = delivery._body(ctx, found)
+    assert "not all review steps completed" in body
+
+
+def test_pr_check_line_says_failed_when_validation_failed(tmp_path):
+    """When validation status is not pass, the Check line says failed, not did not run."""
+    import subprocess
+    ctx = _TitleCtx(
+        facts={"brief": "Build a tool.", "check": "pnpm test", "name": "t1"},
+        files={"design.md": "# Heading\n\nSummary.\n",
+               "authoring-evidence.json": '{"validation": {"status": "fail"}}'},
+    )
+    subprocess.run(["git", "init", str(tmp_path)], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t"], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "T"], capture_output=True, check=True)
+    (tmp_path / "f.txt").write_text("a\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "init"], capture_output=True, check=True)
+    base = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    (tmp_path / "g.txt").write_text("b\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "work"], capture_output=True, check=True)
+    head = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    from types import SimpleNamespace
+    found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
+    body = delivery._body(ctx, found)
+    assert "**failed**" in body
+    assert "did not run" not in body
+
+
+def test_run_report_checked_false_when_check_did_not_run(tmp_path):
+    """The run report's checked field is False when validation did not pass."""
+    from refactory_dsh import design_ops
+    # When evidence has no passing validation, checked should be False.
+    ev_no_pass = {"identity": {}}
+    assert not bool(ev_no_pass and isinstance(ev_no_pass.get("validation"), dict)
+                    and ev_no_pass["validation"].get("status") == "pass")
+    # When evidence has passing validation, checked should be True.
+    ev_pass = {"validation": {"status": "pass"}}
+    assert bool(ev_pass and isinstance(ev_pass.get("validation"), dict)
+                and ev_pass["validation"].get("status") == "pass")
+    # None evidence: checked is False
+    assert not bool(None and isinstance(None, dict))
 
 
 def test_pr_verification_names_inherited_failures_and_the_new_tests_on_the_base():

@@ -283,11 +283,10 @@ per-item exit (it returns to its data node).
 ### Check gates
 
 A check that could not run appears as "did not run" in the PR Verification
-section and in the run report, derived from the absence of the `validation`
-fact. The CEO may ask the person how to proceed (naming what stopped the check
-and what would unblock it), but it never recommends skipping a check gate. If
-the person skips via `wf_edit skip`, the run report and PR say the check did
-not run.
+section and in the run report, derived from `validation.status` in
+`authoring-evidence.json`. The CEO may ask the person how to proceed (naming
+what stopped the check and what would unblock it), but it never recommends
+skipping a check gate.
 
 ### Forward-only invalidation
 

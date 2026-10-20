@@ -755,7 +755,7 @@ export function apply(ctx: Context, config: Config): void {
   })
 
   // CEO prompt recording (#347, C2). Records the prompt text the CEO sends
-  // through subagent, subagent_fork and send_message, keyed by session:node.
+  // through subagent, subagent_fork and send_message, keyed by runKey:node.
   // Used by wf_done to validate that review/audit nodes received the
   // pending delivery's prompt.txt.  Cleared on delivery completion and
   // redispatch so an earlier faithful prompt cannot satisfy a rewritten retry.
@@ -772,16 +772,21 @@ export function apply(ctx: Context, config: Config): void {
     }
     if (promptText === undefined) return next()
 
-    // Find due nodes from the spine
+    // Find due nodes from the spine, keyed by run (workdir) so parallel
+    // GUI sessions cannot cross-contaminate (#347, C2).
     let spine: Spine | undefined
-    const sessionId = sessionIdOf(exec as ToolExec) ?? '_'
+    let runKey: string = '_'
     if (configuredSpine !== undefined) {
       spine = configuredSpine
+      runKey = config.workdir ?? '_configured_'
     } else {
       const session = exec.agent?.session
       if (session !== undefined) {
         const opened = openedBySession.get(String(session.id))
-        if (opened !== undefined) spine = opened.spine
+        if (opened !== undefined) {
+          spine = opened.spine
+          runKey = opened.workdir
+        }
       }
     }
     if (spine !== undefined) {
@@ -791,25 +796,11 @@ export function apply(ctx: Context, config: Config): void {
         // Record the prompt under the due node whose pending prompt.txt it
         // contains, not under every due node.  This prevents faithful-A,
         // rewritten-A′, faithful-B from letting A pass (#347, C2).
-        let matched = false
         for (const node of cur.nodes) {
           if (node._type === 'AgentNode' || node._type === 'LLMNode') {
-            const pending = pendingPrompts.get(node.id)
+            const pending = pendingPrompts.get(`${runKey}:${node.id}`)
             if (pending !== undefined && promptText.includes(pending)) {
-              const key = `${sessionId}:${node.id}`
-              const existing = ceoPrompts.get(key)
-              if (existing !== undefined) existing.push({ prompt: promptText, hash })
-              else ceoPrompts.set(key, [{ prompt: promptText, hash }])
-              matched = true
-            }
-          }
-        }
-        // If no pending prompt matched, record under all due agent nodes so
-        // the fail-closed check at wf_done still sees it.
-        if (!matched) {
-          for (const node of cur.nodes) {
-            if (node._type === 'AgentNode' || node._type === 'LLMNode') {
-              const key = `${sessionId}:${node.id}`
+              const key = `${runKey}:${node.id}`
               const existing = ceoPrompts.get(key)
               if (existing !== undefined) existing.push({ prompt: promptText, hash })
               else ceoPrompts.set(key, [{ prompt: promptText, hash }])
@@ -824,10 +815,14 @@ export function apply(ctx: Context, config: Config): void {
   // Reviewer node ids, fetched once from the runtime bridge and cached.
   // undefined = not yet fetched; null = fetch failed, treat all nodes as reviewers (fail closed).
   let reviewerIds: Set<string> | null | undefined
-  // Pending delivery prompts, cached per node at begin time.
+  // Pending delivery prompts, cached per runKey:node at begin time.
+  // Keyed by `${runKey}:${nodeId}` so parallel GUI sessions do not share state.
   const pendingPrompts = new Map<string, string>()
-  // Unresolved template keys per node, cached at begin for inclusion in receipt (#347, C2).
+  // Unresolved template keys per runKey:node, cached at begin for inclusion in receipt (#347, C2).
   const pendingUnresolvedKeys = new Map<string, unknown[]>()
+  // Track which deliveries have already warned about unresolved keys, so we warn
+  // once per delivery, not per wf_next call (#347, C2).
+  const unresolvedKeyWarned = new Set<string>()
 
   /** The id of the session an execution belongs to, when it has an agent. */
   function sessionIdOf(exec: ToolExec): string | undefined {
@@ -1480,6 +1475,7 @@ export function apply(ctx: Context, config: Config): void {
       })
     }
     if (next.status === 'ready' && !spine.isPaused() && agentCommand !== '' && workdir !== undefined) {
+      const runKey = workdir
       for (const node of next.nodes) {
         if (node._type !== 'AgentNode' && node._type !== 'LLMNode') continue
         // Dispatched AgentNodes are run by commandOf()/drain(); skip them here
@@ -1491,23 +1487,26 @@ export function apply(ctx: Context, config: Config): void {
         })
         if (typeof receipt.prompt !== 'string') throw new Error('agent delivery bridge returned no prompt')
         node.prompt_template = receipt.prompt
+        const mapKey = `${runKey}:${node.id}`
         // Clear old CEO prompts only on fresh dispatch (not reuse), so parallel
         // reviewers do not lose each other's recorded prompts (#347, C2).
-        const isNewDispatch = !pendingPrompts.has(node.id)
-        pendingPrompts.set(node.id, receipt.prompt)
+        const isNewDispatch = !pendingPrompts.has(mapKey)
+        pendingPrompts.set(mapKey, receipt.prompt)
         if (isNewDispatch) {
-          for (const key of ceoPrompts.keys()) {
-            if (key.endsWith(`:${node.id}`)) ceoPrompts.delete(key)
-          }
+          ceoPrompts.delete(mapKey)
         }
         // Record unresolved template keys as a run warning and cache for receipt (#347, C2).
+        // Warn once per delivery, not per wf_next call.
         const unresolvedKeys = receipt.unresolved_keys
         if (Array.isArray(unresolvedKeys) && unresolvedKeys.length > 0) {
-          recordWarnings(workdir, unresolvedKeys.map((k: unknown) => ({
-            node: node.id,
-            line: `unresolved template key: {{${String(k)}}}`,
-          })))
-          pendingUnresolvedKeys.set(node.id, unresolvedKeys as unknown[])
+          if (!unresolvedKeyWarned.has(mapKey)) {
+            unresolvedKeyWarned.add(mapKey)
+            recordWarnings(workdir, unresolvedKeys.map((k: unknown) => ({
+              node: node.id,
+              line: `unresolved template key: {{${String(k)}}}`,
+            })))
+          }
+          pendingUnresolvedKeys.set(mapKey, unresolvedKeys as unknown[])
         }
       }
     }
@@ -1726,8 +1725,8 @@ export function apply(ctx: Context, config: Config): void {
     + `with better instructions (${toolPrefix}_edit set-prompt/append-prompt, then ${toolPrefix}_redo) or stop. Never take over `
     + "the agent's work yourself."
     + '\n\n'
-    + "Every change that produces a pull request must pass through the graph's review steps: health check, "
-    + 'code review, focused QA, and overwatch audit. "The change is small" is not a reason to skip them.'
+    + "Every change that produces a pull request must pass through the graph's review nodes. "
+    + '"The change is small" is not a reason to skip them.'
     + '\n\n'
     + 'Never recommend skipping a check gate. When a check cannot run, report what stopped it and what '
     + 'would unblock it. Ask the person how to proceed. If the person skips, the run report and PR say '
@@ -1939,6 +1938,7 @@ export function apply(ctx: Context, config: Config): void {
       }
       // C2: For review/audit nodes, validate that the CEO's recorded prompt
       // contains the pending delivery's prompt.txt (#347, C2).
+      const runKey = workdir ?? '_configured_'
       if (agentCommand !== '' && workdir !== undefined && (node._type === 'AgentNode' || node._type === 'LLMNode')) {
         // Lazily fetch the reviewer list from the runtime bridge.
         if (reviewerIds === undefined) {
@@ -1953,31 +1953,26 @@ export function apply(ctx: Context, config: Config): void {
         }
         // Validate prompt for reviewer nodes
         let sentPromptHash: string | undefined
+        let sentPromptText: string | undefined
         if (reviewerIds === null || reviewerIds.has(args.node)) {
+          const mapKey = `${runKey}:${args.node}`
           // Fail closed: re-read prompt.txt from the pending delivery when
           // the in-memory cache is empty (e.g. after a restart).
-          let pending = pendingPrompts.get(args.node)
+          let pending = pendingPrompts.get(mapKey)
           if (pending === undefined) {
             try {
               const pp = runtimeBridge(agentCommand, workdir, commandEnv, { action: 'pending-prompt', node: args.node })
               if (typeof pp.prompt === 'string' && pp.prompt) {
                 pending = pp.prompt
-                pendingPrompts.set(args.node, pending)
+                pendingPrompts.set(mapKey, pending)
               }
             } catch { /* bridge failed — pending stays undefined, will refuse below */ }
           }
           if (pending !== undefined) {
-            // Check the latest recorded prompt for this node's current delivery,
-            // so a rewritten second dispatch within the same delivery is refused.
-            // When the latest prompt targets another parallel node, look for the
-            // latest matching prompt instead (#347, C2).
             // Check only the latest prompt recorded for this node's current
             // delivery, so a rewritten second dispatch is refused (#347, C2).
-            const allRecorded: Array<{ prompt: string; hash: string }> = []
-            for (const [key, entries] of ceoPrompts.entries()) {
-              if (key.endsWith(`:${args.node}`)) allRecorded.push(...entries)
-            }
-            if (allRecorded.length === 0) {
+            const allRecorded = ceoPrompts.get(mapKey)
+            if (allRecorded === undefined || allRecorded.length === 0) {
               throw new Error(
                 `wf_done refused: no recorded CEO prompt for reviewer node "${args.node}". `
                 + 'The prompt the CEO dispatched must include the pending delivery prompt.',
@@ -1989,6 +1984,7 @@ export function apply(ctx: Context, config: Config): void {
             const latest = allRecorded[allRecorded.length - 1]!
             if (latest.prompt.includes(pending!)) {
               sentPromptHash = latest.hash
+              sentPromptText = latest.prompt
             } else {
               throw new Error(
                 `wf_done refused: the latest recorded CEO prompt for reviewer node "${args.node}" does not contain `
@@ -2003,20 +1999,22 @@ export function apply(ctx: Context, config: Config): void {
             )
           }
         }
-        const nodeUnresolved = pendingUnresolvedKeys.get(args.node)
+        const mapKey = `${runKey}:${args.node}`
+        const nodeUnresolved = pendingUnresolvedKeys.get(mapKey)
         runtimeBridge(agentCommand, workdir, commandEnv, {
           action: 'finish', node: args.node,
           ...(sentPromptHash !== undefined ? { sent_prompt_hash: sentPromptHash } : {}),
+          ...(sentPromptText !== undefined ? { sent_prompt: sentPromptText } : {}),
           ...(nodeUnresolved !== undefined ? { unresolved_keys: nodeUnresolved } : {}),
         })
       }
       spine.complete(args.node)
       // Clear pending prompt, CEO prompts, and unresolved keys for completed node (#347, C2)
-      pendingPrompts.delete(args.node)
-      pendingUnresolvedKeys.delete(args.node)
-      for (const key of ceoPrompts.keys()) {
-        if (key.endsWith(`:${args.node}`)) ceoPrompts.delete(key)
-      }
+      const completedMapKey = `${runKey}:${args.node}`
+      pendingPrompts.delete(completedMapKey)
+      pendingUnresolvedKeys.delete(completedMapKey)
+      unresolvedKeyWarned.delete(completedMapKey)
+      ceoPrompts.delete(completedMapKey)
       return sync(json({ status: 'complete', node: args.node }))
     },
   }))
