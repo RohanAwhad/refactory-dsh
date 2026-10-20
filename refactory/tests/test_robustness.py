@@ -1207,3 +1207,124 @@ def test_fast_repair_rolling_convergence_hits_cap(tmp_path):
 
     with pytest.raises(ValueError, match="check attempt cap"):
         fast_repair(ctx, [feedback], kind="check")
+
+
+# ── Correction 1: robustness_notes with "credentials" must not stop the run ──
+
+
+def test_design_fast_broken_guarantee_with_credentials_is_repaired(tmp_path, monkeypatch):
+    """A design_fast run whose broken test is named test_does_not_see_the_real_credentials_0
+    is repaired and passes, not stopped as 'unavailable' (correction 1).
+
+    Without the fix, gate_qa would word-scan the robustness_notes text — which
+    contains the target test ID with "credentials" — and failure_kind would
+    return 'unavailable', stopping the run.  With the fix, robustness_notes are
+    excluded from the text that failure_kind classifies.
+    """
+    from refactory_dsh.fast import DesignFastMode
+
+    repo = _git_repo(tmp_path / "repo")
+    # check.py: produces pytest-like FAILED output when flag.txt says 'bad'.
+    # On the base (no flag.txt), it passes.
+    (repo / "check.py").write_text(
+        "import sys, pathlib\n"
+        "if pathlib.Path('flag.txt').exists() and pathlib.Path('flag.txt').read_text().strip() == 'bad':\n"
+        "    print('FAILED test_creds.py::test_does_not_see_the_real_credentials_0')\n"
+        "    print('= 1 failed in 0.1s =')\n"
+        "    sys.exit(1)\n"
+        "print('= 1 passed in 0.1s =')\n"
+    )
+    subprocess.run(["git", "-C", str(repo), "add", "."], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "add check"],
+                   capture_output=True, check=True)
+
+    FAST_PLAN = "Change only the requested file."
+    FAST_QA = json.dumps({"status": "pass",
+                          "checks": [{"name": "runs", "command": "python check.py",
+                                      "status": "pass", "evidence": "exit 0"}],
+                          "findings": [], "not_run": []})
+
+    # First emit: adds flag.txt='bad', causing check.py to fail with a FAILED
+    # line whose test ID contains "credentials".
+    bad_emit = _render({"flag.txt": "bad\n", "tool.py": "print('ok')\n"})
+    # Second emit: fixes flag.txt so check passes.
+    good_emit = _render({"flag.txt": "good\n", "tool.py": "print('ok')\n"})
+
+    model = _FakeModel([FAST_PLAN, bad_emit, FAST_QA, good_emit, FAST_QA])
+    result = DesignFastMode().run(
+        tmp_path / "run", model=model,
+        task={"name": "creds_test", "brief": "a tool",
+              "check": "python check.py", "target": str(repo)},
+    )
+    assert result.exit_ok, (
+        f"run should repair and pass (not stop as unavailable): {result.error}"
+    )
+
+
+# ── Correction 2: design_fast double base crash continues with note ──────────
+
+
+def test_design_fast_base_double_crash_continues_with_note(tmp_path, monkeypatch):
+    """A design_fast run whose base preparation crashes twice continues and
+    its check record carries the note (correction 2).
+
+    The stub uv crashes on calls 2-5 (the base install: two _try_base attempts,
+    each with run_command's retry).  Call 1 (attempt install) passes.  Calls 6+
+    (second attempt install) pass.  focused_check sets base_unavailable and
+    writes the note into check.txt, which the focused_check node now declares.
+    """
+    counter_dir = tempfile.mkdtemp(prefix="r2fast_")
+    counter_file = os.path.join(counter_dir, "counter")
+
+    repo = _git_repo(tmp_path / "repo")
+    (repo / "pyproject.toml").write_text("[project]\nname = 'app'\n")
+    subprocess.run(["git", "-C", str(repo), "add", "pyproject.toml"],
+                   capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "manifest"],
+                   capture_output=True, check=True)
+
+    # Stub uv: passes on call 1 (attempt install), crashes on calls 2-5
+    # (base install: 2 calls per _try_base x 2 _try_base attempts = 4 calls),
+    # then passes on calls 6+ (second attempt install).
+    stub_bin = tmp_path / "stub_bin"
+    stub_bin.mkdir()
+    uv_script = stub_bin / "uv"
+    uv_script.write_text(
+        f"#!/bin/sh\n"
+        f'f="{counter_file}"\n'
+        f'n=0; [ -f "$f" ] && n=$(cat "$f")\n'
+        f'n=$((n + 1)); echo $n > "$f"\n'
+        f'if [ $n -ge 2 ] && [ $n -le 5 ]; then exit 134; fi\n'
+        f'mkdir -p .venv/bin\n'
+        f"printf '#!/bin/sh\\necho stub-python\\n' > .venv/bin/python\n"
+        f'chmod +x .venv/bin/python\n'
+    )
+    uv_script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{stub_bin}{os.pathsep}{os.environ['PATH']}")
+
+    FAST_PLAN = "Change only the requested file."
+    FAST_QA = json.dumps({"status": "pass",
+                          "checks": [{"name": "runs", "command": "python tool.py",
+                                      "status": "pass", "evidence": "exit 0"}],
+                          "findings": [], "not_run": []})
+
+    # First emit: tool.py that fails → triggers base comparison (which crashes).
+    bad_emit = _render({"tool.py": "raise SystemExit(1)\n"})
+    # Second emit: tool.py that passes.
+    good_emit = _render({"tool.py": "print('ok')\n"})
+
+    model = _FakeModel([FAST_PLAN, bad_emit, FAST_QA, good_emit, FAST_QA])
+    result = DesignFastMode().run(
+        tmp_path / "run", model=model,
+        task={"name": "r2fast", "brief": "a tool",
+              "check": "python tool.py", "target": str(repo)},
+    )
+    assert result.exit_ok, f"run should continue despite base crash: {result.error}"
+
+    # check.txt should carry the base_unavailable note.
+    check_txt_path = tmp_path / "run" / "check.txt"
+    assert check_txt_path.exists(), "check.txt should exist"
+    check_txt = check_txt_path.read_text()
+    assert "base comparison unavailable" in check_txt or "without excusals" in check_txt, (
+        f"check.txt should carry the base_unavailable note: {check_txt}"
+    )

@@ -457,13 +457,20 @@ def gate_qa(ctx: Any) -> str:
     if findings:
         # Classify only refactory's own text; check stderr/stdout is target text
         # and must not be word-scanned (correction 1: gate_qa classifies target text).
+        # robustness_notes contain target test IDs and must not be classified
+        # (a test ID with "credentials" would incorrectly stop the run as
+        # unavailable — the b30b regression).
         if check_failed:
             refactory_findings = [
                 f for f in findings
-                if not f.startswith("requested runtime check failed")
+                if (not f.startswith("requested runtime check failed")
+                    and f != robustness_notes)
             ]
         else:
-            refactory_findings = findings
+            refactory_findings = [
+                f for f in findings
+                if f != robustness_notes
+            ]
         if refactory_findings:
             refactory_detail = "\n".join(refactory_findings)
             evidence.stop_unrepairable(evidence.failure_kind(refactory_detail), refactory_detail)
