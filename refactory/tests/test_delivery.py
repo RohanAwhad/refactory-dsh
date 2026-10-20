@@ -600,21 +600,26 @@ def test_foreign_commit_still_refused(tmp_path):
     sp.run(["git", "-C", str(repo), "commit", "-m", "reviewed"], capture_output=True, check=True)
     reviewed = sp.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
                       capture_output=True, text=True, check=True).stdout.strip()
-    # Make another (non-merge) commit
-    (repo / "g.txt").write_text("foreign\n")
-    sp.run(["git", "-C", str(repo), "add", "."], capture_output=True, check=True)
-    sp.run(["git", "-C", str(repo), "commit", "-m", "foreign"], capture_output=True, check=True)
-    foreign = sp.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+    # Create a proper worktree so require_current's git-dir check passes
+    wt_path = tmp_path / "wt"
+    sp.run(["git", "-C", str(repo), "worktree", "add", "-b", "run-branch",
+            str(wt_path), reviewed], capture_output=True, check=True)
+    # Make a foreign (non-merge) commit in the worktree
+    (wt_path / "g.txt").write_text("foreign\n")
+    sp.run(["git", "-C", str(wt_path), "add", "."], capture_output=True, check=True)
+    sp.run(["git", "-C", str(wt_path), "-c", "core.hooksPath=/dev/null",
+            "commit", "-m", "foreign"], capture_output=True, check=True)
+    foreign = sp.run(["git", "-C", str(wt_path), "rev-parse", "HEAD"],
                      capture_output=True, text=True, check=True).stdout.strip()
     assert foreign != reviewed
 
     found = worktree.Worktree(
-        path=str(repo), branch="main", base=reviewed,
+        path=str(wt_path), branch="run-branch", base=reviewed,
         head=reviewed, target=str(repo), run=str(tmp_path / "run"),
     )
     # _recover_interrupted_merge does nothing for non-merge commits
     delivery._recover_interrupted_merge(found)
-    after = sp.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+    after = sp.run(["git", "-C", str(wt_path), "rev-parse", "HEAD"],
                    capture_output=True, text=True, check=True).stdout.strip()
     assert after == foreign  # not reset — still the foreign commit
 
@@ -625,7 +630,7 @@ def test_foreign_commit_still_refused(tmp_path):
     wt_record.parent.mkdir(parents=True, exist_ok=True)
     import json
     wt_record.write_text(json.dumps({
-        "path": str(repo), "branch": "main", "base": reviewed,
+        "path": str(wt_path), "branch": "run-branch", "base": reviewed,
         "head": reviewed, "target": str(repo), "run": str(run_dir),
     }))
     with pytest.raises(ValueError, match="outside the run"):
@@ -648,16 +653,20 @@ def test_deliver_design_recovers_own_merge(tmp_path, monkeypatch):
     sp.run(["git", "-C", str(repo), "commit", "-m", "reviewed"], capture_output=True, check=True)
     reviewed = sp.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
                       capture_output=True, text=True, check=True).stdout.strip()
-    # Create a branch and merge it (delivery's own merge)
+    # Create a branch simulating main moving forward
     sp.run(["git", "-C", str(repo), "checkout", "-b", "main-moved"], capture_output=True, check=True)
     (repo / "g.txt").write_text("b\n")
     sp.run(["git", "-C", str(repo), "add", "."], capture_output=True, check=True)
     sp.run(["git", "-C", str(repo), "commit", "-m", "main-moved"], capture_output=True, check=True)
-    sp.run(["git", "-C", str(repo), "checkout", "-b", "run-branch", reviewed],
+    sp.run(["git", "-C", str(repo), "checkout", reviewed], capture_output=True, check=True)
+    # Create a proper worktree at the reviewed commit
+    wt_path = tmp_path / "wt"
+    sp.run(["git", "-C", str(repo), "worktree", "add", "-b", "run-branch",
+            str(wt_path), reviewed], capture_output=True, check=True)
+    # Merge main-moved into the worktree (delivery's own merge)
+    sp.run(["git", "-C", str(wt_path), "merge", "--no-ff", "--no-edit", "main-moved"],
            capture_output=True, check=True)
-    sp.run(["git", "-C", str(repo), "merge", "--no-ff", "--no-edit", "main-moved"],
-           capture_output=True, check=True)
-    merge_sha = sp.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+    merge_sha = sp.run(["git", "-C", str(wt_path), "rev-parse", "HEAD"],
                        capture_output=True, text=True, check=True).stdout.strip()
     assert merge_sha != reviewed
 
@@ -668,7 +677,7 @@ def test_deliver_design_recovers_own_merge(tmp_path, monkeypatch):
     wt_record.parent.mkdir(parents=True, exist_ok=True)
     import json as _json
     wt_record.write_text(_json.dumps({
-        "path": str(repo), "branch": "run-branch", "base": reviewed,
+        "path": str(wt_path), "branch": "run-branch", "base": reviewed,
         "head": reviewed, "target": str(repo), "run": str(run_dir),
     }))
 
@@ -682,7 +691,7 @@ def test_deliver_design_recovers_own_merge(tmp_path, monkeypatch):
 
     # Now verify it fails without _recover_interrupted_merge:
     # reset HEAD back to the merge commit
-    sp.run(["git", "-C", str(repo), "reset", "--hard", merge_sha],
+    sp.run(["git", "-C", str(wt_path), "reset", "--hard", merge_sha],
            capture_output=True, check=True)
     # Monkeypatch _recover_interrupted_merge to be a no-op
     monkeypatch.setattr(delivery, "_recover_interrupted_merge", lambda found: None)

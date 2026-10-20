@@ -466,8 +466,7 @@ def _require_current(found: Worktree) -> None:
                              "so its attempts are too; start the run again")
         _readd(Path(found.target), path, found.branch)
     common = Path(git(Path(found.target), "rev-parse", "--path-format=absolute", "--git-common-dir").strip())
-    git_dir = Path(git(path, "rev-parse", "--absolute-git-dir").strip())
-    if git_dir != common and git_dir.parent != common / "worktrees":
+    if Path(git(path, "rev-parse", "--absolute-git-dir").strip()).parent != common / "worktrees":
         raise ValueError(f"the run's worktree {path} no longer points at its own git directory; "
                          "nothing was changed")
     head = git(path, "rev-parse", "HEAD").strip()
