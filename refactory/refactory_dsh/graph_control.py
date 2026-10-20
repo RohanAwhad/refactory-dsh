@@ -12,6 +12,7 @@ from typing import Any
 from datetime import datetime, timezone
 
 from refactory_dsh.live import emit, read
+from refactory_dsh import recovery
 
 #: How long a resume waits for an exiting owner at a terminal status.
 #: Short enough that the CLI stays responsive; long enough to cover

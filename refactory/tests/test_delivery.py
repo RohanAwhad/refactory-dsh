@@ -570,7 +570,7 @@ def test_interrupted_merge_recovery_resets_to_reviewed_commit(tmp_path):
     # Back to the reviewed commit's branch and merge
     sp.run(["git", "-C", str(repo), "checkout", "-b", "run-branch", reviewed],
            capture_output=True, check=True)
-    sp.run(["git", "-C", str(repo), "merge", "--no-edit", "main-tip"],
+    sp.run(["git", "-C", str(repo), "merge", "--no-ff", "--no-edit", "main-tip"],
            capture_output=True, check=True)
     merge_sha = sp.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
                        capture_output=True, text=True, check=True).stdout.strip()
@@ -655,7 +655,7 @@ def test_deliver_design_recovers_own_merge(tmp_path, monkeypatch):
     sp.run(["git", "-C", str(repo), "commit", "-m", "main-moved"], capture_output=True, check=True)
     sp.run(["git", "-C", str(repo), "checkout", "-b", "run-branch", reviewed],
            capture_output=True, check=True)
-    sp.run(["git", "-C", str(repo), "merge", "--no-edit", "main-moved"],
+    sp.run(["git", "-C", str(repo), "merge", "--no-ff", "--no-edit", "main-moved"],
            capture_output=True, check=True)
     merge_sha = sp.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
                        capture_output=True, text=True, check=True).stdout.strip()
