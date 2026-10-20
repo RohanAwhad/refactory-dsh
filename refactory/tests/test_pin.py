@@ -95,9 +95,9 @@ def test_driver_recorded_at_launch(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 def test_dirty_driver_records_diff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A dirty checkout records its unified diff."""
     repo = tmp_path / "repo"
-    _init_repo(repo)
-    # Dirty the tracked file without committing.
-    (repo / "dummy.txt").write_text("changed")
+    _init_repo(repo, files={"refactory/refactory_dsh/module.py": "original"})
+    # Dirty a tracked file inside the machinery paths without committing.
+    (repo / "refactory/refactory_dsh/module.py").write_text("changed")
     run_dir = tmp_path / "run"
     _make_run_config(run_dir, "x", str(repo))
 
@@ -358,7 +358,7 @@ def test_pin_preparation_does_not_touch_driver_hooks(tmp_path: Path, monkeypatch
 
 def test_fingerprint_path_translation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Fingerprint keys are translated from the recorded checkout to REPO_ROOT."""
-    from refactory_dsh import recovery
+    from refactory_dsh import recovery, paths
 
     original_checkout = tmp_path / "original"
     pin_checkout = tmp_path / "pin"
@@ -386,7 +386,9 @@ def test_fingerprint_path_translation(tmp_path: Path, monkeypatch: pytest.Monkey
     }
 
     # When REPO_ROOT is the pin, translate the keys.
-    monkeypatch.setattr(recovery, "REPO_ROOT", pin_checkout)
+    # Monkeypatch paths.REPO_ROOT because recovery.py imports it from there
+    # via a function-local `from refactory_dsh.paths import REPO_ROOT`.
+    monkeypatch.setattr(paths, "REPO_ROOT", pin_checkout)
 
     # The translated fingerprint should match the pin's file.
     expected_configuration = config["configuration_fingerprints"]
@@ -513,13 +515,13 @@ def test_mode_independence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
 def test_dirty_diff_applied_to_pin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A dirty diff is recorded and the pin logic attempts to apply it."""
     repo = tmp_path / "repo"
-    commit_a = _init_repo(repo, files={"file.txt": "original"})
+    commit_a = _init_repo(repo, files={"refactory/refactory_dsh/file.txt": "original"})
 
     import refactory_dsh.pin as pin
     monkeypatch.setattr(pin, "REPO_ROOT", repo)
 
-    # Dirty the file.
-    (repo / "file.txt").write_text("dirty content")
+    # Dirty a file inside the machinery paths.
+    (repo / "refactory/refactory_dsh/file.txt").write_text("dirty content")
     run_dir = tmp_path / "run"
     _make_run_config(run_dir, commit_a, str(repo))
     pin.record_driver(run_dir / ".refactory" / "run-config.json")
@@ -528,7 +530,7 @@ def test_dirty_diff_applied_to_pin(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert config["driver"]["dirty_diff"] is not None
 
     # Reset the dirty file to verify the diff is recorded.
-    (repo / "file.txt").write_text("original")
+    (repo / "refactory/refactory_dsh/file.txt").write_text("original")
 
     # Move the driver forward.
     _add_commit(repo, {"other.txt": "new file"})
