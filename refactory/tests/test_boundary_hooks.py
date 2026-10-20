@@ -30,6 +30,7 @@ def test_core_only_environment():
         import os
         import sys
         import types
+        from pathlib import Path
 
         # Patch entry_points to return empty before importing model
         _real_ep = importlib.metadata.entry_points
@@ -59,6 +60,16 @@ def test_core_only_environment():
         client._runtime_root = Path(".")
         client._budget = None
         client._worker_receipt = None
+        client._routing_provenance = {}
+        client._timeout_s = 30
+        client._attempts = 1
+        client._backoff_s = 1.0
+        client._dsh_cli = ""
+        client._python_bin = Path(sys.executable)
+        client._permission_mode = "skip"
+        client._role_routes = {}
+        client._node_routes = {}
+        client._provider_config = {}
 
         env = client._environment()
 
@@ -124,6 +135,16 @@ def test_product_registered_environment():
         client._runtime_root = Path(".")
         client._budget = None
         client._worker_receipt = None
+        client._routing_provenance = {}
+        client._timeout_s = 30
+        client._attempts = 1
+        client._backoff_s = 1.0
+        client._dsh_cli = ""
+        client._python_bin = Path(sys.executable)
+        client._permission_mode = "skip"
+        client._role_routes = {}
+        client._node_routes = {}
+        client._provider_config = {}
 
         env = client._environment()
 
@@ -200,6 +221,16 @@ def test_worker_import_sequence_has_overlay():
         client._runtime_root = Path(".")
         client._budget = None
         client._worker_receipt = None
+        client._routing_provenance = {}
+        client._timeout_s = 30
+        client._attempts = 1
+        client._backoff_s = 1.0
+        client._dsh_cli = ""
+        client._python_bin = Path(sys.executable)
+        client._permission_mode = "skip"
+        client._role_routes = {}
+        client._node_routes = {}
+        client._provider_config = {}
 
         env = client._environment()
 
@@ -298,6 +329,16 @@ def test_stale_install_raises():
         client._runtime_root = Path(".")
         client._budget = None
         client._worker_receipt = None
+        client._routing_provenance = {}
+        client._timeout_s = 30
+        client._attempts = 1
+        client._backoff_s = 1.0
+        client._dsh_cli = ""
+        client._python_bin = Path(sys.executable)
+        client._permission_mode = "skip"
+        client._role_routes = {}
+        client._node_routes = {}
+        client._provider_config = {}
 
         try:
             env = client._environment()

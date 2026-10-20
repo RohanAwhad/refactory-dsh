@@ -33,7 +33,7 @@ def _load_boundary() -> dict[str, Any]:
 
 def _module_name(path: Path, root: Path) -> str:
     """Convert a .py file path to a dotted module name."""
-    relative = path.relative_to(root.parent)
+    relative = path.relative_to(root)
     parts = list(relative.parts)
     if parts[-1] == "__init__.py":
         parts = parts[:-1]
