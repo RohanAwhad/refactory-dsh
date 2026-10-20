@@ -1271,6 +1271,10 @@ def _parser() -> argparse.ArgumentParser:
         opened.add_argument("--" + key.replace("_", "-"), type=int if "tokens" in key else float, default=None)
     for key in ("role_routes", "node_routes", "provider_config"):
         opened.add_argument("--" + key.replace("_", "-"), type=json.loads, default=None)
+    opened.add_argument(
+        "--model-timeout", type=int, default=None, dest="model_timeout_s",
+        help="seconds one model completion may take before it is called hung (default: 1800)",
+    )
     opened.add_argument("--intent", default="", help="the user's purpose for this run's ledger")
     opened.add_argument(
         "--workdir", default="",
@@ -1831,13 +1835,19 @@ def main(argv: list[str] | None = None) -> int:
                     "facts_text": _facts_text(recorded_facts),
                 }
         elif args.verb == "open":
+            model_timeout_s = getattr(args, 'model_timeout_s', None)
+            if model_timeout_s is not None and not (1 <= model_timeout_s <= 7200):
+                raise ConsoleError(f"--model-timeout must be between 1 and 7200 seconds, got {model_timeout_s}")
+            mc = {key: getattr(args, key) for key in ("worker_backend", "provider", "model", "effort", "permission_mode", "role_routes", "node_routes", "provider_config") if getattr(args, key)}
+            if model_timeout_s is not None:
+                mc["timeout_s"] = model_timeout_s
             payload = _open_mode(
                 args.mode,
                 project=project,
                 workdir=args.workdir,
                 knobs=args.knob,
                 intent=args.intent,
-                model_context={key: getattr(args, key) for key in ("worker_backend", "provider", "model", "effort", "permission_mode", "role_routes", "node_routes", "provider_config") if getattr(args, key)},
+                model_context=mc,
                 resource_limits={key: getattr(args, key) for key in ("max_elapsed_s", "max_tokens", "validation_reserve_s", "validation_reserve_tokens") if getattr(args, key) is not None},
             )
         elif args.verb == "create":
