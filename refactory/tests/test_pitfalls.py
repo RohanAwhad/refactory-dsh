@@ -89,6 +89,11 @@ def _contract(body: str = "", anti: str = "") -> str:
     base = (
         "# Do the thing\n\n"
         "## Summary\n\nFix it.\n\n"
+        "## Failure trace\n\nN/A — this is a new feature.\n\n"
+        "## Ask mapping\n\n"
+        "| Ask (quoted from brief) | Design section | Test |\n"
+        "|---|---|---|\n"
+        '| "do a thing" | § Changes | test.py |\n\n'
         "## Rule and sites\n\n"
         "- `file.py:1` — **[changed]**\n\n"
         "## Docs\n\n"

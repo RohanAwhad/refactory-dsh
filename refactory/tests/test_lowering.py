@@ -298,7 +298,7 @@ def test_real_modes_get_check_envelope(mode_cls, check_node_id, expected_envelop
     """
     from refactory_dsh.design import DesignMode
     from refactory_dsh.fast import DesignFastMode
-    from refactory_packages.fix_pack.mode import MakePass
+    from refactory_packages.fix_pack.mode import MakePass  # noqa: F811
 
     classes = {"design": DesignMode, "design_fast": DesignFastMode, "make_pass": MakePass}
     mode = classes[mode_cls]()

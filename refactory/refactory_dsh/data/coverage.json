@@ -175,7 +175,7 @@
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
       "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`). The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-      "reviewed_schema": "0bdf6df91cb2c16aa30e6b0a7319b99c56d2e2be894037a3f70b05a456d80f0f"
+      "reviewed_schema": "0556acf73fcd4801c479dcbe515649942ca5e76f4b8523406537e7444794f9b5"
     },
     "default_pack/design_fast": {
       "doc": "refactory/docs/budgets-fast-modes.md",
@@ -204,7 +204,7 @@
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
       "purpose": "Build a small artifact with one sequential strategist, coder and QA agent, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none (`worktree=0` writes .factory/artifacts instead; `source_project` copies a directory there). The check runs in that worktree before focused QA. It has no approval gate, so it opens no pull request: the branch is left for you to push.",
-      "reviewed_schema": "251795ee3c0005c0d3abf41b3d1624c5ff60c6e929d8cbd31c75c4e950b48147"
+      "reviewed_schema": "75a7f09a27cb047d93867ea56a1a69b5b436215049eb16505dda70ab1165053a"
     },
     "default_pack/edit": {
       "doc": "refactory/docs/authoring-validation.md",
@@ -264,7 +264,7 @@
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
       "purpose": "Change a repository until a failing check passes, on a branch of its own, through the steps any mode that changes a repository attaches (`repo_change`): the example mode authors copy. It opens no pull request; unscored, so not an optimization target.",
-      "reviewed_schema": "e23089c592149082b0c64eb7bda81bd8adde05ee284df5157e7bf8e402de0007"
+      "reviewed_schema": "c23f78ab9a97b32bfc8cc4a9fedcfab5c99092e892c50860f48c6e722385af9d"
     },
     "java_build_pack/build": {
       "doc": "refactory/docs/concepts.md",
@@ -1358,7 +1358,8 @@
           "note": "note",
           "run": "run",
           "runsRoot": "runs_root",
-          "scope": "scope"
+          "scope": "scope",
+          "source": "source"
         },
         "order": [
           "run",
@@ -1366,7 +1367,8 @@
           "intent",
           "note",
           "kind",
-          "scope"
+          "scope",
+          "source"
         ],
         "required": [
           "run"
@@ -1380,7 +1382,7 @@
             "note": "Keep the output text unchanged",
             "run": "/tmp/example-run"
           },
-          "explanation": "Read or append to the run\u2019s intent ledger. CLI/panel also expose gate answers and boundary controls; chat only exposes notes, constraints and seed."
+          "explanation": "Read or append to the run\u2019s intent ledger. CLI/panel also expose gate answers and boundary controls; chat only exposes notes, constraints and seed. Use --source ceo for the CEO\u2019s own observations (context only, not auditable); the CLI default is user-relayed (the person\u2019s words, auditable)."
         }
       ],
       "interfaces": {
@@ -1389,7 +1391,7 @@
         "panel": "Steering and user gate controls."
       },
       "purpose": "Read or append to the run\u2019s intent ledger. CLI/panel also expose gate answers and boundary controls; chat only exposes notes, constraints and seed.",
-      "reviewed_schema": "c3a42de5f6185bb5ad9ff8cb2349f43a09c4013b5b493b2f12eb7a69311da410"
+      "reviewed_schema": "1cd553bcc1982fe5717a19d9a0dfd396ab3e3037efef6f634d15f165afa921df"
     },
     "stop": {
       "chat": {
