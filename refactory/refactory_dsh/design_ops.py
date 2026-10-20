@@ -542,13 +542,6 @@ def enforce_guardedness(ctx: Any) -> list[str]:
 
     Reads test-guardedness.json (already written by check_artifact)
     and design.md's ## Test guardedness exemptions section.
-
-    Only genuinely **new** test files (Added in the diff, not Modified) are
-    enforced.  A modified existing test that passes on the base is not "a new
-    test that passes without the change" (#384 item 1) — it may be a
-    legitimately fixed test.  Files that cannot even be collected on the base
-    (``cannot_run_on_base``) are also excluded: they effectively guard the
-    change because the test cannot run without it.
     """
     if not ctx.exists("test-guardedness.json"):
         return []
@@ -560,34 +553,12 @@ def enforce_guardedness(ctx: Any) -> list[str]:
         return []
 
     # Collect non-guarding test file paths.
-    # compute_test_guardedness (base_check.py) produces {"file": ..., "guarding": bool}.
-    # Exclude ``cannot_run_on_base``: a test that cannot even be collected on the
-    # base effectively guards the change.
+    # compute_test_guardedness (base_check.py) produces {"file": ..., "guarding": bool},
+    # NOT {"test_file": ..., "status": "not_guarding"}.
     non_guarding = []
     for result in guardedness.get("results", []):
-        if (result.get("guarding") is False
-                and result.get("file_level") != "cannot_run_on_base"):
+        if result.get("guarding") is False:
             non_guarding.append(result.get("file", "unknown"))
-
-    if not non_guarding:
-        return []
-
-    # Only block genuinely new test files (Added in the diff), not modified ones.
-    # A modified existing test that passes on the base may be a legitimately
-    # fixed test, not "a new test that passes without the change".
-    found = worktree.recorded(ctx.workdir)
-    if found is not None:
-        try:
-            added_output = worktree.git(
-                Path(found.path), "diff", "--name-only", "--diff-filter=A",
-                found.base, "HEAD",
-            )
-            added_files = set(
-                f for f in added_output.strip().splitlines() if f.strip()
-            )
-            non_guarding = [t for t in non_guarding if t in added_files]
-        except (ValueError, OSError):
-            pass  # cannot determine; enforce on all changed files
 
     if not non_guarding:
         return []
