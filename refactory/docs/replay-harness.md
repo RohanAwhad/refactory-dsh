@@ -52,8 +52,17 @@ The `--output` file is a JSON object:
 ### Committed baseline
 
 The baseline for the current verifier is committed at
-`refactory/tests/fixtures/verifier_baseline.json`. It records the model,
-date and per-entry results from a real run over the evidence log.
+`refactory/tests/fixtures/verifier_baseline.json`. It has not been
+measured yet: the PR ships the harness and fixtures, and the measured
+baseline is produced after merge by running:
+
+```bash
+python -m refactory_dsh.replay_harness \
+  --evidence refactory/tests/fixtures/evidence_log_entries.json \
+  --output refactory/tests/fixtures/verifier_baseline.json
+```
+
+Record the result on #400. Reviewers must not block on its absence.
 
 ### Unit tests
 
