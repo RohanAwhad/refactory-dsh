@@ -1948,7 +1948,7 @@ export function apply(ctx: Context, config: Config): void {
                 + 'The prompt the CEO dispatched must include the pending delivery prompt.',
               )
             }
-            const latest = allRecorded[allRecorded.length - 1]
+            const latest = allRecorded[allRecorded.length - 1]!
             if (latest.prompt.includes(pending!)) {
               sentPromptHash = latest.hash
             } else {
