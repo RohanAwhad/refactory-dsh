@@ -3,13 +3,12 @@
  * each prompt the CEO sends through subagent/subagent_fork/send_message and
  * validates that review/audit nodes received the pending delivery's prompt.txt.
  */
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { defineTool } from '@deepseek-ai/dsh-tools'
-import type { Agent } from '@deepseek-ai/dsh-agent'
 import { afterEach, describe, expect, it } from 'vitest'
 import * as spinePlugin from '../src/index.ts'
 import type { Config } from '../src/index.ts'
@@ -106,7 +105,7 @@ async function executeTool(
 }
 
 /** An executable stub for the agent command bridge. */
-function agentStub(workdir: string): string {
+function agentStub(_workdir: string): string {
   // The stub bridge returns a minimal record for begin with a prompt field,
   // an empty object for finish, and a reviewers list for the reviewers action.
   const scriptDir = scratch()
