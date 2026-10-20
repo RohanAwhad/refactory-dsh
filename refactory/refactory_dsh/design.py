@@ -335,7 +335,7 @@ class DesignMode(Mode):
                    "pitfalls.json"),
             writes=("reviews/design-review-feedback.txt",),
             produces=("design_review_feedback", "design_review_attempts_used",
-                      "design_review_findings"),
+                      "design_review_findings", "pitfall_coverage"),
             knobs=("design_review_attempts",),
             max_iterations=4,
             notes="proceed on PASS with no findings; reloop to design_doc otherwise; "
