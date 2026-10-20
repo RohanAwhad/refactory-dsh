@@ -2,7 +2,7 @@
  * Tests for project propagation through startup.ts and wf_open.
  */
 
-import { describe, expect, it, vi, afterEach } from 'vitest'
+import { describe, expect, it, afterEach } from 'vitest'
 
 describe('project-propagation', () => {
   afterEach(() => {
