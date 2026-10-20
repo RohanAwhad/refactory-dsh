@@ -413,7 +413,10 @@ def copy_uncommitted(target: Path, worktree_path: Path, run: Path) -> list[dict[
     target = Path(target).resolve()
     worktree_path = Path(worktree_path).resolve()
     run = Path(run).resolve()
-    run_id = run.name.removeprefix("run-") if run.name.startswith("run-") else run.name
+    # Derive run_id from the worktree path, not the run directory, so it matches
+    # the convention used by create() and uncommitted_record().
+    wt_name = worktree_path.name
+    run_id = wt_name.removeprefix("run-") if wt_name.startswith("run-") else wt_name
 
     # 1. Modified / staged tracked files (union of --name-only HEAD and --cached)
     try:

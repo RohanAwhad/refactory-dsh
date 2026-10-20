@@ -833,6 +833,10 @@ def validate(ctx: Any) -> str:
         revision = str(ctx.facts.get("revision_of") or brief.get("mode") or "")
         task_refs, requires_data = _required_bindings(ctx, revision)
         requires_data = requires_data or bool(brief.get("data_node"))
+    # When the package is staged (prepare_create), the project for validation is
+    # the staging base, not the shared checkout.
+    staging_root = ctx.facts.get("package_root")
+    staging_project = Path(staging_root).parent.parent.parent if staging_root else None
     try:
         problems = check_package(
             name,
@@ -841,6 +845,7 @@ def validate(ctx: Any) -> str:
             requires_data_node=requires_data,
             requires_task_refs=tuple(task_refs),
             requires_input=declared_inputs(ctx.knob("requires_input", "")),
+            project_override=staging_project,
         )
     except Exception as exc:
         problems = [f"{type(exc).__name__}: {exc}"]
@@ -1020,6 +1025,7 @@ def check_package(
     requires_task_ref: str = "",
     requires_task_refs: tuple[str, ...] = (),
     requires_input: tuple[str, ...] = (),
+    project_override: Path | None = None,
 ) -> list[str]:
     """Everything wrong with a staged package, as a list of reasons.
 
@@ -1032,11 +1038,16 @@ def check_package(
     The two checks are both run rather than the first that fires: the retry prompt
     is more useful the more of the truth it carries, and parsing and semantics
     catch different things.
+
+    ``project_override``, when given, is the directory whose ``.factory/packages/``
+    holds the staged package (e.g. the per-run staging base).  Without it, the
+    shared project checkout is used.
     """
     from refactory_dsh import sandbox
 
-    registry.install_workspace(project_for_nodes())
-    root = registry.workspace_root(project_for_nodes()) / name
+    project = project_override or project_for_nodes()
+    registry.install_workspace(project)
+    root = registry.workspace_root(project) / name
     if not root.is_dir():
         return [f"no directory at {root}"]
     problems: list[str] = []
@@ -1050,7 +1061,7 @@ def check_package(
     if problems:
         return problems
 
-    problems.extend(sandbox.ast_check(name, project_for_nodes()))
+    problems.extend(sandbox.ast_check(name, project))
     if any("does not parse" in problem for problem in problems):
         # Nothing further can be learned from a file that is not valid Python.
         return problems
@@ -1062,7 +1073,7 @@ def check_package(
 
     checked = sandbox.verify_sandboxed(
         name,
-        project=project_for_nodes(),
+        project=project,
         requires_data_node=requires_data_node,
         requires_task_ref=requires_task_ref,
         requires_task_refs=requires_task_refs,

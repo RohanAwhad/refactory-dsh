@@ -165,11 +165,16 @@ def gate_emit(ctx: Any) -> str:
 
 def validate_package(ctx: Any) -> str:
     brief = ctx.read_json("brief.json", {})
+    # When the package is staged (prepare_create / prepare_package), the project for
+    # validation is the staging base, not the shared checkout.
+    staging_root = ctx.facts.get("package_root")
+    staging_project = Path(staging_root).parent.parent.parent if staging_root else None
     try:
         problems = create_ops.check_package(
             str(ctx.facts["name"]), requires_data_node=bool(brief.get("data_node")),
             requires_task_refs=tuple(brief.get("task_refs", ())),
             requires_input=create_ops.declared_inputs(ctx.knob("requires_input", "")),
+            project_override=staging_project,
         )
     except Exception as exc:
         problems = [f"{type(exc).__name__}: {exc}"]
