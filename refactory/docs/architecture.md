@@ -612,3 +612,90 @@ metadata, offline generation and extension checklist. Run `pnpm run docs:generat
 after reviewed changes and `pnpm run docs:check` before building. New public
 operations, mode schemas and worker capabilities require current explanations,
 examples and explicit CLI/chat/panel routes.
+
+## Core/product boundary
+
+The codebase is partitioned into **core** and **product** modules, in preparation
+for splitting into two repositories (`refactory-core` and `refactory`).
+
+**Core** contains the DSL (`nn/`), the engines (`dsh_runtime`, `evaluators`),
+the workers (`model`, `workers`), the outer loop (`loop`, `outerloop`, `optim/`),
+run state and control (`events`, `invocations`, `graph_control`, etc.),
+`sandbox`, and `toolchain`.
+
+**Product** contains the CLI (`cli`, `console`), modes (`design`, `create`,
+`edit`, `fast`), delivery infrastructure (`repo_change`, `worktree`, `delivery`),
+and supporting modules (`brief_guard`, `target_guard`, etc.).
+
+**Dependency direction:** product → core only. A core module must never import a
+product module.
+
+### Classifying a new module
+
+Add the module's dotted name to `refactory/refactory_dsh/data/boundary.json`,
+in either `core` or `product`. Run `python -m pytest refactory/tests/test_boundary.py`
+to verify. An unclassified module fails the test.
+
+### Allow-listing a temporary leak
+
+When a core module must temporarily import a product module (e.g. a concurrent
+PR is changing both), add an entry to `allowed_leaks` in `boundary.json`:
+
+    "refactory_dsh.<core>": [
+      {"imports": "refactory_dsh.<product>", "reason": "<why>", "until": "<when removed>"}
+    ]
+
+The test verifies the leak still exists; once the import is removed, a stale
+allow-list entry — one whose leak no longer exists — causes a test failure until
+the entry is removed.
+
+### Registering from product
+
+When core needs to call product logic, product registers a callback that core
+discovers at call time. The `importlib.metadata` entry-point mechanism is
+preferred because it is independent of import order and of which process runs
+the code.
+
+Example: `worktree.py` provides a `_worktree_environment_overlay` function
+registered as an entry point in `pyproject.toml`. `model.py`'s
+`get_environment_overlay()` discovers and caches it on first use. With no
+registration (core-only install), the overlay is `None` and the block is
+skipped. A product registration is available only in processes whose
+installed distribution declares the entry point.
+
+Every process that calls `model._environment()` gets the overlay through the
+same entry-point discovery:
+
+| Process | Path to model | Interpreter |
+|---|---|---|
+| Worker | `worker_node.execute` → `model` | .venv/bin/python |
+| Interactive owner | `interactive.py` → `model` | .venv/bin/python |
+| Console | `console` → `model` | .venv/bin/python |
+| Supervisor child | spawns `-m refactory_dsh.interactive` → `model` | sys.executable |
+| FnNode ops | `python -m refactory_dsh.run` (startup.ts) → `model` | PATH python |
+| Evaluator model judge | `evaluators.py` → sandbox → `model` | sys.executable (PYTHONPATH=refactory/) |
+
+Sandbox children run `sys.executable` with `PYTHONPATH=refactory/` and keep
+`REFACTORY_WORKDIR`. They find the entry point through the venv's dist-info or
+`refactory/refactory_dsh.egg-info`, and `entry_points()` deduplicates the two,
+so the more-than-one guard does not misfire.
+
+**After pulling this change, every checkout must run `uv sync` (or
+`./install.sh`)**, or every agent node in a worktree run stops with:
+
+    RuntimeError: the worktree record exists but no environment overlay is
+    installed; re-run `uv sync` or `./install.sh`
+
+The run's setup syncs only the worktree's own venv (`worktree.py`, first check
+via `repo_change.py`). It does not re-install when only `refactory/pyproject.toml`
+changes, because the install key covers the root manifests. The driver's
+interpreter is synced only by `install.sh`; the `refactory-dsh` launcher runs
+`.venv/bin/python` without syncing.
+
+### Running the boundary test
+
+    python -m pytest refactory/tests/test_boundary.py -v
+
+The test enforces the boundary statically (AST scan), at runtime (import scan),
+on TypeScript packages, and checks that allowed exceptions are still present
+and that non-import references are tracked.

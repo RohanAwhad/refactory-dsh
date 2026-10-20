@@ -82,7 +82,7 @@ BODY = "pull-request.md"
 
 #: What a run that was approved up front told the person delivery would do, before it
 #: started (:func:`announce`); `prepare` keeps the run to it.
-SHOWN = Path(".refactory") / "delivery-shown.json"
+from refactory_dsh.invocations import DELIVERY_SHOWN as SHOWN  # was: SHOWN = Path(…)
 
 #: The visibilities a new repository may have. Private unless the person says otherwise.
 VISIBILITIES = ("private", "internal", "public")

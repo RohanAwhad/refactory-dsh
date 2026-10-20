@@ -14,11 +14,48 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from refactory_dsh import delivery, lowering, target_guard, worktree
+from refactory_dsh import lowering
 from refactory_dsh.nn.executor import ITEMS_OVERRIDE
 from refactory_dsh.run_artifacts import archive_root, overlaps, owned_outputs
 from refactory_dsh.steering import LEDGER
 from refactory_dsh.run_ownership import LOCK, ownership
+
+# ── constants that core and product share ──────────────────────────────────────
+# Moved here (core) so that neither side needs to import the other to name them.
+# Product modules re-export from their original locations for backward compat.
+
+#: Where a run records the worktree it works in.
+WORKTREE_RECORD = Path(".refactory") / "worktree.json"
+
+#: Where an attempt records the files it is about to write.
+PENDING = Path(".refactory") / "materialise-pending.json"
+
+#: The script reviewers run commands through.
+WRAPPER = Path(".refactory") / "in-worktree"
+
+#: The HOME a check is given.
+CHECK_HOME = Path(".refactory") / "check-home"
+
+#: The HOME the unchanged base is prepared and checked with.
+BASE_CHECK_HOME = Path(".refactory") / "base-check-home"
+
+#: How long one install may take before it is reported as failed.
+INSTALL_TIMEOUT_S = 1800
+
+#: Suppress git hook managers so installs and commands do not rewrite hooks (#347).
+HOOK_SUPPRESS: dict[str, str] = {"LEFTHOOK": "0", "HUSKY": "0"}
+
+#: Where a run keeps its target's baseline.
+TARGET_RECORD = Path(".refactory") / "target.json"
+
+#: What a run that was approved up front told the person delivery would do.
+DELIVERY_SHOWN = Path(".refactory") / "delivery-shown.json"
+
+#: What a node that calls run_check writes.
+CHECK_WRITES = ("changes.diff", "test-guardedness.json")
+
+#: What a node that calls run_check produces.
+CHECK_PRODUCES = ("commit", "files", "inherited_failures")
 
 INVOCATION = Path('.refactory/invocation.json')
 
@@ -91,8 +128,8 @@ def prepare(
                     Path('.refactory/graph-controls'), Path('.refactory/graph-control-receipt.json'),
                     Path('.refactory/resource-usage.json'), Path('.refactory/workers'),
                     Path('.refactory/resume-request.json'), Path('.refactory/run-config.json'),
-                    target_guard.RECORD, worktree.RECORD, worktree.PENDING, worktree.WRAPPER,
-                    worktree.CHECK_HOME, worktree.BASE_CHECK_HOME, delivery.SHOWN, INVOCATION]
+                    TARGET_RECORD, WORKTREE_RECORD, PENDING, WRAPPER,
+                    CHECK_HOME, BASE_CHECK_HOME, DELIVERY_SHOWN, INVOCATION]
         for relative in metadata:
             path = workdir / relative
             if not path.exists() and not path.is_symlink():
