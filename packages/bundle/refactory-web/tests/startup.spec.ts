@@ -61,9 +61,18 @@ describe('refactory-web startup provider', () => {
 })
 
 describe('refactory-web layer', () => {
-  it('carries the wf_next reminder exclusion the web-app patch supplied', () => {
+  it('carries the wf_next and wf_verdict reminder exclusion the web-app patch supplied', () => {
     expect(PATCH).toContain('id: repeat-tool-reminder')
-    expect(PATCH).toContain('exclude: [wf_next]')
+    expect(PATCH).toContain('exclude: [wf_next, wf_verdict]')
+  })
+
+  it('carries the ui-conversation composition row with busyEnter: steer (H1)', () => {
+    // The refactory-web composition sets the conversation plugin's busyEnter to
+    // steer.  The full schema-resolution test (steer without saved, queue with
+    // saved) lives in packages/workflow/workflow-spine/tests/busy-enter.spec.ts,
+    // which has access to @deepseek-ai/schemastery.
+    expect(PATCH).toContain('id: ui-conversation')
+    expect(PATCH).toContain('busyEnter: steer')
   })
 
   it('disables the official whale and mounts the re:factory occupants', () => {
