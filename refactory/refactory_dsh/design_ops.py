@@ -370,7 +370,7 @@ def gate_pitfalls(ctx: Any) -> str:
 
     raw = ctx.read_text("pitfalls.json") if ctx.exists("pitfalls.json") else ""
     source = str(ctx.facts.get("source") or ctx.facts.get("artifact") or "")
-    problems = pitfalls_mod.validate_pitfalls(raw, source)
+    problems = pitfalls_mod.validate_pitfalls(raw, source, run_dir=str(ctx.workdir))
 
     if not problems:
         ctx.write_text("pitfalls-review.txt", "ok\n")

@@ -18,7 +18,7 @@ VALID_CATEGORIES = (
 PIT_ID_RE = re.compile(r'^PIT-\d{3}$')
 
 
-def validate_pitfalls(raw: str, source: str = "") -> list[str]:
+def validate_pitfalls(raw: str, source: str = "", run_dir: str = "") -> list[str]:
     """Validate pitfalls.json content.  Returns a list of problems (empty = valid)."""
     problems: list[str] = []
     try:
@@ -58,19 +58,60 @@ def validate_pitfalls(raw: str, source: str = "") -> list[str]:
         evidence = str(entry.get("evidence", ""))
         if not evidence:
             problems.append(f"{label}: evidence is empty")
-        elif ":" not in evidence:
+        elif evidence.lower().startswith('absent:'):
+            # Form 1: absence claim — absent: <path or glob>
+            claimed_path = evidence.split(':', 1)[1].strip()
+            if not claimed_path:
+                problems.append(f"{label}: absence claim has no path")
+            elif Path(claimed_path).is_absolute():
+                problems.append(f"{label}: absence claim {claimed_path!r} is an absolute path")
+            elif '..' in Path(claimed_path).parts:
+                problems.append(f"{label}: absence claim {claimed_path!r} escapes the worktree")
+            elif source:
+                if any(c in claimed_path for c in ('*', '?', '[')):
+                    try:
+                        matches = sorted(
+                            str(p.relative_to(source))
+                            for p in Path(source).glob(claimed_path)
+                        )
+                    except ValueError as exc:
+                        problems.append(f"{label}: absence claim {claimed_path!r} is not a valid glob: {exc}")
+                        matches = []
+                    if matches:
+                        first = ', '.join(matches[:3])
+                        problems.append(
+                            f"{label}: false absence claim 'absent: {claimed_path}'"
+                            f" \u2014 matches exist: {first}"
+                        )
+                else:
+                    if (Path(source) / claimed_path).exists():
+                        problems.append(
+                            f"{label}: false absence claim 'absent: {claimed_path}'"
+                            f" \u2014 path exists"
+                        )
+        elif re.match(r'^(brief\.json|research/[\w-]+\.md)$', evidence):
+            # Form 2: run-file citation
+            if run_dir:
+                if not (Path(run_dir) / evidence).is_file():
+                    problems.append(
+                        f"{label}: run-file citation '{evidence}'"
+                        f" \u2014 file not found in run directory"
+                    )
+        elif ':' in evidence:
+            # Form 3: file:line citation (existing behaviour preserved)
+            if source:
+                # Best-effort file existence check, consistent with
+                # gate_design_review's citation check: unresolvable paths are
+                # skipped, not blocked.
+                for cite in re.finditer(r'([^\s,;]+):(\d+)', evidence):
+                    file_path = cite.group(1)
+                    full = Path(source) / file_path
+                    if not full.is_file():
+                        # Skip: the file may use a shortened path the gate
+                        # cannot resolve from here.
+                        pass
+        else:
             problems.append(f"{label}: evidence {evidence!r} does not cite file:line")
-        elif source:
-            # Best-effort file existence check, consistent with
-            # gate_design_review's citation check: unresolvable paths are
-            # skipped, not blocked.
-            for cite in re.finditer(r'([^\s,;]+):(\d+)', evidence):
-                file_path = cite.group(1)
-                full = Path(source) / file_path
-                if not full.is_file():
-                    # Skip: the file may use a shortened path the gate
-                    # cannot resolve from here.
-                    pass
 
         prescription = str(entry.get("prescription", ""))
         if not prescription.strip():
