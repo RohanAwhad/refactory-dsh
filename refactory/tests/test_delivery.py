@@ -888,16 +888,16 @@ def _calls(tmp_path: Path) -> str:
     return log.read_text() if log.exists() else ""
 
 
-def _answers(*emits: str) -> list[str]:
+def _answers(*emits: str, corrections_answer: str = DESIGN_DOC_ANSWER) -> list[str]:
     """Every answer a design run needs, in the order its graph asks.
 
-    The apply_corrections agent runs between gate_strategy and emit; its answer
-    is a short message saying no corrections were needed, which writes design.md
-    back unchanged.
+    The apply_corrections agent runs between gate_strategy and emit.  Its answer
+    is captured as design.md, so it must be the full design document content
+    (unchanged when there are no corrections, corrected when there are).
     """
     return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
             DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
-            "No gate corrections found; design.md unchanged.",
+            corrections_answer,
             *emits, *REVIEW_ANSWERS]
 
 
@@ -2021,7 +2021,7 @@ def test_finish_commands_work_with_special_characters_in_title(github, tmp_path)
     )
     answers = [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
                tricky_design, DESIGN_REVIEW_ANSWER,
-               "No gate corrections found; design.md unchanged.",
+               tricky_design,
                render({"tool.py": "print('built')\n"}),
                *REVIEW_ANSWERS]
     model = FakeModel(answers)
@@ -2202,6 +2202,8 @@ def test_base_changed_authored_file_conflict(github, tmp_path, monkeypatch):
         return real(ctx)
 
     monkeypatch.setattr(delivery, "deliver_design", advance_main_then_deliver)
+    # Skip the reloop — this test verifies delivery's behaviour, not the full loop.
+    monkeypatch.setattr(delivery, "evaluate_delivery_conflicts", lambda ctx: "proceed")
 
     run = tmp_path / "run"
     result = _design(run, {"tool.py": "print('built')\n",
@@ -2255,6 +2257,8 @@ def test_merged_result_fails_check(github, tmp_path, monkeypatch, capsys):
         return real(ctx)
 
     monkeypatch.setattr(delivery, "deliver_design", advance_main_then_deliver)
+    # Skip the reloop — this test verifies delivery's behaviour, not the full loop.
+    monkeypatch.setattr(delivery, "evaluate_delivery_conflicts", lambda ctx: "proceed")
 
     run = tmp_path / "run"
     # tool.py fails when config.txt says "broken"
@@ -2502,6 +2506,8 @@ def test_modify_delete_conflict(github, tmp_path, monkeypatch):
         return real(ctx)
 
     monkeypatch.setattr(delivery, "deliver_design", advance_main_then_deliver)
+    # Skip the reloop — this test verifies delivery's behaviour, not the full loop.
+    monkeypatch.setattr(delivery, "evaluate_delivery_conflicts", lambda ctx: "proceed")
 
     run = tmp_path / "run"
     # The run modifies the file.
@@ -2559,6 +2565,8 @@ def test_generate_fails_classes_as_authored(github, tmp_path, monkeypatch):
         return real(ctx)
 
     monkeypatch.setattr(delivery, "deliver_design", advance_main_then_deliver)
+    # Skip the reloop — this test verifies delivery's behaviour, not the full loop.
+    monkeypatch.setattr(delivery, "evaluate_delivery_conflicts", lambda ctx: "proceed")
 
     run = tmp_path / "run"
     result = _design(run, {"tool.py": "print('built')\n", "source.txt": "alpha\nbeta\n"},
@@ -2596,11 +2604,11 @@ def test_post_checkout_hook_does_not_run(github, tmp_path, monkeypatch):
     def advance_main_then_deliver(ctx):
         other = tmp_path / "other"
         git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(other))
-        (other / "source.txt").write_text("gamma\n")
-        subprocess.run(["bash", "gen.sh"], cwd=str(other), check=True, capture_output=True)
+        # Add a new file so main moves without conflicting with the run's source.txt.
+        (other / "extra.txt").write_text("added by main\n")
         git(other, "add", ".")
         git(other, "-c", "user.name=t", "-c", "user.email=t@example.com",
-            "commit", "-q", "-m", "base changes source")
+            "commit", "-q", "-m", "base adds extra.txt")
         git(other, "push", "-q", "origin", "main")
 
         # Install a post-checkout hook in the worktree's git dir.
@@ -2628,7 +2636,7 @@ def test_post_checkout_hook_does_not_run(github, tmp_path, monkeypatch):
     monkeypatch.setattr(delivery, "deliver_design", advance_main_then_deliver)
 
     run = tmp_path / "run"
-    result = _design(run, {"tool.py": "print('built')\n", "source.txt": "alpha\nbeta\n"},
+    result = _design(run, {"tool.py": "print('built')\n"},
                      target=str(repo), check="python tool.py",
                      generate="bash gen.sh")
     assert result.exit_ok, result.error
@@ -2835,9 +2843,9 @@ def test_two_runs_conflict_reloop(github, tmp_path, monkeypatch):
     # Simulate main having the first run's change merged.
     main_clone = tmp_path / "main_clone"
     git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(main_clone))
-    git(main_clone, "merge", "-q", "--no-ff", f"refs/heads/{branch1}",
-        "-m", "merge first run",
-        "-c", "user.name=t", "-c", "user.email=t@example.com")
+    git(main_clone, "-c", "user.name=t", "-c", "user.email=t@example.com",
+        "merge", "-q", "--no-ff", f"refs/heads/{branch1}",
+        "-m", "merge first run")
     git(main_clone, "push", "-q", "origin", "main")
 
     main_tip = git(bare, "rev-parse", "refs/heads/main")
@@ -2892,7 +2900,8 @@ def test_two_runs_conflict_reloop(github, tmp_path, monkeypatch):
 def test_merge_failure_leaves_worktree_clean(github, tmp_path, monkeypatch):
     """A merge that fails partway leaves the worktree clean, with no MERGE_HEAD.
 
-    Fails without the change: the worktree is left with MERGE_HEAD present.
+    Fails without the change: the evaluator has no try/finally, so a crash after
+    the merge starts leaves MERGE_HEAD behind.
     """
     repo = git_repo(tmp_path / "repo")
     (repo / "shared.py").write_text("def f():\n    return 1\n")
@@ -2900,40 +2909,6 @@ def test_merge_failure_leaves_worktree_clean(github, tmp_path, monkeypatch):
     git(repo, "commit", "-q", "-m", "base")
     slug = "acme/clean-merge"
     bare = _published(github, slug, repo)
-
-    real_evaluate = delivery.evaluate_delivery_conflicts
-
-    def crash_after_merge_starts(ctx):
-        """Start the merge, verify MERGE_HEAD exists, then crash."""
-        # Simulate setting up conflict facts so the evaluator starts a merge.
-        conflict_files = ctx.facts.get("delivery_conflict_files") or []
-        if not conflict_files:
-            return real_evaluate(ctx)
-
-        target_tip = str(ctx.facts.get("delivery_target_tip") or "")
-        found = worktree.recorded(ctx.workdir)
-        path = Path(found.path)
-        worktree.verify_git_link(found)
-
-        # Abort any stale merge.
-        try:
-            worktree.git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
-            worktree.git(path, *worktree.NO_HOOKS, "merge", "--abort")
-        except ValueError:
-            pass
-
-        merge_env = {**os.environ, **worktree.COMMITTER}
-        try:
-            worktree.git(path, *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
-                         "merge", "--no-commit", "--no-verify", target_tip, env=merge_env)
-        except ValueError:
-            pass
-
-        # Verify MERGE_HEAD is present.
-        worktree.git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
-
-        # Now crash — but within the evaluator's try/finally, so abort runs.
-        raise RuntimeError("simulated crash after merge started")
 
     real = delivery.deliver_design
 
@@ -2948,14 +2923,25 @@ def test_merge_failure_leaves_worktree_clean(github, tmp_path, monkeypatch):
         return real(ctx)
 
     monkeypatch.setattr(delivery, "deliver_design", advance_main_then_deliver)
-    monkeypatch.setattr(delivery, "evaluate_delivery_conflicts", crash_after_merge_starts)
+
+    # Make the evaluator fail after it starts the merge by crashing
+    # worktree._write_json when it records the pending merge.  The evaluator's
+    # try/finally must abort the merge despite the crash.
+    real_write_json = worktree._write_json
+
+    def crash_on_pending_merge(path, data):
+        if "pending-merge" in str(path):
+            raise RuntimeError("simulated crash after merge started")
+        return real_write_json(path, data)
+
+    monkeypatch.setattr(worktree, "_write_json", crash_on_pending_merge)
 
     run = tmp_path / "run"
     result = _design(run, {"tool.py": "print('built')\n",
                            "shared.py": "def f():\n    return 42\n"},
                      target=str(repo), check="python tool.py")
-    # The run should complete (the gate crash is caught).
-    # After the crash, the worktree should be clean.
+    # The run may or may not succeed (the crash is caught by the gate runtime),
+    # but the worktree must be clean.
     found = worktree.recorded(run)
     path = Path(found.path)
     # No MERGE_HEAD should remain.

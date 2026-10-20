@@ -190,7 +190,8 @@ def test_design_emit_writes_the_blocks_its_scope_describes_into_emit_txt():
 def _design_answers(emit: list[str]) -> list[str]:
     """Every answer design-v2's agents need, in the order the graph asks.
 
-    The apply_corrections agent runs between gate_strategy and emit.
+    The apply_corrections agent runs between gate_strategy and emit.  Its answer
+    is captured as design.md, so it must be the full design document content.
     """
     return [
         # The research answer is the plan array its gate checks, for the same reason
@@ -201,7 +202,7 @@ def _design_answers(emit: list[str]) -> list[str]:
         "one plan: the files, and how the check exercises them",
         DESIGN_DOC_ANSWER,
         DESIGN_REVIEW_ANSWER,
-        "No gate corrections found; design.md unchanged.",
+        DESIGN_DOC_ANSWER,
         *emit,
         *REVIEW_ANSWERS,
     ]

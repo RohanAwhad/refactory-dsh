@@ -77,14 +77,15 @@ def repo(tmp_path) -> Path:
     return git_repo(tmp_path / "repo")
 
 
-def _answers(*emits: str) -> list[str]:
+def _answers(*emits: str, corrections_answer: str = DESIGN_DOC_ANSWER) -> list[str]:
     """Every answer a design run needs, in the order its graph asks.
 
-    The apply_corrections agent runs between gate_strategy and emit.
+    The apply_corrections agent runs between gate_strategy and emit.  Its answer
+    is captured as design.md, so it must be the full design document content.
     """
     return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
             DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
-            "No gate corrections found; design.md unchanged.",
+            corrections_answer,
             *emits, *REVIEW_ANSWERS]
 
 
@@ -1524,6 +1525,8 @@ def test_design_named_failure_not_excused(tmp_path):
     not_fixed = render({"tool.py": "print('did not fix it')\n"})
     fixed = render({"test_oblique.py": "def test_oblique():\n    assert True\n"})
 
+    naming_appendix = "\n\n## Tests to fix\n- test_oblique.py::test_oblique\n"
+
     class DesignNamingModel(FakeModel):
         """Intercepts the design_doc prompt to write a design.md that names the test."""
         def complete(self, prompt, *, system="", workdir=None):
@@ -1534,14 +1537,13 @@ def test_design_named_failure_not_excused(tmp_path):
                     existing = design_path.read_text()
                 else:
                     existing = answer
-                design_path.write_text(
-                    existing + "\n\n## Tests to fix\n- test_oblique.py::test_oblique\n"
-                )
+                design_path.write_text(existing + naming_appendix)
             return answer
 
     result = DesignMode().run(
         tmp_path / "run",
-        model=DesignNamingModel(_answers(not_fixed, fixed)),
+        model=DesignNamingModel(_answers(not_fixed, fixed,
+                                         corrections_answer=DESIGN_DOC_ANSWER + naming_appendix)),
         verdicts={"gate_strategy": "proceed"},
         task={"name": NAME, "brief": "the validation test for contract X fails",
               "check": "python -m pytest -q", "target": str(repo)},

@@ -376,7 +376,7 @@ def test_a_design_run_whose_emit_edits_the_target_fails_before_materialise(targe
     model = _EditingModel([
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
         "the design document", DESIGN_REVIEW_ANSWER,
-        "No gate corrections found; design.md unchanged.",
+        "the design document",
         render({"tool.py": "print('built')\n"}), *REVIEW_ANSWERS,
     ], target)
     result = _without_worktree().run(
@@ -395,7 +395,7 @@ def test_a_refused_emit_is_redone_from_a_fresh_emit_txt(target, tmp_path):
         workdir, verdicts={"gate_strategy": "proceed"},
         model=_EditingModel([RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
                              "the design document", DESIGN_REVIEW_ANSWER,
-                             "No gate corrections found; design.md unchanged.",
+                             "the design document",
                              "All changes are already applied."], target),
         task={"name": NAME, "brief": "a tool", "check": "python tool.py"},
     )

@@ -1639,61 +1639,70 @@ def evaluate_delivery_conflicts(ctx: Any) -> "Verdict | str":
 
     merge_env = {**os.environ, **worktree.COMMITTER}
     try:
-        worktree.git(path, *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
-                     "merge", "--no-commit", "--no-verify", target_tip, env=merge_env)
-        # Clean merge — no conflicts.  The builder still needs to commit it.
-    except ValueError:
-        pass  # expected — conflicts
+        try:
+            worktree.git(path, *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
+                         "merge", "--no-commit", "--no-verify", target_tip, env=merge_env)
+            # Clean merge — no conflicts.  The builder still needs to commit it.
+        except ValueError:
+            pass  # expected — conflicts
 
-    # Verify merge is in progress.
-    try:
-        worktree.git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
-    except ValueError:
-        # merge --no-commit completed cleanly (fast-forward or clean merge).
-        # Let it proceed — materialise's commit will create a merge commit.
-        pass
+        # Verify merge is in progress.
+        try:
+            worktree.git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
+        except ValueError:
+            # merge --no-commit completed cleanly (fast-forward or clean merge).
+            # Let it proceed — materialise's commit will create a merge commit.
+            pass
 
-    # Resolve generated-file conflicts to theirs (main's side).
-    try:
-        conflict_output = worktree.git(path, "diff", "--name-only", "--diff-filter=U")
-    except ValueError:
-        conflict_output = ""
-    unmerged = [f for f in conflict_output.strip().splitlines() if f.strip()]
-    authored_set = set(conflict_files)
-    for cfile in unmerged:
-        if cfile not in authored_set:
-            # Generated file — resolve to theirs (main's side).
-            try:
-                worktree.git(path, *worktree.NO_HOOKS, "checkout", "--theirs", "--", cfile)
-                worktree.git(path, *worktree.NO_HOOKS, "add", "--", cfile)
-            except ValueError:
-                pass  # leave it for the builder
+        # Resolve generated-file conflicts to theirs (main's side).
+        try:
+            conflict_output = worktree.git(path, "diff", "--name-only", "--diff-filter=U")
+        except ValueError:
+            conflict_output = ""
+        unmerged = [f for f in conflict_output.strip().splitlines() if f.strip()]
+        authored_set = set(conflict_files)
+        for cfile in unmerged:
+            if cfile not in authored_set:
+                # Generated file — resolve to theirs (main's side).
+                try:
+                    worktree.git(path, *worktree.NO_HOOKS, "checkout", "--theirs", "--", cfile)
+                    worktree.git(path, *worktree.NO_HOOKS, "add", "--", cfile)
+                except ValueError:
+                    pass  # leave it for the builder
 
-    # Record the pending merge for crash recovery.
-    worktree._write_json(Path(ctx.workdir) / PENDING_MERGE,
-                         {"target_tip": target_tip, "conflict_files": conflict_files})
+        # Record the pending merge for crash recovery.
+        worktree._write_json(Path(ctx.workdir) / PENDING_MERGE,
+                             {"target_tip": target_tip, "conflict_files": conflict_files})
 
-    # Build the description the builder receives via {{validation}}.
-    description_parts = [f"Merge conflict with main ({target_tip[:12]}). "
-                         f"Conflicting authored files: {', '.join(conflict_files)}.\n"
-                         f"During this merge, ===EDIT: blocks for conflicted files apply "
-                         f"to the working tree (with conflict markers), not the committed "
-                         f"text. Resolve every conflict so no <<<<<<< / >>>>>>> markers "
-                         f"remain.\n"]
-    for entry in detail:
-        description_parts.append(f"\n### {entry['path']}\n")
-        if entry.get("base"):
-            description_parts.append(f"**Base (common ancestor):**\n```\n{entry['base'][:3000]}\n```\n")
-        if entry.get("ours"):
-            description_parts.append(f"**Ours (this run's version):**\n```\n{entry['ours'][:3000]}\n```\n")
-        if entry.get("theirs"):
-            description_parts.append(f"**Theirs (main's version):**\n```\n{entry['theirs'][:3000]}\n```\n")
-        if entry.get("main_diff"):
-            description_parts.append(f"**What main changed:**\n```diff\n{entry['main_diff'][:3000]}\n```\n")
+        # Build the description the builder receives via {{validation}}.
+        description_parts = [f"Merge conflict with main ({target_tip[:12]}). "
+                             f"Conflicting authored files: {', '.join(conflict_files)}.\n"
+                             f"During this merge, ===EDIT: blocks for conflicted files apply "
+                             f"to the working tree (with conflict markers), not the committed "
+                             f"text. Resolve every conflict so no <<<<<<< / >>>>>>> markers "
+                             f"remain.\n"]
+        for entry in detail:
+            description_parts.append(f"\n### {entry['path']}\n")
+            if entry.get("base"):
+                description_parts.append(f"**Base (common ancestor):**\n```\n{entry['base'][:3000]}\n```\n")
+            if entry.get("ours"):
+                description_parts.append(f"**Ours (this run's version):**\n```\n{entry['ours'][:3000]}\n```\n")
+            if entry.get("theirs"):
+                description_parts.append(f"**Theirs (main's version):**\n```\n{entry['theirs'][:3000]}\n```\n")
+            if entry.get("main_diff"):
+                description_parts.append(f"**What main changed:**\n```diff\n{entry['main_diff'][:3000]}\n```\n")
 
-    description = "\n".join(description_parts)
-    ctx.set_fact("validation", description)
-    return Verdict("reloop", description)
+        description = "\n".join(description_parts)
+        ctx.set_fact("validation", description)
+        return Verdict("reloop", description)
+    except BaseException:
+        # On any failure, abort the merge so the worktree is never left mid-merge.
+        try:
+            worktree.git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
+            worktree.git(path, *worktree.NO_HOOKS, "merge", "--abort")
+        except ValueError:
+            pass
+        raise
 
 
 def _abort_pending_merge(ctx: Any) -> None:
