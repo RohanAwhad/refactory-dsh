@@ -214,6 +214,7 @@ def run(
     intent: str = "",
     project: Path | None = None,
     timeout_s: int | None = None,
+    model_timeout_s: int | None = None,
     knobs: list[str] | None = None,
     approve: list[str] | None = None,
     provider: str = "",
@@ -248,7 +249,7 @@ def run(
     dsh_profile.require()
     with ownership(workdir) as owner:
         if resume:
-            if source or source_format not in ('', 'directory') or approve or knobs or intent or model_context or provider or model or bool(worker_backend) or effort or permission_mode or role_routes or node_routes:
+            if source or source_format not in ('', 'directory') or approve or knobs or intent or model_context or provider or model or bool(worker_backend) or effort or permission_mode or role_routes or node_routes or model_timeout_s is not None:
                 raise ValueError('resume retains saved inputs, knobs, instructions and routes; changes require explicit invalidation')
             import json
 
@@ -279,9 +280,10 @@ def run(
             write_source(workdir, source_path=source, source_format=source_format or "directory")
         if not resume and model_context is None:
             from refactory_dsh.model import DshModelClient
+            timeout_kwargs = {"timeout_s": model_timeout_s} if model_timeout_s is not None else {}
             model_context = DshModelClient(project=Path(project or project_root()), provider=provider, model=model, worker_backend=worker_backend,
                                            effort=effort, permission_mode=permission_mode,
-                                           role_routes=role_routes, node_routes=node_routes).context()
+                                           role_routes=role_routes, node_routes=node_routes, **timeout_kwargs).context()
         # The graph's own argv names the CEO route, and it must be the route the
         # resolved context selected -- from a project file, a saved run or a
         # caller's model_context -- not the empty CLI flags a person left unset.
@@ -365,6 +367,13 @@ def run(
             if budget is not None:
                 budget.pause()
     # ── dm-94: ownership released; inline supervision runs outside ──
+    # dm-95: promote ready+last_failure to run-level failed before any reader
+    # (status, supervisor) sees an unretried node failure as still active.
+    try:
+        from refactory_dsh.run_state import promote_unretried_failure
+        promote_unretried_failure(workdir)
+    except Exception:
+        pass  # promotion is best-effort; do not mask the run's exit code
     # In headless mode, when the run stopped at a user gate, print the exact
     # commands a person uses to answer it and resume. Printed once, only here.
     if headless and code != 0:
@@ -524,6 +533,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--worker-backend", choices=["dsh", "codex", "claude_code"], default="")
     parser.add_argument("--effort", default="")
     parser.add_argument("--permission-mode", default="", help="worker permissions: skip (new-run default), default (native policy), or a backend-specific mode")
+    parser.add_argument(
+        "--model-timeout", type=int, default=None, dest="model_timeout_s",
+        help="seconds one model completion may take before it is called hung (default: 1800)",
+    )
     import json
     parser.add_argument("--role-routes", type=json.loads, default=None)
     parser.add_argument("--node-routes", type=json.loads, default=None)
@@ -544,6 +557,7 @@ def main(argv: list[str] | None = None) -> int:
             knobs=args.knob,
             approve=args.approve,
             timeout_s=args.timeout or None,
+            model_timeout_s=getattr(args, 'model_timeout_s', None),
             provider=args.provider,
             model=args.model,
             headless=args.headless, resume=args.resume, worker_backend=args.worker_backend,
