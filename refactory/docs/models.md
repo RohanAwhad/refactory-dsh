@@ -105,6 +105,24 @@ The `emit` worker must answer only through `emit.txt`: `===FILE:` with a whole f
 
 A run that failed, or whose run directory a later run has reused, loses its worktree after 24 idle hours (`REFACTORY_WORKTREE_IDLE_HOURS`); a run that goes on afterwards gets it back from its branch. The branch goes after 14 days, with `git branch -D`, since a failed run's commits were never merged. One that succeeded keeps both, and so does a halted or cancelled run (including one whose cursor emptied before reaching a graph sink, which names the nodes it never reached), which can still be resumed. Removing a worktree clears the untracked files the run left there, but a worktree with an edited tracked file, or with an untracked file newer than the run's last step, is kept and reported. `refactory projects` lists the projects and how each run stands, and `refactory projects prune` cleans up without waiting for the next run; `--succeeded` also removes succeeded runs' worktrees, keeping their branches. `REFACTORY_PROJECTS_DIR` and `REFACTORY_HOME` move the two folders.
 
+## Model completion timeout
+
+`--model-timeout SECONDS` sets how long one model completion may take before it is
+called hung, for every agent step in a `refactory ceo` run. The default is 1800
+seconds (30 minutes), defined as `DEFAULT_TIMEOUT_S` in `model.py`. The same flag
+exists on the standalone `design`, `create` and `edit` commands.
+
+Each dispatched agent node's spine limit is computed by
+`node_session_budget_s(attempts, timeout_s) = attempts × timeout_s + 600`, where
+`attempts` defaults to 3 and 600 is `NODE_DISPATCH_OVERHEAD_S`. The per-node
+`command_timeout_s` overrides the spine's global `commandTimeoutMs`, so a
+`--model-timeout` larger than the profile's default does not get silently cut.
+
+The value is saved in `model_context` (as the `timeout_s` key) in
+`run-config.json`, and inherited by nested workers via `REFACTORY_WORKER_CONTEXT`.
+A resumed run uses the saved value; `--model-timeout` given with `--resume` is
+refused.
+
 ## Design-document contract
 
 The design_doc node writes `design.md` following a defined contract. The contract requires these sections:
