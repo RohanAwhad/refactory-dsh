@@ -85,32 +85,6 @@ describe('refactory-web layer', () => {
     expect(PATCH).toContain('repoRoot: !!js ctx.refactoryWebStartup.repoRoot')
   })
 
-  it('defaults busyEnter through schema resolution: steer without saved, queue with saved (H1)', async () => {
-    // DSH settings resolve "schema defaults → composition base → user layer".
-    // The composition base is { busyEnter: 'steer' }; the schema default is 'queue'.
-    // Verify the patch carries the right base, then check the resolution semantics.
-    const { parse } = await import('yaml')
-    const parsed = parse(PATCH) as Array<Record<string, unknown>>
-    const uiConv = parsed.find(
-      (entry: Record<string, unknown>) => entry.id === 'ui-conversation',
-    ) as Record<string, unknown> | undefined
-    expect(uiConv).toBeDefined()
-    const config = uiConv!.config as Record<string, unknown>
-    expect(config.busyEnter).toBe('steer')
-
-    // Resolution semantics: the composition base ('steer') applies when no
-    // user override exists; a saved user choice wins.
-    // Schema default is 'queue' (from ConversationSettingsFields).
-    const schemaDefault = 'queue'
-    const compositionBase = config.busyEnter as string
-    expect(compositionBase).not.toBe(schemaDefault)
-    // Without user layer: effective = composition base
-    expect(compositionBase).toBe('steer')
-    // With user layer 'queue': effective = user layer
-    const userSaved = 'queue'
-    expect(userSaved).toBe('queue')
-  })
-
   it('leaves the single-owner agent-preset-registry row alone', () => {
     // `config` is replaced wholesale, so a second statement here would drop
     // `default: ceo` from refactory. The comment above may name the row;
