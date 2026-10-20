@@ -24,16 +24,25 @@ const PATCH = readFileSync(
 )
 
 describe('H1 — busyEnter defaults to steer through DSH settings resolution', () => {
-  it('composition base is steer, schema default is queue', () => {
-    // The conversation plugin declares busyEnter with union(['queue', 'steer'])
-    // and .default('queue').  The refactory-web composition provides the base
-    // layer { busyEnter: 'steer' }.  Reconstruct the schema identically:
+  it('schema default is queue, composition base overrides to steer, saved choice wins', () => {
+    // The conversation plugin (dsh-client-ui-conversation) declares:
+    //   ConversationSettingsFields = { busyEnter: z.union([...BUSY_ENTER_BEHAVIORS]).default('queue') }
+    // The refactory-web composition provides the base layer { busyEnter: 'steer' }.
+    // DSH settings resolve "schema defaults → composition base → user layer".
+    //
+    // Reconstruct the real schema identically (workflow-spine cannot import
+    // dsh-client-ui-conversation; the values are from submission-settings.d.ts).
     const BUSY_ENTER_BEHAVIORS = ['queue', 'steer'] as const
     const DEFAULT_BUSY_ENTER_BEHAVIOR = 'queue'
 
     const schema = z.object({
       busyEnter: z.union([...BUSY_ENTER_BEHAVIORS]).default(DEFAULT_BUSY_ENTER_BEHAVIOR),
     })
+
+    // Verify the schema's own default is 'queue' — the composition row is what
+    // changes it.  Without the row, the effective value would be 'queue'.
+    const schemaDefault = schema({})
+    expect(schemaDefault.busyEnter).toBe('queue')
 
     // Extract the composition base value from the YAML text.  The row is:
     //   - id: ui-conversation
@@ -46,6 +55,7 @@ describe('H1 — busyEnter defaults to steer through DSH settings resolution', (
     const compositionBase = { busyEnter: match![1]! as 'queue' | 'steer' }
 
     // Resolution without user layer: composition base overrides schema default → steer.
+    // This assertion fails if the refactory-web row is removed or changed.
     const resolvedNoUser = schema(compositionBase)
     expect(resolvedNoUser.busyEnter).toBe('steer')
 

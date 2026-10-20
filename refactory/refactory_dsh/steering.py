@@ -468,21 +468,35 @@ def citations(text: str) -> list[str]:
     return found
 
 
-def chain(ledger: Ledger, outputs: Mapping[str, str], *, deliveries: Mapping[str, Any] | None = None) -> list[str]:
+def chain(ledger: Ledger, outputs: Mapping[str, str], *,
+          deliveries: Mapping[str, Any] | None = None,
+          completed_nodes: frozenset[str] | set[str] | None = None) -> list[str]:
     """Problems with the chain from the ledger to the work, mechanically.
 
     Current runtime receipts establish delivered context and artifact identity.
     Legacy outputs can still cite entries inline. Neither establishes that the
     model read, understood, or satisfied the intent; that remains a judgement.
+
+    ``completed_nodes`` is the set of node ids the spine records as completed
+    (from ``spine-status.json``).  When supplied, a node that is not in the
+    set has not run and is skipped — even if it ran and wrote nothing, a
+    completed node is still judged.  When absent, the legacy heuristic (no
+    delivery and empty output text) is used.
     """
     known = {entry["at"] for entry in ledger.entries()}
     problems: list[str] = []
     for node_id in sorted(outputs):
         delivery = (deliveries or {}).get(node_id)
-        # E9: A node with no delivery record and no output files has not run yet.
-        # Skip it rather than reporting it as a problem.
-        if delivery is None and not outputs[node_id].strip():
-            continue
+        # E9: Decide "has not run" from the spine's record of completed nodes
+        # when available.  A node that ran and wrote nothing must still be
+        # judged; only a node that has not run yet is skipped.
+        if completed_nodes is not None:
+            if node_id not in completed_nodes:
+                continue
+        else:
+            # Legacy fallback: no delivery and no output files → unrun.
+            if delivery is None and not outputs[node_id].strip():
+                continue
         if delivery is not None:
             # E9: A pending delivery has not completed yet — skip it.
             if delivery.get("status") == "pending":
@@ -541,7 +555,9 @@ def outputs_in(run_root: Path) -> dict[str, str]:
     return outputs
 
 
-def fidelity(ledger: Ledger, outputs: Mapping[str, str] | None = None, *, deliveries: Mapping[str, Any] | None = None) -> list[str]:
+def fidelity(ledger: Ledger, outputs: Mapping[str, str] | None = None, *,
+             deliveries: Mapping[str, Any] | None = None,
+             completed_nodes: frozenset[str] | set[str] | None = None) -> list[str]:
     """What is wrong with a ledger a run is about to be judged against.
 
     Says which half it is, because the halves differ in cost and in what they can
@@ -568,7 +584,8 @@ def fidelity(ledger: Ledger, outputs: Mapping[str, str] | None = None, *, delive
     if origin == PLACEHOLDER:
         problems.append(f"the ledger's origin is the placeholder {PLACEHOLDER!r}")
     if outputs is not None:
-        problems.extend(chain(ledger, outputs, deliveries=deliveries))
+        problems.extend(chain(ledger, outputs, deliveries=deliveries,
+                              completed_nodes=completed_nodes))
     return problems
 
 

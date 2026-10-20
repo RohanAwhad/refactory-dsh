@@ -311,12 +311,13 @@ function recordedStep(
     // use, and is reported as absent rather than as a malformed value.
     const parsed: unknown = JSON.parse(readFileSync(join(workdir, 'facts.json'), 'utf8'))
     if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      // 512 characters keeps short strings, numbers, booleans, and small arrays
-      // visible in the CEO's wf_next result while excluding large blobs like file
-      // contents that would fill the context window (a design run's facts.json is
-      // about 37 KB).  Values whose JSON serialization exceeds this limit are
-      // reported by key and size only; the CEO can read facts.json directly when
-      // it needs the full value.
+      // E10: 512 characters keeps short strings, numbers, booleans, and small
+      // arrays visible in the CEO's wf_next result while excluding large blobs
+      // like file contents that would fill the context window (a design run's
+      // facts.json is about 37 KB).  Values whose JSON serialization exceeds
+      // this limit are reported by key and size only; the full value is not
+      // available through wf_next (the CEO's coding tools are disabled while
+      // driving a graph).
       const FACT_INLINE_LIMIT = 512
       const factKeys = Object.keys(parsed as Record<string, unknown>)
       const sizes: Record<string, number> = {}

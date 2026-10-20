@@ -773,6 +773,32 @@ def test_chain_skips_unrun_nodes(tmp_path):
     )
 
 
+def test_chain_uses_completed_nodes_from_spine(tmp_path):
+    """E9: When completed_nodes is supplied, a node not in the set is skipped
+    even if it has output text. A completed node that wrote nothing is judged."""
+    ledger = Ledger.seed(tmp_path, "build a mode")
+    stamp = ledger.entries()[0]["at"]
+    deliveries = {
+        "writer": {"status": "delivered", "entries": [{"at": stamp}]},
+    }
+    outputs = {
+        "writer": f"done.\n{steering.CITATION} {stamp}",
+        "unrun_node": "some legacy text",  # has output but is NOT completed
+        "silent_node": "",  # completed but wrote nothing — must be judged
+    }
+    completed = frozenset({"writer", "silent_node"})
+    problems = steering.chain(ledger, outputs, deliveries=deliveries,
+                              completed_nodes=completed)
+    # unrun_node is NOT in completed_nodes → skipped even though it has text.
+    assert not any("unrun_node" in p for p in problems), (
+        f"unrun node was reported as a problem: {problems}"
+    )
+    # silent_node IS in completed_nodes → judged (will report "cites no ledger entry").
+    assert any("silent_node" in p for p in problems), (
+        f"completed silent node was not judged: {problems}"
+    )
+
+
 def test_chain_skips_pending_deliveries(tmp_path):
     """E9: A node with a pending delivery has not completed yet — skip it."""
     ledger = Ledger.seed(tmp_path, "build a mode")

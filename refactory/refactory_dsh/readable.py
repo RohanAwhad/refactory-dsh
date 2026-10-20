@@ -65,6 +65,11 @@ def format_status(payload: dict[str, Any]) -> str:
             lines.append(f"Error: {error}")
 
         control = (activity.get('control') or {}) if isinstance(activity.get('control'), dict) else {}
+        # dm-101: A stale failed control is cleared only when a later control on
+        # the same run succeeded (the receipt file is overwritten with status
+        # 'applied').  Both the "Last failed control" line and the matching
+        # run_warning are suppressed once a later success overwrites the receipt.
+        control_succeeded = control.get('status') == 'applied'
         if control.get('status') == 'failed':
             action = control.get('action', '')
             message = control.get('message', '')
@@ -73,6 +78,7 @@ def format_status(payload: dict[str, Any]) -> str:
         warnings = [
             e.get('summary', '') for e in (activity.get('events') or [])
             if isinstance(e, dict) and e.get('kind') == 'run_warning' and e.get('summary')
+            and not (control_succeeded and e.get('summary', '').startswith('graph control'))
         ]
         for w in dict.fromkeys(warnings):
             lines.append(f"Warning: {w}")

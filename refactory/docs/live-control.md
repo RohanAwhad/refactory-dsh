@@ -93,9 +93,12 @@ To change the behaviour, open the conversation plugin's settings (found in
 the GUI under **Settings → Conversation → Enter Behaviour**) and choose
 **Queue** or **Steer**. The saved choice overrides the composition default.
 
-On the native GUI, press **Cmd+Enter** (macOS) or **Ctrl+Enter** (other
-platforms) to send a message while the CEO is working. The message reaches
-the CEO as a steering note and is reflected in the intent ledger.
+DSH's `resolveSubmitMode` sends the saved preference on plain Enter and its
+opposite on the Cmd/Ctrl chord.  With `steer` as the composition default,
+**plain Enter steers** (delivers the message immediately as a steering note)
+and **Cmd+Enter** (macOS) / **Ctrl+Enter** (other platforms) **queues** the
+message until the turn finishes.  A saved choice of **Queue** reverses this:
+plain Enter queues, Cmd/Ctrl+Enter steers.
 
 ## Apply a control at its boundary
 
@@ -122,6 +125,8 @@ The run's status includes whether its owner process is alive. A failed run with 
 ### Retry status (dm-95)
 
 When a node command fails, `spine-status.json` records status `ready` with a `last_failure` field containing `{ node, error, at }`, not run-level `failed`. The graph is ready to retry the same boundary. The CEO-facing failure payload in `wf_next` uses `node` for the node id, `command` for the command string, and `error` containing the `<id> exited with code N` prefix followed by the real reason from stderr. `refactory status` shows "step X is being retried" when `last_failure` is present and the owner is alive. Run-level `failed` means the graph run has ended — it appears only for infrastructure errors (an uncaught exception from the graph's drain loop) or when the owner exits without retrying the failed node.
+
+When a step runs successfully, `wf_next`'s `ran` field carries a facts summary instead of the full `facts.json` object. The summary is `{ _summary: true, path: "facts.json", keys, sizes, inline }`: values whose JSON serialization is ≤ 512 characters are inlined in `inline`; larger values are reported by key and byte size only in `sizes`. The 512-character limit keeps short strings, numbers, and small arrays visible while excluding large blobs (a design run's `facts.json` is about 37 KB). The CEO's coding tools are disabled while driving a graph, so the full value of a large fact is not accessible through `wf_next`.
 
 When the owner exits with status `ready` and `last_failure` present, the supervisor promotes the status to `failed` before deciding whether to respawn. The promoted failure names the node and its error. The supervisor does not respawn it: the run genuinely ended because a node failure was not retried. It still respawns a real crash (an owner killed or dead while `executing`).
 

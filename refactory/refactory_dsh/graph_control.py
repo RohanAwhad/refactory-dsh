@@ -67,10 +67,12 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
         deferred_plan = saved.get('deferred_redo_plans', {}).get(node)
         if isinstance(plan, dict):
             return {'action': action, 'target': node, 'status': 'preview', 'revision': current_revision,
+                    'run_id': str(root),
                     'invalidated': plan.get('nodes', []),
                     'message': 'Prior evidence will be archived. Confirm this revision to queue replay.'}
         if isinstance(deferred_plan, dict):
             return {'action': action, 'target': node, 'status': 'deferred', 'revision': current_revision,
+                    'run_id': str(root),
                     'invalidated': deferred_plan.get('nodes', []),
                     'message': 'Replay will apply after concurrent work joins; confirm to queue.'}
         raise ValueError('node cannot safely be replayed at the current boundary')

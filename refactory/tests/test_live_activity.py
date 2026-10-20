@@ -178,6 +178,50 @@ def test_status_shows_failed_control_when_finished(tmp_path):
     assert 'Last failed control' in text
 
 
+def test_later_success_clears_failure_warning(tmp_path):
+    """dm-101: A run_warning 'graph control rerun failed: ...' is filtered out
+    once a later control succeeded (receipt overwritten with status 'applied').
+    This covers b28a's real sequence: a failed rerun followed by an applied rerun."""
+    activity = {
+        'control': {
+            'action': 'rerun', 'status': 'applied',
+            'message': 'Applied at graph boundary.',
+        },
+        'events': [
+            {'kind': 'run_warning', 'summary': 'graph control rerun failed: graph changed since preview'},
+        ],
+    }
+    payload = {
+        'authoring': {'name': 'test-run', 'completed': ['a', 'b']},
+        'state': 'finished',
+        'activity': activity,
+    }
+    text = readable.format_status(payload)
+    assert 'Last failed control' not in text
+    assert 'graph control rerun failed' not in text
+
+
+def test_failed_control_warning_shown_when_no_later_success(tmp_path):
+    """dm-101: When no later control succeeded, the warning IS shown."""
+    activity = {
+        'control': {
+            'action': 'rerun', 'status': 'failed',
+            'message': 'graph changed since preview',
+        },
+        'events': [
+            {'kind': 'run_warning', 'summary': 'graph control rerun failed: graph changed since preview'},
+        ],
+    }
+    payload = {
+        'authoring': {'name': 'test-run', 'completed': ['a']},
+        'state': 'executing',
+        'activity': activity,
+    }
+    text = readable.format_status(payload)
+    assert 'Last failed control' in text
+    assert 'graph control rerun failed' in text
+
+
 def test_status_shows_failed_control_when_executing(tmp_path):
     """dm-101: A failed control receipt IS rendered when the run is executing."""
     activity = {
@@ -222,6 +266,23 @@ def test_later_success_clears_failure_in_graph_control_request(tmp_path):
     result2 = graph_control.request(tmp_path, 'pause')
     assert result2['status'] == 'queued'
     assert 'last_failed_receipt' not in result2
+
+
+def test_preview_includes_run_id(tmp_path):
+    """dm-101: preview payloads carry run_id so the CLI prints the run name."""
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    checkpoint = directory / 'spine-checkpoint.json'
+    checkpoint.write_text(json.dumps({
+        'redo_plans': {'a': {'nodes': ['a', 'qa']}},
+    }))
+    result = graph_control.request(tmp_path, 'preview', node='a')
+    assert result['status'] == 'preview'
+    assert 'run_id' in result
+    assert str(tmp_path) in result['run_id']
+    text = readable.format_graph_control(result)
+    assert str(tmp_path) in text
+    assert 'Preview ()' not in text
 
 
 def test_format_graph_control_names_the_run(tmp_path):
