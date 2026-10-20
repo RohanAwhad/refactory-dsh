@@ -269,16 +269,6 @@ def create_pin(driver_checkout: Path, commit: str, dirty_diff: str | None = None
             check=True, capture_output=True, text=True, timeout=600,
         )
 
-        # Provision the profile in the person's DSH home.
-        profile_name = f"graph-pin-{commit12}"
-        bundle_path = staging_checkout / "packages" / "bundle" / "graph"
-        from refactory_dsh.paths import dsh_command
-        dsh_argv = dsh_command()
-        subprocess.run(
-            [*dsh_argv, "plugin", "--profile", profile_name, "add", str(bundle_path)],
-            check=True, capture_output=True, text=True, timeout=120,
-        )
-
         # Write pin.json.
         pin_json = {
             "commit": commit,
@@ -290,6 +280,18 @@ def create_pin(driver_checkout: Path, commit: str, dirty_diff: str | None = None
 
         # Atomically rename staging to final.
         staging_root.rename(pin_root)
+
+        # Provision the profile in the person's DSH home AFTER the rename
+        # so symlinks point to the final path, not the staging path.
+        profile_name = f"graph-pin-{commit12}"
+        bundle_path = pin_checkout / "packages" / "bundle" / "graph"
+        from refactory_dsh.paths import dsh_command
+        dsh_argv = dsh_command()
+        subprocess.run(
+            [*dsh_argv, "plugin", "--profile", profile_name, "add", str(bundle_path)],
+            check=True, capture_output=True, text=True, timeout=120,
+        )
+
         return pin_checkout
 
     except BaseException:
