@@ -27,5 +27,8 @@ include = ["refactory_dsh*", "refactory_packages*"]
 [tool.setuptools]
 py-modules = []
 
+[project.entry-points.'refactory.environment_overlay']
+worktree = "refactory_dsh.worktree:_worktree_environment_overlay"
+
 [tool.setuptools.package-data]
 refactory_dsh = ["*.mjs", "patches/*.yml", "data/*.json"]

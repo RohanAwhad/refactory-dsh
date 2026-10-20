@@ -22,8 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-#: Where a run keeps its target's baseline: runtime metadata, beside the spine's own.
-RECORD = Path(".refactory") / "target.json"
+from refactory_dsh.invocations import TARGET_RECORD as RECORD  # was: RECORD = Path(…)
 
 #: Names a walk of a target that is not a git checkout skips, as directories or files:
 #: installs, caches and editor state that running anything rewrites, which say nothing
