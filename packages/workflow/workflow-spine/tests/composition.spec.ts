@@ -667,6 +667,16 @@ describe('asking a person', () => {
   })
 })
 
+describe('CEO instructions include the source rule (C5)', () => {
+  it('tells the CEO to set source to user-relayed when relaying the person\'s words', async () => {
+    const { ctx } = await mount()
+    const section = (await ctx.systemPrompt.assemble()).sections.find(s => s.name === 'tool:wf-spine')
+    expect(section).toBeDefined()
+    expect(section!.text).toContain("source to 'user-relayed'")
+    expect(section!.text).toContain('auditable requirements')
+  })
+})
+
 describe('the CEO deny guard', () => {
   function agentWith(ctx: Context | undefined, origin = 'root'): Agent {
     return { id: 'agent-1', session: { header: { origin } }, ctx } as unknown as Agent
