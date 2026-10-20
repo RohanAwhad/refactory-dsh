@@ -3,6 +3,18 @@
 Defined once; read by design_doc, gate_design_review, delivery and the audit.
 No split_clauses: the overwatch audit enumerates each constraint's clauses
 itself, and audit_problems checks them.
+
+Site markers are accepted in every unambiguous form: bare ``[changed]``,
+bold ``**[changed]**``, backtick-wrapped `` `[changed]` ``, or with a
+colon-description ``[changed: description]``.  The canonical form shown in
+prompts and docstrings is ``[changed]`` / ``[left: <reason>]`` (bare, no
+backticks).  ``[new]`` is treated as equivalent to ``changed``.
+
+The three consumers are:
+1. PR body "What changed" — ``delivery.py`` ``build_what_changed()``
+2. Design review gate marker check — ``design_ops.py`` ``gate_design_review()``
+   via ``unmarked_sites()``
+3. Run warnings — ``delivery.py`` ``target_guard.warn()`` on mismatches
 """
 from __future__ import annotations
 
@@ -93,17 +105,25 @@ def _h1(lines: list[str]) -> str:
     return ""
 
 
-def _find_marker(body: str, pattern: str) -> re.Match | None:
-    """Find the first match of *pattern* not inside a backtick span.
+def _find_marker(body: str, bare_pattern: str, backtick_pattern: str) -> re.Match | None:
+    """Find the first match, preferring bare/bold over backtick-wrapped.
 
-    A match whose start has an odd number of backtick characters before it
-    is inside an inline code span and is skipped.  This prevents
-    a backticked mention of the marker in prose from shadowing the real
-    ``**[changed]**`` marker later on the same line.
+    Pass 1: try *bare_pattern*, skipping matches inside inline code spans
+    (odd preceding backtick count).  Pass 2: if no bare/bold match, try
+    *backtick_pattern* with no backtick-count check (the backticks are
+    literal in the match).
+
+    This preserves the existing test at ``test_delivery.py:218-287``:
+    on a line where `` `[changed]` `` appears as a prose mention before
+    ``**[changed]**``, pass 1 finds ``**[changed]**`` (the prose mention
+    is inside a code span and skipped by the odd-backtick filter).
+    Pass 2 is never tried because pass 1 succeeds.
     """
-    for m in re.finditer(pattern, body, re.IGNORECASE):
+    for m in re.finditer(bare_pattern, body, re.IGNORECASE):
         if body[:m.start()].count('`') % 2 == 0:
             return m
+    for m in re.finditer(backtick_pattern, body, re.IGNORECASE):
+        return m
     return None
 
 
@@ -138,14 +158,31 @@ def parse(text: str, run_name: str = "") -> DesignContract:
             status = "changed"
             reason = ""
             desc = ""
-            m_changed = _find_marker(body, r'\*{0,2}\[changed\]\*{0,2}')
-            m_left_reason = _find_marker(body, r'\*{0,2}\[left:\s*(.*?)\]\*{0,2}')
-            m_left = _find_marker(body, r'\*{0,2}\[left\]\*{0,2}')
+            m_changed = _find_marker(
+                body,
+                r'\*{0,2}\[(?:changed|new)(?::\s*([^]]*))?\]\*{0,2}',
+                r'`\*{0,2}\[(?:changed|new)(?::\s*([^]]*))?\]\*{0,2}`',
+            )
+            m_left_reason = _find_marker(
+                body,
+                r'\*{0,2}\[left:\s*(.*?)\]\*{0,2}',
+                r'`\*{0,2}\[left:\s*(.*?)\]\*{0,2}`',
+            )
+            m_left = _find_marker(
+                body,
+                r'\*{0,2}\[left\]\*{0,2}',
+                r'`\*{0,2}\[left\]\*{0,2}`',
+            )
             if m_changed:
                 status = "changed"
                 path_text = body[:m_changed.start()].strip().rstrip("—–-:").strip()
-                desc = body[m_changed.end():].strip()
-                desc = re.sub(r'^[—–\-:\s]+', '', desc).strip()
+                # Colon-description inside the marker takes priority.
+                colon_desc = m_changed.group(1)
+                if colon_desc is not None:
+                    desc = colon_desc.strip()
+                else:
+                    desc = body[m_changed.end():].strip()
+                    desc = re.sub(r'^[—–\-:\s]+', '', desc).strip()
                 desc = desc.rstrip('.')
             elif m_left_reason:
                 status = "left"
@@ -331,6 +368,60 @@ def title_is_run_name(text: str, run_name: str) -> bool:
     return bool(raw) and not _strip_run_name(raw, run_name)
 
 
+def _levenshtein(a: str, b: str) -> int:
+    """Levenshtein distance for short strings (≤ 12 chars each)."""
+    if len(a) > 12 or len(b) > 12:
+        return 999
+    m, n = len(a), len(b)
+    dp = list(range(n + 1))
+    for i in range(1, m + 1):
+        prev = dp[0]
+        dp[0] = i
+        for j in range(1, n + 1):
+            tmp = dp[j]
+            dp[j] = min(dp[j] + 1, dp[j - 1] + 1, prev + (0 if a[i - 1] == b[j - 1] else 1))
+            prev = tmp
+    return dp[n]
+
+
+#: Words that appear in brackets in ordinary prose or markdown and are not
+#: marker attempts, even though some are within edit-distance 2 of ``left``.
+_NOT_MARKER_WORDS = frozenset({
+    'see', 'note', 'todo', 'test', 'list', 'set', 'ref', 'fix', 'let',
+    'add', 'get', 'put', 'run', 'use', 'try', 'end', 'key', 'map', 'var',
+    'log', 'old', 'int', 'str', 'tag', 'type', 'link', 'text', 'file',
+    'changes', 'change', 'leaves', 'lift', 'rest', 'feat', 'best',
+})
+
+
+def find_near_miss_markers(site_text: str) -> list[str]:
+    """For an unmarked site line, find bracket expressions that look like misspelled markers.
+
+    Returns suggestions like ``"possible misspelled marker [chnaged] (did you
+    mean [changed]?)"``.  Ignores link text ``[text](url)`` and common
+    non-marker words.
+    """
+    suggestions: list[str] = []
+    # Strip link text: [text](url)
+    cleaned = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', site_text)
+    for m in re.finditer(r'\[(\w+)(?::[^\]]*)?\]', cleaned):
+        word = m.group(1).lower()
+        if word in ('changed', 'left', 'new'):
+            continue  # recognised marker keyword
+        if word in _NOT_MARKER_WORDS:
+            continue
+        if len(word) > 15:
+            continue
+        for target in ('changed', 'left'):
+            if _levenshtein(word, target) <= 2:
+                suggestions.append(
+                    f"possible misspelled marker [{m.group(1)}] "
+                    f"(did you mean [{target}]?)"
+                )
+                break
+    return suggestions
+
+
 def prompt_contract() -> str:
     """The text the design_doc prompt appends."""
     return (
@@ -342,8 +433,8 @@ def prompt_contract() -> str:
         "3. `## Rule and sites` — the rule this change makes or corrects, "
         "then every place in the code that applies or restates that rule, "
         "found by searching the source. List each as a bullet with its "
-        "file path and line range cited, and mark it `[changed]` (this "
-        "change modifies it) or `[left: <reason>]` (this change leaves it "
+        "file path and line range cited, and mark it [changed] (this "
+        "change modifies it) or [left: <reason>] (this change leaves it "
         "unchanged, with the reason). A site left unchanged without a "
         "reason is a defect.\n\n"
         "4. `## Docs` — the docs that describe the changed behaviour, found "

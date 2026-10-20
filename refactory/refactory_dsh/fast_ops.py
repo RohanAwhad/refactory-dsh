@@ -81,6 +81,8 @@ def prepare_artifact(ctx: Any) -> dict[str, Any]:
             raise ValueError("source_project must be an existing directory")
         source = str(root)
         manifest = _source_manifest(root)
+    # deliver=False tells prepare_design to omit pitfalls facts and writes
+    # that this graph does not declare.
     prepared = design_ops.prepare_design(ctx, deliver=False, in_worktree=False if source else None)
     if source:
         prepared.update(source=source,

@@ -1291,7 +1291,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 
 ## graph-control
 
-Preview or queue boundary pause/resume/stop/rerun/acknowledge/amend-command/withdraw controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. acknowledge transitions an executing checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly.
+Preview or queue boundary pause/resume/stop/rerun/acknowledge/amend-command/withdraw controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. resume --acknowledge-failure also starts an owner for a failed checkpoint. acknowledge transitions an executing or failed checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly.
 
 Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-control.md)
 
@@ -1313,7 +1313,7 @@ Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-con
         "action": "acknowledge",
         "run": "/tmp/example-run"
       },
-      "explanation": "Acknowledge an executing checkpoint whose owner died: moves pending delivery markers and mismatched outputs to set-aside, writes an SHA-bound acknowledgement so recovery accepts the executing checkpoint."
+      "explanation": "Acknowledge an executing or failed checkpoint whose owner died: moves pending delivery markers and mismatched outputs to set-aside, writes an SHA-bound acknowledgement so recovery accepts the checkpoint."
     },
     {
       "arguments": {
@@ -1481,7 +1481,7 @@ Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-con
       "type": "string"
     }
   },
-  "purpose": "Preview or queue boundary pause/resume/stop/rerun/acknowledge/amend-command/withdraw controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. acknowledge transitions an executing checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly.",
+  "purpose": "Preview or queue boundary pause/resume/stop/rerun/acknowledge/amend-command/withdraw controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. resume --acknowledge-failure also starts an owner for a failed checkpoint. acknowledge transitions an executing or failed checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly.",
   "reviewed_schema": "f6939effaa49d5d7309bd21577197ddd6583f8d8d3849bb0fc83d722370e976b"
 }
 ```
@@ -1832,6 +1832,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "required": false,
       "type": "string"
     },
+    "model_timeout_s": {
+      "default": null,
+      "description": "seconds one model completion may take before it is called hung (default: 1800)",
+      "flags": [
+        "--model-timeout"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "integer"
+    },
     "node_routes": {
       "default": null,
       "description": "",
@@ -1966,7 +1977,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     }
   },
   "purpose": "Prepare a mode and resolved project worker context for graph execution. Chat uses wf_open with knobs, intent and an absolute workdir, then workflow tools drive the graph.",
-  "reviewed_schema": "a7943a841396507067d718a2e348763e028db58edc79c140d0fbb48884aaf7e3"
+  "reviewed_schema": "d0384bfee436aa3e8a60b363bee74a2ab9b7d9e5125f75908835ecba12f2a286"
 }
 ```
 
@@ -4569,6 +4580,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "required": false,
       "type": "string"
     },
+    "model_timeout_s": {
+      "default": null,
+      "description": "seconds one model completion may take before it is called hung (default: 1800); sets the per-completion limit for every agent step",
+      "flags": [
+        "--model-timeout"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "integer"
+    },
     "name": {
       "default": "",
       "description": "the package or artifact name (default: from what you said)",
@@ -4832,7 +4854,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     }
   },
   "purpose": "Run a named mode or author a package/artifact from a brief in the terminal; worker file defaults apply at preparation. CEO conversation and graph worker routes are distinct.",
-  "reviewed_schema": "87dce677805e168eca7f531ba916bf2b45635225867cb1f461420fafc80f3862"
+  "reviewed_schema": "054734e27c8a8bda0075d478425f857975ffb609ea6ec2e2a6d1a6c7d4e400c5"
 }
 ```
 
@@ -7422,6 +7444,16 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     },
     {
       "condition": "reloop",
+      "source": "gate_pitfalls",
+      "target": "pitfalls_researcher"
+    },
+    {
+      "condition": "proceed",
+      "source": "gate_pitfalls",
+      "target": "strategy_director"
+    },
+    {
+      "condition": "reloop",
       "source": "gate_qa",
       "target": "emit"
     },
@@ -7431,14 +7463,14 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "target": "overwatch"
     },
     {
+      "condition": "proceed",
+      "source": "gate_research",
+      "target": "pitfalls_researcher"
+    },
+    {
       "condition": "reloop",
       "source": "gate_research",
       "target": "research_director"
-    },
-    {
-      "condition": "proceed",
-      "source": "gate_research",
-      "target": "strategy_director"
     },
     {
       "condition": "proceed",
@@ -7464,6 +7496,11 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "condition": null,
       "source": "overwatch",
       "target": "gate_overwatch"
+    },
+    {
+      "condition": null,
+      "source": "pitfalls_researcher",
+      "target": "gate_pitfalls"
     },
     {
       "condition": null,
@@ -7512,6 +7549,10 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     },
     {
       "id": "gate_overwatch",
+      "user": false
+    },
+    {
+      "id": "gate_pitfalls",
       "user": false
     },
     {
@@ -7613,6 +7654,17 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "role": "ceo"
     },
     {
+      "call": "refactory_dsh.design_ops:gate_pitfalls",
+      "gate_kind": "fn",
+      "id": "gate_pitfalls",
+      "kind": "gate",
+      "knobs": [
+        "pitfalls_attempts"
+      ],
+      "notes": "proceed only when pitfalls.json is valid; reloop to pitfalls_researcher otherwise",
+      "role": "ceo"
+    },
+    {
       "call": "refactory_dsh.create_ops:gate_qa",
       "gate_kind": "fn",
       "id": "gate_qa",
@@ -7673,6 +7725,14 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "kind": "agent",
       "knobs": [],
       "notes": "audit the evidence behind the reviews",
+      "role": "ceo"
+    },
+    {
+      "call": "",
+      "id": "pitfalls_researcher",
+      "kind": "agent",
+      "knobs": [],
+      "notes": "identify risk-ranked pitfalls before strategy, independent of any design",
       "role": "ceo"
     },
     {
@@ -7851,6 +7911,18 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "value": "",
       "values": []
     },
+    "pitfalls_attempts": {
+      "default": 2,
+      "description": "how many times the pitfalls step may be retried when its output is invalid",
+      "frozen": false,
+      "kind": "int",
+      "range": [
+        1,
+        5
+      ],
+      "value": 2,
+      "values": []
+    },
     "pr": {
       "default": true,
       "description": "open a pull request once the reviews pass: into the target's default branch, or a new project's own GitHub repository; off keeps the work on the run's local branch, with its pull request text in pull-request.md and finishing commands in delivery.json",
@@ -8014,7 +8086,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`). The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-    "reviewed_schema": "8f154c0a352be19f0a511f2ce114dd5c0977b71503d3ff90621fc532ecd6840c"
+    "reviewed_schema": "19510e37db271a732098922894f37b621f1378cbd4244ead9297529e39830dfa"
   }
 }
 ```

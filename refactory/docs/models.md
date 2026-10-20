@@ -105,17 +105,37 @@ The `emit` worker must answer only through `emit.txt`: `===FILE:` with a whole f
 
 A run that failed, or whose run directory a later run has reused, loses its worktree after 24 idle hours (`REFACTORY_WORKTREE_IDLE_HOURS`); a run that goes on afterwards gets it back from its branch. The branch goes after 14 days, with `git branch -D`, since a failed run's commits were never merged. One that succeeded keeps both, and so does a halted or cancelled run (including one whose cursor emptied before reaching a graph sink, which names the nodes it never reached), which can still be resumed. Removing a worktree clears the untracked files the run left there, but a worktree with an edited tracked file, or with an untracked file newer than the run's last step, is kept and reported. `refactory projects` lists the projects and how each run stands, and `refactory projects prune` cleans up without waiting for the next run; `--succeeded` also removes succeeded runs' worktrees, keeping their branches. `REFACTORY_PROJECTS_DIR` and `REFACTORY_HOME` move the two folders.
 
+## Model completion timeout
+
+`--model-timeout SECONDS` sets how long one model completion may take before it is
+called hung, for every agent step in a `refactory ceo` run. The default is 1800
+seconds (30 minutes), defined as `DEFAULT_TIMEOUT_S` in `model.py`. The same flag
+exists on the standalone `design`, `create` and `edit` commands.
+
+Each dispatched agent node's spine limit is computed by
+`node_session_budget_s(attempts, timeout_s) = attempts × timeout_s + 600`, where
+`attempts` defaults to 3 and 600 is `NODE_DISPATCH_OVERHEAD_S`. The per-node
+`command_timeout_s` overrides the spine's global `commandTimeoutMs`, so a
+`--model-timeout` larger than the profile's default does not get silently cut.
+
+The value is saved in `model_context` (as the `timeout_s` key) in
+`run-config.json`, and inherited by nested workers via `REFACTORY_WORKER_CONTEXT`.
+A resumed run uses the saved value; `--model-timeout` given with `--resume` is
+refused.
+
 ## Design-document contract
 
 The design_doc node writes `design.md` following a defined contract. The contract requires these sections:
 
 1. **An H1 heading** that says what the change does (never the run name or artifact name).
 2. **`## Summary`** — a prose summary of the problem and the change.
-3. **`## Rule and sites`** — the rule the change makes or corrects, and every place in the code that applies or restates it, each cited with file path and line range, each marked `[changed]` or `[left: <reason>]`.
+3. **`## Rule and sites`** — the rule the change makes or corrects, and every place in the code that applies or restates it, each cited with file path and line range, each marked `[changed]` or `[left: <reason>]`. Markers are accepted in bare, bold, backtick-wrapped, and colon-description forms (`[changed]`, `**[changed]**`, `` `[changed]` ``, `[changed: description]`), with the bare form as canonical. The parser carries a colon description into the "What changed" section of the PR body. `[new]` is treated as equivalent to `changed`. The three consumers are: the PR body "What changed" (`delivery.py` `build_what_changed`), the design review gate marker check (`design_ops.py` `gate_design_review` via `unmarked_sites`), and the run warnings (`delivery.py` `target_guard.warn` via mismatch detection). Misspelled markers (e.g. `[chnaged]`) are caught by the design review gate before the approval gate, while `design_doc` can still fix them.
 4. **`## Docs`** — the docs that describe the changed behaviour, with their planned updates.
 5. **`## Changes`** — the list of files the change adds or modifies.
 
 **Before the design gate:** `gate_design_review` mechanically checks every design for contract completeness: a design missing a required section heading or whose section is empty reloops to `design_doc`. A rule site marked `[left]` without a reason, a rule site with no `[changed]` or `[left: <reason>]` marker, and a title that is the run name are also caught mechanically. `has_contract` (whether all four section headings are present) only selects delivery's fallback for a design written before the contract or by hand. The design_review agent also flags as BLOCKING a place applying the same rule that is left unchanged without a reason, or a doc describing the changed behaviour that the design leaves out.
+
+**Pitfall coverage:** When `pitfalls.json` exists (produced by the `pitfalls_researcher` node in the research stage), `gate_design_review` also checks that every high-risk pitfall id appears in the design's `## Anti-patterns to avoid` section, either addressed (naming the site or section that handles it) or set aside with `[set-aside: <reason>]`. A high-risk pitfall that is missing or set aside without a reason is blocking. The approval gate shows the pitfalls and how the design accounts for each. Modes without a research stage (design_fast, create_fast, edit_fast) skip the pitfall check with a recorded reason.
 
 **Delivery:** `_title` and `_body` use the contract. For a contract design, the PR title comes from the H1 heading (never the run name), the Summary section from `## Summary`, and a "What changed" section from the `[changed]` rule-and-sites entries cross-checked against the branch's actual diff (sites whose file is not in the diff are excluded with a run warning; diff files not covered by any site appear by name; for a pre-contract design, the diff's file list is used instead). For a pre-contract design, the title is extracted from the heading with `Design:` stripped and the run name with its separator stripped; when nothing is left, the brief's first sentence is used as the fallback. The summary is the first prose paragraph after the heading, skipping sub-headings like `## Problem`. No second parser exists: delivery imports and calls `design_contract.parse` once. The PR body no longer recommends squash merge; the sentence about the branch's commits being the run's attempts is kept.
 

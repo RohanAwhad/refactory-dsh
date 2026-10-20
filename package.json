@@ -11,8 +11,8 @@
     "@deepseek-ai/dsh": "0.2.0-rc.2"
   },
   "scripts": {
-    "docs:generate": ".venv/bin/python -m refactory_dsh.tools.gen_api_reference && .venv/bin/python -m refactory_dsh.tools.gen_discovery && .venv/bin/python -m refactory_dsh.tools.gen_tutorial",
-    "docs:check": ".venv/bin/python -m refactory_dsh.tools.gen_api_reference --check && .venv/bin/python -m refactory_dsh.tools.gen_discovery --check && .venv/bin/python -m refactory_dsh.tools.gen_tutorial --check",
+    "docs:generate": ".venv/bin/python -m refactory_dsh.tools.gen_api_reference && .venv/bin/python -m refactory_dsh.tools.gen_discovery && .venv/bin/python -m refactory_dsh.tools.gen_tutorial && .venv/bin/python -m refactory_dsh.tools.export_design_graph",
+    "docs:check": ".venv/bin/python -m refactory_dsh.tools.gen_api_reference --check && .venv/bin/python -m refactory_dsh.tools.gen_discovery --check && .venv/bin/python -m refactory_dsh.tools.gen_tutorial --check && .venv/bin/python -m refactory_dsh.tools.export_design_graph --check",
     "build": "pnpm run docs:check && pnpm run typecheck && tsdown --env.DSH_BUILD_FACE host && tsdown --env.DSH_BUILD_FACE client",
     "typecheck": "tsc -b tsconfig.host.json && tsc -b tsconfig.client.json",
     "test": "vitest run",

@@ -68,6 +68,8 @@ function resourceCheck(node: NodeView, config: CommandRunnerConfig): number | un
 interface CommandResult {
   /** The command that ran, for reporting. */
   command: string
+  /** The graph node id, for node-level failure recording. */
+  nodeId: string
   /** The process exit code; null when the node never ran or died from a signal. */
   exitCode: number | null
   /** Bounded stdout. */
@@ -276,7 +278,7 @@ export async function runDataCommand(
   resourceCheck(node, config)
   const stdout = result.stdout.text.trim()
   const stderr = result.stderr.text.trim()
-  const base: CommandResult = { command, exitCode: result.exitCode, stdout, stderr }
+  const base: CommandResult = { command, nodeId: node.id, exitCode: result.exitCode, stdout, stderr }
   if (result.timedOut) {
     return { ...base, ok: false, error: `${node.id} ${verb} timed out after ${result.timeoutMs}ms` }
   }
@@ -316,6 +318,7 @@ export async function runDeterministic(
   const command = commandOf(node)
   const base: CommandResult = {
     command: command ?? '',
+    nodeId: node.id,
     exitCode: null,
     stdout: '',
     stderr: '',
