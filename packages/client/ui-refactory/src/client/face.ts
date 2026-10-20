@@ -456,7 +456,7 @@ export function refactoryFace(
         // When the projects call fails, the panel still loads with an empty
         // target picker and a console note, rather than failing the whole panel.
         const projectsList = projects.ok ? projects.value : []
-        if (!projects.ok) console.warn('refactory: projects list unavailable:', projects.error.message)
+        if (!projects.ok) globalThis.console.warn('refactory: projects list unavailable:', projects.error.message)
         actions.loaded(tabId, { project: project.value, modes: modes.value, strategies: strategies.value, packages: packages.value, projects: projectsList })
       })
     }
