@@ -135,6 +135,31 @@ The design_doc node writes `design.md` following a defined contract. The contrac
 
 **Before the design gate:** `gate_design_review` mechanically checks every design for contract completeness: a design missing a required section heading or whose section is empty reloops to `design_doc`. A rule site marked `[left]` without a reason, a rule site with no `[changed]` or `[left: <reason>]` marker, and a title that is the run name are also caught mechanically. `has_contract` (whether all four section headings are present) only selects delivery's fallback for a design written before the contract or by hand. The design_review agent also flags as BLOCKING a place applying the same rule that is left unchanged without a reason, or a doc describing the changed behaviour that the design leaves out.
 
+**New required sections (R4, #384):**
+
+6. **`## Failure trace`** — for each failure the brief reports, a file:line chain from the symptom to the root cause, and the link the fix breaks. When the brief asks for a new feature, write `N/A — this is a new feature.`
+7. **`## Ask mapping`** — a markdown table with columns `| Ask (quoted from brief) | Design section | Test |`, one row per ask. `gate_design_review` mechanically checks that each ask appears verbatim in the brief.
+8. **`## Test guardedness exemptions`** (optional) — when new tests pass on the base, list each test file path and reason. A new test that passes on the base and is not listed here is rejected by the guardedness gate.
+
+### Routing design_doc and design_review to a stronger model
+
+Both `design_doc` and `design_review` use the default `ceo` role. To route them
+to a stronger model, use `node_routes` in `refactory.workers.json`:
+
+```json
+{
+  "node_routes": {
+    "design_doc": {"model": "claude-opus-4-20250514"},
+    "design_review": {"model": "claude-opus-4-20250514"}
+  }
+}
+```
+
+The worker receipt for each node records `requested_route` and `actual_route`,
+so the run report and pull request's Verification section show which model
+planned it. See [worker-routing.md](worker-routing.md) for the general
+`node_routes` mechanism and priority order (node > role > run).
+
 **Pitfall coverage:** When `pitfalls.json` exists (produced by the `pitfalls_researcher` node in the research stage), `gate_design_review` also checks that every high-risk pitfall id appears in the design's `## Anti-patterns to avoid` section, either addressed (naming the site or section that handles it) or set aside with `[set-aside: <reason>]`. A high-risk pitfall that is missing or set aside without a reason is blocking. The approval gate shows the pitfalls and how the design accounts for each. Modes without a research stage (design_fast, create_fast, edit_fast) skip the pitfall check with a recorded reason.
 
 **Delivery:** `_title` and `_body` use the contract. For a contract design, the PR title comes from the H1 heading (never the run name), the Summary section from `## Summary`, and a "What changed" section from the `[changed]` rule-and-sites entries cross-checked against the branch's actual diff (sites whose file is not in the diff are excluded with a run warning; diff files not covered by any site appear by name; for a pre-contract design, the diff's file list is used instead). For a pre-contract design, the title is extracted from the heading with `Design:` stripped and the run name with its separator stripped; when nothing is left, the brief's first sentence is used as the fallback. The summary is the first prose paragraph after the heading, skipping sub-headings like `## Problem`. No second parser exists: delivery imports and calls `design_contract.parse` once. The PR body no longer recommends squash merge; the sentence about the branch's commits being the run's attempts is kept.

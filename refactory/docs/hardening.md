@@ -723,6 +723,52 @@ another name that declares the knob gets the envelope.
 
 ---
 
+## 10. Independent verification step (dm-84, #400)
+
+Every reviewer in a design run reads design.md, so gaps the design missed
+propagate unchallenged through health check, code review, QA and overwatch.
+The evidence log (comment 6252312877 on #400, 54 entries) records every gap
+the reviews passed and the method that found it. Of 54 entries, only two
+needed the design; the rest were found by design-blind methods:
+
+- **M1** Adversarial inputs
+- **M2** Trace a real case
+- **M3** Where else does this pattern appear
+- **M11** Verify claims against code
+- **M12** Shared state
+- **M13** Boundary values
+- **M15** Weakened tests
+
+The verifier is given the brief, the diff and the repository — never
+design.md. It sits between the build's check and the reviews' verdict
+(after `check` in full mode, after `focused_check` in fast mode). Its
+blocking findings go back to the builder like a review's.
+
+### Why design-blind
+
+If the verifier read design.md, it would share the same blind spots as
+every other reviewer. By working from the brief and the code alone, it
+catches gaps the design missed, which is the failure mode the evidence log
+documents.
+
+### Pipeline position
+
+```
+check → verifier → gate_verification → fork_qa → reviews
+```
+
+In fast mode:
+```
+focused_check → verifier → gate_verification → focused_qa
+```
+
+### Measurement
+
+The replay harness (`python -m refactory_dsh.replay_harness`) scores the
+verifier against the evidence log. See docs/replay-harness.md.
+
+---
+
 Two things that were on this list have moved off it, which is the point of keeping it:
 
 - **mathlib is no longer untested.** It was installed and the mathlib problem ran, and

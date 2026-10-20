@@ -336,7 +336,7 @@ run that can approve its own plan is not reviewed at all, so a headless run refu
 that gate unless the caller supplies the verdict. The build then passes structural admission and canonical runtime validation inside the bounded repair cycle. Registration supplies execution visibility, not completion. Then three
 reviews (a health check, a code review and an adversarial QA pass) run **in
 parallel**, merge into one synthesis whose blocking findings the QA gate reads, and
-are audited by Overwatch against the brief, accepted criteria/design, latest intent ledger and actual final validation receipts. Its verdict and requirement evidence map are checked at the last gate. A QA or
+are audited by Overwatch against the brief, accepted criteria/design, latest intent ledger and actual final validation receipts. An **independent verifier** runs between the check and the reviews, applying design-blind methods (M1–M15) to the brief, diff and repository without reading design.md; see docs/hardening.md §10. Its verdict and requirement evidence map are checked at the last gate. A QA or
 overwatch reloop goes back to the emit step, not to the plan a person approved.
 
 All authoring review uses the original brief, approved design and explicit user steering

@@ -290,6 +290,8 @@ class DesignFastMode(DesignMode):
             notes="send an emission materialise could not apply back to emit, within the repair bound",
         ))
         _qa_nodes(graph, artifact=True)
+        from refactory_dsh.verification import wire_verification
+        wire_verification(graph, fast=True)
         graph.add(Node(
             "report", "op", call=f"{OPS}:report_artifact", resource_role="final_validation",
             reads=("focused-qa.json", "focused-check.json"), writes=("design.json", "fast-report.json"),

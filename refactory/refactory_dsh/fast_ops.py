@@ -227,6 +227,21 @@ def focused_check(ctx: Any) -> dict[str, Any]:
             guardedness = {"unavailable": f"the new tests could not be run on the base: {exc}"}
         if guardedness is not None:
             ctx.write_json("test-guardedness.json", guardedness)
+    # ── enforce test guardedness in fast mode (R3, #384 item 1) ──
+    from refactory_dsh.design_ops import enforce_guardedness
+    if payload.get("status") != "fail" and ctx.facts.get("artifact") and worktree.recorded(ctx.workdir) is not None:
+        unexempted = enforce_guardedness(ctx)
+        if unexempted:
+            detail = (
+                "BLOCKING: these new tests pass without the change: "
+                + ", ".join(unexempted)
+                + ". Either make them fail on the base or add them to the "
+                "## Test guardedness exemptions section in design.md with reasons."
+            )
+            ctx.write_text("check.txt", detail + "\n")
+            payload["guardedness_blocked"] = True
+            ctx.write_json("focused-check.json", payload)
+
     if payload["status"] == "fail":
         detail = f"requested runtime check failed (exit {payload.get('returncode')}): {payload.get('stderr') or payload.get('stdout')}"
         kind = evidence.check_failure_kind(result, budget=getattr(ctx, "budget", None))
@@ -293,6 +308,10 @@ def focused_check(ctx: Any) -> dict[str, Any]:
         outcome["smoke"] = ctx.read_json("smoke.json", {})
         outcome["revision"] = ctx.read_json("revision.json", None)
     evidence.record(ctx, outcome)
+    # After recording, check if guardedness was blocked and return reloop
+    if payload.get("guardedness_blocked"):
+        detail = ctx.read_text("check.txt") if ctx.exists("check.txt") else "non-guarding tests"
+        return _repair(ctx, [detail.strip()], kind="check")
     return {"focused_check": json.dumps(payload), "output_path": output,
             "review_files": json.dumps(review_files)}
 
@@ -375,6 +394,16 @@ def report_package(ctx: Any) -> dict[str, Any]:
     payload["fast"] = report
     ctx.write_json("create.json", payload)
     return {"created": json.dumps(payload)}
+
+
+def gate_verification(ctx: Any) -> str:
+    """Proceed when the verifier finds no blocking issues; reloop to emit otherwise."""
+    from refactory_dsh.verification import parse_verification_findings
+
+    findings = parse_verification_findings(ctx)
+    if not findings:
+        return "proceed"
+    return _repair(ctx, findings, kind="review")
 
 
 def report_artifact(ctx: Any) -> dict[str, Any]:

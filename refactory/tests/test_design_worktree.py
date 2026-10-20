@@ -29,7 +29,7 @@ from refactory_dsh.nn import Verdict
 from refactory_dsh.paths import REPO_ROOT
 from refactory_dsh.projects import projects_dir
 from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, PITFALLS_ANSWER,
-                           RESEARCH_ANSWER,
+                           RESEARCH_ANSWER, VERIFICATION_ANSWER,
                            REVIEW_ANSWERS, FakeModel,
                            StaleEmitModel, git, git_repo, render, stub)
 
@@ -80,7 +80,8 @@ def repo(tmp_path) -> Path:
 def _answers(*emits: str) -> list[str]:
     """Every answer a design run needs, in the order its graph asks."""
     return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits, *REVIEW_ANSWERS]
+            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits, VERIFICATION_ANSWER,
+            *REVIEW_ANSWERS]
 
 
 def _mode(**knobs) -> DesignMode:
@@ -1172,7 +1173,8 @@ def _fast(workdir: Path, *emits: str, refused: int = 0, knobs: dict | None = Non
         state["knobs"][name]["value"] = value
     mode.load_state_dict(state)
     answers = [FAST_PLAN] + [answer for index, emit in enumerate(emits)
-                             for answer in ((emit,) if index < refused else (emit, FAST_QA))]
+                             for answer in ((emit,) if index < refused
+                                            else (emit, VERIFICATION_ANSWER, FAST_QA))]
     return mode.run(workdir, model=FakeModel(answers),
                     task={"name": NAME, "brief": "a tool", "check": "python tool.py", **task})
 
@@ -1184,7 +1186,7 @@ def test_design_fast_changes_a_repository_in_a_worktree_and_delivers_nothing(rep
     # Passes only where app.py is as committed and the setup command has run: the worktree, prepared.
     tool = ("import pathlib\nassert pathlib.Path('app.py').read_text() == \"print('app')\\n\"\n"
             "assert pathlib.Path('built.txt').exists()\n")
-    model = FakeModel([FAST_PLAN, render({"tool.py": tool}), FAST_QA])
+    model = FakeModel([FAST_PLAN, render({"tool.py": tool}), VERIFICATION_ANSWER, FAST_QA])
     result = DesignFastMode().run(tmp_path / "run", model=model, task={
         "name": NAME, "brief": "a tool", "check": "python tool.py", "target": str(repo),
         "setup": "python -c \"open('built.txt', 'w').write('built')\""})

@@ -27,6 +27,7 @@ from tests_support import (
     DESIGN_REVIEW_ANSWER,
     PITFALLS_ANSWER,
     RESEARCH_ANSWER,
+    VERIFICATION_ANSWER,
     REVIEW_ANSWERS,
     FakeModel,
     create_answers,
@@ -199,6 +200,7 @@ def _design_answers(emit: list[str]) -> list[str]:
         DESIGN_DOC_ANSWER,
         DESIGN_REVIEW_ANSWER,
         *emit,
+        VERIFICATION_ANSWER,
         *REVIEW_ANSWERS,
     ]
 
@@ -209,11 +211,12 @@ def test_the_design_graph_is_a_different_shape_from_a_package_one():
         "check", "code_reviewer", "deliver", "design_doc", "design_review",
         "emit", "fork_qa", "gate_design_review", "gate_overwatch",
         "gate_pitfalls", "gate_qa", "gate_research", "gate_strategy",
+        "gate_verification",
         "health_checker", "join_qa",
         "materialise", "overwatch", "pitfalls_researcher", "prepare",
         "qa_director", "record_findings",
         "report", "research_director", "strategy_director", "synthesize_qa",
-        "synthesize_strategy",
+        "synthesize_strategy", "verifier",
     ], "the graph is design-v2's phases, not v1's"
     assert graph.nodes["check"].evaluator.endswith("check_artifact")
     assert "register" not in graph.nodes, "an artifact is not a package"
