@@ -535,6 +535,98 @@ def test_design_review_gate_catches_misquote_after_brief_says_comma(tmp_path):
     assert "enable fast mode" in verdict.reason
 
 
+def test_design_review_gate_accepts_backticked_marker(tmp_path):
+    """A site marked with backtick-wrapped ``[changed]`` is not flagged as unmarked."""
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({"source": str(tmp_path), "design_review_attempts_used": 0})
+    (tmp_path / "reviews").mkdir(parents=True, exist_ok=True)
+    ctx.write_text("reviews/design-review.md",
+                   "Everything is fine.\n\nVERDICT: PASS\n")
+    design = (
+        "# Do the thing\n\n"
+        "## Summary\n\nFix it.\n\n"
+        "## Rule and sites\n\n"
+        "- `file.py:1` — `[changed]`\n\n"
+        "## Docs\n\n- docs/models.md\n\n"
+        "## Changes\n\n- file.py\n"
+    )
+    ctx.write_text("design.md", design)
+    ctx.write_json("brief.json", {"name": "x", "brief": "do a thing"})
+    import refactory_dsh.design_ops as ops
+    result = ops.gate_design_review(ctx)
+    assert result == "proceed", f"backticked marker should be accepted; got {result!r}"
+
+
+def test_design_review_gate_accepts_colon_description_marker(tmp_path):
+    """A site marked with ``[changed: description]`` is not flagged as unmarked."""
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({"source": str(tmp_path), "design_review_attempts_used": 0})
+    (tmp_path / "reviews").mkdir(parents=True, exist_ok=True)
+    ctx.write_text("reviews/design-review.md",
+                   "Everything is fine.\n\nVERDICT: PASS\n")
+    design = (
+        "# Do the thing\n\n"
+        "## Summary\n\nFix it.\n\n"
+        "## Rule and sites\n\n"
+        "- `file.py:1` — [changed: also reads command_history]\n\n"
+        "## Docs\n\n- docs/models.md\n\n"
+        "## Changes\n\n- file.py\n"
+    )
+    ctx.write_text("design.md", design)
+    ctx.write_json("brief.json", {"name": "x", "brief": "do a thing"})
+    import refactory_dsh.design_ops as ops
+    result = ops.gate_design_review(ctx)
+    assert result == "proceed", f"colon-description marker should be accepted; got {result!r}"
+
+
+def test_design_review_gate_catches_misspelled_marker(tmp_path):
+    """A site with ``[chnaged]`` gets the typo-detection message."""
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({"source": str(tmp_path), "design_review_attempts_used": 0})
+    (tmp_path / "reviews").mkdir(parents=True, exist_ok=True)
+    ctx.write_text("reviews/design-review.md",
+                   "Everything is fine.\n\nVERDICT: PASS\n")
+    design = (
+        "# Do the thing\n\n"
+        "## Summary\n\nFix it.\n\n"
+        "## Rule and sites\n\n"
+        "- `file.py:1` — [chnaged]\n\n"
+        "## Docs\n\n- docs/models.md\n\n"
+        "## Changes\n\n- file.py\n"
+    )
+    ctx.write_text("design.md", design)
+    ctx.write_json("brief.json", {"name": "x", "brief": "do a thing"})
+    import refactory_dsh.design_ops as ops
+    verdict = ops.gate_design_review(ctx)
+    assert verdict == "reloop"
+    assert "possible misspelled marker" in verdict.reason
+    assert "chnaged" in verdict.reason
+
+
+def test_design_review_gate_marked_site_with_bracket_words_no_problem(tmp_path):
+    """A marked site whose line also contains ``[test]`` or a link raises no problem."""
+    ctx = nn.RunContext(tmp_path)
+    ctx.facts.update({"source": str(tmp_path), "design_review_attempts_used": 0})
+    (tmp_path / "reviews").mkdir(parents=True, exist_ok=True)
+    ctx.write_text("reviews/design-review.md",
+                   "Everything is fine.\n\nVERDICT: PASS\n")
+    design = (
+        "# Do the thing\n\n"
+        "## Summary\n\nFix it.\n\n"
+        "## Rule and sites\n\n"
+        "- `file.py:1` — **[changed]** updates [test] and see [list](x.md)\n\n"
+        "## Docs\n\n- docs/models.md\n\n"
+        "## Changes\n\n- file.py\n"
+    )
+    ctx.write_text("design.md", design)
+    ctx.write_json("brief.json", {"name": "x", "brief": "do a thing"})
+    import refactory_dsh.design_ops as ops
+    result = ops.gate_design_review(ctx)
+    assert result == "proceed", (
+        f"marked site with [test] and link should not raise problem; got {result!r}"
+    )
+
+
 def test_design_review_gate_reloop_findings_do_not_claim_pass(tmp_path):
     """A relooped review's design_review_findings no longer says it passed."""
     ctx = nn.RunContext(tmp_path)

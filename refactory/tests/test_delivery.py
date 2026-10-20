@@ -215,6 +215,91 @@ def test_contract_design_gives_title_summary_and_changes(tmp_path):
     assert "adds clause rows" in body
 
 
+# ── fixture-based marker tests ─────────────────────────────────────────────
+
+_FIXTURES = Path(__file__).resolve().parent / "fixtures"
+
+
+def test_b23a_colon_markers_produce_site_what_changed(tmp_path):
+    """b23a's design uses ``[changed: description]`` colon forms.
+
+    Fails without the parser fix: the colon-description form is not recognised,
+    so all sites are ``unmarked`` and ``build_what_changed`` returns a file list.
+    """
+    from refactory_dsh import design_contract
+
+    text = (_FIXTURES / "b23a_design_excerpt.md").read_text()
+    parsed = design_contract.parse(text, "b23a_correct_run")
+    changed = [s for s in parsed.rule_sites if s["status"] == "changed"]
+    assert len(changed) >= 3, f"expected ≥3 changed sites, got {len(changed)}: {changed}"
+    # The colon-description is captured.
+    descs = [s["description"] for s in changed if s["description"]]
+    assert any("command_history" in d for d in descs), f"no colon-desc captured: {descs}"
+    # build_what_changed returns items from sites, not an empty list.
+    items, _ = design_contract.build_what_changed(parsed, ["refactory/refactory_dsh/console.py"])
+    assert items, "build_what_changed returned no items"
+
+
+def test_b24ar_backticked_markers_produce_site_what_changed(tmp_path):
+    """b24ar's design uses backtick-wrapped markers for all 21+ sites.
+
+    Fails without the parser fix: ``_find_marker`` skips backtick-wrapped
+    markers, so all sites are ``unmarked``.
+    """
+    from refactory_dsh import design_contract
+
+    text = (_FIXTURES / "b24ar_design_excerpt.md").read_text()
+    parsed = design_contract.parse(text, "b24ar_hooks_refine")
+    unmarked = [s for s in parsed.rule_sites if s["status"] == "unmarked"]
+    assert not unmarked, f"sites still unmarked: {unmarked[:3]}"
+    changed = [s for s in parsed.rule_sites if s["status"] == "changed"]
+    assert len(changed) >= 10, f"expected ≥10 changed sites, got {len(changed)}"
+    items, _ = design_contract.build_what_changed(
+        parsed, ["vitest.global-setup.ts", "refactory/refactory_dsh/worktree.py"],
+    )
+    assert items, "build_what_changed returned no items"
+
+
+# ── parametrised marker-form tests ─────────────────────────────────────────
+
+@pytest.mark.parametrize("form,expected_status,expected_desc", [
+    ("[changed]", "changed", ""),
+    ("**[changed]**", "changed", ""),
+    ("`[changed]`", "changed", ""),
+    ("[changed: description text]", "changed", "description text"),
+    ("**[changed: description text]**", "changed", "description text"),
+    ("`[changed: description text]`", "changed", "description text"),
+    ("[left: reason text]", "left", ""),
+    ("**[left: reason text]**", "left", ""),
+    ("`[left: reason text]`", "left", ""),
+    ("[left]", "left", ""),
+    ("`[left]`", "left", ""),
+    ("[new]", "changed", ""),
+    ("`[new]`", "changed", ""),
+    ("[new: added this]", "changed", "added this"),
+])
+def test_marker_form_recognised(form, expected_status, expected_desc):
+    """Every unambiguous marker form is recognised by the parser."""
+    from refactory_dsh import design_contract
+
+    design_text = (
+        "# Test form\n\n"
+        "## Summary\n\nTest.\n\n"
+        "## Rule and sites\n\n"
+        f"- `some/file.py:1` — {form}\n\n"
+        "## Docs\n\n- docs/x.md\n\n"
+        "## Changes\n\n- some/file.py\n"
+    )
+    parsed = design_contract.parse(design_text, "test")
+    assert parsed.has_contract
+    site = parsed.rule_sites[0]
+    assert site["status"] == expected_status, f"form {form!r}: got status {site['status']!r}"
+    if expected_desc:
+        assert site["description"] == expected_desc, (
+            f"form {form!r}: expected desc {expected_desc!r}, got {site['description']!r}"
+        )
+
+
 def test_what_changed_uses_sites_not_bullets(tmp_path):
     """Contract design with test-plan Changes bullets yields What changed
     from [changed] sites only, not those bullets.

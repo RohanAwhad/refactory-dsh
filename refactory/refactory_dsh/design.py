@@ -317,8 +317,7 @@ class DesignMode(Mode):
                 "the design does not list at all, is BLOCKING.\n"
                 "- A doc that describes the behaviour the design changes, found by "
                 "searching the docs, that the design's '## Docs' section leaves out.\n\n"
-                "List each finding as a line starting with `BLOCKING:` followed "
-                "by what is wrong.\n\n"
+                "List each finding as a line starting with `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem.\n\n"
                 "End with a line that is exactly `VERDICT: PASS` when there are "
                 "no blocking findings, or `VERDICT: FAIL` when there are any."
             ),
@@ -423,7 +422,7 @@ class DesignMode(Mode):
                 "Rewriting the artifact or repeating the same probe cannot supply an "
                 "unavailable tool; do not prescribe those as a remedy. "
                 "Anything that fails or is "
-                "missing is written as the line `BLOCKING:` followed by what failed. A "
+                "missing is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. A "
                 "check you did not run is not a check that passed."
             ),
             reads=("brief.json", "design.md"),
@@ -454,7 +453,7 @@ class DesignMode(Mode):
                 "A matching number elsewhere in prose is not evidence for the requested "
                 "field. Record findings in "
                 "`reviews/code-review.md`. A defect that would stop the artifact working "
-                "is written as `BLOCKING:` followed by the file and what is wrong."
+                "is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path."
             ),
             reads=("brief.json", "design.md", "emit.txt", "pitfalls.json"),
             writes=("reviews/code-review.md",),
@@ -481,8 +480,7 @@ class DesignMode(Mode):
                 "exercise small and large dimensions and inspect rendered labels and "
                 "bounds; distinguish geometry correctness from presentation quality. Write "
                 "`reviews/qa.md` with each check and its exact result. Anything that "
-                "breaks an ask in the brief is written as `BLOCKING:` followed by what "
-                "you ran and what happened."
+                "breaks an ask in the brief is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path."
             ),
             reads=("brief.json", "design.md", "strategy.json"),
             writes=("reviews/qa.md",),
@@ -535,6 +533,7 @@ class DesignMode(Mode):
                 "external dependency and exact unblock action for the CEO or person, "
                 "and keep that requirement unverified. Do not prescribe re-authoring "
                 "or repeating an unchanged probe to resolve an unavailable tool. "
+                "Any blocking finding is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. "
                 "Write `reviews/overwatch.md` ending with a "
                 "line that is exactly `VERDICT: PASS` or `VERDICT: FAIL`, and name every "
                 "ask with no evidence behind it."

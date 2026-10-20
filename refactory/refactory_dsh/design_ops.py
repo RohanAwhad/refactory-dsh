@@ -249,9 +249,19 @@ def gate_design_review(ctx: Any) -> str:
             )
         unmarked = design_contract.unmarked_sites(parsed)
         if unmarked:
+            # Check for near-miss markers on each unmarked site.
+            parts: list[str] = []
+            for site in parsed.rule_sites:
+                if site["status"] != "unmarked":
+                    continue
+                near = design_contract.find_near_miss_markers(site["path"])
+                if near:
+                    parts.append(f"{site['path']} ({'; '.join(near)})")
+                else:
+                    parts.append(site["path"])
             problems.append(
                 "rule-site(s) with no [changed] or [left: <reason>] marker: "
-                + ", ".join(unmarked)
+                + ", ".join(parts)
             )
         if design_contract.title_is_run_name(design_text, run_name):
             problems.append(
