@@ -332,6 +332,18 @@ def test_info_notes_are_not_requirements_but_corrections_are(tmp_path):
     assert any(e["kind"] == "correction" for e in entries)
 
 
+def test_ceo_notes_are_not_requirements(tmp_path):
+    """C5: CEO-sourced corrections are context, not auditable requirements."""
+    ctx = audit_context(tmp_path)
+    Ledger(tmp_path).note("correction", "CEO noticed a typo", source="ceo")
+    Ledger(tmp_path).note("correction", "User says fix the padding", source="user-relayed")
+    reqs = evidence.requirements(ctx)
+    ceo_texts = [r["text"] for r in reqs if "CEO noticed" in r.get("text", "")]
+    assert not ceo_texts, "CEO-sourced corrections must not be requirements"
+    user_texts = [r["text"] for r in reqs if "fix the padding" in r.get("text", "")]
+    assert user_texts, "user-relayed corrections must remain requirements"
+
+
 # ── ask 1: gate_overwatch says what actually failed ───────────────────────
 
 
