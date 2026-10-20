@@ -10,6 +10,7 @@ layouts.
 from __future__ import annotations
 
 import functools
+import hashlib
 import os
 import re
 import shutil
@@ -305,6 +306,21 @@ def _refuse_if_live_runs(checkout: Path) -> None:
     except (ImportError, RuntimeError) as exc:
         if isinstance(exc, RuntimeError):
             raise
+
+
+def _source_manifest(root: Path) -> dict[str, str]:
+    """Hash every regular file under *root*, excluding common generated directories."""
+    ignored = {".git", ".factory", ".venv", "node_modules", "__pycache__", ".pytest_cache"}
+    result = {}
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        if any(part in ignored or part.startswith(".env") for part in relative.parts):
+            continue
+        if path.is_symlink():
+            raise ValueError(f"source project contains a symlink: {relative}; use an explicit plain-file source")
+        if path.is_file():
+            result[str(relative)] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return result
 
 
 def python() -> Path:
