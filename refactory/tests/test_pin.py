@@ -843,6 +843,30 @@ def test_credential_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
                 f"pin file {p} is a symlink to DSH home: {target}"
 
 
+def test_pinned_resume_dispatch_uses_pin_python(tmp_path: Path) -> None:
+    """A pinned resume's dispatch commands reference the pin's Python, not the driver's."""
+    from refactory_dsh import workers
+
+    graphs_dir = tmp_path / "graphs"
+    graphs_dir.mkdir()
+    graph = {
+        "nodes": {
+            "agent1": {
+                "dispatch_command": "/original/python -m refactory_dsh.worker_node '/path/to/spec.json'",
+                "prompt_template": "test",
+            }
+        }
+    }
+    (graphs_dir / "graph.json").write_text(json.dumps(graph))
+
+    workers.patch_dispatch_python(graphs_dir, "/pin/python")
+
+    updated = json.loads((graphs_dir / "graph.json").read_text())
+    assert updated["nodes"]["agent1"]["dispatch_command"].startswith("/pin/python ")
+    assert "-m refactory_dsh.worker_node" in updated["nodes"]["agent1"]["dispatch_command"]
+    assert "'/path/to/spec.json'" in updated["nodes"]["agent1"]["dispatch_command"]
+
+
 def test_register_run_concurrent_safe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """register_run uses a file lock for concurrent safety."""
     import refactory_dsh.pin as pin

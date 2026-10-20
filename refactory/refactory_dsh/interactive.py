@@ -311,6 +311,13 @@ def run(
                     'runtime_root': _pin_co,
                     'python_bin': str(Path(_pin_co) / '.venv' / 'bin'),
                 }
+                # When pinned, also update dispatch commands in the restored graph
+                # so workers run from the pin's Python, not the original checkout's.
+                from refactory_dsh import workers as _workers_mod
+                _workers_mod.patch_dispatch_python(
+                    graphs,
+                    str(Path(_pin_co) / '.venv' / 'bin' / 'python'),
+                )
             resource_limits = effective_limits
         if source:
             from refactory_dsh.items import write_source
