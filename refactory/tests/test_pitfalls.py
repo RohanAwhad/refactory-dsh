@@ -279,3 +279,68 @@ def test_gate_pitfalls_proceeds_on_valid(tmp_path):
     ctx.write_text("pitfalls.json", PITFALLS_ANSWER)
     import refactory_dsh.design_ops as ops
     assert ops.gate_pitfalls(ctx) == "proceed"
+
+
+# ── fixture repository with pinning test ───────────────────────────────────
+
+def test_fixture_repo_gets_pitfall_for_pinning_test(tmp_path):
+    """A fixture repo whose test pins behaviour gets a pitfall naming that test.
+
+    Creates a repository with a test file containing ``assert timeout == 300``,
+    writes a brief that asks to change the timeout, scripts a pitfall answer
+    referencing the test file, line and assertion, and validates it through
+    gate_pitfalls — matching what a scripted model would produce, as the
+    existing research tests do.
+
+    Fails without the pitfalls_researcher node and gate_pitfalls gate:
+    there would be no node to write pitfalls.json and no gate to validate it.
+    """
+    # ── fixture repository with a pinning test ──
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    test_dir = repo / "tests"
+    test_dir.mkdir()
+    test_file = test_dir / "test_config.py"
+    test_file.write_text(
+        "def test_default_timeout():\n"
+        "    timeout = 300\n"
+        "    assert timeout == 300\n"
+    )
+
+    # ── scripted pitfall answer referencing the pinning test ──
+    pitfall_answer = json.dumps([{
+        "id": "PIT-001",
+        "risk": "high",
+        "category": "pinning_tests",
+        "evidence": "tests/test_config.py:3",
+        "prescription": (
+            "The test asserts `timeout == 300`. The change must keep this "
+            "assertion or deliberately update it with a reason."
+        ),
+    }])
+
+    # ── run context pointing at the fixture repo as its source ──
+    run = tmp_path / "run"
+    ctx = nn.RunContext(run, knobs={"pitfalls_attempts": 3})
+    ctx.facts.update({"source": str(repo), "pitfalls_attempts_used": 0})
+    ctx.write_text("pitfalls.json", pitfall_answer)
+
+    # gate_pitfalls validates the schema and the evidence file:line.
+    import refactory_dsh.design_ops as ops
+    assert ops.gate_pitfalls(ctx) == "proceed"
+
+    # Verify the written pitfalls.json has the required fields.
+    written = json.loads(ctx.read_text("pitfalls.json"))
+    assert len(written) == 1
+    p = written[0]
+    assert p["category"] == "pinning_tests"
+    assert "tests/test_config.py" in p["evidence"]
+    assert ":3" in p["evidence"]
+    assert pitfalls_mod.PIT_ID_RE.match(p["id"])
+    assert p["risk"] == "high"
+    assert p["prescription"]
+
+    # The evidence file actually exists in the fixture repo.
+    assert (repo / "tests" / "test_config.py").is_file()
+    content = (repo / "tests" / "test_config.py").read_text()
+    assert "assert timeout == 300" in content
