@@ -1391,7 +1391,7 @@ def test_new_failure_introduced_by_attempt_is_refused(tmp_path):
     failing = render({"tool.py": "print('built')\n",
                       "test_new.py": "def test_new_broken():\n    assert False\n"})
     fixed = render({"tool.py": "print('built')\n",
-                    "test_new.py": "def test_new_broken():\n    assert True\n"})
+                    "test_new.py": "def test_new_broken():\n    import tool\n    assert hasattr(tool, '__file__')\n"})
     result = _design(
         tmp_path / "run",
         FakeModel(_answers(failing, fixed)),

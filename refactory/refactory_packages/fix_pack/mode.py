@@ -42,7 +42,7 @@ class MakePass(nn.Mode):
         graph.add(nn.Node(
             "prepare", "op", call=f"{OPS}:prepare",
             knobs=("name", "brief", "check", *repo_change.knob_names()),
-            writes=("feedback.txt",),
+            writes=("feedback.txt", "brief.json"),
             produces=("name", "brief", "check", "feedback", *repo_change.produces()),
             notes="read the check, and give the run its worktree",
         ))

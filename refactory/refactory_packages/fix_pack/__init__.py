@@ -18,5 +18,5 @@ PACKAGE = Package(
     description="Make a failing check pass in a repository, on a branch of its own.",
     modes=(MakePass,),
     # repo_change is named too, so a run pins the steps it calls as well as its own.
-    ops=("refactory_packages.fix_pack.ops", "refactory_dsh.repo_change"),
+    ops=("refactory_packages.fix_pack.ops", "refactory_dsh.repo_change", "refactory_dsh.verification"),
 )

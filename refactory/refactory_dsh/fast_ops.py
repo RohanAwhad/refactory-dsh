@@ -425,7 +425,8 @@ def gate_verification(ctx: Any) -> str:
 
     # 1. Check failure → _repair (spends a repair_attempts slot).
     if check_data.get("status") == "fail":
-        detail = ctx.read_text("check.txt") if ctx.exists("check.txt") else "check failed"
+        check_output = check_data.get("stderr") or check_data.get("stdout") or ""
+        detail = f"requested runtime check failed (exit {check_data.get('returncode')}): {check_output}"
         return _repair(ctx, [detail.strip()], kind="check")
 
     # 2. Guardedness block → _repair (spends a repair_attempts slot).

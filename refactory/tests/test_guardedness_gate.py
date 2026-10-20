@@ -267,10 +267,11 @@ def test_guardedness_reloops_in_full_mode_integration(tmp_path, monkeypatch):
     from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
                                PITFALLS_ANSWER, RESEARCH_ANSWER,
                                VERIFICATION_ANSWER,
-                               REVIEW_ANSWERS, FakeModel, render)
+                               REVIEW_ANSWERS, FakeModel, git_repo, render)
     from refactory_dsh import base_check
     from refactory_dsh.design import DesignMode
 
+    repo = git_repo(tmp_path / "repo")
     call_count = [0]
 
     def mock_guardedness(ctx, command, timeout):
@@ -298,7 +299,8 @@ def test_guardedness_reloops_in_full_mode_integration(tmp_path, monkeypatch):
     result = DesignMode().run(
         tmp_path / "run", model=FakeModel(answers),
         verdicts={"gate_strategy": "proceed"},
-        task={"name": "guard_full", "brief": "a tool", "check": "python tool.py"},
+        task={"name": "guard_full", "brief": "a tool", "check": "python tool.py",
+              "target": str(repo)},
     )
     assert result.exit_ok, result.error
     assert call_count[0] >= 2, "guardedness must be computed at least twice"
@@ -313,10 +315,11 @@ def test_guardedness_reloops_in_fast_mode_integration(tmp_path, monkeypatch):
     On the second attempt guardedness passes and the run completes.
     """
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
-    from tests_support import FakeModel, render, VERIFICATION_ANSWER
+    from tests_support import FakeModel, git_repo, render, VERIFICATION_ANSWER
     from refactory_dsh import base_check
     from refactory_dsh.fast import DesignFastMode
 
+    repo = git_repo(tmp_path / "repo")
     FAST_QA = json.dumps({
         "status": "pass",
         "checks": [{"name": "runs", "command": "python tool.py",
@@ -358,7 +361,8 @@ def test_guardedness_reloops_in_fast_mode_integration(tmp_path, monkeypatch):
     mode.load_state_dict(state)
     result = mode.run(
         tmp_path / "run", model=FakeModel(answers),
-        task={"name": "guard_fast", "brief": "a tool", "check": "python tool.py"},
+        task={"name": "guard_fast", "brief": "a tool", "check": "python tool.py",
+              "target": str(repo)},
     )
     assert result.exit_ok, result.error
     assert call_count[0] >= 2, "guardedness must be computed at least twice"

@@ -345,7 +345,7 @@ def test_noisy_verifier_does_not_end_run_fast_mode(tmp_path, monkeypatch):
     ]
     mode = DesignFastMode()
     state = mode.state_dict()
-    state["knobs"]["repair_attempts"]["value"] = 4
+    state["knobs"]["repair_attempts"]["value"] = 3
     mode.load_state_dict(state)
     result = mode.run(
         tmp_path / "run", model=FakeModel(answers),

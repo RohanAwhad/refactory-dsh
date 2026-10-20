@@ -42,7 +42,7 @@ def test_design_catches_known_defect_and_repairs_within_bound(tmp_path, monkeypa
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
     bad = "===FILE: answer.py===\nassert 1 + 1 == 3\n"
     good = "===FILE: answer.py===\nassert 1 + 1 == 2\n"
-    client = FakeModel([PLAN, bad, VERIFICATION_ANSWER, QA_PASS, good, VERIFICATION_ANSWER, QA_PASS])
+    client = FakeModel([PLAN, bad, VERIFICATION_ANSWER, good, VERIFICATION_ANSWER, QA_PASS])
     run = DesignFastMode().run(tmp_path / "run", model=client,
                                task={"name": "small", "brief": "assert two", "check": f"{sys.executable} answer.py"})
     assert run.exit_ok, run.error
@@ -52,9 +52,9 @@ def test_design_catches_known_defect_and_repairs_within_bound(tmp_path, monkeypa
     assert report["research"] == "not requested/run"
     assert report["canonical_smoke"] == "not run"
     assert (tmp_path / "run/repair.txt").read_text().startswith("requested runtime check failed")
-    assert len(client.prompts) == 7, "repairs repeat coder/verifier/QA, never the strategist"
+    assert len(client.prompts) == 6, "repairs repeat coder/verifier/QA, never the strategist"
     assert (tmp_path / "run/implementation-plan.txt").read_text() == PLAN
-    assert PLAN in client.prompts[1] and PLAN in client.prompts[4]
+    assert PLAN in client.prompts[1] and PLAN in client.prompts[3]
 
 
 def test_a_check_with_no_target_imports_refactory_however_the_shell_path_reads(tmp_path, monkeypatch):
