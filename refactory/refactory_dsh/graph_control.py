@@ -154,22 +154,16 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
         try:
             last_receipt = json.loads(receipt_path.read_text())
             if isinstance(last_receipt, dict) and last_receipt.get('status') == 'failed':
-                # dm-101: suppress stale failure when the run reached a terminal state.
-                suppress = False
-                spine_path = root / '.refactory/spine-status.json'
-                if spine_path.exists():
-                    try:
-                        spine_status = json.loads(spine_path.read_text())
-                        if spine_status.get('status') in ('done', 'cancelled', 'halted'):
-                            suppress = True
-                    except (OSError, json.JSONDecodeError):
-                        pass
-                if not suppress:
-                    result['last_failed_receipt'] = {
-                        'action': last_receipt.get('action'),
-                        'status': 'failed',
-                        'message': last_receipt.get('message', ''),
-                    }
+                # dm-101: A stale failed control is cleared only when a later
+                # control on the same run succeeded (the receipt file is
+                # overwritten with status 'applied').  Since we are reading
+                # the receipt file and it still says 'failed', no later
+                # success has occurred — always surface it.
+                result['last_failed_receipt'] = {
+                    'action': last_receipt.get('action'),
+                    'status': 'failed',
+                    'message': last_receipt.get('message', ''),
+                }
         except (OSError, json.JSONDecodeError):
             pass
     if action == 'rerun' and restart_owner:

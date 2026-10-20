@@ -484,6 +484,9 @@ def chain(ledger: Ledger, outputs: Mapping[str, str], *, deliveries: Mapping[str
         if delivery is None and not outputs[node_id].strip():
             continue
         if delivery is not None:
+            # E9: A pending delivery has not completed yet — skip it.
+            if delivery.get("status") == "pending":
+                continue
             if delivery.get("status") != "delivered":
                 problems.append(f"node {node_id!r} has no successful artifact delivery receipt")
                 continue

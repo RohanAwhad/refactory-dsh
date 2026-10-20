@@ -773,6 +773,21 @@ def test_chain_skips_unrun_nodes(tmp_path):
     )
 
 
+def test_chain_skips_pending_deliveries(tmp_path):
+    """E9: A node with a pending delivery has not completed yet — skip it."""
+    ledger = Ledger.seed(tmp_path, "build a mode")
+    deliveries = {
+        "writer": {"status": "pending"},
+    }
+    outputs = {
+        "writer": "",
+    }
+    problems = steering.chain(ledger, outputs, deliveries=deliveries)
+    assert not any("writer" in p for p in problems), (
+        f"pending delivery was reported as a problem: {problems}"
+    )
+
+
 def test_chain_still_reports_ran_but_uncited_node(tmp_path):
     """E9: A node with no delivery but output text has legacy inline citations."""
     ledger = Ledger.seed(tmp_path, "build a mode")

@@ -29,6 +29,14 @@
   config:
     exclude: [wf_next, wf_verdict]
 
+# H1: Default the Enter-behaviour to steer so mid-turn messages from the person
+# are delivered as steering rather than queued.  DSH settings resolve
+# "schema defaults → composition base → user layer" (dsh-settings types.d.ts),
+# so this composition base is overridden by a person's saved choice.
+- id: ui-conversation
+  config:
+    busyEnter: steer
+
 # The re:factory brand replaces the official DeepSeek whale.
 - id: ui-brand-official
   disabled: true

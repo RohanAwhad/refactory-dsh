@@ -218,10 +218,12 @@ describe('the cursor status a run leaves behind', () => {
     expect(result.error).toContain('broken on purpose')
   })
 
-  it('facts summary replaces inline facts with keys, sizes and small inlines (E10)', async () => {
+  it('facts summary replaces inline facts with keys, sizes and small inlines — 512-char limit (E10)', async () => {
     // `ran` is populated only in interactiveOpen mode, so this test uses wf_open
     // with a FnNode → AgentNode graph: drain runs the FnNode (one boundary),
     // `ran` carries its facts summary, and the AgentNode is the next due node.
+    // The 512-character inline limit keeps short strings visible while excluding
+    // large blobs (a design run's facts.json is about 37 KB).
     const workdir = scratch()
     writeFileSync(join(workdir, 'facts.json'), JSON.stringify({
       small: 'hello',

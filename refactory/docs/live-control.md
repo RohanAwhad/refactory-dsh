@@ -82,15 +82,16 @@ uv run refactory steer --run /absolute/run --note "fix the padding" --source use
 
 ## Mid-turn messages
 
-When the CEO is mid-turn, a message you type can be delivered immediately as
-steering rather than queued until the turn finishes. DSH's Enter-behaviour
-setting (found in the conversation plugin's settings under "Enter Behaviour")
-controls this: set it to **Steer** to deliver mid-turn messages as steering.
+When the CEO is mid-turn, a message you type is delivered immediately as
+steering rather than queued until the turn finishes. The refactory-web
+composition sets the conversation plugin's `busyEnter` to `steer`, which
+overrides the upstream default (`queue`). DSH settings resolve
+"schema defaults → composition base → user layer" (dsh-settings types.d.ts),
+so a person's saved Enter-behaviour choice in the GUI still wins.
 
-There is no supported mechanism for a profile to supply a default for this
-Host user setting while preserving a saved choice, so the profile does not
-set it. Change it in the GUI's conversation settings if the default (queue)
-makes you wait.
+To change the behaviour, open the conversation plugin's settings (found in
+the GUI under **Settings → Conversation → Enter Behaviour**) and choose
+**Queue** or **Steer**. The saved choice overrides the composition default.
 
 On the native GUI, press **Cmd+Enter** (macOS) or **Ctrl+Enter** (other
 platforms) to send a message while the CEO is working. The message reaches
@@ -110,7 +111,7 @@ uv run refactory graph-control stop --run /absolute/run
 
 Process cancellation is separate: `refactory stop --run RUN_DIR` requests interruption of the run's current owner process (from the console launch record, or from the spine checkpoint when the launch record is absent or stale, matching how `refactory status` determines `owner_alive`). Inspect the receipt and subsequent activity for confirmation; sending a signal is not proof that every worker terminated. Stopping a reader does not issue either kind of stop.
 
-A control that cannot be applied — a stale revision, an unsupported action, a node that is not safely replayable — is recorded with `status: failed` in the receipt. The failure reason is also journaled as a run warning, visible in `refactory status` and in the receipt shown by `refactory graph-control`'s own output. A failed control stops being reported to the person once the run reaches a terminal state (done, cancelled, halted), because a stale failure from an earlier refused control is misleading on a completed run. The failure remains in the receipt file and in the journal for audit; only the display is suppressed. The owner removes the control file once it applies or refuses the control. A deferred rerun stays queued until concurrent work joins. `refactory status` lists the queued controls, so a person sees what a next owner would apply. Every graph-control confirmation includes the run's name.
+A control that cannot be applied — a stale revision, an unsupported action, a node that is not safely replayable — is recorded with `status: failed` in the receipt. The failure reason is also journaled as a run warning, visible in `refactory status` and in the receipt shown by `refactory graph-control`'s own output. A failed control stops being reported to the person once a later control on the same run succeeds, because the receipt file is overwritten with `status: applied`. The failure remains in the journal for audit; only the display is replaced by the later success. The owner removes the control file once it applies or refuses the control. A deferred rerun stays queued until concurrent work joins. `refactory status` lists the queued controls, so a person sees what a next owner would apply. Every graph-control confirmation includes the run's name.
 
 To change completed work, choose a completed node and prompt correction, press **Preview affected results**, inspect the invalidated nodes, then **Confirm correction and rerun**. The console equivalent is `graph-control preview --node NODE`, followed by `graph-control rerun --node NODE --text "CORRECTION" --revision REVISION` with the returned revision and the same `--run`. The owner refuses a stale preview. Prior evidence is archived and dependent results invalidated before execution; a note alone does not silently rewrite completed work. Unsafe replay plans, including unsettled concurrent work, are refused.
 

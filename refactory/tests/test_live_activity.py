@@ -159,9 +159,10 @@ def test_graph_control_shows_last_failed_receipt(tmp_path):
     assert 'graph changed since preview' in result['last_failed_receipt']['message']
 
 
-def test_status_suppresses_failed_control_when_finished(tmp_path):
-    """dm-101: A failed control receipt is NOT rendered as 'Last failed control'
-    by format_status when the run state is 'finished'."""
+def test_status_shows_failed_control_when_finished(tmp_path):
+    """dm-101: A failed control receipt IS still rendered as 'Last failed control'
+    when the run state is 'finished', because only a later successful control
+    clears a failure (the receipt file is overwritten with status 'applied')."""
     activity = {
         'control': {
             'action': 'rerun', 'status': 'failed',
@@ -174,7 +175,7 @@ def test_status_suppresses_failed_control_when_finished(tmp_path):
         'activity': activity,
     }
     text = readable.format_status(payload)
-    assert 'Last failed control' not in text
+    assert 'Last failed control' in text
 
 
 def test_status_shows_failed_control_when_executing(tmp_path):
@@ -194,11 +195,15 @@ def test_status_shows_failed_control_when_executing(tmp_path):
     assert 'Last failed control' in text
 
 
-def test_stale_failure_suppressed_in_graph_control_request_when_terminal(tmp_path):
-    """dm-101: graph_control.request() suppresses last_failed_receipt when spine is terminal."""
+def test_later_success_clears_failure_in_graph_control_request(tmp_path):
+    """dm-101: graph_control.request() surfaces last_failed_receipt from a
+    failed receipt even when the spine is terminal, because the receipt file
+    is the source of truth. A later applied control overwrites the receipt,
+    so the failure disappears naturally."""
     directory = tmp_path / '.refactory'
     directory.mkdir()
     (directory / 'spine-checkpoint.json').write_text(json.dumps({}))
+    # Receipt says 'failed' — always surfaced regardless of spine state.
     (directory / 'graph-control-receipt.json').write_text(json.dumps({
         'action': 'rerun', 'status': 'failed',
         'message': 'graph changed since preview; preview invalidation again',
@@ -206,7 +211,68 @@ def test_stale_failure_suppressed_in_graph_control_request_when_terminal(tmp_pat
     (directory / 'spine-status.json').write_text(json.dumps({'status': 'done'}))
     result = graph_control.request(tmp_path, 'pause')
     assert result['status'] == 'queued'
-    assert 'last_failed_receipt' not in result
+    assert 'last_failed_receipt' in result
+    assert result['last_failed_receipt']['status'] == 'failed'
+
+    # Now simulate a later successful control overwriting the receipt.
+    (directory / 'graph-control-receipt.json').write_text(json.dumps({
+        'action': 'rerun', 'status': 'applied',
+        'message': 'Applied at graph boundary.',
+    }))
+    result2 = graph_control.request(tmp_path, 'pause')
+    assert result2['status'] == 'queued'
+    assert 'last_failed_receipt' not in result2
+
+
+def test_format_graph_control_names_the_run(tmp_path):
+    """dm-101: every format_graph_control line names the run."""
+    payload = {
+        'status': 'queued', 'action': 'pause', 'run_id': '/runs/b28a',
+    }
+    text = readable.format_graph_control(payload)
+    assert '/runs/b28a' in text
+
+    # preview
+    payload = {
+        'status': 'preview', 'action': 'rerun', 'run_id': '/runs/b28a',
+        'invalidated': ['a', 'b'],
+    }
+    text = readable.format_graph_control(payload)
+    assert '/runs/b28a' in text
+
+    # failed
+    payload = {
+        'status': 'failed', 'action': 'rerun', 'run_id': '/runs/b28a',
+        'message': 'stale preview',
+    }
+    text = readable.format_graph_control(payload)
+    assert '/runs/b28a' in text
+
+    # acknowledged
+    payload = {
+        'status': 'acknowledged', 'action': 'acknowledge', 'run_id': '/runs/b28a',
+        'message': 'ok', 'files': [],
+    }
+    text = readable.format_graph_control(payload)
+    assert '/runs/b28a' in text
+
+    # withdrawn
+    payload = {
+        'status': 'withdrawn', 'action': 'withdraw', 'run_id': '/runs/b28a',
+        'control_id': 'ctrl-1',
+    }
+    text = readable.format_graph_control(payload)
+    assert '/runs/b28a' in text
+
+    # last_failed_receipt
+    payload = {
+        'status': 'queued', 'action': 'pause', 'run_id': '/runs/b28a',
+        'last_failed_receipt': {
+            'action': 'rerun', 'status': 'failed', 'message': 'graph changed',
+        },
+    }
+    text = readable.format_graph_control(payload)
+    assert '/runs/b28a' in text
 
 
 def test_amend_command_returns_run_id(tmp_path):
