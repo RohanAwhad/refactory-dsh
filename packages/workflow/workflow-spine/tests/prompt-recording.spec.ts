@@ -310,7 +310,7 @@ else:
       name: 't',
       start_node: 'fork_qa',
       nodes: {
-        fork_qa: { _type: 'ForkNode', id: 'fork_qa' },
+        fork_qa: { _type: 'ForkNode', id: 'fork_qa', targets: ['health_checker', 'code_reviewer'] },
         health_checker: {
           _type: 'AgentNode', id: 'health_checker', role: 'reviewer',
           prompt_template: 'Review the code', writes: [], reads: [],
@@ -319,13 +319,10 @@ else:
           _type: 'AgentNode', id: 'code_reviewer', role: 'reviewer',
           prompt_template: 'Review code quality', writes: [], reads: [],
         },
-        join_qa: { _type: 'JoinNode', id: 'join_qa' },
+        join_qa: { _type: 'JoinNode', id: 'join_qa', sources: ['health_checker', 'code_reviewer'] },
       },
       edges: [
-        { source: 'fork_qa', target: 'health_checker' },
-        { source: 'fork_qa', target: 'code_reviewer' },
-        { source: 'health_checker', target: 'join_qa' },
-        { source: 'code_reviewer', target: 'join_qa' },
+        { source: 'fork_qa', target: 'join_qa' },
       ],
     }
 
