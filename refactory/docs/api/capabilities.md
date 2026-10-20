@@ -2662,72 +2662,6 @@ Documentation: [refactory/docs/optimization-profiles.md](../../../refactory/docs
 }
 ```
 
-## projects
-
-List registered target projects for the GUI's target picker; the same registry as refactory projects.
-
-Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
-
-```json
-{
-  "chat": {
-    "fields": {},
-    "order": [],
-    "required": []
-  },
-  "description": "the registered projects for target selection",
-  "doc": "refactory/docs/cli.md",
-  "examples": [
-    {
-      "arguments": {},
-      "explanation": "List registered target projects for the GUI's target picker; the same registry as refactory projects."
-    }
-  ],
-  "interfaces": {
-    "chat": "refactory action projects",
-    "cli": "python -m refactory_dsh.console projects",
-    "panel": "Target picker uses refactoryConsole.projects."
-  },
-  "parameters": {
-    "project": {
-      "default": null,
-      "description": "repository root (default: found)",
-      "flags": [
-        "--project"
-      ],
-      "nargs": null,
-      "positional": false,
-      "required": false,
-      "type": "string"
-    },
-    "run": {
-      "default": null,
-      "description": "a run directory or run id",
-      "flags": [
-        "--run"
-      ],
-      "nargs": null,
-      "positional": false,
-      "required": false,
-      "type": "string"
-    },
-    "runs_root": {
-      "default": null,
-      "description": "the directory runs live under, one subdirectory per run; this is not the loop's --runs-root, which is the run directory itself",
-      "flags": [
-        "--runs-root"
-      ],
-      "nargs": null,
-      "positional": false,
-      "required": false,
-      "type": "string"
-    }
-  },
-  "purpose": "List registered target projects for the GUI's target picker; the same registry as refactory projects.",
-  "reviewed_schema": "661036eb7e202899aecc567e2ab9c8364d37d51b4592f36895805e60d1398fe5"
-}
-```
-
 ## registry
 
 Discover or manage mode packages using registered subcommands. Enabling/importing packages changes live discovery without rebuilding docs.
@@ -6750,7 +6684,7 @@ Build a reusable mode package from a brief, name and task/single-shot inputs. Ca
       "role": "ceo"
     },
     {
-      "call": "refactory_dsh.create_ops:prepare_create",
+      "call": "refactory_dsh.create_ops:prepare",
       "id": "prepare",
       "kind": "op",
       "knobs": [
@@ -6763,7 +6697,7 @@ Build a reusable mode package from a brief, name and task/single-shot inputs. Ca
         "requires_input",
         "smoke_timeout_s"
       ],
-      "notes": "read the brief, set up per-run staging, and publish to the prompts",
+      "notes": "read the brief and publish it to the prompts",
       "role": "ceo"
     },
     {
@@ -7065,7 +6999,7 @@ Build a reusable mode package from a brief, name and task/single-shot inputs. Ca
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a reusable mode package from a brief, name and task/single-shot inputs. Canonical smoke runs before separate QA and Overwatch; repair shares the attempt bound and completion needs current validation and intent evidence.",
-    "reviewed_schema": "e46b06c075fd498119207352327459795efea4734de6ee6831f81cde06631702"
+    "reviewed_schema": "43948735931e3bae5ca953b70c7d122fd24dc4cbe69aa3dd90a2988d9a814ff0"
   }
 }
 ```
@@ -7226,7 +7160,7 @@ Build a small reusable package with a strategist, coder and focused QA. Canonica
         "requires_input",
         "smoke_timeout_s"
       ],
-      "notes": "read the brief, set up per-run staging, and publish to the prompts",
+      "notes": "read the brief and publish it to the prompts",
       "role": "ceo"
     },
     {
@@ -7465,7 +7399,7 @@ Build a small reusable package with a strategist, coder and focused QA. Canonica
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a small reusable package with a strategist, coder and focused QA. Canonical smoke precedes focused QA; structural, runtime and review failures share repair_attempts. Supply a brief, name and task/single-shot inputs.",
-    "reviewed_schema": "139325608facacb16306c1b8fc199b04e6bd977034dc89e3334542f16126e4da"
+    "reviewed_schema": "4105c13aaa04a3ae327cf03784e123dd585275c00bc34a310e3ff70a6a4271fb"
   }
 }
 ```
@@ -7486,7 +7420,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     {
       "condition": "proceed",
       "source": "check",
-      "target": "fork_qa"
+      "target": "verifier"
     },
     {
       "condition": null,
@@ -7574,6 +7508,16 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "target": "synthesize_strategy"
     },
     {
+      "condition": "reloop",
+      "source": "gate_verification",
+      "target": "emit"
+    },
+    {
+      "condition": "proceed",
+      "source": "gate_verification",
+      "target": "fork_qa"
+    },
+    {
       "condition": null,
       "source": "join_qa",
       "target": "synthesize_qa"
@@ -7627,6 +7571,11 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "condition": null,
       "source": "synthesize_strategy",
       "target": "design_doc"
+    },
+    {
+      "condition": null,
+      "source": "verifier",
+      "target": "gate_verification"
     }
   ],
   "gates": [
@@ -7657,6 +7606,10 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     {
       "id": "gate_strategy",
       "user": true
+    },
+    {
+      "id": "gate_verification",
+      "user": false
     }
   ],
   "guidance": "",
@@ -7789,6 +7742,17 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "role": "ceo"
     },
     {
+      "call": "refactory_dsh.design_ops:gate_verification",
+      "gate_kind": "fn",
+      "id": "gate_verification",
+      "kind": "gate",
+      "knobs": [
+        "review_attempts"
+      ],
+      "notes": "proceed on PASS; advisory reloop on FAIL (does not spend review_attempts)",
+      "role": "ceo"
+    },
+    {
       "call": "",
       "id": "health_checker",
       "kind": "agent",
@@ -7841,7 +7805,6 @@ Build a software artifact from a brief, name and acceptance command, as commits 
         "worktree",
         "setup",
         "generate",
-        "include_uncommitted",
         "pr",
         "repo_owner",
         "repo_visibility",
@@ -7906,6 +7869,14 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "knobs": [],
       "notes": "compile the perspectives into one plan",
       "role": "ceo"
+    },
+    {
+      "call": "",
+      "id": "verifier",
+      "kind": "agent",
+      "knobs": [],
+      "notes": "design-blind verification: apply the evidence log's methods to the brief, diff and repo",
+      "role": "code_reviewer"
     }
   ],
   "parameters": {
@@ -7991,18 +7962,6 @@ Build a software artifact from a brief, name and acceptance command, as commits 
         null
       ],
       "value": "",
-      "values": []
-    },
-    "include_uncommitted": {
-      "default": false,
-      "description": "start from the target's uncommitted changes instead of only committed HEAD; copies modified, staged, untracked and deleted files into the worktree and commits them as the run's base",
-      "frozen": true,
-      "kind": "bool",
-      "range": [
-        null,
-        null
-      ],
-      "value": false,
       "values": []
     },
     "name": {
@@ -8192,7 +8151,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`). The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-    "reviewed_schema": "ca170b97a5ab35bc1551cee951d8eb8c438cfa75adae5ba4b574559770733028"
+    "reviewed_schema": "0556acf73fcd4801c479dcbe515649942ca5e76f4b8523406537e7444794f9b5"
   }
 }
 ```
@@ -8213,7 +8172,7 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
     {
       "condition": null,
       "source": "focused_check",
-      "target": "focused_qa"
+      "target": "verifier"
     },
     {
       "condition": null,
@@ -8241,6 +8200,16 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "target": "report"
     },
     {
+      "condition": "reloop",
+      "source": "gate_verification",
+      "target": "emit"
+    },
+    {
+      "condition": "proceed",
+      "source": "gate_verification",
+      "target": "focused_qa"
+    },
+    {
       "condition": null,
       "source": "materialise",
       "target": "gate_emit"
@@ -8254,6 +8223,11 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "condition": null,
       "source": "strategy",
       "target": "emit"
+    },
+    {
+      "condition": null,
+      "source": "verifier",
+      "target": "gate_verification"
     }
   ],
   "gates": [
@@ -8263,6 +8237,10 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
     },
     {
       "id": "gate_qa",
+      "user": false
+    },
+    {
+      "id": "gate_verification",
       "user": false
     }
   ],
@@ -8319,6 +8297,17 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "role": "ceo"
     },
     {
+      "call": "refactory_dsh.fast_ops:gate_verification",
+      "gate_kind": "fn",
+      "id": "gate_verification",
+      "kind": "gate",
+      "knobs": [
+        "repair_attempts"
+      ],
+      "notes": "proceed on PASS; advisory reloop on FAIL (does not spend repair_attempts); check failures and guardedness blocks via _repair",
+      "role": "ceo"
+    },
+    {
       "call": "refactory_dsh.fast_ops:materialise_artifact",
       "id": "materialise",
       "kind": "op",
@@ -8339,8 +8328,7 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
         "base",
         "worktree",
         "setup",
-        "generate",
-        "include_uncommitted"
+        "generate"
       ],
       "notes": "read the artifact brief, and say where the run works",
       "role": "ceo"
@@ -8360,6 +8348,14 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "knobs": [],
       "notes": "one concise strategy, followed by one coder and one QA agent; no parallel workers",
       "role": "strategist"
+    },
+    {
+      "call": "",
+      "id": "verifier",
+      "kind": "agent",
+      "knobs": [],
+      "notes": "design-blind verification: apply the evidence log's methods to the brief, diff and repo",
+      "role": "code_reviewer"
     }
   ],
   "parameters": {
@@ -8421,18 +8417,6 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
         null
       ],
       "value": "",
-      "values": []
-    },
-    "include_uncommitted": {
-      "default": false,
-      "description": "start from the target's uncommitted changes instead of only committed HEAD; copies modified, staged, untracked and deleted files into the worktree and commits them as the run's base",
-      "frozen": true,
-      "kind": "bool",
-      "range": [
-        null,
-        null
-      ],
-      "value": false,
       "values": []
     },
     "name": {
@@ -8537,7 +8521,7 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a small artifact with one sequential strategist, coder and QA agent, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none (`worktree=0` writes .factory/artifacts instead; `source_project` copies a directory there). The check runs in that worktree before focused QA. It has no approval gate, so it opens no pull request: the branch is left for you to push.",
-    "reviewed_schema": "5fb225a5c50051db955254a1a1910fa7d82cdc5d23b3a1281a8c321c0f5a1a82"
+    "reviewed_schema": "75a7f09a27cb047d93867ea56a1a69b5b436215049eb16505dda70ab1165053a"
   }
 }
 ```
@@ -8836,7 +8820,7 @@ Revise an existing mode package and validate the revision before separate QA and
       "role": "ceo"
     },
     {
-      "call": "refactory_dsh.create_ops:prepare_create",
+      "call": "refactory_dsh.create_ops:prepare",
       "id": "prepare",
       "kind": "op",
       "knobs": [
@@ -8849,7 +8833,7 @@ Revise an existing mode package and validate the revision before separate QA and
         "requires_input",
         "smoke_timeout_s"
       ],
-      "notes": "read the brief, set up per-run staging, and publish to the prompts",
+      "notes": "read the brief and publish it to the prompts",
       "role": "ceo"
     },
     {
@@ -9151,7 +9135,7 @@ Revise an existing mode package and validate the revision before separate QA and
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Revise an existing mode package and validate the revision before separate QA and Overwatch. Supply revision_of, name and brief. allow_regression=true skips original execution and numerical comparison, while revised execution and intent evidence remain mandatory.",
-    "reviewed_schema": "9da78dbad0326302ae1a8e21dd8e9f75989bcca75075fdf3a0baba324d59dec3"
+    "reviewed_schema": "05c269ef8b75050ab96ed0e489df14b4026d2f4d47f6ece55fef607d11c7572e"
   }
 }
 ```
@@ -9307,7 +9291,7 @@ Revise a small mode package with a coder and focused QA after canonical validati
         "requires_input",
         "smoke_timeout_s"
       ],
-      "notes": "read the brief, set up per-run staging, and publish to the prompts",
+      "notes": "read the brief and publish it to the prompts",
       "role": "ceo"
     },
     {
@@ -9538,7 +9522,7 @@ Revise a small mode package with a coder and focused QA after canonical validati
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Revise a small mode package with a coder and focused QA after canonical validation. Supply revision_of, name and brief. allow_regression=true skips original execution/comparison but still requires revised validation and intent evidence.",
-    "reviewed_schema": "54fbba3bc9fcfcf5107a7af1bd855c1f232de0bdcc487f0d6c4801e5e00f272a"
+    "reviewed_schema": "f87d2ec83e6c8b2fc7c318b4119429dfe80f0c2ef84aee04da57b12fb79cb8a1"
   }
 }
 ```
@@ -9559,12 +9543,22 @@ Change a repository until a failing check passes, on a branch of its own, throug
     {
       "condition": "proceed",
       "source": "check",
-      "target": "report"
+      "target": "verifier"
     },
     {
       "condition": null,
       "source": "emit",
       "target": "materialise"
+    },
+    {
+      "condition": "reloop",
+      "source": "gate_verification",
+      "target": "emit"
+    },
+    {
+      "condition": "proceed",
+      "source": "gate_verification",
+      "target": "report"
     },
     {
       "condition": null,
@@ -9575,11 +9569,20 @@ Change a repository until a failing check passes, on a branch of its own, throug
       "condition": null,
       "source": "prepare",
       "target": "emit"
+    },
+    {
+      "condition": null,
+      "source": "verifier",
+      "target": "gate_verification"
     }
   ],
   "gates": [
     {
       "id": "check",
+      "user": false
+    },
+    {
+      "id": "gate_verification",
       "user": false
     }
   ],
@@ -9607,6 +9610,15 @@ Change a repository until a failing check passes, on a branch of its own, throug
       "role": "ceo"
     },
     {
+      "call": "refactory_dsh.verification:gate_verification_generic",
+      "gate_kind": "fn",
+      "id": "gate_verification",
+      "kind": "gate",
+      "knobs": [],
+      "notes": "advisory verification gate; always proceeds",
+      "role": "ceo"
+    },
+    {
       "call": "refactory_dsh.repo_change:materialise",
       "id": "materialise",
       "kind": "op",
@@ -9626,8 +9638,7 @@ Change a repository until a failing check passes, on a branch of its own, throug
         "base",
         "worktree",
         "setup",
-        "generate",
-        "include_uncommitted"
+        "generate"
       ],
       "notes": "read the check, and give the run its worktree",
       "role": "ceo"
@@ -9639,6 +9650,14 @@ Change a repository until a failing check passes, on a branch of its own, throug
       "knobs": [],
       "notes": "say which branch holds the fix",
       "role": "ceo"
+    },
+    {
+      "call": "",
+      "id": "verifier",
+      "kind": "agent",
+      "knobs": [],
+      "notes": "design-blind verification: apply the evidence log's methods to the brief, diff and repo",
+      "role": "code_reviewer"
     }
   ],
   "parameters": {
@@ -9714,18 +9733,6 @@ Change a repository until a failing check passes, on a branch of its own, throug
       "value": "",
       "values": []
     },
-    "include_uncommitted": {
-      "default": false,
-      "description": "start from the target's uncommitted changes instead of only committed HEAD; copies modified, staged, untracked and deleted files into the worktree and commits them as the run's base",
-      "frozen": true,
-      "kind": "bool",
-      "range": [
-        null,
-        null
-      ],
-      "value": false,
-      "values": []
-    },
     "name": {
       "default": "",
       "description": "what the run is called; a new project is named after it",
@@ -9795,7 +9802,7 @@ Change a repository until a failing check passes, on a branch of its own, throug
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Change a repository until a failing check passes, on a branch of its own, through the steps any mode that changes a repository attaches (`repo_change`): the example mode authors copy. It opens no pull request; unscored, so not an optimization target.",
-    "reviewed_schema": "eb6850976e23ca23bd2f2f51455e805d0f9b7599e0676a516cacab9bc7b20eb6"
+    "reviewed_schema": "c23f78ab9a97b32bfc8cc4a9fedcfab5c99092e892c50860f48c6e722385af9d"
   }
 }
 ```

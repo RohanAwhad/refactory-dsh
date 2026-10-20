@@ -103,8 +103,7 @@ NO_WORKTREE = "(this run has no worktree: `worktree` is off)"
 #: and moves the ``commit`` and ``files`` facts to the amended one. The base comparison
 #: (`base_check`) writes ``test-guardedness.json`` and names the failures it excused as
 #: ``inherited_failures``, empty when it excused none.
-CHECK_WRITES = ("changes.diff", "test-guardedness.json")
-CHECK_PRODUCES = ("commit", "files", "inherited_failures")
+from refactory_dsh.invocations import CHECK_WRITES, CHECK_PRODUCES  # noqa: E402
 
 
 # ── what a mode declares ──────────────────────────────────────────────────────

@@ -680,7 +680,7 @@ and the fail-open case when no run is open.
 - `post_checks` and fork/join are unused (§5).
 - The GUI is not audited here at all. Its defects were tracked as issues #60–#73, and the panel's behaviour is held by `packages/client/ui-refactory/tests/` and [tutorial 7](tutorials/07-pick-and-watch-from-the-panel.md).
 
-## 8. Check sandbox file-size limit, truncation guard, signal classification and attempt counters (#330, #348 E8, #349)
+## 12. Check sandbox file-size limit, truncation guard, signal classification and attempt counters (#330, #348 E8, #349)
 
 **File-size limit raised.**  The check's `RLIMIT_FSIZE` was 64 MB (`DEFAULT_FILE_MB = 64`) while installs got 16 GB (`INSTALL_FILE_MB = 16384`).  A check that wrote a coverage database, build artifact, sqlite file or test fixture over 64 MB was killed by SIGXFSZ and misread as a code failure.  `DEFAULT_FILE_MB` is now 16384, matching `INSTALL_FILE_MB`, because a check runs the project's full test suite, which writes the same class of files an install does.
 
@@ -697,7 +697,7 @@ This is an exit-code-only check with no text scanning.
 
 **Tests.** `tests/test_check_sandbox.py` has one test per fix: a 100 MB file write passes, exit 137/152/153 are classified as uncertain, exit 134/135/139 are code_failure, exit 1 is still code_failure, the create materialiser refuses truncated text, review reloops do not consume check attempts, and each limit's stop message names itself.
 
-## 9. Delivery envelope covers the merged check (dm-107)
+## 13. Delivery envelope covers the merged check (dm-107)
 
 The deliver node's `command_timeout_s` is computed at lowering as
 `_check_envelope_s + INSTALL_TIMEOUT_S + NODE_DISPATCH_OVERHEAD_S`. At defaults
@@ -722,6 +722,50 @@ asserts it exceeds 600 s with `check_timeout_s=1800`;
 another name that declares the knob gets the envelope.
 
 ---
+
+## 15. Independent verification step (dm-84, #400)
+
+Every reviewer in a design run reads design.md, so gaps the design missed
+propagate unchallenged through health check, code review, QA and overwatch.
+The evidence log (comment 6252312877 on #400, 54 entries) records every gap
+the reviews passed and the method that found it. Of 54 entries, only two
+needed the design; the rest were found by design-blind methods:
+
+- **M1** Adversarial inputs
+- **M2** Trace a real case
+- **M3** Where else does this pattern appear
+- **M11** Verify claims against code
+- **M12** Shared state
+- **M13** Boundary values
+- **M15** Weakened tests
+
+The verifier is given the brief, the diff and the repository — never
+design.md. It sits between the build's check and the reviews' verdict
+(after `check` in full mode, after `focused_check` in fast mode). Its
+blocking findings go back to the builder like a review's.
+
+### Why design-blind
+
+If the verifier read design.md, it would share the same blind spots as
+every other reviewer. By working from the brief and the code alone, it
+catches gaps the design missed, which is the failure mode the evidence log
+documents.
+
+### Pipeline position
+
+```
+check → verifier → gate_verification → fork_qa → reviews
+```
+
+In fast mode:
+```
+focused_check → verifier → gate_verification → focused_qa
+```
+
+### Measurement
+
+The replay harness (`python -m refactory_dsh.replay_harness`) scores the
+verifier against the evidence log. See docs/replay-harness.md.
 
 ## 19. cwd escape detection (#351 I3)
 

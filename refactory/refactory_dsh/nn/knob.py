@@ -9,7 +9,7 @@ optimizer did not propose.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping
 
 #: Kinds a knob may declare. ``enum`` holds its accepted values in ``enum``.
 KINDS = ("int", "float", "bool", "str", "enum")
@@ -208,6 +208,39 @@ class Knob:
             description=str(spec.get("description", "")),
             required=bool(spec.get("required", False)),
         )
+
+
+def check_required_knobs(
+    declared: Mapping[str, "Knob"],
+    values: Mapping[str, Any],
+    *,
+    allow_defaults: bool = False,
+) -> list[tuple[str, str]]:
+    """Return ``(name, message)`` for every required knob whose value is empty.
+
+    A required knob's default is a placeholder: at run start (``Mode.run``,
+    ``interactive.prepare``) a value equal to it is still refused when blank. With
+    ``allow_defaults`` such a value is accepted instead, which is what V9 wants: it
+    validates a mode's structure and starting state, where nothing has been given yet.
+    """
+    violations: list[tuple[str, str]] = []
+    # declared may be a list when callers pass raw knob lists (e.g. nn.validate
+    # called with declared_knobs=[]).  Only dicts carry name→Knob pairs.
+    if not hasattr(declared, "items"):
+        return violations
+    for name, knob in declared.items():
+        if not getattr(knob, "required", False) or knob.kind != "str":
+            continue
+        value = values.get(name, knob.default)
+        if allow_defaults and value == knob.default:
+            continue
+        if not str(value).strip():
+            violations.append(
+                (name,
+                 f"required knob {name!r} has no value, or an empty or blank one; "
+                 "give it one")
+            )
+    return violations
 
 
 def _mutations(text: str) -> list[str]:
