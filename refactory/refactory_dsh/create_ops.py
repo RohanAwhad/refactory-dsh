@@ -1134,7 +1134,13 @@ def register(ctx: Any) -> dict[str, Any]:
             f"the package is registered but not readable: {described.problem()}"
         )
     ctx.write_json("registered.json", described.payload["describe"])
-    return {"registered": ", ".join(described.payload["ids"])}
+    result: dict[str, Any] = {"registered": ", ".join(described.payload["ids"])}
+    if staging_root:
+        # Point package_path to the shared location so downstream steps
+        # (smoke / _revision) write provenance into the installed package,
+        # not the per-run staging copy that register already consumed.
+        result["package_path"] = str(registry.workspace_root(project_for_nodes()) / name)
+    return result
 
 
 def _dir_hash(root: Path) -> str:
@@ -1165,8 +1171,10 @@ def prepare_create(ctx: Any) -> dict[str, Any]:
     prepared = prepare(ctx)
     name = str(prepared["name"])
 
-    # Set up the staging directory.
-    staging_base = Path(ctx.workdir) / STAGING_DIR
+    # Set up the staging directory.  Resolve to an absolute path so that
+    # downstream subprocess calls (verify_sandboxed) can find the package when
+    # their cwd is set to the staging project directory.
+    staging_base = Path(ctx.workdir).resolve() / STAGING_DIR
     pkg_root = staging_base / ".factory" / "packages" / name
     pkg_root.mkdir(parents=True, exist_ok=True)
 

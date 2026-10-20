@@ -526,7 +526,7 @@ class CreateMode(Mode):
         graph.add(Node(
             "register", "op", call=f"{OPS}:register",
             writes=("registered.json",),
-            produces=("registered",),
+            produces=("registered", "package_path"),
             notes="confirm the registry lists the new package",
         ))
         graph.add(Node(
