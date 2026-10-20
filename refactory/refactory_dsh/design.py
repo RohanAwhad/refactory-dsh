@@ -90,8 +90,7 @@ class DesignMode(Mode):
             "prepare", "op", call=f"{OPS}:prepare_design",
             knobs=("name", "brief", "check", *repo_change.knob_names(), *delivery.knobs()),
             writes=("brief.json", "research-review.txt", "check.txt", "delivery.md",
-                    "reviews/design-review-feedback.txt", "pitfalls-review.txt",
-                    "intent-ledger.md"),
+                    "reviews/design-review-feedback.txt", "pitfalls-review.txt"),
             produces=("name", "brief", "check", "validation", "research_review", "research_scope", "qa_gate",
                       "overwatch_review", "design_review_feedback", "design_review_findings",
                       *repo_change.produces(), "delivery", "delivery_plan",
@@ -569,7 +568,10 @@ class DesignMode(Mode):
         graph.add(Node(
             "apply_corrections", "agent",
             prompt_template=(
-                "Read `intent-ledger.md` and `design.md` from the run directory.\n\n"
+                "If `intent-ledger.md` exists in the run directory, read it. "
+                "If it does not exist, write `design.md` back unchanged and return a "
+                "short message saying no corrections were needed (no ledger found).\n\n"
+                "Read `design.md` from the run directory.\n\n"
                 "In the intent ledger, find each verdict entry where gate is \"gate_strategy\" and "
                 "verdict is \"proceed\". Look at the entry immediately after it. If that entry has "
                 "kind \"constraint\" (not kind \"constraint (process)\"), it is a gate correction — "
@@ -587,7 +589,7 @@ class DesignMode(Mode):
                 "other gates (check, gate_qa, gate_overwatch, gate_design_review), and steering "
                 "notes that do not follow a gate_strategy proceed verdict are NOT gate corrections."
             ),
-            reads=("design.md", "intent-ledger.md"),
+            reads=("design.md",),
             writes=("design.md",),
             produces=("design_corrections_applied",),
             notes="revise design.md with gate-strategy corrections before the builder runs",

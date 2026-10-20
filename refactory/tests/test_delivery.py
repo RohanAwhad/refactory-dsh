@@ -3088,6 +3088,28 @@ def test_gate_correction_updates_pr_text(github, tmp_path, monkeypatch):
         "process note should not appear in design.md"
 
 
+def test_apply_corrections_no_ledger_leaves_design_unchanged(github, tmp_path):
+    """When there is no intent-ledger.md, apply_corrections passes through and
+    design.md is unchanged.
+
+    Fails without the change: the agent node requires intent-ledger.md in its
+    reads and refuses to dispatch when the file is missing.
+    """
+    repo = git_repo(tmp_path / "repo")
+    slug = "acme/no-ledger"
+    _published(github, slug, repo)
+
+    run = tmp_path / "run"
+    result = _design(run, {"tool.py": "print('built')\n"}, target=str(repo))
+    assert result.exit_ok, result.error
+
+    # design.md should be the DESIGN_DOC_ANSWER — unchanged by apply_corrections
+    # because there is no ledger.
+    design_text = (run / "design.md").read_text()
+    assert "Do the thing" in design_text, \
+        f"design.md should be unchanged: {design_text[:300]}"
+
+
 def test_an_upstream_that_does_not_hold_the_base_is_not_where_the_pull_request_goes(github, tmp_path):
     repo, _stack = _stacked(github, tmp_path)
     # main moves on GitHub; a local branch at that commit still names stack as its upstream.

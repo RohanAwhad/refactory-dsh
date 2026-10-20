@@ -110,11 +110,6 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
         ctx.write_text(feedback, "not run: initial authoring pass; no prior feedback\n")
     ctx.write_text("reviews/design-review-feedback.txt",
                    "not run: initial design pass; no prior review\n")
-    # Write an initial intent-ledger.md so apply_corrections can always read it.
-    # The steering module may seed it later with a richer header; this placeholder
-    # ensures the file exists for nodes that declare it in their reads.
-    if not (Path(ctx.workdir) / "intent-ledger.md").exists():
-        ctx.write_text("intent-ledger.md", "# User Intent Ledger\n")
     from refactory_dsh.create_ops import UNREFUSED
 
     # Pitfalls facts and file are written only by full design mode (whose
