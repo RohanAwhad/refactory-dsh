@@ -1371,7 +1371,7 @@ def test_inherited_failure_does_not_excuse_a_check_that_stopped_at_it(tmp_path):
     repo = git_repo(tmp_path / "repo")
     _commit(repo, "test_base_broken.py", "def test_base_broken():\n    assert False\n")
     fixed = render({"tool.py": "print('built')\n",
-                    "test_base_broken.py": "def test_base_broken():\n    assert True\n"})
+                    "test_base_broken.py": "def test_base_broken():\n    import tool\n    assert hasattr(tool, '__file__')\n"})
     result = _design(
         tmp_path / "run",
         FakeModel(_answers(render({"tool.py": "print('built')\n"}), fixed)),
@@ -1410,7 +1410,7 @@ def test_brief_mentioned_failure_not_excused(tmp_path):
     repo = git_repo(tmp_path / "repo")
     _commit(repo, "test_fix_me.py", "def test_fix_me():\n    assert False\n")
     not_fixed = render({"tool.py": "print('did not fix it')\n"})
-    fixed = render({"test_fix_me.py": "def test_fix_me():\n    assert True\n"})
+    fixed = render({"test_fix_me.py": "def test_fix_me():\n    import tool\n    assert hasattr(tool, '__file__')\n"})
     result = DesignMode().run(
         tmp_path / "run",
         model=FakeModel(_answers(not_fixed, fixed)),
@@ -1520,7 +1520,7 @@ def test_design_named_failure_not_excused(tmp_path):
     repo = git_repo(tmp_path / "repo")
     _commit(repo, "test_oblique.py", "def test_oblique():\n    assert False\n")
     not_fixed = render({"tool.py": "print('did not fix it')\n"})
-    fixed = render({"test_oblique.py": "def test_oblique():\n    assert True\n"})
+    fixed = render({"test_oblique.py": "def test_oblique():\n    import tool\n    assert hasattr(tool, '__file__')\n"})
 
     class DesignNamingModel(FakeModel):
         """Intercepts the design_doc prompt to write a design.md that names the test."""
