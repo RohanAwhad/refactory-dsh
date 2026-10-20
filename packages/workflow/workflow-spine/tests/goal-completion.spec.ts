@@ -323,6 +323,28 @@ describe('goal completion guard (#347, C1)', () => {
     expect(text).toContain('.refactory')
   })
 
+  it('records completion_override on the goal when allowed via override (#347, C1)', async () => {
+    const workdir = scratch()
+    const root = new Context()
+    await root.plugin(SystemPrompt)
+    await root.plugin(ToolRuntime)
+    registerStubs(root)
+    await root.plugin(spinePlugin, configuredConfig({ workdir }))
+
+    const dir = join(workdir, '.refactory')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'invocation.json'), JSON.stringify({ id: 'inv-1' }))
+    writeStatus(workdir, {
+      schema_version: 1, status: 'halted',
+      completion_override: { confirmed_status: 'halted', invocation: 'inv-1', at: '2026-01-01T00:00:00Z' },
+    })
+    const result = await executeTool(root, 'update_goal', { action: 'complete' })
+    expect(result.isError).toBe(false)
+    const text = result.content.map(c => c.text).join('')
+    expect(text).toContain('Completion allowed via person-confirmed override')
+    expect(text).toContain('halted')
+  })
+
   it('completion_override survives a rewrite with the same status', async () => {
     const workdir = scratch()
     const dir = join(workdir, '.refactory')

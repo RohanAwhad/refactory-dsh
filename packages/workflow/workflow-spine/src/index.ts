@@ -646,6 +646,12 @@ export function apply(ctx: Context, config: Config): void {
     return next()
   })
 
+  // Completion override record: when the C1 pre-execute listener allows
+  // `update_goal complete` via a person-confirmed override, this holds the
+  // description so the C1 post-execute listener can append it to the tool
+  // result, recording the override on the goal's completion.
+  let pendingCompletionOverride: string | undefined
+
   // Goal completion guard (#347, C1). A `tools/pre-execute` listener that
   // denies `update_goal` with action `complete` when the run's recorded status
   // (spine-status.json) is not `done` and no person-issued `completion_override`
@@ -696,7 +702,14 @@ export function apply(ctx: Context, config: Config): void {
         try {
           currentInvocation = JSON.parse(readFileSync(join(workdir!, '.refactory', 'invocation.json'), 'utf8')).id ?? null
         } catch { /* no invocation file — invocation is null */ }
-        if (overrideInvocation === currentInvocation) return next()
+        if (overrideInvocation === currentInvocation) {
+          // Record the override so the post-execute listener injects it into
+          // the goal's completion result ("the goal then records that").
+          pendingCompletionOverride =
+            `[Completion allowed via person-confirmed override: `
+            + `status="${currentStatus}", confirmed at ${String(ov.at ?? 'unknown')}]`
+          return next()
+        }
       }
     }
 
@@ -705,6 +718,20 @@ export function apply(ctx: Context, config: Config): void {
       reason: `The run's recorded status is "${currentStatus}". `
         + 'End this turn and ask the person whether to continue or mark the goal blocked; '
         + 'from the third goal round you may use update_goal with action "blocked".',
+    })
+  })
+
+  // Goal completion override recording (#347, C1). When the pre-execute
+  // listener allowed `update_goal complete` via a person-confirmed override,
+  // append the override note to the tool result so it is recorded on the goal.
+  ctx.on('tools/post-execute', (exec, result, next) => {
+    if (exec.name !== 'update_goal' || pendingCompletionOverride === undefined) return next()
+    const note = pendingCompletionOverride
+    pendingCompletionOverride = undefined
+    if (result.isError) return next()
+    return Promise.resolve({
+      kind: 'accept' as const,
+      content: [...result.content, { type: 'text' as const, text: note }],
     })
   })
 

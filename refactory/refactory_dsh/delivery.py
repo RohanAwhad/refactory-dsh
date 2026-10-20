@@ -1548,6 +1548,17 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
     )
     verification += _process_notes_section(ctx)
     sections.append(verification)
+    # Extract issue-close references from the brief (e.g. "Close #347 and #363")
+    import re as _re
+    _close_refs: set[str] = set()
+    for _cm in _re.finditer(
+        r'(?i)(?:close|closes|closing)\s+(?:#\d+(?:\s*(?:,|and)\s*)?)+', brief
+    ):
+        for _ref in _re.findall(r'#(\d+)', _cm.group(0)):
+            _close_refs.add(_ref)
+    if _close_refs:
+        sections.append("\n".join(f"Closes #{r}" for r in sorted(_close_refs, key=int)))
+
     sections.append(f"## Original request\n\n{brief}")
     sections.append(f"---\n\nWritten by a refactory design run once its reviews passed.\n\n"
                     f"```\n{stat}\n```")

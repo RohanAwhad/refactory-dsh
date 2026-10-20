@@ -182,6 +182,37 @@ def test_pr_verification_says_check_passed_when_validation_fact_is_set(tmp_path)
     assert "did not run" not in body
 
 
+def test_pr_body_includes_closes_refs_from_brief(tmp_path):
+    """When the brief says 'Close #347 and #363', the PR body includes Closes lines."""
+    import subprocess
+    ctx = _TitleCtx(
+        facts={
+            "brief": "Close #347 and #363 in the PR.",
+            "check": "pnpm test",
+            "name": "t1",
+        },
+        files={"design.md": "# Heading\n\nSummary.\n"},
+    )
+    subprocess.run(["git", "init", str(tmp_path)], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t"], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "T"], capture_output=True, check=True)
+    (tmp_path / "f.txt").write_text("a\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "init"], capture_output=True, check=True)
+    base = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    (tmp_path / "g.txt").write_text("b\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "work"], capture_output=True, check=True)
+    head = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    from types import SimpleNamespace
+    found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
+    body = delivery._body(ctx, found)
+    assert "Closes #347" in body
+    assert "Closes #363" in body
+
+
 def test_pr_verification_names_inherited_failures_and_the_new_tests_on_the_base():
     import json
     ctx = _TitleCtx(

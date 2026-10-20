@@ -733,9 +733,14 @@ cleared when `recordStatus()` writes a different status. The refusal steers the 
 toward `update_goal blocked` or ending the turn. The C0 write confinement listener also
 denies subagent writes to `.refactory/`, so the override cannot be forged.
 
+When the override is valid and `update_goal complete` is allowed through, a
+`tools/post-execute` listener appends the override details (confirmed status and
+timestamp) to the tool result content, recording it on the goal's completion.
+
 **Held by.** `goal-completion.spec.ts`: tests covering halted/failed/done status,
-matching/mismatching override, override clearing on status change, interactive mode
-workdir resolution, and forgery prevention via `.refactory/` write denial.
+matching/mismatching override, override recording on the goal, override clearing on
+status change, interactive mode workdir resolution, and forgery prevention via
+`.refactory/` write denial.
 `confine-writes.spec.ts`: test that subagent writes to `.refactory/` are denied.
 
 ## 11. Cancelled approval rewrite (#347, C3)
