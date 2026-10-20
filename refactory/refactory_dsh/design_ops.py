@@ -110,6 +110,12 @@ def pick_gate_corrections(ctx: Any) -> str:
 
     joined = "\n\n".join(f"- {c}" for c in corrections)
     ctx.set_fact("gate_corrections", joined)
+
+    # Back up design.md before corrections are applied (gate 5c).
+    design_path = Path(ctx.workdir) / "design.md"
+    if design_path.exists():
+        (Path(ctx.workdir) / "design.md.pre_corrections").write_text(design_path.read_text())
+
     return "proceed"
 
 

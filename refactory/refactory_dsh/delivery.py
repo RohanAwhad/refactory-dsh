@@ -820,6 +820,7 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
 
     # All paths with a worktree write the pull request text once.
     found = worktree.require_current(ctx.workdir)
+    _validate_design_after_corrections(Path(ctx.workdir))
     title = _write_pr_text(ctx, found)
 
     # ── action "none" (--no-pr, never planned) ──────────────────────────
@@ -1782,6 +1783,28 @@ def _process_notes_section(ctx: Any) -> str:
     return "\n".join(lines)
 
 
+def _validate_design_after_corrections(workdir: Path) -> None:
+    """Post-validation: if design.md lost its contract after corrections, restore the backup.
+
+    ``pick_gate_corrections`` writes ``design.md.pre_corrections`` before routing
+    to ``apply_corrections``.  If the agent rewrote design.md in a way that loses
+    the required sections (``## Summary``, ``## Rule and sites``, etc.), this
+    restores the pre-correction version and warns.  When there is no backup
+    (no corrections were applied), this is a no-op.
+    """
+    from refactory_dsh import design_contract
+    design_path = workdir / "design.md"
+    backup_path = workdir / "design.md.pre_corrections"
+    if not design_path.exists() or not backup_path.exists():
+        return
+    text = design_path.read_text()
+    parsed = design_contract.parse(text)
+    if not parsed.has_contract:
+        backup_text = backup_path.read_text()
+        design_path.write_text(backup_text)
+        target_guard.warn("design.md was unparseable after corrections; restored the pre-correction version")
+
+
 def _write_pr_text(ctx: Any, found: worktree.Worktree) -> str:
     """Write ``pull-request.md`` once and return the title.  The single call site."""
     title = _title(ctx)
@@ -1888,10 +1911,12 @@ def _kept(ctx: Any, approved: dict[str, Any], found: worktree.Worktree | None, w
     elif title:
         record["finish"] = finish or []
     _record(ctx, record)
-    # A kept-local run still passed its reviews — record succeeded so prune
-    # can treat it as ended and state() reports it correctly.
+    # A run with nothing to push is succeeded at report, as before.
+    # A run that delivers is succeeded only after its push (_delivered).
+    # A run looping back for conflict resolution is NOT succeeded yet.
     if found is not None:
-        worktree.record_outcome(found, "succeeded")
+        if not (merge is not None and merge.conflicts):
+            worktree.record_outcome(found, "succeeded")
         projects.record_delivery(Path(found.target), branch=branch, pull_request=pull_request,
                                  status="pushed, no pull request" if pushed and not pull_request else "kept local")
     # Build the human-readable ``where`` from the finish commands.

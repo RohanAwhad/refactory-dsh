@@ -3085,10 +3085,59 @@ def test_gate_correction_updates_pr_text(github, tmp_path, monkeypatch):
     pr_text = (run / delivery.BODY).read_text()
     assert "websocket" in pr_text.lower(), \
         f"PR text should mention websockets: {pr_text[:500]}"
+    assert "polling" not in pr_text.lower(), \
+        f"PR text should not mention the replaced approach: {pr_text[:500]}"
 
     # Process notes should not appear in the design.
     assert "try harder" not in design_text.lower(), \
         "process note should not appear in design.md"
+
+
+def test_unparseable_design_after_corrections_is_restored(tmp_path):
+    """When apply_corrections produces unparseable design.md, the pre-correction
+    version is restored and a warning is emitted.
+
+    Fails without the change: delivery reads the unparseable design.md and the
+    PR loses its Summary.
+    """
+    from refactory_dsh.delivery import _validate_design_after_corrections
+
+    run = tmp_path / "run"
+    run.mkdir(parents=True, exist_ok=True)
+    good_design = (
+        "# Title\n\n"
+        "## Summary\n\nGood summary.\n\n"
+        "## Rule and sites\n\n"
+        "- `file.py:1` — do the thing **[changed]**\n\n"
+        "## Docs\n\n- docs/readme.md\n\n"
+        "## Changes\n\n- file.py\n"
+    )
+    (run / "design.md").write_text(good_design)
+    (run / "design.md.pre_corrections").write_text(good_design)
+
+    # Corrupt design.md (missing required sections).
+    (run / "design.md").write_text("This is not a valid design document at all.")
+
+    _validate_design_after_corrections(run)
+
+    # design.md should be restored to the backup.
+    assert (run / "design.md").read_text() == good_design
+
+
+def test_no_backup_means_no_restoration(tmp_path):
+    """When there is no backup (no corrections were applied), validation is a no-op."""
+    from refactory_dsh.delivery import _validate_design_after_corrections
+
+    run = tmp_path / "run"
+    run.mkdir(parents=True, exist_ok=True)
+    bad_text = "This is not a valid design document at all."
+    (run / "design.md").write_text(bad_text)
+    # No design.md.pre_corrections exists.
+
+    _validate_design_after_corrections(run)
+
+    # design.md is unchanged — no backup to restore from.
+    assert (run / "design.md").read_text() == bad_text
 
 
 def test_edit_resolves_conflict_keeping_mains_lines(tmp_path):
