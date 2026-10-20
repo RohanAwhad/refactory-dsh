@@ -43,7 +43,7 @@ describe('H1 — busyEnter defaults to steer through DSH settings resolution', (
     // match the value directly from the text the startup.spec.ts also reads.
     const match = PATCH.match(/busyEnter:\s*(\S+)/)
     expect(match).not.toBeNull()
-    const compositionBase = { busyEnter: match![1]! }
+    const compositionBase = { busyEnter: match![1]! as 'queue' | 'steer' }
 
     // Resolution without user layer: composition base overrides schema default → steer.
     const resolvedNoUser = schema(compositionBase)
