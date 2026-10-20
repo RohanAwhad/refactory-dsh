@@ -25,9 +25,12 @@ import threading
 import time
 from concurrent.futures import CancelledError
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from refactory_dsh.paths import SOURCE_CLI_ENTRY, dsh_command, dsh_root, node_bin, venv_bin
+import importlib.metadata
+
+from refactory_dsh.invocations import HOOK_SUPPRESS, WORKTREE_RECORD
 from refactory_dsh.owned_process import SHUTDOWN_GRACE_S, shutdown, _termination_as_exit
 
 #: The overlay that keeps a node's completion from backgrounding its own work. Checked
@@ -49,6 +52,27 @@ DEFAULT_TIMEOUT_S = 1800
 #: adds it to the declared budget when reserving the spine's node envelope, and the
 #: session inside the dispatch runs under the same wall (#307).
 NODE_DISPATCH_OVERHEAD_S = 600
+
+_UNSET: object = object()
+_environment_overlay: Callable[[Path], dict[str, str] | None] | None | object = _UNSET
+
+
+def get_environment_overlay() -> Callable[[Path], dict[str, str] | None] | None:
+    """Return the registered overlay, discovering it via entry points on first call."""
+    global _environment_overlay
+    if _environment_overlay is _UNSET:
+        eps = importlib.metadata.entry_points(group='refactory.environment_overlay')
+        if len(eps) > 1:
+            raise RuntimeError(
+                f"expected at most one 'refactory.environment_overlay' entry point, "
+                f"got {len(eps)}: {[ep.name for ep in eps]}"
+            )
+        if eps:
+            ep = next(iter(eps))
+            _environment_overlay = ep.load()
+        else:
+            _environment_overlay = None
+    return _environment_overlay
 
 
 def node_session_budget_s(attempts: int, timeout_s: int) -> int:
@@ -307,18 +331,20 @@ class DshModelClient:
         # strategy), the inherited PATH passes through.
         _workdir = os.environ.get('REFACTORY_WORKDIR', '')
         if _workdir:
-            from refactory_dsh import worktree as _wt
-            _found = _wt.recorded(Path(_workdir))
-            if _found is not None:
-                _home = Path(_workdir).resolve() / _wt.CHECK_HOME
-                _home.mkdir(parents=True, exist_ok=True)
-                _target_env = _wt.check_environment(Path(_found.path), _home)
-                result['PATH'] = _target_env['PATH']
-                if 'VIRTUAL_ENV' in _target_env:
-                    result['VIRTUAL_ENV'] = _target_env['VIRTUAL_ENV']
+            _overlay = get_environment_overlay()
+            if _overlay is not None:
+                _target_env = _overlay(Path(_workdir))
+                if _target_env is not None:
+                    result['PATH'] = _target_env['PATH']
+                    if 'VIRTUAL_ENV' in _target_env:
+                        result['VIRTUAL_ENV'] = _target_env['VIRTUAL_ENV']
+            elif (Path(_workdir) / WORKTREE_RECORD).exists():
+                raise RuntimeError(
+                    "the worktree record exists but no environment overlay is installed; "
+                    "re-run `uv sync` or `./install.sh`"
+                )
         # An agent's own shell can run install commands that would rewrite the
         # target's hooks; suppress hook managers there too (#347).
-        from refactory_dsh.worktree import HOOK_SUPPRESS
         result.update(HOOK_SUPPRESS)
         return result
 
