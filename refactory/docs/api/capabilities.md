@@ -7895,6 +7895,18 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "value": 3,
       "values": []
     },
+    "review_attempts": {
+      "default": 3,
+      "description": "how many times the review gates may reloop before stopping; defaults to the same as check_attempts",
+      "frozen": false,
+      "kind": "int",
+      "range": [
+        1,
+        5
+      ],
+      "value": 3,
+      "values": []
+    },
     "review_comments": {
       "default": false,
       "description": "with refine: add the pull request's reviews and comments to the run's steering",
@@ -7982,7 +7994,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`). The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-    "reviewed_schema": "7a1c01edb782b0e2700fc55e658599cadf6caedde3ac8823f0a301d907fb11eb"
+    "reviewed_schema": "eb740b6d3eb5c0ea7c389e637ab69166c2d0899ae0a9aa7207be24a8c0c0bbf1"
   }
 }
 ```
