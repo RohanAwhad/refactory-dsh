@@ -25,7 +25,8 @@ from refactory_dsh.nn import Verdict
 from refactory_dsh.design import DesignMode
 from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
                            PITFALLS_ANSWER, RESEARCH_ANSWER,
-                           REVIEW_ANSWERS, FakeModel as _FakeModel,
+                           REVIEW_ANSWERS, VERIFICATION_ANSWER,
+                           FakeModel as _FakeModel,
                            git_repo as _git_repo, render as _render)
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -149,7 +150,8 @@ def test_is_signal_crash_none_returncode():
 def _design_answers(*emits: str) -> list[str]:
     """Every answer a design run needs, in the order its graph asks."""
     return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits, *REVIEW_ANSWERS]
+            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits, VERIFICATION_ANSWER,
+            *REVIEW_ANSWERS]
 
 
 def _design_run(workdir, model, target):
@@ -884,12 +886,20 @@ def test_node_declarations_include_convergence_facts():
         assert fact in check_node.produces, f"design check node missing {fact}"
     assert "check_attempt_cap" in check_node.knobs, "design check node missing check_attempt_cap knob"
 
-    # Design fast mode: focused_check and gate_qa nodes.
+    # Design fast mode: focused_check, gate_verification and gate_qa nodes.
     fast_graph = DesignFastMode().build()
     fc_node = fast_graph.nodes["focused_check"]
     for fact in ("check_failures_history", "check_blocker_history",
                  "convergence_extras_used", "convergence_granted", "base_unavailable"):
         assert fact in fc_node.produces, f"design_fast focused_check missing {fact}"
+    gv_node = fast_graph.nodes["gate_verification"]
+    for fact in ("convergence_extras_used", "convergence_granted"):
+        assert fact in gv_node.produces, f"design_fast gate_verification missing {fact}"
+    assert "check_attempt_cap" in gv_node.knobs, "design_fast gate_verification missing check_attempt_cap knob"
+    assert gv_node.max_iterations >= 15, (
+        f"gate_verification max_iterations ({gv_node.max_iterations}) must accommodate "
+        "check_attempt_cap + VERIFIER_GATE_LIMIT + review_budget"
+    )
     qa_node = fast_graph.nodes["gate_qa"]
     for fact in ("check_failures_history", "check_blocker_history",
                  "convergence_extras_used", "convergence_granted"):
@@ -1250,7 +1260,7 @@ def test_design_fast_broken_guarantee_with_credentials_is_repaired(tmp_path, mon
     # Second emit: fixes flag.txt so check passes.
     good_emit = _render({"flag.txt": "good\n", "tool.py": "print('ok')\n"})
 
-    model = _FakeModel([FAST_PLAN, bad_emit, FAST_QA, good_emit, FAST_QA])
+    model = _FakeModel([FAST_PLAN, bad_emit, VERIFICATION_ANSWER, good_emit, VERIFICATION_ANSWER, FAST_QA])
     result = DesignFastMode().run(
         tmp_path / "run", model=model,
         task={"name": "creds_test", "brief": "a tool",
@@ -1318,7 +1328,7 @@ def test_design_fast_base_double_crash_continues_with_note(tmp_path, monkeypatch
     # Second emit: tool.py that passes.
     good_emit = _render({"tool.py": "print('ok')\n"})
 
-    model = _FakeModel([FAST_PLAN, bad_emit, FAST_QA, good_emit, FAST_QA])
+    model = _FakeModel([FAST_PLAN, bad_emit, VERIFICATION_ANSWER, good_emit, VERIFICATION_ANSWER, FAST_QA])
     result = DesignFastMode().run(
         tmp_path / "run", model=model,
         task={"name": "r2fast", "brief": "a tool",

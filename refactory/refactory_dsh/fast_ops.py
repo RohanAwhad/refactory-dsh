@@ -536,7 +536,14 @@ def gate_verification(ctx: Any) -> str:
     if check_data.get("status") == "fail":
         check_output = check_data.get("stderr") or check_data.get("stdout") or ""
         detail = f"requested runtime check failed (exit {check_data.get('returncode')}): {check_output}"
-        return _repair(ctx, [detail.strip()], kind="check")
+        findings = [detail.strip()]
+        # R5: prepend robustness_notes ([left] sites and broken guarantees)
+        # so the builder sees them first.  Kept out of anything failure_kind
+        # classifies — _repair's feedback is never word-scanned.
+        robustness_notes = check_data.get("robustness_notes", "")
+        if robustness_notes:
+            findings.insert(0, robustness_notes)
+        return _repair(ctx, findings, kind="check")
 
     # 2. Guardedness block → _repair (spends a repair_attempts slot).
     if check_data.get("guardedness_blocked"):
