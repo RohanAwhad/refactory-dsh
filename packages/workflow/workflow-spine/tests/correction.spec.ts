@@ -666,6 +666,136 @@ describe('applyControls integration', () => {
     expect(existsSync(join(workdir, '.refactory', 'graph-controls', '1.json'))).toBe(false)
   })
 
+  it('feedback sidecar is written by drain and reaches the dispatched node manifest (dm-110)', async () => {
+    const workdir = scratch()
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', reads: [], writes: [],
+             dispatch_command: 'echo dispatched' },
+        b: { _type: 'AgentNode', id: 'b', role: 'builder', prompt_template: 'B', reads: [], writes: [] },
+      },
+      edges: [{ source: 'a', target: 'b' }],
+    }
+    const ctx = await mount(graph, { workdir, executeCommands: true })
+    // First wf_next dispatches 'a' and writes the prompt file.
+    const executed: Array<{ command: string; env: Record<string, string> }> = []
+    ctx.provide('shell', {
+      resolve: (request: { command: string; workdir?: string; timeoutMs?: number; env?: Record<string, string>; sandboxPolicy?: unknown }) => ({
+        command: request.command, workdir: request.workdir ?? process.cwd(),
+        timeoutMs: request.timeoutMs ?? 10_000, onExpiry: 'kill',
+        stdoutMaxBytes: 1_000_000, env: request.env, sandboxPolicy: request.sandboxPolicy,
+      }),
+      execute: async (spec: { command: string; env?: Record<string, string> }) => {
+        executed.push({ command: spec.command, env: spec.env ?? {} })
+        return { result: async () => ({
+          exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 10_000,
+          stdout: { text: '', truncated: false }, stderr: { text: '', truncated: false },
+        }) }
+      },
+    })
+    await call(ctx, 'wf_next')
+    // Complete 'a'.
+    await call(ctx, 'wf_done', { node: 'a' })
+    // Read checkpoint and compute its revision.
+    const cpBytes = readFileSync(join(workdir, '.refactory', 'spine-checkpoint.json'))
+    const revision = createHash('sha256').update(cpBytes).digest('hex')
+    // Queue a rerun control with text.
+    writeRerunControl(workdir, 'a', { revision, text: 'MARKER-dm110-fix-this' })
+    // The next wf_next triggers applyControls which sets feedback, then drain writes the sidecar.
+    executed.length = 0
+    await call(ctx, 'wf_next')
+    // The feedback sidecar should exist.
+    const fbFile = join(workdir, '.refactory', 'prompts', 'a.feedback.md')
+    expect(existsSync(fbFile)).toBe(true)
+    expect(readFileSync(fbFile, 'utf8')).toContain('MARKER-dm110-fix-this')
+    // The manifest in the environment should reference the feedback file.
+    const lastExec = executed[executed.length - 1]
+    expect(lastExec).toBeDefined()
+    const manifest = JSON.parse(lastExec!.env?.DSH_WORKFLOW_NODE ?? '{}')
+    expect(manifest.feedback_file).toBe(fbFile)
+  })
+
+  it('gate reloop reason reaches the reloop target feedback sidecar (dm-110)', async () => {
+    const workdir = scratch()
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', reads: [], writes: [],
+             dispatch_command: 'echo dispatched' },
+        gate: { _type: 'GateNode', id: 'gate', evaluator_type: 'fn',
+                evaluator_command: 'echo gate-eval', reads: [] },
+        c: { _type: 'AgentNode', id: 'c', role: 'builder', prompt_template: 'C', reads: [], writes: [] },
+      },
+      edges: [
+        { source: 'a', target: 'gate' },
+        { source: 'gate', target: 'a', condition: 'reloop' },
+        { source: 'gate', target: 'c', condition: 'proceed' },
+      ],
+    }
+    const ctx = await mount(graph, { workdir, executeCommands: true })
+    let callCount = 0
+    ctx.provide('shell', {
+      resolve: (request: { command: string; workdir?: string; timeoutMs?: number; env?: Record<string, string>; sandboxPolicy?: unknown }) => ({
+        command: request.command, workdir: request.workdir ?? process.cwd(),
+        timeoutMs: request.timeoutMs ?? 10_000, onExpiry: 'kill',
+        stdoutMaxBytes: 1_000_000, env: request.env, sandboxPolicy: request.sandboxPolicy,
+      }),
+      execute: async (spec: { command: string }) => {
+        callCount += 1
+        // First two calls: 'a' runs then gate evaluates.
+        // Gate returns "GATE-REASON\nreloop" the first time.
+        if (spec.command.includes('gate-eval')) {
+          return { result: async () => ({
+            exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 10_000,
+            stdout: { text: 'GATE-REASON-TEXT\nreloop', truncated: false },
+            stderr: { text: '', truncated: false },
+          }) }
+        }
+        return { result: async () => ({
+          exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 10_000,
+          stdout: { text: '', truncated: false }, stderr: { text: '', truncated: false },
+        }) }
+      },
+    })
+    // First wf_next: runs 'a', then runs gate which reloops back to 'a'.
+    await call(ctx, 'wf_next')
+    // After the reloop, 'a' should be dispatched again with the gate reason as feedback.
+    const fbFile = join(workdir, '.refactory', 'prompts', 'a.feedback.md')
+    expect(existsSync(fbFile)).toBe(true)
+    expect(readFileSync(fbFile, 'utf8')).toContain('GATE-REASON-TEXT')
+  })
+
+  it('feedback sidecar is not written when no feedback exists, so stale files are not read (dm-110)', async () => {
+    const workdir = scratch()
+    const graph: WorkflowGraph = {
+      name: 't', start_node: 'a',
+      nodes: {
+        a: { _type: 'AgentNode', id: 'a', role: 'builder', prompt_template: 'A', reads: [], writes: [],
+             dispatch_command: 'echo dispatched' },
+      },
+      edges: [],
+    }
+    const ctx = await mount(graph, { workdir, executeCommands: true })
+    ctx.provide('shell', {
+      resolve: (request: { command: string; workdir?: string; timeoutMs?: number; env?: Record<string, string>; sandboxPolicy?: unknown }) => ({
+        command: request.command, workdir: request.workdir ?? process.cwd(),
+        timeoutMs: request.timeoutMs ?? 10_000, onExpiry: 'kill',
+        stdoutMaxBytes: 1_000_000, env: request.env, sandboxPolicy: request.sandboxPolicy,
+      }),
+      execute: async () => ({
+        result: async () => ({
+          exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: 10_000,
+          stdout: { text: '', truncated: false }, stderr: { text: '', truncated: false },
+        }),
+      }),
+    })
+    // First wf_next: runs 'a' with no feedback — no sidecar should exist.
+    await call(ctx, 'wf_next')
+    const fbFile = join(workdir, '.refactory', 'prompts', 'a.feedback.md')
+    expect(existsSync(fbFile)).toBe(false)
+  })
+
   it('deferred rerun control survives concurrent work and applies after join', async () => {
     const workdir = scratch()
     const graph: WorkflowGraph = {

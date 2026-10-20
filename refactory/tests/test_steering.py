@@ -677,6 +677,130 @@ def test_marking_consumed_is_identity_safe(tmp_path):
 # ── scope: product vs process notes ────────────────────────────────────────
 
 
+# ── C5: source-based heading separation ────────────────────────────────────
+
+
+def test_ceo_notes_render_under_own_heading_not_user_heading(tmp_path):
+    """C5: CEO notes render under 'CEO observations', not 'What the user has said'."""
+    ledger = Ledger.seed(tmp_path, "build a mode")
+    ledger.note("info", "the task needs attention", source="user-relayed")
+    ledger.note("info", "I noticed a pattern", source="ceo")
+
+    rendered = ledger.render()
+    assert "What the user has said" in rendered
+    assert "CEO observations" in rendered
+    assert "the task needs attention" in rendered.split("CEO observations")[0]
+    assert "I noticed a pattern" in rendered.split("CEO observations")[1]
+    assert "not auditable requirements" in rendered
+
+
+def test_only_user_relayed_entries_when_no_ceo_notes(tmp_path):
+    """C5: A ledger with only user-relayed entries keeps the existing heading."""
+    ledger = Ledger.seed(tmp_path, "build a mode")
+    ledger.note("correction", "fix the spelling")
+
+    rendered = ledger.render()
+    assert "What the user has said" in rendered
+    assert "CEO observations" not in rendered
+
+
+def test_source_backward_compat_defaults_to_user_relayed(tmp_path):
+    """C5: A raw ledger without (ceo) suffix parses with source='user-relayed'."""
+    raw = (
+        "# User Intent Ledger\n\n"
+        "## [2026-01-01T00:00:00+00:00] Initial Idea\nold request\n\n"
+        "## [2026-01-01T00:00:01+00:00] correction\nold correction\n"
+    )
+    parsed = steering.parse_entries(raw)
+    assert parsed[0]["source"] == "user-relayed"
+    assert parsed[1]["source"] == "user-relayed"
+
+
+def test_ceo_source_roundtrips_through_ledger(tmp_path):
+    """C5: A note with source='ceo' is persisted with (ceo) suffix and read back."""
+    ledger = Ledger.seed(tmp_path, "build a mode")
+    ledger.note("info", "I think this is ready", source="ceo")
+
+    reopened = Ledger(tmp_path)
+    entries = reopened.entries()
+    assert entries[1]["source"] == "ceo"
+    assert entries[1]["kind"] == "info"
+    assert entries[1]["text"] == "I think this is ready"
+
+
+def test_note_rejects_invalid_source(tmp_path):
+    """C5: An unknown source is refused."""
+    ledger = Ledger.seed(tmp_path, "build a mode")
+    with pytest.raises(SteeringError, match="unknown note source"):
+        ledger.note("info", "something", source="unknown")
+
+
+# ── E9: skip unrun nodes in problem detection ─────────────────────────────
+
+
+def test_chain_skips_unrun_nodes(tmp_path):
+    """E9: A node with no delivery and no output files is unrun and skipped."""
+    ledger = Ledger.seed(tmp_path, "build a mode")
+    stamp = ledger.entries()[0]["at"]
+    deliveries = {
+        "writer": {"status": "delivered", "entries": [{"at": stamp}]},
+    }
+    outputs = {
+        "writer": f"done.\n{steering.CITATION} {stamp}",
+        "unrun_node": "",  # no output files, no delivery — has not run yet
+    }
+    problems = steering.chain(ledger, outputs, deliveries=deliveries)
+    # Should not report unrun_node as a problem.
+    assert not any("unrun_node" in p for p in problems), (
+        f"unrun node was reported as a problem: {problems}"
+    )
+
+
+def test_chain_still_reports_ran_but_uncited_node(tmp_path):
+    """E9: A node with no delivery but output text has legacy inline citations."""
+    ledger = Ledger.seed(tmp_path, "build a mode")
+    outputs = {
+        "writer": "I did the work.",  # has output text but no citations
+    }
+    problems = steering.chain(ledger, outputs)
+    assert any("cites no ledger entry" in p for p in problems)
+
+
+# ── E12: bookkeeping entries filtered from prompts ─────────────────────────
+
+
+def test_bookkeeping_entries_filtered_from_render(tmp_path):
+    """E12: gate-visit, verdict, verdict-use are returned by parse but not rendered."""
+    ledger = Ledger.seed(tmp_path, "build a mode")
+    ledger.visit("gate_check", [])
+    ledger.verdict("gate_check", "proceed", approval=True)
+
+    entries = ledger.entries()
+    bookkeeping = [e for e in entries if e["kind"] in steering.BOOKKEEPING_KINDS]
+    assert len(bookkeeping) >= 2, "test fixture should have bookkeeping entries"
+
+    rendered = ledger.render()
+    assert "gate-visit" not in rendered
+    assert "verdict-use" not in rendered
+    # But the Initial Idea should still be there.
+    assert "build a mode" in rendered
+
+
+def test_bookkeeping_entries_still_in_parse(tmp_path):
+    """E12: Bookkeeping entries are still returned by parse_entries."""
+    ledger = Ledger.seed(tmp_path, "build a mode")
+    ledger.visit("gate_check", [])
+    ledger.verdict("gate_check", "proceed", approval=True)
+
+    entries = ledger.entries()
+    kinds = [e["kind"] for e in entries]
+    assert "gate-visit" in kinds
+    assert "verdict" in kinds
+
+
+# ── scope: product vs process notes ────────────────────────────────────────
+
+
 def test_note_scope_roundtrips_through_ledger(tmp_path):
     """A process note is persisted with (process) in the header and read back."""
     ledger = Ledger.seed(tmp_path, "build a mode")

@@ -867,6 +867,7 @@ def _steer(
     note: str | None = None,
     kind: str = "info",
     scope: str = "product",
+    source: str = "user-relayed",
     verdicts: tuple[str, ...] | list[str] = (),
     with_gates: bool = False,
     control: str | None = None,
@@ -897,7 +898,7 @@ def _steer(
     if seed is not None:
         Ledger.seed(run_root, seed)
     if note is not None:
-        ledger.note(kind, note, scope=scope)
+        ledger.note(kind, note, scope=scope, source=source)
     recorded_scopes: dict[str, str] = {}
     for pair in verdicts:
         gate, _, value = str(pair).partition("=")
@@ -1338,6 +1339,11 @@ def _parser() -> argparse.ArgumentParser:
              "record run-level directives that are visible but not auditable",
     )
     steer.add_argument(
+        "--source", default="user-relayed", choices=["user-relayed", "ceo"],
+        help="who said this: user-relayed (default) for the person's words, ceo for "
+             "the CEO's own observations; CEO notes are context, not auditable requirements",
+    )
+    steer.add_argument(
         "--verdict", action="append", default=[],
         help="record a one-use gate answer as <gate>=<value> (repeatable), scoped "
              "to the current declared review inputs; changed inputs require a fresh answer",
@@ -1755,7 +1761,7 @@ def main(argv: list[str] | None = None) -> int:
             payload = _steer(
                 _root_for(args, project),
                 seed=args.seed, note=args.note, kind=args.kind,
-                scope=args.scope,
+                scope=args.scope, source=args.source,
                 verdicts=args.verdict, with_gates=args.gates,
                 control=asked,
                 target=args.keep or args.reject,

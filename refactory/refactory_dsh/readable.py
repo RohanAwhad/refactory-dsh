@@ -65,7 +65,7 @@ def format_status(payload: dict[str, Any]) -> str:
             lines.append(f"Error: {error}")
 
         control = (activity.get('control') or {}) if isinstance(activity.get('control'), dict) else {}
-        if control.get('status') == 'failed':
+        if control.get('status') == 'failed' and state not in ('finished', 'halted'):
             action = control.get('action', '')
             message = control.get('message', '')
             lines.append(f"Last failed control: {action} — {message}")

@@ -61,9 +61,9 @@ describe('refactory-web startup provider', () => {
 })
 
 describe('refactory-web layer', () => {
-  it('carries the wf_next reminder exclusion the web-app patch supplied', () => {
+  it('carries the wf_next and wf_verdict reminder exclusion the web-app patch supplied', () => {
     expect(PATCH).toContain('id: repeat-tool-reminder')
-    expect(PATCH).toContain('exclude: [wf_next]')
+    expect(PATCH).toContain('exclude: [wf_next, wf_verdict]')
   })
 
   it('disables the official whale and mounts the re:factory occupants', () => {

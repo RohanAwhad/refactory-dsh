@@ -192,6 +192,55 @@ describe('the cursor status a run leaves behind', () => {
     expect(recorded.last_failure).toMatchObject({ node: 'run', error: expect.stringContaining('broken on purpose') })
   })
 
+  it('failure payload has node id, command field, and descriptive error (E7)', async () => {
+    const workdir = scratch()
+    const { ctx } = await mount({
+      workdir,
+      executeCommands: true,
+      graph: {
+        name: 't',
+        start_node: 'run',
+        nodes: { run: { _type: 'FnNode', id: 'run', command: 'run-it', reads: [], writes: [] } },
+        edges: [],
+      },
+    })
+    ctx.provide('shell', shell(() => ({ exitCode: 4, stderr: 'broken on purpose\n' })))
+    const result = await call(ctx, 'wf_next') as { status: string; node: string; command: string; error: string }
+    expect(result.status).toBe('failed')
+    expect(result.node).toBe('run')
+    expect(result.command).toBe('run-it')
+    expect(result.error).toContain('run exited with code 4')
+    expect(result.error).toContain('broken on purpose')
+  })
+
+  it('facts summary replaces inline facts with keys, sizes and small inlines (E10)', async () => {
+    const workdir = scratch()
+    const { ctx } = await mount({
+      workdir,
+      executeCommands: true,
+      graph: {
+        name: 't',
+        start_node: 'run',
+        nodes: { run: { _type: 'FnNode', id: 'run', command: 'run-it', reads: [], writes: [] } },
+        edges: [],
+      },
+    })
+    // Write a facts.json with one small and one large value.
+    writeFileSync(join(workdir, 'facts.json'), JSON.stringify({
+      small: 'hello',
+      big: 'x'.repeat(600),
+    }))
+    ctx.provide('shell', shell(() => ({ exitCode: 0 })))
+    const result = await call(ctx, 'wf_next') as { ran: { facts: { _summary: boolean; keys: string[]; sizes: Record<string, number>; inline: Record<string, unknown>; path: string } } }
+    expect(result.ran.facts._summary).toBe(true)
+    expect(result.ran.facts.path).toBe('facts.json')
+    expect(result.ran.facts.keys).toEqual(expect.arrayContaining(['small', 'big']))
+    expect(result.ran.facts.sizes.small).toBeLessThanOrEqual(512)
+    expect(result.ran.facts.sizes.big).toBeGreaterThan(512)
+    expect(result.ran.facts.inline.small).toBe('hello')
+    expect(result.ran.facts.inline).not.toHaveProperty('big')
+  })
+
   it('records the exit code alone when a failed node said nothing', async () => {
     // dm-95: a node failure writes status ready with last_failure, not failed.
     const workdir = scratch()

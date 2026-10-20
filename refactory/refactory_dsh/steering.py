@@ -52,6 +52,15 @@ KINDS: tuple[str, ...] = ("info", "correction", "constraint")
 #: never an auditable requirement because the audit cannot cite itself as evidence.
 SCOPES: tuple[str, ...] = ("product", "process")
 
+#: Who said a note: the person (``user-relayed``) or the CEO on its own
+#: (``ceo``). Only user-relayed entries are auditable requirements; CEO
+#: entries are context the agent sees but the audit does not check against.
+SOURCES: tuple[str, ...] = ("user-relayed", "ceo")
+
+#: Bookkeeping entry kinds written by the gate protocol. Stored in the
+#: ledger for routing, but filtered out of rendered prompts.
+BOOKKEEPING_KINDS: frozenset[str] = frozenset({"gate-visit", "verdict", "verdict-use"})
+
 #: The entry kind a gate verdict is recorded under. Separate from the three the
 #: person writes, because a verdict is a decision the run routed on, not something
 #: the person said about it, and a resumed run has to tell them apart.
@@ -120,26 +129,34 @@ class Ledger:
         ledger.path.write_text(f"# User Intent Ledger\n\n## [{_now()}] Initial Idea\n{text}\n")
         return ledger
 
-    def note(self, kind: str, text: str, *, scope: str = "product") -> dict[str, Any]:
-        """Append one thing the user said. Returns the entry as it was recorded.
+    def note(self, kind: str, text: str, *, scope: str = "product",
+             source: str = "user-relayed") -> dict[str, Any]:
+        """Append one thing said about this run. Returns the entry as it was recorded.
 
         ``scope`` is ``'product'`` (default) or ``'process'``. A process note is
         about the run's own behaviour (e.g. "add a row to the audit table") and is
         never an auditable requirement, because the audit cannot cite itself as
         evidence for a directive about its own behaviour.
+
+        ``source`` is ``'user-relayed'`` (default) or ``'ceo'``. CEO notes render
+        under their own heading and are never auditable requirements; only the
+        person's words (``user-relayed``) are.
         """
         if kind not in KINDS:
             raise SteeringError(f"unknown note kind {kind!r}; known: {list(KINDS)}")
         if scope not in SCOPES:
             raise SteeringError(f"unknown note scope {scope!r}; known: {list(SCOPES)}")
+        if source not in SOURCES:
+            raise SteeringError(f"unknown note source {source!r}; known: {list(SOURCES)}")
         body = (text or "").strip()
         if not body:
             raise SteeringError("an empty note records nothing and dilutes the ledger")
-        entry = {"at": _now(), "kind": kind, "text": body, "scope": scope}
+        entry = {"at": _now(), "kind": kind, "text": body, "scope": scope, "source": source}
         self.root.mkdir(parents=True, exist_ok=True)
-        suffix = " (process)" if scope == "process" else ""
+        scope_suffix = " (process)" if scope == "process" else ""
+        source_suffix = " (ceo)" if source == "ceo" else ""
         with self.path.open("a") as handle:
-            handle.write(f"\n## [{entry['at']}] {kind}{suffix}\n{body}\n")
+            handle.write(f"\n## [{entry['at']}] {kind}{scope_suffix}{source_suffix}\n{body}\n")
         return entry
 
     def verdict(
@@ -312,7 +329,11 @@ def parse_entries(text: str) -> list[dict[str, Any]]:
             if kind.endswith(" (process)"):
                 kind = kind[:-len(" (process)")].strip()
                 scope = "process"
-            current = {"at": stamp, "kind": kind, "text": "", "scope": scope}
+            source = "user-relayed"
+            if kind.endswith(" (ceo)"):
+                kind = kind[:-len(" (ceo)")].strip()
+                source = "ceo"
+            current = {"at": stamp, "kind": kind, "text": "", "scope": scope, "source": source}
             body = []
         elif current is not None:
             body.append(line)
@@ -323,17 +344,43 @@ def parse_entries(text: str) -> list[dict[str, Any]]:
 
 
 def render_entries(entries: list[dict[str, Any]]) -> str:
-    """Render supplied entries; empty input leaves an unsteered prompt unchanged."""
+    """Render supplied entries; empty input leaves an unsteered prompt unchanged.
+
+    Bookkeeping kinds (gate-visit, verdict, verdict-use) are stored in the
+    ledger for routing but filtered out of rendered prompts (E12).
+
+    Entries are partitioned by source (C5): user-relayed entries appear under
+    "What the user has said" and are auditable requirements; CEO entries appear
+    under "CEO observations" with an explicit non-auditable disclaimer.
+    Legacy entries without a source annotation default to user-relayed.
+    """
     if not entries:
         return ""
-    lines = [
-        "## What the user has said", "",
-        "This is the run's intent ledger: what was asked for, and everything said",
-        "since. Entries marked `constraint` must be respected, not merely known.", "",
-    ]
-    for entry in entries:
-        lines.append(f"- **[{entry['at']}] [{entry['kind']}]** {entry['text']}")
-    return "\n".join(lines)
+    renderable = [e for e in entries if e.get("kind") not in BOOKKEEPING_KINDS]
+    if not renderable:
+        return ""
+    user_entries = [e for e in renderable if e.get("source", "user-relayed") != "ceo"]
+    ceo_entries = [e for e in renderable if e.get("source", "user-relayed") == "ceo"]
+    sections: list[str] = []
+    if user_entries:
+        lines = [
+            "## What the user has said", "",
+            "This is the run's intent ledger: what was asked for, and everything said",
+            "since. Entries marked `constraint` must be respected, not merely known.", "",
+        ]
+        for entry in user_entries:
+            lines.append(f"- **[{entry['at']}] [{entry['kind']}]** {entry['text']}")
+        sections.append("\n".join(lines))
+    if ceo_entries:
+        lines = [
+            "## CEO observations", "",
+            "These are the CEO's own observations. They are context for the agent,",
+            "not auditable requirements.", "",
+        ]
+        for entry in ceo_entries:
+            lines.append(f"- **[{entry['at']}] [{entry['kind']}]** {entry['text']}")
+        sections.append("\n".join(lines))
+    return "\n\n".join(sections)
 
 
 def _is_agent_node(node: Any) -> bool:
@@ -429,6 +476,10 @@ def chain(ledger: Ledger, outputs: Mapping[str, str], *, deliveries: Mapping[str
     problems: list[str] = []
     for node_id in sorted(outputs):
         delivery = (deliveries or {}).get(node_id)
+        # E9: A node with no delivery record and no output files has not run yet.
+        # Skip it rather than reporting it as a problem.
+        if delivery is None and not outputs[node_id].strip():
+            continue
         if delivery is not None:
             if delivery.get("status") != "delivered":
                 problems.append(f"node {node_id!r} has no successful artifact delivery receipt")
@@ -544,7 +595,9 @@ __all__ = [
     "KINDS",
     "LEDGER",
     "PLACEHOLDER",
+    "BOOKKEEPING_KINDS",
     "SCOPES",
+    "SOURCES",
     "VERDICT_KIND",
     "Ledger",
     "SteeringError",

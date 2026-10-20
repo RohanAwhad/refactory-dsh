@@ -61,6 +61,41 @@ a directive about its own behavior. Process notes are reported on in a separate
 non-blocking section of the intent audit and appear in the run report and pull
 request, so a person sees each one and whether it was followed.
 
+### Steering sources
+
+A steering note carries a `--source` (`user-relayed` or `ceo`).
+
+- **`user-relayed`** (the CLI default) marks the person's own words. These are
+  auditable requirements.
+- **`ceo`** (the `wf_steer` tool's default) marks the CEO's own observations.
+  These are context the agent sees, not auditable requirements. They render
+  under "CEO observations" with an explicit non-auditable disclaimer.
+
+When the CEO relays the person's words through `wf_steer`, it must set
+`source: "user-relayed"` so they become requirements the audit checks. Without
+it the words are silently treated as CEO observations. Legacy ledger entries
+without a source annotation default to `user-relayed`.
+
+```bash
+uv run refactory steer --run /absolute/run --note "fix the padding" --source user-relayed
+```
+
+## Mid-turn messages
+
+When the CEO is mid-turn, a message you type can be delivered immediately as
+steering rather than queued until the turn finishes. DSH's Enter-behaviour
+setting (found in the conversation plugin's settings under "Enter Behaviour")
+controls this: set it to **Steer** to deliver mid-turn messages as steering.
+
+There is no supported mechanism for a profile to supply a default for this
+Host user setting while preserving a saved choice, so the profile does not
+set it. Change it in the GUI's conversation settings if the default (queue)
+makes you wait.
+
+On the native GUI, press **Cmd+Enter** (macOS) or **Ctrl+Enter** (other
+platforms) to send a message while the CEO is working. The message reaches
+the CEO as a steering note and is reflected in the intent ledger.
+
 ## Apply a control at its boundary
 
 Optimizer notes, keep/reject and pause/resume/stop apply at generation boundaries. Graph controls apply at the next graph boundary and can wait for admitted work to settle. External workers accept new instructions at a subsequent node boundary, not as an in-flight prompt edit. A queued control receipt is a request, not confirmation of application.
@@ -75,7 +110,7 @@ uv run refactory graph-control stop --run /absolute/run
 
 Process cancellation is separate: `refactory stop --run RUN_DIR` requests interruption of the run's current owner process (from the console launch record, or from the spine checkpoint when the launch record is absent or stale, matching how `refactory status` determines `owner_alive`). Inspect the receipt and subsequent activity for confirmation; sending a signal is not proof that every worker terminated. Stopping a reader does not issue either kind of stop.
 
-A control that cannot be applied — a stale revision, an unsupported action, a node that is not safely replayable — is recorded with `status: failed` in the receipt. The failure reason is also journaled as a run warning, visible in `refactory status` and in the receipt shown by `refactory graph-control`'s own output. The owner removes the control file once it applies or refuses the control. A deferred rerun stays queued until concurrent work joins. `refactory status` lists the queued controls, so a person sees what a next owner would apply.
+A control that cannot be applied — a stale revision, an unsupported action, a node that is not safely replayable — is recorded with `status: failed` in the receipt. The failure reason is also journaled as a run warning, visible in `refactory status` and in the receipt shown by `refactory graph-control`'s own output. A failed control stops being reported to the person once the run reaches a terminal state (done, cancelled, halted), because a stale failure from an earlier refused control is misleading on a completed run. The failure remains in the receipt file and in the journal for audit; only the display is suppressed. The owner removes the control file once it applies or refuses the control. A deferred rerun stays queued until concurrent work joins. `refactory status` lists the queued controls, so a person sees what a next owner would apply. Every graph-control confirmation includes the run's name.
 
 To change completed work, choose a completed node and prompt correction, press **Preview affected results**, inspect the invalidated nodes, then **Confirm correction and rerun**. The console equivalent is `graph-control preview --node NODE`, followed by `graph-control rerun --node NODE --text "CORRECTION" --revision REVISION` with the returned revision and the same `--run`. The owner refuses a stale preview. Prior evidence is archived and dependent results invalidated before execution; a note alone does not silently rewrite completed work. Unsafe replay plans, including unsettled concurrent work, are refused.
 
@@ -85,7 +120,7 @@ The run's status includes whether its owner process is alive. A failed run with 
 
 ### Retry status (dm-95)
 
-When a node command fails, `spine-status.json` records status `ready` with a `last_failure` field containing `{ node, error, at }`, not run-level `failed`. The graph is ready to retry the same boundary. `refactory status` shows "step X is being retried" when `last_failure` is present and the owner is alive. Run-level `failed` means the graph run has ended — it appears only for infrastructure errors (an uncaught exception from the graph's drain loop) or when the owner exits without retrying the failed node.
+When a node command fails, `spine-status.json` records status `ready` with a `last_failure` field containing `{ node, error, at }`, not run-level `failed`. The graph is ready to retry the same boundary. The CEO-facing failure payload in `wf_next` uses `node` for the node id, `command` for the command string, and `error` containing the `<id> exited with code N` prefix followed by the real reason from stderr. `refactory status` shows "step X is being retried" when `last_failure` is present and the owner is alive. Run-level `failed` means the graph run has ended — it appears only for infrastructure errors (an uncaught exception from the graph's drain loop) or when the owner exits without retrying the failed node.
 
 When the owner exits with status `ready` and `last_failure` present, the supervisor promotes the status to `failed` before deciding whether to respawn. The promoted failure names the node and its error. The supervisor does not respawn it: the run genuinely ended because a node failure was not retried. It still respawns a real crash (an owner killed or dead while `executing`).
 
@@ -308,6 +343,14 @@ amendment. The feedback is shown to the driver, cleared when the agent
 completes, and superseded when a gate reloops with its own findings. A
 one-shot correction ("emit these two files and change nothing else") applies
 to that visit only and does not override a later review's repair.
+
+A dispatched agent node's prompt carries that visit's feedback (rerun text
+and a gate's reloop reason) under a heading "## Feedback for this visit",
+for any graph and any mode. The feedback sidecar is written atomically by
+the spine's `drain()` and read by the worker node before dispatch. It is
+removed (or omitted from the manifest) when no feedback exists for the
+visit, so a stale file is never read. Concurrent item passes of one node
+may share the sidecar because they carry the same feedback text.
 
 ### Gate refusal reason persistence
 

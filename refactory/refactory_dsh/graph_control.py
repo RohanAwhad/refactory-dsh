@@ -154,11 +154,22 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
         try:
             last_receipt = json.loads(receipt_path.read_text())
             if isinstance(last_receipt, dict) and last_receipt.get('status') == 'failed':
-                result['last_failed_receipt'] = {
-                    'action': last_receipt.get('action'),
-                    'status': 'failed',
-                    'message': last_receipt.get('message', ''),
-                }
+                # dm-101: suppress stale failure when the run reached a terminal state.
+                suppress = False
+                spine_path = root / '.refactory/spine-status.json'
+                if spine_path.exists():
+                    try:
+                        spine_status = json.loads(spine_path.read_text())
+                        if spine_status.get('status') in ('done', 'cancelled', 'halted'):
+                            suppress = True
+                    except (OSError, json.JSONDecodeError):
+                        pass
+                if not suppress:
+                    result['last_failed_receipt'] = {
+                        'action': last_receipt.get('action'),
+                        'status': 'failed',
+                        'message': last_receipt.get('message', ''),
+                    }
         except (OSError, json.JSONDecodeError):
             pass
     if action == 'rerun' and restart_owner:
@@ -294,6 +305,7 @@ def _acknowledge(root: Path, checkpoint: Path, saved: dict[str, Any]) -> dict[st
     return {
         'action': 'acknowledge',
         'status': 'acknowledged',
+        'run_id': str(root),
         'checkpoint_status_before': checkpoint_status,
         'set_aside': str(set_aside_dir.relative_to(root)),
         'files': manifest_files,
@@ -322,7 +334,8 @@ def _withdraw(root: Path, control_id: str) -> dict[str, Any]:
             pass
     control_path.unlink()
     emit(root, 'control_requested', state='withdrawn', summary=f'withdraw {control_id}')
-    return {'action': 'withdraw', 'control_id': control_id, 'status': 'withdrawn',
+    return {'action': 'withdraw', 'control_id': control_id, 'run_id': str(root),
+            'status': 'withdrawn',
             'message': f'Control {control_id} withdrawn.'}
 
 
@@ -418,6 +431,7 @@ def _amend_command(root: Path, checkpoint: Path, saved: dict[str, Any], *,
         'old_value': old_value,
         'new_value': value,
         'note': note,
+        'run_id': str(root),
         'status': 'queued',
         'rerun_control_id': rerun_id,
         'rerun_target': target_node,

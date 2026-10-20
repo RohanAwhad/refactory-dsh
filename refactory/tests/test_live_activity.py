@@ -159,6 +159,103 @@ def test_graph_control_shows_last_failed_receipt(tmp_path):
     assert 'graph changed since preview' in result['last_failed_receipt']['message']
 
 
+def test_status_suppresses_failed_control_when_finished(tmp_path):
+    """dm-101: A failed control receipt is NOT rendered as 'Last failed control'
+    by format_status when the run state is 'finished'."""
+    activity = {
+        'control': {
+            'action': 'rerun', 'status': 'failed',
+            'message': 'graph changed since preview',
+        },
+    }
+    payload = {
+        'authoring': {'name': 'test-run', 'completed': ['a']},
+        'state': 'finished',
+        'activity': activity,
+    }
+    text = readable.format_status(payload)
+    assert 'Last failed control' not in text
+
+
+def test_status_shows_failed_control_when_executing(tmp_path):
+    """dm-101: A failed control receipt IS rendered when the run is executing."""
+    activity = {
+        'control': {
+            'action': 'rerun', 'status': 'failed',
+            'message': 'graph changed since preview',
+        },
+    }
+    payload = {
+        'authoring': {'name': 'test-run', 'completed': ['a']},
+        'state': 'executing',
+        'activity': activity,
+    }
+    text = readable.format_status(payload)
+    assert 'Last failed control' in text
+
+
+def test_stale_failure_suppressed_in_graph_control_request_when_terminal(tmp_path):
+    """dm-101: graph_control.request() suppresses last_failed_receipt when spine is terminal."""
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    (directory / 'spine-checkpoint.json').write_text(json.dumps({}))
+    (directory / 'graph-control-receipt.json').write_text(json.dumps({
+        'action': 'rerun', 'status': 'failed',
+        'message': 'graph changed since preview; preview invalidation again',
+    }))
+    (directory / 'spine-status.json').write_text(json.dumps({'status': 'done'}))
+    result = graph_control.request(tmp_path, 'pause')
+    assert result['status'] == 'queued'
+    assert 'last_failed_receipt' not in result
+
+
+def test_amend_command_returns_run_id(tmp_path):
+    """dm-101: _amend_command returns a dict with run_id."""
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    checkpoint_data = {
+        'status': 'ready',
+        'state': {'cursor': ['run']},
+        'graph': {'nodes': {'run': {'_type': 'FnNode', 'command': 'old-cmd'}}},
+    }
+    (directory / 'spine-checkpoint.json').write_text(json.dumps(checkpoint_data))
+    (directory / 'invocation.json').write_text(json.dumps({'id': 'inv1'}))
+    (tmp_path / 'facts.json').write_text(json.dumps({'check': 'old-check'}))
+    result = graph_control._amend_command(
+        tmp_path, directory / 'spine-checkpoint.json', checkpoint_data,
+        field='check', value='new-check', note='test', acknowledge_failure=False,
+    )
+    assert 'run_id' in result
+    assert str(tmp_path) in result['run_id']
+
+
+def test_acknowledge_returns_run_id(tmp_path):
+    """dm-101: _acknowledge returns a dict with run_id."""
+    import fcntl
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    checkpoint_data = {'status': 'executing', 'owner_pid': 99999999}
+    checkpoint = directory / 'spine-checkpoint.json'
+    checkpoint.write_text(json.dumps(checkpoint_data))
+    result = graph_control._acknowledge(tmp_path, checkpoint, checkpoint_data)
+    assert 'run_id' in result
+    assert str(tmp_path) in result['run_id']
+
+
+def test_withdraw_returns_run_id(tmp_path):
+    """dm-101: _withdraw returns a dict with run_id."""
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    controls_dir = directory / 'graph-controls'
+    controls_dir.mkdir()
+    (controls_dir / 'test-ctrl.json').write_text(json.dumps({
+        'id': 'test-ctrl', 'action': 'pause', 'status': 'queued',
+    }))
+    result = graph_control._withdraw(tmp_path, 'test-ctrl')
+    assert 'run_id' in result
+    assert str(tmp_path) in result['run_id']
+
+
 def test_graph_snapshot_reads_saved_topology_without_commands_or_mutations(tmp_path):
     checkpoint = tmp_path / '.refactory/spine-checkpoint.json'
     checkpoint.parent.mkdir()
