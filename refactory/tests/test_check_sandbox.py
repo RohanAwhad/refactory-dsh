@@ -14,6 +14,12 @@ Each test fails without the corresponding production change.
 | test_create_materialise_refuses_truncated | create_ops.materialise has no guard | create_ops.py refuse_truncated call |
 | test_review_reloops_independent | repair() uses a single counter | create_ops.py repair() rewrite |
 | test_exhausted_limits_name_which | the stop message is generic | create_ops.py repair() rewrite |
+| test_gate_overwatch_increments_review_counter | kind='review' removed from gate_overwatch | gate_overwatch repair(kind='review') |
+| test_gate_qa_increments_review_counter | kind='review' removed from gate_qa | gate_qa repair(kind='review') |
+| test_check_artifact_gate_increments_check_counter | repair() default kind changed | check_artifact repair(kind='check') |
+| test_gate_smoke_increments_check_counter | repair() default kind changed | gate_smoke repair(kind='check') |
+| test_fast_gate_qa_review_kind_counter | kind='review' removed from fast gate_qa | fast_ops.gate_qa review path |
+| test_fast_gate_qa_check_kind_counter | kind='check' removed from fast gate_qa | fast_ops.gate_qa check path |
 """
 from __future__ import annotations
 
@@ -36,6 +42,7 @@ class FakeResult:
     returncode: int = 1
     stdout: str = ""
     stderr: str = ""
+    elapsed_s: float = 0.0
     prep_failure: dict | None = None
 
     def problem(self) -> str:
@@ -345,3 +352,191 @@ def test_fast_repair_records_kind(tmp_path):
     _repair(ctx2, ["review problem"], kind="review")
     assert ctx2.facts.get("review_repairs_used") == 1
     assert ctx2.facts.get("check_repairs_used", 0) == 0
+
+
+# ── Gate-level tests: verify kind-specific counters through real call sites ──
+#
+# These tests call the actual gate functions and verify the kind-specific
+# counters are set correctly.  Each gate-level test fails when the `kind=`
+# argument is removed or changed at that gate's repair() call site.
+
+
+def _gate_context(tmp_path, knobs=None):
+    """Create a RunContext with evidence, suitable for testing gate functions.
+
+    Sets up an artifact directory, seeds the intent ledger, writes the minimal
+    input files (brief.json, strategy.json), and records passing runtime
+    evidence so ``authoring-evidence.json`` exists.
+    """
+    from refactory_dsh import nn
+    from refactory_dsh.steering import Ledger
+
+    root = tmp_path / "artifact"
+    root.mkdir(exist_ok=True)
+    (root / "answer.txt").write_text("42")
+    ctx = nn.RunContext(tmp_path, facts={
+        "brief": "Deliver the answer",
+        "artifact": str(root),
+        "name": "gate_probe",
+    }, knobs=knobs or {}, enforce_writes=False)
+    ctx.write_json("brief.json", {"brief": ctx.facts["brief"]})
+    ctx.write_json("strategy.json", {"acceptance_criteria": ["answer is 42"]})
+    Ledger.seed(tmp_path, ctx.facts["brief"])
+    evidence.record(ctx, {"status": "pass", "command": "test", "stdout": "ok"})
+    return ctx
+
+
+def test_gate_overwatch_increments_review_counter(tmp_path):
+    """gate_overwatch calls repair(kind='review'), incrementing review_attempts_used.
+
+    Fails if kind='review' is removed from gate_overwatch's repair() call:
+    repair() would default to kind='check', incrementing check_attempts_used
+    instead of review_attempts_used.
+    """
+    from refactory_dsh import create_ops
+    from refactory_dsh.agent_delivery import begin, finish
+
+    ctx = _gate_context(tmp_path, knobs={"attempts": "10", "review_attempts": "5"})
+
+    # Deliver an audit so the overwatch receipt exists.
+    begin(tmp_path, "overwatch", "Audit each ask",
+          ["reviews/overwatch.md", evidence.AUDIT])
+    ev = ctx.read_json(evidence.EVIDENCE, {})
+    rows = []
+    for item in ev.get("requirements", []):
+        row = {"id": item["id"], "requirement": item["text"], "status": "pass",
+               "evidence": [{"path": "artifact/answer.txt", "detail": "ok"}]}
+        if item.get("kind") in ("correction", "constraint"):
+            row["clauses"] = [{"clause": item.get("text", ""),
+                               "evidence": [{"path": "artifact/answer.txt",
+                                             "detail": "ok"}]}]
+        rows.append(row)
+    ctx.write_json(evidence.AUDIT, {"requirements": rows})
+    # Write a failing overwatch review so the gate reloops.
+    ctx.write_text("reviews/overwatch.md",
+                   "BLOCKING: test failure\nVERDICT: FAIL")
+    finish(tmp_path, "overwatch")
+
+    result = create_ops.gate_overwatch(ctx)
+    assert result == "reloop"
+    assert ctx.facts.get("review_attempts_used", 0) >= 1, \
+        "gate_overwatch should increment review_attempts_used"
+    assert ctx.facts.get("check_attempts_used", 0) == 0, \
+        "gate_overwatch should NOT increment check_attempts_used"
+
+
+def test_gate_qa_increments_review_counter(tmp_path):
+    """gate_qa calls repair(kind='review'), incrementing review_attempts_used.
+
+    Fails if kind='review' is removed from gate_qa's repair() call.
+    The reloop is triggered because the review workers have no current
+    delivery receipts, which current_problems detects.
+    """
+    from refactory_dsh import create_ops
+
+    ctx = _gate_context(tmp_path, knobs={"attempts": "10", "review_attempts": "5"})
+    # Write a minimal qa-synthesized.md so gate_qa can read it.
+    ctx.write_text("reviews/qa-synthesized.md", "# QA synthesis\n0 reviews\n")
+    # Don't deliver any review workers → current_problems finds them missing → reloop.
+
+    result = create_ops.gate_qa(ctx)
+    assert result == "reloop"
+    assert ctx.facts.get("review_attempts_used", 0) >= 1, \
+        "gate_qa should increment review_attempts_used"
+    assert ctx.facts.get("check_attempts_used", 0) == 0, \
+        "gate_qa should NOT increment check_attempts_used"
+
+
+def test_check_artifact_gate_increments_check_counter(tmp_path, monkeypatch):
+    """check_artifact calls repair() with the default kind='check'.
+
+    Fails if the default kind is changed from 'check', because
+    check_attempts_used would not be set.
+    """
+    from refactory_dsh import design_ops, repo_change, worktree
+
+    fake = FakeResult(ok=False, returncode=1, stdout="", stderr="test failed")
+    monkeypatch.setattr(repo_change, "refused", lambda ctx: None)
+    monkeypatch.setattr(repo_change, "run_check", lambda ctx, cmd, timeout: fake)
+    monkeypatch.setattr(worktree, "recorded", lambda run: None)
+
+    ctx = _gate_context(tmp_path, knobs={
+        "attempts": "10", "check_attempts": "5", "review_attempts": "5",
+    })
+    ctx.facts["check"] = "echo test"
+
+    result = design_ops.check_artifact(ctx)
+    assert result == "reloop"
+    assert ctx.facts.get("check_attempts_used", 0) == 1, \
+        "check_artifact should increment check_attempts_used"
+    assert ctx.facts.get("review_attempts_used", 0) == 0, \
+        "check_artifact should NOT increment review_attempts_used"
+
+
+def test_gate_smoke_increments_check_counter(tmp_path, monkeypatch):
+    """gate_smoke calls repair() with the default kind='check' when smoke fails.
+
+    Fails if the default kind is changed from 'check'.
+    """
+    from refactory_dsh import create_ops
+
+    def _fail_smoke(ctx):
+        raise ValueError("smoke failed")
+
+    monkeypatch.setattr(create_ops, "smoke", _fail_smoke)
+
+    ctx = _gate_context(tmp_path, knobs={
+        "attempts": "10", "check_attempts": "5",
+    })
+
+    result = create_ops.gate_smoke(ctx)
+    assert result == "reloop"
+    assert ctx.facts.get("check_attempts_used", 0) == 1, \
+        "gate_smoke should increment check_attempts_used"
+    assert ctx.facts.get("review_attempts_used", 0) == 0, \
+        "gate_smoke should NOT increment review_attempts_used"
+
+
+def test_fast_gate_qa_review_kind_counter(tmp_path):
+    """fast_ops.gate_qa with only review findings calls _repair(kind='review').
+
+    Fails if kind='review' is removed from the non-check-failed path in
+    fast_ops.gate_qa.
+    """
+    from refactory_dsh import fast_ops, nn
+
+    ctx = nn.RunContext(tmp_path, facts={},
+                        knobs={"repair_attempts": "5"},
+                        enforce_writes=False)
+    # No focused-qa.json → "focused QA did not deliver a JSON report"
+    # No focused-check.json → check_failed is False → kind='review'
+
+    result = fast_ops.gate_qa(ctx)
+    assert result == "reloop"
+    assert ctx.facts.get("review_repairs_used", 0) == 1, \
+        "fast gate_qa (review path) should increment review_repairs_used"
+    assert ctx.facts.get("check_repairs_used", 0) == 0, \
+        "fast gate_qa (review path) should NOT increment check_repairs_used"
+
+
+def test_fast_gate_qa_check_kind_counter(tmp_path):
+    """fast_ops.gate_qa with a failed check calls _repair(kind='check').
+
+    Fails if kind='check' is removed from the check-failed path in
+    fast_ops.gate_qa.
+    """
+    from refactory_dsh import fast_ops, nn
+
+    ctx = nn.RunContext(tmp_path, facts={},
+                        knobs={"repair_attempts": "5"},
+                        enforce_writes=False)
+    ctx.write_json("focused-check.json",
+                   {"status": "fail", "returncode": 1,
+                    "stderr": "test failed"})
+
+    result = fast_ops.gate_qa(ctx)
+    assert result == "reloop"
+    assert ctx.facts.get("check_repairs_used", 0) == 1, \
+        "fast gate_qa (check path) should increment check_repairs_used"
+    assert ctx.facts.get("review_repairs_used", 0) == 0, \
+        "fast gate_qa (check path) should NOT increment review_repairs_used"
