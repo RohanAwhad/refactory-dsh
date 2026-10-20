@@ -295,9 +295,22 @@ def create_pin(driver_checkout: Path, commit: str, dirty_diff: str | None = None
         return pin_checkout
 
     except BaseException:
-        # Clean up staging on failure.
-        if staging_root.exists():
-            shutil.rmtree(staging_root, ignore_errors=True)
+        # Clean up whichever directory exists: staging (if rename failed)
+        # or final (if rename succeeded but provisioning failed).
+        for cleanup_dir in (staging_root, pin_root):
+            if cleanup_dir.exists():
+                # Also remove the git worktree registration.
+                checkout_in_dir = cleanup_dir / "checkout"
+                if checkout_in_dir.exists():
+                    try:
+                        subprocess.run(
+                            ["git", "-C", str(driver_checkout), "worktree", "remove", "--force",
+                             str(checkout_in_dir)],
+                            capture_output=True, text=True, timeout=60,
+                        )
+                    except (OSError, subprocess.SubprocessError):
+                        pass
+                shutil.rmtree(cleanup_dir, ignore_errors=True)
         raise
     finally:
         os.close(lock_fd)
