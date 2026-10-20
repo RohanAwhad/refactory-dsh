@@ -26,7 +26,11 @@ The IR fork is explicit: `refactory_dsh/ir.py:4-5` states "Copied from `factory/
 
 ### Approach: git submodule (not full merge)
 
-A full merge (absorbing v1's source tree into v2's repo) would break lightwell-factory's GitLab mirror of remote-factory and force an immediate lightwell migration. Instead, use a **git submodule** to pull v1 into v2 while keeping remote-factory as a standalone repo.
+A full merge (absorbing v1's source tree into v2's repo) would break lightwell-factory's GitLab mirror of remote-factory and force an immediate lightwell migration.
+
+**Why remote-factory must remain a standalone repo (for now):** lightwell-factory lives on GitLab and mirrors the `remote-factory` GitHub repo at the repository level. GitLab's repository mirroring operates on entire repos — it cannot mirror a subdirectory or branch of a different repo. If remote-factory is absorbed into refactory-dsh, lightwell's mirror breaks and must be reconfigured to track refactory-dsh (pulling in all of v2's Node.js packages, DSH runtime, etc. that lightwell doesn't use). A legacy branch within refactory-dsh would not satisfy GitLab's repo-level mirror either.
+
+Instead, use a **git submodule** to pull v1 into v2 while keeping remote-factory as a standalone repo.
 
 ```
 git submodule add git@github.com:akashgit/remote-factory.git v1/remote-factory
@@ -43,19 +47,29 @@ This gives v2 direct import access to v1's code (IR, OpenShell, Package abstract
 
 **Submodule** keeps the boundary explicit. remote-factory is its own repo with its own history. refactory-dsh pins to a commit and bumps it. lightwell tracks remote-factory independently. No sync ambiguity.
 
+### Python packaging boundary
+
+A submodule checkout does not make v1's code importable — `v1/remote-factory/factory/` is a directory on disk, not an installed package. Three options:
+
+1. **`sys.path` adapter** (recommended for Phase 0). A thin `_v1_compat.py` module in v2 that adds the submodule path to `sys.path` and re-exports the specific modules needed (IR primitives, OpenShell). No `pip install` of v1, no dependency contamination. v2's `pyproject.toml` gains no new deps.
+2. **Editable install with extras.** `pip install -e "v1/remote-factory[contained-openshell]"` — pulls v1's full dependency set (anthropic, langfuse, networkx, fastapi, etc.) into v2's environment. Unacceptable for v2's minimal-deps goal.
+3. **Refactor v1 into optional extras.** Make v1's IR and OpenShell modules installable independently via new extras in v1's `pyproject.toml` (e.g., `pip install "remote-factory[ir-only]"`). Cleaner long-term but requires upstream v1 changes.
+
+Start with option 1. Move to option 3 if the `sys.path` adapter becomes unwieldy or if more than a handful of modules need sharing.
+
 ### Estimated effort: ~1 day
 
 | Task | Effort |
 |---|---|
 | `git submodule add`, configure CI to init submodules | ~2 hours |
-| Replace v2's forked `ir.py` with import from submodule | ~2 hours |
+| Write `_v1_compat.py` adapter, replace v2's forked `ir.py` with re-exports | ~2 hours |
 | Delete cross-repo test oracle (`tests/reference_ir.py`, `uv sync --group reference`) | ~1 hour |
-| Validate: v2 tests pass with submodule-sourced IR | ~1 hour |
+| Validate: v2 tests pass with submodule-sourced IR via supported install path | ~1 hour |
 
 ### What this enables
 
-- **IR drift stops.** v2 imports from v1's canonical `primitives.py`. v2's 3 extension fields are added upstream to remote-factory (lightwell doesn't use them, so no disruption).
-- **OpenShell becomes importable.** `from v1.remote_factory.factory.contained.openshell import ...` — no standalone extraction needed.
+- **IR drift stops.** v2 imports from v1's canonical `primitives.py` via the adapter. v2's 3 extension fields are added upstream to remote-factory (lightwell doesn't use them, so no disruption).
+- **OpenShell becomes importable.** Same adapter exposes `factory.contained.openshell` — no standalone extraction needed.
 - **Shared abstractions without forced unification.** v2 can use v1's `Package` type directly if it's useful, or ignore it. No pressure to reconcile `Package` and `Mode` on a timeline.
 - **Cross-repo test oracle disappears.** The `reference_ir.py` plumbing that pulls remote-factory via `uv sync` is replaced by a local submodule import.
 
@@ -133,11 +147,26 @@ Run v2's agent nodes inside v1's containment by invoking `factory contained --ta
 
 **Cons:** Couples v2's runtime to a v1 installation. Adds subprocess overhead. Credential model mismatch (v1 gateway vs. v2 DSH provider registry).
 
+### OpenShell execution boundary
+
+Before estimating integration work, we need to understand what sits where in v1's OpenShell stack:
+
+| Layer | What it does | Location in v1 | Reusable by v2? |
+|---|---|---|---|
+| Kernel confinement | Landlock filesystem allowlists, seccomp syscall filtering | `factory/contained/openshell.py` | Yes — pure sandbox lifecycle, no v1-specific deps |
+| Plan composition | Assembles confinement plans from profiles | `factory/contained/openshell.py` | Yes |
+| Provisioning + workspace transfer | Sets up sandbox filesystem, copies project files in | `factory/cli/contained_openshell.py` | Needs adapter — v2's workdir layout differs |
+| Credential gateway | Holds provider keys outside the sandbox, proxies API calls | `factory/contained/providers.py` | Needs adapter — v2 uses DSH provider registry, not v1's gateway |
+| Provenance + cancellation | Tracks sandbox provenance, handles cleanup on abort | `factory/cli/contained_openshell.py` | Likely reusable with minor adaptation |
+| Artifact collection | Reads results out of sandbox post-execution | `factory/cli/contained_openshell.py` | Needs adapter — v2 reads `facts.json`, not v1's result format |
+
+The kernel confinement and plan composition layers are directly importable. The CLI layer (provisioning, credentials, artifacts) needs adapter work to map to v2's DSH execution model.
+
 ### Recommendation
 
-**With the submodule approach (section 1):** direct import from the submodule (`from v1.remote_factory.factory.contained.openshell import ...`) behind an optional dependency. This gets v2 sandboxing with zero extraction work. No standalone package needed unless we later absorb the submodule and want to keep OpenShell independent.
+**With the submodule approach (section 1):** import the confinement and plan-composition layers from the submodule via the `_v1_compat.py` adapter. Write a thin v2-specific shim for provisioning, credential bridging, and artifact collection.
 
-The credential model adapter (v1 gateway → v2 DSH provider registry) is the real work regardless of approach — ~3-5 days of focused effort touching security-sensitive code.
+The credential adapter (DSH provider registry → gateway model) is the hardest piece — ~3-5 days of focused work touching security-sensitive code. An integration spike (see Phase 0 below) should validate the boundary before committing to this estimate.
 
 ---
 
@@ -227,45 +256,72 @@ This removes lightwell migration from the critical path entirely.
 
 ---
 
+## Ownership
+
+| Area | Owner | Responsibilities |
+|---|---|---|
+| Shared IR schema | v2 team (refactory-dsh) | Proposes field additions, ensures backward-compatible serialization |
+| remote-factory (v1) releases | v1 maintainer (TBD) | Security patches, critical bug fixes, submodule pin bumps |
+| OpenShell confinement | v1 maintainer + v2 team (shared) | v1 maintainer owns the core module; v2 team owns the adapter/shim |
+| Lightwell migration | Lightwell team | Drives Package migration, decides migration timeline |
+| Submodule pin coordination | v2 team | Bumps pin when upstream IR/OpenShell changes land |
+
 ## Decision matrix
 
 | Decision | Recommended path | Effort | Prerequisite |
 |---|---|---|---|
 | Repo structure | **Submodule** v1 into v2 (section 1) | ~1 day | — |
 | Runtime direction | **v2 (DSH) as primary**, v1 maintenance | Ongoing | Submodule |
-| Sandboxing | **Direct import** from submodule (section 3) | ~3-5 days for credential adapter | Submodule |
+| Sandboxing | **Direct import** from submodule (section 3) | Integration spike first, then ~3-5 days for credential adapter | Submodule |
 | v1 support | **Tier 1 indefinite, Tier 2 time-bounded** (section 4) | ~3 months for migration tooling | — |
 | Lightwell | **Stay on v1**, migrate independently (section 5) | At lightwell's pace | Package migration plan |
-| Full merge | **Absorb submodule** when lightwell is migrated | ~1-2 days | Lightwell migration |
+| Mechanical repo absorption | **Absorb submodule** when lightwell is migrated | ~1-2 days | Lightwell migration |
+| Package/Mode convergence | **Incremental**, decoupled from repo absorption | Unbounded design work | — |
+| CLI unification | **After** convergence is underway | TBD | Package/Mode convergence progress |
 
 ## Suggested sequence
 
-### Phase 1: Submodule + IR unification (~1 day)
-1. `git submodule add` remote-factory into `v1/remote-factory`
-2. Replace v2's forked `ir.py` with imports from submodule's canonical `primitives.py`
-3. Add v2's 3 extension fields (`resource_role`, `command_timeout_s`, `dispatch_command`) upstream to remote-factory
-4. Delete cross-repo test oracle (`tests/reference_ir.py`, `uv sync --group reference` plumbing)
-5. Validate: all v2 tests pass
+### Phase 0: Integration spike (~2-3 days)
 
-### Phase 2: OpenShell integration (~1 week)
-6. Import OpenShell from submodule behind optional dependency
-7. Build credential adapter (DSH provider registry → v1 gateway model)
-8. Wire into v2's `workers.py` as a sandbox backend option
-9. Validate: run a v2 mode inside OpenShell confinement
+Validate the packaging approach and OpenShell boundary before committing to later estimates.
+
+1. `git submodule add` remote-factory into `v1/remote-factory`
+2. Write `_v1_compat.py` adapter: `sys.path`-based import of IR primitives from submodule
+3. Replace v2's forked `ir.py` with re-exports from adapter
+4. Run one representative v2 workflow end-to-end on the shared IR, via `uv run` / supported install path
+5. Verify IR serialization round-trip: v2-produced graph JSON accepted by v1's reader for the 6 shared node types
+6. Attempt a bare import of `factory.contained.openshell` via the adapter — identify which transitive deps are pulled and which layers (confinement, provisioning, credentials) are separable in practice
+
+**Exit criteria:** shared IR works through the supported install path, and we have a concrete list of what OpenShell integration requires. Use this to firm up Phase 2 estimates.
+
+### Phase 1: Submodule + IR unification (~1 day, after spike validates approach)
+7. Finalize `_v1_compat.py` based on spike findings
+8. Add v2's 3 extension fields (`resource_role`, `command_timeout_s`, `dispatch_command`) upstream to remote-factory
+9. Delete cross-repo test oracle (`tests/reference_ir.py`, `uv sync --group reference` plumbing), retain serialization round-trip tests
+10. Validate: all v2 tests pass, CI inits submodule correctly
+
+### Phase 2: OpenShell integration (estimate TBD by spike)
+11. Import OpenShell confinement + plan-composition layers from submodule via adapter
+12. Write v2 shim for provisioning, workspace transfer, and artifact collection
+13. Build credential adapter (DSH provider registry → v1 gateway model)
+14. Wire into v2's `workers.py` as a sandbox backend option
+15. Validate: run a v2 mode inside OpenShell confinement, test cancellation and failure paths
 
 ### Phase 3: Benchmark porting (~1-2 weeks, can overlap with Phase 2)
-10. Port v1's 8 contributed benchmark workflows to v2 `Mode` format
-11. Validate: benchmark results match between v1 executor and v2 DSH runtime
+16. Port v1's 8 contributed benchmark workflows to v2 `Mode` format
+17. Validate: benchmark results match between v1 executor and v2 DSH runtime
 
 ### Phase 4: Lightwell migration (at lightwell's pace, independent)
-12. Complete the 11-PR `Package` migration plan in remote-factory
-13. Remove monkey-patches and pinned-commit dependency
-14. When ready, port modes to v2 or import `Package` from submodule
+18. Complete the 11-PR `Package` migration plan in remote-factory
+19. Remove monkey-patches and pinned-commit dependency
+20. When ready, port modes to v2 or import `Package` from submodule
 
-### Phase 5: Full merge (when ready)
-15. Absorb submodule: `git submodule deinit`, move code in or delete
-16. Unify CLIs, deprecate `factory` entry point
-17. Final `Package`/`Mode` convergence
+### Phase 5: Mechanical repo absorption (when ready, ~1-2 days)
+21. Absorb submodule: `git submodule deinit v1/remote-factory`, move needed code in or delete
+
+### Phase 6: Runtime convergence (unbounded, incremental)
+22. Converge `Package`/`Mode` abstractions
+23. Unify CLIs, deprecate `factory` entry point
 
 ## Key risks
 
