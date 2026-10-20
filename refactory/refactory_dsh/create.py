@@ -59,6 +59,11 @@ class CreateMode(Mode):
                 description="how many times the emit step may be retried with the "
                             "validator's reasons",
             ),
+            "review_attempts": Knob(
+                3, "int", lo=1, hi=5,
+                description="how many times the review gates may reloop before "
+                            "stopping; defaults to the same as check_attempts",
+            ),
             "research_attempts": Knob(
                 3, "int", lo=1, hi=8,
                 description="how many times the research step may be retried when its "
@@ -526,7 +531,8 @@ class CreateMode(Mode):
             writes=("smoke.json", "revision.json", "authoring-evidence.json", "validation.txt"),
             produces=("smoke_score", "smoke_ok", "smoke_model", "smoke_reason",
                       "before_score", "after_score", "regressed", "revision_note",
-                      "runtime_evidence", "validation", "attempts_used"),
+                      "runtime_evidence", "validation", "attempts_used",
+                      "check_attempts_used"),
             notes="run the new mode once, and compare a revision with the mode it "
                   "revises; a mode that cannot score is not finished",
         ))

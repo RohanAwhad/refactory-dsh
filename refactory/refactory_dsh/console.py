@@ -449,6 +449,10 @@ def _authoring(run_root: Path, spine: dict[str, Any]) -> dict[str, Any]:
         "revision_note": facts.get("revision_note"),
         "step_tokens": step_tokens if step_tokens else None,
         "total_tokens": total_tokens if step_tokens else None,
+        "check_attempts_used": facts.get("check_attempts_used", 0),
+        "review_attempts_used": facts.get("review_attempts_used", 0),
+        "check_repairs_used": facts.get("check_repairs_used", 0),
+        "review_repairs_used": facts.get("review_repairs_used", 0),
     }
 
 

@@ -49,8 +49,12 @@ does not promise exhaustive tracking of external services or every transitive
 dependency outside the delivered package.
 
 Repairable implementation/check failures return concrete diagnostics to the
-coder. Full modes share their declared attempt allowance across admission,
-runtime and review failure; fast modes use their existing total repair allowance.
+coder. Full modes share an overall attempt cap across admission, runtime and
+review failure; within that cap, check failures and review reloops are counted
+separately (`check_attempts_used` against `check_attempts`,
+`review_attempts_used` against `review_attempts`), so a review reloop does not
+consume a check attempt. Fast modes use their existing total repair allowance
+but record which kind (`check_repairs_used`, `review_repairs_used`) spent it.
 Missing tools/credentials, cancellation, uncertain worker outcomes/timeouts and
 resource exhaustion stop with their actual outcome. The artifact and evidence
 remain for explicit unblock/recovery; repeating code generation cannot install an

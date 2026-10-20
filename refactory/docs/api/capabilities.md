@@ -6589,7 +6589,9 @@ Build a reusable mode package from a brief, name and task/single-shot inputs. Ca
       "gate_kind": "fn",
       "id": "gate_overwatch",
       "kind": "gate",
-      "knobs": [],
+      "knobs": [
+        "review_attempts"
+      ],
       "notes": "proceed only on a stated PASS verdict",
       "role": "ceo"
     },
@@ -6598,7 +6600,9 @@ Build a reusable mode package from a brief, name and task/single-shot inputs. Ca
       "gate_kind": "fn",
       "id": "gate_qa",
       "kind": "gate",
-      "knobs": [],
+      "knobs": [
+        "review_attempts"
+      ],
       "notes": "proceed only when every review ran and none is blocking",
       "role": "ceo"
     },
@@ -6877,6 +6881,18 @@ Build a reusable mode package from a brief, name and task/single-shot inputs. Ca
       "value": 3,
       "values": []
     },
+    "review_attempts": {
+      "default": 3,
+      "description": "how many times the review gates may reloop before stopping; defaults to the same as check_attempts",
+      "frozen": false,
+      "kind": "int",
+      "range": [
+        1,
+        5
+      ],
+      "value": 3,
+      "values": []
+    },
     "revision_of": {
       "default": "",
       "description": "for an edit: the <package>/<mode> being revised",
@@ -6958,7 +6974,7 @@ Build a reusable mode package from a brief, name and task/single-shot inputs. Ca
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a reusable mode package from a brief, name and task/single-shot inputs. Canonical smoke runs before separate QA and Overwatch; repair shares the attempt bound and completion needs current validation and intent evidence.",
-    "reviewed_schema": "33dd7f848f6ae5ad2570cc992144aec6e142cae1e94645a955705b7dde8cc0a6"
+    "reviewed_schema": "43948735931e3bae5ca953b70c7d122fd24dc4cbe69aa3dd90a2988d9a814ff0"
   }
 }
 ```
@@ -7631,7 +7647,9 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "gate_kind": "fn",
       "id": "gate_overwatch",
       "kind": "gate",
-      "knobs": [],
+      "knobs": [
+        "review_attempts"
+      ],
       "notes": "proceed only on a stated PASS verdict",
       "role": "ceo"
     },
@@ -7651,7 +7669,9 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "gate_kind": "fn",
       "id": "gate_qa",
       "kind": "gate",
-      "knobs": [],
+      "knobs": [
+        "review_attempts"
+      ],
       "notes": "proceed only when every review ran and none is blocking",
       "role": "ceo"
     },
@@ -7967,6 +7987,18 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "value": 3,
       "values": []
     },
+    "review_attempts": {
+      "default": 3,
+      "description": "how many times the review gates may reloop before stopping; defaults to the same as check_attempts",
+      "frozen": false,
+      "kind": "int",
+      "range": [
+        1,
+        5
+      ],
+      "value": 3,
+      "values": []
+    },
     "review_comments": {
       "default": false,
       "description": "with refine: add the pull request's reviews and comments to the run's steering",
@@ -8054,7 +8086,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`). The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-    "reviewed_schema": "9a7202d6169cd6a02eba15bc52dc69e730c04d0622ccf515b363d7b929812eb9"
+    "reviewed_schema": "19510e37db271a732098922894f37b621f1378cbd4244ead9297529e39830dfa"
   }
 }
 ```
@@ -8615,7 +8647,9 @@ Revise an existing mode package and validate the revision before separate QA and
       "gate_kind": "fn",
       "id": "gate_overwatch",
       "kind": "gate",
-      "knobs": [],
+      "knobs": [
+        "review_attempts"
+      ],
       "notes": "proceed only on a stated PASS verdict",
       "role": "ceo"
     },
@@ -8624,7 +8658,9 @@ Revise an existing mode package and validate the revision before separate QA and
       "gate_kind": "fn",
       "id": "gate_qa",
       "kind": "gate",
-      "knobs": [],
+      "knobs": [
+        "review_attempts"
+      ],
       "notes": "proceed only when every review ran and none is blocking",
       "role": "ceo"
     },
@@ -8903,6 +8939,18 @@ Revise an existing mode package and validate the revision before separate QA and
       "value": 3,
       "values": []
     },
+    "review_attempts": {
+      "default": 3,
+      "description": "how many times the review gates may reloop before stopping; defaults to the same as check_attempts",
+      "frozen": false,
+      "kind": "int",
+      "range": [
+        1,
+        5
+      ],
+      "value": 3,
+      "values": []
+    },
     "revision_of": {
       "default": "",
       "description": "for an edit: the <package>/<mode> being revised",
@@ -8984,7 +9032,7 @@ Revise an existing mode package and validate the revision before separate QA and
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Revise an existing mode package and validate the revision before separate QA and Overwatch. Supply revision_of, name and brief. allow_regression=true skips original execution and numerical comparison, while revised execution and intent evidence remain mandatory.",
-    "reviewed_schema": "c293edc1d69b8c3fbda779072fb331f2b6bffc1d4713728998bc550904f78afa"
+    "reviewed_schema": "05c269ef8b75050ab96ed0e489df14b4026d2f4d47f6ece55fef607d11c7572e"
   }
 }
 ```
