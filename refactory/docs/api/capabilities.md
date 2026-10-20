@@ -8287,7 +8287,7 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "knobs": [
         "repair_attempts"
       ],
-      "notes": "proceed on PASS; advisory reloop on FAIL (does not spend repair_attempts); guardedness blocks via _repair(kind='check')",
+      "notes": "proceed on PASS; advisory reloop on FAIL (does not spend repair_attempts); check failures and guardedness blocks via _repair",
       "role": "ceo"
     },
     {
@@ -8504,7 +8504,7 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a small artifact with one sequential strategist, coder and QA agent, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none (`worktree=0` writes .factory/artifacts instead; `source_project` copies a directory there). The check runs in that worktree before focused QA. It has no approval gate, so it opens no pull request: the branch is left for you to push.",
-    "reviewed_schema": "37397ced72de9210cb6add50eb39c894abd32e1aa36cb73528270bcded214601"
+    "reviewed_schema": "75a7f09a27cb047d93867ea56a1a69b5b436215049eb16505dda70ab1165053a"
   }
 }
 ```
@@ -9526,12 +9526,22 @@ Change a repository until a failing check passes, on a branch of its own, throug
     {
       "condition": "proceed",
       "source": "check",
-      "target": "report"
+      "target": "verifier"
     },
     {
       "condition": null,
       "source": "emit",
       "target": "materialise"
+    },
+    {
+      "condition": "reloop",
+      "source": "gate_verification",
+      "target": "emit"
+    },
+    {
+      "condition": "proceed",
+      "source": "gate_verification",
+      "target": "report"
     },
     {
       "condition": null,
@@ -9542,11 +9552,20 @@ Change a repository until a failing check passes, on a branch of its own, throug
       "condition": null,
       "source": "prepare",
       "target": "emit"
+    },
+    {
+      "condition": null,
+      "source": "verifier",
+      "target": "gate_verification"
     }
   ],
   "gates": [
     {
       "id": "check",
+      "user": false
+    },
+    {
+      "id": "gate_verification",
       "user": false
     }
   ],
@@ -9571,6 +9590,15 @@ Change a repository until a failing check passes, on a branch of its own, throug
       "kind": "agent",
       "knobs": [],
       "notes": "write the fix as blocks in emit.txt",
+      "role": "ceo"
+    },
+    {
+      "call": "refactory_dsh.verification:gate_verification_generic",
+      "gate_kind": "fn",
+      "id": "gate_verification",
+      "kind": "gate",
+      "knobs": [],
+      "notes": "advisory verification gate; always proceeds",
       "role": "ceo"
     },
     {
@@ -9605,6 +9633,14 @@ Change a repository until a failing check passes, on a branch of its own, throug
       "knobs": [],
       "notes": "say which branch holds the fix",
       "role": "ceo"
+    },
+    {
+      "call": "",
+      "id": "verifier",
+      "kind": "agent",
+      "knobs": [],
+      "notes": "design-blind verification: apply the evidence log's methods to the brief, diff and repo",
+      "role": "code_reviewer"
     }
   ],
   "parameters": {
@@ -9749,7 +9785,7 @@ Change a repository until a failing check passes, on a branch of its own, throug
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Change a repository until a failing check passes, on a branch of its own, through the steps any mode that changes a repository attaches (`repo_change`): the example mode authors copy. It opens no pull request; unscored, so not an optimization target.",
-    "reviewed_schema": "e23089c592149082b0c64eb7bda81bd8adde05ee284df5157e7bf8e402de0007"
+    "reviewed_schema": "c23f78ab9a97b32bfc8cc4a9fedcfab5c99092e892c50860f48c6e722385af9d"
   }
 }
 ```
