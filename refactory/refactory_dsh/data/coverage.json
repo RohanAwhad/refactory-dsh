@@ -175,7 +175,7 @@
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
       "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`). The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-      "reviewed_schema": "7f2dc09bd67fe015dc3634bb76796c99c2ae124fa767c63cd9461614a9e79d67"
+      "reviewed_schema": "9968573b30a9449f19c74b0257a7784f302c9a3fda77f02f4d8c39da74e5bc35"
     },
     "default_pack/design_fast": {
       "doc": "refactory/docs/budgets-fast-modes.md",
@@ -204,7 +204,7 @@
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
       "purpose": "Build a small artifact with one sequential strategist, coder and QA agent, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none (`worktree=0` writes .factory/artifacts instead; `source_project` copies a directory there). The check runs in that worktree before focused QA. It has no approval gate, so it opens no pull request: the branch is left for you to push.",
-      "reviewed_schema": "66162b4faf1ab63e0ade74f800b4938223cb57d04186e16a2e6ad5490c0720b2"
+      "reviewed_schema": "e275c6ed9c7e8ece64dd3f20b11a15b75071a4f6f27c59768d372e7bb10ebe36"
     },
     "default_pack/edit": {
       "doc": "refactory/docs/authoring-validation.md",
@@ -264,7 +264,7 @@
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
       "purpose": "Change a repository until a failing check passes, on a branch of its own, through the steps any mode that changes a repository attaches (`repo_change`): the example mode authors copy. It opens no pull request; unscored, so not an optimization target.",
-      "reviewed_schema": "e23089c592149082b0c64eb7bda81bd8adde05ee284df5157e7bf8e402de0007"
+      "reviewed_schema": "c23f78ab9a97b32bfc8cc4a9fedcfab5c99092e892c50860f48c6e722385af9d"
     },
     "java_build_pack/build": {
       "doc": "refactory/docs/concepts.md",

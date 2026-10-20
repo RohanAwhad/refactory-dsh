@@ -7448,7 +7448,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     {
       "condition": "proceed",
       "source": "check",
-      "target": "fork_qa"
+      "target": "verifier"
     },
     {
       "condition": null,
@@ -7536,6 +7536,16 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "target": "synthesize_strategy"
     },
     {
+      "condition": "reloop",
+      "source": "gate_verification",
+      "target": "emit"
+    },
+    {
+      "condition": "proceed",
+      "source": "gate_verification",
+      "target": "fork_qa"
+    },
+    {
       "condition": null,
       "source": "join_qa",
       "target": "synthesize_qa"
@@ -7589,6 +7599,11 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "condition": null,
       "source": "synthesize_strategy",
       "target": "design_doc"
+    },
+    {
+      "condition": null,
+      "source": "verifier",
+      "target": "gate_verification"
     }
   ],
   "gates": [
@@ -7619,6 +7634,10 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     {
       "id": "gate_strategy",
       "user": true
+    },
+    {
+      "id": "gate_verification",
+      "user": false
     }
   ],
   "guidance": "",
@@ -7752,6 +7771,17 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "role": "ceo"
     },
     {
+      "call": "refactory_dsh.design_ops:gate_verification",
+      "gate_kind": "fn",
+      "id": "gate_verification",
+      "kind": "gate",
+      "knobs": [
+        "review_attempts"
+      ],
+      "notes": "proceed on PASS; advisory reloop on FAIL (does not spend review_attempts)",
+      "role": "ceo"
+    },
+    {
       "call": "",
       "id": "health_checker",
       "kind": "agent",
@@ -7868,6 +7898,14 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "knobs": [],
       "notes": "compile the perspectives into one plan",
       "role": "ceo"
+    },
+    {
+      "call": "",
+      "id": "verifier",
+      "kind": "agent",
+      "knobs": [],
+      "notes": "design-blind verification: apply the evidence log's methods to the brief, diff and repo",
+      "role": "code_reviewer"
     }
   ],
   "parameters": {
@@ -8154,7 +8192,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`). The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-    "reviewed_schema": "7f2dc09bd67fe015dc3634bb76796c99c2ae124fa767c63cd9461614a9e79d67"
+    "reviewed_schema": "9968573b30a9449f19c74b0257a7784f302c9a3fda77f02f4d8c39da74e5bc35"
   }
 }
 ```
@@ -8175,7 +8213,7 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
     {
       "condition": null,
       "source": "focused_check",
-      "target": "focused_qa"
+      "target": "verifier"
     },
     {
       "condition": null,
@@ -8203,6 +8241,16 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "target": "report"
     },
     {
+      "condition": "reloop",
+      "source": "gate_verification",
+      "target": "emit"
+    },
+    {
+      "condition": "proceed",
+      "source": "gate_verification",
+      "target": "focused_qa"
+    },
+    {
       "condition": null,
       "source": "materialise",
       "target": "gate_emit"
@@ -8216,6 +8264,11 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "condition": null,
       "source": "strategy",
       "target": "emit"
+    },
+    {
+      "condition": null,
+      "source": "verifier",
+      "target": "gate_verification"
     }
   ],
   "gates": [
@@ -8225,6 +8278,10 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
     },
     {
       "id": "gate_qa",
+      "user": false
+    },
+    {
+      "id": "gate_verification",
       "user": false
     }
   ],
@@ -8283,6 +8340,17 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "role": "ceo"
     },
     {
+      "call": "refactory_dsh.fast_ops:gate_verification",
+      "gate_kind": "fn",
+      "id": "gate_verification",
+      "kind": "gate",
+      "knobs": [
+        "repair_attempts"
+      ],
+      "notes": "proceed on PASS; advisory reloop on FAIL (does not spend repair_attempts); check failures and guardedness blocks via _repair",
+      "role": "ceo"
+    },
+    {
       "call": "refactory_dsh.fast_ops:materialise_artifact",
       "id": "materialise",
       "kind": "op",
@@ -8323,6 +8391,14 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "knobs": [],
       "notes": "one concise strategy, followed by one coder and one QA agent; no parallel workers",
       "role": "strategist"
+    },
+    {
+      "call": "",
+      "id": "verifier",
+      "kind": "agent",
+      "knobs": [],
+      "notes": "design-blind verification: apply the evidence log's methods to the brief, diff and repo",
+      "role": "code_reviewer"
     }
   ],
   "parameters": {
@@ -8500,7 +8576,7 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a small artifact with one sequential strategist, coder and QA agent, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none (`worktree=0` writes .factory/artifacts instead; `source_project` copies a directory there). The check runs in that worktree before focused QA. It has no approval gate, so it opens no pull request: the branch is left for you to push.",
-    "reviewed_schema": "66162b4faf1ab63e0ade74f800b4938223cb57d04186e16a2e6ad5490c0720b2"
+    "reviewed_schema": "e275c6ed9c7e8ece64dd3f20b11a15b75071a4f6f27c59768d372e7bb10ebe36"
   }
 }
 ```
@@ -9550,12 +9626,22 @@ Change a repository until a failing check passes, on a branch of its own, throug
     {
       "condition": "proceed",
       "source": "check",
-      "target": "report"
+      "target": "verifier"
     },
     {
       "condition": null,
       "source": "emit",
       "target": "materialise"
+    },
+    {
+      "condition": "reloop",
+      "source": "gate_verification",
+      "target": "emit"
+    },
+    {
+      "condition": "proceed",
+      "source": "gate_verification",
+      "target": "report"
     },
     {
       "condition": null,
@@ -9566,11 +9652,20 @@ Change a repository until a failing check passes, on a branch of its own, throug
       "condition": null,
       "source": "prepare",
       "target": "emit"
+    },
+    {
+      "condition": null,
+      "source": "verifier",
+      "target": "gate_verification"
     }
   ],
   "gates": [
     {
       "id": "check",
+      "user": false
+    },
+    {
+      "id": "gate_verification",
       "user": false
     }
   ],
@@ -9595,6 +9690,15 @@ Change a repository until a failing check passes, on a branch of its own, throug
       "kind": "agent",
       "knobs": [],
       "notes": "write the fix as blocks in emit.txt",
+      "role": "ceo"
+    },
+    {
+      "call": "refactory_dsh.verification:gate_verification_generic",
+      "gate_kind": "fn",
+      "id": "gate_verification",
+      "kind": "gate",
+      "knobs": [],
+      "notes": "advisory verification gate; always proceeds",
       "role": "ceo"
     },
     {
@@ -9629,6 +9733,14 @@ Change a repository until a failing check passes, on a branch of its own, throug
       "knobs": [],
       "notes": "say which branch holds the fix",
       "role": "ceo"
+    },
+    {
+      "call": "",
+      "id": "verifier",
+      "kind": "agent",
+      "knobs": [],
+      "notes": "design-blind verification: apply the evidence log's methods to the brief, diff and repo",
+      "role": "code_reviewer"
     }
   ],
   "parameters": {
@@ -9773,7 +9885,7 @@ Change a repository until a failing check passes, on a branch of its own, throug
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Change a repository until a failing check passes, on a branch of its own, through the steps any mode that changes a repository attaches (`repo_change`): the example mode authors copy. It opens no pull request; unscored, so not an optimization target.",
-    "reviewed_schema": "e23089c592149082b0c64eb7bda81bd8adde05ee284df5157e7bf8e402de0007"
+    "reviewed_schema": "c23f78ab9a97b32bfc8cc4a9fedcfab5c99092e892c50860f48c6e722385af9d"
   }
 }
 ```

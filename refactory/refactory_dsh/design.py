@@ -271,7 +271,7 @@ class DesignMode(Mode):
                 "'Let me reconsider' or other working-out.\n\n"
                 + design_contract.prompt_contract()
                 + "\n\n"
-                "6. `## Anti-patterns to avoid` (when the research produced pitfalls) — "
+                "9. `## Anti-patterns to avoid` (when the research produced pitfalls) — "
                 "for each pitfall id from the pitfalls analysis, either address it by "
                 "naming the site (a backticked `path:line` from Rule and sites) or the "
                 "section (§ heading name) that handles it, or set it aside with "
@@ -326,7 +326,13 @@ class DesignMode(Mode):
                 "such place; one marked `[left]` without a reason, or one you find that "
                 "the design does not list at all, is BLOCKING.\n"
                 "- A doc that describes the behaviour the design changes, found by "
-                "searching the docs, that the design's '## Docs' section leaves out.\n\n"
+                "searching the docs, that the design's '## Docs' section leaves out.\n"
+                "- A missing ## Failure trace section or a missing ## Ask mapping table.\n"
+                "- A failure trace entry whose cited file:line chain does not match the code "
+                "when you read it.\n"
+                "- An ask in the Ask mapping whose quoted text does not appear verbatim in the brief, "
+                "or whose named test does not exercise the ask.\n"
+                "- An ask in the brief that has no corresponding row in the Ask mapping table.\n\n"
                 "List each finding as a line starting with `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem.\n\n"
                 "End with a line that is exactly `VERDICT: PASS` when there are "
                 "no blocking findings, or `VERDICT: FAIL` when there are any."
@@ -615,6 +621,8 @@ class DesignMode(Mode):
         graph.connect("gate_overwatch", "overwatch", condition="audit")
         graph.connect("gate_overwatch", "report", condition="proceed")
         graph.connect("report", "deliver")
+        from refactory_dsh.verification import wire_verification
+        wire_verification(graph)
         from refactory_dsh.authoring_evidence import wire_reviews
         wire_reviews(graph)
         return graph

@@ -82,7 +82,7 @@ BODY = "pull-request.md"
 
 #: What a run that was approved up front told the person delivery would do, before it
 #: started (:func:`announce`); `prepare` keeps the run to it.
-SHOWN = Path(".refactory") / "delivery-shown.json"
+from refactory_dsh.invocations import DELIVERY_SHOWN as SHOWN  # was: SHOWN = Path(…)
 
 #: The visibilities a new repository may have. Private unless the person says otherwise.
 VISIBILITIES = ("private", "internal", "public")
@@ -1545,8 +1545,8 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
         f"## Verification\n\n"
         f"- **Check:** `{check_cmd}` passed in the run's worktree.\n"
         + command_corrections
-        + "- **Reviews:** the health check, code review and QA found nothing blocking, "
-        "and the overwatch audit passed.\n"
+        + "- **Reviews:** the health check, code review, independent verification and QA "
+        "found nothing blocking, and the overwatch audit passed.\n"
         + _base_evidence(ctx)
         + f"- **Base:** `{found.base[:12]}`, with {attempts} attempt commit(s) on `{found.branch}`.\n"
         + merge_line
@@ -1569,6 +1569,20 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
             f"because the run was converging (failure counts at granted attempts: "
             f"{', '.join(granted_counts) if granted_counts else 'n/a'})."
         )
+    # Add planning model info if available.
+    report_data = ctx.read_json("design.json", None) if ctx.exists("design.json") else None
+    if isinstance(report_data, dict):
+        planning_models = report_data.get("planning_models", {})
+        if planning_models:
+            model_lines = []
+            for node_name, model_name in sorted(planning_models.items()):
+                model_lines.append(f"`{node_name}`: `{model_name or 'default'}`")
+            verification += "\n- **Planning models:** " + ", ".join(model_lines) + ".\n"
+    # Add unresolved verification findings if present.
+    if ctx.exists("reviews/verification-unresolved.md"):
+        unresolved = ctx.read_text("reviews/verification-unresolved.md").strip()
+        if unresolved:
+            verification += "\n- **Unresolved verification findings:**\n" + unresolved + "\n"
     verification += _process_notes_section(ctx)
     sections.append(verification)
     sections.append(f"## Original request\n\n{brief}")

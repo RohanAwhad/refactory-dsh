@@ -47,18 +47,7 @@ def survey_package(ctx: Any) -> dict[str, Any]:
                        if selected else "No reference package requested; implement from the supplied API and brief.")}
 
 
-def _source_manifest(root: Path) -> dict[str, str]:
-    ignored = {".git", ".factory", ".venv", "node_modules", "__pycache__", ".pytest_cache"}
-    result = {}
-    for path in sorted(root.rglob("*")):
-        relative = path.relative_to(root)
-        if any(part in ignored or part.startswith(".env") for part in relative.parts):
-            continue
-        if path.is_symlink():
-            raise ValueError(f"source project contains a symlink: {relative}; use an explicit plain-file source")
-        if path.is_file():
-            result[str(relative)] = hashlib.sha256(path.read_bytes()).hexdigest()
-    return result
+from refactory_dsh.paths import _source_manifest  # moved to paths.py; re-exported for callers  # noqa: E402
 
 
 def prepare_artifact(ctx: Any) -> dict[str, Any]:
@@ -271,6 +260,21 @@ def focused_check(ctx: Any) -> dict[str, Any]:
             guardedness = {"unavailable": f"the new tests could not be run on the base: {exc}"}
         if guardedness is not None:
             ctx.write_json("test-guardedness.json", guardedness)
+    # ── enforce test guardedness in fast mode (R3, #384 item 1) ──
+    from refactory_dsh.design_ops import enforce_guardedness
+    if payload.get("status") != "fail" and ctx.facts.get("artifact") and worktree.recorded(ctx.workdir) is not None:
+        unexempted = enforce_guardedness(ctx)
+        if unexempted:
+            detail = (
+                "BLOCKING: these new tests pass without the change: "
+                + ", ".join(unexempted)
+                + ". Make them fail without the change, or explain in the "
+                "PR why each test pins existing behaviour."
+            )
+            ctx.write_text("check.txt", detail + "\n")
+            payload["guardedness_blocked"] = True
+            ctx.write_json("focused-check.json", payload)
+
     if payload["status"] == "fail":
         detail = f"requested runtime check failed (exit {payload.get('returncode')}): {payload.get('stderr') or payload.get('stdout')}"
         kind = evidence.check_failure_kind(result, budget=getattr(ctx, "budget", None))
@@ -311,6 +315,18 @@ def focused_check(ctx: Any) -> dict[str, Any]:
                 if unbuilt_msg:
                     ctx.write_text("check.txt", f"(the check passed; inherited failures excused)\n\n{unbuilt_msg}\n")
                 ctx.write_json("focused-check.json", payload)
+                # ── enforce guardedness on excused pass too (R3) ──
+                unexempted = enforce_guardedness(ctx)
+                if unexempted:
+                    detail = (
+                        "BLOCKING: these new tests pass without the change: "
+                        + ", ".join(unexempted)
+                        + ". Make them fail without the change, or explain in the "
+                        "PR why each test pins existing behaviour."
+                    )
+                    ctx.write_text("check.txt", detail + "\n")
+                    payload["guardedness_blocked"] = True
+                    ctx.write_json("focused-check.json", payload)
             else:
                 # New failures exist — wire unbuilt diagnosis the same way
                 # as design_ops.check_artifact does.
@@ -495,6 +511,56 @@ def report_package(ctx: Any) -> dict[str, Any]:
     payload["fast"] = report
     ctx.write_json("create.json", payload)
     return {"created": json.dumps(payload)}
+
+
+def gate_verification(ctx: Any) -> str:
+    """Proceed when the verifier finds no blocking issues; reloop to emit otherwise.
+
+    Handles three cases from focused_check (an op node that cannot return Verdicts):
+
+    1. **Check failure** — the check failed; route to _repair with the check
+       failure detail so a repair_attempts slot is spent and emit receives the
+       check failure (not the verifier's noise).
+    2. **Guardedness block** — new tests pass on the base; route to _repair
+       with kind='check'.
+    3. **Verifier findings** — advisory reloop that does NOT spend
+       repair_attempts.  After ``VERIFIER_GATE_LIMIT`` advisory reloops the
+       gate proceeds and records unresolved findings in
+       ``reviews/verification-unresolved.md``.
+    """
+    from refactory_dsh.verification import VERIFIER_GATE_LIMIT, parse_verification_findings
+
+    check_data = ctx.read_json("focused-check.json", {})
+
+    # 1. Check failure → _repair (spends a repair_attempts slot).
+    if check_data.get("status") == "fail":
+        check_output = check_data.get("stderr") or check_data.get("stdout") or ""
+        detail = f"requested runtime check failed (exit {check_data.get('returncode')}): {check_output}"
+        return _repair(ctx, [detail.strip()], kind="check")
+
+    # 2. Guardedness block → _repair (spends a repair_attempts slot).
+    if check_data.get("guardedness_blocked"):
+        detail = ctx.read_text("check.txt") if ctx.exists("check.txt") else "non-guarding tests"
+        return _repair(ctx, [detail.strip()], kind="check")
+
+    # 3. Verifier findings — advisory, never spend repair_attempts.
+    findings = parse_verification_findings(ctx)
+    if not findings:
+        return "proceed"
+
+    feedback = "\n".join(findings)
+
+    used = int(ctx.facts.get("verification_iterations_used", 0))
+    ctx.set_fact("verification_iterations_used", used + 1)
+
+    if used + 1 >= VERIFIER_GATE_LIMIT:
+        # Proceed with unresolved findings — never end a run on verifier noise.
+        ctx.write_text("reviews/verification-unresolved.md", feedback + "\n")
+        return "proceed"
+
+    ctx.write_text("repair.txt", feedback + "\n")
+    ctx.set_fact("repair_feedback", feedback)
+    return Verdict("reloop", feedback)
 
 
 def report_artifact(ctx: Any) -> dict[str, Any]:

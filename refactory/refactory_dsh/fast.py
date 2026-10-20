@@ -84,8 +84,8 @@ def _qa_nodes(graph: Graph, *, artifact: bool) -> None:
         resource_role="final_validation",
         knobs=("check", "check_timeout_s", "check_attempt_cap"),
         reads=("emit.txt",) + (() if artifact else ("authoring-evidence.json", "smoke.json")),
-        writes=("focused-check.json", "focused-source.json", "authoring-evidence.json", "check.txt")
-               + (repo_change.CHECK_WRITES if artifact else ()),
+        writes=("focused-check.json", "focused-source.json", "authoring-evidence.json")
+               + (("check.txt", *repo_change.CHECK_WRITES) if artifact else ()),
         produces=("focused_check", "output_path", "review_files", "runtime_evidence",
                   "base_unavailable",
                   "check_failures_history",
@@ -311,6 +311,8 @@ class DesignFastMode(DesignMode):
             notes="send an emission materialise could not apply back to emit, within the repair bound",
         ))
         _qa_nodes(graph, artifact=True)
+        from refactory_dsh.verification import wire_verification
+        wire_verification(graph, fast=True)
         graph.add(Node(
             "report", "op", call=f"{OPS}:report_artifact", resource_role="final_validation",
             reads=("focused-qa.json", "focused-check.json"), writes=("design.json", "fast-report.json"),

@@ -268,6 +268,20 @@ def gate_design_review(ctx: Any) -> str:
                 "the design's title is the run name; it must say what the change does"
             )
 
+    # ── mechanical check 3a: failure trace section ──
+    if design_text:
+        if not design_contract.has_non_empty_section(design_text, design_contract.FAILURE_TRACE):
+            problems.append(
+                "the design is missing the required ## Failure trace section (or it is empty)"
+            )
+
+    # ── mechanical check 3b: ask mapping section ──
+    if design_text:
+        if not design_contract.has_non_empty_section(design_text, design_contract.ASK_MAPPING):
+            problems.append(
+                "the design is missing the required ## Ask mapping table (or it is empty)"
+            )
+
     # ── mechanical check 4: pitfall coverage ──
     has_pitfalls = ctx.facts.get("has_pitfalls_step", False)
     if has_pitfalls:
@@ -429,6 +443,17 @@ def check_artifact(ctx: Any) -> str:
     ctx.set_fact("base_unavailable", "")
 
     if result.ok:
+        # ── enforce test guardedness (R3, #384 item 1) ──
+        unexempted = enforce_guardedness(ctx)
+        if unexempted:
+            detail = (
+                "BLOCKING: these new tests pass without the change: "
+                + ", ".join(unexempted)
+                + ". Make them fail without the change, or explain in the "
+                "PR why each test pins existing behaviour."
+            )
+            ctx.write_text("check.txt", detail + "\n")
+            return repair(ctx, [detail])
         ctx.set_fact("validation", "(the check passed)")
         return "proceed"
 
@@ -480,6 +505,17 @@ def check_artifact(ctx: Any) -> str:
             outcome["inherited_failures"] = sorted(filtered.inherited)
             ctx.set_fact("inherited_failures", sorted(filtered.inherited))
             evidence.record(ctx, outcome)
+            # ── enforce test guardedness on excused pass too (R3) ──
+            unexempted = enforce_guardedness(ctx)
+            if unexempted:
+                detail = (
+                    "BLOCKING: these new tests pass without the change: "
+                    + ", ".join(unexempted)
+                    + ". Make them fail without the change, or explain in the "
+                    "PR why each test pins existing behaviour."
+                )
+                ctx.write_text("check.txt", detail + "\n")
+                return repair(ctx, [detail])
             return "proceed"
         if filtered.new_failures and filtered.inherited:
             detail = filtered.new_failure_detail
@@ -562,6 +598,131 @@ def check_artifact(ctx: Any) -> str:
     return repair(ctx, [detail])
 
 
+def gate_verification(ctx: Any) -> str:
+    """Proceed when the verifier finds no blocking issues; reloop to emit otherwise.
+
+    Verifier findings do NOT spend ``review_attempts``: the verifier's noise
+    is unmeasured, so it must not end a run on its own.  The gate tracks its
+    own iteration count via ``verification_iterations_used`` and proceeds
+    after ``VERIFIER_GATE_LIMIT`` advisory reloops, recording unresolved
+    findings in ``reviews/verification-unresolved.md`` for the reviews,
+    overwatch audit and PR Verification section.
+    """
+    from refactory_dsh.verification import VERIFIER_GATE_LIMIT, parse_verification_findings
+
+    findings = parse_verification_findings(ctx)
+    if not findings:
+        ctx.write_text("reviews/verification-gate.txt", "proceed: no blocking finding\n")
+        return "proceed"
+
+    feedback = "\n".join(findings)
+    ctx.write_text("reviews/verification-gate.txt", feedback + "\n")
+
+    used = int(ctx.facts.get("verification_iterations_used", 0))
+    ctx.set_fact("verification_iterations_used", used + 1)
+
+    if used + 1 >= VERIFIER_GATE_LIMIT:
+        # Proceed with unresolved findings — never end a run on verifier noise.
+        ctx.write_text("reviews/verification-unresolved.md", feedback + "\n")
+        return "proceed"
+
+    ctx.write_text("validation.txt", feedback + "\n")
+    ctx.set_fact("validation", feedback)
+    return Verdict("reloop", feedback)
+
+
+def enforce_guardedness(ctx: Any) -> list[str]:
+    """Return the names of non-guarding **added** tests that are not exempted.
+
+    Only added test files (not modified ones) are enforced, as the brief
+    says "a new test".  Exemptions come from two sources:
+
+    1. design.md's ``## Test guardedness exemptions`` section (full mode).
+    2. A ``# guardedness-exempt: <reason>`` comment in the test file itself
+       (works in both full and fast mode, since fast has no design.md).
+
+    ``cannot_run_on_base`` files (collection error on the base, typically
+    because they import newly-added code) are excluded: they are not
+    "passing without the change".
+
+    When no guardedness record exists, the caller should note it in the
+    check record.
+    """
+    if not ctx.exists("test-guardedness.json"):
+        return []
+    guardedness = ctx.read_json("test-guardedness.json", {})
+    if "unavailable" in guardedness:
+        return []
+    summary = guardedness.get("summary", {})
+    if summary.get("not_guarding", 0) == 0:
+        return []
+
+    # Determine which test files were ADDED (not modified).
+    added_files: set[str] | None = None
+    try:
+        from refactory_dsh import worktree
+        found = worktree.recorded(ctx.workdir)
+        if found is not None:
+            added_raw = worktree.git(
+                Path(found.path), "diff", "--name-only", "--diff-filter=A",
+                found.base, "HEAD",
+            )
+            added_files = set(f.strip() for f in added_raw.splitlines() if f.strip())
+    except (ValueError, OSError, AttributeError):
+        pass  # If we can't determine, enforce on all (conservative)
+
+    # Collect non-guarding test file paths — only ADDED files.
+    non_guarding = []
+    for result in guardedness.get("results", []):
+        if result.get("guarding") is False and result.get("file_level") != "cannot_run_on_base":
+            tf = result.get("file", "unknown")
+            if added_files is not None and tf not in added_files:
+                continue  # Modified file, not a new test — skip
+            non_guarding.append(tf)
+
+    if not non_guarding:
+        return []
+
+    # Read exemptions from design.md (full mode).
+    design_text = ctx.read_text("design.md") if ctx.exists("design.md") else ""
+    exempted: set[str] = set()
+    in_section = False
+    for line in design_text.splitlines():
+        stripped = line.strip()
+        if stripped.lower() == "## test guardedness exemptions":
+            in_section = True
+            continue
+        if in_section and stripped.startswith("## "):
+            break
+        if in_section and (stripped.startswith("- ") or stripped.startswith("* ")):
+            bullet_text = stripped[2:].strip()
+            m = _re.match(r'`([^`]+)`', bullet_text)
+            if m:
+                exempted.add(m.group(1).strip())
+            else:
+                idx = bullet_text.find(' — ')
+                exempted.add(bullet_text[:idx].strip() if idx >= 0 else bullet_text.split()[0] if bullet_text else "")
+
+    # Read marker exemptions from the test files themselves.
+    try:
+        from refactory_dsh import worktree as _wt
+        found = _wt.recorded(ctx.workdir)
+        if found is not None:
+            for tf in non_guarding:
+                tf_path = Path(found.path) / tf
+                if tf_path.is_file():
+                    try:
+                        content = tf_path.read_text(errors="replace")
+                        if _re.search(r'#\s*guardedness-exempt:', content):
+                            exempted.add(tf)
+                    except OSError:
+                        pass
+    except (ValueError, AttributeError):
+        pass
+
+    return [t for t in non_guarding if t not in exempted]
+
+
 def report_artifact(ctx: Any) -> dict[str, Any]:
     """Say what was produced, so a run's output is discoverable rather than inferred."""
     from refactory_dsh.authoring_evidence import require_completion
@@ -573,6 +734,28 @@ def report_artifact(ctx: Any) -> dict[str, Any]:
     require_completion(ctx)
     ev = ctx.read_json("authoring-evidence.json", None)
     audit = ctx.read_json("intent-audit.json", None)
+    # Collect planning model info from worker receipts (R5).
+    # Sort by modification time so the latest receipt for each node wins.
+    planning_models: dict[str, str | None] = {}
+    workers_dir = ctx.workdir / ".refactory" / "workers"
+    if workers_dir.is_dir():
+        try:
+            receipt_files = sorted(
+                (f for f in workers_dir.iterdir() if f.suffix == ".json"),
+                key=lambda f: f.stat().st_mtime,
+            )
+        except OSError:
+            receipt_files = []
+        for wf in receipt_files:
+            try:
+                rec = json.loads(wf.read_text())
+                nid = rec.get("node_id", "")
+                if nid in ("design_doc", "design_review"):
+                    route = rec.get("actual_route") or rec.get("requested_route") or {}
+                    planning_models[nid] = route.get("model") or None
+            except (json.JSONDecodeError, OSError):
+                pass
+
     report_payload: dict[str, Any] = {
         "name": ctx.facts.get("name"),
         "artifact": ctx.facts.get("artifact"),
@@ -582,6 +765,8 @@ def report_artifact(ctx: Any) -> dict[str, Any]:
         "validation_evidence": ev,
         "intent_audit": audit,
     }
+    if planning_models:
+        report_payload["planning_models"] = planning_models
     # Surface process notes with their followed/not-followed statement.
     process_notes = (ev or {}).get("process_notes", [])
     if process_notes:
