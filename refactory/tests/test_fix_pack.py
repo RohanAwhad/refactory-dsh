@@ -17,7 +17,7 @@ import pytest
 
 from refactory_dsh import nn, registry, repo_change, worktree
 from refactory_dsh.paths import REPO_ROOT
-from tests_support import FakeModel, git, git_repo, render, stub
+from tests_support import FakeModel, VERIFICATION_ANSWER, git, git_repo, render, stub
 
 CHECK = 'python -c "from app import answer; assert answer() == 42, answer()"'
 
@@ -46,7 +46,11 @@ def _run(workdir: Path, *emits: str, **knobs):
         else:
             state["knobs"][name]["value"] = value
     mode.load_state_dict(state)
-    model = FakeModel(list(emits))
+    # The verifier runs once after the final passing check, so append one
+    # VERIFICATION_ANSWER at the end.  Failed-check reloops go back to emit
+    # without reaching the verifier, so earlier emits consume their answers
+    # directly.
+    model = FakeModel([*emits, VERIFICATION_ANSWER])
     return mode.run(workdir, model=model, task=task), model
 
 
@@ -68,7 +72,15 @@ def test_a_fix_lands_on_the_runs_branch_and_the_checkout_is_left_alone(repo, tmp
     assert git(repo, "show", f"{payload['branch']}:app.py") == "def answer():\n    return 42"
     assert git(repo, "rev-list", "--count", f"{head}..{payload['branch']}") == "2"
     assert (git(repo, "rev-parse", "HEAD"), (repo / "app.py").read_text()) == (head, "def answer():\n    return 41\n")
-    assert "AssertionError: 43" in model.prompts[1], "the retry is told what the check said"
+    assert "AssertionError: 43" in model.prompts[1], "the retry prompt is told what the check said"
+
+
+def test_fix_pack_has_verifier_node():
+    """fix_pack's graph includes the verifier and gate_verification nodes."""
+    mode = registry.resolve(REPO_ROOT, "fix_pack/make_pass")[1]()
+    graph = mode.graph()
+    assert "verifier" in graph.nodes, "fix_pack must have the verifier"
+    assert "gate_verification" in graph.nodes
 
 
 def test_the_lockfile_an_install_writes_is_part_of_the_fix(repo, tmp_path, monkeypatch):
@@ -98,15 +110,28 @@ def test_the_generate_command_amends_its_changes_into_the_fix(repo, tmp_path):
 
 
 def test_an_emission_that_cannot_be_applied_goes_back_to_emit(repo, tmp_path):
-    result, model = _run(tmp_path / "run", _edit("app.py", "    return 40\n", "    return 42\n"),
-                         _edit("app.py", "    return 41\n", "    return 42\n"), target=str(repo))
+    # Refused emissions reloop to emit without reaching the verifier, so
+    # VERIFICATION_ANSWER is needed only once, after the final passing check.
+    mode = registry.resolve(REPO_ROOT, "fix_pack/make_pass")[1]()
+    task = {"check": CHECK, "target": str(repo)}
+    model = FakeModel([
+        _edit("app.py", "    return 40\n", "    return 42\n"),  # refused
+        _edit("app.py", "    return 41\n", "    return 42\n"),  # succeeds
+        VERIFICATION_ANSWER,
+    ])
+    result = mode.run(tmp_path / "run", model=model, task=task)
     assert result.exit_ok, result.error
     assert "materialise could not apply emit.txt" in model.prompts[1]
 
 
 def test_the_attempts_knob_bounds_the_tries(repo, tmp_path):
-    result, _ = _run(tmp_path / "run", _edit("app.py", "    return 41\n", "    return 43\n"),
-                     target=str(repo), attempts=1)
+    mode = registry.resolve(REPO_ROOT, "fix_pack/make_pass")[1]()
+    state = mode.state_dict()
+    state["knobs"]["attempts"]["value"] = 1
+    task = {"check": CHECK, "target": str(repo)}
+    mode.load_state_dict(state)
+    model = FakeModel([_edit("app.py", "    return 41\n", "    return 43\n"), VERIFICATION_ANSWER])
+    result = mode.run(tmp_path / "run", model=model, task=task)
     assert not result.exit_ok
     assert "the check still fails after 1 attempt(s)" in str(result.error)
 
@@ -121,8 +146,13 @@ def test_a_name_that_is_not_one_directory_is_refused_before_anything_is_made(rep
 
 def test_with_its_worktree_off_it_writes_the_artifact_directory(tmp_path, monkeypatch):
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path / "project"))
-    result, _ = _run(tmp_path / "run", render({"app.py": "def answer():\n    return 42\n"}),
-                     name="answer", worktree=False)
+    mode = registry.resolve(REPO_ROOT, "fix_pack/make_pass")[1]()
+    state = mode.state_dict()
+    state["knobs"]["worktree"]["value"] = False
+    state["knobs"]["name"]["value"] = "answer"
+    mode.load_state_dict(state)
+    model = FakeModel([render({"app.py": "def answer():\n    return 42\n"}), VERIFICATION_ANSWER])
+    result = mode.run(tmp_path / "run", model=model, task={"check": CHECK})
     assert result.exit_ok, result.error
     assert result.facts["artifact"] == str((tmp_path / "project" / repo_change.ARTIFACTS / "answer").resolve())
     assert not worktree.root().exists()
