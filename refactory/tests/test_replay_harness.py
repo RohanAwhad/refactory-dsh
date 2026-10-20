@@ -17,41 +17,43 @@ def test_fixture_entries_have_required_fields():
     assert len(entries) >= 3
     for entry in entries:
         for field in ("id", "brief", "gap_description", "method", "diff",
-                      "expected_finding_pattern"):
+                      "expected_finding_pattern", "pre_fix_commit"):
             assert field in entry, f"entry {entry.get('id', '?')} missing {field}"
 
 
 def test_replay_one_found():
     entry = {
-        "id": "EL-001",
-        "brief": "Add a --timeout flag to the CLI that caps how long a command runs",
-        "gap_description": "negative timeout values are silently accepted",
+        "id": "2",
+        "brief": "Make the design gate reject rule-site lines that have no [changed] or [left] marker",
+        "gap_description": "A rule site with no marker counted as changed",
         "method": "M1",
-        "diff": "--- a/cli.py\n+++ b/cli.py\n@@ -10,0 +11,5 @@\n+    parser.add_argument('--timeout', type=int, default=30)\n",
-        "expected_finding_pattern": "negative timeout",
+        "pre_fix_commit": "918151f1e4",
+        "diff": "--- a/refactory/refactory_dsh/design_ops.py\n+++ b/refactory/refactory_dsh/design_ops.py\n",
+        "expected_finding_pattern": "marker",
     }
 
-    def verifier(brief, diff):
-        return ["BLOCKING: cli.py:11: negative timeout values accepted"]
+    def verifier(brief, diff, repo_path=None):
+        return ["BLOCKING: design_ops.py:245: a site with no marker is accepted"]
 
     result = replay_one(entry, verifier)
     assert result.found is True
     assert result.noise_count == 0
-    assert result.entry_id == "EL-001"
+    assert result.entry_id == "2"
     assert result.method == "M1"
 
 
 def test_replay_one_missed():
     entry = {
-        "id": "EL-002",
-        "brief": "Rename the export_data function to export_records everywhere",
-        "gap_description": "a call site in utils/legacy.py still uses export_data",
-        "method": "M3",
-        "diff": "--- a/core.py\n+++ b/core.py\n@@ -5 +5 @@\n-def export_data(items):\n+def export_records(items):\n",
-        "expected_finding_pattern": "export_data",
+        "id": "21",
+        "brief": "A mode that declares a required brief must refuse to start when the brief is missing or empty",
+        "gap_description": "Run start accepted empty string as a valid brief",
+        "method": "M13",
+        "pre_fix_commit": "fcb2517800",
+        "diff": "--- a/refactory/refactory_dsh/interactive.py\n+++ b/refactory/refactory_dsh/interactive.py\n",
+        "expected_finding_pattern": "empty",
     }
 
-    def verifier(brief, diff):
+    def verifier(brief, diff, repo_path=None):
         return []  # missed the gap
 
     result = replay_one(entry, verifier)
@@ -61,18 +63,19 @@ def test_replay_one_missed():
 
 def test_replay_one_noise():
     entry = {
-        "id": "EL-001",
-        "brief": "Add a --timeout flag",
-        "gap_description": "negative timeout values",
+        "id": "2",
+        "brief": "Make the design gate reject rule-site lines that have no [changed] or [left] marker",
+        "gap_description": "unmarked sites accepted",
         "method": "M1",
+        "pre_fix_commit": "918151f1e4",
         "diff": "...",
-        "expected_finding_pattern": "negative timeout",
+        "expected_finding_pattern": "marker",
     }
 
-    def verifier(brief, diff):
+    def verifier(brief, diff, repo_path=None):
         return [
-            "BLOCKING: cli.py:11: negative timeout values accepted",
-            "BLOCKING: cli.py:15: spurious noise finding",
+            "BLOCKING: design_ops.py:245: a site with no marker is accepted",
+            "BLOCKING: design_ops.py:250: spurious noise finding",
         ]
 
     result = replay_one(entry, verifier)
@@ -83,40 +86,39 @@ def test_replay_one_noise():
 def test_replay_all_counts():
     entries = json.loads(FIXTURES_PATH.read_text())
 
-    def mock_verifier(brief, diff):
-        if "timeout" in brief.lower():
+    def mock_verifier(brief, diff, repo_path=None):
+        if "design gate" in brief.lower():
             return [
-                "BLOCKING: cli.py:11: negative timeout values accepted",
-                "BLOCKING: cli.py:15: spurious noise finding",
+                "BLOCKING: design_ops.py:245: a site with no marker is accepted",
+                "BLOCKING: design_ops.py:250: spurious noise finding",
             ]
-        if "rename" in brief.lower():
-            return ["BLOCKING: utils/legacy.py:3: still uses export_data"]
+        if "base commit" in brief.lower():
+            return ["BLOCKING: base_check.py:580: partial parse results accepted"]
         return []  # miss
 
     summary = replay_all(entries, mock_verifier)
     assert summary.found == 2
     assert summary.missed == 1
-    assert summary.noise == 1  # noise finding on entry 0
+    assert summary.noise == 1  # noise finding on entry 2
     assert summary.total_entries == 3
 
 
 def test_per_method_breakdown():
     entries = json.loads(FIXTURES_PATH.read_text())
 
-    def mock_verifier(brief, diff):
-        if "timeout" in brief.lower():
-            return ["BLOCKING: negative timeout"]
+    def mock_verifier(brief, diff, repo_path=None):
+        if "design gate" in brief.lower():
+            return ["BLOCKING: marker issue"]
         return []
 
     summary = replay_all(entries, mock_verifier)
     assert "M1" in summary.per_method
-    assert "M3" in summary.per_method
     assert "M13" in summary.per_method
 
 
 def test_replay_summary_shape():
     entries = json.loads(FIXTURES_PATH.read_text())
-    summary = replay_all(entries, lambda b, d: [])
+    summary = replay_all(entries, lambda b, d, r=None: [])
     assert isinstance(summary, ReplaySummary)
     assert summary.total_entries == len(entries)
     assert summary.found + summary.missed == summary.total_entries

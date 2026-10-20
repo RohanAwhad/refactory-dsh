@@ -35,6 +35,9 @@ class FakeCtx:
     def write_text(self, name, text):
         self._files[name] = text
 
+    def write_json(self, name, data):
+        self._files[name] = json.dumps(data)
+
     def set_fact(self, name, value):
         self.facts[name] = value
 
@@ -144,3 +147,58 @@ def test_guardedness_enforced_in_check_artifact():
     assert "enforce_guardedness" in source, (
         "check_artifact must call enforce_guardedness"
     )
+
+
+def test_guardedness_enforced_in_focused_check():
+    """Verify that focused_check calls enforce_guardedness for detection.
+
+    focused_check is an op node and cannot return a Verdict to reloop,
+    so it detects non-guarding tests and records guardedness_blocked in
+    focused-check.json. gate_verification (the first gate after focused_check)
+    reads the flag and does the actual reloop.
+    """
+    from refactory_dsh import fast_ops
+    import inspect
+    source = inspect.getsource(fast_ops.focused_check)
+    assert "enforce_guardedness" in source, (
+        "focused_check must call enforce_guardedness for detection"
+    )
+    assert "guardedness_blocked" in source, (
+        "focused_check must set guardedness_blocked in the payload"
+    )
+
+
+def test_guardedness_enforcement_routed_through_gate_verification_fast():
+    """gate_verification in fast_ops enforces guardedness via the guardedness_blocked flag.
+
+    focused_check is an op node whose Verdict returns are silently ignored by the
+    executor, so the actual reloop happens in gate_verification — the first gate
+    node after focused_check in the fast-mode pipeline.
+    """
+    from refactory_dsh import fast_ops
+    import inspect
+    source = inspect.getsource(fast_ops.gate_verification)
+    assert "guardedness_blocked" in source, (
+        "gate_verification must check guardedness_blocked from focused-check.json"
+    )
+
+
+def test_gate_verification_fast_blocks_on_guardedness():
+    """gate_verification in fast mode returns reloop when guardedness is blocked."""
+    from refactory_dsh.fast_ops import gate_verification
+
+    ctx = FakeCtx(
+        files={
+            "focused-check.json": json.dumps({
+                "status": "pass",
+                "guardedness_blocked": True,
+            }),
+            "check.txt": "BLOCKING: these new tests pass without the change: test_foo.py",
+            "reviews/verification.md": "No blocking findings.\n\nVERDICT: PASS",
+        }
+    )
+    ctx._knobs = {"repair_attempts": "2"}
+    result = gate_verification(ctx)
+    assert isinstance(result, Verdict)
+    assert str(result) == "reloop"
+    assert "test_foo.py" in result.reason

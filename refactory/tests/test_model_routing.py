@@ -107,3 +107,76 @@ def test_delivery_body_includes_planning_models():
     assert "planning_models" in source, (
         "delivery must render planning_models in the PR verification"
     )
+
+
+def test_run_records_planning_models(tmp_path, monkeypatch):
+    """A scripted run with worker receipts records planning_models in design.json.
+
+    Without the fix, report_artifact would not read worker receipts at all,
+    so design.json would never contain planning_models.
+    """
+    monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
+    from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+                               PITFALLS_ANSWER, RESEARCH_ANSWER,
+                               VERIFICATION_ANSWER,
+                               REVIEW_ANSWERS, FakeModel, render)
+
+    class _NodeClient:
+        """Thin per-node wrapper that creates worker receipts for planning nodes."""
+        def __init__(self, parent, node_id, route):
+            self._parent = parent
+            self._node_id = node_id
+            self._route = route
+
+        def complete(self, prompt, *, system="", workdir=None):
+            answer = self._parent.complete(prompt, system=system, workdir=workdir)
+            if workdir is not None and self._node_id in ("design_doc", "design_review"):
+                from pathlib import Path as P
+                workers_dir = P(workdir) / ".refactory" / "workers"
+                workers_dir.mkdir(parents=True, exist_ok=True)
+                receipt = {
+                    "schema_version": 1, "node_id": self._node_id,
+                    "actual_route": self._route, "state": "completed",
+                }
+                (workers_dir / f"worker-{self._node_id}.json").write_text(
+                    json.dumps(receipt))
+            return answer
+
+        def context(self):
+            return {}
+
+        def route(self):
+            return {"worker_backend": "dsh"}
+
+    class RoutedModel(FakeModel):
+        """FakeModel that supports for_node and creates worker receipts."""
+        def __init__(self, answers, node_routes=None):
+            super().__init__(answers)
+            self._node_routes = node_routes or {}
+
+        def for_node(self, node_id, role=""):
+            return _NodeClient(self, node_id, self._node_routes.get(node_id, {}))
+
+    answers = [
+        RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
+        DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+        render({"tool.py": "print('built')\n"}),
+        VERIFICATION_ANSWER,
+        *REVIEW_ANSWERS,
+    ]
+    routes = {
+        "design_doc": {"model": "test-strong-model"},
+        "design_review": {"model": "test-strong-model"},
+    }
+    result = DesignMode().run(
+        tmp_path / "run", model=RoutedModel(answers, node_routes=routes),
+        verdicts={"gate_strategy": "proceed"},
+        task={"name": "routing_test", "brief": "a tool", "check": "python tool.py"},
+    )
+    assert result.exit_ok, result.error
+    report = json.loads((tmp_path / "run" / "design.json").read_text())
+    assert "planning_models" in report, (
+        "report must include planning_models from worker receipts"
+    )
+    assert report["planning_models"]["design_doc"] == "test-strong-model"
+    assert report["planning_models"]["design_review"] == "test-strong-model"

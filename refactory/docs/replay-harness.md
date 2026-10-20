@@ -6,8 +6,13 @@ a set of known gaps that reviews missed, each with the method that found it.
 ## Running
 
 ```bash
-python -m refactory_dsh.replay_harness --evidence entries.json --output baseline.json
+python -m refactory_dsh.replay_harness --evidence entries.json --output baseline.json --repo /path/to/repo
 ```
+
+The `--repo` argument names the repository to create temporary worktrees from
+each entry's `pre_fix_commit`. The harness checks out each commit, passes the
+worktree path to the verifier as its third argument, and removes the worktree
+afterwards. Entries whose commit is not reachable are skipped with a message.
 
 ### Input format
 
@@ -15,10 +20,11 @@ The `--evidence` file is a JSON array of entries. Each entry must have:
 
 | Field | Type | Description |
 |---|---|---|
-| `id` | string | Unique entry identifier (e.g. `EL-001`) |
+| `id` | string | Unique entry identifier from the evidence log (e.g. `2`, `5`) |
 | `brief` | string | The original request / brief text |
 | `gap_description` | string | What the gap is |
 | `method` | string | The method that found it (e.g. `M1`, `M3`) |
+| `pre_fix_commit` | string | The commit hash before the fix was applied |
 | `diff` | string | The diff from the pre-fix commit |
 | `expected_finding_pattern` | string | Substring to match in verifier findings |
 
@@ -59,7 +65,8 @@ baseline is produced after merge by running:
 ```bash
 python -m refactory_dsh.replay_harness \
   --evidence refactory/tests/fixtures/evidence_log_entries.json \
-  --output refactory/tests/fixtures/verifier_baseline.json
+  --output refactory/tests/fixtures/verifier_baseline.json \
+  --repo .
 ```
 
 Record the result on #400. Reviewers must not block on its absence.

@@ -5,7 +5,7 @@ brief, diff and repository, and report how many known gaps it finds and how many
 findings were noise.
 
 Usage:
-    python -m refactory_dsh.replay_harness [--evidence PATH] [--output PATH]
+    python -m refactory_dsh.replay_harness [--evidence PATH] [--output PATH] [--repo PATH]
 
 A post-build verifier does not cover gaps found at a design gate (which have no
 diff to verify).
@@ -45,13 +45,15 @@ def replay_one(entry: dict, verifier_fn: Callable) -> ReplayResult:
     ``entry`` must have: id, brief, gap_description, method, diff,
     expected_finding_pattern.
 
-    ``verifier_fn(brief, diff) -> list[str]`` returns blocking findings.
+    ``verifier_fn(brief, diff, repo_path) -> list[str]`` returns blocking findings.
+    ``repo_path`` is the path to a worktree checked out at the pre-fix commit,
+    or None when no worktree is available (e.g. in unit tests).
 
     Scoring: ``found`` is True when any finding contains the
     ``expected_finding_pattern`` (case-insensitive substring match).
     ``noise_count`` counts findings that do NOT match the pattern.
     """
-    findings = verifier_fn(entry["brief"], entry["diff"])
+    findings = verifier_fn(entry["brief"], entry["diff"], entry.get("repo_path"))
     pattern = entry["expected_finding_pattern"].lower()
     matched = any(pattern in f.lower() for f in findings)
     noise = sum(1 for f in findings if pattern not in f.lower())
@@ -97,6 +99,8 @@ def replay_all(entries: list[dict], verifier_fn: Callable) -> ReplaySummary:
 
 if __name__ == "__main__":
     import argparse
+    import subprocess
+    import tempfile
 
     parser = argparse.ArgumentParser(
         prog="python -m refactory_dsh.replay_harness",
@@ -106,16 +110,64 @@ if __name__ == "__main__":
                         help="path to the evidence log entries JSON file")
     parser.add_argument("--output", default="verifier_baseline.json",
                         help="path to write the summary output")
+    parser.add_argument("--repo", default=".",
+                        help="repository to create worktrees from pre-fix commits")
     args = parser.parse_args()
 
     entries = json.loads(Path(args.evidence).read_text())
-    print(f"Loaded {len(entries)} entries from {args.evidence}")
+    replayable = [e for e in entries if e.get("pre_fix_commit")]
+    skipped = [e for e in entries if not e.get("pre_fix_commit")]
+    print(f"Loaded {len(entries)} entries; {len(replayable)} replayable, "
+          f"{len(skipped)} skipped (no pre_fix_commit)")
+
+    repo = Path(args.repo).resolve()
+    worktrees_created: list[Path] = []
+
+    def _create_worktree(commit: str) -> Path | None:
+        """Create a temporary git worktree at the given commit."""
+        try:
+            tmpdir = tempfile.mkdtemp(prefix="replay-wt-")
+            subprocess.run(
+                ["git", "-C", str(repo), "worktree", "add", "--detach",
+                 tmpdir, commit],
+                check=True, capture_output=True, text=True,
+            )
+            worktrees_created.append(Path(tmpdir))
+            return Path(tmpdir)
+        except subprocess.CalledProcessError:
+            return None
+
+    def _remove_worktrees() -> None:
+        """Remove all temporary git worktrees."""
+        for wt in worktrees_created:
+            try:
+                subprocess.run(
+                    ["git", "-C", str(repo), "worktree", "remove", "--force",
+                     str(wt)],
+                    capture_output=True, text=True,
+                )
+            except (subprocess.CalledProcessError, OSError):
+                pass
+
+    # Set up worktrees for replayable entries
+    for entry in replayable:
+        commit = entry["pre_fix_commit"]
+        wt = _create_worktree(commit)
+        if wt is None:
+            print(f"  {entry['id']}: commit {commit} is not reachable, skipping")
+            entry["repo_path"] = None
+        else:
+            entry["repo_path"] = str(wt)
 
     # Default stub verifier for CLI use; real usage supplies a model-backed fn
-    def stub_verifier(brief: str, diff: str) -> list[str]:
+    def stub_verifier(brief: str, diff: str, repo_path: str | None = None) -> list[str]:
         return []
 
-    summary = replay_all(entries, stub_verifier)
+    try:
+        summary = replay_all(replayable, stub_verifier)
+    finally:
+        _remove_worktrees()
+
     output = {
         "total_entries": summary.total_entries,
         "found": summary.found,

@@ -1,26 +1,29 @@
 [
   {
-    "id": "EL-001",
-    "brief": "Add a --timeout flag to the CLI that caps how long a command runs",
-    "gap_description": "negative timeout values are silently accepted and cause an infinite hang",
+    "id": "2",
+    "brief": "Make the design gate reject rule-site lines that have no [changed] or [left] marker, so a design that lists a site without saying what it plans for it is caught before the approval gate",
+    "gap_description": "A rule site with no [changed]/[left] marker counted as changed, so a design could list a site without committing to a plan",
     "method": "M1",
-    "diff": "--- a/cli.py\n+++ b/cli.py\n@@ -10,0 +11,5 @@\n+    parser.add_argument('--timeout', type=int, default=30)\n+    args = parser.parse_args()\n+    subprocess.run(cmd, timeout=args.timeout)\n",
-    "expected_finding_pattern": "negative timeout"
+    "pre_fix_commit": "918151f1e4",
+    "diff": "--- a/refactory/refactory_dsh/design_ops.py\n+++ b/refactory/refactory_dsh/design_ops.py\n@@ -245,6 +245,12 @@\n+    unmarked = [s for s in sites if not _has_marker(s)]\n+    if unmarked:\n+        problems.append(f\"rule sites without [changed]/[left] marker: {unmarked}\")\n",
+    "expected_finding_pattern": "marker"
   },
   {
-    "id": "EL-002",
-    "brief": "Rename the export_data function to export_records everywhere",
-    "gap_description": "a call site in utils/legacy.py still uses export_data",
-    "method": "M3",
-    "diff": "--- a/core.py\n+++ b/core.py\n@@ -5 +5 @@\n-def export_data(items):\n+def export_records(items):\n",
-    "expected_finding_pattern": "export_data"
+    "id": "5",
+    "brief": "Record whether the new tests fail on the base commit and excuse inherited failures. When test-guardedness cannot parse the check output, say so; do not silently excuse every failure",
+    "gap_description": "Excusal accepted partial parses (pytest ERROR, a later non-test step) and masked runs (-x, pnpm test && pytest with the inherited failure first)",
+    "method": "M1",
+    "pre_fix_commit": "ceea30362a",
+    "diff": "--- a/refactory/refactory_dsh/base_check.py\n+++ b/refactory/refactory_dsh/base_check.py\n@@ -580,5 +580,8 @@\n+    if not parsed_tests:\n+        return {\"unavailable\": \"could not parse any test results from the check output\"}\n+    for entry in parsed_tests:\n+        if entry.get(\"status\") == \"error\":\n+            non_test_entries.append(entry)\n",
+    "expected_finding_pattern": "partial"
   },
   {
-    "id": "EL-003",
-    "brief": "Parse the count field from the CSV header and use it to allocate the result array",
-    "gap_description": "a count of zero causes an empty allocation that the subsequent loop indexes out of bounds",
+    "id": "21",
+    "brief": "A mode that declares a required brief (a Knob with required=True) must refuse to start when the brief is missing or empty, before any run directory is created",
+    "gap_description": "Run start accepted any value equal to the knob's default, and a brief's default is empty string, so a mode declaring a required brief still started with no brief at all",
     "method": "M13",
-    "diff": "--- a/parser.py\n+++ b/parser.py\n@@ -20,0 +21,3 @@\n+    count = int(header['count'])\n+    result = [None] * count\n+    for i in range(len(data)):\n+        result[i] = transform(data[i])\n",
-    "expected_finding_pattern": "zero"
+    "pre_fix_commit": "fcb2517800",
+    "diff": "--- a/refactory/refactory_dsh/interactive.py\n+++ b/refactory/refactory_dsh/interactive.py\n@@ -142,3 +142,6 @@\n+    for knob in mode.knobs():\n+        if knob.required and not task.get(knob.name):\n+            raise ValueError(f\"required knob {knob.name!r} is missing or empty\")\n",
+    "expected_finding_pattern": "empty"
   }
 ]

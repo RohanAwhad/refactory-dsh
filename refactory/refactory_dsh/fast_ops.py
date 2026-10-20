@@ -308,10 +308,6 @@ def focused_check(ctx: Any) -> dict[str, Any]:
         outcome["smoke"] = ctx.read_json("smoke.json", {})
         outcome["revision"] = ctx.read_json("revision.json", None)
     evidence.record(ctx, outcome)
-    # After recording, check if guardedness was blocked and return reloop
-    if payload.get("guardedness_blocked"):
-        detail = ctx.read_text("check.txt") if ctx.exists("check.txt") else "non-guarding tests"
-        return _repair(ctx, [detail.strip()], kind="check")
     return {"focused_check": json.dumps(payload), "output_path": output,
             "review_files": json.dumps(review_files)}
 
@@ -397,8 +393,20 @@ def report_package(ctx: Any) -> dict[str, Any]:
 
 
 def gate_verification(ctx: Any) -> str:
-    """Proceed when the verifier finds no blocking issues; reloop to emit otherwise."""
+    """Proceed when the verifier finds no blocking issues; reloop to emit otherwise.
+
+    Also enforces test guardedness in fast mode: focused_check is an op node
+    and cannot return a Verdict, so guardedness blocking is checked here —
+    it is the first gate after focused_check in the fast-mode pipeline.
+    """
     from refactory_dsh.verification import parse_verification_findings
+
+    # Check guardedness first — focused_check records the block in
+    # focused-check.json but cannot return a Verdict (op node).
+    check_data = ctx.read_json("focused-check.json", {})
+    if check_data.get("guardedness_blocked"):
+        detail = ctx.read_text("check.txt") if ctx.exists("check.txt") else "non-guarding tests"
+        return _repair(ctx, [detail.strip()], kind="check")
 
     findings = parse_verification_findings(ctx)
     if not findings:

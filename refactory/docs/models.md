@@ -138,7 +138,7 @@ The design_doc node writes `design.md` following a defined contract. The contrac
 **New required sections (R4, #384):**
 
 6. **`## Failure trace`** — for each failure the brief reports, a file:line chain from the symptom to the root cause, and the link the fix breaks. When the brief asks for a new feature, write `N/A — this is a new feature.`
-7. **`## Ask mapping`** — a markdown table with columns `| Ask (quoted from brief) | Design section | Test |`, one row per ask. `gate_design_review` mechanically checks that each ask appears verbatim in the brief.
+7. **`## Ask mapping`** — a markdown table with columns `| Ask (quoted from brief) | Design section | Test |`, one row per ask. `gate_design_review` mechanically checks that the section heading is present; the `design_review` agent validates that each quoted ask appears verbatim in the brief.
 8. **`## Test guardedness exemptions`** (optional) — when new tests pass on the base, list each test file path and reason. A new test that passes on the base and is not listed here is rejected by the guardedness gate.
 
 ### Routing design_doc and design_review to a stronger model
