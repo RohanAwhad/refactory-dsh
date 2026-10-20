@@ -184,3 +184,131 @@ def test_staged_new_files_are_copied(repo, tmp_path):
 
     # And it must be in the worktree.
     assert (Path(found.path) / "staged_only.txt").read_text() == "staged only\n"
+
+
+def test_untracked_in_subdirectory_and_names_with_spaces(repo, tmp_path):
+    """Subdirectory untracked files and filenames with spaces are handled correctly.
+
+    Without ``--untracked-files=all``, ``git status`` shows ``?? newdir/`` for a new
+    directory and the individual files inside are silently skipped.  Without ``-z``,
+    git quotes filenames containing spaces and the parse breaks.
+    """
+    # 1. Untracked file inside a new subdirectory.
+    subdir = repo / "newdir"
+    subdir.mkdir()
+    (subdir / "nested.txt").write_text("nested content\n")
+
+    # 2. Tracked file whose name contains a space: commit it, then modify.
+    space_file = repo / "my file.txt"
+    space_file.write_text("original\n")
+    git(repo, "add", "my file.txt")
+    git(repo, "commit", "-q", "-m", "add file with space")
+    space_file.write_text("modified with space\n")
+
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "edgetest01", run)
+    entries = worktree.copy_uncommitted(repo, Path(found.path), run)
+    found = worktree.recorded(run)
+
+    paths = {e["path"] for e in entries}
+
+    # Subdirectory untracked file must be present.
+    assert "newdir/nested.txt" in paths, f"newdir/nested.txt not in {paths}"
+    assert (Path(found.path) / "newdir" / "nested.txt").read_text() == "nested content\n"
+
+    # File with space in its name must be present and have the right content.
+    assert "my file.txt" in paths, f"'my file.txt' not in {paths}"
+    assert (Path(found.path) / "my file.txt").read_text() == "modified with space\n"
+
+    # Both appear in the base commit's tree.
+    base_tree = worktree.git(
+        Path(found.path), "ls-tree", "-r", "--name-only", found.base
+    ).splitlines()
+    assert "newdir/nested.txt" in base_tree
+    assert "my file.txt" in base_tree
+
+
+def test_include_uncommitted_knob_through_prepare(repo, tmp_path):
+    """The include_uncommitted knob drives copy_uncommitted through _open_worktree.
+
+    With the knob on, the worktree starts from the person's uncommitted changes.
+    With it off (default), the worktree has only committed content.
+    On a redo (branch has attempt commits), copy_uncommitted is not called again
+    and the base stays at the first copy's commit.
+    """
+    import os
+    from unittest.mock import patch
+    from refactory_dsh import repo_change
+    from refactory_dsh import worktree as wt_mod
+
+    # Modify a tracked file in the person's checkout.
+    (repo / "app.py").write_text("uncommitted via knob\n")
+
+    # ---- Part 1: include_uncommitted=True ----
+    run_on = tmp_path / "run-knobon"
+    run_on.mkdir(parents=True)
+    inv_on = run_on / ".refactory"
+    inv_on.mkdir(parents=True, exist_ok=True)
+    (inv_on / "invocation.json").write_text('{"id": "aabbccdd0001"}')
+
+    class Ctx:
+        def __init__(self, workdir, knobs):
+            self.workdir = workdir
+            self._knobs = knobs
+        def knob(self, name, default=None):
+            return self._knobs.get(name, default)
+
+    ctx_on = Ctx(run_on, {"include_uncommitted": True})
+
+    with patch("refactory_dsh.repo_change.project_for_nodes", return_value=repo):
+        result_on = repo_change._open_worktree(ctx_on, "knobtest1", {"target": str(repo)})
+
+    wt_on = Path(result_on["worktree"])
+    assert (wt_on / "app.py").read_text() == "uncommitted via knob\n"
+    found_on = wt_mod.recorded(run_on)
+    assert found_on is not None
+    record_on = wt_mod.uncommitted_record(found_on)
+    assert any(e["path"] == "app.py" for e in record_on), "uncommitted record must list app.py"
+    # The diff from base to HEAD is empty: the uncommitted change IS the base.
+    diff = wt_mod.git(wt_on, "diff", "--name-only", found_on.base, "HEAD").strip()
+    assert diff == "", "uncommitted changes should be the base, not a diff from it"
+    first_base = found_on.base
+
+    # ---- Part 2: include_uncommitted=False (default) ----
+    run_off = tmp_path / "run-knoboff"
+    run_off.mkdir(parents=True)
+    inv_off = run_off / ".refactory"
+    inv_off.mkdir(parents=True, exist_ok=True)
+    (inv_off / "invocation.json").write_text('{"id": "aabbccdd0002"}')
+
+    ctx_off = Ctx(run_off, {})
+
+    with patch("refactory_dsh.repo_change.project_for_nodes", return_value=repo):
+        result_off = repo_change._open_worktree(ctx_off, "knobtest2", {"target": str(repo)})
+
+    wt_off = Path(result_off["worktree"])
+    assert (wt_off / "app.py").read_text() == "print('app')\n", \
+        "without include_uncommitted, the worktree should have committed content only"
+    found_off = wt_mod.recorded(run_off)
+    assert wt_mod.uncommitted_record(found_off) == []
+
+    # ---- Part 3: redo guard — after attempt commits, copy_uncommitted is skipped ----
+    # Simulate an attempt commit on the first worktree's branch.
+    (wt_on / "attempt.py").write_text("attempt 1\n")
+    wt_mod.git(wt_on, "add", "attempt.py")
+    wt_mod.git(wt_on, *wt_mod.NO_HOOKS, "commit", "-m", "attempt 1",
+               env={**os.environ, **wt_mod.COMMITTER})
+
+    # Person now edits a file in the checkout — this must NOT be re-copied.
+    (repo / "app.py").write_text("redo edit should not appear\n")
+
+    with patch("refactory_dsh.repo_change.project_for_nodes", return_value=repo), \
+         patch.object(wt_mod, "copy_uncommitted") as spy:
+        repo_change._open_worktree(ctx_on, "knobtest1", {"target": str(repo)})
+
+    spy.assert_not_called()
+    # The worktree still has the original uncommitted content, not the redo edit.
+    assert (wt_on / "app.py").read_text() == "uncommitted via knob\n"
+    # The base stays at the first copy's commit.
+    found_redo = wt_mod.recorded(run_on)
+    assert found_redo.base == first_base, "the base must not move on redo"
