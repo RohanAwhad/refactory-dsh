@@ -516,15 +516,16 @@ def prune_pins(dsh_home: Path | None = None) -> list[str]:
         driver_checkout = data.get("driver_checkout")
         checkout_path = entry / "checkout"
 
-        # Remove the profile by its package name BEFORE the worktree, so
-        # the bundle path the plugin command references still exists.
+        # Remove the profile by its package name BEFORE the worktree.
+        # Using the package name (not the path) so removal works even if the
+        # checkout directory was already cleaned up by a previous attempt.
         profile_name = stored_profile
         try:
             from refactory_dsh.paths import dsh_command
+            from refactory_dsh.dsh_profile import GRAPH_BUNDLE
             dsh_argv = dsh_command()
-            bundle_path = checkout_path / "packages" / "bundle" / "graph"
             subprocess.run(
-                [*dsh_argv, "plugin", "--profile", profile_name, "remove", str(bundle_path)],
+                [*dsh_argv, "plugin", "--profile", profile_name, "remove", GRAPH_BUNDLE],
                 capture_output=True, text=True, timeout=60,
             )
         except (OSError, subprocess.SubprocessError):
@@ -545,7 +546,43 @@ def prune_pins(dsh_home: Path | None = None) -> list[str]:
         shutil.rmtree(entry, ignore_errors=True)
         pruned.append(commit)
 
+    # Prune stale entries from every driver's runs.json: remove entries
+    # whose run directory no longer exists, so the list does not grow
+    # unboundedly and _refuse_if_live_runs does not check vanished paths.
+    _prune_driver_runs()
+
     return pruned
+
+
+def _prune_driver_runs() -> None:
+    """Remove stale entries from every driver's ``runs.json``.
+
+    An entry is stale when its run directory no longer exists on disk.
+    """
+    drivers_dir = refactory_home() / "drivers"
+    if not drivers_dir.is_dir():
+        return
+    for driver_dir in drivers_dir.iterdir():
+        if not driver_dir.is_dir():
+            continue
+        runs_json = driver_dir / "runs.json"
+        if not runs_json.is_file():
+            continue
+        lock_path = driver_dir / "runs.lock"
+        lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            try:
+                data = json.loads(runs_json.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            runs = data.get("runs", [])
+            pruned_runs = [r for r in runs if Path(r).exists()]
+            if len(pruned_runs) < len(runs):
+                data["runs"] = pruned_runs
+                _atomic_write_json(runs_json, data)
+        finally:
+            os.close(lock_fd)
 
 
 # ── workspace stamp ──────────────────────────────────────────────────────
