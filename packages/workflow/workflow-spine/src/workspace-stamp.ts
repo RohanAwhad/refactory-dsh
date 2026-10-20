@@ -17,9 +17,10 @@ import { fileURLToPath } from 'node:url'
 declare const __WORKSPACE_BUILD_STAMP__: string
 
 /**
- * The eight packages whose sources feed the workspace stamp.
+ * The workspace packages whose sources feed the workspace stamp.
+ * Used as a fallback when ``pnpm-workspace.yaml`` cannot be read.
  */
-const WORKSPACE_PACKAGES = [
+const FALLBACK_WORKSPACE_PACKAGES = [
   'packages/workflow/workflow-spine',
   'packages/bundle/graph',
   'packages/bundle/refactory',
@@ -29,6 +30,45 @@ const WORKSPACE_PACKAGES = [
   'packages/client/ui-refactory',
   'packages/client/ui-brand-refactory',
 ] as const
+
+/**
+ * Resolve workspace package paths from ``pnpm-workspace.yaml``.
+ *
+ * Parses the ``packages:`` list (exact paths, one per ``- `` line).
+ * Falls back to {@link FALLBACK_WORKSPACE_PACKAGES} when the file is
+ * absent or cannot be parsed.
+ */
+function resolveWorkspacePackages(root: string): string[] {
+  try {
+    const wsFile = join(root, 'pnpm-workspace.yaml')
+    const content = readFileSync(wsFile, 'utf8')
+    let inPackages = false
+    const packages: string[] = []
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim()
+      if (trimmed === 'packages:') { inPackages = true; continue }
+      if (inPackages) {
+        if (trimmed.startsWith('- ')) {
+          packages.push(trimmed.slice(2).trim().replace(/^['"]|['"]$/g, ''))
+        } else if (trimmed !== '' && !trimmed.startsWith('#')) {
+          break
+        }
+      }
+    }
+    if (packages.length === 0) return [...FALLBACK_WORKSPACE_PACKAGES]
+    // Filter to directories that have a src/ subdirectory.
+    const result: string[] = []
+    for (const pkg of packages) {
+      try {
+        readdirSync(join(root, pkg, 'src'))
+        result.push(pkg)
+      } catch { /* no src dir — skip */ }
+    }
+    return result.length > 0 ? result.sort() : [...FALLBACK_WORKSPACE_PACKAGES]
+  } catch {
+    return [...FALLBACK_WORKSPACE_PACKAGES]
+  }
+}
 
 /**
  * Build-time workspace stamp injected by tsdown's `define`. When running from
@@ -53,7 +93,8 @@ export function computeWorkspaceStamp(root?: string): string | null {
   const hash = createHash('sha256')
   let foundAny = false
 
-  for (const pkg of WORKSPACE_PACKAGES) {
+  const packages = resolveWorkspacePackages(repoRoot)
+  for (const pkg of packages) {
     const srcDir = join(repoRoot, pkg, 'src')
     let files: string[]
     try {

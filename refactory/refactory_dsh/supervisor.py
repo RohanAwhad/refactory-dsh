@@ -309,9 +309,21 @@ def supervise(root: Path, *, max_respawns: int | None = None,
             if pending is not None:
                 # A person's explicit request — reset counter and start a new child
                 respawn_count = 0
+                # Detect drift BEFORE prepare() so a moved driver creates a pin
+                # instead of prepare() refusing with "configuration changed".
+                _skip_cfg = False
+                try:
+                    _sv_config = json.loads((root / '.refactory/run-config.json').read_text())
+                    from refactory_dsh import pin as _sv_pin
+                    if _sv_pin.detect_drift(_sv_config) is not None:
+                        _sv_pin.resolve_pin(_sv_config['driver'], run_dir=root)
+                        _skip_cfg = True
+                except Exception:
+                    pass
                 try:
                     recovery.prepare(root, name,
-                                     acknowledge_failed=bool(pending.get('acknowledge_failed')))
+                                     acknowledge_failed=bool(pending.get('acknowledge_failed')),
+                                     skip_configuration=_skip_cfg)
                 except ValueError as exc:
                     reason = str(exc)
                     pid_for_record = child.pid if child is not None else os.getpid()
@@ -356,9 +368,19 @@ def supervise(root: Path, *, max_respawns: int | None = None,
                                      reason=reason)
                 return last_exit_code if inline else None
 
+            # Detect drift before prepare() so a moved driver does not refuse.
+            _skip_cfg2 = False
+            try:
+                _sv_config2 = json.loads((root / '.refactory/run-config.json').read_text())
+                from refactory_dsh import pin as _sv_pin2
+                if _sv_pin2.detect_drift(_sv_config2) is not None:
+                    _sv_pin2.resolve_pin(_sv_config2['driver'], run_dir=root)
+                    _skip_cfg2 = True
+            except Exception:
+                pass
             # Try recovery.prepare() to distinguish transient vs deterministic
             try:
-                recovery.prepare(root, name)
+                recovery.prepare(root, name, skip_configuration=_skip_cfg2)
             except ValueError as exc:
                 # Deterministic refusal — do not retry
                 reason = str(exc)

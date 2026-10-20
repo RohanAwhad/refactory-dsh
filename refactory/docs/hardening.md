@@ -781,3 +781,12 @@ creation, hooks isolation, dirty diff application, `uv sync`, `pnpm install`,
 the pin directory and propagates the error. Concurrent callers block on the lock
 and, after the first one finishes, find the prepared pin via `pin.json` and
 return it immediately.
+
+### Supervisor drift detection
+
+The supervisor loop calls `recovery.prepare()` at two sites: the resume-pending
+path (where a person explicitly resumes) and the transient-exit respawn path.
+Both sites detect drift before `prepare()` and, when the driver has moved,
+resolve the pin and pass `skip_configuration=True` to `prepare()` so the
+fingerprint comparison does not refuse against the moved checkout. The re-exec'd
+owner child validates against the pin's files after re-exec.

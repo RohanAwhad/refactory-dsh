@@ -189,6 +189,18 @@ def _pin_key(commit: str, dirty_diff: str | None) -> str:
     return commit
 
 
+def _profile_name_for(commit12: str, dirty_diff: str | None) -> str:
+    """The DSH profile name for a pin.
+
+    Clean:  ``graph-pin-<commit12>``
+    Dirty:  ``graph-pin-<commit12>-<diff8>``
+    """
+    if dirty_diff:
+        diff_hash = hashlib.sha256(dirty_diff.encode()).hexdigest()[:8]
+        return f"graph-pin-{commit12}-{diff_hash}"
+    return f"graph-pin-{commit12}"
+
+
 # ── pin resolution ───────────────────────────────────────────────────────
 
 
@@ -217,7 +229,7 @@ def resolve_pin(driver_info: dict, *, run_dir: Path | None = None) -> Path:
     if (pin_root / "pin.json").is_file():
         # Pin exists; register this run if a run_dir was given.
         if run_dir is not None:
-            _update_driver_record(run_dir, pin_checkout, commit12)
+            _update_driver_record(run_dir, pin_checkout, commit12, dirty_diff)
             register_run(key, run_dir)
         return pin_checkout
 
@@ -226,13 +238,14 @@ def resolve_pin(driver_info: dict, *, run_dir: Path | None = None) -> Path:
     pin_checkout = create_pin(driver_checkout, commit, dirty_diff)
 
     if run_dir is not None:
-        _update_driver_record(run_dir, pin_checkout, commit12)
+        _update_driver_record(run_dir, pin_checkout, commit12, dirty_diff)
         register_run(key, run_dir)
 
     return pin_checkout
 
 
-def _update_driver_record(run_dir: Path, pin_checkout: Path, commit12: str) -> None:
+def _update_driver_record(run_dir: Path, pin_checkout: Path, commit12: str,
+                          dirty_diff: str | None = None) -> None:
     """Update the driver record in the run's run-config.json."""
     config_path = Path(run_dir) / ".refactory" / "run-config.json"
     if not config_path.exists():
@@ -242,7 +255,7 @@ def _update_driver_record(run_dir: Path, pin_checkout: Path, commit12: str) -> N
     if driver is None:
         return
     driver["pin_checkout"] = str(pin_checkout)
-    driver["profile"] = f"graph-pin-{commit12}"
+    driver["profile"] = _profile_name_for(commit12, dirty_diff)
     _atomic_write_json(config_path, config)
 
 
@@ -332,7 +345,7 @@ def create_pin(driver_checkout: Path, commit: str, dirty_diff: str | None = None
         )
 
         # Provision the profile in the person's DSH home.
-        profile_name = f"graph-pin-{commit12}"
+        profile_name = _profile_name_for(commit12, dirty_diff)
         bundle_path = pin_checkout / "packages" / "bundle" / "graph"
         from refactory_dsh.paths import dsh_command
         dsh_argv = dsh_command()
@@ -348,6 +361,7 @@ def create_pin(driver_checkout: Path, commit: str, dirty_diff: str | None = None
             "commit": commit,
             "created": datetime.now(timezone.utc).isoformat(),
             "driver_checkout": str(driver_checkout),
+            "profile": profile_name,
             "runs": [],
         }
         _atomic_write_json(pin_root / "pin.json", pin_json)
@@ -452,6 +466,10 @@ def prune_pins(dsh_home: Path | None = None) -> list[str]:
 
         commit = data.get("commit", entry.name)
         commit12 = commit[:12]
+        # Read the profile name from pin.json if stored; otherwise derive it.
+        stored_profile = data.get("profile")
+        if not stored_profile:
+            stored_profile = f"graph-pin-{commit12}"
         runs = data.get("runs", [])
 
         # A run is live (and its pin must be kept) as long as the run
@@ -483,7 +501,7 @@ def prune_pins(dsh_home: Path | None = None) -> list[str]:
                 pass
 
         # Remove the profile by its package name.
-        profile_name = f"graph-pin-{commit12}"
+        profile_name = stored_profile
         try:
             from refactory_dsh.paths import dsh_command
             dsh_argv = dsh_command()
@@ -505,9 +523,50 @@ def prune_pins(dsh_home: Path | None = None) -> list[str]:
 # ── workspace stamp ──────────────────────────────────────────────────────
 
 
+def _workspace_packages_from_yaml(root: Path) -> list[str]:
+    """Resolve workspace package paths from ``pnpm-workspace.yaml``.
+
+    Parses the ``packages:`` list, which contains exact paths (one per line
+    prefixed with ``- ``).  Falls back to :data:`WORKSPACE_PACKAGES` when the
+    file is absent or cannot be parsed.
+    """
+    ws_file = root / "pnpm-workspace.yaml"
+    if not ws_file.exists():
+        return list(WORKSPACE_PACKAGES)
+    try:
+        content = ws_file.read_text()
+        in_packages = False
+        packages: list[str] = []
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped == "packages:":
+                in_packages = True
+                continue
+            if in_packages:
+                if stripped.startswith("- "):
+                    entry = stripped[2:].strip().strip("'\"")
+                    packages.append(entry)
+                elif stripped and not stripped.startswith("#"):
+                    break
+        if not packages:
+            return list(WORKSPACE_PACKAGES)
+        # Filter to directories that have src/ with .ts or .tsx files.
+        result: list[str] = []
+        for pkg in packages:
+            pkg_dir = root / pkg
+            src_dir = pkg_dir / "src"
+            if src_dir.is_dir():
+                result.append(pkg)
+        return sorted(result) if result else list(WORKSPACE_PACKAGES)
+    except Exception:
+        return list(WORKSPACE_PACKAGES)
+
+
 def workspace_stamp(root: Path) -> str | None:
     """Compute a SHA-256 stamp of all TS source files across workspace packages.
 
+    Derives the package list from ``pnpm-workspace.yaml`` when available,
+    falling back to :data:`WORKSPACE_PACKAGES`.
     Covers both ``.ts`` and ``.tsx`` files.
     Returns a 16-character hex hash, or ``None`` when no source files exist.
     """
@@ -515,7 +574,9 @@ def workspace_stamp(root: Path) -> str | None:
     hasher = hashlib.sha256()
     found_any = False
 
-    for pkg_rel in WORKSPACE_PACKAGES:
+    packages = _workspace_packages_from_yaml(root)
+
+    for pkg_rel in packages:
         src_dir = root / pkg_rel / "src"
         if not src_dir.is_dir():
             continue

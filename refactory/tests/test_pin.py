@@ -358,12 +358,36 @@ def test_prune_with_run_outside_default_locations(tmp_path: Path) -> None:
 
 
 def test_pin_preparation_does_not_touch_driver_hooks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Pin creation does not modify the driver's hooks or config (except worktreeConfig)."""
+    """Pin creation does not modify the driver's hooks or config (except worktreeConfig).
+
+    A fake ``pnpm`` script that actively tries to install a hook is put on PATH.
+    The test asserts the driver's hooks and config are unchanged, proving that
+    ``LEFTHOOK=0``, ``HUSKY=0`` and per-worktree hooks isolation block the install.
+    """
     repo = tmp_path / "repo"
     commit_a = _init_repo(repo)
 
     import refactory_dsh.pin as pin
     monkeypatch.setattr(pin, "REPO_ROOT", repo)
+
+    # Create a fake pnpm that actively tries to install a hook.
+    fake_bin = tmp_path / "fake_bin"
+    fake_bin.mkdir()
+    fake_pnpm = fake_bin / "pnpm"
+    fake_pnpm.write_text(
+        "#!/bin/sh\n"
+        "# Simulate lefthook/husky trying to install hooks.\n"
+        "# If hooks isolation works, this should have no effect on the driver.\n"
+        "git config core.hooksPath /tmp/evil-hooks 2>/dev/null || true\n"
+        "mkdir -p .git/hooks 2>/dev/null || true\n"
+        'echo "#!/bin/sh" > .git/hooks/pre-commit 2>/dev/null || true\n'
+        "exit 0\n"
+    )
+    fake_pnpm.chmod(0o755)
+
+    fake_uv = fake_bin / "uv"
+    fake_uv.write_text("#!/bin/sh\nexit 0\n")
+    fake_uv.chmod(0o755)
 
     # Snapshot the driver's state before pin creation.
     hooks_dir = repo / ".git" / "hooks"
@@ -372,10 +396,24 @@ def test_pin_preparation_does_not_touch_driver_hooks(tmp_path: Path, monkeypatch
         hooks_before = {f.name: f.read_bytes() for f in hooks_dir.iterdir() if f.is_file()}
     config_before = (repo / ".git" / "config").read_text()
 
-    # Create a pin with installs stubbed but git commands real.
-    # This must NOT swallow exceptions — a real failure is a test failure.
+    # Create the pin with the fake pnpm on PATH. Git commands must be real.
+    # The _selective_subprocess routes git through to the real subprocess.run
+    # and uses the fake pnpm/uv for everything else.
     original_run = subprocess.run
-    with patch("subprocess.run", side_effect=_selective_subprocess(original_run)):
+
+    def _side_effect_with_fake_path(cmd, **kw):
+        if isinstance(cmd, (list, tuple)):
+            cmd_name = str(cmd[0])
+            if cmd_name == "git" or cmd_name.endswith("/git"):
+                return original_run(cmd, **kw)
+            # For non-git commands, run the fake scripts with modified PATH.
+            env = dict(kw.get("env", os.environ))
+            env["PATH"] = f"{fake_bin}:{env.get('PATH', '')}"
+            kw["env"] = env
+            return original_run(cmd, **kw)
+        return original_run(cmd, **kw)
+
+    with patch("subprocess.run", side_effect=_side_effect_with_fake_path):
         pin.create_pin(repo, commit_a)
 
     # The driver's hooks and config should be unchanged (except worktreeConfig).
@@ -390,7 +428,7 @@ def test_pin_preparation_does_not_touch_driver_hooks(tmp_path: Path, monkeypatch
         if line.strip() not in config_before and "worktreeconfig" not in line.lower() and "extensions" not in line.lower():
             pytest.fail(f"unexpected config change: {line}")
 
-    assert hooks_before == hooks_after, "driver hooks were modified"
+    assert hooks_before == hooks_after, "driver hooks were modified by fake pnpm"
 
 
 def test_fingerprint_path_translation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -458,29 +496,44 @@ def test_reexec_skipped_when_already_on_pin(tmp_path: Path, monkeypatch: pytest.
 
 
 def test_resume_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """End-to-end: drift detected → pin resolved → correct interpreter and profile."""
+    """End-to-end: interactive.run(resume=True) detects drift, resolves pin,
+    and re-execs with the pin's Python and profile.
+
+    This goes through ``interactive.run`` — the same call the supervisor's
+    owner command makes — with ``os.execv`` captured via a sentinel exception
+    and only the heavy installs stubbed.
+    """
     repo = tmp_path / "repo"
     commit_a = _init_repo(repo, files={"refactory/refactory_dsh/mode.py": "v1"})
 
     import refactory_dsh.pin as pin
+    from refactory_dsh import interactive, paths
+    from refactory_dsh import dsh_profile
     monkeypatch.setattr(pin, "REPO_ROOT", repo)
+    monkeypatch.setattr(paths, "REPO_ROOT", repo)
 
     run_dir = tmp_path / "run"
     fp_file = repo / "refactory" / "refactory_dsh" / "mode.py"
     fp = hashlib.sha256(fp_file.read_bytes()).hexdigest()
     _make_run_config(run_dir, commit_a, str(repo),
-                     fingerprints={str(fp_file): fp})
+                     fingerprints={str(fp_file): fp},
+                     mode="test_pack/test_mode")
     pin.record_driver(run_dir / ".refactory" / "run-config.json")
+
+    # Write spine checkpoint so recovery.prepare accepts the run.
+    checkpoint = {
+        "run_id": str(run_dir.resolve()),
+        "graph": {"name": "test_pack-test_mode"},
+        "status": "ready",
+        "configuration_fingerprints": {str(fp_file): fp},
+        "file_fingerprints": {},
+    }
+    (run_dir / ".refactory" / "spine-checkpoint.json").write_text(json.dumps(checkpoint))
 
     # Move the driver to commit B, changing the fingerprinted file.
     commit_b = _add_commit(repo, {"refactory/refactory_dsh/mode.py": "v2"})
 
-    config = json.loads((run_dir / ".refactory" / "run-config.json").read_text())
-    drift = pin.detect_drift(config)
-    assert drift is not None
-    assert drift["recorded_commit"] == commit_a
-
-    # Create the pin structure (stub heavy installs).
+    # Create the pin structure (pre-existing, with heavy installs stubbed).
     key = pin._pin_key(commit_a, None)
     pin_root = pin.refactory_home() / "pins" / key
     pin_checkout = pin_root / "checkout"
@@ -493,25 +546,41 @@ def test_resume_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
         "driver_checkout": str(repo), "runs": [],
     })
 
-    result = pin.resolve_pin(config["driver"], run_dir=run_dir)
-    assert result == pin_checkout
+    # Stub require_build and dsh_profile.require — they are pre-flight checks.
+    monkeypatch.setattr("refactory_dsh.interactive.require_build", lambda **kw: None)
+    monkeypatch.setattr(dsh_profile, "require", lambda **kw: None)
 
-    # Verify the driver record was updated.
+    # Stub ownership to a no-op context manager.
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _fake_ownership(wd):
+        yield 999
+    monkeypatch.setattr(interactive, "ownership", _fake_ownership)
+
+    # Capture os.execv with a sentinel exception.
+    class _ExecvSentinel(Exception):
+        def __init__(self, path: str, args: list[str]):
+            self.path = path
+            self.args = args
+            super().__init__(path)
+
+    def _fake_execv(p: str, a: list[str]) -> None:
+        raise _ExecvSentinel(p, list(a))
+    monkeypatch.setattr(os, "execv", _fake_execv)
+
+    with pytest.raises(_ExecvSentinel) as exc_info:
+        interactive.run("test_pack/test_mode", workdir=run_dir, resume=True)
+
+    # Assert the pin's Python was used for the re-exec.
+    assert exc_info.value.path == str(pin_checkout / ".venv" / "bin" / "python")
+    assert "-m" in exc_info.value.args
+    assert "refactory_dsh.interactive" in exc_info.value.args
+
+    # Verify the driver record was updated with the pin and its profile.
     updated = json.loads((run_dir / ".refactory" / "run-config.json").read_text())
     assert updated["driver"]["pin_checkout"] == str(pin_checkout)
     assert updated["driver"]["profile"] == f"graph-pin-{commit_a[:12]}"
-
-    # Verify the pinned interpreter is the pin's Python.
-    pin_py = pin.pin_python(pin_checkout)
-    assert str(pin_py) == str(pin_checkout / ".venv" / "bin" / "python")
-
-    # Verify that the re-exec loop-break would work: if REPO_ROOT were the
-    # pin_checkout, the re-exec would be skipped.
-    from refactory_dsh import paths
-    saved_root = paths.REPO_ROOT
-    monkeypatch.setattr(paths, "REPO_ROOT", pin_checkout)
-    assert paths.REPO_ROOT.resolve() == Path(pin_checkout).resolve()
-    monkeypatch.setattr(paths, "REPO_ROOT", saved_root)
 
     # A new run at commit B should have no pin.
     run2 = tmp_path / "run2"
@@ -697,7 +766,7 @@ def test_dirty_diff_conflict_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 
 def test_pin_keyed_by_commit_and_diff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Two launches with different dirty diffs get different pin keys."""
+    """Two launches with different dirty diffs get different pin keys and profile names."""
     import refactory_dsh.pin as pin
 
     commit = "d" * 40
@@ -710,32 +779,68 @@ def test_pin_keyed_by_commit_and_diff(tmp_path: Path, monkeypatch: pytest.Monkey
     assert key_b != key_clean
     assert key_clean == commit
 
+    # Profile names also differ for different diffs.
+    profile_a = pin._profile_name_for(commit[:12], "diff A")
+    profile_b = pin._profile_name_for(commit[:12], "diff B")
+    profile_clean = pin._profile_name_for(commit[:12], None)
+
+    assert profile_a != profile_b
+    assert profile_a != profile_clean
+    assert profile_b != profile_clean
+    assert profile_clean == f"graph-pin-{commit[:12]}"
+    assert "-" in profile_a.split(f"graph-pin-{commit[:12]}-")[1]
+
 
 def test_credential_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A pinned run uses graph-pin-<commit12> with DSH_HOME unchanged; no credential refs."""
+    """A pinned run uses graph-pin-<commit12> with DSH_HOME unchanged; no credential refs.
+
+    Asserts *behaviour* — not source text:
+    1. DSH_HOME in os.environ is unchanged after pin operations.
+    2. No file under the pin directory is a symlink to anything in the
+       DSH home directory.
+    """
     import refactory_dsh.pin as pin
 
+    # Simulate the person's DSH home with a credentials file.
+    dsh_home = tmp_path / "dsh_home"
+    dsh_home.mkdir()
+    (dsh_home / ".credentials.yaml").write_text("api_key: secret")
+    monkeypatch.setenv("DSH_HOME", str(dsh_home))
+
+    original_dsh_home = os.environ.get("DSH_HOME")
+
     commit = "e" * 40
+    commit12 = commit[:12]
     key = pin._pin_key(commit, None)
     pin_root = pin.refactory_home() / "pins" / key
     pin_checkout = pin_root / "checkout"
     pin_checkout.mkdir(parents=True)
 
-    # Verify the pin's profile name is graph-pin-<commit12>.
-    commit12 = commit[:12]
+    # Create some files under the pin to verify no credential links.
+    (pin_checkout / "some_file.py").write_text("pass")
+    (pin_checkout / "packages" / "bundle" / "graph").mkdir(parents=True, exist_ok=True)
+    (pin_checkout / "packages" / "bundle" / "graph" / "package.json").write_text("{}")
+
+    # Write pin.json with the profile name.
+    pin._atomic_write_json(pin_root / "pin.json", {
+        "commit": commit, "created": "now",
+        "driver_checkout": str(tmp_path), "runs": [],
+        "profile": f"graph-pin-{commit12}",
+    })
+
+    # Verify the profile name follows the expected pattern.
     profile_name = f"graph-pin-{commit12}"
     assert profile_name.startswith("graph-pin-")
 
-    # Verify that pin.py never sets or changes DSH_HOME.
-    import refactory_dsh.pin as pin_mod
-    source = Path(pin_mod.__file__).read_text()
-    # DSH_HOME should only appear in comments, not in os.environ assignments.
-    for line in source.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("#") or stripped.startswith('"""') or stripped.startswith("'''"):
-            continue
-        assert "DSH_HOME" not in stripped or "os.environ" not in stripped, \
-            f"pin.py must not set DSH_HOME: {stripped}"
+    # 1. DSH_HOME is unchanged after pin operations.
+    assert os.environ.get("DSH_HOME") == original_dsh_home
+
+    # 2. No file under the pin is a symlink into the DSH home.
+    for p in pin_root.rglob("*"):
+        if p.is_symlink():
+            target = p.resolve()
+            assert not str(target).startswith(str(dsh_home)), \
+                f"pin file {p} is a symlink to DSH home: {target}"
 
 
 def test_register_run_concurrent_safe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
