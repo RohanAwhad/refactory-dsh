@@ -254,19 +254,44 @@ def require_build(root: Path | None = None, *, check_only: bool = False) -> None
 
 
 def _refuse_if_live_runs(checkout: Path) -> None:
-    """Raise if any pin lists live runs using this checkout as their driver."""
+    """Raise if any live run uses this checkout as its driver (pinned or not).
+
+    A run is live when its invocation lock is currently held, checked via
+    :func:`run_ownership.held`.
+    """
+    from refactory_dsh.run_ownership import held as _run_held
     try:
         from refactory_dsh.pin import list_pins
         for pin_data in list_pins():
             if pin_data.get("driver_checkout") == str(checkout):
                 for run_path_str in pin_data.get("runs", []):
-                    if Path(run_path_str).exists():
-                        raise RuntimeError(
-                            f"the build is stale but a live run ({run_path_str}) uses "
-                            f"this checkout; run `pnpm run build` manually after the run finishes"
-                        )
-    except ImportError:
-        pass
+                    rp = Path(run_path_str)
+                    if rp.exists():
+                        try:
+                            if _run_held(rp):
+                                raise RuntimeError(
+                                    f"the build is stale but a live run ({run_path_str}) uses "
+                                    f"this checkout; run `pnpm run build` manually after the run finishes"
+                                )
+                        except RuntimeError:
+                            raise
+                        except Exception:
+                            pass
+    except (ImportError, RuntimeError) as exc:
+        if isinstance(exc, RuntimeError):
+            raise
+    # Check unpinned runs registered directly on this driver checkout.
+    try:
+        from refactory_dsh.pin import driver_live_runs
+        live = driver_live_runs(checkout)
+        if live:
+            raise RuntimeError(
+                f"the build is stale but a live run ({live[0]}) uses "
+                f"this checkout; run `pnpm run build` manually after the run finishes"
+            )
+    except (ImportError, RuntimeError) as exc:
+        if isinstance(exc, RuntimeError):
+            raise
 
 
 def python() -> Path:

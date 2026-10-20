@@ -706,7 +706,7 @@ def migration_command(name: str, bundles: list[str]) -> str:
     return f"dsh plugin --profile {name} remove " + " ".join(bundles)
 
 
-def requirement(name: str = GRAPH_PROFILE, bundle: str = GRAPH_BUNDLE, *, home: str | Path | None = None) -> str | None:
+def requirement(name: str = GRAPH_PROFILE, bundle: str = GRAPH_BUNDLE, *, home: str | Path | None = None, checkout: Path | None = None) -> str | None:
     """Why DSH cannot start this target's work, and the commands that fix it.
 
     ``None`` when the profile carries the bundle. The reason is stated because the
@@ -743,15 +743,15 @@ def requirement(name: str = GRAPH_PROFILE, bundle: str = GRAPH_BUNDLE, *, home: 
             f"the DSH profile {name!r} exists but does not carry {bundle}, so it is "
             f"not this checkout's {name!r} profile. Add it with `{prefix}{add_command(name, bundle)}`"
         )
-    mismatch = checkout_mismatch(name, bundle, home=home)
+    mismatch = checkout_mismatch(name, bundle, home=home, checkout=checkout)
     if mismatch is not None:
         return mismatch
     return None
 
 
-def require(name: str = GRAPH_PROFILE, bundle: str = GRAPH_BUNDLE, *, home: str | Path | None = None) -> None:
+def require(name: str = GRAPH_PROFILE, bundle: str = GRAPH_BUNDLE, *, home: str | Path | None = None, checkout: Path | None = None) -> None:
     """Raise :class:`ProfileError` naming the fix and the reason, or return."""
-    problem = requirement(name, bundle, home=home)
+    problem = requirement(name, bundle, home=home, checkout=checkout)
     if problem is not None:
         raise ProfileError(problem)
 

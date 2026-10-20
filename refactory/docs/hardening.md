@@ -771,8 +771,13 @@ refuses with a `RuntimeError` naming the commit and the conflicting paths.
 `<refactory_home>/pins/<commit>.lock` before staging a pin. Concurrent callers
 block until the first one finishes, then find the prepared pin and return it.
 
-### Atomic pin preparation
+### In-place pin preparation
 
-The pin is staged in `<commit>.preparing/` and atomically renamed to
-`<commit>/` only after all preparation steps succeed. A failure at any point
-removes the staging directory and propagates the error.
+The pin is prepared directly at its final path (`<refactory_home>/pins/<key>/`),
+guarded by an exclusive file lock (`<key>.lock`). The `pin.json` file is the
+readiness marker: it is written only after all preparation steps (worktree
+creation, hooks isolation, dirty diff application, `uv sync`, `pnpm install`,
+`pnpm build`, and profile provisioning) succeed. A failure at any point removes
+the pin directory and propagates the error. Concurrent callers block on the lock
+and, after the first one finishes, find the prepared pin via `pin.json` and
+return it immediately.

@@ -255,13 +255,20 @@ def run(
     require_build()
     from refactory_dsh import dsh_profile
     _profile_name = 'graph'
+    _pin_checkout_for_check: Path | None = None
     if resume and workdir:
         try:
             from refactory_dsh import pin as _pin_mod
             _profile_name = _pin_mod.driver_profile(workdir)
+            if _profile_name.startswith('graph-pin-'):
+                import json as _json
+                _rc = _json.loads((Path(workdir) / '.refactory' / 'run-config.json').read_text())
+                _pco = _rc.get('driver', {}).get('pin_checkout')
+                if _pco:
+                    _pin_checkout_for_check = Path(_pco)
         except Exception:
             pass
-    dsh_profile.require(name=_profile_name)
+    dsh_profile.require(name=_profile_name, checkout=_pin_checkout_for_check)
     with ownership(workdir) as owner:
         if resume:
             if source or source_format not in ('', 'directory') or approve or knobs or intent or model_context or provider or model or bool(worker_backend) or effort or permission_mode or role_routes or node_routes or model_timeout_s is not None:

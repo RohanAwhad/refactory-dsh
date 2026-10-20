@@ -80,6 +80,43 @@ def record_driver(run_config_path: Path) -> None:
     except (OSError, subprocess.SubprocessError):
         pass
 
+    # Also capture untracked files under machinery paths.
+    try:
+        result_untracked = subprocess.run(
+            ["git", "-C", checkout, "ls-files", "--others", "--exclude-standard",
+             "--", *MACHINERY_GLOBS],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result_untracked.returncode == 0 and result_untracked.stdout.strip():
+            untracked_parts: list[str] = []
+            for untracked_file in result_untracked.stdout.strip().splitlines():
+                full_path = Path(checkout) / untracked_file
+                if full_path.is_file():
+                    try:
+                        content = full_path.read_text()
+                    except (OSError, UnicodeDecodeError):
+                        continue
+                    lines = content.splitlines(keepends=True)
+                    n = len(lines)
+                    header = (
+                        f"diff --git a/{untracked_file} b/{untracked_file}\n"
+                        f"new file mode 100644\n"
+                        f"--- /dev/null\n"
+                        f"+++ b/{untracked_file}\n"
+                        f"@@ -0,0 +1,{n} @@\n"
+                    )
+                    body = "".join(
+                        f"+{line}" if line.endswith("\n")
+                        else f"+{line}\n\\ No newline at end of file\n"
+                        for line in lines
+                    )
+                    untracked_parts.append(header + body)
+            if untracked_parts:
+                untracked_section = "\n".join(untracked_parts)
+                dirty_diff = (dirty_diff + "\n" + untracked_section) if dirty_diff else untracked_section
+    except (OSError, subprocess.SubprocessError):
+        pass
+
     fingerprints_at_launch = dict(config.get("configuration_fingerprints") or {})
 
     config["driver"] = {
@@ -91,6 +128,10 @@ def record_driver(run_config_path: Path) -> None:
         "pin_checkout": None,
     }
     _atomic_write_json(run_config_path, config)
+
+    # Register the run on its driver checkout so rebuild checks can find it.
+    run_dir = run_config_path.parent.parent  # .refactory/run-config.json → run_dir
+    register_run_on_driver(Path(checkout), run_dir)
 
 
 # ── drift detection ──────────────────────────────────────────────────────
@@ -512,6 +553,64 @@ def _atomic_write_json(path: Path, data: Any) -> None:
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=2))
     tmp.replace(path)
+
+
+def register_run_on_driver(checkout: Path, run_dir: Path) -> None:
+    """Register a run as using the given driver checkout.
+
+    Uses ``<refactory_home>/drivers/<checkout_hash>/runs.json`` under a file lock
+    so that :func:`driver_live_runs` can refuse a rebuild while a run is active.
+    """
+    checkout_hash = hashlib.sha256(str(Path(checkout).resolve()).encode()).hexdigest()[:16]
+    driver_meta = refactory_home() / "drivers" / checkout_hash
+    driver_meta.mkdir(parents=True, exist_ok=True)
+    lock_path = driver_meta / "runs.lock"
+    runs_json = driver_meta / "runs.json"
+    lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        data: dict = {"checkout": str(checkout), "runs": []}
+        if runs_json.exists():
+            try:
+                data = json.loads(runs_json.read_text())
+            except (OSError, json.JSONDecodeError):
+                pass
+        run_str = str(Path(run_dir).resolve())
+        runs = data.get("runs", [])
+        if run_str not in runs:
+            runs.append(run_str)
+            data["runs"] = runs
+            data["checkout"] = str(checkout)
+            _atomic_write_json(runs_json, data)
+    finally:
+        os.close(lock_fd)
+
+
+def driver_live_runs(checkout: Path) -> list[str]:
+    """Return run directories registered on *checkout* that are currently live.
+
+    A run is live when its invocation lock is held by another process.
+    """
+    from refactory_dsh.run_ownership import held as _run_held
+
+    checkout_hash = hashlib.sha256(str(Path(checkout).resolve()).encode()).hexdigest()[:16]
+    runs_json = refactory_home() / "drivers" / checkout_hash / "runs.json"
+    if not runs_json.exists():
+        return []
+    try:
+        data = json.loads(runs_json.read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    live: list[str] = []
+    for run_path_str in data.get("runs", []):
+        rp = Path(run_path_str)
+        if rp.exists():
+            try:
+                if _run_held(rp):
+                    live.append(run_path_str)
+            except Exception:
+                pass
+    return live
 
 
 def driver_profile(run_dir: Path) -> str:

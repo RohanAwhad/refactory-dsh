@@ -85,14 +85,20 @@ def run_on_dsh(
     if context:
         context = {**context, "dsh_home": str(selected_home)}
     _dsh_profile_name = "graph"
+    _dsh_pin_checkout: Path | None = None
     try:
         _run_config_path = workdir / ".refactory" / "run-config.json"
         if _run_config_path.exists():
             import refactory_dsh.pin as _pin_mod
             _dsh_profile_name = _pin_mod.driver_profile(workdir)
+            if _dsh_profile_name.startswith("graph-pin-"):
+                _rc_data = json.loads(_run_config_path.read_text())
+                _pco = _rc_data.get("driver", {}).get("pin_checkout")
+                if _pco:
+                    _dsh_pin_checkout = Path(_pco)
     except Exception:
         pass
-    problem = dsh_profile.requirement(name=_dsh_profile_name, home=selected_home)
+    problem = dsh_profile.requirement(name=_dsh_profile_name, home=selected_home, checkout=_dsh_pin_checkout)
     if problem is not None:
         # Checked here rather than left to the child: DSH's own error is about a
         # missing profile, which reads as a packaging bug. The profile is machine

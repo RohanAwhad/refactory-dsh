@@ -763,6 +763,64 @@ def test_register_run_concurrent_safe(tmp_path: Path, monkeypatch: pytest.Monkey
     assert str(run2.resolve()) in data["runs"]
 
 
+def test_dirty_driver_captures_untracked_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Untracked files under machinery paths are included in dirty_diff."""
+    repo = tmp_path / "repo"
+    _init_repo(repo, files={"refactory/refactory_dsh/existing.py": "original"})
+
+    # Create an untracked file under machinery paths (not added to git).
+    (repo / "refactory/refactory_dsh/newfile.py").write_text("new untracked content")
+
+    run_dir = tmp_path / "run"
+    _make_run_config(run_dir, "x", str(repo))
+
+    import refactory_dsh.pin as pin
+    monkeypatch.setattr(pin, "REPO_ROOT", repo)
+
+    pin.record_driver(run_dir / ".refactory" / "run-config.json")
+
+    config = json.loads((run_dir / ".refactory" / "run-config.json").read_text())
+    driver = config["driver"]
+    assert driver["dirty_diff"] is not None
+    assert "newfile.py" in driver["dirty_diff"]
+    assert "new untracked content" in driver["dirty_diff"]
+
+
+def test_register_run_on_driver(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """record_driver registers the run on its driver checkout."""
+    repo = tmp_path / "repo"
+    commit_a = _init_repo(repo)
+
+    import refactory_dsh.pin as pin
+    monkeypatch.setattr(pin, "REPO_ROOT", repo)
+
+    run_dir = tmp_path / "run"
+    _make_run_config(run_dir, commit_a, str(repo))
+    pin.record_driver(run_dir / ".refactory" / "run-config.json")
+
+    # Verify the run is registered on the driver.
+    checkout_hash = hashlib.sha256(str(repo.resolve()).encode()).hexdigest()[:16]
+    driver_meta = pin.refactory_home() / "drivers" / checkout_hash / "runs.json"
+    assert driver_meta.exists()
+    data = json.loads(driver_meta.read_text())
+    assert str(run_dir.resolve()) in data["runs"]
+    assert data["checkout"] == str(repo)
+
+
+def test_pinned_resume_profile_check_accepts_checkout(tmp_path: Path) -> None:
+    """requirement() with checkout= does not crash for a pin profile name."""
+    from refactory_dsh import dsh_profile
+
+    # Calling requirement with a pin profile name and a checkout should not
+    # raise KeyError. It returns a message (profile doesn't exist) or None.
+    result = dsh_profile.requirement(
+        name="graph-pin-000000000000",
+        checkout=tmp_path,
+    )
+    # The profile directory doesn't exist, so it returns an error message.
+    assert isinstance(result, str)
+
+
 def test_pin_profile_is_valid_target() -> None:
     """A pin profile name (graph-pin-<commit12>) is accepted by dsh_profile.target()."""
     from refactory_dsh.dsh_profile import target, Target
