@@ -295,7 +295,8 @@ def supervise(root: Path, *, max_respawns: int | None = None,
                 # A person's explicit request — reset counter and start a new child
                 respawn_count = 0
                 try:
-                    recovery.prepare(root, name)
+                    recovery.prepare(root, name,
+                                     acknowledge_failed=bool(pending.get('acknowledge_failed')))
                 except ValueError as exc:
                     reason = str(exc)
                     pid_for_record = child.pid if child is not None else os.getpid()
@@ -315,6 +316,12 @@ def supervise(root: Path, *, max_respawns: int | None = None,
                     except OSError:
                         pass
                 continue
+
+            # dm-95: promote ready+last_failure to run-level failed when the
+            # owner exits without retrying the node.  A node failure the owner
+            # did not retry has ended the run; recording it as failed prevents
+            # the supervisor from respawning.
+            run_state.promote_unretried_failure(root)
 
             # Check if supervision is needed — single decision function
             if not run_state.needs_supervision(root, since=child_start_time):

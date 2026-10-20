@@ -137,12 +137,18 @@ def snapshot(root: Path, *, after: int = 0) -> dict[str, Any]:
                 'paused by user' if spine.get('status') == 'paused' else
                 'failure requires attention' if spine.get('status') in ('failed', 'refused') else
                 'graph boundary; worker dispatch unconfirmed' if nodes else None)
+    # dm-95: override wait_reason when a node failure is awaiting retry
+    last_failure = spine.get('last_failure')
+    if last_failure and isinstance(last_failure, dict) and spine.get('status') == 'ready':
+        wait = f'step {last_failure.get("node", "unknown")} failed; awaiting retry'
     return {'schema_version': 1, 'run_id': str(root), 'invocation': invocation.get('id'),
             'events': history, 'cursor': cursor, 'last_event_at': all_events[-1].get('at') if all_events else None,
             'started_at': invocation.get('started'), 'nodes': nodes, 'completed': completed,
             'running_nodes': spine.get('running_nodes'),
             'graph': graph_snapshot(root),
-            'wait_reason': wait, 'workers': workers, 'deliveries': supplied,
+            'wait_reason': wait,
+            **({'last_failure': last_failure} if last_failure and isinstance(last_failure, dict) else {}),
+            'workers': workers, 'deliveries': supplied,
             'resources': read(root / '.refactory/resource-usage.json') or None,
             'control': read(root / '.refactory/graph-control-receipt.json') or None,
             'outputs': read(root / 'facts.json')}

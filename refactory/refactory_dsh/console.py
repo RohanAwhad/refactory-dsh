@@ -503,6 +503,12 @@ def status(run_root: Path, *, after: int = 0) -> dict[str, Any]:
             state = "finished"
     from refactory_dsh import live, run_state
     activity = live.snapshot(run_root)
+    # dm-95: surface last_failure info when the graph is retrying a node
+    last_failure = spine.get('last_failure')
+    if last_failure and isinstance(last_failure, dict) and spine.get('status') == 'ready':
+        lf_node = last_failure.get('node', 'unknown')
+        activity['last_failure'] = last_failure
+        activity['wait_reason'] = f'step {lf_node} is being retried'
     # Report command corrections from facts.json
     facts_data = _read_json(run_root / 'facts.json')
     command_history = facts_data.get('command_history', [])
