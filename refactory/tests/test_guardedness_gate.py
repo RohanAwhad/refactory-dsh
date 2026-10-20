@@ -49,7 +49,7 @@ def test_non_guarding_test_without_exemption_causes_reloop():
     """A new test that passes on the base blocks the check."""
     guardedness = {
         "summary": {"total_new_tests": 1, "guarding": 0, "not_guarding": 1},
-        "results": [{"test_file": "test_foo.py", "status": "not_guarding"}],
+        "results": [{"file": "test_foo.py", "guarding": False, "file_level": "pass"}],
     }
     ctx = FakeCtx(
         files={
@@ -65,7 +65,7 @@ def test_non_guarding_test_with_exemption_proceeds():
     """A test listed in ## Test guardedness exemptions is not blocked."""
     guardedness = {
         "summary": {"total_new_tests": 1, "guarding": 0, "not_guarding": 1},
-        "results": [{"test_file": "test_foo.py", "status": "not_guarding"}],
+        "results": [{"file": "test_foo.py", "guarding": False, "file_level": "pass"}],
     }
     design = (
         "# Design\n\n## Summary\n\nFix it.\n\n"
@@ -87,8 +87,8 @@ def test_all_guarding_proceeds():
     guardedness = {
         "summary": {"total_new_tests": 2, "guarding": 2, "not_guarding": 0},
         "results": [
-            {"test_file": "test_a.py", "status": "guarding"},
-            {"test_file": "test_b.py", "status": "guarding"},
+            {"file": "test_a.py", "guarding": True},
+            {"file": "test_b.py", "guarding": True},
         ],
     }
     ctx = FakeCtx(
@@ -120,8 +120,8 @@ def test_reloop_message_names_tests():
     guardedness = {
         "summary": {"total_new_tests": 2, "guarding": 0, "not_guarding": 2},
         "results": [
-            {"test_file": "test_a.py", "status": "not_guarding"},
-            {"test_file": "test_b.py", "status": "not_guarding"},
+            {"file": "test_a.py", "guarding": False, "file_level": "pass"},
+            {"file": "test_b.py", "guarding": False, "file_level": "pass"},
         ],
     }
     ctx = FakeCtx(
@@ -253,12 +253,12 @@ def test_guardedness_reloops_in_fast_mode_integration(tmp_path, monkeypatch):
             # First call: test does not guard the change
             return {
                 "summary": {"total_new_tests": 1, "guarding": 0, "not_guarding": 1},
-                "results": [{"test_file": "test_foo.py", "status": "not_guarding"}],
+                "results": [{"file": "test_foo.py", "guarding": False, "file_level": "pass"}],
             }
         # Subsequent calls: test guards the change
         return {
             "summary": {"total_new_tests": 1, "guarding": 1, "not_guarding": 0},
-            "results": [{"test_file": "test_foo.py", "status": "guarding"}],
+            "results": [{"file": "test_foo.py", "guarding": True}],
         }
 
     monkeypatch.setattr(base_check, "compute_test_guardedness", mock_guardedness)

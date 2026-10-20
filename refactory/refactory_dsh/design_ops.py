@@ -552,11 +552,13 @@ def enforce_guardedness(ctx: Any) -> list[str]:
     if summary.get("not_guarding", 0) == 0:
         return []
 
-    # Collect non-guarding test file paths
+    # Collect non-guarding test file paths.
+    # compute_test_guardedness (base_check.py) produces {"file": ..., "guarding": bool},
+    # NOT {"test_file": ..., "status": "not_guarding"}.
     non_guarding = []
     for result in guardedness.get("results", []):
-        if result.get("status") == "not_guarding":
-            non_guarding.append(result.get("test_file", "unknown"))
+        if result.get("guarding") is False:
+            non_guarding.append(result.get("file", "unknown"))
 
     if not non_guarding:
         return []
