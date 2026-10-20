@@ -44,6 +44,19 @@ You can say:
 
 The CEO uses workflow state, steering and edit/redo tools. A delivery receipt shows which instruction reached work; inspect the outputs to judge compliance. An already running worker may not receive a change immediately. See [the interface guide](../interfaces.md#steering-is-precise-about-timing).
 
+### Mid-turn messages and Enter behaviour
+
+While the CEO is working, you can send a message immediately as steering
+rather than waiting for the turn to finish. The refactory-web composition
+defaults the conversation plugin's Enter behaviour to **Steer**; a saved
+choice in **Settings → Conversation → Enter Behaviour** still overrides it.
+
+With the default Enter-behaviour (**Steer**), **plain Enter** sends the
+message immediately as steering while the CEO is mid-turn.
+**Cmd+Enter** (macOS) / **Ctrl+Enter** (other platforms) sends the opposite
+— queuing the message until the turn finishes.  A saved choice of **Queue**
+reverses which gesture does what (DSH's `resolveSubmitMode` rule).
+
 A session owns one open workflow. Use another session with a distinct run directory for independent work. Reopening a mode can start a fresh invocation; it is not equivalent to resuming an interrupted one.
 
 ## Follow a run in the panel

@@ -30,6 +30,7 @@ export interface NodeManifest {
   reads: string[]
   writes: string[]
   prompt_file?: string
+  feedback_file?: string
 }
 
 /** Per-run settings for node commands: where they run, and with what. */
@@ -178,7 +179,7 @@ export function runWarningsOf(stderr: string): string[] {
 }
 
 /** The declaration handed to a node command. */
-function manifestOf(node: NodeView, command: string, promptFile?: string): NodeManifest {
+function manifestOf(node: NodeView, command: string, promptFile?: string, feedbackFile?: string): NodeManifest {
   return {
     id: node.id,
     type: node._type,
@@ -186,18 +187,19 @@ function manifestOf(node: NodeView, command: string, promptFile?: string): NodeM
     reads: node.reads ?? [],
     writes: node.writes ?? [],
     ...(promptFile !== undefined ? { prompt_file: promptFile } : {}),
+    ...(feedbackFile !== undefined ? { feedback_file: feedbackFile } : {}),
   }
 }
 
 /** One command's request: where it runs, with what, and under which sandbox. */
-function requestFor(node: NodeView, command: string, config: CommandRunnerConfig, promptFile?: string): ShellExecRequest {
+function requestFor(node: NodeView, command: string, config: CommandRunnerConfig, promptFile?: string, feedbackFile?: string): ShellExecRequest {
   const seconds = node.command_timeout_s
   if (seconds !== undefined && (!Number.isSafeInteger(seconds) || seconds <= 0 || seconds > 2_147_483)) {
     throw new Error(`${node.id} has an invalid command_timeout_s`)
   }
   return {
     command,
-    env: { ...config.env, [NODE_ENV_KEY]: JSON.stringify(manifestOf(node, command, promptFile)) },
+    env: { ...config.env, [NODE_ENV_KEY]: JSON.stringify(manifestOf(node, command, promptFile, feedbackFile)) },
     timeoutMs: seconds === undefined ? config.timeoutMs : seconds * 1000,
     ...(config.workdir === undefined ? {} : { workdir: config.workdir }),
     ...(config.sandboxPolicy === undefined ? {} : { sandboxPolicy: config.sandboxPolicy }),
@@ -314,6 +316,7 @@ export async function runDeterministic(
   shell: ShellExecutor,
   node: NodeView,
   config: CommandRunnerConfig,
+  feedbackFile?: string,
 ): Promise<CommandOutcome> {
   const command = commandOf(node)
   const base: CommandResult = {
@@ -339,7 +342,7 @@ export async function runDeterministic(
   }
 
   const allowance = resourceCheck(node, config)
-  const request = requestFor(node, command, config, promptFile)
+  const request = requestFor(node, command, config, promptFile, feedbackFile)
   const resolved = shell.resolve(request)
   // The model-facing shell caps arbitrary calls at its default maximum. This
   // trusted workflow operation carries a bounded allowance resolved at lowering;

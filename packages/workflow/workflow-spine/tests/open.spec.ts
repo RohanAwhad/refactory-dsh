@@ -729,7 +729,7 @@ describe('one deterministic node per call when the run is opened interactively',
     expect(first).toMatchObject({
       status: 'ready',
       nodes: [{ id: 'n2' }],
-      ran: { node: 'n1', type: 'FnNode', outputs: ['n1.out'], facts: { n1: true } },
+      ran: { node: 'n1', type: 'FnNode', outputs: ['n1.out'], facts: { _summary: true, inline: { n1: true } } },
     })
 
     const second = await call(ctx, 'wf_next', {}, as('session-1'))
@@ -744,7 +744,7 @@ describe('one deterministic node per call when the run is opened interactively',
     expect(log).toEqual(['run-n1', 'run-n2', 'run-n3', 'run-n4'])
     expect(last).toMatchObject({
       status: 'done',
-      ran: { node: 'n4', outputs: ['n4.out'], facts: { n1: true, n2: true, n3: true, n4: true } },
+      ran: { node: 'n4', outputs: ['n4.out'], facts: { _summary: true, inline: { n1: true, n2: true, n3: true, n4: true } } },
     })
   })
 
@@ -1078,7 +1078,7 @@ describe('run warnings on a configured graph', () => {
     const ctx = await mount({ interactiveOpen: false, graph: CHAIN_GRAPH, executeCommands: true, workdir: run }, shell)
 
     const view = await call(ctx, 'wf_next', {})
-    expect(view).toMatchObject({ status: 'failed', node: 'run-n2', warnings: [`n1: ${DRIFT_WARNING}`] })
+    expect(view).toMatchObject({ status: 'failed', node: 'n2', warnings: [`n1: ${DRIFT_WARNING}`] })
   })
 
   it('are journalled for the run\'s final report', async () => {
