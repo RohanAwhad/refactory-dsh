@@ -3088,6 +3088,130 @@ def test_gate_correction_updates_pr_text(github, tmp_path, monkeypatch):
         "process note should not appear in design.md"
 
 
+def test_edit_resolves_conflict_keeping_mains_lines(tmp_path):
+    """An ===EDIT: block resolves a merge conflict by keeping main's lines,
+    not only ===FILE: whole-file replacement.
+
+    Fails without the change: edits apply to committed_text (the last attempt's
+    commit), which has no conflict markers.  An edit that searches for marker
+    text would fail with 'text is not in shared.py'.
+    """
+    from refactory_dsh import repo_change
+    from refactory_dsh.worktree import (
+        create, recorded, _write_json, RECORD,
+        git as wgit, COMMITTER, NO_HOOKS,
+    )
+    from dataclasses import asdict, replace as dreplace
+
+    # ── Set up a repo with shared.py ──
+    repo = git_repo(tmp_path / "repo")
+    (repo / "shared.py").write_text("line 1\nline 2\nline 3\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "initial shared.py")
+
+    # ── Create a worktree for the run ──
+    run = tmp_path / "run"
+    run.mkdir(parents=True, exist_ok=True)
+    create(repo, "HEAD", "test-edit-merge", run)
+    found = recorded(run)
+    wt_path = Path(found.path)
+
+    # ── Make a feature change in the worktree and commit ──
+    (wt_path / "shared.py").write_text("line 1\nline 2 feature\nline 3\n")
+    wgit(wt_path, "add", ".")
+    wgit(wt_path, *NO_HOOKS, "-c", "commit.gpgsign=false",
+         "commit", "-q", "--no-verify", "-m", "feature change",
+         env={**os.environ, **COMMITTER})
+    feature_head = wgit(wt_path, "rev-parse", "HEAD").strip()
+
+    # Update the worktree record with the new head.
+    updated_found = dreplace(found, head=feature_head)
+    _write_json(run / RECORD, asdict(updated_found))
+
+    # ── Make a conflicting change on main in the original repo ──
+    (repo / "shared.py").write_text("line 1\nline 2 main\nline 3\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "main changes line 2")
+    main_head = git(repo, "rev-parse", "HEAD")
+
+    # ── Start a merge in the worktree ──
+    try:
+        wgit(wt_path, *NO_HOOKS, "-c", "commit.gpgsign=false",
+             "merge", "--no-commit", "--no-verify", main_head,
+             env={**os.environ, **COMMITTER})
+    except ValueError:
+        pass  # expected — conflicts
+
+    # Verify MERGE_HEAD is present and shared.py has markers.
+    wgit(wt_path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
+    conflicted = (wt_path / "shared.py").read_text()
+    assert "<<<<<<< HEAD" in conflicted, f"expected markers: {conflicted}"
+
+    # Find the >>>>>>> marker line (contains the SHA, not "REPLACE").
+    theirs_marker = ""
+    for mline in conflicted.splitlines():
+        if mline.startswith(">>>>>>>") and "REPLACE" not in mline:
+            theirs_marker = mline
+            break
+    assert theirs_marker, "expected >>>>>>> marker in conflicted text"
+
+    # ── Build ===EDIT: blocks that resolve the conflict ──
+    # The ======= in the edit format IS the ======= git puts as a conflict
+    # divider.  EDIT 1's SEARCH text is everything above that divider
+    # (the ours marker and content); REPLACE is empty (removes them).
+    # EDIT 2's SEARCH text is the theirs marker line; REPLACE is empty.
+    # The bare ======= line stays but is not caught by the conflict-marker
+    # regex (which checks only <<<<<<< and >>>>>>>).
+    edit_emit = (
+        "===EDIT: shared.py===\n"
+        "<<<<<<< SEARCH\n"
+        "<<<<<<< HEAD\n"
+        "line 2 feature\n"
+        "=======\n"
+        ">>>>>>> REPLACE\n"
+        "\n"
+        "<<<<<<< SEARCH\n"
+        + theirs_marker + "\n"
+        "=======\n"
+        ">>>>>>> REPLACE\n"
+    )
+
+    ctx = _TitleCtx(
+        facts={"name": "test_edit_merge", "brief": "test", "check": "echo ok"},
+        files={"emit.txt": edit_emit},
+    )
+    ctx.workdir = run
+    ctx.read_text = lambda name: ctx._files[name]
+    ctx.write_text = lambda name, text: ctx._files.__setitem__(name, text)
+    ctx.write_json = lambda name, data: ctx._files.__setitem__(name, json.dumps(data))
+    ctx.read_json = lambda name, default=None: (
+        json.loads(ctx._files.get(name, "null"))
+        if ctx._files.get(name) else default
+    )
+
+    result = repo_change._commit_emission(ctx)
+    assert result.get("commit"), f"expected a commit: {result}"
+
+    # The committed file keeps main's content, with no <<<<<<< or >>>>>>> markers.
+    committed = (wt_path / "shared.py").read_text()
+    assert "line 2 main" in committed, f"expected main's content: {committed}"
+    assert "<<<<<<< HEAD" not in committed
+    assert "line 2 feature" not in committed
+    assert theirs_marker not in committed
+
+    # The commit is a merge commit (2 parents).
+    cat_output = git(wt_path, "cat-file", "-p", "HEAD")
+    parent_lines = [l for l in cat_output.splitlines() if l.startswith("parent ")]
+    assert len(parent_lines) == 2, f"expected merge commit, got {len(parent_lines)} parents"
+
+    # No MERGE_HEAD remains after the commit.
+    try:
+        wgit(wt_path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
+        assert False, "MERGE_HEAD should be gone after commit"
+    except ValueError:
+        pass  # expected
+
+
 def test_apply_corrections_no_ledger_leaves_design_unchanged(github, tmp_path):
     """When there is no intent-ledger.md, apply_corrections passes through and
     design.md is unchanged.
