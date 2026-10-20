@@ -291,8 +291,10 @@ def test_guardedness_reloops_in_full_mode_integration(tmp_path, monkeypatch):
     answers = [
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
         DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
-        render({"tool.py": "print('v1')\n"}),       # first emit: guardedness blocks
-        render({"tool.py": "print('v2')\n"}),       # second emit after repair
+        render({"tool.py": "print('v1')\n",
+                "test_foo.py": "def test_foo():\n    assert True\n"}),  # first emit: test_foo.py in added_files
+        render({"tool.py": "print('v2')\n",
+                "test_foo.py": "def test_foo():\n    import tool\n    assert hasattr(tool, '__file__')\n"}),  # second emit: guarding test
         VERIFICATION_ANSWER,
         *REVIEW_ANSWERS,
     ]
@@ -347,10 +349,12 @@ def test_guardedness_reloops_in_fast_mode_integration(tmp_path, monkeypatch):
 
     answers = [
         "Change only the requested file.",          # strategy
-        render({"tool.py": "print('v1')\n"}),       # first emit: guardedness blocks
+        render({"tool.py": "print('v1')\n",
+                "test_foo.py": "def test_foo():\n    assert True\n"}),  # first emit
         VERIFICATION_ANSWER,                         # verifier after first check
         # gate_verification sees guardedness_blocked → reloops to emit
-        render({"tool.py": "print('v2')\n"}),       # second emit after reloop
+        render({"tool.py": "print('v2')\n",
+                "test_foo.py": "def test_foo():\n    import tool\n    assert hasattr(tool, '__file__')\n"}),  # second emit
         VERIFICATION_ANSWER,                         # verifier after second check
         FAST_QA,                                     # focused QA
     ]
