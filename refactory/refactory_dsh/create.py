@@ -401,7 +401,7 @@ class CreateMode(Mode):
                 "Use its authoritative receipt and outputs. A targeted extra model check must "
                 "name a concrete unmet criterion and its bounded scope. Record every "
                 "command and its exact output in `reviews/health-check.md`. If anything "
-                "fails or is missing, write the line `BLOCKING:` followed by what failed. "
+                "fails or is missing, write `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. "
                 "A check you did not run is not a check that passed — say which ones you "
                 "skipped."
             ),
@@ -423,8 +423,7 @@ class CreateMode(Mode):
                 "Check that admission and content guards also accept legitimate data "
                 "and notation supported by the contract, not only reject bad cases. "
                 "Record findings in `reviews/code-review.md`. A defect that "
-                "would stop the package working is written as `BLOCKING:` followed by "
-                "the file and what is wrong. Style is not blocking."
+                "would stop the package working is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. Style is not blocking."
             ),
             reads=("design.md", "emit.txt"),
             writes=("reviews/code-review.md",),
@@ -454,8 +453,7 @@ class CreateMode(Mode):
                 "does not grade, and mark any untested requirement as unverified. "
                 "Write `reviews/qa.md` with each check and its exact result. Every "
                 "acceptance criterion in the strategy must have a check. Anything that "
-                "breaks an acceptance criterion is written as `BLOCKING:` followed by "
-                "what you ran and what happened."
+                "breaks an acceptance criterion is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path."
             ),
             reads=("brief.json", "strategy.json"),
             writes=("reviews/qa.md",),
@@ -497,6 +495,7 @@ class CreateMode(Mode):
                 "artifacts. Audit actual final validation receipts and the accepted design "
                 "against the brief and latest intent ledger. Required behavior without "
                 "adequate evidence is failed or unverified with a precise reason. "
+                "Any blocking finding is written as `BLOCKING: <path>: <description>` where `<path>` is the file the builder must change to fix the problem. A defect in the code is reported against the code file, even when the requirement it misses comes from design.md or the brief. A problem in a run document (design.md, strategy.json, or another file an earlier step wrote) is reported with that document's path. "
                 "Write `reviews/overwatch.md` ending with exactly `VERDICT: PASS` or "
                 "`VERDICT: FAIL`. A missing required check cannot pass."
             ),

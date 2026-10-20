@@ -668,7 +668,7 @@ and the fail-open case when no run is open.
 - **`fast_ops.gate_qa`** (`fast_ops.py`) does not need it — it uses structured JSON checks from `focused-qa.json`, not `blocking_findings()` on review prose.
 - **`fast_ops.gate_emit`** (`fast_ops.py`) does not need it — it reloops on materialise refusals, not review findings.
 
-**Held by.** `test_gate_stale_findings.py`: `test_classify_finding_structured_worktree_file_stays_blocking`, `test_classify_finding_structured_run_doc_downgraded`, `test_classify_finding_freeform_stays_blocking`, `test_classify_finding_no_path_stays_blocking`, `test_run_doc_owners_from_declarations`, `test_scope_filter_with_custom_graph_document`, `test_classify_finding_exact_path_match`, `test_scope_filter_mixed_findings`.
+**Held by.** `test_gate_stale_findings.py`: `test_classify_finding_structured_worktree_file_stays_blocking`, `test_classify_finding_structured_run_doc_downgraded`, `test_classify_finding_freeform_stays_blocking`, `test_classify_finding_no_path_stays_blocking`, `test_run_doc_owners_from_declarations`, `test_scope_filter_with_custom_graph_document`, `test_classify_finding_exact_path_match`, `test_scope_filter_mixed_findings`, `test_gate_qa_downgrades_design_md_finding`, `test_gate_qa_keeps_worktree_finding_blocking`, `test_gate_overwatch_downgrades_design_md_finding`.
 
 ---
 
