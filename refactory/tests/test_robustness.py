@@ -1273,6 +1273,8 @@ def test_design_fast_base_double_crash_continues_with_note(tmp_path, monkeypatch
     (second attempt install) pass.  focused_check sets base_unavailable and
     writes the note into check.txt, which the focused_check node now declares.
     """
+    from refactory_dsh.fast import DesignFastMode
+
     counter_dir = tempfile.mkdtemp(prefix="r2fast_")
     counter_file = os.path.join(counter_dir, "counter")
 
