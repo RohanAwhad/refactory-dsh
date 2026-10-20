@@ -135,9 +135,16 @@ def main() -> int:
         # moved, refuse with a diagnostic message.
         _pin_py = _resolve_pin_python(workdir)
         if _pin_py:
-            if os.path.realpath(sys.executable) != os.path.realpath(_pin_py):
+            # Compare sys.prefix (the venv root) with the pin's venv, not
+            # os.path.realpath: uv venvs symlink to the shared interpreter,
+            # so realpath resolves both to the same binary and the switch
+            # never fires.  Re-exec with ``-m refactory_dsh.worker_node``
+            # so the pin's package is loaded, not sys.argv[0] (which under
+            # ``-m`` is the driver's worker_node.py file path).
+            _pin_venv = str(Path(_pin_py).parent.parent)
+            if sys.prefix != _pin_venv:
                 if os.path.isfile(_pin_py):
-                    os.execv(_pin_py, [_pin_py] + sys.argv)
+                    os.execv(_pin_py, [_pin_py, '-m', 'refactory_dsh.worker_node', *sys.argv[1:]])
                 print(
                     f'worker: pinned Python {_pin_py} not found; '
                     f'run `refactory pin list` to inspect',

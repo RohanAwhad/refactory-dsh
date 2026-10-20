@@ -1014,3 +1014,223 @@ def test_pin_profile_is_valid_target() -> None:
     assert result.profile == "graph-pin-5068dbfc93a1"
     assert result.owned is True
     assert "graph" in result.layers
+
+
+def test_worker_dispatch_reexec_uses_module_and_prefix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Worker re-exec compares sys.prefix (not realpath) and uses -m for the module.
+
+    Fails without fix: os.path.realpath comparison resolves both venvs' Python
+    symlinks to the same uv binary, so the re-exec never fires.  And
+    ``[pin_py] + sys.argv`` re-executes the driver's worker_node.py path.
+    """
+    from refactory_dsh import worker_node
+
+    run_dir = tmp_path / "run"
+    (run_dir / ".refactory").mkdir(parents=True)
+    pin_checkout = tmp_path / "pin" / "checkout"
+    pin_py = pin_checkout / ".venv" / "bin" / "python"
+    pin_py.parent.mkdir(parents=True)
+    pin_py.write_text("#!/bin/sh\n")
+
+    config = {"driver": {"pin_checkout": str(pin_checkout)}}
+    (run_dir / ".refactory" / "run-config.json").write_text(json.dumps(config))
+
+    # Simulate being in a DIFFERENT venv (the driver's).
+    monkeypatch.setattr(sys, "prefix", "/driver/checkout/.venv")
+
+    captured: dict[str, Any] = {}
+
+    def fake_execv(path: str, args: list[str]) -> None:
+        captured["path"] = path
+        captured["args"] = args
+        raise SystemExit(42)
+
+    monkeypatch.setattr(os, "execv", fake_execv)
+    monkeypatch.chdir(run_dir)
+
+    # When running with -m, sys.argv[0] is the file path of the module in
+    # the DRIVER's checkout.  The re-exec must NOT use sys.argv[0].
+    monkeypatch.setattr(sys, "argv", [
+        "/driver/checkout/refactory/refactory_dsh/worker_node.py",
+        "spec.json",
+    ])
+
+    with pytest.raises(SystemExit):
+        worker_node.main()
+
+    assert captured["path"] == str(pin_py)
+    # Must use -m so the pin's package is loaded.
+    assert captured["args"][1] == "-m"
+    assert captured["args"][2] == "refactory_dsh.worker_node"
+    # Only the spec argument is forwarded (sys.argv[1:]).
+    assert captured["args"][3] == "spec.json"
+
+
+def test_worker_dispatch_skips_reexec_when_already_on_pin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """When the worker is already running from the pin's venv, no re-exec occurs."""
+    from refactory_dsh import worker_node
+
+    run_dir = tmp_path / "run"
+    (run_dir / ".refactory").mkdir(parents=True)
+    pin_checkout = tmp_path / "pin" / "checkout"
+    pin_py = pin_checkout / ".venv" / "bin" / "python"
+    pin_py.parent.mkdir(parents=True)
+    pin_py.write_text("#!/bin/sh\n")
+
+    config = {"driver": {"pin_checkout": str(pin_checkout)}}
+    (run_dir / ".refactory" / "run-config.json").write_text(json.dumps(config))
+
+    # sys.prefix matches the pin's venv → already on pin, no re-exec.
+    monkeypatch.setattr(sys, "prefix", str(pin_checkout / ".venv"))
+
+    execv_called = False
+
+    def fake_execv(path: str, args: list[str]) -> None:
+        nonlocal execv_called
+        execv_called = True
+
+    monkeypatch.setattr(os, "execv", fake_execv)
+    monkeypatch.chdir(run_dir)
+    monkeypatch.setattr(sys, "argv", [
+        str(pin_checkout / "refactory/refactory_dsh/worker_node.py"),
+        "spec.json",
+    ])
+
+    # main() will continue past re-exec check and fail on reading spec.json
+    # (which doesn't exist), but execv should NOT have been called.
+    worker_node.main()
+    assert not execv_called
+
+
+def test_drift_ignores_non_driver_fingerprints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Drift detection does not count non-driver fingerprints as driver drift.
+
+    A changed run graph (under the run directory, not the checkout) must not
+    trigger pinning.  Recovery's prepare() refuses it as on main.
+    """
+    repo = tmp_path / "repo"
+    commit_a = _init_repo(repo)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True)
+    (run_dir / ".refactory").mkdir(parents=True)
+
+    # Fingerprints: one under the driver checkout, one under the run directory.
+    driver_fp_file = repo / "dummy.txt"
+    driver_fp = hashlib.sha256(driver_fp_file.read_bytes()).hexdigest()
+    run_graph = run_dir / "graphs" / "design-graph.json"
+    run_graph.parent.mkdir(parents=True)
+    run_graph.write_text('{"nodes": {}}')
+    run_graph_fp = hashlib.sha256(run_graph.read_bytes()).hexdigest()
+
+    fingerprints = {
+        str(driver_fp_file): driver_fp,
+        str(run_graph): run_graph_fp,
+    }
+
+    import refactory_dsh.pin as pin
+    monkeypatch.setattr(pin, "REPO_ROOT", repo)
+
+    _make_run_config(run_dir, commit_a, str(repo), fingerprints=fingerprints)
+    pin.record_driver(run_dir / ".refactory" / "run-config.json")
+
+    config = json.loads((run_dir / ".refactory" / "run-config.json").read_text())
+
+    # Modify ONLY the run graph (non-driver fingerprint).
+    run_graph.write_text('{"nodes": {"added": true}}')
+
+    # detect_drift must return None — the driver has not moved.
+    drift = pin.detect_drift(config)
+    assert drift is None, "non-driver fingerprint change should not be counted as driver drift"
+
+
+def test_resume_uses_check_only_for_require_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """interactive.run(resume=True) passes check_only=True to require_build.
+
+    Fails without fix: require_build() is called without check_only on resume,
+    which tries to rebuild and may fail under a live supervisor.
+    """
+    called_with: dict[str, Any] = {}
+
+    def capturing_require_build(**kw: Any) -> None:
+        called_with.update(kw)
+
+    monkeypatch.setattr("refactory_dsh.interactive.require_build", capturing_require_build)
+
+    import refactory_dsh.dsh_profile as _dp
+    monkeypatch.setattr(_dp, "require", lambda **kw: None)
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def fake_ownership(wd):
+        yield 999
+
+    monkeypatch.setattr("refactory_dsh.interactive.ownership", fake_ownership)
+
+    # Write a minimal run config for resume.
+    config_dir = tmp_path / ".refactory"
+    config_dir.mkdir(parents=True)
+    (config_dir / "run-config.json").write_text(json.dumps({
+        "mode": "test/mode",
+        "project": str(tmp_path),
+        "knobs": [],
+        "model_context": {
+            "timeout_s": 500, "provider": "", "model": "",
+            "worker_backend": "dsh", "permission_mode": "default",
+        },
+        "resource_limits": None,
+        "configuration_fingerprints": {},
+    }))
+
+    monkeypatch.setattr("refactory_dsh.interactive.prepare",
+                        lambda *a, **kw: ("test", []))
+    monkeypatch.setattr("refactory_dsh.interactive.command",
+                        lambda *a, **kw: ["echo", "test"])
+    monkeypatch.setattr("refactory_dsh.interactive.run_summary", lambda wd: "")
+    monkeypatch.setattr("refactory_dsh.interactive.run_warnings", lambda wd: "")
+
+    class FakeResult:
+        returncode = 0
+
+    import refactory_dsh.workers as _w
+    monkeypatch.setattr(_w, "run_graph_command", lambda *a, **kw: FakeResult())
+
+    from refactory_dsh.interactive import run
+    run("test/mode", workdir=tmp_path, resume=True)
+
+    assert called_with.get("check_only") is True
+
+
+def test_failed_rebuild_warns_and_continues(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed pnpm build at launch warns instead of stopping.
+
+    Fails without fix: subprocess.run with check=True raises CalledProcessError
+    and the launch crashes.
+    """
+    from refactory_dsh import paths
+    from refactory_dsh.pin import WORKSPACE_PACKAGES
+
+    # Set up a stale build.
+    for pkg in WORKSPACE_PACKAGES:
+        src_dir = tmp_path / pkg / "src"
+        src_dir.mkdir(parents=True, exist_ok=True)
+        (src_dir / "index.ts").write_text("export const x = 1;")
+
+    spine_lib = tmp_path / "packages" / "workflow" / "workflow-spine" / "lib"
+    spine_lib.mkdir(parents=True, exist_ok=True)
+    (spine_lib / "index.js").write_text("// built")
+    (spine_lib / ".workspace-stamp").write_text("0000000000000000")
+
+    monkeypatch.delenv("REFACTORY_GUI_MODE", raising=False)
+
+    # Make pnpm build fail.
+    import subprocess as _sp
+
+    def failing_run(cmd, **kw):
+        if isinstance(cmd, list) and "build" in cmd:
+            raise _sp.CalledProcessError(1, cmd)
+        return _sp.CompletedProcess(cmd, 0, "", "")
+
+    with patch("subprocess.run", side_effect=failing_run):
+        # Should warn but NOT raise.
+        paths.require_build(root=tmp_path)

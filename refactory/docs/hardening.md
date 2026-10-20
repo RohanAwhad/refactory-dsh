@@ -787,6 +787,36 @@ the pin directory and propagates the error. Concurrent callers block on the lock
 and, after the first one finishes, find the prepared pin via `pin.json` and
 return it immediately.
 
+### Worker dispatch under a pin
+
+The dispatched worker (`worker_node.py`) compares `sys.prefix` (the venv root)
+with the pin's venv, not `os.path.realpath(sys.executable)`.  A uv venv's Python
+is a symlink to the shared uv interpreter, so `realpath` resolves both the
+driver's and the pin's binaries to the same target and the re-exec would never
+fire.  When the prefixes differ, the worker re-execs with
+`[pin_py, '-m', 'refactory_dsh.worker_node', *sys.argv[1:]]` so the pin's
+package is loaded rather than the driver's `worker_node.py` file path that
+`sys.argv[0]` holds under `-m` dispatch.
+
+### Drift scope
+
+`detect_drift` counts only fingerprint paths under the driver checkout as
+driver drift.  Changes to non-driver paths — the run's own `graphs/` directory,
+project packages — are not driver drift and do not trigger pinning.  Recovery's
+`prepare()` still refuses those changes with "prepared configuration … changed;
+dependent results need explicit invalidation", and the supervisor's `prepare()`
+calls do the same.  This prevents a run whose own configuration changed from
+receiving a full pin (worktree, installs, build, profile) and bypassing the
+explicit-invalidation refusal.
+
+### Stale-build handling on resume
+
+`interactive.run()` passes `check_only=True` to `require_build()` on resume
+and respawn.  A stale build on a resume child warns to stderr instead of
+attempting a rebuild.  Where a rebuild is attempted (a fresh launch with no live
+runs), a failed `pnpm run build` is caught and logged as a warning rather than
+stopping the launch.
+
 ### Supervisor drift detection
 
 The supervisor loop calls `recovery.prepare()` at two sites: the resume-pending

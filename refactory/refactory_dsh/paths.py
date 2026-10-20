@@ -261,7 +261,12 @@ def require_build(root: Path | None = None, *, check_only: bool = False, gui_mod
                         logging.getLogger(__name__).warning(str(exc))
                         return
                     logging.getLogger(__name__).info("workspace build is stale; rebuilding")
-                    subprocess.run(["pnpm", "run", "build"], cwd=str(selected), check=True)
+                    try:
+                        subprocess.run(["pnpm", "run", "build"], cwd=str(selected), check=True)
+                    except subprocess.CalledProcessError:
+                        logging.getLogger(__name__).warning(
+                            "rebuild failed; the build is stale — run `pnpm run build` manually"
+                        )
             finally:
                 os.close(lock_fd)
 

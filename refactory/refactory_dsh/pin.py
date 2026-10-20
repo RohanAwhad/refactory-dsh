@@ -164,10 +164,17 @@ def detect_drift(run_config: dict) -> dict | None:
         return {"kind": "commit", "recorded_commit": recorded_commit}
 
     # 2. Fingerprint drift (uncommitted edits to fingerprinted files).
+    # Only count fingerprint paths under the driver checkout as driver drift.
+    # Changes to other paths (the run's graphs/, project packages) are not
+    # driver drift: they are handled by recovery's explicit-invalidation
+    # refusal ("prepared configuration … changed") and the supervisor's
+    # prepare() call.
     from refactory_dsh.recovery import _configuration_fingerprint
 
     fingerprints_at_launch = driver.get("fingerprints_at_launch") or {}
     for fp_path, expected in fingerprints_at_launch.items():
+        if not fp_path.startswith(checkout):
+            continue
         try:
             current = _configuration_fingerprint(Path(fp_path))
         except Exception:

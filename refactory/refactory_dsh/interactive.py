@@ -252,7 +252,9 @@ def run(
     workdir = Path(workdir).expanduser().resolve()
     # Pre-flight: both checks raise on failure before ownership() creates
     # the run directory, so a refused start leaves nothing behind.
-    require_build()
+    # On resume and respawn, use check_only so a stale build warns instead
+    # of rebuilding (the supervisor would respawn repeatedly on a failed build).
+    require_build(check_only=resume)
     from refactory_dsh import dsh_profile
     _profile_name = 'graph'
     _pin_checkout_for_check: Path | None = None
