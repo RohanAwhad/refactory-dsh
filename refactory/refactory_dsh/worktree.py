@@ -421,44 +421,58 @@ def copy_uncommitted(target: Path, worktree_path: Path, run: Path) -> list[dict[
     wt_name = worktree_path.name
     run_id = wt_name.removeprefix("run-") if wt_name.startswith("run-") else wt_name
 
-    # Parse ``git status --porcelain`` for a unified view of all changes including
-    # renames, staged deletes, modified, added and untracked files.
+    # Parse ``git status --porcelain=v1 -z --untracked-files=all`` for a unified
+    # view of all changes including renames, staged deletes, modified, added and
+    # untracked files.  The ``-z`` flag gives NUL-separated output so paths with
+    # spaces or special characters are not quoted, and ``--untracked-files=all``
+    # enumerates individual files inside new directories instead of collapsing
+    # them to the directory name.
     try:
-        status_output = git(target, "status", "--porcelain")
+        status_output = git(target, "status", "--porcelain=v1", "-z", "--untracked-files=all")
     except ValueError:
         status_output = ""
-    # Also enumerate untracked unignored files explicitly (porcelain uses '??').
     copy_paths: set[str] = set()
     delete_paths: set[str] = set()
     untracked_set: set[str] = set()
 
-    for line in status_output.splitlines():
-        if len(line) < 4:
+    # NUL-separated entries: each is "XY path\0" except renames which are
+    # "XY old\0new\0" (two path entries).
+    entries_raw = status_output.split("\0") if status_output else []
+    i = 0
+    while i < len(entries_raw):
+        entry = entries_raw[i]
+        if len(entry) < 4:
+            i += 1
             continue
-        xy = line[:2]
-        rest = line[3:]
-        # Renames: "R  old -> new" or "RM old -> new"
+        xy = entry[:2]
+        path = entry[3:]
+        # Renames: the next NUL-separated entry is the new name.
         if xy[0] == "R" or xy[1] == "R":
-            parts = rest.split(" -> ", 1)
-            if len(parts) == 2:
-                old, new = parts[0].strip(), parts[1].strip()
-                delete_paths.add(old)
+            old = path
+            i += 1
+            new = entries_raw[i] if i < len(entries_raw) else ""
+            delete_paths.add(old)
+            if new:
                 copy_paths.add(new)
+            i += 1
             continue
-        path = rest.strip()
         if not path:
+            i += 1
             continue
         # Deleted: either index or worktree column is 'D'
         if "D" in xy:
             delete_paths.add(path)
+            i += 1
             continue
         # Untracked
         if xy == "??":
             copy_paths.add(path)
             untracked_set.add(path)
+            i += 1
             continue
-        # Modified, Added, etc.
+        # Modified, Added, Copied, etc.
         copy_paths.add(path)
+        i += 1
 
     entries: list[dict[str, str]] = []
 

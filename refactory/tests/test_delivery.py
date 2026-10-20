@@ -137,6 +137,42 @@ def test_pr_verification_names_inherited_failures_and_the_new_tests_on_the_base(
     assert "3 of 4 fail without the change; 1 pass there, so they do not guard it" in lines
 
 
+def test_pr_body_includes_uncommitted_files_line(tmp_path, monkeypatch):
+    """The PR body renders the uncommitted-files line through delivery's body builder."""
+    import subprocess
+    ctx = _TitleCtx(
+        facts={"brief": "Build a tool", "check": "python tool.py", "name": "b2"},
+        files={"design.md": "# A design\n\nSummary.\n"},
+    )
+    subprocess.run(["git", "init", str(tmp_path)], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@test.com"], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], capture_output=True, check=True)
+    (tmp_path / "file.txt").write_text("content\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "init"], capture_output=True, check=True)
+    base = subprocess.run(
+        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True).stdout.strip()
+    (tmp_path / "tool.py").write_text("print('built')\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "attempt"], capture_output=True, check=True)
+    head = subprocess.run(
+        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True).stdout.strip()
+    from types import SimpleNamespace
+    found = SimpleNamespace(path=str(tmp_path), base=base, head=head,
+                            branch="refactory/run-test", target=str(tmp_path))
+    # Mock uncommitted_record to return entries.
+    monkeypatch.setattr(
+        "refactory_dsh.worktree.uncommitted_record",
+        lambda f: [{"path": "modified.py", "kind": "modified", "sha256": "abc123"}],
+    )
+    body = delivery._body(ctx, found)
+    assert "Uncommitted base" in body
+    assert "modified.py" in body
+    assert "include_uncommitted" in body
+
+
 def test_pr_verification_says_why_the_new_tests_were_not_run_on_the_base():
     import json
     ctx = _TitleCtx(files={"test-guardedness.json": json.dumps(

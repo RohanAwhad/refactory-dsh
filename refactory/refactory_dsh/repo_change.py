@@ -330,8 +330,12 @@ def _open_worktree(ctx: Any, name: str, task: dict[str, Any],
     # the base over them.
     uncommitted_entries: list[dict[str, str]] = []
     if ctx.knob("include_uncommitted", False) not in (False, 0, "0", "false"):
-        existing_record = worktree.uncommitted_record(found)
-        if not existing_record:
+        # Guard on the branch having no attempt commits, not on the record
+        # existing.  A first prepare on a clean tree writes no record (no
+        # entries), so checking "record exists" would let a redo after the
+        # person edits files copy them over existing attempt commits.
+        has_attempts = found.head != found.base
+        if not has_attempts:
             uncommitted_entries = worktree.copy_uncommitted(target, Path(found.path), ctx.workdir)
             # Re-read the worktree record so `found.head` and `found.base` reflect the
             # new commit.
@@ -340,9 +344,11 @@ def _open_worktree(ctx: Any, name: str, task: dict[str, Any],
                 print(f"refactory: {len(uncommitted_entries)} uncommitted file(s) copied into the "
                       f"worktree and committed as the run's base", file=sys.stderr)
         else:
-            uncommitted_entries = existing_record
-            print(f"refactory: uncommitted-changes base already recorded ({len(existing_record)} file(s)); "
-                  "skipping re-copy on redo", file=sys.stderr)
+            existing_record = worktree.uncommitted_record(found)
+            if existing_record:
+                uncommitted_entries = existing_record
+            print(f"refactory: skipping uncommitted-changes copy on redo "
+                  f"(branch has attempt commits)", file=sys.stderr)
     worktree.write_wrapper(found, ctx.workdir)
     # Every step of a worktree run is held to its own worktree (#319, #347).
     # Changes to the target or the launcher checkout are warnings: another

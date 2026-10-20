@@ -485,6 +485,8 @@ def run_command(
                 except (ValueError, KeyError):
                     sig_name = f"signal {sig_num}"
                 sig_label = f"killed by {sig_name}"
+                if sentinel_path is not None:
+                    sentinel_path.unlink(missing_ok=True)
                 return SandboxResult(
                     ok=False,
                     timeout_s=timeout_s,
@@ -500,6 +502,8 @@ def run_command(
             # change's fault or infrastructure.
             result = _once(time.monotonic() + timeout_s)
     except subprocess.TimeoutExpired:
+        if sentinel_path is not None:
+            sentinel_path.unlink(missing_ok=True)
         return SandboxResult(
             ok=False, timed_out=True, returncode=124, timeout_s=timeout_s,
             elapsed_s=round(time.monotonic() - started, 3), progress=_progress_at(workdir),

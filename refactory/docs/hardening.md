@@ -737,7 +737,7 @@ is unchanged. `SandboxResult.cwd_outside` carries the escaped directory, which
 `design_ops` and `fast_ops` record as `cwd_escaped` in the check outcome.
 
 **What it does not catch.** An intermediate `cd` that returns before the command
-ends. A subshell that `cd`s. A symlink that resolves outside the worktree.
+ends. A subshell that `cd`s.
 
 **Test.** `test_cwd_escape.py`: `cd /tmp` is flagged; `cd <subdir>` is not; `exit 3`
 keeps status 3; the sentinel never reaches stdout or stderr.
@@ -753,17 +753,19 @@ succeed in their own staging directories.
 `project_override`), and `register()` copies atomically to the shared
 `.factory/packages/<name>/` — refusing if the shared package changed since prepare.
 
-**Test.** `test_staging_isolation.py`: two prepares of one new name, both build, the
-second register refuses naming the first, and the first's package is intact; a reloop
-does not refuse itself; an edit whose source changed mid-run refuses.
+**Test.** `test_staging_isolation.py`: two runs through `prepare_create`, then
+`register`; the second register refuses naming the first, and the first's package is
+intact; a reloop does not refuse itself; an edit whose source changed mid-run refuses;
+an edit whose `revision_of` differs from its name copies from the source.
 
 ## 21. Copy-on-register atomicity (#351)
 
 **How it works.** `register()` writes the staged package to a temporary sibling
 directory, renames the old package aside, renames the new one in, then deletes the
-old. If the swap fails, the old is put back. The registering run's id is written
-into `.origin.json` so the refusal message names the other run. After a successful
-register, `source_hash` is updated in the facts so a reloop does not refuse itself.
+old. If the swap fails, the old is put back. The registering run's id (its invocation
+id, as `repo_change` uses) is written into `.origin.json` so the refusal message names
+the other run. After a successful register, the origin stamp in `.origin.json`
+identifies this run so a reloop does not refuse itself.
 `prepare_create` records both `source_hash` and `source_existed`, so register can
 refuse when a new package appears (not only when an existing one changed).
 

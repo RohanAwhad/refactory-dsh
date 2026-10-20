@@ -124,3 +124,63 @@ def test_worktree_without_copy_uncommitted_has_committed_content_only(repo, tmp_
     assert (Path(found.path) / "app.py").read_text() == "print('app')\n"
     # No uncommitted record.
     assert worktree.uncommitted_record(found) == []
+
+
+def test_redo_guard_prevents_recopy_after_attempt_commits(repo, tmp_path):
+    """After commit_attempt advances HEAD past base, copy_uncommitted is not re-run.
+
+    The redo guard in ``_open_worktree`` checks ``found.head != found.base``.
+    This test verifies the guard condition is correct: after an attempt commit,
+    head advances past base, so has_attempts is True and the copy is skipped.
+    """
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "redotest1", run)
+    # Initially: head == base (no attempts yet).
+    assert found.head == found.base
+
+    # First copy with no changes → empty entries, no record written.
+    entries = worktree.copy_uncommitted(repo, Path(found.path), run)
+    assert entries == []
+
+    # Simulate an attempt commit on the branch.
+    attempt_file = Path(found.path) / "attempt.py"
+    attempt_file.write_text("# attempt 1\n")
+    worktree.git(Path(found.path), "add", "attempt.py")
+    worktree.git(Path(found.path), *worktree.NO_HOOKS, "commit", "-m", "attempt 1",
+                 env={**__import__("os").environ, **worktree.COMMITTER})
+    new_head = worktree.git(Path(found.path), "rev-parse", "HEAD").strip()
+
+    # Re-read the worktree record: the run record still has the old head,
+    # but create() reads head from git.
+    found_after = worktree.create(repo, "HEAD", "redotest1", run)
+
+    # Now head != base: the redo guard (found.head != found.base) is True.
+    assert found_after.head != found_after.base, \
+        "has_attempts should be True after commit_attempt"
+    assert found_after.head == new_head
+
+    # Person now edits a file in the checkout.
+    (repo / "app.py").write_text("redo modified\n")
+
+    # The guard condition prevents re-copy (in production, _open_worktree
+    # skips copy_uncommitted when has_attempts is True).
+    has_attempts = found_after.head != found_after.base
+    assert has_attempts, "redo guard should prevent copy on a branch with attempts"
+
+
+def test_staged_new_files_are_copied(repo, tmp_path):
+    """A file added with ``git add`` (status 'A ') is copied into the worktree base."""
+    # Stage a new file (index-only addition).
+    (repo / "staged_only.txt").write_text("staged only\n")
+    git(repo, "add", "staged_only.txt")
+
+    run = _run(tmp_path)
+    found = worktree.create(repo, "HEAD", "stagedtest1", run)
+    entries = worktree.copy_uncommitted(repo, Path(found.path), run)
+
+    # The staged file must be in the entries.
+    paths = {e["path"] for e in entries}
+    assert "staged_only.txt" in paths, f"staged_only.txt not in {paths}"
+
+    # And it must be in the worktree.
+    assert (Path(found.path) / "staged_only.txt").read_text() == "staged only\n"

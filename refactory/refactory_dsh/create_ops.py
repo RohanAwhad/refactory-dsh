@@ -1106,7 +1106,7 @@ def register(ctx: Any) -> dict[str, Any]:
         # Detect whether the shared package changed since prepare.
         source_hash = ctx.facts.get("source_hash", "")
         source_existed = ctx.facts.get("source_existed", source_hash != "")
-        own_run_id = Path(ctx.workdir).name
+        own_run_id = _invocation_run_id(ctx.workdir)
         # When editing from a different source package, verify the source
         # hasn't changed since prepare recorded its hash.
         _revision_of_fact = str(ctx.facts.get("revision_of") or "")
@@ -1132,10 +1132,13 @@ def register(ctx: Any) -> dict[str, Any]:
                         f"This run's staged package is kept at {staging_root} "
                         f"for inspection."
                     )
-            # For the destination check below: the destination is a new package
-            # in this edit, so only check whether it appeared unexpectedly.
-            source_hash = ""
-            source_existed = False
+            # For the destination check below: use the destination's recorded
+            # state from prepare, not the source's.  An edit whose destination
+            # already existed at prepare must not be falsely refused.
+            dest_hash = ctx.facts.get("dest_hash", "")
+            dest_existed = ctx.facts.get("dest_existed", False)
+            source_hash = dest_hash
+            source_existed = dest_existed
         if shared.exists():
             current = _dir_hash(shared)
             # A reloop: this run already registered the package on a previous
@@ -1305,10 +1308,29 @@ def _origin_run_id(shared: Path) -> str:
     return ""
 
 
+def _invocation_run_id(workdir: Path) -> str:
+    """The run's invocation id, or the workdir basename as fallback.
+
+    Uses the same source as ``repo_change._run_id``: the ``invocation.json``
+    file the spine writes into the run directory before the first node runs.
+    """
+    from refactory_dsh import worktree as _wt
+    inv_path = Path(workdir) / _wt.INVOCATION
+    if inv_path.exists():
+        try:
+            data = json.loads(inv_path.read_text())
+            found = str(data.get("id") or "")
+            if re.fullmatch(r"[0-9a-f]{12,}", found):
+                return found[:12]
+        except (json.JSONDecodeError, OSError):
+            pass
+    return Path(workdir).name
+
+
 def _stamp_origin_run_id(staging_root: Path, workdir: Path) -> None:
     """Write the registering run's id into the staged package's ``.origin.json``."""
     origin_path = staging_root / ".origin.json"
-    run_id = Path(workdir).name
+    run_id = _invocation_run_id(workdir)
     try:
         data = json.loads(origin_path.read_text()) if origin_path.exists() else {}
     except (json.JSONDecodeError, OSError):
@@ -1318,10 +1340,18 @@ def _stamp_origin_run_id(staging_root: Path, workdir: Path) -> None:
 
 
 def _dir_hash(root: Path) -> str:
-    """A content hash of every file under ``root``, for change detection."""
+    """A content hash of every file under ``root``, for change detection.
+
+    Skips ``__pycache__`` directories and ``.pyc`` bytecode files, as the
+    repository's other content hashes do (``authoring_evidence.py`` and
+    ``registry.py``).  An import of the shared package between prepare and
+    register must not change the hash.
+    """
     h = hashlib.sha256()
     for path in sorted(root.rglob("*")):
         if path.is_file():
+            if "__pycache__" in path.parts or path.suffix == ".pyc":
+                continue
             h.update(str(path.relative_to(root)).encode())
             h.update(path.read_bytes())
     return h.hexdigest()
@@ -1377,6 +1407,8 @@ def prepare_create(ctx: Any) -> dict[str, Any]:
         source_existed = True
         for _src_path in sorted(shared.rglob("*")):
             if _src_path.is_file():
+                if "__pycache__" in _src_path.parts or _src_path.suffix == ".pyc":
+                    continue
                 _rel = str(_src_path.relative_to(shared))
                 try:
                     source_files[_rel] = _src_path.read_text()
@@ -1384,11 +1416,24 @@ def prepare_create(ctx: Any) -> dict[str, Any]:
                     source_files[_rel] = None  # binary or unreadable
     ctx.write_json(f"{STAGING}/source-snapshot.json", source_files)
 
+    # When revision_of differs from name (editing into a new destination),
+    # record the destination's state separately so register() can check each
+    # against its own record.
+    dest_hash = ""
+    dest_existed = False
+    if revision_of and source_pkg_name != name:
+        dest_shared = registry.workspace_root(project_for_nodes()) / name
+        if dest_shared.is_dir():
+            dest_hash = _dir_hash(dest_shared)
+            dest_existed = True
+
     return {
         **prepared,
         "package_root": str(pkg_root),
         "source_hash": source_hash,
         "source_existed": source_existed,
+        "dest_hash": dest_hash,
+        "dest_existed": dest_existed,
     }
 
 

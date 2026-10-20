@@ -100,51 +100,54 @@ def _make_staged_package(run: Path, name: str, content: str = "# generated\n") -
 
 
 def test_two_parallel_creates_both_build_second_register_refuses(tmp_path, monkeypatch):
-    """Two prepares of one new name both build; the second register refuses naming the first."""
+    """Two runs through prepare_create; the second register refuses naming the first.
+
+    Drives through the real production path: prepare_create → write content →
+    register.  Assert that the second register's refusal names the first run.
+    """
     project = _make_project(tmp_path)
     monkeypatch.setattr("refactory_dsh.paths.project_for_nodes", lambda: project)
     monkeypatch.setattr("refactory_dsh.create_ops.project_for_nodes", lambda: project)
     monkeypatch.setattr("refactory_dsh.sandbox.describe_package", _mock_describe)
+    monkeypatch.setattr("refactory_dsh.create_ops.prepare", lambda ctx: {
+        "name": "mypkg",
+        "brief": "test parallel creates",
+    })
 
     shared = registry.workspace_root(project) / "mypkg"
-    # No shared package exists yet.
     assert not shared.exists()
 
-    # Run 1: prepare and build.
+    # Run 1: prepare_create sets up staging.
     run1 = tmp_path / "run1"
     run1.mkdir()
-    staging1 = _make_staged_package(run1, "mypkg", "# run1\n")
+    ctx1 = FakeCtx(run1)
+    result1 = prepare_create(ctx1)
+    ctx1.facts.update(result1)
+    # Simulate materialise writing into the staged package.
+    pkg1 = Path(result1["package_root"])
+    (pkg1 / "__init__.py").write_text("# run1\n")
 
-    # Run 2: prepare and build.
+    # Run 2: prepare_create sets up its own staging.
     run2 = tmp_path / "run2"
     run2.mkdir()
-    staging2 = _make_staged_package(run2, "mypkg", "# run2\n")
+    ctx2 = FakeCtx(run2)
+    result2 = prepare_create(ctx2)
+    ctx2.facts.update(result2)
+    pkg2 = Path(result2["package_root"])
+    (pkg2 / "__init__.py").write_text("# run2\n")
 
     # Both staging directories are separate.
-    assert str(staging1) != str(staging2)
-    assert staging1.exists() and staging2.exists()
+    assert str(pkg1) != str(pkg2)
+    assert pkg1.exists() and pkg2.exists()
 
     # Run 1 registers successfully.
-    ctx1 = FakeCtx(run1, facts={
-        "name": "mypkg",
-        "package_root": str(staging1),
-        "source_hash": "",
-        "source_existed": False,
-    })
     register(ctx1)
     assert shared.exists()
     assert (shared / "__init__.py").read_text() == "# run1\n"
-    # Run 1's id is recorded in .origin.json.
     origin = json.loads((shared / ".origin.json").read_text())
     assert origin.get("run_id") == "run1"
 
     # Run 2 tries to register: refuses because the shared package appeared.
-    ctx2 = FakeCtx(run2, facts={
-        "name": "mypkg",
-        "package_root": str(staging2),
-        "source_hash": "",
-        "source_existed": False,
-    })
     with pytest.raises(ValueError, match="did not exist when this run's prepare"):
         register(ctx2)
 
@@ -306,8 +309,6 @@ def test_edit_revision_of_differs_from_name(tmp_path, monkeypatch):
     run = tmp_path / "edit_run"
     run.mkdir()
 
-    # Mock prepare() to skip its complex dependency chain (model readiness,
-    # mode contracts, revision source reading) and return the facts directly.
     monkeypatch.setattr("refactory_dsh.create_ops.prepare", lambda ctx: {
         "name": "dest_pkg",
         "revision_of": "source_pkg/some_mode",
@@ -337,3 +338,54 @@ def test_edit_revision_of_differs_from_name(tmp_path, monkeypatch):
 
     # The source package is intact (not overwritten by register).
     assert (source_shared / "__init__.py").read_text() == "CHANGED = True\n"
+
+
+def test_edit_into_existing_destination_succeeds(tmp_path, monkeypatch):
+    """An edit whose destination already exists at prepare is not falsely refused.
+
+    When ``revision_of`` differs from ``name`` and the destination package
+    already exists at prepare time, register must not refuse with 'did not
+    exist when this run's prepare ran' because the destination's state is
+    recorded separately (``dest_hash`` / ``dest_existed``).
+    """
+    project = _make_project(tmp_path)
+    monkeypatch.setattr("refactory_dsh.paths.project_for_nodes", lambda: project)
+    monkeypatch.setattr("refactory_dsh.create_ops.project_for_nodes", lambda: project)
+    monkeypatch.setattr("refactory_dsh.sandbox.describe_package", _mock_describe)
+
+    # Create the source package.
+    source_shared = registry.workspace_root(project) / "source_pkg"
+    source_shared.mkdir(parents=True, exist_ok=True)
+    (source_shared / "__init__.py").write_text("SOURCE = True\n")
+    (source_shared / ".origin.json").write_text('{"origin": "create-mode"}\n')
+
+    # Create the destination package (already exists before the edit).
+    dest_shared = registry.workspace_root(project) / "dest_pkg"
+    dest_shared.mkdir(parents=True, exist_ok=True)
+    (dest_shared / "__init__.py").write_text("OLD_DEST = True\n")
+    (dest_shared / ".origin.json").write_text('{"origin": "create-mode"}\n')
+
+    run = tmp_path / "edit_run"
+    run.mkdir()
+
+    monkeypatch.setattr("refactory_dsh.create_ops.prepare", lambda ctx: {
+        "name": "dest_pkg",
+        "revision_of": "source_pkg/some_mode",
+        "brief": "test edit into existing destination",
+    })
+
+    ctx = FakeCtx(run)
+    result = prepare_create(ctx)
+    ctx.facts.update(result)
+
+    # Verify prepare recorded the destination's state.
+    assert result["dest_existed"] is True
+    assert result["dest_hash"] != ""
+
+    # Write edited content into staging.
+    pkg_root = Path(result["package_root"])
+    (pkg_root / "__init__.py").write_text("EDITED = True\n")
+
+    # Register succeeds because the destination has not changed since prepare.
+    register(ctx)
+    assert (dest_shared / "__init__.py").read_text() == "EDITED = True\n"
