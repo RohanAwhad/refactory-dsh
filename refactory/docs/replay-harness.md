@@ -6,7 +6,7 @@ a set of known gaps that reviews missed, each with the method that found it.
 ## Running
 
 ```bash
-python -m refactory_dsh.replay_harness --evidence entries.json --output baseline.json --repo /path/to/repo
+python -m refactory_dsh.replay_harness --evidence entries.json --output baseline.json --model <model> --repo /path/to/repo
 ```
 
 The `--repo` argument names the repository to create temporary worktrees from
