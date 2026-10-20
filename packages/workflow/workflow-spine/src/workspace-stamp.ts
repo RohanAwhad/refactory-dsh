@@ -57,7 +57,7 @@ export function computeWorkspaceStamp(root?: string): string | null {
     const srcDir = join(repoRoot, pkg, 'src')
     let files: string[]
     try {
-      files = readdirSync(srcDir)
+      files = (readdirSync(srcDir, { recursive: true }) as string[])
         .filter(name => name.endsWith('.ts'))
         .sort()
     } catch {

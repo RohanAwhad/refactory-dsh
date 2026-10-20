@@ -5517,6 +5517,56 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 }
 ```
 
+## cli:pin
+
+Manage driver pins: list active pins and their runs, or prune those no run refers to. A pin is a prepared worktree of the commit a run was launched with, shared across runs at the same commit.
+
+Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
+
+```json
+{
+  "description": "manage driver pins",
+  "doc": "refactory/docs/cli.md",
+  "examples": [
+    {
+      "arguments": {
+        "pin_action": "list"
+      },
+      "explanation": "List all driver pins with their commit, creation time and driver checkout. Each pin is a prepared worktree of an older commit that a resumed run uses when the driver has moved."
+    },
+    {
+      "arguments": {
+        "pin_action": "prune"
+      },
+      "explanation": "Remove pins no live or resumable run refers to and clean up their graph-pin profiles from the person's DSH home."
+    }
+  ],
+  "interfaces": {
+    "chat": "Unavailable as a direct chat mutation; use the documented CLI route.",
+    "cli": "refactory pin {list,prune}",
+    "panel": "Unavailable as a dedicated panel control; use the documented CLI route."
+  },
+  "parameters": {
+    "pin_action": {
+      "default": null,
+      "description": "",
+      "enum": [
+        "list",
+        "prune"
+      ],
+      "flags": [],
+      "nargs": "A...",
+      "position": 0,
+      "positional": true,
+      "required": false,
+      "type": "string"
+    }
+  },
+  "purpose": "Manage driver pins: list active pins and their runs, or prune those no run refers to. A pin is a prepared worktree of the commit a run was launched with, shared across runs at the same commit.",
+  "reviewed_schema": "d47740d328a9f172e8f92555f1da70c29bcfe21fe4c8124ee2066559dfaeca14"
+}
+```
+
 ## cli:projects
 
 List the projects design runs work on, with each run's branch and how it ended, or prune the worktrees and branches that ended runs no longer need.
