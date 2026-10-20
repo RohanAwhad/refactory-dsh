@@ -253,43 +253,31 @@ def create_pin(driver_checkout: Path, commit: str, dirty_diff: str | None = None
                 )
 
         # Prepare the pin: uv sync, pnpm install, pnpm build.
+        # Errors must propagate — the outer except BaseException cleans up
+        # staging.  A broken pin must never be atomically renamed into use.
         env = {**os.environ, "LEFTHOOK": "0", "HUSKY": "0"}
-        try:
-            subprocess.run(
-                ["uv", "sync"], cwd=str(staging_checkout), env=env,
-                check=True, capture_output=True, text=True, timeout=600,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            logger.warning("pin uv sync failed: %s", exc)
-
-        try:
-            subprocess.run(
-                ["pnpm", "install"], cwd=str(staging_checkout), env=env,
-                check=True, capture_output=True, text=True, timeout=600,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            logger.warning("pin pnpm install failed: %s", exc)
-
-        try:
-            subprocess.run(
-                ["pnpm", "run", "build"], cwd=str(staging_checkout), env=env,
-                check=True, capture_output=True, text=True, timeout=600,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            logger.warning("pin pnpm build failed: %s", exc)
+        subprocess.run(
+            ["uv", "sync"], cwd=str(staging_checkout), env=env,
+            check=True, capture_output=True, text=True, timeout=600,
+        )
+        subprocess.run(
+            ["pnpm", "install"], cwd=str(staging_checkout), env=env,
+            check=True, capture_output=True, text=True, timeout=600,
+        )
+        subprocess.run(
+            ["pnpm", "run", "build"], cwd=str(staging_checkout), env=env,
+            check=True, capture_output=True, text=True, timeout=600,
+        )
 
         # Provision the profile in the person's DSH home.
         profile_name = f"graph-pin-{commit12}"
         bundle_path = staging_checkout / "packages" / "bundle" / "graph"
-        try:
-            from refactory_dsh.paths import dsh_command
-            dsh_argv = dsh_command()
-            subprocess.run(
-                [*dsh_argv, "plugin", "--profile", profile_name, "add", str(bundle_path)],
-                check=True, capture_output=True, text=True, timeout=120,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            logger.warning("pin profile provisioning failed: %s", exc)
+        from refactory_dsh.paths import dsh_command
+        dsh_argv = dsh_command()
+        subprocess.run(
+            [*dsh_argv, "plugin", "--profile", profile_name, "add", str(bundle_path)],
+            check=True, capture_output=True, text=True, timeout=120,
+        )
 
         # Write pin.json.
         pin_json = {
@@ -451,7 +439,8 @@ def workspace_stamp(root: Path) -> str | None:
         if not src_dir.is_dir():
             continue
         ts_files = sorted(
-            p for p in src_dir.rglob("*.ts") if p.is_file()
+            p for p in src_dir.rglob("*")
+            if p.is_file() and p.suffix in (".ts", ".tsx")
         )
         for ts_file in ts_files:
             rel = str(ts_file.relative_to(root))

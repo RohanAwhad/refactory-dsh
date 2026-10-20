@@ -58,7 +58,7 @@ export function computeWorkspaceStamp(root?: string): string | null {
     let files: string[]
     try {
       files = (readdirSync(srcDir, { recursive: true }) as string[])
-        .filter(name => name.endsWith('.ts'))
+        .filter(name => name.endsWith('.ts') || name.endsWith('.tsx'))
         .sort()
     } catch {
       continue
