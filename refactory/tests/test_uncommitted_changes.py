@@ -41,15 +41,15 @@ def test_uncommitted_changes_are_copied_and_committed(repo, tmp_path):
     # Create an untracked file.
     (repo / "untracked.txt").write_text("new file\n")
 
-    # Create a staged file.
-    (repo / "staged.txt").write_text("staged content\n")
-    git(repo, "add", "staged.txt")
-
     # Rename a file with git mv.
     (repo / "rename_me.txt").write_text("will be renamed\n")
     git(repo, "add", "rename_me.txt")
     git(repo, "commit", "-q", "-m", "add rename_me")
     git(repo, "mv", "rename_me.txt", "renamed.txt")
+
+    # Create a staged file (after the last commit so it stays staged).
+    (repo / "staged.txt").write_text("staged content\n")
+    git(repo, "add", "staged.txt")
 
     # Record porcelain before.
     porcelain_before = git(repo, "status", "--porcelain")

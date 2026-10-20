@@ -522,6 +522,8 @@ def copy_uncommitted(target: Path, worktree_path: Path, run: Path) -> list[dict[
 
 def uncommitted_record(found: "Worktree") -> list[dict[str, str]]:
     """The uncommitted files that were copied into ``found``'s worktree, or empty."""
+    if not hasattr(found, "target"):
+        return []
     run_id = Path(found.path).name.removeprefix("run-")
     path = slot(Path(found.target)) / f"run-{run_id}.{UNCOMMITTED_RECORD}"
     data = _json(path)

@@ -16,10 +16,18 @@ from typing import Any
 
 import pytest
 
-from refactory_dsh import registry
+from refactory_dsh import registry, sandbox
 from refactory_dsh.create_ops import prepare_create, materialise, register, _dir_hash, STAGING_DIR
 from refactory_dsh.paths import project_for_nodes
 from tests_support import git_repo
+
+
+def _mock_describe(name, **kwargs):
+    """Return a successful SandboxResult for describe_package, bypassing subprocess import."""
+    return sandbox.SandboxResult(
+        ok=True,
+        payload={"describe": {"name": name, "modes": []}, "ids": [name]},
+    )
 
 
 class FakeCtx:
@@ -96,6 +104,7 @@ def test_two_parallel_creates_both_build_second_register_refuses(tmp_path, monke
     project = _make_project(tmp_path)
     monkeypatch.setattr("refactory_dsh.paths.project_for_nodes", lambda: project)
     monkeypatch.setattr("refactory_dsh.create_ops.project_for_nodes", lambda: project)
+    monkeypatch.setattr("refactory_dsh.sandbox.describe_package", _mock_describe)
 
     shared = registry.workspace_root(project) / "mypkg"
     # No shared package exists yet.
@@ -187,6 +196,7 @@ def test_reloop_register_does_not_refuse_itself(tmp_path, monkeypatch):
     project = _make_project(tmp_path)
     monkeypatch.setattr("refactory_dsh.paths.project_for_nodes", lambda: project)
     monkeypatch.setattr("refactory_dsh.create_ops.project_for_nodes", lambda: project)
+    monkeypatch.setattr("refactory_dsh.sandbox.describe_package", _mock_describe)
 
     run1 = tmp_path / "run1"
     run1.mkdir()
