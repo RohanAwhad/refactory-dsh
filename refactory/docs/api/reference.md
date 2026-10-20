@@ -844,7 +844,6 @@ Worker routes and durable receipts over DSH's named-provider registry.
 | function | `lower_workflow` | `(workflow: 'Any', workdir: 'Path', model_context: 'dict[str, Any] \| None', declarations: 'dict[str, Any] \| None' = None) -> 'Any'` |
 | function | `now` | `() -> 'str'` |
 | function | `observer_patch` | `(path: 'Path', route: 'dict[str, Any]', provider_config: 'dict[str, Any] \| None' = None) -> 'None'` |
-| function | `patch_dispatch_python` | `(graphs_dir: 'Path', python_path: 'str') -> 'None'` |
 | function | `permission_patch` | `(route: 'dict[str, Any]') -> 'list[dict[str, Any]]'` |
 | function | `provider_rows` | `(route: 'dict[str, Any]', provider_config: 'dict[str, Any] \| None') -> 'list[dict[str, Any]]'` |
 | function | `resolve_route` | `(base: 'dict[str, Any]', *, role: 'str' = 'worker', node: 'str' = '', role_routes: 'dict[str, Any] \| None' = None, node_routes: 'dict[str, Any] \| None' = None) -> 'dict[str, Any]'` |
@@ -856,7 +855,6 @@ Worker routes and durable receipts over DSH's named-provider registry.
 - **`account_usage`** — Keep measured DSH calls while exposing incomplete delegated coverage.
 - **`environment`** — Nonsecret resolved context for graph-owned calls.
 - **`lower_workflow`** — Resolve explicit node workers before graph dispatch, preserving all edges.
-- **`patch_dispatch_python`** — Replace the Python interpreter in all lowered dispatch commands.
 - **`permission_patch`** — Scope DSH bypass to this runtime, without leaking through child env.
 - **`provider_rows`** — Declare selected provider routes to a runtime that cannot see profiles.
 - **`resolve_route`** — Explicit node overrides role overrides run; runtime supplies empty fields.

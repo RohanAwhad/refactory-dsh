@@ -770,7 +770,7 @@ refuses with a `RuntimeError` naming the commit and the conflicting paths.
 ### File lock for concurrent pin creation
 
 `create_pin()` acquires an exclusive `flock` on
-`<refactory_home>/pins/<commit>.lock` before staging a pin. Concurrent callers
+`<refactory_home>/pins/<key>.lock` before preparing a pin. Concurrent callers
 block until the first one finishes, then find the prepared pin and return it.
 A rebuild (`require_build`) is also refused when a live run uses the checkout:
 the run is registered on its driver at launch, and `_refuse_if_live_runs`

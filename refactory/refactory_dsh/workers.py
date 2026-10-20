@@ -251,32 +251,6 @@ def lower_workflow(workflow: Any, workdir: Path, model_context: dict[str, Any] |
     return result
 
 
-def patch_dispatch_python(graphs_dir: Path, python_path: str) -> None:
-    """Replace the Python interpreter in all lowered dispatch commands.
-
-    Called after a pinned resume restores graphs that were lowered with the
-    driver's Python.  Updates the JSON graph files in-place so the spine
-    dispatches workers with the pin's interpreter.
-    """
-    for graph_file in graphs_dir.glob('*.json'):
-        if not graph_file.is_file():
-            continue
-        try:
-            content = json.loads(graph_file.read_text())
-        except (OSError, json.JSONDecodeError):
-            continue
-        changed = False
-        for node_data in (content.get('nodes') or {}).values():
-            cmd = node_data.get('dispatch_command', '')
-            if cmd and '-m refactory_dsh.worker_node' in cmd:
-                # Replace the Python path (first token) with the pin's Python.
-                parts = cmd.split(' -m refactory_dsh.worker_node', 1)
-                node_data['dispatch_command'] = python_path + ' -m refactory_dsh.worker_node' + parts[1]
-                changed = True
-        if changed:
-            graph_file.write_text(json.dumps(content, indent=2, sort_keys=True) + '\n')
-
-
 def environment(context: dict[str, Any] | None) -> dict[str, str]:
     """Nonsecret resolved context for graph-owned calls.
 

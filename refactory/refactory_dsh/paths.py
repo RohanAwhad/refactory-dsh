@@ -241,25 +241,26 @@ def require_build(root: Path | None = None, *, check_only: bool = False, gui_mod
                     "the build is stale; run `pnpm run build` to rebuild"
                 )
                 return
-            # When a live run uses this checkout, warn but do not rebuild.
-            try:
-                _refuse_if_live_runs(selected)
-            except RuntimeError as exc:
-                import logging
-                logging.getLogger(__name__).warning(str(exc))
-                return
+            # Acquire the build lock BEFORE the live-run check to prevent a
+            # TOCTOU race where a run starts between the check and the build.
             import fcntl
             import logging
-            logging.getLogger(__name__).info("workspace build is stale; rebuilding")
             build_lock = refactory_home() / "build.lock"
             build_lock.parent.mkdir(parents=True, exist_ok=True)
             lock_fd = os.open(str(build_lock), os.O_CREAT | os.O_RDWR, 0o600)
             try:
                 fcntl.flock(lock_fd, fcntl.LOCK_EX)
-                # Re-check after acquiring the lock (another process may have rebuilt).
+                # Re-check stamps after acquiring the lock.
                 saved_stamp2 = stamp_file.read_text().strip()
                 current_stamp2 = _ws(selected)
                 if current_stamp2 is not None and saved_stamp2 != current_stamp2:
+                    # When a live run uses this checkout, warn but do not rebuild.
+                    try:
+                        _refuse_if_live_runs(selected)
+                    except RuntimeError as exc:
+                        logging.getLogger(__name__).warning(str(exc))
+                        return
+                    logging.getLogger(__name__).info("workspace build is stale; rebuilding")
                     subprocess.run(["pnpm", "run", "build"], cwd=str(selected), check=True)
             finally:
                 os.close(lock_fd)

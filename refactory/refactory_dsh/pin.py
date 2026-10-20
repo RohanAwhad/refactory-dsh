@@ -65,7 +65,11 @@ def record_driver(run_config_path: Path) -> None:
     config = json.loads(run_config_path.read_text())
 
     checkout = str(REPO_ROOT)
-    commit = _git_rev_parse(Path(checkout))
+    commit: str | None = None
+    try:
+        commit = _git_rev_parse(Path(checkout))
+    except Exception:
+        logger.warning("cannot determine commit for %s; not a git repository", checkout)
 
     # Dirty diff of machinery paths: ``git diff HEAD`` captures both staged
     # and unstaged changes in one pass.

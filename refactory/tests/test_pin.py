@@ -499,9 +499,9 @@ def test_resume_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     """End-to-end: interactive.run(resume=True) detects drift, resolves pin,
     and re-execs with the pin's Python and profile.
 
-    This goes through ``interactive.run`` — the same call the supervisor's
-    owner command makes — with ``os.execv`` captured via a sentinel exception
-    and only the heavy installs stubbed.
+    Uses the real ``create_pin`` with only uv sync / pnpm install / pnpm build
+    stubbed (via ``_selective_subprocess``).  ``os.execv`` is captured via a
+    sentinel exception.
     """
     repo = tmp_path / "repo"
     commit_a = _init_repo(repo, files={"refactory/refactory_dsh/mode.py": "v1"})
@@ -533,18 +533,19 @@ def test_resume_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     # Move the driver to commit B, changing the fingerprinted file.
     commit_b = _add_commit(repo, {"refactory/refactory_dsh/mode.py": "v2"})
 
-    # Create the pin structure (pre-existing, with heavy installs stubbed).
-    key = pin._pin_key(commit_a, None)
-    pin_root = pin.refactory_home() / "pins" / key
-    pin_checkout = pin_root / "checkout"
-    pin_checkout.mkdir(parents=True)
-    (pin_checkout / ".git").write_text("gitdir: dummy")
-    (pin_checkout / ".venv" / "bin").mkdir(parents=True)
+    # Create the pin using the real create_pin, with only the heavy installs
+    # (uv sync, pnpm install, pnpm build) and profile provisioning stubbed.
+    # dsh_command() would fail because the temp repo has no DSH CLI entry, so
+    # stub it to return a dummy command that _selective_subprocess will stub.
+    monkeypatch.setattr("refactory_dsh.paths.dsh_command", lambda root=None, cli=None: ["dsh-stub"])
+    original_run = subprocess.run
+    with patch("subprocess.run", side_effect=_selective_subprocess(original_run)):
+        pin_checkout = pin.create_pin(repo, commit_a)
+
+    # create_pin creates a real git worktree but does not run a real uv sync,
+    # so .venv does not exist.  Create a fake python binary for the execv assertion.
+    (pin_checkout / ".venv" / "bin").mkdir(parents=True, exist_ok=True)
     (pin_checkout / ".venv" / "bin" / "python").write_text("#!/bin/sh\n")
-    pin._atomic_write_json(pin_root / "pin.json", {
-        "commit": commit_a, "created": "now",
-        "driver_checkout": str(repo), "runs": [],
-    })
 
     # Stub require_build and dsh_profile.require — they are pre-flight checks.
     monkeypatch.setattr("refactory_dsh.interactive.require_build", lambda **kw: None)
@@ -794,7 +795,7 @@ def test_pin_keyed_by_commit_and_diff(tmp_path: Path, monkeypatch: pytest.Monkey
 def test_credential_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A pinned run uses graph-pin-<commit12> with DSH_HOME unchanged; no credential refs.
 
-    Asserts *behaviour* — not source text:
+    Calls the real ``create_pin`` (with installs stubbed) and asserts behaviour:
     1. DSH_HOME in os.environ is unchanged after pin operations.
     2. No file under the pin directory is a symlink to anything in the
        DSH home directory.
@@ -809,28 +810,19 @@ def test_credential_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 
     original_dsh_home = os.environ.get("DSH_HOME")
 
-    commit = "e" * 40
-    commit12 = commit[:12]
-    key = pin._pin_key(commit, None)
-    pin_root = pin.refactory_home() / "pins" / key
-    pin_checkout = pin_root / "checkout"
-    pin_checkout.mkdir(parents=True)
+    repo = tmp_path / "repo"
+    commit_a = _init_repo(repo)
+    monkeypatch.setattr(pin, "REPO_ROOT", repo)
 
-    # Create some files under the pin to verify no credential links.
-    (pin_checkout / "some_file.py").write_text("pass")
-    (pin_checkout / "packages" / "bundle" / "graph").mkdir(parents=True, exist_ok=True)
-    (pin_checkout / "packages" / "bundle" / "graph" / "package.json").write_text("{}")
+    # Stub dsh_command because the temp repo has no DSH CLI entry.
+    monkeypatch.setattr("refactory_dsh.paths.dsh_command", lambda root=None, cli=None: ["dsh-stub"])
 
-    # Write pin.json with the profile name.
-    pin._atomic_write_json(pin_root / "pin.json", {
-        "commit": commit, "created": "now",
-        "driver_checkout": str(tmp_path), "runs": [],
-        "profile": f"graph-pin-{commit12}",
-    })
+    # Create the pin using real create_pin with installs stubbed.
+    original_run = subprocess.run
+    with patch("subprocess.run", side_effect=_selective_subprocess(original_run)):
+        pin_checkout = pin.create_pin(repo, commit_a)
 
-    # Verify the profile name follows the expected pattern.
-    profile_name = f"graph-pin-{commit12}"
-    assert profile_name.startswith("graph-pin-")
+    pin_root = pin_checkout.parent
 
     # 1. DSH_HOME is unchanged after pin operations.
     assert os.environ.get("DSH_HOME") == original_dsh_home
@@ -843,28 +835,91 @@ def test_credential_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
                 f"pin file {p} is a symlink to DSH home: {target}"
 
 
-def test_pinned_resume_dispatch_uses_pin_python(tmp_path: Path) -> None:
-    """A pinned resume's dispatch commands reference the pin's Python, not the driver's."""
-    from refactory_dsh import workers
+def test_worker_node_resolves_pin_python(tmp_path: Path) -> None:
+    """worker_node._resolve_pin_python reads pin_checkout from the driver record."""
+    from refactory_dsh import worker_node
 
-    graphs_dir = tmp_path / "graphs"
-    graphs_dir.mkdir()
-    graph = {
-        "nodes": {
-            "agent1": {
-                "dispatch_command": "/original/python -m refactory_dsh.worker_node '/path/to/spec.json'",
-                "prompt_template": "test",
-            }
-        }
+    run_dir = tmp_path / "run"
+    (run_dir / ".refactory").mkdir(parents=True)
+    pin_checkout = tmp_path / "pin" / "checkout"
+    config = {
+        "driver": {
+            "pin_checkout": str(pin_checkout),
+        },
     }
-    (graphs_dir / "graph.json").write_text(json.dumps(graph))
+    (run_dir / ".refactory" / "run-config.json").write_text(json.dumps(config))
 
-    workers.patch_dispatch_python(graphs_dir, "/pin/python")
+    result = worker_node._resolve_pin_python(run_dir)
+    assert result == str(pin_checkout / ".venv" / "bin" / "python")
 
-    updated = json.loads((graphs_dir / "graph.json").read_text())
-    assert updated["nodes"]["agent1"]["dispatch_command"].startswith("/pin/python ")
-    assert "-m refactory_dsh.worker_node" in updated["nodes"]["agent1"]["dispatch_command"]
-    assert "'/path/to/spec.json'" in updated["nodes"]["agent1"]["dispatch_command"]
+
+def test_worker_node_returns_none_when_not_pinned(tmp_path: Path) -> None:
+    """worker_node._resolve_pin_python returns None when there is no pin."""
+    from refactory_dsh import worker_node
+
+    run_dir = tmp_path / "run"
+    (run_dir / ".refactory").mkdir(parents=True)
+    config = {
+        "driver": {
+            "pin_checkout": None,
+            "checkout": str(tmp_path),
+            "commit": "a" * 40,
+        },
+    }
+    (run_dir / ".refactory" / "run-config.json").write_text(json.dumps(config))
+
+    result = worker_node._resolve_pin_python(run_dir)
+    assert result is None
+
+
+def test_worker_node_detects_driver_drift(tmp_path: Path) -> None:
+    """worker_node._check_driver_mid_run detects when the driver has moved."""
+    from refactory_dsh import worker_node
+
+    repo = tmp_path / "repo"
+    commit_a = _init_repo(repo)
+
+    run_dir = tmp_path / "run"
+    (run_dir / ".refactory").mkdir(parents=True)
+    config = {
+        "driver": {
+            "checkout": str(repo),
+            "commit": commit_a,
+            "pin_checkout": None,
+        },
+    }
+    (run_dir / ".refactory" / "run-config.json").write_text(json.dumps(config))
+
+    # No drift yet.
+    assert worker_node._check_driver_mid_run(run_dir) is None
+
+    # Move the driver.
+    _add_commit(repo, {"new.txt": "content"})
+
+    msg = worker_node._check_driver_mid_run(run_dir)
+    assert msg is not None
+    assert commit_a[:12] in msg
+
+
+def test_record_driver_on_non_git_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """record_driver on a checkout that is not a git repository warns and records no commit."""
+    import refactory_dsh.pin as pin
+
+    non_git = tmp_path / "not-a-repo"
+    non_git.mkdir()
+    monkeypatch.setattr(pin, "REPO_ROOT", non_git)
+
+    run_dir = tmp_path / "run"
+    _make_run_config(run_dir, "x", str(non_git))
+
+    # Should not raise; it warns and records commit=null.
+    pin.record_driver(run_dir / ".refactory" / "run-config.json")
+
+    config = json.loads((run_dir / ".refactory" / "run-config.json").read_text())
+    driver = config["driver"]
+    assert driver["commit"] is None
+    assert driver["checkout"] == str(non_git)
+    assert driver["profile"] == "graph"
 
 
 def test_register_run_concurrent_safe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

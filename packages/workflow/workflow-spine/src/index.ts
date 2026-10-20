@@ -483,6 +483,25 @@ function payloadEnv(value: unknown): Record<string, string> | undefined {
   return out
 }
 
+/**
+ * Build the argv for {@code wf_open}, including the session's project when set.
+ *
+ * Exported so the project-propagation tests call the real logic instead of
+ * re-implementing it inline.
+ */
+export function buildWfOpenArgv(
+  openArgs: readonly string[],
+  sessionCwd: string | undefined,
+  mode: string,
+): string[] {
+  const argv = [...openArgs]
+  if (typeof sessionCwd === 'string' && sessionCwd !== '') {
+    argv.push('--project', sessionCwd)
+  }
+  argv.push(mode)
+  return argv
+}
+
 export function apply(ctx: Context, config: Config): void {
   // Detect stale builds early, before any graph is configured or opened.
   // A stale build is a developer-infrastructure error with no recovery path —
@@ -1536,13 +1555,7 @@ export function apply(ctx: Context, config: Config): void {
             + '`python -m refactory_dsh.console open`)',
           )
         }
-        const argv = [...config.openArgs]
-        // Pass the session's cwd as the project so the run uses the right one.
-        const sessionCwd = session.header?.cwd
-        if (typeof sessionCwd === 'string' && sessionCwd !== '') {
-          argv.push('--project', sessionCwd)
-        }
-        argv.push(args.mode)
+        const argv = buildWfOpenArgv(config.openArgs, session.header?.cwd, args.mode)
         // The console refuses without a workdir, so an absent one is derived from
         // the session and the mode rather than dropped. The payload's `run` is
         // still the authority on where the run actually landed.
