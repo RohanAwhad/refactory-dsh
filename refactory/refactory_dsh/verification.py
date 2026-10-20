@@ -103,7 +103,7 @@ def wire_verification(graph: Any, *, fast: bool = False) -> None:
             reads=("reviews/verification.md", "focused-check.json", "check.txt"),
             writes=("reviews/verification-gate.txt", "fast-report.json", "repair.txt"),
             produces=("verification_gate", "repair_feedback", "repairs_used",
-                      "review_repairs_used"),
+                      "check_repairs_used", "review_repairs_used"),
             knobs=("repair_attempts",),
             max_iterations=4,
             notes="proceed on PASS; reloop to emit on FAIL within repair bound",
