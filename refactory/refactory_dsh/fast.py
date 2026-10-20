@@ -107,7 +107,8 @@ def _qa_nodes(graph: Graph, *, artifact: bool) -> None:
         knobs=("repair_attempts",), reads=("focused-qa.json", "focused-check.json", "focused-source.json",
                                           "authoring-evidence.json", "intent-audit.json"),
         writes=("fast-report.json", "repair.txt"),
-        produces=("repair_feedback", "repairs_used", "qa_passed"), max_iterations=4,
+        produces=("repair_feedback", "repairs_used", "check_repairs_used",
+                  "review_repairs_used", "qa_passed"), max_iterations=4,
         notes="repair only within the shared bound; unresolved findings are failure",
     ))
     graph.connect("focused_check", "focused_qa")
@@ -123,7 +124,7 @@ class CreateFastMode(CreateMode):
     @classmethod
     def declare(cls) -> dict[str, Knob]:
         knobs = super().declare()
-        for name in ("research_attempts", "design_attempts", "attempts"):
+        for name in ("research_attempts", "design_attempts", "attempts", "review_attempts"):
             knobs.pop(name, None)
         knobs.update({
             "repair_attempts": Knob(1, "int", lo=0, hi=3, description="total repairs across admission, runtime validation and focused QA"),
@@ -178,13 +179,15 @@ class CreateFastMode(CreateMode):
                           resource_role="work",
                           writes=("validation.txt", "repair.txt", "fast-report.json"),
                           knobs=("repair_attempts",), max_iterations=4,
-                          produces=("validation", "repair_feedback", "repairs_used")))
+                          produces=("validation", "repair_feedback", "repairs_used",
+                                    "check_repairs_used")))
         _qa_nodes(graph, artifact=False)
         graph.add(replace(full.nodes["register"], resource_role="work"))
         graph.add(replace(full.nodes["smoke"], evaluator="refactory_dsh.create_ops:gate_smoke",
                           knobs=("allow_regression", "sample_knobs", "smoke_timeout_s", "repair_attempts"),
                           writes=(*full.nodes["smoke"].writes, "repair.txt", "fast-report.json"),
-                          produces=(*full.nodes["smoke"].produces, "repair_feedback", "repairs_used"),
+                          produces=(*full.nodes["smoke"].produces, "repair_feedback", "repairs_used",
+                                    "check_repairs_used", "review_repairs_used"),
                           resource_role="final_validation", max_iterations=4))
         graph.add(replace(full.nodes["report"], call=f"{OPS}:report_package",
                           resource_role="final_validation",
@@ -222,7 +225,9 @@ class DesignFastMode(DesignMode):
         knobs = super().declare()
         knobs.pop("research_attempts")
         knobs.pop("check_attempts")
+        knobs.pop("review_attempts")
         knobs.pop("design_review_attempts")
+        knobs.pop("pitfalls_attempts")
         # It works where design works (`repo_change`), but delivers nothing: a pull request
         # is opened only behind an approval gate that names it (#350), and fast mode has
         # none. Its work stays on the run's branch.

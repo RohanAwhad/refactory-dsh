@@ -117,7 +117,7 @@
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
       "purpose": "Build a reusable mode package from a brief, name and task/single-shot inputs. Canonical smoke runs before separate QA and Overwatch; repair shares the attempt bound and completion needs current validation and intent evidence.",
-      "reviewed_schema": "33dd7f848f6ae5ad2570cc992144aec6e142cae1e94645a955705b7dde8cc0a6"
+      "reviewed_schema": "43948735931e3bae5ca953b70c7d122fd24dc4cbe69aa3dd90a2988d9a814ff0"
     },
     "default_pack/create_fast": {
       "doc": "refactory/docs/authoring-validation.md",
@@ -175,7 +175,7 @@
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
       "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`). The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-      "reviewed_schema": "2dfc1c3057570600c7c31de3303c282cf8b7666b4f78b05682b92f9b439be5e3"
+      "reviewed_schema": "0bdf6df91cb2c16aa30e6b0a7319b99c56d2e2be894037a3f70b05a456d80f0f"
     },
     "default_pack/design_fast": {
       "doc": "refactory/docs/budgets-fast-modes.md",
@@ -224,7 +224,7 @@
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
       "purpose": "Revise an existing mode package and validate the revision before separate QA and Overwatch. Supply revision_of, name and brief. allow_regression=true skips original execution and numerical comparison, while revised execution and intent evidence remain mandatory.",
-      "reviewed_schema": "c293edc1d69b8c3fbda779072fb331f2b6bffc1d4713728998bc550904f78afa"
+      "reviewed_schema": "05c269ef8b75050ab96ed0e489df14b4026d2f4d47f6ece55fef607d11c7572e"
     },
     "default_pack/edit_fast": {
       "doc": "refactory/docs/authoring-validation.md",
@@ -550,7 +550,7 @@
         "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
       },
       "purpose": "Run a named mode or author a package/artifact from a brief in the terminal; worker file defaults apply at preparation. CEO conversation and graph worker routes are distinct.",
-      "reviewed_schema": "87dce677805e168eca7f531ba916bf2b45635225867cb1f461420fafc80f3862"
+      "reviewed_schema": "054734e27c8a8bda0075d478425f857975ffb609ea6ec2e2a6d1a6c7d4e400c5"
     },
     "cli:doctor": {
       "doc": "refactory/docs/cli.md",
@@ -938,7 +938,7 @@
             "action": "acknowledge",
             "run": "/tmp/example-run"
           },
-          "explanation": "Acknowledge an executing checkpoint whose owner died: moves pending delivery markers and mismatched outputs to set-aside, writes an SHA-bound acknowledgement so recovery accepts the executing checkpoint."
+          "explanation": "Acknowledge an executing or failed checkpoint whose owner died: moves pending delivery markers and mismatched outputs to set-aside, writes an SHA-bound acknowledgement so recovery accepts the checkpoint."
         },
         {
           "arguments": {
@@ -970,7 +970,7 @@
         "cli": "python -m refactory_dsh.console graph-control",
         "panel": "Graph boundary controls and recovery preview."
       },
-      "purpose": "Preview or queue boundary pause/resume/stop/rerun/redeliver/acknowledge/amend-command/withdraw controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. acknowledge transitions an executing checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly. redeliver brings a finished or failed-at-deliver run up to date with main in one command.",
+      "purpose": "Preview or queue boundary pause/resume/stop/rerun/redeliver/acknowledge/amend-command/withdraw controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. resume --acknowledge-failure also starts an owner for a failed checkpoint. acknowledge transitions an executing or failed checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly. redeliver brings a finished or failed-at-deliver run up to date with main in one command.",
       "reviewed_schema": "e6051426af8d5423cc4f122642b3c2b99f7defda000f9c3a5a4c6704351fcbb1"
     },
     "help": {
@@ -1075,7 +1075,7 @@
         "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
       },
       "purpose": "Prepare a mode and resolved project worker context for graph execution. Chat uses wf_open with knobs, intent and an absolute workdir, then workflow tools drive the graph.",
-      "reviewed_schema": "a7943a841396507067d718a2e348763e028db58edc79c140d0fbb48884aaf7e3"
+      "reviewed_schema": "d0384bfee436aa3e8a60b363bee74a2ab9b7d9e5125f75908835ecba12f2a286"
     },
     "profile-resolve": {
       "chat": {

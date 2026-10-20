@@ -79,24 +79,26 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
         from refactory_dsh.run_state import is_alive as _alive
         pid = saved.get('owner_pid')
         if not pid or not _alive(pid):
-            return recovery.start(root)
+            return recovery.start(root, acknowledge_failed=acknowledge_failure)
         # An owner that stopped where it will not go on by itself is exiting: wait
         # for it, then start a fresh one, rather than queue a control it never reads.
         if read(root / '.refactory/spine-status.json').get('status') in OWNER_STOPPED:
             deadline = time.monotonic() + _OWNER_EXIT_TIMEOUT
             while time.monotonic() < deadline:
                 if not _alive(pid):
-                    return recovery.start(root)
+                    return recovery.start(root, acknowledge_failed=acknowledge_failure)
                 time.sleep(0.1)
             # dm-81 fix: write resume-pending.json so the supervisor (or a new
             # recovery.start) picks it up once the owner exits — no second command.
             pending_path = root / '.refactory/resume-pending.json'
             pending_path.parent.mkdir(parents=True, exist_ok=True)
             checkpoint_bytes = (root / '.refactory/spine-checkpoint.json').read_bytes()
-            pending_data = {
+            pending_data: dict[str, Any] = {
                 'at': datetime.now(timezone.utc).isoformat(),
                 'checkpoint_sha256': hashlib.sha256(checkpoint_bytes).hexdigest(),
             }
+            if acknowledge_failure:
+                pending_data['acknowledge_failed'] = True
             tmp = pending_path.with_suffix('.tmp')
             tmp.write_text(json.dumps(pending_data))
             tmp.replace(pending_path)
@@ -169,12 +171,12 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
 # ── acknowledge ────────────────────────────────────────────────────────────
 
 def _acknowledge(root: Path, checkpoint: Path, saved: dict[str, Any]) -> dict[str, Any]:
-    """Acknowledge an executing checkpoint whose owner is gone.
+    """Acknowledge an executing or failed checkpoint whose owner is gone.
 
     Writes an acknowledgement bound to the checkpoint's SHA into
     resume-request.json. recovery.prepare() and the spine's restore accept
-    an executing checkpoint only with a matching acknowledgement. Pending
-    delivery markers and outputs whose fingerprints differ from the
+    an executing or failed checkpoint only with a matching acknowledgement.
+    Pending delivery markers and outputs whose fingerprints differ from the
     checkpoint's recorded fingerprints are set aside under
     .refactory/set-aside/<timestamp>/.
     """
@@ -182,11 +184,11 @@ def _acknowledge(root: Path, checkpoint: Path, saved: dict[str, Any]) -> dict[st
     from refactory_dsh.run_state import is_alive as _is_alive
     from refactory_dsh.recovery import fingerprint as _fp
 
-    # 1. Verify checkpoint is executing
-    if saved.get('status') != 'executing':
+    # 1. Verify checkpoint is executing or failed
+    if saved.get('status') not in ('executing', 'failed'):
         raise ValueError(
-            f"checkpoint status is {saved.get('status')!r}, not 'executing'; "
-            "acknowledge applies only to an executing checkpoint whose owner died"
+            f"checkpoint status is {saved.get('status')!r}; "
+            "acknowledge applies to an executing or failed checkpoint whose owner died"
         )
 
     # 2. Verify owner is dead
@@ -258,9 +260,10 @@ def _acknowledge(root: Path, checkpoint: Path, saved: dict[str, Any]) -> dict[st
         })
 
     # Write manifest
+    checkpoint_status = saved.get('status', 'executing')
     manifest = {
         'at': datetime.now(timezone.utc).isoformat(),
-        'checkpoint_status_before': 'executing',
+        'checkpoint_status_before': checkpoint_status,
         'owner_pid': owner_pid,
         'files': manifest_files,
     }
@@ -274,23 +277,27 @@ def _acknowledge(root: Path, checkpoint: Path, saved: dict[str, Any]) -> dict[st
     request_path = root / '.refactory/resume-request.json'
     request_data: dict[str, Any] = {
         'checkpoint_sha256': checkpoint_sha,
-        'acknowledge_executing': True,
     }
+    if checkpoint_status == 'failed':
+        request_data['acknowledge_failed'] = True
+    else:
+        request_data['acknowledge_executing'] = True
     tmp = request_path.with_suffix('.tmp')
     tmp.write_text(json.dumps(request_data))
     tmp.replace(request_path)
 
     emit(root, 'control_requested', state='acknowledged',
-         summary='acknowledge executing checkpoint',
+         summary=f'acknowledge {checkpoint_status} checkpoint',
          set_aside=str(set_aside_dir.relative_to(root)),
          files_count=len(manifest_files))
 
     return {
         'action': 'acknowledge',
         'status': 'acknowledged',
+        'checkpoint_status_before': checkpoint_status,
         'set_aside': str(set_aside_dir.relative_to(root)),
         'files': manifest_files,
-        'message': f'Checkpoint acknowledged; {len(manifest_files)} file(s) set aside under '
+        'message': f'Checkpoint ({checkpoint_status}) acknowledged; {len(manifest_files)} file(s) set aside under '
                    f'{set_aside_dir.name}. Run "refactory graph-control resume" to continue.',
     }
 

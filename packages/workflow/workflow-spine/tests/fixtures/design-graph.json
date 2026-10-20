@@ -57,6 +57,12 @@
       "max_iterations": 12,
       "_type": "GateNode"
     },
+    "gate_pitfalls": {
+      "id": "gate_pitfalls",
+      "evaluator_type": "fn",
+      "max_iterations": 8,
+      "_type": "GateNode"
+    },
     "gate_qa": {
       "id": "gate_qa",
       "evaluator_type": "fn",
@@ -96,6 +102,12 @@
     },
     "overwatch": {
       "id": "overwatch",
+      "role": "ceo",
+      "max_iterations": 1,
+      "_type": "AgentNode"
+    },
+    "pitfalls_researcher": {
+      "id": "pitfalls_researcher",
       "role": "ceo",
       "max_iterations": 1,
       "_type": "AgentNode"
@@ -198,6 +210,16 @@
       "condition": "proceed"
     },
     {
+      "source": "gate_pitfalls",
+      "target": "pitfalls_researcher",
+      "condition": "reloop"
+    },
+    {
+      "source": "gate_pitfalls",
+      "target": "strategy_director",
+      "condition": "proceed"
+    },
+    {
       "source": "gate_qa",
       "target": "emit",
       "condition": "reloop"
@@ -209,13 +231,13 @@
     },
     {
       "source": "gate_research",
-      "target": "research_director",
-      "condition": "reloop"
+      "target": "pitfalls_researcher",
+      "condition": "proceed"
     },
     {
       "source": "gate_research",
-      "target": "strategy_director",
-      "condition": "proceed"
+      "target": "research_director",
+      "condition": "reloop"
     },
     {
       "source": "gate_strategy",
@@ -240,6 +262,11 @@
     {
       "source": "overwatch",
       "target": "gate_overwatch",
+      "condition": null
+    },
+    {
+      "source": "pitfalls_researcher",
+      "target": "gate_pitfalls",
       "condition": null
     },
     {

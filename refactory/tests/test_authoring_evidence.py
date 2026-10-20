@@ -500,7 +500,7 @@ def test_failure_message_count_matches_attempts_used(tmp_path):
     result2 = create_ops.repair(ctx, ["problem 2"])
     assert str(result2) == "reloop"
     assert ctx.facts["attempts_used"] == 2
-    with pytest.raises(ValueError, match=r"after 3 attempt\(s\)"):
+    with pytest.raises(ValueError, match=r"check attempts exhausted after 3 check failure\(s\)"):
         create_ops.repair(ctx, ["problem 3"])
     assert ctx.facts["attempts_used"] == 3, (
         "the saved attempts_used must match the number in the failure message"

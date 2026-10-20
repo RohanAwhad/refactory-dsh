@@ -12,6 +12,15 @@ import re
 from typing import Any
 import uuid
 
+# Shell exit codes from the kernel, the OOM killer or the sandbox's own resource
+# limits.  A test runner does not exit with these codes on purpose; classifying them
+# as 'uncertain' avoids spending a code attempt on a resource kill.
+_RESOURCE_EXIT_CODES: frozenset[int] = frozenset({
+    128 + 9,   # SIGKILL — OOM killer, manual kill, cgroup limit
+    128 + 24,  # SIGXCPU — RLIMIT_CPU exceeded
+    128 + 25,  # SIGXFSZ — RLIMIT_FSIZE exceeded
+})
+
 EVIDENCE = "authoring-evidence.json"
 AUDIT = "intent-audit.json"
 REVIEWERS = ("health_checker", "code_reviewer", "qa_director", "overwatch", "focused_qa")
@@ -334,6 +343,8 @@ def check_failure_kind(
     rc = getattr(result, "returncode", None)
     if rc is not None and rc < 0:
         return "uncertain"
+    if rc is not None and rc in _RESOURCE_EXIT_CODES:
+        return "uncertain"
     # Preparation step failure (install, generate, setup) — structural.
     prep = getattr(result, "prep_failure", None)
     if isinstance(prep, dict):
@@ -392,7 +403,8 @@ def wire_reviews(graph: Any) -> None:
         node = graph.nodes[name]
         graph.nodes[name] = replace(node, reads=(*node.reads, EVIDENCE, *((AUDIT,) if name == "gate_overwatch" else ())), max_iterations=12,
                                    writes=(*node.writes, "validation.txt"),
-                                   produces=(*node.produces, "validation", "attempts_used"))
+                                   produces=(*node.produces, "validation", "attempts_used", "review_attempts_used"),
+                                   knobs=(*node.knobs, "review_attempts"))
     report = graph.nodes["report"]
     graph.nodes["report"] = replace(report, reads=(*report.reads, EVIDENCE, AUDIT))
 

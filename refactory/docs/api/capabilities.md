@@ -1291,7 +1291,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 
 ## graph-control
 
-Preview or queue boundary pause/resume/stop/rerun/redeliver/acknowledge/amend-command/withdraw controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. acknowledge transitions an executing checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly. redeliver brings a finished or failed-at-deliver run up to date with main in one command.
+Preview or queue boundary pause/resume/stop/rerun/redeliver/acknowledge/amend-command/withdraw controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. resume --acknowledge-failure also starts an owner for a failed checkpoint. acknowledge transitions an executing or failed checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly. redeliver brings a finished or failed-at-deliver run up to date with main in one command.
 
 Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-control.md)
 
@@ -1313,7 +1313,7 @@ Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-con
         "action": "acknowledge",
         "run": "/tmp/example-run"
       },
-      "explanation": "Acknowledge an executing checkpoint whose owner died: moves pending delivery markers and mismatched outputs to set-aside, writes an SHA-bound acknowledgement so recovery accepts the executing checkpoint."
+      "explanation": "Acknowledge an executing or failed checkpoint whose owner died: moves pending delivery markers and mismatched outputs to set-aside, writes an SHA-bound acknowledgement so recovery accepts the checkpoint."
     },
     {
       "arguments": {
@@ -1489,7 +1489,7 @@ Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-con
       "type": "string"
     }
   },
-  "purpose": "Preview or queue boundary pause/resume/stop/rerun/redeliver/acknowledge/amend-command/withdraw controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. acknowledge transitions an executing checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly. redeliver brings a finished or failed-at-deliver run up to date with main in one command.",
+  "purpose": "Preview or queue boundary pause/resume/stop/rerun/redeliver/acknowledge/amend-command/withdraw controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. resume --acknowledge-failure also starts an owner for a failed checkpoint. acknowledge transitions an executing or failed checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly. redeliver brings a finished or failed-at-deliver run up to date with main in one command.",
   "reviewed_schema": "e6051426af8d5423cc4f122642b3c2b99f7defda000f9c3a5a4c6704351fcbb1"
 }
 ```
@@ -1840,6 +1840,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "required": false,
       "type": "string"
     },
+    "model_timeout_s": {
+      "default": null,
+      "description": "seconds one model completion may take before it is called hung (default: 1800)",
+      "flags": [
+        "--model-timeout"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "integer"
+    },
     "node_routes": {
       "default": null,
       "description": "",
@@ -1974,7 +1985,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     }
   },
   "purpose": "Prepare a mode and resolved project worker context for graph execution. Chat uses wf_open with knobs, intent and an absolute workdir, then workflow tools drive the graph.",
-  "reviewed_schema": "a7943a841396507067d718a2e348763e028db58edc79c140d0fbb48884aaf7e3"
+  "reviewed_schema": "d0384bfee436aa3e8a60b363bee74a2ab9b7d9e5125f75908835ecba12f2a286"
 }
 ```
 
@@ -4577,6 +4588,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "required": false,
       "type": "string"
     },
+    "model_timeout_s": {
+      "default": null,
+      "description": "seconds one model completion may take before it is called hung (default: 1800); sets the per-completion limit for every agent step",
+      "flags": [
+        "--model-timeout"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "integer"
+    },
     "name": {
       "default": "",
       "description": "the package or artifact name (default: from what you said)",
@@ -4840,7 +4862,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     }
   },
   "purpose": "Run a named mode or author a package/artifact from a brief in the terminal; worker file defaults apply at preparation. CEO conversation and graph worker routes are distinct.",
-  "reviewed_schema": "87dce677805e168eca7f531ba916bf2b45635225867cb1f461420fafc80f3862"
+  "reviewed_schema": "054734e27c8a8bda0075d478425f857975ffb609ea6ec2e2a6d1a6c7d4e400c5"
 }
 ```
 
@@ -6575,7 +6597,9 @@ Build a reusable mode package from a brief, name and task/single-shot inputs. Ca
       "gate_kind": "fn",
       "id": "gate_overwatch",
       "kind": "gate",
-      "knobs": [],
+      "knobs": [
+        "review_attempts"
+      ],
       "notes": "proceed only on a stated PASS verdict",
       "role": "ceo"
     },
@@ -6584,7 +6608,9 @@ Build a reusable mode package from a brief, name and task/single-shot inputs. Ca
       "gate_kind": "fn",
       "id": "gate_qa",
       "kind": "gate",
-      "knobs": [],
+      "knobs": [
+        "review_attempts"
+      ],
       "notes": "proceed only when every review ran and none is blocking",
       "role": "ceo"
     },
@@ -6863,6 +6889,18 @@ Build a reusable mode package from a brief, name and task/single-shot inputs. Ca
       "value": 3,
       "values": []
     },
+    "review_attempts": {
+      "default": 3,
+      "description": "how many times the review gates may reloop before stopping; defaults to the same as check_attempts",
+      "frozen": false,
+      "kind": "int",
+      "range": [
+        1,
+        5
+      ],
+      "value": 3,
+      "values": []
+    },
     "revision_of": {
       "default": "",
       "description": "for an edit: the <package>/<mode> being revised",
@@ -6944,7 +6982,7 @@ Build a reusable mode package from a brief, name and task/single-shot inputs. Ca
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a reusable mode package from a brief, name and task/single-shot inputs. Canonical smoke runs before separate QA and Overwatch; repair shares the attempt bound and completion needs current validation and intent evidence.",
-    "reviewed_schema": "33dd7f848f6ae5ad2570cc992144aec6e142cae1e94645a955705b7dde8cc0a6"
+    "reviewed_schema": "43948735931e3bae5ca953b70c7d122fd24dc4cbe69aa3dd90a2988d9a814ff0"
   }
 }
 ```
@@ -7414,6 +7452,16 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     },
     {
       "condition": "reloop",
+      "source": "gate_pitfalls",
+      "target": "pitfalls_researcher"
+    },
+    {
+      "condition": "proceed",
+      "source": "gate_pitfalls",
+      "target": "strategy_director"
+    },
+    {
+      "condition": "reloop",
       "source": "gate_qa",
       "target": "emit"
     },
@@ -7423,14 +7471,14 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "target": "overwatch"
     },
     {
+      "condition": "proceed",
+      "source": "gate_research",
+      "target": "pitfalls_researcher"
+    },
+    {
       "condition": "reloop",
       "source": "gate_research",
       "target": "research_director"
-    },
-    {
-      "condition": "proceed",
-      "source": "gate_research",
-      "target": "strategy_director"
     },
     {
       "condition": "proceed",
@@ -7456,6 +7504,11 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "condition": null,
       "source": "overwatch",
       "target": "gate_overwatch"
+    },
+    {
+      "condition": null,
+      "source": "pitfalls_researcher",
+      "target": "gate_pitfalls"
     },
     {
       "condition": null,
@@ -7504,6 +7557,10 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     },
     {
       "id": "gate_overwatch",
+      "user": false
+    },
+    {
+      "id": "gate_pitfalls",
       "user": false
     },
     {
@@ -7600,8 +7657,21 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "gate_kind": "fn",
       "id": "gate_overwatch",
       "kind": "gate",
-      "knobs": [],
+      "knobs": [
+        "review_attempts"
+      ],
       "notes": "proceed only on a stated PASS verdict",
+      "role": "ceo"
+    },
+    {
+      "call": "refactory_dsh.design_ops:gate_pitfalls",
+      "gate_kind": "fn",
+      "id": "gate_pitfalls",
+      "kind": "gate",
+      "knobs": [
+        "pitfalls_attempts"
+      ],
+      "notes": "proceed only when pitfalls.json is valid; reloop to pitfalls_researcher otherwise",
       "role": "ceo"
     },
     {
@@ -7609,7 +7679,9 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "gate_kind": "fn",
       "id": "gate_qa",
       "kind": "gate",
-      "knobs": [],
+      "knobs": [
+        "review_attempts"
+      ],
       "notes": "proceed only when every review ran and none is blocking",
       "role": "ceo"
     },
@@ -7663,6 +7735,14 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "kind": "agent",
       "knobs": [],
       "notes": "audit the evidence behind the reviews",
+      "role": "ceo"
+    },
+    {
+      "call": "",
+      "id": "pitfalls_researcher",
+      "kind": "agent",
+      "knobs": [],
+      "notes": "identify risk-ranked pitfalls before strategy, independent of any design",
       "role": "ceo"
     },
     {
@@ -7841,6 +7921,18 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "value": "",
       "values": []
     },
+    "pitfalls_attempts": {
+      "default": 2,
+      "description": "how many times the pitfalls step may be retried when its output is invalid",
+      "frozen": false,
+      "kind": "int",
+      "range": [
+        1,
+        5
+      ],
+      "value": 2,
+      "values": []
+    },
     "pr": {
       "default": true,
       "description": "open a pull request once the reviews pass: into the target's default branch, or a new project's own GitHub repository; off keeps the work on the run's local branch, with its pull request text in pull-request.md and finishing commands in delivery.json",
@@ -7901,6 +7993,18 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "range": [
         1,
         8
+      ],
+      "value": 3,
+      "values": []
+    },
+    "review_attempts": {
+      "default": 3,
+      "description": "how many times the review gates may reloop before stopping; defaults to the same as check_attempts",
+      "frozen": false,
+      "kind": "int",
+      "range": [
+        1,
+        5
       ],
       "value": 3,
       "values": []
@@ -7992,7 +8096,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`). The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-    "reviewed_schema": "2dfc1c3057570600c7c31de3303c282cf8b7666b4f78b05682b92f9b439be5e3"
+    "reviewed_schema": "0bdf6df91cb2c16aa30e6b0a7319b99c56d2e2be894037a3f70b05a456d80f0f"
   }
 }
 ```
@@ -8553,7 +8657,9 @@ Revise an existing mode package and validate the revision before separate QA and
       "gate_kind": "fn",
       "id": "gate_overwatch",
       "kind": "gate",
-      "knobs": [],
+      "knobs": [
+        "review_attempts"
+      ],
       "notes": "proceed only on a stated PASS verdict",
       "role": "ceo"
     },
@@ -8562,7 +8668,9 @@ Revise an existing mode package and validate the revision before separate QA and
       "gate_kind": "fn",
       "id": "gate_qa",
       "kind": "gate",
-      "knobs": [],
+      "knobs": [
+        "review_attempts"
+      ],
       "notes": "proceed only when every review ran and none is blocking",
       "role": "ceo"
     },
@@ -8841,6 +8949,18 @@ Revise an existing mode package and validate the revision before separate QA and
       "value": 3,
       "values": []
     },
+    "review_attempts": {
+      "default": 3,
+      "description": "how many times the review gates may reloop before stopping; defaults to the same as check_attempts",
+      "frozen": false,
+      "kind": "int",
+      "range": [
+        1,
+        5
+      ],
+      "value": 3,
+      "values": []
+    },
     "revision_of": {
       "default": "",
       "description": "for an edit: the <package>/<mode> being revised",
@@ -8922,7 +9042,7 @@ Revise an existing mode package and validate the revision before separate QA and
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Revise an existing mode package and validate the revision before separate QA and Overwatch. Supply revision_of, name and brief. allow_regression=true skips original execution and numerical comparison, while revised execution and intent evidence remain mandatory.",
-    "reviewed_schema": "c293edc1d69b8c3fbda779072fb331f2b6bffc1d4713728998bc550904f78afa"
+    "reviewed_schema": "05c269ef8b75050ab96ed0e489df14b4026d2f4d47f6ece55fef607d11c7572e"
   }
 }
 ```

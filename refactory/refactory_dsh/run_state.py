@@ -107,6 +107,48 @@ def read_start_failure(root: Path) -> dict | None:
         return None
 
 
+def promote_unretried_failure(root: Path) -> None:
+    """Promote ready+last_failure to run-level failed when the owner exits.
+
+    dm-95: when the owner exits and the spine's last boundary was a node
+    failure that was not retried (status ``ready`` with ``last_failure``),
+    the run has ended.  Record it as ``failed`` with the node failure's
+    error so the supervisor does not respawn it and ``refactory status``
+    reads as failed.  The promotion updates both ``spine-status.json``
+    and ``spine-checkpoint.json``.
+    """
+    status_path = Path(root) / '.refactory/spine-status.json'
+    checkpoint_path = Path(root) / '.refactory/spine-checkpoint.json'
+    try:
+        status_data = json.loads(status_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(status_data, dict) or status_data.get('status') != 'ready':
+        return
+    last_failure = status_data.get('last_failure')
+    if not isinstance(last_failure, dict):
+        return
+    node = last_failure.get('node', 'unknown')
+    error = last_failure.get('error', 'node failure')
+    status_data['status'] = 'failed'
+    status_data['error'] = f'{node}: {error}'
+    try:
+        tmp = status_path.with_suffix('.tmp')
+        tmp.write_text(json.dumps(status_data, indent=2))
+        tmp.replace(status_path)
+    except OSError:
+        return
+    try:
+        cp_data = json.loads(checkpoint_path.read_text())
+        if isinstance(cp_data, dict):
+            cp_data['status'] = 'failed'
+            tmp = checkpoint_path.with_suffix('.tmp')
+            tmp.write_text(json.dumps(cp_data))
+            tmp.replace(checkpoint_path)
+    except (OSError, json.JSONDecodeError):
+        pass
+
+
 def read_supervision_history(root: Path) -> list[dict]:
     """Read .refactory/supervision-history.json if present."""
     path = Path(root) / '.refactory/supervision-history.json'

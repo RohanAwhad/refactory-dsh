@@ -81,6 +81,8 @@ def prepare_artifact(ctx: Any) -> dict[str, Any]:
             raise ValueError("source_project must be an existing directory")
         source = str(root)
         manifest = _source_manifest(root)
+    # deliver=False tells prepare_design to omit pitfalls facts and writes
+    # that this graph does not declare.
     prepared = design_ops.prepare_design(ctx, deliver=False, in_worktree=False if source else None)
     if source:
         prepared.update(source=source,
@@ -121,15 +123,27 @@ def _report(ctx: Any, status: str, findings: list[str]) -> dict[str, Any]:
     }
 
 
-def _repair(ctx: Any, findings: list[str]) -> str:
+def _repair(ctx: Any, findings: list[str], *, kind: str = "check") -> str:
     used = int(ctx.facts.get("repairs_used", 0))
     limit = int(ctx.knob("repair_attempts", 1))
     feedback = "\n".join(findings)
     ctx.write_text("repair.txt", feedback + "\n")
     ctx.set_fact("repair_feedback", feedback)
+
+    if kind == "check":
+        kind_used = int(ctx.facts.get("check_repairs_used", 0))
+        ctx.set_fact("check_repairs_used", kind_used + 1)
+    else:
+        kind_used = int(ctx.facts.get("review_repairs_used", 0))
+        ctx.set_fact("review_repairs_used", kind_used + 1)
+
     if used >= limit:
         ctx.write_json("fast-report.json", _report(ctx, "unresolved", findings))
-        raise ValueError(f"focused QA/admission unresolved after {used} repair(s): {feedback}")
+        label = "check" if kind == "check" else "review"
+        raise ValueError(
+            f"focused QA/admission unresolved after {used} repair(s) "
+            f"({label} failure): {feedback}"
+        )
     ctx.set_fact("repairs_used", used + 1)
     ctx.write_json("fast-report.json", _report(ctx, "repairing", findings))
     return Verdict("reloop", feedback)
@@ -340,7 +354,7 @@ def gate_qa(ctx: Any) -> str:
         if refactory_findings:
             refactory_detail = "\n".join(refactory_findings)
             evidence.stop_unrepairable(evidence.failure_kind(refactory_detail), refactory_detail)
-        return _repair(ctx, findings)
+        return _repair(ctx, findings, kind='check' if check_failed else 'review')
     ctx.set_fact("qa_passed", True)
     ctx.write_json("fast-report.json", _report(ctx, "qa_passed", []))
     return "proceed"

@@ -573,8 +573,8 @@ Running code we did not write.
 | function | `model_readiness` | `(workdir: 'Path', *, model_context: 'dict[str, str] \| None' = None, require_ready: 'bool' = True) -> 'dict[str, Any]'` |
 | function | `promote` | `(project: 'Path', name: 'str', *, note: 'str' = '') -> 'dict[str, Any]'` |
 | function | `refactory_env` | `(env: 'dict[str, str] \| None' = None) -> 'dict[str, str]'` |
-| function | `run_command` | `(command: 'str', *, workdir: 'Path', timeout_s: 'int' = 180, memory_mb: 'int' = 0, cpu_s: 'int \| None' = None, file_mb: 'int' = 64, env: 'dict[str, str] \| None' = None, budget: 'Any' = None, home: 'Path \| None' = None, exact_env: 'bool' = False, stdin: 'Any' = None) -> 'SandboxResult'` |
-| function | `run_sandboxed` | `(code: 'str', *, workdir: 'Path', timeout_s: 'int' = 180, memory_mb: 'int' = 2048, cpu_s: 'int' = 120, file_mb: 'int' = 64, env: 'dict[str, str] \| None' = None, forwarded: 'dict[str, str] \| None' = None) -> 'SandboxResult'` |
+| function | `run_command` | `(command: 'str', *, workdir: 'Path', timeout_s: 'int' = 180, memory_mb: 'int' = 0, cpu_s: 'int \| None' = None, file_mb: 'int' = 16384, env: 'dict[str, str] \| None' = None, budget: 'Any' = None, home: 'Path \| None' = None, exact_env: 'bool' = False, stdin: 'Any' = None) -> 'SandboxResult'` |
+| function | `run_sandboxed` | `(code: 'str', *, workdir: 'Path', timeout_s: 'int' = 180, memory_mb: 'int' = 2048, cpu_s: 'int' = 120, file_mb: 'int' = 16384, env: 'dict[str, str] \| None' = None, forwarded: 'dict[str, str] \| None' = None) -> 'SandboxResult'` |
 | function | `scrub` | `(env: 'dict[str, str] \| None' = None) -> 'dict[str, str]'` |
 | function | `smoke` | `(identifier: 'str', workdir: 'Path', *, project: 'Path \| None' = None, model: 'bool' = False, knobs: 'dict[str, Any] \| None' = None, model_context: 'dict[str, str] \| None' = None, **kwargs: 'Any') -> 'SandboxResult'` |
 | function | `usage` | `() -> 'str'` |
@@ -674,6 +674,7 @@ The steps a mode uses to change a repository: where it works, what lands, how it
 | function | `materialise_node` | `(**fields: 'Any') -> 'Node'` |
 | function | `prepare_commands` | `(ctx: 'Any', found: 'worktree.Worktree', env: 'dict[str, str]', home: 'Path', timeout: 'float', budget: 'Any', *, amend: 'bool' = True) -> 'tuple[worktree.Worktree, list[str], dict[str, Any] \| None]'` |
 | function | `produces` | `() -> 'tuple[str, ...]'` |
+| function | `refuse_truncated` | `(path: 'Path', text: 'str') -> 'None'` |
 | function | `refused` | `(ctx: 'Any') -> 'str'` |
 | function | `report` | `(ctx: 'Any', name: 'str', payload: 'dict[str, Any]') -> 'dict[str, Any]'` |
 | function | `run_check` | `(ctx: 'Any', command: 'str', timeout: 'float') -> 'Any'` |
@@ -686,6 +687,7 @@ The steps a mode uses to change a repository: where it works, what lands, how it
 - **`materialise_node`** — The op that applies ``emit.txt`` as the run's next attempt (`materialise`).
 - **`prepare_commands`** — Run the run's generate command, then its setup command, in a prepared worktree.
 - **`produces`** — The facts `locate` returns, for the prepare node's ``produces``.
+- **`refuse_truncated`** — Refuse text copied from a read that the read tool cut short, before it is written anywhere.
 - **`refused`** — Why `materialise` could not apply the last ``emit.txt``; empty when it did.
 - **`report`** — Settle the run's place, write the mode's report ``name`` from ``payload``, and return it.
 - **`run_check`** — Run ``command`` where the run works, and return its `sandbox.SandboxResult`.

@@ -100,9 +100,19 @@ for the usage breakdown, tradeoffs and revised acceptance strategy before select
 another limit.
 
 Elapsed time and tokens are separate from candidate counts, graph steps and one
-completion's hang timeout. CLI controls are `--max-elapsed-s`, `--max-tokens`,
+completion's hang timeout (`--model-timeout`, default 1800 seconds). CLI controls are `--model-timeout`, `--max-elapsed-s`, `--max-tokens`,
 `--validation-reserve-s` and `--validation-reserve-tokens`. The GUI exposes the
-same effective run settings. Python graphs accept the same fields:
+same effective run settings.
+
+`--model-timeout` sets how long one model completion may take (default 1800s).
+Each agent node's spine limit is `attempts × model-timeout + 600`; the per-node
+`command_timeout_s` overrides the spine's global `commandTimeoutMs`
+(`execute.ts:344`). `--max-elapsed-s` is a deliberate wall-clock ceiling that can
+end a step mid-completion. `streamIdleTimeoutMs` is disabled by default
+(`workers.py:162`) but can undercut `--model-timeout` if explicitly enabled by a
+provider config.
+
+Python graphs accept the same fields:
 
 ```python
 run = mode.run(

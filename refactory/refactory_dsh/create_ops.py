@@ -19,6 +19,7 @@ from typing import Any
 from refactory_dsh import registry
 from refactory_dsh.paths import project_root, project_for_nodes
 from refactory_dsh.nn import Package, PackageError, Verdict, validate_state
+from refactory_dsh.repo_change import refuse_truncated
 
 STAGING = "staging"
 
@@ -755,6 +756,7 @@ def materialise(ctx: Any) -> dict[str, Any]:
     written: list[str] = []
     for relative, content in files.items():
         inside = _package_relative(relative, name)
+        refuse_truncated(Path(inside), content)
         target = root / inside
         if not target.resolve().is_relative_to(root.resolve()):
             raise ValueError(f"{relative!r} escapes the package directory")
@@ -1224,14 +1226,38 @@ def smoke(ctx: Any) -> dict[str, Any]:
             **({"smoke_model": "used"} if agent_nodes else {}), **revised}
 
 
-def repair(ctx: Any, findings: list[str]) -> str:
-    """Share the existing full-mode attempt allowance across all build failures."""
+def repair(ctx: Any, findings: list[str], *, kind: str = "check") -> str:
+    """Share the existing full-mode attempt allowance across all build failures.
+
+    ``kind`` is ``'check'`` for a failed runtime check and ``'review'`` for a
+    review-driven reloop.  Each kind has its own counter and limit; both
+    increment ``attempts_used`` against the overall cap.
+    """
     feedback = "\n".join(findings)
     used = int(ctx.facts.get("attempts_used", 0)) + 1
     ctx.write_text("validation.txt", feedback + "\n")
     ctx.set_fact("validation", feedback)
     ctx.set_fact("attempts_used", used)
-    if used >= int(ctx.knob("attempts", ctx.knob("check_attempts", 3))):
+
+    if kind == "check":
+        kind_used = int(ctx.facts.get("check_attempts_used", 0)) + 1
+        ctx.set_fact("check_attempts_used", kind_used)
+        kind_limit = int(ctx.knob("check_attempts", ctx.knob("attempts", 3)))
+        if kind_used >= kind_limit:
+            raise ValueError(
+                f"check attempts exhausted after {kind_used} check failure(s): {feedback}"
+            )
+    else:
+        kind_used = int(ctx.facts.get("review_attempts_used", 0)) + 1
+        ctx.set_fact("review_attempts_used", kind_used)
+        kind_limit = int(ctx.knob("review_attempts", ctx.knob("check_attempts", ctx.knob("attempts", 3))))
+        if kind_used >= kind_limit:
+            raise ValueError(
+                f"review reloop limit reached after {kind_used} review cycle(s): {feedback}"
+            )
+
+    overall_limit = int(ctx.knob("attempts", ctx.knob("check_attempts", 3)))
+    if used >= overall_limit:
         raise ValueError(f"authoring unresolved after {used} attempt(s): {feedback}")
     return Verdict("reloop", feedback)
 
@@ -1491,6 +1517,87 @@ QA_REVIEWS = (
 BLOCKING_MARK = "BLOCKING"
 
 
+# ── finding-scope filter ──────────────────────────────────────────────────
+#
+# A post-build gate (one that reloops to ``emit``) may block only on findings
+# about files the builder can change.  A finding citing a run document owned
+# by an earlier step is downgraded to a non-blocking note at the gate layer.
+#
+# Classification uses only the structured form ``<path>: <rest>`` at the
+# start of the finding text (after ``blocking_findings`` has stripped the
+# ``BLOCKING:`` prefix).  Free-form findings stay blocking.
+
+
+def _run_doc_owners(workdir: Path) -> dict[str, str]:
+    """Map run-document names to their owning node ids.
+
+    Derived from the graph's node ``writes`` declarations in
+    ``.refactory/declarations.json``.  A file no node writes is not a run
+    document.  Only exact file names are indexed, not directory writes.
+    """
+    from refactory_dsh.lowering import read_declarations
+
+    decls = read_declarations(workdir)
+    owners: dict[str, str] = {}
+    for node_id, entry in decls.items():
+        if not isinstance(entry, dict):
+            continue
+        for written in entry.get("writes", ()):
+            if isinstance(written, str) and not written.endswith("/"):
+                if written not in owners:
+                    owners[written] = node_id
+    return owners
+
+
+def classify_finding(
+    finding_text: str, run_doc_owners: dict[str, str],
+) -> tuple[bool, str | None]:
+    """Classify a single finding by its structured target path.
+
+    Only the structured form ``<path>: <rest>`` (where *path* matches a
+    node's ``writes`` declaration exactly) names its target.  When that
+    path is a run document, the finding becomes non-blocking.  Every other
+    finding — free-form text, or a path not in the owners map — stays
+    blocking.
+
+    Returns ``(is_blocking, owning_step_or_None)``.
+    """
+    m = re.match(r'^([\w][\w/._-]*\.\w+):\s', finding_text)
+    if not m:
+        # Free-form finding, no structured path → stays blocking.
+        return (True, None)
+    target = m.group(1)
+    if target in run_doc_owners:
+        return (False, run_doc_owners[target])
+    return (True, None)
+
+
+def scope_filter_findings(
+    findings: list[str], workdir: Path,
+) -> tuple[list[str], list[str]]:
+    """Separate blocking findings from non-blocking notes about run documents.
+
+    Returns ``(blocking, notes)`` where *blocking* are findings that remain
+    blocking and *notes* are human-readable strings for downgraded findings.
+    """
+    owners = _run_doc_owners(workdir)
+    if not owners:
+        return (list(findings), [])
+    blocking: list[str] = []
+    notes: list[str] = []
+    for finding in findings:
+        is_blocking, owning_step = classify_finding(finding, owners)
+        if is_blocking:
+            blocking.append(finding)
+        else:
+            target_m = re.match(r'^([\w][\w/._-]*\.\w+):\s', finding)
+            target_name = target_m.group(1) if target_m else "?"
+            notes.append(
+                f"Non-blocking note ({owning_step} owns {target_name}): {finding}"
+            )
+    return (blocking, notes)
+
+
 def marks(line: str, marker: str) -> bool:
     """Whether a line states the marker, however a markdown author decorated it.
 
@@ -1673,6 +1780,7 @@ def gate_qa(ctx: Any) -> str:
         unavailable = re.search(r"(?im)^\s*UNAVAILABLE:.*$", detail)
         if unavailable:
             evidence.stop_unrepairable("unavailable", unavailable[0])
+    scope_notes: list[str] = []
     stale = evidence.current_problems(ctx, ("health_checker", "code_reviewer", "qa_director"))
     if stale:
         reason = "reloop: " + "; ".join(stale)
@@ -1681,14 +1789,33 @@ def gate_qa(ctx: Any) -> str:
     elif snapshot["missing"]:
         reason = "reloop: a review did not run: " + ", ".join(snapshot["missing"])
     else:
-        findings = [f"{review['path']}: {finding}" for review in snapshot["reviews"]
-                    for finding in review["findings"]]
-        reason = "reloop: " + "\n".join(findings) if findings else ""
+        # Collect raw findings per review, then apply scope filter.
+        raw_findings = [finding for review in snapshot["reviews"]
+                        for finding in review["findings"]]
+        filtered, scope_notes = scope_filter_findings(raw_findings, ctx.workdir)
+        # Rebuild with review-path prefixes for the still-blocking findings.
+        blocking_indexed: list[str] = []
+        idx = 0
+        for review in snapshot["reviews"]:
+            for finding in review["findings"]:
+                if finding in filtered:
+                    blocking_indexed.append(f"{review['path']}: {finding}")
+                    filtered.remove(finding)  # consume first match
+                idx += 1
+        reason = "reloop: " + "\n".join(blocking_indexed) if blocking_indexed else ""
+        if scope_notes:
+            note_text = "\n".join(scope_notes)
+            if reason:
+                reason += "\n" + note_text
     if reason:
         ctx.write_text("reviews/qa-gate.txt", reason + "\n")
         ctx.set_fact("qa_gate", reason)
-        return repair(ctx, [reason]) if ctx.exists(evidence.EVIDENCE) else Verdict("reloop", reason)
-    ctx.write_text("reviews/qa-gate.txt", "proceed: no blocking finding\n")
+        return repair(ctx, [reason], kind='review') if ctx.exists(evidence.EVIDENCE) else Verdict("reloop", reason)
+    if scope_notes:
+        ctx.write_text("reviews/qa-gate.txt",
+                       "proceed: no blocking finding\n" + "\n".join(scope_notes) + "\n")
+    else:
+        ctx.write_text("reviews/qa-gate.txt", "proceed: no blocking finding\n")
     ctx.set_fact("qa_gate", "(the reviews found nothing blocking)")
     ctx.write_text("validation.txt", "(reviews passed)\n")
     ctx.set_fact("validation", "(reviews passed)")
@@ -1707,7 +1834,8 @@ def gate_overwatch(ctx: Any) -> str:
     # Compute three separate problem categories so the reason names each one.
     evidence_problems = evidence.current_problems(ctx, ("overwatch",))
     audit_problems_list = evidence.audit_problems(ctx)
-    review_findings = blocking_findings(text)
+    review_findings_raw = blocking_findings(text)
+    review_findings, ow_scope_notes = scope_filter_findings(review_findings_raw, ctx.workdir)
     verdict = text.strip().splitlines()[-1].strip() if text.strip() else ""
 
     if verdict == PASS_MARK and not evidence_problems and not audit_problems_list and not review_findings:
@@ -1745,9 +1873,11 @@ def gate_overwatch(ctx: Any) -> str:
             f"overwatch verdict is missing or not {PASS_MARK!r}"
             f" (last line: {verdict!r})"
         )
+    if ow_scope_notes:
+        parts.append("non-blocking notes: " + "; ".join(ow_scope_notes))
     reason = "reloop: " + "; ".join(parts) + "\n" + _excerpt(text, 2000)
     ctx.write_text("reviews/overwatch-gate.txt", reason + "\n")
     ctx.set_fact("overwatch_review", reason)
     ctx.write_text("validation.txt", reason + "\n")
     ctx.set_fact("validation", reason)
-    return repair(ctx, [reason]) if ctx.exists(evidence.EVIDENCE) else Verdict("reloop", reason)
+    return repair(ctx, [reason], kind='review') if ctx.exists(evidence.EVIDENCE) else Verdict("reloop", reason)

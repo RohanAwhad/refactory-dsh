@@ -98,14 +98,24 @@ def prepare(root: Path, name: str, *, resource_limits: dict[str, Any] | None = N
             except (OSError, json.JSONDecodeError, ValueError):
                 pass
         if not ack_ok:
-            raise ValueError('last node outcome is unknown or failed; inspect side effects before any explicit rerun')
+            raise ValueError(
+                'last node outcome is unknown; inspect side effects, then use:\n'
+                f'  refactory graph-control acknowledge --run {root}')
         # With a valid acknowledgement, treat as halted for recovery purposes
         allowed.add('executing')
     if saved.get('status') not in allowed:
-        raise ValueError('last node outcome is unknown or failed; inspect side effects before any explicit rerun')
+        status = saved.get('status')
+        if status == 'failed':
+            raise ValueError(
+                'checkpoint status is failed; to resume after inspecting side effects, use:\n'
+                f'  refactory graph-control resume --acknowledge-failure --run {root}')
+        raise ValueError(
+            f'checkpoint status is {status!r}; inspect side effects before any explicit rerun')
     for pending in (root / '.refactory/agent-delivery/pending').glob('*.json'):
         if pending.is_file():
-            raise ValueError('a dispatched worker outcome is unknown; automatic replay is unsafe')
+            raise ValueError(
+                'a dispatched worker outcome is unknown; set it aside first with:\n'
+                f'  refactory graph-control acknowledge --run {root}')
     for name, expected in saved.get('file_fingerprints', {}).items():
         if fingerprint(root / name) != expected:
             raise ValueError(f'input/output {name!r} changed; dependent results need explicit invalidation')

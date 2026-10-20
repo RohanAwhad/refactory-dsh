@@ -43,7 +43,12 @@ DEFAULT_TIMEOUT_S = 180
 DEFAULT_MODEL_SMOKE_TIMEOUT_S = 3600
 DEFAULT_MEMORY_MB = 2048
 DEFAULT_CPU_S = 120
-DEFAULT_FILE_MB = 64
+DEFAULT_FILE_MB = 16384
+
+#: Shell exit codes for signals that may be the change's own fault (SIGABRT, SIGBUS,
+#: SIGSEGV).  Retried once in run_command; if they persist, the base comparison decides
+#: whether the crash is the change's fault or infrastructure.
+_AMBIGUOUS_SHELL_EXITS = frozenset({134, 135, 139})
 
 #: Anything whose name looks like a credential is removed from the environment.
 #: A generated package has no reason to read a key, and every reason not to.
@@ -458,6 +463,12 @@ def run_command(
                     stdout=result.stdout,
                     stderr=f"{sig_label}\n{result.stderr}" if result.stderr else sig_label,
                 )
+        elif result.returncode in _AMBIGUOUS_SHELL_EXITS:
+            # Shell-wrapped SIGABRT/SIGBUS/SIGSEGV — retry once (#377, extended to
+            # 128+N shells).  If the retry still crashes, the result falls through to
+            # the caller's base comparison, which decides whether the crash is the
+            # change's fault or infrastructure.
+            result = _once(time.monotonic() + timeout_s)
     except subprocess.TimeoutExpired:
         return SandboxResult(
             ok=False, timed_out=True, returncode=124, timeout_s=timeout_s,

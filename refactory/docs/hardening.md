@@ -530,8 +530,9 @@ reported the change only at materialise, 45 minutes later.
    naming the step; for output-only steps (planning steps and emit), it fails
    the step.
 3. **Planning guard.** Design's `prepare_design` passes its planning steps
-   (`research_director`, `strategy_director`, `synthesize_strategy`,
-   `design_doc`) to `repo_change.locate` as `output_only`, which merges them
+   (`research_director`, `pitfalls_researcher`, `strategy_director`,
+   `synthesize_strategy`, `design_doc`) to `repo_change.locate` as
+   `output_only`, which merges them
    with `OUTPUT_ONLY = ("emit",)` at `target_guard.record`. The watch/strayed
    bracket that catches emit editing the target now catches a planning step
    doing so. `OUTPUT_ONLY` stays `("emit",)` — design's steps are design's own.
@@ -652,6 +653,26 @@ and the fail-open case when no run is open.
 
 ---
 
+## 14. Post-build findings must cite files the builder can change
+
+**What the issue is.** A post-build reviewer finding that cites only a run document (e.g. `design.md`) sends the run back to `emit`, which cannot change that file. The run produces an empty attempt, which `#369` refuses. The run must be stopped and replayed by hand. b24ar_hooks_refine's attempt 2 was blocked this way: all three reviews cited design.md's backtick-wrapped markers as their only finding, the code itself was complete.
+
+**The rule.** A finding blocks only when the step it is sent back to can fix it. Post-build gate evaluators classify each blocking finding by the structured form `<path>: <text>` at its start. When that path matches a file declared in a node's `writes` (from `.refactory/declarations.json`), the finding is about a run document and is downgraded to a non-blocking note naming the owning step. Every other finding — free-form text, or a path not in any node's `writes` — stays blocking. A finding like `BLOCKING: the change does not implement design.md's Rule 2` stays blocking because it does not start with a structured path; a finding like `BLOCKING: design.md: site markers are in backticks` is downgraded because `design.md` is declared in `design_doc`'s writes.
+
+**Owner derivation.** Owners are derived from the running graph's node `writes` declarations in `.refactory/declarations.json`, not from a hard-coded map. This holds for any graph: design, create, design_fast, edit, refine, and a user's own mode with its own documents. A path no node writes is not a run document. `_run_doc_owners()` in `create_ops.py` builds the mapping at gate time.
+
+**Which gates enforce this.**
+
+- **`gate_qa`** and **`gate_overwatch`** (both in `create_ops.py`) enforce this. Both call `scope_filter_findings()` on the raw blocking findings before deciding whether to reloop.
+- **`gate_design_review`** (`design_ops.py`) does not need it — it reloops to `design_doc`, which can fix `design.md`.
+- **`check_artifact`** (`design_ops.py`) does not need it — its findings come from test runner output (assertion errors, test names), not from free-form review text parsed by `blocking_findings()`.
+- **`fast_ops.gate_qa`** (`fast_ops.py`) does not need it — it uses structured JSON checks from `focused-qa.json`, not `blocking_findings()` on review prose.
+- **`fast_ops.gate_emit`** (`fast_ops.py`) does not need it — it reloops on materialise refusals, not review findings.
+
+**Held by.** `test_gate_stale_findings.py`: `test_classify_finding_structured_worktree_file_stays_blocking`, `test_classify_finding_structured_run_doc_downgraded`, `test_classify_finding_freeform_stays_blocking`, `test_classify_finding_no_path_stays_blocking`, `test_run_doc_owners_from_declarations`, `test_scope_filter_with_custom_graph_document`, `test_classify_finding_exact_path_match`, `test_scope_filter_mixed_findings`, `test_gate_qa_downgrades_design_md_finding`, `test_gate_qa_keeps_worktree_finding_blocking`, `test_gate_overwatch_downgrades_design_md_finding`.
+
+---
+
 ## What this does not cover
 
 - Listing a generated package still imports it (§1).
@@ -659,7 +680,24 @@ and the fail-open case when no run is open.
 - `post_checks` and fork/join are unused (§5).
 - The GUI is not audited here at all. Its defects were tracked as issues #60–#73, and the panel's behaviour is held by `packages/client/ui-refactory/tests/` and [tutorial 7](tutorials/07-pick-and-watch-from-the-panel.md).
 
-## Delivery envelope covers the merged check (dm-107)
+## 8. Check sandbox file-size limit, truncation guard, signal classification and attempt counters (#330, #348 E8, #349)
+
+**File-size limit raised.**  The check's `RLIMIT_FSIZE` was 64 MB (`DEFAULT_FILE_MB = 64`) while installs got 16 GB (`INSTALL_FILE_MB = 16384`).  A check that wrote a coverage database, build artifact, sqlite file or test fixture over 64 MB was killed by SIGXFSZ and misread as a code failure.  `DEFAULT_FILE_MB` is now 16384, matching `INSTALL_FILE_MB`, because a check runs the project's full test suite, which writes the same class of files an install does.
+
+**Truncation guard shared.**  Every materialiser now calls `refuse_truncated` from `repo_change.py` before writing a file: `repo_change.materialise` (design, design_fast via `fast_ops.materialise_artifact`), `create_ops.materialise` (create, create_fast, edit, edit_fast).  The function was renamed from `_refuse_truncated` to `refuse_truncated` so the import from `create_ops` is a public API.
+
+**Shell-wrapped signal classification.**  Shell-wrapped signal deaths (exit 128+N) for resource-limit signals are now classified by `check_failure_kind` in `authoring_evidence.py`:
+
+- **137 (SIGKILL), 152 (SIGXCPU), 153 (SIGXFSZ)** are classified as `'uncertain'` (infrastructure), stopping the run without spending a code attempt.  These come from the kernel, the OOM killer or the sandbox's own limits and cannot be the change's fault.
+- **134 (SIGABRT), 135 (SIGBUS), 139 (SIGSEGV)** remain `'code_failure'` because they can be caused by a native extension the change broke or a C assertion it triggers.  `run_command` retries them once (as it does for direct signal deaths), and if they persist, the base comparison decides whether the crash is the change's fault or infrastructure.
+
+This is an exit-code-only check with no text scanning.
+
+**Separate check and review counters.**  Check failures and review reloops are counted separately: `check_attempts_used` / `check_attempts`, `review_attempts_used` / `review_attempts`, under the existing `attempts_used` / `attempts` overall cap.  Fast modes keep one `repair_attempts` limit (default 1) but record which kind (`check_repairs_used`, `review_repairs_used`) spent it and name that kind in the stop message.  `refactory status` shows all counters.
+
+**Tests.** `tests/test_check_sandbox.py` has one test per fix: a 100 MB file write passes, exit 137/152/153 are classified as uncertain, exit 134/135/139 are code_failure, exit 1 is still code_failure, the create materialiser refuses truncated text, review reloops do not consume check attempts, and each limit's stop message names itself.
+
+## 9. Delivery envelope covers the merged check (dm-107)
 
 The deliver node's `command_timeout_s` is computed at lowering as
 `_check_envelope_s + INSTALL_TIMEOUT_S + NODE_DISPATCH_OVERHEAD_S`. At defaults
@@ -682,6 +720,8 @@ the lowered value equals the formula; `test_deliver_timeout_exceeds_spine_defaul
 asserts it exceeds 600 s with `check_timeout_s=1800`;
 `test_synthetic_deliver_op_gets_delivery_envelope` asserts that a custom op under
 another name that declares the knob gets the envelope.
+
+---
 
 Two things that were on this list have moved off it, which is the point of keeping it:
 
