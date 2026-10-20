@@ -436,7 +436,8 @@ def copy_uncommitted(target: Path, worktree_path: Path, run: Path) -> list[dict[
     untracked_set: set[str] = set()
 
     # NUL-separated entries: each is "XY path\0" except renames which are
-    # "XY old\0new\0" (two path entries).
+    # "XY new\0old\0" (two path entries — with -z the field order is reversed:
+    # the entry's path is the destination, the next NUL field is the source).
     entries_raw = status_output.split("\0") if status_output else []
     i = 0
     while i < len(entries_raw):
@@ -446,14 +447,15 @@ def copy_uncommitted(target: Path, worktree_path: Path, run: Path) -> list[dict[
             continue
         xy = entry[:2]
         path = entry[3:]
-        # Renames: the next NUL-separated entry is the new name.
+        # Renames: with -z, the entry path is the NEW name (destination) and
+        # the next NUL-separated field is the OLD name (source).
         if xy[0] == "R" or xy[1] == "R":
-            old = path
+            new_name = path
             i += 1
-            new = entries_raw[i] if i < len(entries_raw) else ""
-            delete_paths.add(old)
-            if new:
-                copy_paths.add(new)
+            old_name = entries_raw[i] if i < len(entries_raw) else ""
+            copy_paths.add(new_name)
+            if old_name:
+                delete_paths.add(old_name)
             i += 1
             continue
         if not path:
