@@ -69,10 +69,14 @@ def validate_pitfalls(raw: str, source: str = "", run_dir: str = "") -> list[str
                 problems.append(f"{label}: absence claim {claimed_path!r} escapes the worktree")
             elif source:
                 if any(c in claimed_path for c in ('*', '?', '[')):
-                    matches = sorted(
-                        str(p.relative_to(source))
-                        for p in Path(source).glob(claimed_path)
-                    )
+                    try:
+                        matches = sorted(
+                            str(p.relative_to(source))
+                            for p in Path(source).glob(claimed_path)
+                        )
+                    except ValueError as exc:
+                        problems.append(f"{label}: absence claim {claimed_path!r} is not a valid glob: {exc}")
+                        matches = []
                     if matches:
                         first = ', '.join(matches[:3])
                         problems.append(

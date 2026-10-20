@@ -19,6 +19,7 @@ from tests_support import (
     PITFALLS_ANSWER,
     RESEARCH_ANSWER,
     REVIEW_ANSWERS,
+    VERIFICATION_ANSWER,
     render,
 )
 
@@ -379,6 +380,11 @@ def test_new_project_design_run_passes_pitfalls_gate(tmp_path):
     design_doc = (
         "# Do the thing\n\n"
         "## Summary\n\nFix it properly.\n\n"
+        "## Failure trace\n\nN/A \u2014 this is a new feature.\n\n"
+        "## Ask mapping\n\n"
+        "| Ask (quoted from brief) | Design section | Test |\n"
+        "|---|---|---|\n"
+        '| "a tool" | \u00a7 Changes | tool.py |\n\n'
         "## Rule and sites\n\n"
         "- `tool.py:1` \u2014 **[changed]**\n\n"
         "## Docs\n\n"
@@ -397,6 +403,7 @@ def test_new_project_design_run_passes_pitfalls_gate(tmp_path):
         design_doc,
         DESIGN_REVIEW_ANSWER,
         render({"tool.py": "print('built')\n"}),
+        VERIFICATION_ANSWER,
         *REVIEW_ANSWERS,
     ]
     result = DesignMode().run(
