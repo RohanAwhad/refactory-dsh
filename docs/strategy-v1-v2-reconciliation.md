@@ -29,7 +29,7 @@ The IR fork is explicit: `refactory_dsh/ir.py:4-5` states "Copied from `factory/
 A full merge (absorbing v1's source tree into v2's repo) would break lightwell-factory's GitLab mirror of remote-factory and force an immediate lightwell migration. Instead, use a **git submodule** to pull v1 into v2 while keeping remote-factory as a standalone repo.
 
 ```
-git submodule add git@github.com:akashgit/remote-factory.git vendor/remote-factory
+git submodule add git@github.com:akashgit/remote-factory.git v1/remote-factory
 ```
 
 This gives v2 direct import access to v1's code (IR, OpenShell, Package abstractions) while:
@@ -55,7 +55,7 @@ This gives v2 direct import access to v1's code (IR, OpenShell, Package abstract
 ### What this enables
 
 - **IR drift stops.** v2 imports from v1's canonical `primitives.py`. v2's 3 extension fields are added upstream to remote-factory (lightwell doesn't use them, so no disruption).
-- **OpenShell becomes importable.** `from vendor.remote_factory.factory.contained.openshell import ...` — no standalone extraction needed.
+- **OpenShell becomes importable.** `from v1.remote_factory.factory.contained.openshell import ...` — no standalone extraction needed.
 - **Shared abstractions without forced unification.** v2 can use v1's `Package` type directly if it's useful, or ignore it. No pressure to reconcile `Package` and `Mode` on a timeline.
 - **Cross-repo test oracle disappears.** The `reference_ir.py` plumbing that pulls remote-factory via `uv sync` is replaced by a local submodule import.
 
@@ -70,7 +70,7 @@ The submodule is a stepping stone, not the end state. Absorb it when:
 - The IR coordination tax outweighs the benefit of keeping repos separate
 - v1's `factory` CLI is fully deprecated
 
-At that point: `git submodule deinit vendor/remote-factory`, move the code in or delete it.
+At that point: `git submodule deinit v1/remote-factory`, move the code in or delete it.
 
 ---
 
@@ -135,7 +135,7 @@ Run v2's agent nodes inside v1's containment by invoking `factory contained --ta
 
 ### Recommendation
 
-**With the submodule approach (section 1):** direct import from the submodule (`from vendor.remote_factory.factory.contained.openshell import ...`) behind an optional dependency. This gets v2 sandboxing with zero extraction work. No standalone package needed unless we later absorb the submodule and want to keep OpenShell independent.
+**With the submodule approach (section 1):** direct import from the submodule (`from v1.remote_factory.factory.contained.openshell import ...`) behind an optional dependency. This gets v2 sandboxing with zero extraction work. No standalone package needed unless we later absorb the submodule and want to keep OpenShell independent.
 
 The credential model adapter (v1 gateway → v2 DSH provider registry) is the real work regardless of approach — ~3-5 days of focused effort touching security-sensitive code.
 
@@ -241,7 +241,7 @@ This removes lightwell migration from the critical path entirely.
 ## Suggested sequence
 
 ### Phase 1: Submodule + IR unification (~1 day)
-1. `git submodule add` remote-factory into `vendor/remote-factory`
+1. `git submodule add` remote-factory into `v1/remote-factory`
 2. Replace v2's forked `ir.py` with imports from submodule's canonical `primitives.py`
 3. Add v2's 3 extension fields (`resource_role`, `command_timeout_s`, `dispatch_command`) upstream to remote-factory
 4. Delete cross-repo test oracle (`tests/reference_ir.py`, `uv sync --group reference` plumbing)
