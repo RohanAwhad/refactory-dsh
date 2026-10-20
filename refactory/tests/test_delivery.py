@@ -2274,6 +2274,17 @@ def test_merged_result_fails_check(github, tmp_path, monkeypatch, capsys):
     branch = json.loads((run / "design.json").read_text())["branch"]
     assert _remote_head(github, slug, branch) == ""
 
+    # The worktree must NOT be marked "succeeded" — the merge check failed.
+    # Fails without the fix: _kept only guards record_outcome against
+    # merge.conflicts, not merge.check_failed.
+    found = worktree.recorded(run)
+    if found is not None:
+        record_path = worktree.slot(Path(found.target)) / f"run-{found.branch.removeprefix('refactory/run-')}.json"
+        if record_path.exists():
+            wt_record = json.loads(record_path.read_text())
+            assert wt_record.get("outcome") != "succeeded", \
+                "worktree should not be marked succeeded when the merged check failed"
+
 
 def test_base_did_not_move(github, tmp_path):
     """The base did not move: no merge commit.

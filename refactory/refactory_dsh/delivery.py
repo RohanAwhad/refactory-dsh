@@ -1915,7 +1915,7 @@ def _kept(ctx: Any, approved: dict[str, Any], found: worktree.Worktree | None, w
     # A run that delivers is succeeded only after its push (_delivered).
     # A run looping back for conflict resolution is NOT succeeded yet.
     if found is not None:
-        if not (merge is not None and merge.conflicts):
+        if not (merge is not None and (merge.conflicts or merge.check_failed or merge.abandoned)):
             worktree.record_outcome(found, "succeeded")
         projects.record_delivery(Path(found.target), branch=branch, pull_request=pull_request,
                                  status="pushed, no pull request" if pushed and not pull_request else "kept local")

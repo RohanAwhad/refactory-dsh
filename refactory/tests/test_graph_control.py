@@ -1326,3 +1326,75 @@ def test_redeliver_finds_deliver_by_callable_not_id(tmp_path):
 
     assert result['target'] == 'ship_it'
     assert result['source'] == 'redeliver'
+
+
+def test_redeliver_failed_at_delivery_gate(tmp_path):
+    """redeliver accepts a run that failed at delivery_gate (the gate after
+    deliver), e.g. when conflict resolution exhausted its budget.
+
+    Fails without the change: _redeliver only checks if the cursor contains
+    the deliver op node, not the delivery gate.
+    """
+    root = tmp_path
+    refactory = root / '.refactory'
+    refactory.mkdir(parents=True, exist_ok=True)
+    (refactory / 'spine-status.json').write_text(json.dumps({'status': 'failed'}))
+
+    checkpoint: dict[str, Any] = {
+        'status': 'failed',
+        'run_id': str(root),
+        'graph': {
+            'name': 'default_pack-design',
+            'nodes': {
+                'check': {'_type': 'GateNode', 'id': 'check', 'evaluator_type': 'fn',
+                          'evaluator_command': 'true', 'reads': [],
+                          'writes': ['check.txt']},
+                'emit': {'_type': 'AgentNode', 'id': 'emit', 'role': 'builder',
+                         'prompt_template': 'E', 'reads': [], 'writes': []},
+                'deliver': {'_type': 'FnNode', 'id': 'deliver',
+                            'callable_name': 'refactory_dsh.delivery:deliver_design',
+                            'command': 'dsh-run refactory_dsh.delivery:deliver_design',
+                            'reads': [], 'writes': []},
+                'delivery_gate': {'_type': 'GateNode', 'id': 'delivery_gate',
+                                  'evaluator_type': 'fn', 'max_iterations': 8,
+                                  'reads': [], 'writes': []},
+            },
+            'edges': [
+                {'source': 'emit', 'target': 'check'},
+                {'source': 'check', 'target': 'deliver'},
+                {'source': 'deliver', 'target': 'delivery_gate'},
+                {'source': 'delivery_gate', 'target': 'emit', 'condition': 'reloop'},
+            ],
+        },
+        'state': {
+            'cursor': ['delivery_gate'],
+            'completed': ['emit', 'check', 'deliver'],
+            'skipped': [],
+            'pause_before': [],
+            'gate_verdicts': {},
+            'iterations': {},
+            'feedback': {},
+            'gate_reasons': {},
+            'afters': [],
+            'prompts': {},
+            'log': [],
+        },
+        'file_fingerprints': {},
+        'owner_pid': _dead_pid(),
+    }
+    (refactory / 'spine-checkpoint.json').write_text(json.dumps(checkpoint))
+    (refactory / 'run-config.json').write_text(json.dumps({
+        'mode': 'default_pack/design', 'project': str(root),
+        'configuration_fingerprints': {},
+    }))
+    (refactory / 'invocation.json').write_text(json.dumps({'id': 'test-inv'}))
+    (root / 'facts.json').write_text(json.dumps({'name': 'test'}))
+
+    with patch('refactory_dsh.graph_control.recovery.start',
+               return_value={'action': 'resume', 'status': 'queued', 'pid': 1}) as mock_start:
+        result = graph_control.request(root, 'redeliver')
+
+    assert result['target'] == 'deliver'
+    assert result['source'] == 'redeliver'
+    assert result['status'] == 'queued'
+    mock_start.assert_called_once_with(root, acknowledge_failed=True)
