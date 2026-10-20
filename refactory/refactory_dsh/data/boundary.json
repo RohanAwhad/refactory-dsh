@@ -42,6 +42,7 @@
     "refactory_dsh.owned_process",
     "refactory_dsh.package_rewrite",
     "refactory_dsh.paths",
+    "refactory_dsh.pin",
     "refactory_dsh.profiles",
     "refactory_dsh.recovery",
     "refactory_dsh.registry",
@@ -92,6 +93,9 @@
     "refactory_dsh.worktree"
   ],
   "allowed_leaks": {
+    "refactory_dsh.pin": [
+      {"imports": "refactory_dsh.worktree", "reason": "function-local import of NO_HOOKS and _isolate_hooks to prepare a pin worktree with hooks isolated; added by #428", "until": "prep PR 2"}
+    ],
     "refactory_dsh.recovery": [
       {"imports": "refactory_dsh.console", "reason": "function-local import of CONSOLE_FILE; PRs #428/#429 changing file", "until": "prep PR 2"}
     ],
