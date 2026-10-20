@@ -3154,6 +3154,7 @@ def test_two_runs_conflict_reloop(github, tmp_path, monkeypatch):
     # so: emit (conflict resolution) + reviews (4 answers)
     reloop_answers = [
         resolution_emit,
+        VERIFICATION_ANSWER,
         *REVIEW_ANSWERS,
     ]
 
@@ -3308,6 +3309,8 @@ def test_gate_correction_updates_pr_text(github, tmp_path, monkeypatch):
     design_with_polling = (
         "# Use a polling loop to check for updates\n\n"
         "## Summary\n\nUse a polling loop to check for updates periodically.\n\n"
+        "## Failure trace\n\nN/A \u2014 this is a new feature.\n\n"
+        "## Ask mapping\n\n| Ask (quoted from brief) | Design section | Test |\n|---|---|---|\n| \"Build a tool\" | \u00a7 Changes | tool.py |\n\n"
         "## Rule and sites\n\n"
         "- `tool.py:1` — use a polling loop **[changed]**\n\n"
         "## Docs\n\n- docs/models.md\n\n"
@@ -3320,6 +3323,8 @@ def test_gate_correction_updates_pr_text(github, tmp_path, monkeypatch):
     corrected_design = (
         "# Use websockets to receive updates\n\n"
         "## Summary\n\nUse websockets to receive real-time updates.\n\n"
+        "## Failure trace\n\nN/A \u2014 this is a new feature.\n\n"
+        "## Ask mapping\n\n| Ask (quoted from brief) | Design section | Test |\n|---|---|---|\n| \"Build a tool\" | \u00a7 Changes | tool.py |\n\n"
         "## Rule and sites\n\n"
         "- `tool.py:1` — use websockets **[changed]**\n\n"
         "## Docs\n\n- docs/models.md\n\n"
@@ -3354,6 +3359,7 @@ def test_gate_correction_updates_pr_text(github, tmp_path, monkeypatch):
         # pick_corrections is a gate — no model answer needed
         corrected_design,      # apply_corrections rewrites design.md to "websockets"
         render({"tool.py": "print('built')\n"}),  # emit
+        VERIFICATION_ANSWER,
         *REVIEW_ANSWERS,
     ]
 
