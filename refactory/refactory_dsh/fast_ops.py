@@ -275,6 +275,18 @@ def focused_check(ctx: Any) -> dict[str, Any]:
                 if unbuilt_msg:
                     ctx.write_text("check.txt", f"(the check passed; inherited failures excused)\n\n{unbuilt_msg}\n")
                 ctx.write_json("focused-check.json", payload)
+                # ── enforce guardedness on excused pass too (R3) ──
+                unexempted = enforce_guardedness(ctx)
+                if unexempted:
+                    detail = (
+                        "BLOCKING: these new tests pass without the change: "
+                        + ", ".join(unexempted)
+                        + ". Make them fail without the change, or explain in the "
+                        "PR why each test pins existing behaviour."
+                    )
+                    ctx.write_text("check.txt", detail + "\n")
+                    payload["guardedness_blocked"] = True
+                    ctx.write_json("focused-check.json", payload)
             else:
                 # New failures exist — wire unbuilt diagnosis the same way
                 # as design_ops.check_artifact does.
@@ -395,30 +407,47 @@ def report_package(ctx: Any) -> dict[str, Any]:
 def gate_verification(ctx: Any) -> str:
     """Proceed when the verifier finds no blocking issues; reloop to emit otherwise.
 
-    Also enforces test guardedness in fast mode: focused_check is an op node
-    and cannot return a Verdict, so guardedness blocking is checked here —
-    it is the first gate after focused_check in the fast-mode pipeline.
+    Handles three cases from focused_check (an op node that cannot return Verdicts):
 
-    Guardedness violations spend a ``repair_attempts`` slot (via
-    ``_repair(kind='check')``).  Verifier findings do NOT: the verifier's
-    noise is unmeasured, so it must not end a run on its own.  Findings are
-    written to ``repair.txt`` and set on ``repair_feedback`` so the next
-    emit sees them; the gate's own ``max_iterations`` bounds retries.
+    1. **Check failure** — the check failed; route to _repair with the check
+       failure detail so a repair_attempts slot is spent and emit receives the
+       check failure (not the verifier's noise).
+    2. **Guardedness block** — new tests pass on the base; route to _repair
+       with kind='check'.
+    3. **Verifier findings** — advisory reloop that does NOT spend
+       repair_attempts.  After ``VERIFIER_GATE_LIMIT`` advisory reloops the
+       gate proceeds and records unresolved findings in
+       ``reviews/verification-unresolved.md``.
     """
-    from refactory_dsh.verification import parse_verification_findings
+    from refactory_dsh.verification import VERIFIER_GATE_LIMIT, parse_verification_findings
 
-    # Check guardedness first — focused_check records the block in
-    # focused-check.json but cannot return a Verdict (op node).
     check_data = ctx.read_json("focused-check.json", {})
+
+    # 1. Check failure → _repair (spends a repair_attempts slot).
+    if check_data.get("status") == "fail":
+        detail = ctx.read_text("check.txt") if ctx.exists("check.txt") else "check failed"
+        return _repair(ctx, [detail.strip()], kind="check")
+
+    # 2. Guardedness block → _repair (spends a repair_attempts slot).
     if check_data.get("guardedness_blocked"):
         detail = ctx.read_text("check.txt") if ctx.exists("check.txt") else "non-guarding tests"
         return _repair(ctx, [detail.strip()], kind="check")
 
+    # 3. Verifier findings — advisory, never spend repair_attempts.
     findings = parse_verification_findings(ctx)
     if not findings:
         return "proceed"
-    # Advisory reloop: do not spend repair_attempts for verifier noise.
+
     feedback = "\n".join(findings)
+
+    used = int(ctx.facts.get("verification_iterations_used", 0))
+    ctx.set_fact("verification_iterations_used", used + 1)
+
+    if used + 1 >= VERIFIER_GATE_LIMIT:
+        # Proceed with unresolved findings — never end a run on verifier noise.
+        ctx.write_text("reviews/verification-unresolved.md", feedback + "\n")
+        return "proceed"
+
     ctx.write_text("repair.txt", feedback + "\n")
     ctx.set_fact("repair_feedback", feedback)
     return Verdict("reloop", feedback)

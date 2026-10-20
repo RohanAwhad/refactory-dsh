@@ -24,10 +24,26 @@ import re
 
 TITLE = "Title"
 SUMMARY = "Summary"
+FAILURE_TRACE = "Failure trace"
+ASK_MAPPING = "Ask mapping"
 RULE_AND_SITES = "Rule and sites"
 DOCS = "Docs"
 CHANGES = "Changes"
+GUARDEDNESS_EXEMPTIONS = "Test guardedness exemptions"
 CONTRACT_SECTIONS = (SUMMARY, RULE_AND_SITES, DOCS, CHANGES)
+
+
+def has_non_empty_section(text: str, section: str) -> bool:
+    """Check if the design text has the named ``## section`` with non-empty content."""
+    lower = text.lower()
+    heading = f"## {section.lower()}"
+    pos = lower.find(heading)
+    if pos < 0:
+        return False
+    after = pos + len(heading)
+    next_heading = lower.find("\n## ", after)
+    content = text[after:next_heading].strip() if next_heading >= 0 else text[after:].strip()
+    return bool(content)
 
 
 @dataclasses.dataclass

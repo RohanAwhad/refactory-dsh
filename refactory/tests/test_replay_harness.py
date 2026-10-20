@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -148,6 +150,19 @@ def test_replay_all_skips_unreachable():
     assert summary.missed == 0
 
 
+def test_skipped_entries_appear_in_summary():
+    """Skipped entries must appear in summary.results with skipped=True."""
+    entries = [
+        {"id": "skip1", "brief": "x", "method": "M1", "pre_fix_commit": "abc",
+         "repo_path": None,
+         "expected_finding_file": "f.py", "expected_finding_terms": ["x"]},
+    ]
+    summary = replay_all(entries, lambda b, d, r=None: [])
+    assert len(summary.results) == 1
+    assert summary.results[0].skipped is True
+    assert summary.results[0].entry_id == "skip1"
+
+
 def test_per_method_breakdown():
     entries = json.loads(FIXTURES_PATH.read_text())
 
@@ -170,3 +185,14 @@ def test_replay_summary_shape():
     assert len(summary.results) == summary.total_entries
     for r in summary.results:
         assert isinstance(r, ReplayResult)
+
+
+def test_cli_requires_model():
+    """The CLI must refuse to run without --model."""
+    result = subprocess.run(
+        [sys.executable, "-m", "refactory_dsh.replay_harness",
+         "--evidence", str(FIXTURES_PATH)],
+        capture_output=True, text=True,
+    )
+    assert result.returncode != 0
+    assert "--model is required" in result.stderr

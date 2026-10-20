@@ -14,10 +14,10 @@ from refactory_dsh.nn import Verdict
 
 class FakeCtx:
     """Minimal context for enforce_guardedness tests."""
-    def __init__(self, files=None, facts=None):
+    def __init__(self, files=None, facts=None, workdir=None):
         self._files = dict(files or {})
         self.facts = dict(facts or {})
-        self.workdir = Path(".")
+        self.workdir = workdir or Path(".")
         self._knobs = {}
 
     def exists(self, name):
@@ -232,6 +232,28 @@ def test_gate_verification_fast_blocks_on_guardedness():
     assert isinstance(result, Verdict)
     assert str(result) == "reloop"
     assert "test_foo.py" in result.reason
+
+
+def test_gate_verification_fast_handles_check_failure():
+    """gate_verification in fast mode routes check failures to _repair."""
+    from refactory_dsh.fast_ops import gate_verification
+
+    ctx = FakeCtx(
+        files={
+            "focused-check.json": json.dumps({
+                "status": "fail",
+                "returncode": 1,
+            }),
+            "check.txt": "requested runtime check failed (exit 1): assert False",
+            "reviews/verification.md": "BLOCKING: tool.py:1: noise\n\nVERDICT: FAIL",
+        }
+    )
+    ctx._knobs = {"repair_attempts": "2"}
+    result = gate_verification(ctx)
+    assert isinstance(result, Verdict)
+    assert str(result) == "reloop"
+    # Must carry the check failure, not the verifier noise.
+    assert "assert False" in result.reason or "check failed" in result.reason
 
 
 def test_guardedness_reloops_in_full_mode_integration(tmp_path, monkeypatch):

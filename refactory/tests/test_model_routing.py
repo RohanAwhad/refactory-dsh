@@ -69,16 +69,22 @@ def test_report_artifact_reads_planning_models_from_worker_receipts(tmp_path):
 
     # Exercise the same logic report_artifact uses
     planning_models: dict[str, str | None] = {}
-    for wf in sorted(workers_dir.iterdir()):
-        if wf.suffix == ".json":
-            try:
-                rec = json.loads(wf.read_text())
-                nid = rec.get("node_id", "")
-                if nid in ("design_doc", "design_review"):
-                    route = rec.get("actual_route") or rec.get("requested_route") or {}
-                    planning_models[nid] = route.get("model") or None
-            except (json.JSONDecodeError, OSError):
-                pass
+    try:
+        receipt_files = sorted(
+            (f for f in workers_dir.iterdir() if f.suffix == ".json"),
+            key=lambda f: f.stat().st_mtime,
+        )
+    except OSError:
+        receipt_files = []
+    for wf in receipt_files:
+        try:
+            rec = json.loads(wf.read_text())
+            nid = rec.get("node_id", "")
+            if nid in ("design_doc", "design_review"):
+                route = rec.get("actual_route") or rec.get("requested_route") or {}
+                planning_models[nid] = route.get("model") or None
+        except (json.JSONDecodeError, OSError):
+            pass
 
     assert planning_models == {
         "design_doc": "claude-opus-4-20250514",

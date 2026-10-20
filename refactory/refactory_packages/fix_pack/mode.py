@@ -85,4 +85,7 @@ class MakePass(nn.Mode):
         graph.connect("materialise", "check")
         graph.connect("check", "emit", condition="reloop")
         graph.connect("check", "report", condition="proceed")
+        # Independent verification step: any mode that uses repo_change gets the verifier.
+        from refactory_dsh.verification import wire_verification
+        wire_verification(graph, check_node="check", proceed_target="report")
         return graph

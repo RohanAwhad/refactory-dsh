@@ -1518,6 +1518,11 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
             for node_name, model_name in sorted(planning_models.items()):
                 model_lines.append(f"`{node_name}`: `{model_name or 'default'}`")
             verification += "\n- **Planning models:** " + ", ".join(model_lines) + ".\n"
+    # Add unresolved verification findings if present.
+    if ctx.exists("reviews/verification-unresolved.md"):
+        unresolved = ctx.read_text("reviews/verification-unresolved.md").strip()
+        if unresolved:
+            verification += "\n- **Unresolved verification findings:**\n" + unresolved + "\n"
     verification += _process_notes_section(ctx)
     sections.append(verification)
     sections.append(f"## Original request\n\n{brief}")

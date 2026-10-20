@@ -84,7 +84,7 @@
     "gate_verification": {
       "id": "gate_verification",
       "evaluator_type": "fn",
-      "max_iterations": 4,
+      "max_iterations": 5,
       "_type": "GateNode"
     },
     "health_checker": {

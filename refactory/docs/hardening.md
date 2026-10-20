@@ -723,7 +723,7 @@ another name that declares the knob gets the envelope.
 
 ---
 
-## 10. Independent verification step (dm-84, #400)
+## 15. Independent verification step (dm-84, #400)
 
 Every reviewer in a design run reads design.md, so gaps the design missed
 propagate unchallenged through health check, code review, QA and overwatch.

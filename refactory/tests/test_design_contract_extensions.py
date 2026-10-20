@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from refactory_dsh.design import DesignMode
-from refactory_dsh.design_contract import prompt_contract
+from refactory_dsh.design_contract import prompt_contract, FAILURE_TRACE, ASK_MAPPING
 
 
 def test_prompt_contract_includes_failure_trace():
@@ -42,6 +42,14 @@ def test_design_review_prompt_mentions_failure_trace():
     assert "Ask mapping" in prompt
 
 
+def test_design_review_prompt_blocks_missing_ask_in_brief():
+    """The design_review prompt must mention blocking an ask in the brief
+    that has no row in the mapping table."""
+    graph = DesignMode().build()
+    prompt = graph.nodes["design_review"].prompt_template
+    assert "ask in the brief" in prompt.lower()
+
+
 class FakeCtx:
     """Minimal context for gate_design_review mechanical checks."""
     def __init__(self, files=None, facts=None):
@@ -73,11 +81,14 @@ class FakeCtx:
         return self._knobs.get(name, default)
 
 
-def _make_design(*, failure_trace=True, ask_mapping=True):
+def _make_design(*, failure_trace=True, ask_mapping=True, empty_trace=False):
     """Build a design.md with or without the new sections."""
     parts = ["# Fix the thing\n", "## Summary\n\nFix it.\n"]
     if failure_trace:
-        parts.append("## Failure trace\n\nN/A — this is a new feature.\n")
+        if empty_trace:
+            parts.append("## Failure trace\n\n")
+        else:
+            parts.append("## Failure trace\n\nN/A — this is a new feature.\n")
     if ask_mapping:
         parts.append(
             "## Ask mapping\n\n"
@@ -129,6 +140,24 @@ def test_gate_rejects_missing_ask_mapping():
     result = gate_design_review(ctx)
     feedback = ctx.facts.get("design_review_feedback", "")
     assert "Ask mapping" in feedback or "ask mapping" in feedback
+
+
+def test_gate_rejects_empty_failure_trace():
+    """An empty Failure trace section does not count as present."""
+    from refactory_dsh.design_ops import gate_design_review
+    design = _make_design(failure_trace=True, ask_mapping=True, empty_trace=True)
+    review = "No issues found.\n\nVERDICT: PASS"
+    ctx = FakeCtx(
+        files={
+            "reviews/design-review.md": review,
+            "design.md": design,
+            "brief.json": json.dumps({"brief": "a tool"}),
+        },
+        facts={"name": "test_r4", "has_pitfalls_step": False},
+    )
+    result = gate_design_review(ctx)
+    feedback = ctx.facts.get("design_review_feedback", "")
+    assert "Failure trace" in feedback or "failure trace" in feedback
 
 
 def test_gate_accepts_both_sections_present():

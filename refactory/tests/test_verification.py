@@ -101,6 +101,11 @@ def test_verifier_not_in_planning_steps():
     assert "verifier" not in PLANNING_STEPS
 
 
+def test_verifier_has_final_validation_resource_role_full_mode():
+    graph = DesignMode().build()
+    assert graph.nodes["verifier"].resource_role == "final_validation"
+
+
 # ── gate_verification declaration tests ───────────────────────────────────
 
 
@@ -109,6 +114,7 @@ def test_gate_verification_declares_writes_full_mode():
     gate = graph.nodes["gate_verification"]
     assert "validation.txt" in gate.writes
     assert "reviews/verification-gate.txt" in gate.writes
+    assert "reviews/verification-unresolved.md" in gate.writes
 
 
 def test_gate_verification_declares_writes_fast_mode():
@@ -117,6 +123,7 @@ def test_gate_verification_declares_writes_fast_mode():
     assert "fast-report.json" in gate.writes
     assert "repair.txt" in gate.writes
     assert "reviews/verification-gate.txt" in gate.writes
+    assert "reviews/verification-unresolved.md" in gate.writes
 
 
 def test_gate_verification_does_not_spend_review_attempts_full():
@@ -138,6 +145,40 @@ def test_gate_verification_does_not_spend_repair_attempts_fast():
     assert "review_repairs_used" not in gate.produces, (
         "verification findings must not spend repair_attempts"
     )
+
+
+# ── wire_verification raises on missing edge ──────────────────────────────
+
+
+def test_wire_verification_raises_on_missing_edge():
+    """wire_verification must raise when the edge it tries to remove does not exist."""
+    from refactory_dsh.nn import Graph, Node
+    from refactory_dsh.verification import wire_verification
+    graph = Graph()
+    graph.add(Node("check", "gate", evaluator="x:y"))
+    graph.add(Node("emit", "agent", prompt_template="x"))
+    graph.add(Node("report", "op", call="x:y"))
+    graph.connect("check", "emit", condition="reloop")
+    # No check→report(proceed) edge — should raise.
+    with pytest.raises(ValueError, match="no edge"):
+        wire_verification(graph, check_node="check", proceed_target="report")
+
+
+# ── fix_pack gets the verifier ────────────────────────────────────────────
+
+
+def test_fix_pack_has_verifier():
+    from refactory_dsh import registry
+    from refactory_dsh.paths import REPO_ROOT
+    mode = registry.resolve(REPO_ROOT, "fix_pack/make_pass")[1]()
+    graph = mode.graph()
+    assert "verifier" in graph.nodes
+    assert "gate_verification" in graph.nodes
+    edges = [(e.source, e.target, e.condition) for e in graph.edges]
+    assert ("check", "verifier", "proceed") in edges
+    assert ("gate_verification", "report", "proceed") in edges
+    assert ("gate_verification", "emit", "reloop") in edges
+    assert ("check", "report", "proceed") not in edges
 
 
 # ── scripted run tests ────────────────────────────────────────────────────
@@ -251,3 +292,135 @@ def test_verification_pass_proceeds_to_reviews_fast_mode(tmp_path, monkeypatch):
         task={"name": "verify_fast_pass", "brief": "a tool", "check": "python tool.py"},
     )
     assert result.exit_ok, result.error
+
+
+def test_noisy_verifier_does_not_end_run_full_mode(tmp_path, monkeypatch):
+    """Five consecutive verifier FAILs must not end the run; the gate proceeds."""
+    monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
+    from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+                               PITFALLS_ANSWER, RESEARCH_ANSWER,
+                               REVIEW_ANSWERS, FakeModel, render)
+    VERIFICATION_FAIL = "BLOCKING: tool.py:1: noise\n\nVERDICT: FAIL"
+    # The verifier fails on every attempt.  After VERIFIER_GATE_LIMIT reloops
+    # the gate must proceed to reviews instead of raising.
+    answers = [
+        RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
+        DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+        render({"tool.py": "print('built')\n"}),
+        VERIFICATION_FAIL,                   # attempt 1 → reloop
+        render({"tool.py": "print('v2')\n"}),
+        VERIFICATION_FAIL,                   # attempt 2 → reloop
+        render({"tool.py": "print('v3')\n"}),
+        VERIFICATION_FAIL,                   # attempt 3 → proceed (at limit)
+        *REVIEW_ANSWERS,
+    ]
+    result = DesignMode().run(
+        tmp_path / "run", model=FakeModel(answers),
+        verdicts={"gate_strategy": "proceed"},
+        task={"name": "noisy_full", "brief": "a tool", "check": "python tool.py"},
+    )
+    assert result.exit_ok, result.error
+    # Unresolved findings must be recorded.
+    assert (tmp_path / "run" / "reviews" / "verification-unresolved.md").exists()
+
+
+def test_noisy_verifier_does_not_end_run_fast_mode(tmp_path, monkeypatch):
+    """Five consecutive verifier FAILs in fast mode must not end the run."""
+    monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
+    from tests_support import FakeModel, render
+    FAST_PLAN = "Change only the requested file."
+    FAST_QA = json.dumps({"status": "pass", "checks": [{"name": "runs", "command": "python tool.py",
+                                                         "status": "pass", "evidence": "exit 0"}],
+                          "findings": [], "not_run": []})
+    VERIFICATION_FAIL = "BLOCKING: tool.py:1: noise\n\nVERDICT: FAIL"
+    answers = [
+        FAST_PLAN,
+        render({"tool.py": "print('v1')\n"}),
+        VERIFICATION_FAIL,
+        render({"tool.py": "print('v2')\n"}),
+        VERIFICATION_FAIL,
+        render({"tool.py": "print('v3')\n"}),
+        VERIFICATION_FAIL,                   # at limit → proceed
+        FAST_QA,
+    ]
+    mode = DesignFastMode()
+    state = mode.state_dict()
+    state["knobs"]["repair_attempts"]["value"] = 4
+    mode.load_state_dict(state)
+    result = mode.run(
+        tmp_path / "run", model=FakeModel(answers),
+        task={"name": "noisy_fast", "brief": "a tool", "check": "python tool.py"},
+    )
+    assert result.exit_ok, result.error
+    assert (tmp_path / "run" / "reviews" / "verification-unresolved.md").exists()
+
+
+def test_fast_mode_failing_check_plus_verifier_fail(tmp_path, monkeypatch):
+    """A failing check plus a verifier FAIL: emit gets the check failure, repair is spent."""
+    monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
+    from tests_support import FakeModel, render, VERIFICATION_ANSWER
+    FAST_PLAN = "Change only the requested file."
+    FAST_QA = json.dumps({"status": "pass", "checks": [{"name": "runs", "command": "python tool.py",
+                                                         "status": "pass", "evidence": "exit 0"}],
+                          "findings": [], "not_run": []})
+    VERIFICATION_FAIL = "BLOCKING: tool.py:1: noise\n\nVERDICT: FAIL"
+    answers = [
+        FAST_PLAN,
+        render({"tool.py": "import sys; sys.exit(1)\n"}),   # check fails
+        VERIFICATION_FAIL,                                    # verifier also fails
+        # gate_verification sees check failure → _repair with check text
+        render({"tool.py": "print('fixed')\n"}),             # second emit: check passes
+        VERIFICATION_ANSWER,
+        FAST_QA,
+    ]
+    mode = DesignFastMode()
+    state = mode.state_dict()
+    state["knobs"]["repair_attempts"]["value"] = 2
+    mode.load_state_dict(state)
+    model = FakeModel(answers)
+    result = mode.run(
+        tmp_path / "run", model=model,
+        task={"name": "check_fail_fast", "brief": "a tool", "check": "python tool.py"},
+    )
+    assert result.exit_ok, result.error
+    # The repair feedback must carry the check failure, not the verifier noise.
+    repair_prompts = [p for p in model.prompts if "Repair feedback:" in p]
+    assert len(repair_prompts) >= 1, "emit must have received repair feedback"
+    assert "noise" not in repair_prompts[0].lower() or "check failed" in repair_prompts[0].lower() or "exit" in repair_prompts[0].lower(), (
+        "the builder must receive the check failure, not just verifier noise"
+    )
+    assert int(result.facts.get("repairs_used", 0)) >= 1, "a repair must have been spent"
+
+
+def test_fast_mode_repair_1_two_verifier_fails_still_reaches_qa(tmp_path, monkeypatch):
+    """With repair_attempts=1 and two verifier FAILs, the run still reaches QA."""
+    monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
+    from tests_support import FakeModel, render
+    FAST_PLAN = "Change only the requested file."
+    FAST_QA = json.dumps({"status": "pass", "checks": [{"name": "runs", "command": "python tool.py",
+                                                         "status": "pass", "evidence": "exit 0"}],
+                          "findings": [], "not_run": []})
+    VERIFICATION_FAIL = "BLOCKING: tool.py:1: noise\n\nVERDICT: FAIL"
+    answers = [
+        FAST_PLAN,
+        render({"tool.py": "print('ok')\n"}),
+        VERIFICATION_FAIL,                    # 1st FAIL → advisory reloop
+        render({"tool.py": "print('ok2')\n"}),
+        VERIFICATION_FAIL,                    # 2nd FAIL → advisory reloop
+        render({"tool.py": "print('ok3')\n"}),
+        VERIFICATION_FAIL,                    # 3rd FAIL → at limit, proceed
+        FAST_QA,
+    ]
+    mode = DesignFastMode()
+    state = mode.state_dict()
+    state["knobs"]["repair_attempts"]["value"] = 1
+    mode.load_state_dict(state)
+    result = mode.run(
+        tmp_path / "run", model=FakeModel(answers),
+        task={"name": "repair1_fast", "brief": "a tool", "check": "python tool.py"},
+    )
+    assert result.exit_ok, result.error
+    # The verifier's advisory reloops must NOT have spent repair_attempts.
+    assert int(result.facts.get("repairs_used", 0)) == 0, (
+        "verifier advisory reloops must not spend repair_attempts"
+    )

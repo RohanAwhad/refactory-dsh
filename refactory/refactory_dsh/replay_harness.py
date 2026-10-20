@@ -5,7 +5,7 @@ brief, diff and repository, and report how many known gaps it finds and how many
 findings were noise.
 
 Usage:
-    python -m refactory_dsh.replay_harness [--evidence PATH] [--output PATH] [--repo PATH]
+    python -m refactory_dsh.replay_harness [--evidence PATH] [--output PATH] [--repo PATH] --model MODEL
 
 A post-build verifier does not cover gaps found at a design gate (which have no
 diff to verify).
@@ -90,7 +90,8 @@ def replay_one(entry: dict, verifier_fn: Callable) -> ReplayResult:
 def replay_all(entries: list[dict], verifier_fn: Callable) -> ReplaySummary:
     """Replay all entries and aggregate into a summary.
 
-    Entries whose ``repo_path`` is ``None`` (commit unreachable) are skipped.
+    Entries whose ``repo_path`` is ``None`` (commit unreachable) are skipped
+    and reported in the summary.
     """
     results: list[ReplayResult] = []
     per_method: dict[str, dict[str, int]] = {}
@@ -133,16 +134,55 @@ def replay_all(entries: list[dict], verifier_fn: Callable) -> ReplaySummary:
 
 
 def _build_diff(repo: Path, commit: str) -> str:
-    """Build the diff for a pre-fix commit against its parent."""
+    """Build the diff for a pre-fix commit against its merge-base with main."""
     import subprocess
     try:
-        result = subprocess.run(
-            ["git", "-C", str(repo), "diff", f"{commit}~1", commit],
+        # Use merge-base with main to get the PR's change, not one attempt's increment.
+        base_result = subprocess.run(
+            ["git", "-C", str(repo), "merge-base", "main", commit],
             capture_output=True, text=True, check=True,
         )
-        return result.stdout
+        merge_base = base_result.stdout.strip()
+        diff_result = subprocess.run(
+            ["git", "-C", str(repo), "diff", merge_base, commit],
+            capture_output=True, text=True, check=True,
+        )
+        return diff_result.stdout
     except subprocess.CalledProcessError:
         return ""
+
+
+def _make_verifier_fn(client: Any):
+    """Create a verifier function from a model client.
+
+    Uses the same prompt (VERIFIER_PROMPT template) the run's verifier node uses,
+    with the entry's brief, diff and worktree as substitutions.
+    """
+    from refactory_dsh.verification import VERIFICATION_METHODS
+
+    def verifier_fn(brief: str, diff: str, repo_path: str | None = None) -> list[str]:
+        prompt = (
+            f"Artifact directory (absolute): {repo_path or '(not available)'}\n"
+            f"Read and run the delivered files at this exact path; do not infer it "
+            f"from your working directory.\n"
+            f"Changes:\n{diff}\n\n"
+            f"Brief: {brief}\n\n"
+            + VERIFICATION_METHODS +
+            "\nFor each finding, report it as:\n"
+            "BLOCKING: <file:line>: <description with a runnable counterexample or "
+            "a cited file:line chain>\n\n"
+            "design.md is in the run directory. Do NOT read it, or strategy.json, "
+            "or any review files. You verify the change against the brief and the "
+            "repository only.\n\n"
+            "End with a line that is exactly VERDICT: PASS when there are no "
+            "blocking findings, or VERDICT: FAIL when there are any."
+        )
+        answer = client.complete(prompt, workdir=repo_path)
+        return [
+            line for line in answer.splitlines()
+            if line.strip().upper().startswith("BLOCKING:")
+        ]
+    return verifier_fn
 
 
 if __name__ == "__main__":
@@ -164,6 +204,8 @@ if __name__ == "__main__":
                         help="model name for the verifier backend (required)")
     parser.add_argument("--provider", default="",
                         help="provider for the model backend")
+    parser.add_argument("--gh-evidence", action="store_true",
+                        help="read entries from #400 evidence log via gh api")
     args = parser.parse_args()
 
     if not args.model:
@@ -177,9 +219,9 @@ if __name__ == "__main__":
 
     entries = json.loads(Path(args.evidence).read_text())
     replayable = [e for e in entries if e.get("pre_fix_commit")]
-    skipped = [e for e in entries if not e.get("pre_fix_commit")]
+    skipped_entries = [e for e in entries if not e.get("pre_fix_commit")]
     print(f"Loaded {len(entries)} entries; {len(replayable)} replayable, "
-          f"{len(skipped)} skipped (no pre_fix_commit)")
+          f"{len(skipped_entries)} skipped (no pre_fix_commit)")
 
     repo = Path(args.repo).resolve()
     worktrees_created: list[Path] = []
@@ -210,52 +252,37 @@ if __name__ == "__main__":
             except (subprocess.CalledProcessError, OSError):
                 pass
 
-    # Set up worktrees and build diffs for replayable entries
+    # Build verifier function from the model client — do this BEFORE
+    # creating worktrees so a crash here does not leak them.
+    from refactory_dsh.model import DshModelClient
+    client = DshModelClient(model=args.model, provider=args.provider)
+    verifier = _make_verifier_fn(client)
+
+    # Set up worktrees and build diffs for replayable entries.
     actually_replayable: list[dict] = []
-    for entry in replayable:
-        commit = entry["pre_fix_commit"]
-        wt = _create_worktree(commit)
-        if wt is None:
-            print(f"  {entry['id']}: commit {commit} is not reachable, skipping")
-            continue
-        entry["repo_path"] = str(wt)
-        # Build the diff from git
-        entry["diff"] = _build_diff(repo, commit)
-        actually_replayable.append(entry)
-
-    # Build verifier function from the model client
-    from refactory_dsh.verification import VERIFICATION_METHODS, VERIFIER_PROMPT
-
-    def _make_verifier(model_name: str, provider: str):
-        """Create a model-backed verifier function."""
-        from refactory_dsh.model import DshModelClient
-        client = DshModelClient(route={
-            "worker_backend": "dsh", "model": model_name,
-            "provider": provider, "effort": "", "permission_mode": "default",
-        })
-
-        def verifier_fn(brief: str, diff: str, repo_path: str | None = None) -> list[str]:
-            prompt = (
-                f"Brief: {brief}\n\n"
-                f"Diff:\n{diff}\n\n"
-                + VERIFICATION_METHODS +
-                "\nFor each finding, report it as:\n"
-                "BLOCKING: <file:line>: <description>\n\n"
-                "End with VERDICT: PASS or VERDICT: FAIL.\n"
-            )
-            if repo_path:
-                prompt = f"Repository at: {repo_path}\n\n" + prompt
-            answer = client.complete(prompt)
-            # Extract BLOCKING lines
-            return [
-                line for line in answer.splitlines()
-                if line.strip().upper().startswith("BLOCKING:")
-            ]
-        return verifier_fn
-
-    verifier = _make_verifier(args.model, args.provider)
-
     try:
+        for entry in replayable:
+            commit = entry["pre_fix_commit"]
+            # Check reachability first.
+            reachable = subprocess.run(
+                ["git", "-C", str(repo), "cat-file", "-t", commit],
+                capture_output=True, text=True,
+            )
+            if reachable.returncode != 0:
+                print(f"  {entry['id']}: commit {commit} is not reachable, skipping")
+                entry["repo_path"] = None
+                actually_replayable.append(entry)
+                continue
+            wt = _create_worktree(commit)
+            if wt is None:
+                print(f"  {entry['id']}: commit {commit} worktree failed, skipping")
+                entry["repo_path"] = None
+                actually_replayable.append(entry)
+                continue
+            entry["repo_path"] = str(wt)
+            entry["diff"] = _build_diff(repo, commit)
+            actually_replayable.append(entry)
+
         summary = replay_all(actually_replayable, verifier)
     finally:
         _remove_worktrees()
