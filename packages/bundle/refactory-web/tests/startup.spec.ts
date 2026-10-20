@@ -66,42 +66,13 @@ describe('refactory-web layer', () => {
     expect(PATCH).toContain('exclude: [wf_next, wf_verdict]')
   })
 
-  it('defaults busyEnter through DSH settings resolution: steer without saved, queue with saved (H1)', async () => {
-    // DSH settings resolve "schema defaults → composition base → user layer"
-    // (dsh-settings lib/types/types.d.ts:25-29).  The composition row for
-    // ui-conversation provides the base; the schema default is 'queue'.
-    const { parse } = await import('yaml')
-    const {
-      DEFAULT_BUSY_ENTER_BEHAVIOR,
-      BUSY_ENTER_FIELD,
-      BUSY_ENTER_BEHAVIORS,
-    } = await import('@deepseek-ai/dsh-client-ui-conversation')
-    const z = (await import('@deepseek-ai/schemastery')).default
-
-    // Verify the schema default is 'queue'.
-    expect(DEFAULT_BUSY_ENTER_BEHAVIOR).toBe('queue')
-
-    // Parse the composition base from the YAML patch.
-    const parsed = parse(PATCH) as Array<Record<string, unknown>>
-    const uiConv = parsed.find(
-      (entry: Record<string, unknown>) => entry.id === 'ui-conversation',
-    ) as Record<string, unknown> | undefined
-    expect(uiConv).toBeDefined()
-    const compositionBase = uiConv!.config as Record<string, unknown>
-
-    // Reconstruct the settings schema exactly as the conversation plugin
-    // declares it (ConversationSettingsFields in submission-settings.ts).
-    const schema = z.object({
-      [BUSY_ENTER_FIELD]: z.union([...BUSY_ENTER_BEHAVIORS]).default(DEFAULT_BUSY_ENTER_BEHAVIOR),
-    })
-
-    // Resolution without user layer: composition base overrides schema default → 'steer'.
-    const resolvedNoUser = schema(compositionBase)
-    expect(resolvedNoUser.busyEnter).toBe('steer')
-
-    // Resolution with user layer saving 'queue': user override wins → 'queue'.
-    const resolvedWithUser = schema({ ...compositionBase, busyEnter: 'queue' })
-    expect(resolvedWithUser.busyEnter).toBe('queue')
+  it('carries the ui-conversation composition row with busyEnter: steer (H1)', () => {
+    // The refactory-web composition sets the conversation plugin's busyEnter to
+    // steer.  The full schema-resolution test (steer without saved, queue with
+    // saved) lives in packages/workflow/workflow-spine/tests/busy-enter.spec.ts,
+    // which has access to @deepseek-ai/schemastery.
+    expect(PATCH).toContain('id: ui-conversation')
+    expect(PATCH).toContain('busyEnter: steer')
   })
 
   it('disables the official whale and mounts the re:factory occupants', () => {
