@@ -97,10 +97,6 @@
       "max_iterations": 4,
       "_type": "GateNode"
     },
-    "pick_corrections": {
-      "id": "pick_corrections",
-      "_type": "FnNode"
-    },
     "health_checker": {
       "id": "health_checker",
       "role": "ceo",
@@ -125,6 +121,10 @@
       "role": "ceo",
       "max_iterations": 1,
       "_type": "AgentNode"
+    },
+    "pick_corrections": {
+      "id": "pick_corrections",
+      "_type": "FnNode"
     },
     "pitfalls_researcher": {
       "id": "pitfalls_researcher",
@@ -295,11 +295,6 @@
       "condition": null
     },
     {
-      "source": "pick_corrections",
-      "target": "apply_corrections",
-      "condition": null
-    },
-    {
       "source": "materialise",
       "target": "check",
       "condition": null
@@ -307,6 +302,11 @@
     {
       "source": "overwatch",
       "target": "gate_overwatch",
+      "condition": null
+    },
+    {
+      "source": "pick_corrections",
+      "target": "apply_corrections",
       "condition": null
     },
     {
