@@ -1193,7 +1193,7 @@ def test_design_fast_changes_a_repository_in_a_worktree_and_delivers_nothing(rep
         "setup": "python -c \"open('built.txt', 'w').write('built')\""})
     assert result.exit_ok, result.error
     assert "===EDIT: <relative path>===" in model.prompts[1], "emit is told it may edit the last attempt"
-    assert str(worktree.WRAPPER) in model.prompts[2], "focused QA is told how to run a command in the worktree"
+    assert str(worktree.WRAPPER) in model.prompts[3], "focused QA is told how to run a command in the worktree"
     assert (git(repo, "rev-parse", "HEAD"), (repo / "app.py").read_text()) == (head, "print('mine, not committed')\n")
     payload = _report(tmp_path / "run")
     assert (payload["target"], payload["base"]) == (str(repo.resolve()), head)
