@@ -200,15 +200,20 @@ def venv_bin() -> Path:
 SPINE_LIB = Path("packages") / "workflow" / "workflow-spine" / "lib" / "index.js"
 
 
-def require_build(root: Path | None = None, *, check_only: bool = False) -> None:
+def require_build(root: Path | None = None, *, check_only: bool = False, gui_mode: bool = False) -> None:
     """Refuse immediately when the spine build is missing, and rebuild stale builds.
 
     Running from source (SOURCE_CLI_ENTRY exists) skips the check: tsx
     compiles on the fly. Otherwise, the built bundle at SPINE_LIB must
     exist. After the existence check, the workspace stamp is compared.
-    When stale and not under a GUI, ``pnpm run build`` is run under a lock
-    and only when no live run uses the checkout. When stale and under a GUI,
-    ``RuntimeError`` is raised asking the person to restart.
+    When stale and ``gui_mode`` is true, ``RuntimeError`` is raised asking
+    the person to restart.  When stale otherwise, ``pnpm run build`` is run
+    under a lock and only when no live run uses the checkout.
+
+    ``gui_mode`` should be passed as ``True`` only by the process that IS the
+    GUI (the console).  Owners, supervisors and other children inherit
+    ``REFACTORY_GUI_MODE`` from the environment but should NOT be refused a
+    rebuild -- they pass the default ``gui_mode=False``.
     """
     selected = Path(root) if root is not None else dsh_root()
     if (selected / SOURCE_CLI_ENTRY).exists():
@@ -225,7 +230,7 @@ def require_build(root: Path | None = None, *, check_only: bool = False) -> None
         saved_stamp = stamp_file.read_text().strip()
         current_stamp = _ws(selected)
         if current_stamp is not None and saved_stamp != current_stamp:
-            if os.environ.get("REFACTORY_GUI_MODE"):
+            if gui_mode:
                 raise RuntimeError(
                     "the build is stale; restart the GUI to pick up changes — "
                     "run `pnpm run build` and relaunch"

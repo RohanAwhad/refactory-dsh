@@ -367,7 +367,7 @@ def _open_mode(
     root = Path(workdir).expanduser().resolve()
     from refactory_dsh.paths import require_build
     try:
-        require_build()
+        require_build(gui_mode=bool(os.environ.get("REFACTORY_GUI_MODE")))
     except RuntimeError as exc:
         raise ConsoleError(str(exc)) from exc
     try:

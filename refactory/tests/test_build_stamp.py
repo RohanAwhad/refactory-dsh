@@ -81,10 +81,12 @@ def test_require_build_asks_restart_under_gui(tmp_path: Path, monkeypatch: pytes
     (spine_lib / "index.js").write_text("// built")
     (spine_lib / ".workspace-stamp").write_text("0000000000000000")
 
-    monkeypatch.setenv("REFACTORY_GUI_MODE", "1")
-
+    # gui_mode=True simulates the console (the GUI process itself) calling
+    # require_build.  The env var alone no longer triggers the GUI path —
+    # only the explicit parameter does, so owners and supervisors started
+    # from the GUI are not refused.
     with pytest.raises(RuntimeError, match="restart"):
-        paths.require_build(root=tmp_path)
+        paths.require_build(root=tmp_path, gui_mode=True)
 
 
 def test_require_build_skips_when_running_from_source(tmp_path: Path) -> None:
