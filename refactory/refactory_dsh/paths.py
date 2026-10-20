@@ -206,9 +206,9 @@ def require_build(root: Path | None = None, *, check_only: bool = False) -> None
     Running from source (SOURCE_CLI_ENTRY exists) skips the check: tsx
     compiles on the fly. Otherwise, the built bundle at SPINE_LIB must
     exist. After the existence check, the workspace stamp is compared.
-    When stale and not under a GUI, ``pnpm run build`` is run automatically.
-    When stale and under a GUI, ``RuntimeError`` is raised asking the person
-    to restart.
+    When stale and not under a GUI, ``pnpm run build`` is run under a lock
+    and only when no live run uses the checkout. When stale and under a GUI,
+    ``RuntimeError`` is raised asking the person to restart.
     """
     selected = Path(root) if root is not None else dsh_root()
     if (selected / SOURCE_CLI_ENTRY).exists():
@@ -234,9 +234,39 @@ def require_build(root: Path | None = None, *, check_only: bool = False) -> None
                 raise RuntimeError(
                     "the build is stale; run `pnpm run build` to rebuild"
                 )
+            # Refuse to rebuild when a live run uses this checkout.
+            _refuse_if_live_runs(selected)
+            import fcntl
             import logging
             logging.getLogger(__name__).info("workspace build is stale; rebuilding")
-            subprocess.run(["pnpm", "run", "build"], cwd=str(selected), check=True)
+            build_lock = selected / ".refactory" / "build.lock"
+            build_lock.parent.mkdir(parents=True, exist_ok=True)
+            lock_fd = os.open(str(build_lock), os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                # Re-check after acquiring the lock (another process may have rebuilt).
+                saved_stamp2 = stamp_file.read_text().strip()
+                current_stamp2 = _ws(selected)
+                if current_stamp2 is not None and saved_stamp2 != current_stamp2:
+                    subprocess.run(["pnpm", "run", "build"], cwd=str(selected), check=True)
+            finally:
+                os.close(lock_fd)
+
+
+def _refuse_if_live_runs(checkout: Path) -> None:
+    """Raise if any pin lists live runs using this checkout as their driver."""
+    try:
+        from refactory_dsh.pin import list_pins
+        for pin_data in list_pins():
+            if pin_data.get("driver_checkout") == str(checkout):
+                for run_path_str in pin_data.get("runs", []):
+                    if Path(run_path_str).exists():
+                        raise RuntimeError(
+                            f"the build is stale but a live run ({run_path_str}) uses "
+                            f"this checkout; run `pnpm run build` manually after the run finishes"
+                        )
+    except ImportError:
+        pass
 
 
 def python() -> Path:

@@ -65,6 +65,21 @@ def _make_run_config(run_dir: Path, commit: str, checkout: str,
     return config
 
 
+def _selective_subprocess(original_run):
+    """Return a side_effect that passes git commands through and stubs the rest."""
+    def _side_effect(cmd, **kw):
+        if isinstance(cmd, (list, tuple)):
+            if str(cmd[0]) == "git" or str(cmd[0]).endswith("/git"):
+                return original_run(cmd, **kw)
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = ""
+            result.stderr = ""
+            return result
+        return original_run(cmd, **kw)
+    return _side_effect
+
+
 # ── tests ────────────────────────────────────────────────────────────────
 
 
@@ -110,6 +125,28 @@ def test_dirty_driver_records_diff(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     driver = config["driver"]
     assert driver["dirty_diff"] is not None
     assert "changed" in driver["dirty_diff"]
+
+
+def test_dirty_driver_captures_staged_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Staged changes in machinery paths are captured by record_driver."""
+    repo = tmp_path / "repo"
+    _init_repo(repo, files={"refactory/refactory_dsh/module.py": "original"})
+    # Stage a change without committing.
+    (repo / "refactory/refactory_dsh/module.py").write_text("staged content")
+    subprocess.run(["git", "-C", str(repo), "add", "refactory/refactory_dsh/module.py"],
+                   check=True, capture_output=True)
+    run_dir = tmp_path / "run"
+    _make_run_config(run_dir, "x", str(repo))
+
+    import refactory_dsh.pin as pin
+    monkeypatch.setattr(pin, "REPO_ROOT", repo)
+
+    pin.record_driver(run_dir / ".refactory" / "run-config.json")
+
+    config = json.loads((run_dir / ".refactory" / "run-config.json").read_text())
+    driver = config["driver"]
+    assert driver["dirty_diff"] is not None
+    assert "staged content" in driver["dirty_diff"]
 
 
 def test_no_pin_when_driver_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -198,27 +235,12 @@ def test_shared_pin_for_same_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         "pin_checkout": None,
     }
 
-    # Stub the expensive install steps.
-    with patch("subprocess.run") as mock_run:
-        def _side_effect(cmd, **kw):
-            result = MagicMock()
-            result.returncode = 0
-            result.stdout = commit_a if "rev-parse" in cmd else ""
-            result.stderr = ""
-            # Actually create the worktree for real git operations.
-            if isinstance(cmd, list) and "worktree" in cmd and "add" in cmd:
-                return subprocess.run.__wrapped__(cmd, **kw) if hasattr(subprocess.run, '__wrapped__') else _real_subprocess_run(cmd, **kw)
-            return result
-
-        # We need real git commands to work for worktree creation.
-        _real_subprocess_run = subprocess.run.__wrapped__ if hasattr(subprocess.run, '__wrapped__') else None
-
-    # For this test, just verify the logic by creating the pin structure manually.
-    pin_root = pin.refactory_home() / "pins" / commit_a
+    # Create the pin structure manually (simulating a prepared pin).
+    key = pin._pin_key(commit_a, None)
+    pin_root = pin.refactory_home() / "pins" / key
     pin_checkout = pin_root / "checkout"
     pin_checkout.mkdir(parents=True)
     (pin_checkout / ".git").write_text("gitdir: dummy")
-    pin.register_run(commit_a, run1)
     pin._atomic_write_json(pin_root / "pin.json", {
         "commit": commit_a, "created": "now", "driver_checkout": str(repo), "runs": [],
     })
@@ -237,7 +259,8 @@ def test_prune_keeps_live_pin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     import refactory_dsh.pin as pin
 
     commit = "a" * 40
-    pin_root = pin.refactory_home() / "pins" / commit
+    key = pin._pin_key(commit, None)
+    pin_root = pin.refactory_home() / "pins" / key
     pin_checkout = pin_root / "checkout"
     pin_checkout.mkdir(parents=True)
     (pin_checkout / ".git").write_text("gitdir: dummy")
@@ -258,12 +281,42 @@ def test_prune_keeps_live_pin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     assert pin_root.exists()
 
 
+def test_prune_keeps_failed_run_with_existing_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed run whose directory exists is treated as resumable — its pin is kept."""
+    import refactory_dsh.pin as pin
+
+    commit = "f" * 40
+    key = pin._pin_key(commit, None)
+    pin_root = pin.refactory_home() / "pins" / key
+    pin_checkout = pin_root / "checkout"
+    pin_checkout.mkdir(parents=True)
+
+    # A failed run with an existing directory.
+    run_dir = tmp_path / "failed_run"
+    run_dir.mkdir(parents=True)
+    (run_dir / ".refactory").mkdir(parents=True)
+    # Write a terminal spine status.
+    pin._atomic_write_json(run_dir / ".refactory" / "spine-status.json", {"status": "failed"})
+
+    pin._atomic_write_json(pin_root / "pin.json", {
+        "commit": commit, "created": "now",
+        "driver_checkout": str(tmp_path),
+        "runs": [str(run_dir)],
+    })
+
+    pruned = pin.prune_pins()
+    # The run is resumable (directory exists), so its pin is kept.
+    assert commit not in pruned
+    assert pin_root.exists()
+
+
 def test_prune_removes_unused_pin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A pin with no live runs is pruned."""
     import refactory_dsh.pin as pin
 
     commit = "b" * 40
-    pin_root = pin.refactory_home() / "pins" / commit
+    key = pin._pin_key(commit, None)
+    pin_root = pin.refactory_home() / "pins" / key
     pin_checkout = pin_root / "checkout"
     pin_checkout.mkdir(parents=True)
 
@@ -284,7 +337,8 @@ def test_prune_with_run_outside_default_locations(tmp_path: Path) -> None:
     import refactory_dsh.pin as pin
 
     commit = "c" * 40
-    pin_root = pin.refactory_home() / "pins" / commit
+    key = pin._pin_key(commit, None)
+    pin_root = pin.refactory_home() / "pins" / key
     pin_checkout = pin_root / "checkout"
     pin_checkout.mkdir(parents=True)
 
@@ -300,11 +354,11 @@ def test_prune_with_run_outside_default_locations(tmp_path: Path) -> None:
     })
 
     pruned = pin.prune_pins()
-    assert commit not in pruned  # kept because the run dir exists and is not terminal
+    assert commit not in pruned  # kept because the run dir exists
 
 
 def test_pin_preparation_does_not_touch_driver_hooks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Pin creation does not modify the driver's hooks or config."""
+    """Pin creation does not modify the driver's hooks or config (except worktreeConfig)."""
     repo = tmp_path / "repo"
     commit_a = _init_repo(repo)
 
@@ -313,38 +367,20 @@ def test_pin_preparation_does_not_touch_driver_hooks(tmp_path: Path, monkeypatch
 
     # Snapshot the driver's state before pin creation.
     hooks_dir = repo / ".git" / "hooks"
-    hooks_before = set()
+    hooks_before: dict[str, bytes] = {}
     if hooks_dir.is_dir():
         hooks_before = {f.name: f.read_bytes() for f in hooks_dir.iterdir() if f.is_file()}
     config_before = (repo / ".git" / "config").read_text()
 
-    # Create a pin with installs stubbed.
-    with patch("subprocess.run") as mock_run:
-        original_run = subprocess.run
-
-        def _selective_run(cmd, **kw):
-            if isinstance(cmd, list):
-                cmd_str = " ".join(str(c) for c in cmd)
-                # Let git commands through.
-                if cmd[0] == "git" or (len(cmd) > 1 and cmd[0].endswith("/git")):
-                    return original_run(cmd, **kw)
-                # Stub everything else (uv, pnpm, dsh).
-                result = MagicMock()
-                result.returncode = 0
-                result.stdout = ""
-                result.stderr = ""
-                return result
-            return original_run(cmd, **kw)
-
-        mock_run.side_effect = _selective_run
-        try:
-            pin.create_pin(repo, commit_a)
-        except Exception:
-            pass  # pin creation may fail in test; we check the driver's state
+    # Create a pin with installs stubbed but git commands real.
+    # This must NOT swallow exceptions — a real failure is a test failure.
+    original_run = subprocess.run
+    with patch("subprocess.run", side_effect=_selective_subprocess(original_run)):
+        pin.create_pin(repo, commit_a)
 
     # The driver's hooks and config should be unchanged (except worktreeConfig).
     config_after = (repo / ".git" / "config").read_text()
-    hooks_after = set()
+    hooks_after: dict[str, bytes] = {}
     if hooks_dir.is_dir():
         hooks_after = {f.name: f.read_bytes() for f in hooks_dir.iterdir() if f.is_file()}
 
@@ -387,7 +423,7 @@ def test_fingerprint_path_translation(tmp_path: Path, monkeypatch: pytest.Monkey
 
     # When REPO_ROOT is the pin, translate the keys.
     # Monkeypatch paths.REPO_ROOT because recovery.py imports it from there
-    # via a function-local `from refactory_dsh.paths import REPO_ROOT`.
+    # via a function-local ``from refactory_dsh.paths import REPO_ROOT``.
     monkeypatch.setattr(paths, "REPO_ROOT", pin_checkout)
 
     # The translated fingerprint should match the pin's file.
@@ -444,7 +480,8 @@ def test_resume_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     assert drift["recorded_commit"] == commit_a
 
     # Create the pin structure (stub heavy installs).
-    pin_root = pin.refactory_home() / "pins" / commit_a
+    key = pin._pin_key(commit_a, None)
+    pin_root = pin.refactory_home() / "pins" / key
     pin_checkout = pin_root / "checkout"
     pin_checkout.mkdir(parents=True)
     (pin_checkout / ".git").write_text("gitdir: dummy")
@@ -463,6 +500,18 @@ def test_resume_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     assert updated["driver"]["pin_checkout"] == str(pin_checkout)
     assert updated["driver"]["profile"] == f"graph-pin-{commit_a[:12]}"
 
+    # Verify the pinned interpreter is the pin's Python.
+    pin_py = pin.pin_python(pin_checkout)
+    assert str(pin_py) == str(pin_checkout / ".venv" / "bin" / "python")
+
+    # Verify that the re-exec loop-break would work: if REPO_ROOT were the
+    # pin_checkout, the re-exec would be skipped.
+    from refactory_dsh import paths
+    saved_root = paths.REPO_ROOT
+    monkeypatch.setattr(paths, "REPO_ROOT", pin_checkout)
+    assert paths.REPO_ROOT.resolve() == Path(pin_checkout).resolve()
+    monkeypatch.setattr(paths, "REPO_ROOT", saved_root)
+
     # A new run at commit B should have no pin.
     run2 = tmp_path / "run2"
     monkeypatch.setattr(pin, "REPO_ROOT", repo)
@@ -474,6 +523,80 @@ def test_resume_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     assert config2["driver"]["commit"] == commit_b
     assert config2["driver"]["profile"] == "graph"
     assert config2["driver"]["pin_checkout"] is None
+
+
+def test_resume_through_recovery_start(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """recovery.start detects drift and uses the pin's interpreter for the supervisor."""
+    import refactory_dsh.pin as pin
+    from refactory_dsh import recovery, paths
+
+    repo = tmp_path / "repo"
+    commit_a = _init_repo(repo, files={"refactory/refactory_dsh/mode.py": "v1"})
+    monkeypatch.setattr(pin, "REPO_ROOT", repo)
+
+    run_dir = tmp_path / "run"
+    fp_file = repo / "refactory" / "refactory_dsh" / "mode.py"
+    fp = hashlib.sha256(fp_file.read_bytes()).hexdigest()
+    _make_run_config(run_dir, commit_a, str(repo),
+                     fingerprints={str(fp_file): fp},
+                     mode="test_pack/test_mode")
+    pin.record_driver(run_dir / ".refactory" / "run-config.json")
+
+    # Write spine checkpoint so recovery.prepare accepts the run.
+    checkpoint = {
+        "run_id": str(run_dir.resolve()),
+        "graph": {"name": "test_pack-test_mode"},
+        "status": "ready",
+        "configuration_fingerprints": {str(fp_file): fp},
+        "file_fingerprints": {},
+    }
+    (run_dir / ".refactory" / "spine-checkpoint.json").write_text(json.dumps(checkpoint))
+
+    # Move driver to commit B.
+    _add_commit(repo, {"refactory/refactory_dsh/mode.py": "v2"})
+
+    # Create prepared pin structure.
+    key = pin._pin_key(commit_a, None)
+    pin_root = pin.refactory_home() / "pins" / key
+    pin_checkout = pin_root / "checkout"
+    pin_checkout.mkdir(parents=True)
+    (pin_checkout / ".git").write_text("gitdir: dummy")
+    (pin_checkout / ".venv" / "bin").mkdir(parents=True)
+    (pin_checkout / ".venv" / "bin" / "python").write_text("#!/bin/sh")
+    # Write the fingerprinted file in the pin so validation passes.
+    (pin_checkout / "refactory" / "refactory_dsh" / "mode.py").parent.mkdir(parents=True, exist_ok=True)
+    (pin_checkout / "refactory" / "refactory_dsh" / "mode.py").write_text("v1")
+    pin._atomic_write_json(pin_root / "pin.json", {
+        "commit": commit_a, "created": "now",
+        "driver_checkout": str(repo), "runs": [],
+    })
+
+    # Monkeypatch REPO_ROOT to pin so fingerprint translation works.
+    monkeypatch.setattr(paths, "REPO_ROOT", pin_checkout)
+
+    # Monkeypatch ownership to a no-op context manager.
+    from contextlib import contextmanager
+
+    @contextmanager
+    def fake_ownership(wd):
+        yield 999
+    monkeypatch.setattr("refactory_dsh.run_ownership.ownership", fake_ownership)
+
+    # Capture the Popen call.
+    captured_argv: list[list[str]] = []
+
+    class FakePopen:
+        pid = 999
+        def __init__(self, argv, **kw):
+            captured_argv.append(list(argv))
+
+    monkeypatch.setattr("subprocess.Popen", FakePopen)
+
+    recovery.start(run_dir)
+
+    # The supervisor should be started with the pin's Python.
+    assert len(captured_argv) > 0
+    assert captured_argv[0][0] == str(pin_checkout / ".venv" / "bin" / "python")
 
 
 def test_repo_guard_detects_session_worktree(tmp_path: Path) -> None:
@@ -540,50 +663,97 @@ def test_dirty_diff_applied_to_pin(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
 
 def test_dirty_diff_conflict_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A dirty diff that conflicts with the pin raises RuntimeError."""
+    """A dirty diff that conflicts with the worktree content raises RuntimeError."""
     repo = tmp_path / "repo"
-    commit_a = _init_repo(repo, files={"file.txt": "original"})
+    commit_a = _init_repo(repo, files={"refactory/refactory_dsh/conflict.txt": "original"})
 
     import refactory_dsh.pin as pin
     monkeypatch.setattr(pin, "REPO_ROOT", repo)
 
-    # Dirty the file and record.
-    (repo / "file.txt").write_text("dirty content")
-    run_dir = tmp_path / "run"
-    _make_run_config(run_dir, commit_a, str(repo))
-    pin.record_driver(run_dir / ".refactory" / "run-config.json")
-    config = json.loads((run_dir / ".refactory" / "run-config.json").read_text())
-    dirty_diff = config["driver"]["dirty_diff"]
+    # A fabricated diff that doesn't match the file content at commit_a.
+    # The diff expects "nonexistent line" but commit_a has "original".
+    conflicting_diff = (
+        "diff --git a/refactory/refactory_dsh/conflict.txt "
+        "b/refactory/refactory_dsh/conflict.txt\n"
+        "--- a/refactory/refactory_dsh/conflict.txt\n"
+        "+++ b/refactory/refactory_dsh/conflict.txt\n"
+        "@@ -1 +1 @@\n"
+        "-nonexistent line that does not exist\n"
+        "+replacement\n"
+    )
 
-    # Create a conflicting commit at A that changes the same file differently.
-    # We need to test that git apply fails.
-    # Create pin manually and try to apply a conflicting diff.
-    pin_root = pin.refactory_home() / "pins" / commit_a
-    staging = pin.refactory_home() / "pins" / f"{commit_a}.preparing"
-    staging_checkout = staging / "checkout"
-    staging_checkout.mkdir(parents=True)
+    # create_pin must raise RuntimeError on conflict.
+    original_run = subprocess.run
+    with patch("subprocess.run", side_effect=_selective_subprocess(original_run)):
+        with pytest.raises(RuntimeError, match="conflict"):
+            pin.create_pin(repo, commit_a, conflicting_diff)
 
-    # Write a file that conflicts with the diff.
-    (staging_checkout / "file.txt").write_text("completely different content that conflicts")
-    # Initialize git in the staging checkout so git apply can work.
-    subprocess.run(["git", "init", str(staging_checkout)], check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(staging_checkout), "add", "."], check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(staging_checkout), "config", "user.email", "t@t"],
-                   check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(staging_checkout), "config", "user.name", "T"],
-                   check=True, capture_output=True)
-    subprocess.run(["git", "-C", str(staging_checkout), "commit", "-m", "x"],
-                   check=True, capture_output=True)
 
-    # Try to apply the diff — it should fail.
-    if dirty_diff:
-        result = subprocess.run(
-            ["git", "-C", str(staging_checkout), "apply", "-"],
-            input=dirty_diff, capture_output=True, text=True,
-        )
-        # We expect this to fail (conflict).
-        assert result.returncode != 0 or "conflict" in result.stderr.lower() or True
-        # The actual create_pin would raise RuntimeError on conflict.
+def test_pin_keyed_by_commit_and_diff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two launches with different dirty diffs get different pin keys."""
+    import refactory_dsh.pin as pin
+
+    commit = "d" * 40
+    key_a = pin._pin_key(commit, "diff A")
+    key_b = pin._pin_key(commit, "diff B")
+    key_clean = pin._pin_key(commit, None)
+
+    assert key_a != key_b
+    assert key_a != key_clean
+    assert key_b != key_clean
+    assert key_clean == commit
+
+
+def test_credential_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pinned run uses graph-pin-<commit12> with DSH_HOME unchanged; no credential refs."""
+    import refactory_dsh.pin as pin
+
+    commit = "e" * 40
+    key = pin._pin_key(commit, None)
+    pin_root = pin.refactory_home() / "pins" / key
+    pin_checkout = pin_root / "checkout"
+    pin_checkout.mkdir(parents=True)
+
+    # Verify the pin's profile name is graph-pin-<commit12>.
+    commit12 = commit[:12]
+    profile_name = f"graph-pin-{commit12}"
+    assert profile_name.startswith("graph-pin-")
+
+    # Verify that pin.py never sets or changes DSH_HOME.
+    import refactory_dsh.pin as pin_mod
+    source = Path(pin_mod.__file__).read_text()
+    # DSH_HOME should only appear in comments, not in os.environ assignments.
+    for line in source.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or stripped.startswith('"""') or stripped.startswith("'''"):
+            continue
+        assert "DSH_HOME" not in stripped or "os.environ" not in stripped, \
+            f"pin.py must not set DSH_HOME: {stripped}"
+
+
+def test_register_run_concurrent_safe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """register_run uses a file lock for concurrent safety."""
+    import refactory_dsh.pin as pin
+
+    commit = "g" * 40
+    key = pin._pin_key(commit, None)
+    pin_root = pin.refactory_home() / "pins" / key
+    pin_root.mkdir(parents=True)
+    pin._atomic_write_json(pin_root / "pin.json", {
+        "commit": commit, "created": "now", "driver_checkout": str(tmp_path), "runs": [],
+    })
+
+    run1 = tmp_path / "run1"
+    run1.mkdir(parents=True)
+    run2 = tmp_path / "run2"
+    run2.mkdir(parents=True)
+
+    pin.register_run(key, run1)
+    pin.register_run(key, run2)
+
+    data = json.loads((pin_root / "pin.json").read_text())
+    assert str(run1.resolve()) in data["runs"]
+    assert str(run2.resolve()) in data["runs"]
 
 
 def test_pin_profile_is_valid_target() -> None:

@@ -37,8 +37,17 @@ WORKSPACE_PACKAGES: tuple[str, ...] = (
 )
 
 #: Machinery paths within the checkout whose changes matter for fingerprint drift.
+#: Covers both the Python package and TS package sources.
 MACHINERY_GLOBS: tuple[str, ...] = (
     "refactory/refactory_dsh",
+    "packages/workflow/workflow-spine/src",
+    "packages/bundle/graph/src",
+    "packages/bundle/refactory/src",
+    "packages/bundle/refactory-web/src",
+    "packages/refactory/tool-refactory/src",
+    "packages/refactory/refactory-console/src",
+    "packages/client/ui-refactory/src",
+    "packages/client/ui-brand-refactory/src",
 )
 
 
@@ -49,6 +58,8 @@ def record_driver(run_config_path: Path) -> None:
     """Add a ``driver`` key to the run's ``run-config.json``.
 
     Called once at launch, right after the config is first written.
+    The dirty diff covers staged changes, unstaged changes and the TS packages
+    (``git diff HEAD`` captures both staged and unstaged in one pass).
     """
     run_config_path = Path(run_config_path)
     config = json.loads(run_config_path.read_text())
@@ -56,11 +67,12 @@ def record_driver(run_config_path: Path) -> None:
     checkout = str(REPO_ROOT)
     commit = _git_rev_parse(Path(checkout))
 
-    # Dirty diff of machinery paths.
+    # Dirty diff of machinery paths: ``git diff HEAD`` captures both staged
+    # and unstaged changes in one pass.
     dirty_diff: str | None = None
     try:
         result = subprocess.run(
-            ["git", "-C", checkout, "diff", "--", *MACHINERY_GLOBS],
+            ["git", "-C", checkout, "diff", "HEAD", "--", *MACHINERY_GLOBS],
             capture_output=True, text=True, timeout=30,
         )
         if result.returncode == 0 and result.stdout.strip():
@@ -121,6 +133,21 @@ def detect_drift(run_config: dict) -> dict | None:
     return None
 
 
+# ── pin key ──────────────────────────────────────────────────────────────
+
+
+def _pin_key(commit: str, dirty_diff: str | None) -> str:
+    """The directory name for a pin, keyed by commit and diff hash.
+
+    Two launches from the same commit with different dirty diffs get
+    different pins.
+    """
+    if dirty_diff:
+        diff_hash = hashlib.sha256(dirty_diff.encode()).hexdigest()[:12]
+        return f"{commit}-{diff_hash}"
+    return commit
+
+
 # ── pin resolution ───────────────────────────────────────────────────────
 
 
@@ -132,7 +159,9 @@ def resolve_pin(driver_info: dict, *, run_dir: Path | None = None) -> Path:
     """
     commit = driver_info["commit"]
     commit12 = commit[:12]
-    pin_root = refactory_home() / "pins" / commit
+    dirty_diff = driver_info.get("dirty_diff")
+    key = _pin_key(commit, dirty_diff)
+    pin_root = refactory_home() / "pins" / key
     pin_checkout = pin_root / "checkout"
 
     # Already pinned and prepared?
@@ -141,22 +170,23 @@ def resolve_pin(driver_info: dict, *, run_dir: Path | None = None) -> Path:
         if existing.is_dir():
             return existing
 
-    # A prepared pin for this commit may already exist from another run.
-    if (pin_checkout / ".git").exists() or (pin_checkout / ".git").is_file():
+    # A prepared pin for this commit+diff may already exist from another run.
+    # pin.json is the readiness marker: it is written only after all preparation
+    # succeeds, so its presence means the pin is fully usable.
+    if (pin_root / "pin.json").is_file():
         # Pin exists; register this run if a run_dir was given.
         if run_dir is not None:
             _update_driver_record(run_dir, pin_checkout, commit12)
-            register_run(commit, run_dir)
+            register_run(key, run_dir)
         return pin_checkout
 
     # Create the pin.
     driver_checkout = Path(driver_info["checkout"])
-    dirty_diff = driver_info.get("dirty_diff")
     pin_checkout = create_pin(driver_checkout, commit, dirty_diff)
 
     if run_dir is not None:
         _update_driver_record(run_dir, pin_checkout, commit12)
-        register_run(commit, run_dir)
+        register_run(key, run_dir)
 
     return pin_checkout
 
@@ -182,16 +212,25 @@ def create_pin(driver_checkout: Path, commit: str, dirty_diff: str | None = None
     """Create a pin worktree at ``commit``, prepared and ready to use.
 
     Uses an exclusive file lock so concurrent callers share one preparation.
-    """
-    commit12 = commit[:12]
-    pin_root = refactory_home() / "pins" / commit
-    pin_checkout = pin_root / "checkout"
-    staging_root = refactory_home() / "pins" / f"{commit}.preparing"
-    staging_checkout = staging_root / "checkout"
-    lock_path = refactory_home() / "pins" / f"{commit}.lock"
+    Preparation happens directly at the final path (no staging rename) so
+    git worktree registrations and editable installs reference the permanent
+    path from the start.  ``pin.json`` is the readiness marker: written only
+    after all preparation succeeds.
 
-    # Fast path: already prepared.
-    if pin_checkout.is_dir():
+    Uses :data:`worktree.NO_HOOKS` for the worktree add and
+    :func:`worktree._isolate_hooks` for per-worktree hook isolation, the same
+    helpers run worktrees use.
+    """
+    from refactory_dsh.worktree import NO_HOOKS, _isolate_hooks
+
+    commit12 = commit[:12]
+    key = _pin_key(commit, dirty_diff)
+    pin_root = refactory_home() / "pins" / key
+    pin_checkout = pin_root / "checkout"
+    lock_path = refactory_home() / "pins" / f"{key}.lock"
+
+    # Fast path: already prepared (pin.json is the readiness marker).
+    if (pin_root / "pin.json").is_file():
         return pin_checkout
 
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -199,90 +238,59 @@ def create_pin(driver_checkout: Path, commit: str, dirty_diff: str | None = None
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
         # Re-check after acquiring the lock.
-        if pin_checkout.is_dir():
+        if (pin_root / "pin.json").is_file():
             return pin_checkout
 
-        # Clean up any previous failed staging.
-        if staging_root.exists():
-            shutil.rmtree(staging_root, ignore_errors=True)
-        staging_root.mkdir(parents=True, exist_ok=True)
+        # Clean up any previous failed attempt at this path.
+        if pin_root.exists():
+            _cleanup_pin_dir(pin_root, driver_checkout)
+        pin_root.mkdir(parents=True, exist_ok=True)
 
-        # Create a detached worktree.
+        # Create a detached worktree using worktree.py's NO_HOOKS pattern so
+        # hooks do not run during creation.
         subprocess.run(
-            ["git", "-C", str(driver_checkout), "worktree", "add", "--detach",
-             str(staging_checkout), commit],
+            ["git", "-C", str(driver_checkout),
+             *NO_HOOKS,
+             "worktree", "add", "--detach",
+             str(pin_checkout), commit],
             check=True, capture_output=True, text=True, timeout=120,
         )
 
-        # Enable extensions.worktreeConfig on the driver if not already set.
-        try:
-            result = subprocess.run(
-                ["git", "-C", str(driver_checkout), "config", "--get", "extensions.worktreeConfig"],
-                capture_output=True, text=True, timeout=10,
-            )
-            if result.returncode != 0 or result.stdout.strip().lower() != "true":
-                subprocess.run(
-                    ["git", "-C", str(driver_checkout), "config", "extensions.worktreeConfig", "true"],
-                    check=True, capture_output=True, text=True, timeout=10,
-                )
-        except (OSError, subprocess.SubprocessError):
-            pass
-
-        # Isolate hooks: per-worktree core.hooksPath = /dev/null.
-        try:
-            subprocess.run(
-                ["git", "-C", str(staging_checkout), "config", "--worktree",
-                 "core.hooksPath", "/dev/null"],
-                check=True, capture_output=True, text=True, timeout=10,
-            )
-        except (OSError, subprocess.SubprocessError):
-            pass
+        # Isolate hooks using the same helper run worktrees use.
+        # This enables extensions.worktreeConfig on the driver (expected by
+        # canary checks) and sets a per-worktree core.hooksPath.
+        _isolate_hooks(driver_checkout, pin_checkout)
 
         # Apply dirty diff if present.
         if dirty_diff:
             result = subprocess.run(
-                ["git", "-C", str(staging_checkout), "apply", "-"],
+                ["git", "-C", str(pin_checkout), "apply", "-"],
                 input=dirty_diff, capture_output=True, text=True, timeout=60,
             )
             if result.returncode != 0:
-                # Clean up and raise.
-                shutil.rmtree(staging_root, ignore_errors=True)
                 raise RuntimeError(
                     f"Run was launched from commit {commit} with uncommitted changes "
                     f"that conflict with the pin; the conflicting output: {result.stderr[:500]}"
                 )
 
         # Prepare the pin: uv sync, pnpm install, pnpm build.
-        # Errors must propagate — the outer except BaseException cleans up
-        # staging.  A broken pin must never be atomically renamed into use.
+        # Errors propagate — the outer except BaseException cleans up.
+        # A broken pin must never be marked ready.
         env = {**os.environ, "LEFTHOOK": "0", "HUSKY": "0"}
         subprocess.run(
-            ["uv", "sync"], cwd=str(staging_checkout), env=env,
+            ["uv", "sync"], cwd=str(pin_checkout), env=env,
             check=True, capture_output=True, text=True, timeout=600,
         )
         subprocess.run(
-            ["pnpm", "install"], cwd=str(staging_checkout), env=env,
+            ["pnpm", "install"], cwd=str(pin_checkout), env=env,
             check=True, capture_output=True, text=True, timeout=600,
         )
         subprocess.run(
-            ["pnpm", "run", "build"], cwd=str(staging_checkout), env=env,
+            ["pnpm", "run", "build"], cwd=str(pin_checkout), env=env,
             check=True, capture_output=True, text=True, timeout=600,
         )
 
-        # Write pin.json.
-        pin_json = {
-            "commit": commit,
-            "created": datetime.now(timezone.utc).isoformat(),
-            "driver_checkout": str(driver_checkout),
-            "runs": [],
-        }
-        _atomic_write_json(staging_root / "pin.json", pin_json)
-
-        # Atomically rename staging to final.
-        staging_root.rename(pin_root)
-
-        # Provision the profile in the person's DSH home AFTER the rename
-        # so symlinks point to the final path, not the staging path.
+        # Provision the profile in the person's DSH home.
         profile_name = f"graph-pin-{commit12}"
         bundle_path = pin_checkout / "packages" / "bundle" / "graph"
         from refactory_dsh.paths import dsh_command
@@ -292,28 +300,41 @@ def create_pin(driver_checkout: Path, commit: str, dirty_diff: str | None = None
             check=True, capture_output=True, text=True, timeout=120,
         )
 
+        # Write pin.json as the LAST step: it is the readiness marker.
+        # Its presence tells resolve_pin and the fast-path that the pin is
+        # fully prepared and safe to use.
+        pin_json = {
+            "commit": commit,
+            "created": datetime.now(timezone.utc).isoformat(),
+            "driver_checkout": str(driver_checkout),
+            "runs": [],
+        }
+        _atomic_write_json(pin_root / "pin.json", pin_json)
+
         return pin_checkout
 
     except BaseException:
-        # Clean up whichever directory exists: staging (if rename failed)
-        # or final (if rename succeeded but provisioning failed).
-        for cleanup_dir in (staging_root, pin_root):
-            if cleanup_dir.exists():
-                # Also remove the git worktree registration.
-                checkout_in_dir = cleanup_dir / "checkout"
-                if checkout_in_dir.exists():
-                    try:
-                        subprocess.run(
-                            ["git", "-C", str(driver_checkout), "worktree", "remove", "--force",
-                             str(checkout_in_dir)],
-                            capture_output=True, text=True, timeout=60,
-                        )
-                    except (OSError, subprocess.SubprocessError):
-                        pass
-                shutil.rmtree(cleanup_dir, ignore_errors=True)
+        _cleanup_pin_dir(pin_root, driver_checkout)
         raise
     finally:
         os.close(lock_fd)
+
+
+def _cleanup_pin_dir(pin_dir: Path, driver_checkout: Path) -> None:
+    """Remove a pin directory and its git worktree registration."""
+    if not pin_dir.exists():
+        return
+    checkout_in_dir = pin_dir / "checkout"
+    if checkout_in_dir.exists():
+        try:
+            subprocess.run(
+                ["git", "-C", str(driver_checkout), "worktree", "remove", "--force",
+                 str(checkout_in_dir)],
+                capture_output=True, text=True, timeout=60,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+    shutil.rmtree(pin_dir, ignore_errors=True)
 
 
 # ── pin utilities ────────────────────────────────────────────────────────
@@ -324,18 +345,27 @@ def pin_python(pin_checkout: Path) -> Path:
     return Path(pin_checkout) / ".venv" / "bin" / "python"
 
 
-def register_run(commit: str, run_dir: Path) -> None:
-    """Record that ``run_dir`` uses the pin at ``commit``."""
-    pin_json_path = refactory_home() / "pins" / commit / "pin.json"
+def register_run(key: str, run_dir: Path) -> None:
+    """Record that ``run_dir`` uses the pin at ``key``.
+
+    Uses a file lock to prevent concurrent writes from losing registrations.
+    """
+    pin_json_path = refactory_home() / "pins" / key / "pin.json"
     if not pin_json_path.exists():
         return
-    data = json.loads(pin_json_path.read_text())
-    runs = data.get("runs", [])
-    run_str = str(Path(run_dir).resolve())
-    if run_str not in runs:
-        runs.append(run_str)
-        data["runs"] = runs
-        _atomic_write_json(pin_json_path, data)
+    lock_path = pin_json_path.with_suffix(".lock")
+    lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        data = json.loads(pin_json_path.read_text())
+        runs = data.get("runs", [])
+        run_str = str(Path(run_dir).resolve())
+        if run_str not in runs:
+            runs.append(run_str)
+            data["runs"] = runs
+            _atomic_write_json(pin_json_path, data)
+    finally:
+        os.close(lock_fd)
 
 
 def list_pins() -> list[dict]:
@@ -357,7 +387,12 @@ def list_pins() -> list[dict]:
 
 
 def prune_pins(dsh_home: Path | None = None) -> list[str]:
-    """Remove pins no run refers to. Returns pruned commit SHAs."""
+    """Remove pins no run refers to. Returns pruned commit SHAs.
+
+    A run whose directory still exists is treated as resumable regardless of
+    its status (done, failed, cancelled).  Only runs whose directories are
+    gone are pruned from the pin's list.
+    """
     pruned: list[str] = []
     pins_dir = refactory_home() / "pins"
     if not pins_dir.is_dir():
@@ -378,24 +413,13 @@ def prune_pins(dsh_home: Path | None = None) -> list[str]:
         commit12 = commit[:12]
         runs = data.get("runs", [])
 
-        # Check each run: remove dead references.
+        # A run is live (and its pin must be kept) as long as the run
+        # directory exists.  Failed and done runs are resumable unless
+        # the directory is gone.
         live_runs: list[str] = []
         for run_path_str in runs:
             run_path = Path(run_path_str)
-            if not run_path.exists():
-                continue
-            # Check if the run is terminal.
-            config_path = run_path / ".refactory" / "run-config.json"
-            status_path = run_path / ".refactory" / "spine-status.json"
-            is_terminal = False
-            try:
-                if status_path.exists():
-                    status_data = json.loads(status_path.read_text())
-                    if status_data.get("status") in ("done", "failed", "cancelled"):
-                        is_terminal = True
-            except (OSError, json.JSONDecodeError):
-                pass
-            if not is_terminal:
+            if run_path.exists():
                 live_runs.append(run_path_str)
 
         if live_runs:
@@ -417,7 +441,7 @@ def prune_pins(dsh_home: Path | None = None) -> list[str]:
             except (OSError, subprocess.SubprocessError):
                 pass
 
-        # Remove the profile.
+        # Remove the profile by its package name.
         profile_name = f"graph-pin-{commit12}"
         try:
             from refactory_dsh.paths import dsh_command
@@ -441,8 +465,9 @@ def prune_pins(dsh_home: Path | None = None) -> list[str]:
 
 
 def workspace_stamp(root: Path) -> str | None:
-    """Compute a SHA-256 stamp of all ``*.ts`` source files across workspace packages.
+    """Compute a SHA-256 stamp of all TS source files across workspace packages.
 
+    Covers both ``.ts`` and ``.tsx`` files.
     Returns a 16-character hex hash, or ``None`` when no source files exist.
     """
     root = Path(root)
