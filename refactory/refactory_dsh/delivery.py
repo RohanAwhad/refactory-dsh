@@ -1533,10 +1533,17 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
 
 def _process_notes_section(ctx: Any) -> str:
     """Non-blocking summary of process-scoped steering notes for the PR body."""
+    import json as _json
     from refactory_dsh import authoring_evidence as evidence
 
-    audit = ctx.read_json(evidence.AUDIT, None) if ctx.exists(evidence.AUDIT) else None
-    ev = ctx.read_json(evidence.EVIDENCE, None) if ctx.exists(evidence.EVIDENCE) else None
+    def _safe_read_json(name: str) -> Any:
+        try:
+            return _json.loads(ctx.read_text(name))
+        except Exception:
+            return None
+
+    audit = _safe_read_json(evidence.AUDIT) if ctx.exists(evidence.AUDIT) else None
+    ev = _safe_read_json(evidence.EVIDENCE) if ctx.exists(evidence.EVIDENCE) else None
     notes = (ev or {}).get("process_notes", [])
     if not notes:
         return ""
