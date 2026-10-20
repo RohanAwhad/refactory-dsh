@@ -86,37 +86,116 @@ def test_prefix_boundary_not_fooled(tmp_path):
     assert str(wt2) in result.cwd_outside
 
 
-def test_check_record_carries_cwd_escaped(tmp_path):
-    """The check outcome carries cwd_escaped when the command leaves the worktree.
+def test_check_record_carries_cwd_escaped(tmp_path, monkeypatch):
+    """Drives the real ``check_artifact`` and ``focused_check`` in a real worktree.
 
-    Drives the production ``design_ops.apply_cwd_escaped`` helper that both
-    ``check_artifact`` (design_ops) and ``focused_check`` (fast_ops) call to
-    record a directory escape into the check outcome dict.
+    A command that ``cd``s to ``/tmp`` must produce ``cwd_escaped`` in the
+    recorded runtime evidence (Part A — ``design_ops.check_artifact``) and in
+    ``focused-check.json`` (Part B — ``fast_ops.focused_check``).
+
+    This test fails if ``apply_cwd_escaped`` is removed from ``check_artifact``
+    or ``focused_check``, or if ``repo_change`` stops passing ``worktree_root``
+    to ``sandbox.run_command``.
     """
-    from refactory_dsh.design_ops import apply_cwd_escaped
+    import json as _json
+    from refactory_dsh import design_ops, fast_ops, worktree
+    from tests_support import git_repo
 
-    workdir = tmp_path / "wt"
-    workdir.mkdir()
-    result = sandbox.run_command("cd /tmp && echo ok", workdir=workdir, worktree_root=workdir)
-    assert result.ok
-    assert result.cwd_outside is not None
+    repo = git_repo(tmp_path / "repo")
 
-    # Part A — design_ops path: apply_cwd_escaped is the production function
-    # called by design_ops.check_artifact after run_check returns.
-    design_outcome: dict = {"status": "pass", "stdout": result.stdout, "stderr": result.stderr}
-    apply_cwd_escaped(result, design_outcome)
-    assert "cwd_escaped" in design_outcome
-    assert "/tmp" in design_outcome["cwd_escaped"]
+    class Ctx:
+        """Minimal context for check_artifact / focused_check."""
+        def __init__(self, workdir: Path):
+            self.workdir = Path(workdir)
+            self.facts: dict = {}
+            self.budget = None
+            self.model = None
+            self._knobs: dict = {}
 
-    # Part B — fast_ops path: fast_ops.focused_check calls the same helper
-    # via design_ops.apply_cwd_escaped(result, payload).
-    fast_payload: dict = {"command": "cd /tmp && echo ok", "status": "pass"}
-    apply_cwd_escaped(result, fast_payload)
-    assert "cwd_escaped" in fast_payload
-    assert "/tmp" in fast_payload["cwd_escaped"]
+        def knob(self, name, default=None):
+            return self._knobs.get(name, default)
 
-    # A result that stayed inside the worktree must NOT set cwd_escaped.
-    clean_result = sandbox.run_command("true", workdir=workdir, worktree_root=workdir)
-    clean_outcome: dict = {"status": "pass"}
-    apply_cwd_escaped(clean_result, clean_outcome)
-    assert "cwd_escaped" not in clean_outcome
+        def set_fact(self, name, value):
+            self.facts[name] = value
+
+        def write_text(self, name, content):
+            p = self.workdir / name
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(str(content))
+
+        def write_json(self, name, payload):
+            p = self.workdir / name
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(_json.dumps(payload, indent=2))
+
+        def read_json(self, name, default=None):
+            p = self.workdir / name
+            if p.exists():
+                return _json.loads(p.read_text())
+            return default
+
+        def read_text(self, name):
+            p = self.workdir / name
+            if p.exists():
+                return p.read_text()
+            return ""
+
+        def exists(self, name):
+            return (self.workdir / name).exists()
+
+        @property
+        def iteration(self):
+            return 1
+
+    # Mock evidence.record to capture outcome dicts without its complex
+    # dependencies (identity, receipts, etc.) and base_check to skip the
+    # test-guardedness computation that needs a second worktree checkout.
+    captured: list[dict] = []
+    monkeypatch.setattr(
+        "refactory_dsh.authoring_evidence.record",
+        lambda ctx, outcome: (captured.append(dict(outcome)), outcome)[-1],
+    )
+    monkeypatch.setattr(
+        "refactory_dsh.base_check.compute_test_guardedness",
+        lambda *a, **kw: None,
+    )
+
+    # ── Part A: design_ops.check_artifact ─────────────────────────────
+    run_a = tmp_path / "run_a"
+    run_a.mkdir()
+    found_a = worktree.create(repo, "HEAD", "cwdesca001", run_a)
+
+    ctx_a = Ctx(run_a)
+    ctx_a.facts.update({
+        "check": "cd /tmp && true",
+        "commit": found_a.head,
+        "artifact": found_a.path,
+        "name": "test_cwd_check",
+    })
+
+    verdict = design_ops.check_artifact(ctx_a)
+    assert verdict == "proceed"
+    assert captured, "evidence.record was not called by check_artifact"
+    assert "cwd_escaped" in captured[-1], \
+        f"cwd_escaped missing from recorded evidence: {sorted(captured[-1])}"
+    assert "/tmp" in captured[-1]["cwd_escaped"]
+
+    # ── Part B: fast_ops.focused_check ────────────────────────────────
+    run_b = tmp_path / "run_b"
+    run_b.mkdir()
+    found_b = worktree.create(repo, "HEAD", "cwdescb002", run_b)
+
+    ctx_b = Ctx(run_b)
+    ctx_b.facts.update({
+        "check": "cd /tmp && true",
+        "commit": found_b.head,
+        "artifact": found_b.path,
+        "name": "test_cwd_check",
+    })
+
+    fast_ops.focused_check(ctx_b)
+    payload = ctx_b.read_json("focused-check.json")
+    assert payload is not None, "focused-check.json was not written"
+    assert "cwd_escaped" in payload, \
+        f"cwd_escaped missing from focused-check.json: {sorted(payload)}"
+    assert "/tmp" in payload["cwd_escaped"]
