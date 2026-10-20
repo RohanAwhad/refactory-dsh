@@ -735,6 +735,23 @@ def test_note_rejects_invalid_source(tmp_path):
         ledger.note("info", "something", source="unknown")
 
 
+def test_combined_process_ceo_note_roundtrips(tmp_path):
+    """C5+scope: A note with both scope='process' and source='ceo' roundtrips.
+
+    The heading written is ``kind (process) (ceo)``; parsing must strip the
+    rightmost suffix first (``(ceo)``), then ``(process)``, or both ``kind``
+    and ``scope`` are corrupted.
+    """
+    ledger = Ledger.seed(tmp_path, "build a mode")
+    ledger.note("constraint", "add more logging", scope="process", source="ceo")
+
+    entries = Ledger(tmp_path).entries()
+    assert entries[1]["kind"] == "constraint"
+    assert entries[1]["scope"] == "process"
+    assert entries[1]["source"] == "ceo"
+    assert entries[1]["text"] == "add more logging"
+
+
 # ── E9: skip unrun nodes in problem detection ─────────────────────────────
 
 

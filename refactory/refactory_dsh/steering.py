@@ -325,14 +325,17 @@ def parse_entries(text: str) -> list[dict[str, Any]]:
                 found.append(current)
             stamp, _, kind = line[4:].partition("] ")
             kind = kind.strip()
-            scope = "product"
-            if kind.endswith(" (process)"):
-                kind = kind[:-len(" (process)")].strip()
-                scope = "process"
+            # Parse suffixes right-to-left: writing order is
+            # {kind}{scope_suffix}{source_suffix}, e.g. "correction (process) (ceo)",
+            # so strip the rightmost suffix (ceo) first, then (process).
             source = "user-relayed"
             if kind.endswith(" (ceo)"):
                 kind = kind[:-len(" (ceo)")].strip()
                 source = "ceo"
+            scope = "product"
+            if kind.endswith(" (process)"):
+                kind = kind[:-len(" (process)")].strip()
+                scope = "process"
             current = {"at": stamp, "kind": kind, "text": "", "scope": scope, "source": source}
             body = []
         elif current is not None:
