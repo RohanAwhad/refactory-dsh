@@ -46,6 +46,7 @@ variants). The refusal names which argument was empty.
 | `--worker-backend dsh\|codex\|claude_code` | the explicit coding-worker runtime; DSH is the default. |
 | `--effort <value>` | DSH reasoning-effort override; external workers use native product settings. |
 | `--permission-mode <value>` | New workers default to `skip` (full native permission bypass). Choose `default` for native checks, or a supported backend-specific policy. Saved runs/profiles retain their policies; see [worker permissions](models.md#model-provider-versus-coding-agent). |
+| `--model-timeout <seconds>` | seconds one model completion may take before it is called hung; default 1800 (30 min). Sets the per-completion limit for every agent step of the run. Each step's spine limit is `attempts × model-timeout + 600`. Not the same as `--timeout` (seconds to wait at a gate) or `--max-elapsed-s` (wall-clock cap on the entire run). |
 | `--max-elapsed-s <n>` / `--max-tokens <n>` | the shared resource allocation, including nested work and validation. |
 | `--validation-reserve-s <n>` / `--validation-reserve-tokens <n>` | keep part of that allocation available for required final validation. |
 | `--revise <package>/<mode>` | edit only: the mode being revised. |
