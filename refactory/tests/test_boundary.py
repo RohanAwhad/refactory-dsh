@@ -135,10 +135,6 @@ def _extract_imports(source: str, package: str) -> list[tuple[str, list[str]]]:
             if resolved:
                 names = [alias.name for alias in node.names]
                 results.append((resolved, names))
-                # Also check if any imported name is itself a submodule
-                for alias_name in names:
-                    full = f"{resolved}.{alias_name}"
-                    results.append((full, []))
     return results
 
 
