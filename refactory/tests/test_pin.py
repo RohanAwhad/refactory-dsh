@@ -584,3 +584,14 @@ def test_dirty_diff_conflict_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyP
         # We expect this to fail (conflict).
         assert result.returncode != 0 or "conflict" in result.stderr.lower() or True
         # The actual create_pin would raise RuntimeError on conflict.
+
+
+def test_pin_profile_is_valid_target() -> None:
+    """A pin profile name (graph-pin-<commit12>) is accepted by dsh_profile.target()."""
+    from refactory_dsh.dsh_profile import target, Target
+
+    result = target("graph-pin-5068dbfc93a1")
+    assert isinstance(result, Target)
+    assert result.profile == "graph-pin-5068dbfc93a1"
+    assert result.owned is True
+    assert "graph" in result.layers

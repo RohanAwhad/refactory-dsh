@@ -50,7 +50,7 @@ def configuration_fingerprints(root: Path, identifier: str, project: Path) -> di
 
 
 def prepare(root: Path, name: str, *, resource_limits: dict[str, Any] | None = None,
-            acknowledge_failed: bool = False) -> Path:
+            acknowledge_failed: bool = False, skip_configuration: bool = False) -> Path:
     root = Path(root).resolve()
     checkpoint = root / '.refactory/spine-checkpoint.json'
     payload = checkpoint.read_bytes()
@@ -119,22 +119,23 @@ def prepare(root: Path, name: str, *, resource_limits: dict[str, Any] | None = N
     for name, expected in saved.get('file_fingerprints', {}).items():
         if fingerprint(root / name) != expected:
             raise ValueError(f'input/output {name!r} changed; dependent results need explicit invalidation')
-    config = json.loads((root / '.refactory/run-config.json').read_text())
-    expected_configuration = config.get('configuration_fingerprints')
-    if not isinstance(expected_configuration, dict) or not expected_configuration:
-        raise ValueError('saved run has no configuration fingerprints; automatic recovery cannot verify its source')
-    # Translate fingerprint paths from recorded checkout to current REPO_ROOT
-    # so that a re-exec'd process compares against the pin's files.
-    from refactory_dsh.paths import REPO_ROOT
-    driver = config.get('driver', {})
-    driver_checkout = driver.get('checkout', '')
-    repo_root_str = str(REPO_ROOT)
-    for name, expected in expected_configuration.items():
-        actual_name = name
-        if driver_checkout and name.startswith(driver_checkout) and driver_checkout != repo_root_str:
-            actual_name = repo_root_str + name[len(driver_checkout):]
-        if _configuration_fingerprint(Path(actual_name)) != expected:
-            raise ValueError(f'prepared configuration {name!r} changed; dependent results need explicit invalidation')
+    if not skip_configuration:
+        config = json.loads((root / '.refactory/run-config.json').read_text())
+        expected_configuration = config.get('configuration_fingerprints')
+        if not isinstance(expected_configuration, dict) or not expected_configuration:
+            raise ValueError('saved run has no configuration fingerprints; automatic recovery cannot verify its source')
+        # Translate fingerprint paths from recorded checkout to current REPO_ROOT
+        # so that a re-exec'd process compares against the pin's files.
+        from refactory_dsh.paths import REPO_ROOT
+        driver = config.get('driver', {})
+        driver_checkout = driver.get('checkout', '')
+        repo_root_str = str(REPO_ROOT)
+        for name, expected in expected_configuration.items():
+            actual_name = name
+            if driver_checkout and name.startswith(driver_checkout) and driver_checkout != repo_root_str:
+                actual_name = repo_root_str + name[len(driver_checkout):]
+            if _configuration_fingerprint(Path(actual_name)) != expected:
+                raise ValueError(f'prepared configuration {name!r} changed; dependent results need explicit invalidation')
     if resource_limits:
         from refactory_dsh.budgets import ResourceLimits, RunBudget
         RunBudget.from_path(root / '.refactory/resource-usage.json').resume(ResourceLimits.from_dict(resource_limits))
@@ -165,18 +166,21 @@ def start(root: Path, *, acknowledge_failed: bool = False) -> dict[str, Any]:
     root = Path(root).resolve()
     with ownership(root):
         config = json.loads((root / '.refactory/run-config.json').read_text())
+        # Detect drift BEFORE prepare() so a moved driver creates a pin
+        # instead of prepare() refusing with "configuration changed".
+        from refactory_dsh import pin as _pin
+        _drift = _pin.detect_drift(config)
+        python_exe = sys.executable
+        if _drift is not None:
+            _pin_checkout = _pin.resolve_pin(config['driver'], run_dir=root)
+            python_exe = str(_pin.pin_python(_pin_checkout))
         # Validate while owning the directory, then release before the child
         # acquires its own nonblocking lock. Otherwise a fast child can reject
         # its parent as the still-active owner. The child repeats validation;
         # an intervening invocation can refuse this queued request safely.
-        prepare(root, config['mode'].replace('/', '-'), acknowledge_failed=acknowledge_failed)
-    # ── pin: detect drift and use the pin's interpreter ──
-    from refactory_dsh import pin as _pin
-    _drift = _pin.detect_drift(config)
-    python_exe = sys.executable
-    if _drift is not None:
-        _pin_checkout = _pin.resolve_pin(config['driver'], run_dir=root)
-        python_exe = str(_pin.pin_python(_pin_checkout))
+        prepare(root, config['mode'].replace('/', '-'),
+                acknowledge_failed=acknowledge_failed,
+                skip_configuration=(_drift is not None))
     supervisor_log = root / '.refactory/supervisor.log'
     supervisor_log.parent.mkdir(parents=True, exist_ok=True)
     with supervisor_log.open('ab') as output:

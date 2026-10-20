@@ -294,6 +294,16 @@ def run(
                                                role_routes={}, node_routes={}).context()
             else:
                 model_context = {**model_context, 'permission_mode': model_context.get('permission_mode') or 'default'}
+            # When pinned, rewrite runtime_root and python_bin so workers
+            # use the pin's venv, not the original checkout's.
+            _driver_rec = saved.get('driver', {})
+            if model_context and _driver_rec.get('pin_checkout'):
+                _pin_co = _driver_rec['pin_checkout']
+                model_context = {
+                    **model_context,
+                    'runtime_root': _pin_co,
+                    'python_bin': str(Path(_pin_co) / '.venv' / 'bin'),
+                }
             resource_limits = effective_limits
         if source:
             from refactory_dsh.items import write_source

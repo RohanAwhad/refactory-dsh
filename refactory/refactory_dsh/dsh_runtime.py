@@ -99,7 +99,7 @@ def run_on_dsh(
         # state, and this is the one place that knows the command that creates it.
         return DshRun(facts={}, workdir=workdir, returncode=2, stderr=problem)
 
-    require_build(root=Path(context["runtime_root"]) if context else None)
+    require_build(root=Path(context["runtime_root"]) if context else None, check_only=True)
 
     graphs = workdir / "graphs"
     # The steering layer, on the runtime that ships. A run a person steered has a

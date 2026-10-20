@@ -98,3 +98,21 @@ def test_require_build_skips_when_running_from_source(tmp_path: Path) -> None:
 
     # No stamp file, no lib — should not raise.
     paths.require_build(root=tmp_path)
+
+
+def test_require_build_check_only_never_rebuilds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """check_only=True raises instead of rebuilding, so mid-run calls never build."""
+    from refactory_dsh import paths
+    from refactory_dsh.pin import WORKSPACE_PACKAGES
+
+    _make_package_tree(tmp_path, list(WORKSPACE_PACKAGES))
+
+    spine_lib = tmp_path / "packages" / "workflow" / "workflow-spine" / "lib"
+    spine_lib.mkdir(parents=True, exist_ok=True)
+    (spine_lib / "index.js").write_text("// built")
+    (spine_lib / ".workspace-stamp").write_text("0000000000000000")
+
+    monkeypatch.delenv("REFACTORY_GUI_MODE", raising=False)
+
+    with pytest.raises(RuntimeError, match="stale"):
+        paths.require_build(root=tmp_path, check_only=True)

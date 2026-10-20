@@ -228,6 +228,11 @@ def target(name: str = GRAPH_PROFILE) -> Target:
     for entry in TARGETS:
         if entry.profile == name:
             return entry
+    # Pin profiles (graph-pin-<commit12>) are dynamically created for pinned
+    # runs.  They behave like the graph target but with the pin profile name.
+    if name.startswith("graph-pin-"):
+        return Target(name, None, ("graph",), True,
+                      "a pinned driver's graph profile")
     raise KeyError(name)
 
 

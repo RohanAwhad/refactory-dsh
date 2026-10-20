@@ -200,7 +200,7 @@ def venv_bin() -> Path:
 SPINE_LIB = Path("packages") / "workflow" / "workflow-spine" / "lib" / "index.js"
 
 
-def require_build(root: Path | None = None) -> None:
+def require_build(root: Path | None = None, *, check_only: bool = False) -> None:
     """Refuse immediately when the spine build is missing, and rebuild stale builds.
 
     Running from source (SOURCE_CLI_ENTRY exists) skips the check: tsx
@@ -229,6 +229,10 @@ def require_build(root: Path | None = None) -> None:
                 raise RuntimeError(
                     "the build is stale; restart the GUI to pick up changes — "
                     "run `pnpm run build` and relaunch"
+                )
+            if check_only:
+                raise RuntimeError(
+                    "the build is stale; run `pnpm run build` to rebuild"
                 )
             import logging
             logging.getLogger(__name__).info("workspace build is stale; rebuilding")
