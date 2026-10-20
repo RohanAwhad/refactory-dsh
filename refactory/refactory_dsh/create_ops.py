@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib
 import hashlib
 import json
+import os
 import re
 import shutil
 import sys
@@ -1089,37 +1090,76 @@ def register(ctx: Any) -> dict[str, Any]:
     """Confirm the registry now sees the package under its own name.
 
     When the run staged the package in its own directory (``prepare_create``), copy it
-    atomically to the shared ``.factory/packages/<name>/``.  If the shared package
-    changed since ``prepare`` recorded its hash, refuse and name the other run.
+    atomically to the shared ``.factory/packages/<name>/``.  If the shared package's
+    state differs from what ``prepare`` recorded — including when it now exists and did
+    not before — refuse and name the other run (read from ``.origin.json``).
+
+    After a successful registration, the ``source_hash`` fact is updated to the new
+    state so that a reloop (register runs before smoke in the create graph) does not
+    make this run refuse itself.
     """
     name = str(ctx.facts["name"])
     staging_root = ctx.facts.get("package_root")
     if staging_root:
         import tempfile
         shared = registry.workspace_root(project_for_nodes()) / name
-        # Check whether the shared package changed since prepare.
+        # Detect whether the shared package changed since prepare.
         source_hash = ctx.facts.get("source_hash", "")
+        source_existed = ctx.facts.get("source_existed", source_hash != "")
         if shared.exists():
             current = _dir_hash(shared)
-            if source_hash and current != source_hash:
+            if not source_existed:
+                # Package did not exist at prepare but now does: another run created it.
+                other_run = _origin_run_id(shared)
+                other_info = f" (registered by run {other_run})" if other_run else ""
+                raise ValueError(
+                    f"the shared package {name!r} did not exist when this run's prepare "
+                    f"ran, but it exists now{other_info}; another run registered it first. "
+                    f"This run's staged package is kept at {staging_root} for inspection."
+                )
+            if current != source_hash:
+                other_run = _origin_run_id(shared)
+                other_info = f" (registered by run {other_run})" if other_run else ""
                 raise ValueError(
                     f"the shared package {name!r} changed since this run's prepare "
-                    f"(hash {source_hash[:12]} -> {current[:12]}); another run "
+                    f"(hash {source_hash[:12]} -> {current[:12]}){other_info}; another run "
                     f"registered it first. This run's staged package is kept at "
                     f"{staging_root} for inspection."
                 )
-        # Atomic copy: write to a sibling temp dir, then rename over the target.
+        elif source_existed:
+            other_run = ""
+            raise ValueError(
+                f"the shared package {name!r} existed when this run's prepare ran, "
+                f"but it is gone now; another run deleted it. "
+                f"This run's staged package is kept at {staging_root} for inspection."
+            )
+        # Write this run's id into the staged .origin.json before copying.
+        _stamp_origin_run_id(Path(staging_root), ctx.workdir)
+        # Atomic swap: write to a sibling temp dir, rename the old aside, rename
+        # the new in, then delete the old.
         shared.parent.mkdir(parents=True, exist_ok=True)
         temp = Path(tempfile.mkdtemp(prefix=f".{name}-", dir=shared.parent))
+        old_aside: Path | None = None
         try:
             dest = temp / name
             shutil.copytree(staging_root, dest)
             if shared.exists():
-                shutil.rmtree(shared)
+                old_aside = shared.with_name(f".{name}-old-{os.getpid()}")
+                shared.rename(old_aside)
             dest.rename(shared)
+        except BaseException:
+            # Roll back: if we moved the old aside, put it back.
+            if old_aside is not None and old_aside.exists() and not shared.exists():
+                old_aside.rename(shared)
+            raise
         finally:
+            if old_aside is not None and old_aside.exists():
+                shutil.rmtree(old_aside, ignore_errors=True)
             if temp.exists():
                 shutil.rmtree(temp, ignore_errors=True)
+        # Update source_hash so a reloop of register does not refuse itself.
+        ctx.set_fact("source_hash", _dir_hash(shared))
+        ctx.set_fact("source_existed", True)
     registry.install_workspace(project_for_nodes())
     importlib.invalidate_caches()
     if name not in registry.discover_names(project_for_nodes()):
@@ -1141,6 +1181,30 @@ def register(ctx: Any) -> dict[str, Any]:
         # not the per-run staging copy that register already consumed.
         result["package_path"] = str(registry.workspace_root(project_for_nodes()) / name)
     return result
+
+
+def _origin_run_id(shared: Path) -> str:
+    """Read the registering run's id from the package's ``.origin.json``, or empty."""
+    origin_path = shared / ".origin.json"
+    if origin_path.exists():
+        try:
+            data = json.loads(origin_path.read_text())
+            return str(data.get("run_id", ""))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return ""
+
+
+def _stamp_origin_run_id(staging_root: Path, workdir: Path) -> None:
+    """Write the registering run's id into the staged package's ``.origin.json``."""
+    origin_path = staging_root / ".origin.json"
+    run_id = Path(workdir).name
+    try:
+        data = json.loads(origin_path.read_text()) if origin_path.exists() else {}
+    except (json.JSONDecodeError, OSError):
+        data = {}
+    data["run_id"] = run_id
+    origin_path.write_text(json.dumps(data, indent=2))
 
 
 def _dir_hash(root: Path) -> str:
@@ -1179,17 +1243,22 @@ def prepare_create(ctx: Any) -> dict[str, Any]:
     pkg_root.mkdir(parents=True, exist_ok=True)
 
     # For edit mode: if a source package exists, copy it into staging.
+    # Record both the hash and whether the package existed, so register can
+    # refuse when a new package appears (source_hash="" was previously skipped).
     source_hash = ""
+    source_existed = False
     shared = registry.workspace_root(project_for_nodes()) / name
     if shared.is_dir():
         # Copy existing package as the starting point for an edit.
         shutil.copytree(shared, pkg_root, dirs_exist_ok=True)
         source_hash = _dir_hash(shared)
+        source_existed = True
 
     return {
         **prepared,
         "package_root": str(pkg_root),
         "source_hash": source_hash,
+        "source_existed": source_existed,
     }
 
 

@@ -325,15 +325,24 @@ def _open_worktree(ctx: Any, name: str, task: dict[str, Any],
     # When opted in, copy the person's uncommitted changes into the worktree and
     # commit them as the run's own base, so the attempts' diffs show only the run's
     # change.  The person's checkout is never modified.
+    # On a redo of prepare, the branch already has attempt commits; do not re-copy,
+    # which would add a second base commit on top of existing attempts and re-pin
+    # the base over them.
     uncommitted_entries: list[dict[str, str]] = []
     if ctx.knob("include_uncommitted", False) not in (False, 0, "0", "false"):
-        uncommitted_entries = worktree.copy_uncommitted(target, Path(found.path), ctx.workdir)
-        # Re-read the worktree record so `found.head` and `found.base` reflect the
-        # new commit.
-        found = worktree.recorded(ctx.workdir) or found
-        if uncommitted_entries:
-            print(f"refactory: {len(uncommitted_entries)} uncommitted file(s) copied into the "
-                  f"worktree and committed as the run's base", file=sys.stderr)
+        existing_record = worktree.uncommitted_record(found)
+        if not existing_record:
+            uncommitted_entries = worktree.copy_uncommitted(target, Path(found.path), ctx.workdir)
+            # Re-read the worktree record so `found.head` and `found.base` reflect the
+            # new commit.
+            found = worktree.recorded(ctx.workdir) or found
+            if uncommitted_entries:
+                print(f"refactory: {len(uncommitted_entries)} uncommitted file(s) copied into the "
+                      f"worktree and committed as the run's base", file=sys.stderr)
+        else:
+            uncommitted_entries = existing_record
+            print(f"refactory: uncommitted-changes base already recorded ({len(existing_record)} file(s)); "
+                  "skipping re-copy on redo", file=sys.stderr)
     worktree.write_wrapper(found, ctx.workdir)
     # Every step of a worktree run is held to its own worktree (#319, #347).
     # Changes to the target or the launcher checkout are warnings: another
@@ -868,9 +877,7 @@ def run_check(ctx: Any, command: str, timeout: float) -> Any:
         target_guard.warn(f"tracked files in the run's worktree had changed since materialise and were put "
                           f"back, so the check runs the committed attempt: {target_guard._named(restored)}")
     result = _check_in_worktree(ctx, found, command, timeout)
-    if result.cwd_outside:
-        target_guard.warn(f"the check's command ended in {result.cwd_outside}, outside "
-                          f"the run's worktree {found.path}")
+    # _check_in_worktree already warns about cwd escape; do not warn twice.
     _warn_if_shared_changed(found, "while preparing for and running the check")
     # The reviews and the next attempt read the worktree, and edits apply to the
     # committed attempt: a check that reformats a file must not leave them apart.

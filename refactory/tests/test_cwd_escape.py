@@ -72,3 +72,30 @@ def test_no_worktree_root_means_no_detection(tmp_path):
     result = sandbox.run_command("cd /tmp && true", workdir=workdir)
     assert result.ok
     assert result.cwd_outside is None
+
+
+def test_prefix_boundary_not_fooled(tmp_path):
+    """/a/wt2 is not treated as inside /a/wt (trailing / prevents prefix fooling)."""
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    wt2 = tmp_path / "wt2"
+    wt2.mkdir()
+    result = sandbox.run_command(f"cd {wt2} && true", workdir=wt, worktree_root=wt)
+    assert result.ok
+    assert result.cwd_outside is not None
+    assert str(wt2) in result.cwd_outside
+
+
+def test_check_record_carries_cwd_escaped(tmp_path):
+    """The check outcome carries cwd_escaped when the command leaves the worktree."""
+    workdir = tmp_path / "wt"
+    workdir.mkdir()
+    result = sandbox.run_command("cd /tmp && echo ok", workdir=workdir, worktree_root=workdir)
+    assert result.ok
+    assert result.cwd_outside is not None
+    # Simulate what design_ops / fast_ops do: put cwd_escaped in the outcome.
+    outcome = {"status": "pass", "stdout": result.stdout, "stderr": result.stderr}
+    if result.cwd_outside:
+        outcome["cwd_escaped"] = result.cwd_outside
+    assert "cwd_escaped" in outcome
+    assert "/tmp" in outcome["cwd_escaped"]

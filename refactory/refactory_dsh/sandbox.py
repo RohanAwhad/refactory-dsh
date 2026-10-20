@@ -425,7 +425,7 @@ def run_command(
             f"__refactory_wt_root='{wt_real}'\n"
             f"__refactory_sentinel='{sentinel_path}'\n"
             "trap '__refactory_final=\"$(cd -P . 2>/dev/null && pwd -P)\"; "
-            "case \"$__refactory_final\" in \"$__refactory_wt_root\"*) ;; "
+            "case \"$__refactory_final\" in \"$__refactory_wt_root\"/*|\"$__refactory_wt_root\") ;; "
             "*) printf \"%s\" \"$__refactory_final\" > \"$__refactory_sentinel\" ;; "
             "esac' EXIT\n"
             f"{command}\n"

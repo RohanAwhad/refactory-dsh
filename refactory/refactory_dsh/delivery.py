@@ -1497,10 +1497,24 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
                     f"`{corr_old}` \u2192 `{corr_new}`"
                     + (f" ({corr_note})" if corr_note else "") + ".\n")
 
+    # Render uncommitted-changes note in the PR's Verification when the base
+    # included the person's uncommitted files.
+    uncommitted = worktree.uncommitted_record(found)
+    uncommitted_line = ""
+    if uncommitted:
+        paths = [entry["path"] for entry in uncommitted]
+        uncommitted_line = (
+            f"- **Uncommitted base:** the base included {len(uncommitted)} uncommitted "
+            f"file(s) from the working tree, opted in via `include_uncommitted`: "
+            + ", ".join(f"`{p}`" for p in paths[:10])
+            + ("…" if len(paths) > 10 else "")
+            + ". They are part of this PR; that is the meaning of opting in.\n"
+        )
     verification = (
         f"## Verification\n\n"
         f"- **Check:** `{check_cmd}` passed in the run's worktree.\n"
         + command_corrections
+        + uncommitted_line
         + "- **Reviews:** the health check, code review and QA found nothing blocking, "
         "and the overwatch audit passed.\n"
         + _base_evidence(ctx)

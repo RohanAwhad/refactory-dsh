@@ -734,7 +734,7 @@ export function RefactoryBody({
             }}>{t(`setup.${view}`)}</button>)}
         </div>
         <p className={css.note}>{t(intent === 'run' ? 'panel.onceHelp' : 'panel.startHelp')}</p>
-        {projects.length > 0 && <div className={css.field}>
+        {projects.length > 0 && (!selected || modes.find(m => m.id === selected)?.parameters?.target !== undefined) && <div className={css.field}>
           <FieldLabel htmlFor="refactory-target" help={t('help.target')}>{t('target.label')}</FieldLabel>
           <select id="refactory-target" className={css.control} data-refactory-target
             value={state.knobs?.target ?? ''}

@@ -315,7 +315,9 @@ export function createRefactoryStore(): EngineStoreHandle<RefactoryState, Refact
         if (tab.selectedPackage === name) return
         tab.selectedPackage = name
         tab.chosen = null
+        const savedTarget = tab.knobs.target
         tab.knobs = {}
+        if (savedTarget) tab.knobs.target = savedTarget
       },
       setupIntent: (d, tabId: TabId, intent: 'run' | 'optimize') => { bucket(d, tabId).setupIntent = intent },
       chose: (d, tabId: TabId, id: string | null) => {
@@ -324,7 +326,11 @@ export function createRefactoryStore(): EngineStoreHandle<RefactoryState, Refact
         if (id && tab.choices.kind === 'ready') tab.selectedPackage = tab.choices.value.modes.find(mode => mode.id === id)?.package ?? null
         // Knobs belong to the selection. A one-shot belongs to its own request
         // and keeps its result even when the person selects another mode.
+        // The target knob is preserved because it is set by the target picker
+        // above the mode select and should not be silently dropped.
+        const savedTarget = tab.knobs.target
         tab.knobs = {}
+        if (savedTarget) tab.knobs.target = savedTarget
       },
       /**
        * Record one knob value a person changed.

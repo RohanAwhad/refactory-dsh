@@ -141,10 +141,6 @@ class CreateMode(Mode):
                 description="for an edit: skip original-mode execution and score comparison; "
                             "still validate the revised mode (default false)",
             ),
-            "include_uncommitted": Knob(
-                False, "bool", frozen=True,
-                description="start from the target's uncommitted changes",
-            ),
         }
 
     def build(self) -> Graph:
@@ -157,13 +153,13 @@ class CreateMode(Mode):
             # are knobs. Naming no Task and not asking for `single_shot` is refused
             # here, before the first model call.
             knobs=("name", "brief", "task_ref", "single_shot", "data_node",
-                   "revision_of", "requires_input", "smoke_timeout_s",
-                   "include_uncommitted"),
+                   "revision_of", "requires_input", "smoke_timeout_s"),
             writes=("brief.json", "research-review.txt", "strategy-review.txt", "validation.txt"),
             produces=("name", "brief", "extends", "revision_of", "intent", "validation",
                       "design_review", "api", "reference", "task_ref", "class_of_work",
                       "data_node", "requires_input", "research_review", "qa_gate",
-                      "overwatch_review", "package_root", "source_hash"),
+                      "overwatch_review", "package_root", "source_hash",
+                      "source_existed"),
             notes="read the brief, set up per-run staging, and publish to the prompts",
         ))
         graph.add(Node(

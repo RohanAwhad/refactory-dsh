@@ -374,7 +374,7 @@ Release checks exercised live CLI observation and native gate answers, pause/res
 
 ## Target selection and uncommitted changes
 
-The GUI lets a person pick a run's target repository or project from the registered projects list (the same registry as `refactory projects`). The `target` knob names the repository; an empty value starts a new project. A `ProjectPicker` select appears in the **Configure a run** section when registered projects exist.
+The GUI lets a person pick a run's target repository or project from the registered projects list (the same registry as `refactory projects`). The `target` knob names the repository; an empty value starts a new project. A target `<select>` appears in the **Configure a run** section of `RefactoryBody` when registered projects exist and the chosen mode declares the `target` parameter (design and design_fast; not create or edit).
 
 The `include_uncommitted` knob (off by default) opts a run into starting from the person's uncommitted changes. When set, modified tracked files, staged files, untracked unignored files and deleted tracked files are copied into the worktree and committed as the run's base. The run records each file with its kind and content hash. The PR's Verification says "The base included uncommitted changes from the working tree." The person's checkout is never changed.
 
@@ -384,6 +384,6 @@ When a check's command changes its working directory outside the run's worktree,
 
 ## Worktree and staging isolation
 
-Design and design_fast modes use a git worktree of the target repository, on a branch `refactory/run-<id>`. Create, create_fast, edit and edit_fast modes stage their package in a per-run directory (`<run>/.factory-staging/.factory/packages/<name>/`), so two parallel runs never collide. At registration, the staged package is copied atomically (write to a temp sibling, then rename) to the shared `.factory/packages/<name>/`. If the shared package changed since prepare, registration refuses and names the other run. Modes that only write into their run directory (loop, optimize) need no isolation.
+Design and design_fast modes use a git worktree of the target repository, on a branch `refactory/run-<id>`. Create, create_fast, edit and edit_fast modes stage their package in a per-run directory (`<run>/.factory-staging/.factory/packages/<name>/`), so two parallel runs never collide. At registration, the staged package is copied atomically (rename the old aside, rename the new in, then delete the old) to the shared `.factory/packages/<name>/`. If the shared package's state differs from what prepare recorded — including when it now exists but did not before — registration refuses, naming the other run (read from `.origin.json`). After a successful register the hash is refreshed so a reloop does not refuse itself. Modes that only write into their run directory (loop, optimize) need no isolation.
 
 [Profiles and candidate evidence](optimization-profiles.md) · [Fast modes and resource recovery](budgets-fast-modes.md) · [Worker capabilities](models.md#model-provider-versus-coding-agent)

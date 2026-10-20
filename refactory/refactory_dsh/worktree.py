@@ -402,9 +402,14 @@ def copy_uncommitted(target: Path, worktree_path: Path, run: Path) -> list[dict[
     """Copy every uncommitted change from ``target`` into ``worktree_path`` and record it.
 
     Copies modified tracked files, staged files, untracked unignored files, and deletes
-    tracked files the person deleted.  The worktree is then committed as the run's base
-    ("working-tree base for run-<id>"), so the attempts' diffs show only the run's own
-    change, and the PR's Verification lists which files came from the working tree.
+    tracked files the person deleted — including the old side of staged renames.  The
+    worktree is then committed as the run's base ("working-tree base for run-<id>"), so
+    the attempts' diffs show only the run's own change, and the PR's Verification lists
+    which files came from the working tree.
+
+    Uses ``git status --porcelain`` to capture renames (``git mv a b`` must delete ``a``
+    in the worktree) rather than separate ``--name-only --diff-filter`` calls that miss
+    the old side of a staged rename.
 
     The person's checkout is never modified.
     """
@@ -413,41 +418,63 @@ def copy_uncommitted(target: Path, worktree_path: Path, run: Path) -> list[dict[
     target = Path(target).resolve()
     worktree_path = Path(worktree_path).resolve()
     run = Path(run).resolve()
-    # Derive run_id from the worktree path, not the run directory, so it matches
-    # the convention used by create() and uncommitted_record().
     wt_name = worktree_path.name
     run_id = wt_name.removeprefix("run-") if wt_name.startswith("run-") else wt_name
 
-    # 1. Modified / staged tracked files (union of --name-only HEAD and --cached)
+    # Parse ``git status --porcelain`` for a unified view of all changes including
+    # renames, staged deletes, modified, added and untracked files.
     try:
-        modified = git(target, "diff", "--name-only", "HEAD").splitlines()
+        status_output = git(target, "status", "--porcelain")
     except ValueError:
-        modified = []
-    try:
-        staged = git(target, "diff", "--cached", "--name-only", "HEAD").splitlines()
-    except ValueError:
-        staged = []
-    # 2. Untracked unignored files
-    try:
-        untracked = git(target, "ls-files", "--others", "--exclude-standard").splitlines()
-    except ValueError:
-        untracked = []
-    # 3. Deleted tracked files
-    try:
-        deleted = git(target, "diff", "--name-only", "--diff-filter=D", "HEAD").splitlines()
-    except ValueError:
-        deleted = []
+        status_output = ""
+    # Also enumerate untracked unignored files explicitly (porcelain uses '??').
+    copy_paths: set[str] = set()
+    delete_paths: set[str] = set()
+    untracked_set: set[str] = set()
 
-    all_paths = sorted(set(modified + staged + untracked))
+    for line in status_output.splitlines():
+        if len(line) < 4:
+            continue
+        xy = line[:2]
+        rest = line[3:]
+        # Renames: "R  old -> new" or "RM old -> new"
+        if xy[0] == "R" or xy[1] == "R":
+            parts = rest.split(" -> ", 1)
+            if len(parts) == 2:
+                old, new = parts[0].strip(), parts[1].strip()
+                delete_paths.add(old)
+                copy_paths.add(new)
+            continue
+        path = rest.strip()
+        if not path:
+            continue
+        # Deleted: either index or worktree column is 'D'
+        if "D" in xy:
+            delete_paths.add(path)
+            continue
+        # Untracked
+        if xy == "??":
+            copy_paths.add(path)
+            untracked_set.add(path)
+            continue
+        # Modified, Added, etc.
+        copy_paths.add(path)
+
     entries: list[dict[str, str]] = []
 
-    for rel in all_paths:
-        if not rel.strip():
-            continue
+    # Delete files that the person deleted or renamed away.
+    for rel in sorted(delete_paths):
+        dest = worktree_path / rel
+        if dest.exists():
+            dest.unlink()
+        entries.append({"path": rel, "kind": "deleted", "sha256": ""})
+
+    # Copy files that exist in the working tree.
+    for rel in sorted(copy_paths):
         source = target / rel
         dest = worktree_path / rel
-        if rel in deleted or not source.exists():
-            # Person deleted a tracked file — delete it in the worktree too.
+        if not source.exists():
+            # The person deleted it after staging, or it's gone; treat as deleted.
             if dest.exists():
                 dest.unlink()
             entries.append({"path": rel, "kind": "deleted", "sha256": ""})
@@ -459,16 +486,8 @@ def copy_uncommitted(target: Path, worktree_path: Path, run: Path) -> list[dict[
         sha = _hl.sha256(content).hexdigest()
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(content)
-        kind = "untracked" if rel in untracked else "modified"
+        kind = "untracked" if rel in untracked_set else "modified"
         entries.append({"path": rel, "kind": kind, "sha256": sha})
-
-    # Handle pure deletions not in all_paths
-    for rel in deleted:
-        if rel.strip() and rel not in [e["path"] for e in entries]:
-            dest = worktree_path / rel
-            if dest.exists():
-                dest.unlink()
-            entries.append({"path": rel, "kind": "deleted", "sha256": ""})
 
     if not entries:
         return entries

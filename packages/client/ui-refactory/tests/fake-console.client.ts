@@ -45,6 +45,14 @@ export const PARAMETERS: RefactoryModeChoice['parameters'] = {
   },
 }
 
+/** A design-mode parameter set that includes the ``target`` knob. */
+export const DESIGN_PARAMETERS: RefactoryModeChoice['parameters'] = {
+  ...PARAMETERS,
+  target: {
+    value: '', kind: 'str', values: [], range: [null, null], frozen: true, description: 'the git repository to change',
+  },
+}
+
 /** One scored mode, as the catalogue describes it. */
 export const MODE: RefactoryModeChoice = {
   id: 'p/adaptive',
@@ -57,6 +65,20 @@ export const MODE: RefactoryModeChoice = {
   action: 'start',
   trust: 'trusted',
   parameters: PARAMETERS,
+}
+
+/** A design mode that declares ``target`` and shows the target picker. */
+export const DESIGN: RefactoryModeChoice = {
+  id: 'default_pack/design',
+  package: 'default_pack',
+  mode: 'design',
+  description: 'design and build an artifact',
+  startable: true,
+  enabled: true,
+  scored: false,
+  action: 'design',
+  trust: 'trusted',
+  parameters: DESIGN_PARAMETERS,
 }
 
 /** One authoring mode, whose `action` is the verb that runs it. */

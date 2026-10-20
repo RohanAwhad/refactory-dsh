@@ -753,17 +753,23 @@ succeed in their own staging directories.
 `project_override`), and `register()` copies atomically to the shared
 `.factory/packages/<name>/` — refusing if the shared package changed since prepare.
 
-**Test.** `test_staging_isolation.py`: two parallel creates use separate staging;
-the second to register refuses when the shared package changed.
+**Test.** `test_staging_isolation.py`: two prepares of one new name, both build, the
+second register refuses naming the first, and the first's package is intact; a reloop
+does not refuse itself; an edit whose source changed mid-run refuses.
 
 ## 21. Copy-on-register atomicity (#351)
 
 **How it works.** `register()` writes the staged package to a temporary sibling
-directory, then renames it over the target. If the rename fails, the temp is
-cleaned up. If the shared package's content hash differs from the one `prepare`
-recorded, the copy is refused.
+directory, renames the old package aside, renames the new one in, then deletes the
+old. If the swap fails, the old is put back. The registering run's id is written
+into `.origin.json` so the refusal message names the other run. After a successful
+register, `source_hash` is updated in the facts so a reloop does not refuse itself.
+`prepare_create` records both `source_hash` and `source_existed`, so register can
+refuse when a new package appears (not only when an existing one changed).
 
-**Test.** `test_staging_isolation.py:test_second_register_refuses_when_shared_changed`.
+**Test.** `test_staging_isolation.py:test_two_parallel_creates_both_build_second_register_refuses`,
+`test_reloop_register_does_not_refuse_itself`,
+`test_edit_whose_source_changed_refuses_at_register`.
 
 ---
 
