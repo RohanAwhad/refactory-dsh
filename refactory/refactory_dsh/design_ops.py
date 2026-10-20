@@ -449,10 +449,17 @@ def check_artifact(ctx: Any) -> str:
             guardedness=guardedness,
         )
         if filtered.base_environment_failure:
-            # R2: continue without excusals instead of stopping.
-            note = (f"base comparison unavailable: {filtered.base_environment_failure}; "
-                    "the attempt's results stand without excusals")
-            ctx.set_fact("base_unavailable", note)
+            if filtered.base_crashed:
+                # R2: a crash — continue without excusals, with the note.
+                note = (f"base comparison unavailable: {filtered.base_environment_failure}; "
+                        "the attempt's results stand without excusals")
+                ctx.set_fact("base_unavailable", note)
+            else:
+                # A deterministic failure — stop as today's base_environment_failure.
+                evidence.stop_unrepairable(
+                    'unavailable',
+                    f"the base check could not run: {filtered.base_environment_failure}",
+                )
 
         # Diagnose unbuilt packages from the worktree's own manifests.
         wt_path = Path(found.path)

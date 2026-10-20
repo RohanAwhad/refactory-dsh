@@ -227,6 +227,7 @@ class FilteredCheckResult:
     guardedness: dict | None
     base_failures: set[str] | None = None
     base_complete: bool = False
+    base_crashed: bool = False
 
 
 # ── three-condition excusal ──────────────────────────────────────────────
@@ -473,8 +474,10 @@ def _read_cache(run: Path, key: str) -> BaseCheckResult | None:
 
 
 def _write_cache(run: Path, key: str, result: BaseCheckResult) -> None:
-    # Never cache a result from a crash — R2: later checks get a fresh attempt.
-    if result.environment_failure:
+    # Never cache a crash result — R2: later checks get a fresh attempt.
+    # Deterministic (non-crash) environment failures ARE cached so filter_check
+    # and the next attempt do not re-prepare the base (v5 correction 2).
+    if getattr(result, '_crashed', False):
         return
     cache_dir = run / CACHE_FILE.parent
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -526,10 +529,12 @@ def run_base_check(ctx: Any, command: str, timeout: float) -> BaseCheckResult:
             # Classify: if the error text carries a signal label from
             # ensure_environment's is_signal_crash handling, treat as crash.
             is_crash = any(tok in err_str for tok in ("killed by SIG", "killed by signal"))
-            return BaseCheckResult(
+            r = BaseCheckResult(
                 ok=False, failures=set(), output=err_str, exit_code=-1,
                 environment_failure=err_str,
-            ), is_crash
+            )
+            r._crashed = is_crash  # type: ignore[attr-defined]
+            return r, is_crash
 
         home = Path(ctx.workdir).resolve() / worktree.BASE_CHECK_HOME
         home.mkdir(parents=True, exist_ok=True)
@@ -550,10 +555,12 @@ def run_base_check(ctx: Any, command: str, timeout: float) -> BaseCheckResult:
                 # Also check the problem text for signal labels (from ensure_environment).
                 is_crash = any("killed by SIG" in p or "killed by signal" in p for p in problems)
             detail = "on the base: " + "\n".join(problems)
-            return BaseCheckResult(
+            r = BaseCheckResult(
                 ok=False, failures=set(), output=detail, exit_code=-1,
                 environment_failure=detail,
-            ), is_crash
+            )
+            r._crashed = is_crash  # type: ignore[attr-defined]
+            return r, is_crash
 
         check_result = sandbox.run_command(
             command, workdir=base_path, timeout_s=timeout,
@@ -561,10 +568,12 @@ def run_base_check(ctx: Any, command: str, timeout: float) -> BaseCheckResult:
         )
         crashed_chk, sig_chk = sandbox.is_signal_crash(check_result)
         if crashed_chk:
-            return BaseCheckResult(
+            r = BaseCheckResult(
                 ok=False, failures=set(), output=f"base check command {sig_chk}",
                 exit_code=-1, environment_failure=f"base check command {sig_chk}",
-            ), True
+            )
+            r._crashed = True  # type: ignore[attr-defined]
+            return r, True
 
         output = "\n".join(
             (check_result.stdout or "", check_result.stderr or "")
@@ -589,8 +598,9 @@ def run_base_check(ctx: Any, command: str, timeout: float) -> BaseCheckResult:
             remove_base_worktree(Path(found.target), run_id)
         (ctx.workdir / CACHE_FILE).unlink(missing_ok=True)
         result, is_crash = _try_base()
-        if result.environment_failure:
-            # Double failure — do NOT cache, so later checks get a fresh attempt.
+        if is_crash and result.environment_failure:
+            # Double crash — do NOT cache, so later checks get a fresh attempt.
+            result._crashed = True  # type: ignore[attr-defined]
             return result
 
     _write_cache(ctx.workdir, key, result)
@@ -769,6 +779,7 @@ def filter_check(
             guardedness=guardedness,
             base_failures=None,
             base_complete=False,
+            base_crashed=getattr(base_result, '_crashed', False),
         )
 
     # Parse the attempt's failures
