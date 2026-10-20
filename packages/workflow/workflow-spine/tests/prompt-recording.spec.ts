@@ -192,6 +192,50 @@ describe('CEO-dispatched prompt recording and validation (#347, C2)', () => {
     expect(result.isError).toBe(false)
   })
 
+  it('wf_done refuses for any node when reviewer list cannot be fetched (fail-closed) (#347, C2)', async () => {
+    const workdir = scratch()
+    // Stub that fails on the 'reviewers' action
+    const scriptDir = scratch()
+    const script = join(scriptDir, 'agent-bridge-no-reviewers')
+    writeFileSync(script, `#!/usr/bin/env python3
+import sys, json
+req = json.load(sys.stdin)
+action = req.get("action", "")
+if action == "begin":
+    print(json.dumps({"prompt": req.get("prompt", ""), "id": "test", "node": req.get("node", "")}))
+elif action == "finish":
+    print(json.dumps({"status": "delivered"}))
+elif action == "invalidate":
+    print(json.dumps({"requested": []}))
+elif action == "reviewers":
+    print(json.dumps({"error": "cannot read reviewers"}), file=sys.stderr)
+    sys.exit(1)
+else:
+    print(json.dumps({"error": "unknown action"}), file=sys.stderr)
+    sys.exit(1)
+`)
+    chmodSync(script, 0o755)
+
+    const root = new Context()
+    await root.plugin(SystemPrompt)
+    await root.plugin(ToolRuntime)
+    registerStubs(root)
+    await root.plugin(spinePlugin, configuredConfig({
+      graph: PLAIN_GRAPH, workdir, agentCommand: script,
+    }))
+
+    // Advance so the node is due and delivery context is established
+    await root.tools.get('wf_next')!.execute({}, {} as never)
+
+    // Do NOT record any CEO prompt — go directly to wf_done.
+    // Because the reviewer list fetch fails, emit is treated as a reviewer (fail-closed)
+    // and no matching CEO prompt is found, so wf_done is refused.
+    const result = await executeTool(root, 'wf_done', { node: 'emit' })
+    expect(result.isError).toBe(true)
+    const text = result.content.map(c => c.text).join('')
+    expect(text).toContain('wf_done refused')
+  })
+
   it('wf_done refuses when a rewritten retry follows a faithful first dispatch (#347, C2)', async () => {
     const workdir = scratch()
     const stub = agentStub(workdir)

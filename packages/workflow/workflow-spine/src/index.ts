@@ -771,7 +771,8 @@ export function apply(ctx: Context, config: Config): void {
   })
 
   // Reviewer node ids, fetched once from the runtime bridge and cached.
-  let reviewerIds: Set<string> | undefined
+  // undefined = not yet fetched; null = fetch failed, treat all nodes as reviewers (fail closed).
+  let reviewerIds: Set<string> | null | undefined
   // Pending delivery prompts, cached per node at begin time.
   const pendingPrompts = new Map<string, string>()
 
@@ -1880,12 +1881,12 @@ export function apply(ctx: Context, config: Config): void {
             reviewerIds = new Set(Array.isArray(list) ? list.map(String) : [])
           } catch {
             // Fail closed: if we cannot read the reviewer list, treat all nodes as reviewers
-            reviewerIds = new Set()
+            reviewerIds = null
           }
         }
         // Validate prompt for reviewer nodes
         let sentPromptHash: string | undefined
-        if (reviewerIds.has(args.node)) {
+        if (reviewerIds === null || reviewerIds.has(args.node)) {
           // Fail closed: re-read prompt.txt from the pending delivery when
           // the in-memory cache is empty (e.g. after a restart).
           let pending = pendingPrompts.get(args.node)

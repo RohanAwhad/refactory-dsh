@@ -762,16 +762,18 @@ sends through `subagent`, `subagent_fork`, and `send_message`, keyed by session 
 node. Prompts are cleared on delivery completion and redispatch so an earlier faithful
 prompt cannot satisfy a rewritten retry. For review and audit nodes, `wf_done` refuses
 completion unless a recorded prompt contains the pending delivery's prompt.txt. The
-spine fails closed: when the in-memory prompt cache is empty after a restart, it
-re-reads `prompt.txt` from the pending delivery via a bridge action. The receipt records
+spine fails closed: when the reviewer list cannot be fetched, all nodes are treated as
+reviewers; when the in-memory prompt cache is empty after a restart, it re-reads
+`prompt.txt` from the pending delivery via a bridge action. The receipt records
 `prompt_hash` and `sent_prompt_hash` before writing `receipt.json`.
 
 **Held by.** `test_agent_delivery.py`: `test_main_bridge_renders_templates_before_begin`,
 `test_main_bridge_refuses_unrendered_templates`,
 `test_main_bridge_accepts_templates_inside_substituted_values`,
 `test_receipt_records_prompt_hash`,
-`test_reviewers_action_returns_reviewers_list`. `prompt-recording.spec.ts`: four tests
-for wf_done validation of reviewer nodes including rewritten-retry refusal.
+`test_reviewers_action_returns_reviewers_list`. `prompt-recording.spec.ts`: five tests
+for wf_done validation of reviewer nodes including rewritten-retry refusal and
+reviewer-list-fetch fail-closed behavior.
 
 ## 13. Sacred Rules 8 and 9
 
