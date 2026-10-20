@@ -1133,6 +1133,8 @@ def register(ctx: Any) -> dict[str, Any]:
                 f"but it is gone now; another run deleted it. "
                 f"This run's staged package is kept at {staging_root} for inspection."
             )
+        # Record the source-versus-staged diff for reviewers before copying.
+        _record_staging_diff(ctx, Path(staging_root))
         # Write this run's id into the staged .origin.json before copying.
         _stamp_origin_run_id(Path(staging_root), ctx.workdir)
         # Atomic swap: write to a sibling temp dir, rename the old aside, rename
@@ -1181,6 +1183,82 @@ def register(ctx: Any) -> dict[str, Any]:
         # not the per-run staging copy that register already consumed.
         result["package_path"] = str(registry.workspace_root(project_for_nodes()) / name)
     return result
+
+
+def _record_staging_diff(ctx: Any, staged_root: Path) -> None:
+    """Record the diff between the source package and the staged result for reviewers.
+
+    ``prepare_create`` saves a snapshot of the source package's files in
+    ``staging/source-snapshot.json``.  This function compares that snapshot with
+    the staged package (after ``materialise`` wrote into it) and writes a
+    structured diff to ``staging/package-diff.json`` so reviewers can see exactly
+    what the run changed.  For a new create every file is ``added``; for an edit
+    the diff shows modifications, additions and deletions.
+    """
+    import difflib
+
+    source_snapshot: dict[str, str | None] = ctx.read_json(
+        f"{STAGING}/source-snapshot.json", {}
+    )
+    staged_files: dict[str, str | None] = {}
+    for path in sorted(staged_root.rglob("*")):
+        if path.is_file():
+            rel = str(path.relative_to(staged_root))
+            try:
+                staged_files[rel] = path.read_text()
+            except (UnicodeDecodeError, OSError):
+                staged_files[rel] = None
+
+    all_paths = sorted(set(source_snapshot) | set(staged_files))
+    if not all_paths:
+        return
+
+    changes: list[dict[str, str]] = []
+    diff_lines: list[str] = []
+    for rel in all_paths:
+        old_content = source_snapshot.get(rel)
+        new_content = staged_files.get(rel)
+        in_source = rel in source_snapshot
+        in_staged = rel in staged_files
+
+        if not in_source:
+            changes.append({"path": rel, "kind": "added"})
+            diff_lines.append(f"--- /dev/null")
+            diff_lines.append(f"+++ staged/{rel}")
+            if new_content is not None:
+                for line in new_content.splitlines():
+                    diff_lines.append(f"+{line}")
+            diff_lines.append("")
+        elif not in_staged:
+            changes.append({"path": rel, "kind": "deleted"})
+            diff_lines.append(f"--- source/{rel}")
+            diff_lines.append(f"+++ /dev/null")
+            if old_content is not None:
+                for line in old_content.splitlines():
+                    diff_lines.append(f"-{line}")
+            diff_lines.append("")
+        elif old_content != new_content:
+            changes.append({"path": rel, "kind": "modified"})
+            if old_content is not None and new_content is not None:
+                diff = difflib.unified_diff(
+                    old_content.splitlines(keepends=True),
+                    new_content.splitlines(keepends=True),
+                    fromfile=f"source/{rel}",
+                    tofile=f"staged/{rel}",
+                )
+                diff_lines.extend(line.rstrip("\n") for line in diff)
+            else:
+                diff_lines.append(f"--- source/{rel} (binary)")
+                diff_lines.append(f"+++ staged/{rel} (binary)")
+                diff_lines.append("Binary files differ")
+            diff_lines.append("")
+
+    ctx.write_json(f"{STAGING}/package-diff.json", {
+        "source_file_count": len(source_snapshot),
+        "staged_file_count": len(staged_files),
+        "changes": changes,
+        "diff": "\n".join(diff_lines),
+    })
 
 
 def _origin_run_id(shared: Path) -> str:
@@ -1248,11 +1326,24 @@ def prepare_create(ctx: Any) -> dict[str, Any]:
     source_hash = ""
     source_existed = False
     shared = registry.workspace_root(project_for_nodes()) / name
+
+    # Snapshot the source package's files so register() can record a diff for
+    # reviewers.  For a new create the snapshot is empty; for edit it captures
+    # every file in the shared package before the run touches it.
+    source_files: dict[str, str | None] = {}
     if shared.is_dir():
         # Copy existing package as the starting point for an edit.
         shutil.copytree(shared, pkg_root, dirs_exist_ok=True)
         source_hash = _dir_hash(shared)
         source_existed = True
+        for _src_path in sorted(shared.rglob("*")):
+            if _src_path.is_file():
+                _rel = str(_src_path.relative_to(shared))
+                try:
+                    source_files[_rel] = _src_path.read_text()
+                except (UnicodeDecodeError, OSError):
+                    source_files[_rel] = None  # binary or unreadable
+    ctx.write_json(f"{STAGING}/source-snapshot.json", source_files)
 
     return {
         **prepared,
