@@ -62,7 +62,7 @@ describe('the target picker', () => {
   })
 
   it('preserves the target knob when a mode is chosen', () => {
-    const { view, instance } = mountBody({
+    const { instance } = mountBody({
       choices: { kind: 'ready', value: CHOICES },
     })
     // First pick a design mode and set target.
