@@ -23,6 +23,11 @@ from refactory_dsh import design_contract, design_ops, repo_change
 from refactory_dsh.create_ops import repair
 from refactory_dsh.fast_ops import _repair as fast_repair
 from refactory_dsh.nn import Verdict
+from refactory_dsh.design import DesignMode
+from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+                           PITFALLS_ANSWER, RESEARCH_ANSWER,
+                           REVIEW_ANSWERS, FakeModel as _FakeModel,
+                           git_repo as _git_repo, render as _render)
 
 # ── helpers ────────────────────────────────────────────────────────────────
 
@@ -139,27 +144,45 @@ def test_is_signal_crash_none_returncode():
     assert crashed is False
 
 
-# ── R1: signal-killed install (via ensure_environment) ─────────────────────
+# ── R1: signal-killed install (via scripted design run) ────────────────────
+
+
+def _design_answers(*emits: str) -> list[str]:
+    """Every answer a design run needs, in the order its graph asks."""
+    return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
+            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits, *REVIEW_ANSWERS]
+
+
+def _design_run(workdir, model, target):
+    """Run a scripted design run, like the design-worktree tests do."""
+    return DesignMode().run(
+        workdir, model=model,
+        verdicts={"gate_strategy": "proceed"},
+        task={"name": "r1_test", "brief": "a tool", "check": "python tool.py",
+              "target": str(target)},
+    )
 
 
 def test_signal_killed_install_once_then_passing_spends_no_attempt(tmp_path, monkeypatch):
     """An install killed by SIGABRT once, then passing, spends no attempt.
 
-    run_command retries once internally for rc < 0 or rc in {134, 135, 139}.
-    This test uses a counter file outside HOME: the first call kills itself,
-    and because the flag file now exists, the retry (inside run_command) passes.
-    Driven through check_artifact to show the outcome at the node level.
+    Driven as a scripted design run (research → design → emit → check → reviews).
+    The stub uv crashes on its first call (SIGABRT, exit 134).  run_command
+    retries once internally; the retry sees the flag file, creates .venv
+    normally and exits 0.  The run completes with one attempt — the crash
+    cost nothing.
     """
     counter_dir = tempfile.mkdtemp(prefix="r1_")
     counter_file = os.path.join(counter_dir, "flag")
-    repo = _git_init(tmp_path / "repo")
-    _commit_file(repo, "pyproject.toml", "[project]\nname = 'app'\n")
-    # Write a trivial passing check script.
-    _commit_file(repo, "check.sh", "#!/bin/sh\necho ok\n")
-    run_dir = tmp_path / "run"
-    found = _make_worktree(repo, run_dir, "HEAD")
 
-    # Stub uv with a script that crashes once, then passes.
+    repo = _git_repo(tmp_path / "repo")
+    (repo / "pyproject.toml").write_text("[project]\nname = 'app'\n")
+    subprocess.run(["git", "-C", str(repo), "add", "pyproject.toml"],
+                   capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "manifest"],
+                   capture_output=True, check=True)
+
+    # Stub uv: crash once (SIGABRT), then create .venv and pass.
     stub_bin = tmp_path / "stub_bin"
     stub_bin.mkdir()
     uv_script = stub_bin / "uv"
@@ -170,40 +193,40 @@ def test_signal_killed_install_once_then_passing_spends_no_attempt(tmp_path, mon
         f'  touch "$f"\n'
         f'  kill -ABRT $$\n'
         f'fi\n'
+        f'mkdir -p .venv/bin\n'
+        f"printf '#!/bin/sh\\necho stub-python\\n' > .venv/bin/python\n"
+        f'chmod +x .venv/bin/python\n'
     )
     uv_script.chmod(0o755)
     monkeypatch.setenv("PATH", f"{stub_bin}{os.pathsep}{os.environ['PATH']}")
 
-    # Drive through check_artifact (the check node's callable).
-    ctx = _Ctx(run_dir, facts={
-        "check": "sh check.sh",
-        "name": "r1_test",
-    }, knobs={"check_attempts": "3", "attempts": "3"})
-    ctx.write_text("design.md", "# R1 test\n\n## Summary\n\ntest.\n\n## Rule and sites\n\n## Docs\n\n## Changes\n\n")
-
-    # ensure_environment is called inside run_check → _check_in_worktree.
-    # The install crashes once, run_command retries internally, retry passes.
-    # check_artifact should proceed — no attempt spent on the crash.
-    result = design_ops.check_artifact(ctx)
-    assert result == "proceed" or isinstance(result, Verdict), f"unexpected result: {result}"
-    # If the check itself passes, no attempt was spent.
-    if result == "proceed":
-        assert not ctx.facts.get("attempts_used"), "a passing check must not spend an attempt"
+    emit = _render({"tool.py": "print('built')\n"})
+    result = _design_run(tmp_path / "run", _FakeModel(_design_answers(emit)), repo)
+    assert result.exit_ok, f"run failed unexpectedly: {result.error}"
+    found = worktree.recorded(tmp_path / "run")
+    count = subprocess.run(
+        ["git", "-C", str(found.target), "rev-list", "--count",
+         f"{found.base}..{found.branch}"],
+        capture_output=True, text=True, check=True).stdout.strip()
+    assert count == "1", f"expected 1 attempt (no extra from crash), got {count}"
 
 
 def test_signal_killed_install_twice_stops_as_infrastructure(tmp_path, monkeypatch):
     """An install killed twice stops as infrastructure naming the signal.
 
-    Driven through check_artifact to show the run stops as infrastructure,
-    not code_failure — ValueError is raised with the signal name.
+    Driven as a scripted design run.  The stub uv always crashes with SIGABRT.
+    run_command retries once, gets another crash.  is_signal_crash detects it
+    and normalises the return code.  The run stops as infrastructure (ValueError,
+    not code_failure) and names the signal.
     """
-    repo = _git_init(tmp_path / "repo")
-    _commit_file(repo, "pyproject.toml", "[project]\nname = 'app'\n")
-    _commit_file(repo, "check.sh", "#!/bin/sh\necho ok\n")
-    run_dir = tmp_path / "run"
-    found = _make_worktree(repo, run_dir, "HEAD")
+    repo = _git_repo(tmp_path / "repo")
+    (repo / "pyproject.toml").write_text("[project]\nname = 'app'\n")
+    subprocess.run(["git", "-C", str(repo), "add", "pyproject.toml"],
+                   capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "manifest"],
+                   capture_output=True, check=True)
 
-    # Stub uv with a script that always crashes.
+    # Stub uv: always crashes with SIGABRT.
     stub_bin = tmp_path / "stub_bin"
     stub_bin.mkdir()
     uv_script = stub_bin / "uv"
@@ -211,20 +234,11 @@ def test_signal_killed_install_twice_stops_as_infrastructure(tmp_path, monkeypat
     uv_script.chmod(0o755)
     monkeypatch.setenv("PATH", f"{stub_bin}{os.pathsep}{os.environ['PATH']}")
 
-    ctx = _Ctx(run_dir, facts={
-        "check": "sh check.sh",
-        "name": "r1_test",
-    }, knobs={"check_attempts": "3", "attempts": "3"})
-    ctx.write_text("design.md", "# R1 test\n\n## Summary\n\ntest.\n\n## Rule and sites\n\n## Docs\n\n## Changes\n\n")
-
-    # check_artifact → run_check → _check_in_worktree → ensure_environment
-    # The install always crashes.  check_failure_kind returns 'uncertain',
-    # stop_unrepairable raises ValueError — infrastructure stop.
-    with pytest.raises(ValueError) as exc_info:
-        design_ops.check_artifact(ctx)
-    # The error message must name the signal.
-    assert "SIGABRT" in str(exc_info.value) or "killed by" in str(exc_info.value).lower(), (
-        f"infrastructure stop must name the signal: {exc_info.value}"
+    emit = _render({"tool.py": "print('built')\n"})
+    result = _design_run(tmp_path / "run", _FakeModel(_design_answers(emit, emit)), repo)
+    assert result.exit_ok is False
+    assert "SIGABRT" in (result.error or "") or "killed by" in (result.error or "").lower(), (
+        f"infrastructure stop must name the signal: {result.error}"
     )
 
 
