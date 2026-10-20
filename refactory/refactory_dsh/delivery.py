@@ -95,6 +95,10 @@ TITLE_LIMIT = 72
 VERIFY_ATTEMPTS = 5
 VERIFY_WAIT_S = 2.0
 
+#: The callable names of delivery's entry points, used by graph_control to find
+#: the deliver node by its callable rather than by its id or a command substring.
+DELIVER_ENTRY_POINTS = frozenset({"refactory_dsh.delivery:deliver_design"})
+
 
 #: A GitHub remote: HTTPS, with or without a user, or SSH in either spelling.
 _REMOTE = re.compile(r"^(?:https://(?:[^@/]+@)?github\.com/|(?:ssh://)?git@github\.com[:/])"
@@ -798,6 +802,10 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
     if found is None:
         return _kept(ctx, approved, found, str(approved.get("why") or "it was never planned"),
                      title="", finish=[])
+
+    # Verify the worktree's git link before recovery: a worktree whose .git was
+    # repointed must be refused before git reset --hard runs in it.
+    worktree.verify_git_link(found)
 
     # Recover from an interrupted merge before require_current checks HEAD.
     _recover_interrupted_merge(found)

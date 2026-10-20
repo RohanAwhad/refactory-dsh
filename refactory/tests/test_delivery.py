@@ -699,6 +699,58 @@ def test_deliver_design_recovers_own_merge(tmp_path, monkeypatch):
         delivery.deliver_design(ctx)
 
 
+def test_verify_git_link_refuses_mislinked_worktree(tmp_path):
+    """A worktree whose .git points at the repository's own git directory
+    is refused by verify_git_link, even when HEAD is at delivery's own merge.
+
+    This prevents _recover_interrupted_merge from resetting a worktree
+    that was repointed at the person's repository.
+    """
+    import subprocess as sp
+    repo = _git_init(tmp_path / "repo")
+    (repo / "f.txt").write_text("a\n")
+    sp.run(["git", "-C", str(repo), "add", "."], capture_output=True, check=True)
+    sp.run(["git", "-C", str(repo), "commit", "-m", "reviewed"], capture_output=True, check=True)
+    reviewed = sp.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                      capture_output=True, text=True, check=True).stdout.strip()
+
+    sp.run(["git", "-C", str(repo), "checkout", "-b", "main-tip"], capture_output=True, check=True)
+    (repo / "g.txt").write_text("b\n")
+    sp.run(["git", "-C", str(repo), "add", "."], capture_output=True, check=True)
+    sp.run(["git", "-C", str(repo), "commit", "-m", "tip"], capture_output=True, check=True)
+
+    # Create a proper worktree at the reviewed commit
+    wt_path = tmp_path / "wt"
+    sp.run(["git", "-C", str(repo), "worktree", "add", "-b", "run-branch",
+            str(wt_path), reviewed], capture_output=True, check=True)
+
+    # Merge in the worktree (simulating delivery's own merge)
+    sp.run(["git", "-C", str(wt_path), "merge", "--no-ff", "--no-edit", "main-tip"],
+           capture_output=True, check=True)
+    merge_sha = sp.run(["git", "-C", str(wt_path), "rev-parse", "HEAD"],
+                       capture_output=True, text=True, check=True).stdout.strip()
+    assert merge_sha != reviewed
+
+    # Repoint the worktree's .git to the repo's own git dir
+    repo_git_dir = sp.run(["git", "-C", str(repo), "rev-parse", "--absolute-git-dir"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    (wt_path / ".git").write_text(f"gitdir: {repo_git_dir}\n")
+
+    found = worktree.Worktree(
+        path=str(wt_path), branch="run-branch", base=reviewed,
+        head=reviewed, target=str(repo), run=str(tmp_path / "run"),
+    )
+
+    # verify_git_link refuses the mislinked worktree
+    with pytest.raises(ValueError, match="no longer points at its own git directory"):
+        worktree.verify_git_link(found)
+
+    # HEAD is unchanged — git reset --hard was never called
+    after = sp.run(["git", "-C", str(wt_path), "rev-parse", "HEAD"],
+                   capture_output=True, text=True, check=True).stdout.strip()
+    assert after == merge_sha
+
+
 @pytest.fixture
 def github(tmp_path, monkeypatch) -> Path:
     """GitHub, as far as delivery can tell: gh logged in as `octo`, repositories on disk."""

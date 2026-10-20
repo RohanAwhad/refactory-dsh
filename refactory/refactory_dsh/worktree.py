@@ -453,6 +453,23 @@ def _tracked_edits(path: Path) -> list[str]:
     return sorted(entry[3:] for entry in listing.split("\0") if len(entry) > 3)
 
 
+def verify_git_link(found: Worktree) -> None:
+    """Refuse a worktree whose ``.git`` does not point at its target's worktree directory.
+
+    Extracted from :func:`_require_current` so delivery can verify the link
+    before running ``git reset --hard`` in ``_recover_interrupted_merge``.
+    A worktree whose ``.git`` was repointed at the person's repository must be
+    refused before any mutating git command runs in it.
+    """
+    path = Path(found.path)
+    if not path.is_dir():
+        return  # the worktree does not exist; _require_current will re-add it
+    common = Path(git(Path(found.target), "rev-parse", "--path-format=absolute", "--git-common-dir").strip())
+    if Path(git(path, "rev-parse", "--absolute-git-dir").strip()).parent != common / "worktrees":
+        raise ValueError(f"the run's worktree {path} no longer points at its own git directory; "
+                         "nothing was changed")
+
+
 def _require_current(found: Worktree) -> None:
     """Refuse a worktree whose HEAD moved outside the run's own steps; add back one pruned.
 
@@ -465,10 +482,7 @@ def _require_current(found: Worktree) -> None:
             raise ValueError(f"the run's worktree {path} and its branch {found.branch} are both gone, "
                              "so its attempts are too; start the run again")
         _readd(Path(found.target), path, found.branch)
-    common = Path(git(Path(found.target), "rev-parse", "--path-format=absolute", "--git-common-dir").strip())
-    if Path(git(path, "rev-parse", "--absolute-git-dir").strip()).parent != common / "worktrees":
-        raise ValueError(f"the run's worktree {path} no longer points at its own git directory; "
-                         "nothing was changed")
+    verify_git_link(found)
     head = git(path, "rev-parse", "HEAD").strip()
     if head != found.head:
         raise ValueError(

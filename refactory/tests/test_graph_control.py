@@ -773,6 +773,7 @@ def _make_run_dir_with_deliver(tmp_path: Path, *, status: str = 'done',
                 'emit': {'_type': 'AgentNode', 'id': 'emit', 'role': 'builder',
                          'prompt_template': 'E', 'reads': [], 'writes': []},
                 'deliver': {'_type': 'FnNode', 'id': 'deliver',
+                            'callable_name': 'refactory_dsh.delivery:deliver_design',
                             'command': 'dsh-run refactory_dsh.delivery:deliver_design',
                             'reads': [], 'writes': []},
             },
@@ -890,3 +891,57 @@ def test_rerun_text_on_agent_node_not_refused_by_text_check(tmp_path):
     except ValueError as exc:
         # It should NOT be the text check error
         assert 'this node takes no text' not in str(exc)
+
+
+def test_redeliver_finds_deliver_by_callable_not_id(tmp_path):
+    """redeliver finds the deliver node by callable_name, so a mode whose
+    deliver node has another id still works.
+    """
+    root = tmp_path
+    refactory_dir = root / '.refactory'
+    refactory_dir.mkdir(parents=True, exist_ok=True)
+    (refactory_dir / 'spine-status.json').write_text(json.dumps({'status': 'done'}))
+
+    checkpoint: dict[str, Any] = {
+        'status': 'done',
+        'run_id': str(root),
+        'graph': {
+            'name': 'custom-mode',
+            'nodes': {
+                'ship_it': {'_type': 'FnNode', 'id': 'ship_it',
+                            'callable_name': 'refactory_dsh.delivery:deliver_design',
+                            'command': 'dsh-run refactory_dsh.delivery:deliver_design',
+                            'reads': [], 'writes': []},
+            },
+            'edges': [],
+        },
+        'state': {
+            'cursor': [],
+            'completed': ['ship_it'],
+            'skipped': [],
+            'pause_before': [],
+            'gate_verdicts': {},
+            'iterations': {},
+            'feedback': {},
+            'gate_reasons': {},
+            'afters': [],
+            'prompts': {},
+            'log': [],
+        },
+        'file_fingerprints': {},
+        'owner_pid': _dead_pid(),
+    }
+    (refactory_dir / 'spine-checkpoint.json').write_text(json.dumps(checkpoint))
+    (refactory_dir / 'run-config.json').write_text(json.dumps({
+        'mode': 'custom/mode', 'project': str(root),
+        'configuration_fingerprints': {},
+    }))
+    (refactory_dir / 'invocation.json').write_text(json.dumps({'id': 'test-inv'}))
+    (root / 'facts.json').write_text(json.dumps({'name': 'test'}))
+
+    with patch('refactory_dsh.graph_control.recovery.start',
+               return_value={'action': 'resume', 'status': 'queued', 'pid': 1}):
+        result = graph_control.request(root, 'redeliver')
+
+    assert result['target'] == 'ship_it'
+    assert result['source'] == 'redeliver'

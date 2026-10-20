@@ -446,6 +446,27 @@ def _find_rerun_target(saved: dict[str, Any], node: str = '') -> str:
     raise ValueError(f'name the node to rerun with --node: the run has {len(cursor)} due node(s) ({due})')
 
 
+def _find_deliver_node(graph_nodes: dict[str, Any]) -> str | None:
+    """The deliver node's id, found by its callable from ``delivery.DELIVER_ENTRY_POINTS``.
+
+    Checks ``callable_name`` first (set by lowering) and falls back to
+    the ``command`` field for older checkpoints that lack the field.
+    """
+    from refactory_dsh.delivery import DELIVER_ENTRY_POINTS
+
+    for nid, ndata in graph_nodes.items():
+        if not isinstance(ndata, dict):
+            continue
+        call = ndata.get('callable_name') or ''
+        if call in DELIVER_ENTRY_POINTS:
+            return nid
+        cmd = ndata.get('command') or ''
+        for ep in DELIVER_ENTRY_POINTS:
+            if ep in cmd:
+                return nid
+    return None
+
+
 def _redeliver(root: Path, saved: dict[str, Any], current_revision: str) -> dict[str, Any]:
     """Merge current main, regenerate, re-check and push in one command.
 
@@ -454,21 +475,13 @@ def _redeliver(root: Path, saved: dict[str, Any], current_revision: str) -> dict
     deliver node, the checkpoint-bound acknowledgement is passed
     automatically, as ``rerun --acknowledge-failure`` does.
     """
-    from refactory_dsh import recovery
-
     spine_status = read(root / '.refactory/spine-status.json').get('status', '')
     if spine_status not in OWNER_STOPPED:
         raise ValueError(f'redeliver requires a stopped run (status: {spine_status!r})')
 
-    # Find the deliver node
+    # Find the deliver node by its callable, not by its id
     graph_nodes = saved.get('graph', {}).get('nodes', {})
-    deliver_node_id = None
-    for nid, ndata in graph_nodes.items():
-        if isinstance(ndata, dict):
-            cmd = ndata.get('command', '')
-            if 'delivery:deliver' in cmd or nid == 'deliver':
-                deliver_node_id = nid
-                break
+    deliver_node_id = _find_deliver_node(graph_nodes)
     if deliver_node_id is None:
         raise ValueError('this run has no deliver node')
 
