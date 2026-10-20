@@ -2002,6 +2002,11 @@ def test_finish_commands_work_with_special_characters_in_title(github, tmp_path)
     tricky_design = (
         "# Fix the audit's `gate` and $PATH handling\n\n"
         "## Summary\n\nFix it properly.\n\n"
+        "## Failure trace\n\nN/A — this is a new feature.\n\n"
+        "## Ask mapping\n\n"
+        "| Ask (quoted from brief) | Design section | Test |\n"
+        "|---|---|---|\n"
+        '| "gate" | § Changes | test_tool.py |\n\n'
         "## Rule and sites\n\n"
         "- `tool.py:1` — **[changed]**\n\n"
         "## Docs\n\n"
@@ -2016,6 +2021,7 @@ def test_finish_commands_work_with_special_characters_in_title(github, tmp_path)
     answers = [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
                tricky_design, DESIGN_REVIEW_ANSWER,
                render({"tool.py": "print('built')\n"}),
+               VERIFICATION_ANSWER,
                *REVIEW_ANSWERS]
     model = FakeModel(answers)
     result = _mode(pr=False).run(

@@ -91,6 +91,7 @@ def wire_verification(graph: Any, *, fast: bool = False) -> None:
         writes=("reviews/verification.md",),
         produces=("verification",),
         role="code_reviewer",
+        resource_role="final_validation" if fast else None,
         notes="design-blind verification: apply the evidence log's methods to the brief, diff and repo",
     ))
 
@@ -98,6 +99,7 @@ def wire_verification(graph: Any, *, fast: bool = False) -> None:
         graph.add(Node(
             "gate_verification", "gate",
             evaluator=f"{OPS_FAST}:gate_verification",
+            resource_role="final_validation",
             reads=("reviews/verification.md",),
             writes=("reviews/verification-gate.txt", "fast-report.json", "repair.txt"),
             produces=("verification_gate", "repair_feedback", "repairs_used",

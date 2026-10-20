@@ -298,6 +298,11 @@ def test_the_check_runs_without_the_real_credentials(tmp_path):
 _CONTRACT_DESIGN = (
     "# Do the thing\n\n"
     "## Summary\n\nFix it.\n\n"
+    "## Failure trace\n\nN/A — this is a new feature.\n\n"
+    "## Ask mapping\n\n"
+    "| Ask (quoted from brief) | Design section | Test |\n"
+    "|---|---|---|\n"
+    '| "do a thing" | § Changes | test.py |\n\n'
     "## Rule and sites\n\n"
     "- `file.py:1` — **[changed]**\n\n"
     "## Docs\n\n"
@@ -312,6 +317,11 @@ def _contract_design(body: str = "") -> str:
     return (
         "# Do the thing\n\n"
         "## Summary\n\nFix it.\n\n"
+        "## Failure trace\n\nN/A — this is a new feature.\n\n"
+        "## Ask mapping\n\n"
+        "| Ask (quoted from brief) | Design section | Test |\n"
+        "|---|---|---|\n"
+        '| "do a thing" | § Changes | test.py |\n\n'
         "## Rule and sites\n\n"
         "- `file.py:1` — **[changed]**\n\n"
         "## Docs\n\n"
@@ -548,6 +558,11 @@ def test_design_review_gate_accepts_backticked_marker(tmp_path):
     design = (
         "# Do the thing\n\n"
         "## Summary\n\nFix it.\n\n"
+        "## Failure trace\n\nN/A — this is a new feature.\n\n"
+        "## Ask mapping\n\n"
+        "| Ask (quoted from brief) | Design section | Test |\n"
+        "|---|---|---|\n"
+        '| "do a thing" | § Changes | test.py |\n\n'
         "## Rule and sites\n\n"
         "- `file.py:1` — `[changed]`\n\n"
         "## Docs\n\n- docs/models.md\n\n"
@@ -570,6 +585,11 @@ def test_design_review_gate_accepts_colon_description_marker(tmp_path):
     design = (
         "# Do the thing\n\n"
         "## Summary\n\nFix it.\n\n"
+        "## Failure trace\n\nN/A — this is a new feature.\n\n"
+        "## Ask mapping\n\n"
+        "| Ask (quoted from brief) | Design section | Test |\n"
+        "|---|---|---|\n"
+        '| "do a thing" | § Changes | test.py |\n\n'
         "## Rule and sites\n\n"
         "- `file.py:1` — [changed: also reads command_history]\n\n"
         "## Docs\n\n- docs/models.md\n\n"
@@ -616,6 +636,11 @@ def test_design_review_gate_marked_site_with_bracket_words_no_problem(tmp_path):
     design = (
         "# Do the thing\n\n"
         "## Summary\n\nFix it.\n\n"
+        "## Failure trace\n\nN/A — this is a new feature.\n\n"
+        "## Ask mapping\n\n"
+        "| Ask (quoted from brief) | Design section | Test |\n"
+        "|---|---|---|\n"
+        '| "do a thing" | § Changes | test.py |\n\n'
         "## Rule and sites\n\n"
         "- `file.py:1` — **[changed]** updates [test] and see [list](x.md)\n\n"
         "## Docs\n\n- docs/models.md\n\n"
