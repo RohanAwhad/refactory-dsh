@@ -384,9 +384,10 @@ def test_pin_preparation_does_not_touch_driver_hooks(tmp_path: Path, monkeypatch
     if hooks_dir.is_dir():
         hooks_after = {f.name: f.read_bytes() for f in hooks_dir.iterdir() if f.is_file()}
 
-    # Only extensions.worktreeConfig is allowed to be added.
+    # Only extensions.worktreeConfig (and its [extensions] section header)
+    # is allowed to be added.
     for line in config_after.splitlines():
-        if line.strip() not in config_before and "worktreeconfig" not in line.lower():
+        if line.strip() not in config_before and "worktreeconfig" not in line.lower() and "extensions" not in line.lower():
             pytest.fail(f"unexpected config change: {line}")
 
     assert hooks_before == hooks_after, "driver hooks were modified"
@@ -595,8 +596,14 @@ def test_resume_through_recovery_start(tmp_path: Path, monkeypatch: pytest.Monke
     recovery.start(run_dir)
 
     # The supervisor should be started with the pin's Python.
+    # detect_drift's _git_rev_parse goes through subprocess.run, which
+    # internally calls the monkeypatched Popen with a git command, so
+    # the supervisor start is not necessarily the first captured call.
     assert len(captured_argv) > 0
-    assert captured_argv[0][0] == str(pin_checkout / ".venv" / "bin" / "python")
+    supervisor_cmds = [a for a in captured_argv
+                       if a[0] != "git" and "-m" in a and "refactory_dsh.supervisor" in a]
+    assert len(supervisor_cmds) > 0, f"no supervisor Popen found in {captured_argv}"
+    assert supervisor_cmds[0][0] == str(pin_checkout / ".venv" / "bin" / "python")
 
 
 def test_repo_guard_detects_session_worktree(tmp_path: Path) -> None:
