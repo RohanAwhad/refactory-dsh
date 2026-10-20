@@ -655,9 +655,10 @@ def _commit_emission(ctx: Any) -> dict[str, Any]:
         # text, and the files it deletes, are gone from the last attempt itself.
         rev = str(last["applied_to"])
         deletes = tuple(name for name in deletes if worktree.committed_text(found, name) is not None)
-    # During a merge-in-progress, files with unmerged entries have markers in the
-    # working tree.  Edits must apply to that text (markers included), not the
-    # committed text that lacks main's side.
+    # During a merge-in-progress, edits must apply to the worktree text for
+    # EVERY path, not only unmerged ones.  A cleanly-merged file contains main's
+    # changes in the worktree but not in the committed text; reading from the
+    # commit would silently revert main's change.
     merge_in_progress = False
     try:
         worktree.git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
@@ -671,12 +672,28 @@ def _commit_emission(ctx: Any) -> dict[str, Any]:
             unmerged_paths = {f.strip() for f in unmerged_output.splitlines() if f.strip()}
         except ValueError:
             pass
+        # Before writing anything, ensure every unmerged path appears in the emission
+        # (as either ===FILE: or ===EDIT:).  A partial emission would stage stray files
+        # and leave unmerged entries to be committed with markers.
+        emission_paths = {
+            (relative.as_posix() if hasattr(relative, 'as_posix') else str(relative))
+            for relative in (*files.keys(), *changed.keys())
+        }
+        missing_unmerged = sorted(unmerged_paths - emission_paths)
+        if missing_unmerged:
+            raise AttemptRefused(
+                f"merge in progress but the emission does not resolve all conflicted files; "
+                f"missing: {', '.join(missing_unmerged)}. Every conflicted file must appear "
+                f"in the emission as ===FILE: or ===EDIT:."
+            )
 
     repeated = []
     for relative, pairs in changed.items():
         rel_str = relative.as_posix() if hasattr(relative, 'as_posix') else str(relative)
-        if merge_in_progress and rel_str in unmerged_paths:
-            # Read from the working tree (with conflict markers), not the commit.
+        if merge_in_progress:
+            # During a merge, always read from the worktree (which has main's
+            # changes for cleanly-merged files, and conflict markers for unmerged
+            # files).
             fpath = path / relative
             if not fpath.exists():
                 raise AttemptRefused(f"{relative} is not a file of the last attempt, so it cannot be edited; "
@@ -918,9 +935,10 @@ def report(ctx: Any, name: str, payload: dict[str, Any]) -> dict[str, Any]:
     payload = {**payload, "target": found.target, "branch": found.branch, "base": found.base, "head": found.head,
                "diff_stat": worktree.git(Path(found.path), "diff", "--stat", found.base, "HEAD").strip()}
     ctx.write_json(name, payload)
-    # record_outcome("succeeded") is deferred to delivery: the run is not
-    # succeeded until the pull request is pushed.  delivery._delivered and
-    # delivery._kept both record the outcome, so the run is still tracked.
+    # Record outcome for runs that will not deliver (design_fast).  For design
+    # mode, delivery._delivered and _kept also record it, so this is harmless
+    # when delivery runs later: record_outcome is idempotent.
+    worktree.record_outcome(found, "succeeded")
     projects.record_run(Path(found.target), run=ctx.workdir, branch=found.branch, base=found.base,
                         status="succeeded")
     # Clean up the base worktree (created by base_check for the base comparison gate)

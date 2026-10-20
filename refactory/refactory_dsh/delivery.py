@@ -825,8 +825,10 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
     # ── action "none" (--no-pr, never planned) ──────────────────────────
     if approved.get("action") in (None, "none"):
         finish = _finish_commands(ctx, found, title)
-        return _kept(ctx, approved, found, str(approved.get("why") or "it was never planned"),
-                     title=title, finish=finish)
+        result = _kept(ctx, approved, found, str(approved.get("why") or "it was never planned"),
+                       title=title, finish=finish)
+        result["delivery_conflict_files"] = []
+        return result
 
     # ── from here on, delivery was planned ──────────────────────────────
     if found.head != str(ctx.facts.get("commit")):
@@ -839,11 +841,15 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
     repo_slug = now.get("repo") or approved.get("repo")
     finish = _finish_commands(ctx, found, title, repo_slug)
     if now["action"] == "none":
-        return _kept(ctx, approved, found, str(now["why"]), title=title, finish=finish)
+        result = _kept(ctx, approved, found, str(now["why"]), title=title, finish=finish)
+        result["delivery_conflict_files"] = []
+        return result
     if not matches(now, approved) or now.get("branch") != approved.get("branch"):
-        return _kept(ctx, approved, found, f"delivery would now be different from what the approval gate "
-                                           f"showed: it {now['summary']}",
-                     title=title, finish=finish)
+        result = _kept(ctx, approved, found, f"delivery would now be different from what the approval gate "
+                                             f"showed: it {now['summary']}",
+                       title=title, finish=finish)
+        result["delivery_conflict_files"] = []
+        return result
     try:
         outcome = _deliver(ctx, found, now, title=title)
     except NotDelivered as reason:
@@ -864,13 +870,29 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
                                  status="unverified")
         raise
     finally:
-        # Restore the worktree to the reviewed commit so a redo finds it where
-        # require_current expects it, even when _deliver left it at a merge commit.
+        # When delivery pushes a merge commit, advance the worktree record and
+        # the commit fact to it, so a later attempt (review reloop or builder
+        # rerun) builds on the merge, not the reviewed commit.  This prevents
+        # GitHub from rejecting the push as non-fast-forward (dm-116).
         path = Path(found.path)
         if path.is_dir():
             actual = worktree.git(path, "rev-parse", "HEAD").strip()
             if actual != found.head:
-                worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", found.head)
+                # Check if the current HEAD is our merge commit.
+                try:
+                    parents_output = worktree.git(path, "rev-parse", f"{actual}^1", f"{actual}^2")
+                    parent_lines = [p.strip() for p in parents_output.strip().splitlines() if p.strip()]
+                    if len(parent_lines) >= 2 and parent_lines[0] == found.head:
+                        # This is our merge commit.  Advance the record.
+                        from dataclasses import replace as _replace, asdict as _asdict
+                        advanced = _replace(found, head=actual, base=parent_lines[1])
+                        worktree._write_json(Path(ctx.workdir) / worktree.RECORD, _asdict(advanced))
+                        ctx.set_fact("commit", actual)
+                        found = advanced  # update local for _delivered
+                    else:
+                        worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", found.head)
+                except ValueError:
+                    worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", found.head)
     result = _delivered(ctx, approved, found, outcome, title=title)
     result["delivery_conflict_files"] = []
     return result
@@ -1113,31 +1135,28 @@ def _merge_target(ctx: Any, path: Path, slug: str, into: str, generate: str,
     """Merge the current tip of ``into`` into the run's branch, when it has moved.
 
     Conflicts in files the generate command produces are resolved by re-running the
-    generate command. A conflict in any other file is not resolved automatically:
-    delivery proceeds from the reviewed commit and names the conflicts.
+    generate command. A conflict in any other (authored) file causes delivery to
+    stop without pushing — the run loops back to the builder via ``delivery_gate``,
+    automatically. The builder resolves the conflicts; materialise commits a merge
+    with main's tip as the second parent.
 
     Every git step uses ``worktree.git`` with ``worktree.NO_HOOKS`` so hooks are
     suppressed and failures raise ``ValueError``.
     """
+    # Decide whether this is a new repository from the delivery plan.
+    is_new_repo = str((ctx.facts.get("delivery_plan") or {}).get("action", "")) == "create"
+
     # Find the current tip of the target branch on GitHub.
     try:
         listing = _git(path, "ls-remote", _url(slug), f"refs/heads/{into}")
     except NotDelivered as exc:
-        # For an existing repository, ls-remote failing is a stop, not "no merge needed".
-        # For a new project whose branch has not been pushed yet, it is genuinely empty.
-        try:
-            _heads(path, slug)
-            # ls-remote succeeded for _heads but not for the specific ref — treat as empty.
+        if is_new_repo:
+            # A new project whose branch has not been pushed yet — genuinely empty.
             return MergeResult()
-        except NotDelivered:
-            # Cannot reach the repository at all — check if it is known to exist.
-            try:
-                remote_info = _remote(Path(path))
-                if remote_info is not None:
-                    raise NotDelivered(f"cannot reach {slug} to check the target branch: {exc}") from exc
-            except NotDelivered:
-                pass
-            return MergeResult()
+        # For an existing repository, ls-remote failing is a stop.
+        raise NotDelivered(
+            f"cannot reach {slug} to check the target branch: {exc}"
+        ) from exc
     if not listing.strip():
         # The target branch does not exist on GitHub (first PR for a new project).
         return MergeResult()
@@ -1618,12 +1637,27 @@ def evaluate_delivery_conflicts(ctx: Any) -> "Verdict | str":
 
     conflict_files = ctx.facts.get("delivery_conflict_files") or []
     if not conflict_files:
+        # Clean up any stale pending-merge record from a previous iteration.
+        pending = Path(ctx.workdir) / PENDING_MERGE
+        pending.unlink(missing_ok=True)
         return "proceed"
 
     detail = ctx.facts.get("delivery_conflict_detail") or []
     target_tip = str(ctx.facts.get("delivery_target_tip") or "")
     if not target_tip:
         raise ValueError("delivery_gate: delivery_conflict_files set but delivery_target_tip missing")
+
+    # ── Bound the loop by check_attempts ──
+    allowed = int(ctx.knob("check_attempts", 3))
+    used = int(ctx.facts.get("delivery_conflict_reloops", 0)) + 1
+    ctx.set_fact("delivery_conflict_reloops", used)
+    if used > allowed:
+        _abort_pending_merge(ctx)
+        raise ValueError(
+            f"delivery conflict resolution exhausted {allowed} attempts; "
+            f"conflicting files: {', '.join(conflict_files)}. "
+            f"To resume: graph-control redeliver --run <run_dir>"
+        )
 
     found = worktree.recorded(ctx.workdir)
     if found is None:
@@ -1679,20 +1713,21 @@ def evaluate_delivery_conflicts(ctx: Any) -> "Verdict | str":
         # Build the description the builder receives via {{validation}}.
         description_parts = [f"Merge conflict with main ({target_tip[:12]}). "
                              f"Conflicting authored files: {', '.join(conflict_files)}.\n"
-                             f"During this merge, ===EDIT: blocks for conflicted files apply "
-                             f"to the working tree (with conflict markers), not the committed "
-                             f"text. Resolve every conflict so no <<<<<<< / >>>>>>> markers "
+                             f"During this merge, ===EDIT: blocks apply to the working tree "
+                             f"text (with conflict markers for conflicted files, with main's "
+                             f"changes for cleanly merged files), not the committed text. "
+                             f"Resolve every conflict so no <<<<<<< / >>>>>>> markers "
                              f"remain.\n"]
         for entry in detail:
             description_parts.append(f"\n### {entry['path']}\n")
             if entry.get("base"):
-                description_parts.append(f"**Base (common ancestor):**\n```\n{entry['base'][:3000]}\n```\n")
+                description_parts.append(f"**Base (common ancestor):**\n```\n{entry['base']}\n```\n")
             if entry.get("ours"):
-                description_parts.append(f"**Ours (this run's version):**\n```\n{entry['ours'][:3000]}\n```\n")
+                description_parts.append(f"**Ours (this run's version):**\n```\n{entry['ours']}\n```\n")
             if entry.get("theirs"):
-                description_parts.append(f"**Theirs (main's version):**\n```\n{entry['theirs'][:3000]}\n```\n")
+                description_parts.append(f"**Theirs (main's version):**\n```\n{entry['theirs']}\n```\n")
             if entry.get("main_diff"):
-                description_parts.append(f"**What main changed:**\n```diff\n{entry['main_diff'][:3000]}\n```\n")
+                description_parts.append(f"**What main changed:**\n```diff\n{entry['main_diff']}\n```\n")
 
         description = "\n".join(description_parts)
         ctx.set_fact("validation", description)
@@ -1844,15 +1879,22 @@ def _kept(ctx: Any, approved: dict[str, Any], found: worktree.Worktree | None, w
     if title:
         record["title"] = title
         record["pr_text"] = BODY
+    # Do not print "to finish: git push" when the merge failed, as that would push
+    # the reviewed commit without main — the exact problem this change fixes.
+    if merge is not None and (merge.conflicts or merge.check_failed or merge.abandoned):
+        if title:
+            record["finish"] = []
+    elif title:
         record["finish"] = finish or []
     _record(ctx, record)
+    # A kept-local run still passed its reviews — record succeeded so prune
+    # can treat it as ended and state() reports it correctly.
     if found is not None:
+        worktree.record_outcome(found, "succeeded")
         projects.record_delivery(Path(found.target), branch=branch, pull_request=pull_request,
                                  status="pushed, no pull request" if pushed and not pull_request else "kept local")
     # Build the human-readable ``where`` from the finish commands.
     finish_cmds = finish or []
-    # Do not print "to finish: git push" when the merge failed, as that would push
-    # the reviewed commit without main — the exact problem this change fixes.
     if merge is not None and (merge.conflicts or merge.check_failed or merge.abandoned):
         finish_cmds = []
     gh_cmd = next((cmd for cmd in finish_cmds if cmd.startswith("gh pr create")), "")
@@ -1860,6 +1902,9 @@ def _kept(ctx: Any, approved: dict[str, Any], found: worktree.Worktree | None, w
         where = (f"; the branch {branch} is already on GitHub, as {pushed}; to finish: {gh_cmd}")
     elif finish_cmds:
         where = f"; to finish: {' && '.join(finish_cmds)}"
+    elif merge is not None and (merge.conflicts or merge.check_failed or merge.abandoned):
+        # Say what actually stopped — no false "no GitHub repository" warning.
+        where = f"; the work is on branch {branch}"
     elif title and found is not None:
         body_path = str(Path(ctx.workdir).resolve() / BODY)
         where = (f"; there is no GitHub repository to open a pull request in;"

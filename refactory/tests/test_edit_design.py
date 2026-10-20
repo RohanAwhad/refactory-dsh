@@ -190,8 +190,8 @@ def test_design_emit_writes_the_blocks_its_scope_describes_into_emit_txt():
 def _design_answers(emit: list[str]) -> list[str]:
     """Every answer design-v2's agents need, in the order the graph asks.
 
-    The apply_corrections agent runs between gate_strategy and emit.  Its answer
-    is captured as design.md, so it must be the full design document content.
+    pick_corrections is an op (no model answer).  apply_corrections is still an
+    agent whose answer is captured as design.md.
     """
     return [
         # The research answer is the plan array its gate checks, for the same reason
@@ -216,8 +216,8 @@ def test_the_design_graph_is_a_different_shape_from_a_package_one():
         "emit", "fork_qa", "gate_design_review", "gate_overwatch",
         "gate_pitfalls", "gate_qa", "gate_research", "gate_strategy",
         "health_checker", "join_qa",
-        "materialise", "overwatch", "pitfalls_researcher", "prepare",
-        "qa_director", "record_findings",
+        "materialise", "overwatch", "pick_corrections", "pitfalls_researcher",
+        "prepare", "qa_director", "record_findings",
         "report", "research_director", "strategy_director", "synthesize_qa",
         "synthesize_strategy",
     ], "the graph is design-v2's phases, not v1's"

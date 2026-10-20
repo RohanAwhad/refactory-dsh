@@ -283,10 +283,17 @@ no longer pushes the reviewed commit behind main. Instead:
    parent.
 5. The check, the base comparison and the reviews run on the merged result before
    delivery tries again.
-6. The loop is bounded by `check_attempts`. A run that cannot resolve stops,
-   naming the conflicting files. `graph-control redeliver` restarts it.
+6. The loop is bounded by `check_attempts` (default 3). A run that cannot resolve
+   stops, naming the conflicting files. `graph-control redeliver` restarts it.
 
-On any failure the merge is aborted, so a worktree is never left mid-merge.
+On any failure the merge is aborted and `pending-merge.json` is deleted, so a
+worktree is never left mid-merge. After a crash between the merge commit and
+the record write, `require_current` adopts the existing merge commit rather
+than refusing.
+
+After delivery pushes a merge commit, it advances the worktree record (head and
+base) to the merge, so a later attempt builds on it and the next push
+fast-forwards. Delivery only ever pushes a head that contains main.
 
 `rerun` with `--text` on a node that takes no text (an op or a gate) is refused
 with `"this node takes no text; drop --text"`.

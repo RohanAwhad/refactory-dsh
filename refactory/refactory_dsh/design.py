@@ -566,28 +566,23 @@ class DesignMode(Mode):
         # After the report, so only a run whose reviews passed and whose sign-offs held
         # reaches anything outside it (#350).
         graph.add(Node(
+            "pick_corrections", "op", call=f"{OPS}:pick_gate_corrections",
+            produces=("gate_corrections", "design_corrections_applied"),
+            notes="deterministically extract gate_strategy corrections from the ledger; "
+                  "skip the agent when there are none",
+        ))
+        graph.add(Node(
             "apply_corrections", "agent",
             prompt_template=(
-                "If `intent-ledger.md` exists in the run directory, read it. "
-                "If it does not exist, write `design.md` back unchanged and return a "
-                "short message saying no corrections were needed (no ledger found).\n\n"
                 "Read `design.md` from the run directory.\n\n"
-                "In the intent ledger, find each verdict entry where gate is \"gate_strategy\" and "
-                "verdict is \"proceed\". Look at the entry immediately after it. If that entry has "
-                "kind \"constraint\" (not kind \"constraint (process)\"), it is a gate correction — "
-                "feedback the person gave when approving the design.\n\n"
-                "If there are no gate corrections, write `design.md` back unchanged and return a "
-                "short message saying no corrections were needed.\n\n"
-                "If there are gate corrections, update `design.md`: revise the ## Summary, the "
+                "The following gate corrections were given when the design was approved:\n\n"
+                "{{gate_corrections}}\n\n"
+                "Update `design.md`: revise the ## Summary, the "
                 "heading (H1), and the description text in each site entry in ## Rule and sites to "
                 "reflect the corrections. "
                 "Do not change the ## Docs section, the ## Changes section, the "
                 "## Anti-patterns to avoid section, or the document's overall structure. Write the "
-                "updated `design.md`. Return a short message listing what was changed.\n\n"
-                "Only constraint entries immediately following a gate_strategy proceed verdict are "
-                "gate corrections. Process-scoped entries (marked \"(process)\"), corrections from "
-                "other gates (check, gate_qa, gate_overwatch, gate_design_review), and steering "
-                "notes that do not follow a gate_strategy proceed verdict are NOT gate corrections."
+                "updated `design.md`. Return a short message listing what was changed."
             ),
             reads=("design.md",),
             writes=("design.md",),
@@ -632,7 +627,8 @@ class DesignMode(Mode):
         graph.connect("gate_design_review", "design_doc", condition="reloop")
         graph.connect("gate_design_review", "gate_strategy", condition="proceed")
         graph.connect("gate_strategy", "synthesize_strategy", condition="reloop")
-        graph.connect("gate_strategy", "apply_corrections", condition="proceed")
+        graph.connect("gate_strategy", "pick_corrections", condition="proceed")
+        graph.connect("pick_corrections", "apply_corrections")
         graph.connect("apply_corrections", "emit")
         graph.connect("emit", "materialise")
         graph.connect("materialise", "check")

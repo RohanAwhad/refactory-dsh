@@ -656,6 +656,9 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
             advanced = replace(found, head=new_head)
     except ValueError:
         advanced = replace(found, head=new_head)
+    # Clean up pending-merge record after a successful merge commit.
+    pending_merge = Path(run) / ".refactory" / "pending-merge.json"
+    pending_merge.unlink(missing_ok=True)
     _write_json(Path(run) / RECORD, asdict(advanced))
     pending.unlink(missing_ok=True)
     return advanced
@@ -666,6 +669,37 @@ def require_current(run: Path) -> Worktree:
     found = recorded(run)
     if found is None:
         raise ValueError("this run has no worktree")
+    # Recover from a crash between a merge commit and the pending-merge record
+    # write: if pending-merge.json exists and MERGE_HEAD is gone, check whether
+    # HEAD is already a merge commit whose second parent matches the recorded tip.
+    pending_merge = Path(run) / ".refactory" / "pending-merge.json"
+    if pending_merge.exists():
+        pending = _json(pending_merge)
+        recorded_tip = str(pending.get("target_tip") or "")
+        path = Path(found.path)
+        if path.is_dir():
+            has_merge_head = False
+            try:
+                git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
+                has_merge_head = True
+            except ValueError:
+                pass
+            if not has_merge_head and recorded_tip:
+                # Check if HEAD is already a merge commit with the recorded tip
+                # as its second parent — adopt it rather than refusing.
+                try:
+                    head = git(path, "rev-parse", "HEAD").strip()
+                    if head != found.head:
+                        parents_output = git(path, "rev-parse", f"{head}^1", f"{head}^2")
+                        parent_lines = [p.strip() for p in parents_output.strip().splitlines() if p.strip()]
+                        if len(parent_lines) >= 2 and parent_lines[1] == recorded_tip:
+                            # Adopt the existing merge commit.
+                            advanced = replace(found, head=head, base=parent_lines[1])
+                            _write_json(Path(run) / RECORD, asdict(advanced))
+                            pending_merge.unlink(missing_ok=True)
+                            found = advanced
+                except ValueError:
+                    pass
     _require_current(found)
     return found
 

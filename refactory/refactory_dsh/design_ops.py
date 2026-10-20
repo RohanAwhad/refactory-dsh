@@ -41,6 +41,73 @@ def noop(ctx: Any) -> dict[str, Any]:
     return {}
 
 
+def pick_gate_corrections(ctx: Any) -> dict[str, Any]:
+    """Deterministically extract gate_strategy corrections from the intent ledger.
+
+    Reads the ledger only when it exists; a missing ledger means "no corrections".
+    Only constraint entries (not process-scoped) immediately following a
+    gate_strategy proceed verdict are gate corrections.  Process notes and
+    other gates' notes are excluded here, not by the agent prompt.
+
+    When there are no corrections, ``gate_corrections`` is empty and the
+    ``apply_corrections`` agent node is skipped (its prompt receives an empty
+    string, and the design_corrections_applied fact is already set).
+    """
+    from refactory_dsh.steering import LEDGER
+
+    ledger_path = Path(ctx.workdir) / LEDGER
+    if not ledger_path.exists():
+        return {"gate_corrections": "", "design_corrections_applied": "no corrections (no ledger)"}
+
+    text = ledger_path.read_text()
+    corrections: list[str] = []
+
+    # Parse the ledger entries: look for verdict entries for gate_strategy
+    # with verdict=proceed, then the immediately following constraint entry.
+    # Split into sections by ## headers
+    sections = _re.split(r'^## ', text, flags=_re.MULTILINE)
+    entries: list[dict[str, str]] = []
+    for section in sections[1:]:  # skip the title
+        lines = section.strip().splitlines()
+        if not lines:
+            continue
+        header = lines[0]
+        body = "\n".join(lines[1:]).strip()
+        entries.append({"header": header, "body": body})
+
+    saw_proceed = False
+    for entry in entries:
+        header = entry["header"]
+        body = entry["body"]
+        # Check for verdict entries: "[timestamp] verdict" or "[timestamp] verdict-use"
+        if "verdict" in header.lower() and "verdict-use" not in header.lower():
+            # Parse the body for gate and verdict
+            gate_match = _re.search(r'^gate:\s*(.+)$', body, _re.MULTILINE)
+            verdict_match = _re.search(r'^verdict:\s*(.+)$', body, _re.MULTILINE)
+            if gate_match and verdict_match:
+                gate = gate_match.group(1).strip()
+                verdict = verdict_match.group(1).strip()
+                saw_proceed = (gate == "gate_strategy" and verdict == "proceed")
+                continue
+        # Check for constraint entries immediately after a gate_strategy proceed
+        if saw_proceed:
+            # Check if this is a constraint (not process-scoped)
+            is_constraint = "constraint" in header.lower() and "(process)" not in header.lower()
+            # Also check it's not a correction from another gate
+            is_correction = "correction" in header.lower()
+            if is_constraint or is_correction:
+                corrections.append(body)
+            saw_proceed = False
+        else:
+            saw_proceed = False
+
+    if not corrections:
+        return {"gate_corrections": "", "design_corrections_applied": "no corrections found in ledger"}
+
+    joined = "\n\n".join(f"- {c}" for c in corrections)
+    return {"gate_corrections": joined}
+
+
 def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None = None) -> dict[str, Any]:
     """Read the brief, and what the brief says counts as done.
 

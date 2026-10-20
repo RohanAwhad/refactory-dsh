@@ -97,6 +97,10 @@
       "max_iterations": 4,
       "_type": "GateNode"
     },
+    "pick_corrections": {
+      "id": "pick_corrections",
+      "_type": "FnNode"
+    },
     "health_checker": {
       "id": "health_checker",
       "role": "ceo",
@@ -277,7 +281,7 @@
     },
     {
       "source": "gate_strategy",
-      "target": "apply_corrections",
+      "target": "pick_corrections",
       "condition": "proceed"
     },
     {
@@ -288,6 +292,11 @@
     {
       "source": "join_qa",
       "target": "synthesize_qa",
+      "condition": null
+    },
+    {
+      "source": "pick_corrections",
+      "target": "apply_corrections",
       "condition": null
     },
     {

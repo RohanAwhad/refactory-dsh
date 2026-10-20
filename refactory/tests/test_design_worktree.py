@@ -80,8 +80,8 @@ def repo(tmp_path) -> Path:
 def _answers(*emits: str, corrections_answer: str = DESIGN_DOC_ANSWER) -> list[str]:
     """Every answer a design run needs, in the order its graph asks.
 
-    The apply_corrections agent runs between gate_strategy and emit.  Its answer
-    is captured as design.md, so it must be the full design document content.
+    pick_corrections is an op (no model answer).  apply_corrections is still an
+    agent whose answer is captured as design.md.
     """
     return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
             DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,

@@ -739,21 +739,31 @@ delivery tries again.
 
 - *Nothing pushes without main.* `_deliver` raises `NotDelivered` on conflict,
   check_failed or abandoned; `push_head` is never set to `found.head` as a
-  fallback.
+  fallback. ls-remote failure on an existing repository raises instead of
+  falling through.
 - *Conflict-marker refusal.* `_commit_emission` scans each emitted file for
   `<<<<<<<` / `>>>>>>>` (excluding `<<<<<<< SEARCH` / `>>>>>>> REPLACE`) and
   raises `AttemptRefused` before committing.
+- *Every conflicted path in the emission.* During a merge, `_commit_emission`
+  refuses before writing unless every `--diff-filter=U` path appears in the
+  emission as ===FILE: or ===EDIT:.
 - *Worktree cleanup on failure.* The delivery_gate evaluator's try/finally runs
-  `git merge --abort` on any exception. The deliver op's finally block resets
-  HEAD to the reviewed commit.
-- *Loop bound.* `delivery_gate` declares `max_iterations=8` with
-  `knobs=("check_attempts",)`, bounded by the existing attempt budget.
+  `git merge --abort` on any exception. `_abort_pending_merge` runs on every
+  stop path (check retries exhausted, emit/materialise failing, the gate's own
+  limit). The deliver op's finally block advances the worktree record when a
+  merge commit was pushed, or resets HEAD otherwise.
+- *Never left mid-merge.* On any failure or stop, the merge is aborted and
+  `pending-merge.json` is deleted. After a crash between the merge commit and
+  the record write, `require_current` adopts the existing merge commit.
+- *Loop bound.* `delivery_gate` counts reloops against `check_attempts`
+  (default 3). At the limit, it aborts the merge and raises an error naming
+  the conflicting files. `graph-control redeliver` accepts a run stopped there.
 
 **Tests.**
 
 - `test_two_runs_conflict_reloop`: two runs editing the same function; the
   second's delivery reloops and the pushed head is a merge commit containing
-  main.
+  main; the merge's second parent is main's tip.
 - `test_merge_failure_leaves_worktree_clean`: the evaluator's merge crashes;
   no MERGE_HEAD remains.
 - `test_emission_with_conflict_markers_refused`: a file with markers is
@@ -762,6 +772,16 @@ delivery tries again.
   authored-file conflict; conflict facts are set.
 - `test_merged_result_fails_check`: delivery does not push on failed merged
   check.
+- `test_edit_resolves_conflict_keeping_mains_lines`: an ===EDIT: block
+  resolves a merge conflict by keeping main's lines.
+- `test_ls_remote_failure_stops_existing_repo`: ls-remote failure on an
+  existing repository stops delivery instead of pushing without main.
+- `test_delivery_advances_worktree_after_merge_push`: after delivery pushes a
+  merge commit, the worktree record advances so a later push fast-forwards.
+- `test_apply_corrections_no_ledger_leaves_design_unchanged`: with no ledger,
+  the agent does not run and design.md is unchanged.
+- `test_unresolved_conflict_stops_after_budget`: a builder that never resolves
+  stops after check_attempts, with a clean worktree.
 
 ---
 

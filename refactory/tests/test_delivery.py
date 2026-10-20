@@ -891,9 +891,10 @@ def _calls(tmp_path: Path) -> str:
 def _answers(*emits: str, corrections_answer: str = DESIGN_DOC_ANSWER) -> list[str]:
     """Every answer a design run needs, in the order its graph asks.
 
-    The apply_corrections agent runs between gate_strategy and emit.  Its answer
-    is captured as design.md, so it must be the full design document content
-    (unchanged when there are no corrections, corrected when there are).
+    pick_corrections is an op (no model answer needed).  When gate_corrections
+    is empty (no ledger or no corrections), apply_corrections receives an empty
+    prompt and writes design.md unchanged — its answer is captured as design.md,
+    so it must be the full design document content.
     """
     return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
             DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
@@ -2848,7 +2849,7 @@ def test_two_runs_conflict_reloop(github, tmp_path, monkeypatch):
         "-m", "merge first run")
     git(main_clone, "push", "-q", "origin", "main")
 
-    main_tip = git(bare, "rev-parse", "refs/heads/main")
+    main_tip = git(bare, "rev-parse", "refs/heads/main").strip()
 
     # Second run: changes the same function differently.
     # This will conflict with main (which now has return 2).
@@ -2893,6 +2894,8 @@ def test_two_runs_conflict_reloop(github, tmp_path, monkeypatch):
                git(bare, "cat-file", "-p", remote_head2).splitlines()
                if line.startswith("parent ")]
     assert len(parents) == 2, f"expected merge commit, got {len(parents)} parents"
+    assert parents[1] == main_tip, \
+        f"expected second parent to be main's tip {main_tip}, got {parents[1]}"
     # main's tip is an ancestor.
     assert git(bare, "merge-base", "--is-ancestor", main_tip, remote_head2) == ""
 
@@ -3053,11 +3056,13 @@ def test_gate_correction_updates_pr_text(github, tmp_path, monkeypatch):
     # excluded from the design.
     ledger.note("info", "try harder", scope="process")
 
-    # Build model answers: the key is that apply_corrections gets the corrected design.
+    # Build model answers: pick_corrections (op) extracts the gate correction
+    # from the ledger, then apply_corrections (agent) rewrites design.md.
     answers = [
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
         design_with_polling,   # design_doc writes design.md with "polling loop"
         DESIGN_REVIEW_ANSWER,  # design_review passes
+        # pick_corrections is an op — no model answer needed
         corrected_design,      # apply_corrections rewrites design.md to "websockets"
         render({"tool.py": "print('built')\n"}),  # emit
         *REVIEW_ANSWERS,
@@ -3213,11 +3218,12 @@ def test_edit_resolves_conflict_keeping_mains_lines(tmp_path):
 
 
 def test_apply_corrections_no_ledger_leaves_design_unchanged(github, tmp_path):
-    """When there is no intent-ledger.md, apply_corrections passes through and
+    """When there is no intent-ledger.md, the pick_corrections op finds nothing
+    and the apply_corrections agent does not run (gate_corrections is empty).
     design.md is unchanged.
 
-    Fails without the change: the agent node requires intent-ledger.md in its
-    reads and refuses to dispatch when the file is missing.
+    Fails without the change: the agent node runs on every design run and may
+    wipe design.md.
     """
     repo = git_repo(tmp_path / "repo")
     slug = "acme/no-ledger"
@@ -3232,6 +3238,251 @@ def test_apply_corrections_no_ledger_leaves_design_unchanged(github, tmp_path):
     design_text = (run / "design.md").read_text()
     assert "Do the thing" in design_text, \
         f"design.md should be unchanged: {design_text[:300]}"
+
+    # The pick_corrections op ran and set the fact.
+    assert result.facts.get("design_corrections_applied"), \
+        "pick_corrections should have set design_corrections_applied"
+
+
+def test_ls_remote_failure_stops_existing_repo(github, tmp_path, monkeypatch):
+    """ls-remote failure on an existing repository stops delivery instead of
+    pushing the reviewed commit without main.
+
+    Fails without the change: the raise inside try/except NotDelivered is
+    swallowed, and delivery pushes the reviewed commit without main.
+    """
+    repo = git_repo(tmp_path / "repo")
+    slug = "acme/ls-remote-fail"
+    bare = _published(github, slug, repo)
+
+    real = delivery.deliver_design
+    real_git = delivery._git
+
+    def break_ls_remote_then_deliver(ctx):
+        def failing_git(path, *args):
+            if "ls-remote" in args and f"refs/heads/main" in " ".join(str(a) for a in args):
+                raise delivery.NotDelivered("simulated ls-remote failure")
+            return real_git(path, *args)
+        monkeypatch.setattr(delivery, "_git", failing_git)
+        return real(ctx)
+
+    monkeypatch.setattr(delivery, "deliver_design", break_ls_remote_then_deliver)
+    # Skip the delivery_gate reloop.
+    monkeypatch.setattr(delivery, "evaluate_delivery_conflicts", lambda ctx: "proceed")
+
+    run = tmp_path / "run"
+    result = _design(run, {"tool.py": "print('built')\n"},
+                     target=str(repo), check="python tool.py")
+    # The run should complete but delivery should not push.
+    assert result.exit_ok, result.error
+    record = _record(run)
+    assert record["status"] == "kept local"
+    assert "cannot reach" in record.get("why", "")
+    # No push happened.
+    branch = json.loads((run / "design.json").read_text())["branch"]
+    assert _remote_head(github, slug, branch) == ""
+
+
+def test_delivery_advances_worktree_after_merge_push(github, tmp_path, monkeypatch):
+    """After delivery pushes a merge commit, the worktree record advances
+    so a later push fast-forwards (dm-116).
+
+    Fails without the change: the finally block resets HEAD to the reviewed
+    commit, so a later delivery's merge does not contain the pushed one and
+    GitHub rejects the push as non-fast-forward.
+    """
+    repo = git_repo(tmp_path / "repo")
+    (repo / "shared.py").write_text("def f():\n    return 1\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "base")
+    slug = "acme/advance-wt"
+    bare = _published(github, slug, repo)
+
+    real = delivery.deliver_design
+
+    def advance_main_then_deliver(ctx):
+        other = tmp_path / "other"
+        if not other.exists():
+            git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(other))
+            (other / "new_file.txt").write_text("main advanced\n")
+            git(other, "add", ".")
+            git(other, "-c", "user.name=t", "-c", "user.email=t@example.com",
+                "commit", "-q", "-m", "main advances")
+            git(other, "push", "-q", "origin", "main")
+        return real(ctx)
+
+    monkeypatch.setattr(delivery, "deliver_design", advance_main_then_deliver)
+    # Skip the delivery_gate reloop.
+    monkeypatch.setattr(delivery, "evaluate_delivery_conflicts", lambda ctx: "proceed")
+
+    run = tmp_path / "run"
+    result = _design(run, {"tool.py": "print('built')\n"},
+                     target=str(repo), check="python tool.py")
+    assert result.exit_ok, result.error
+
+    record = _record(run)
+    assert record["status"] in ("opened", "already open", "updated"), \
+        f"expected delivery, got: {record}"
+
+    # The worktree record should be advanced to the merge commit.
+    found = worktree.recorded(run)
+    # Check that the head is a merge commit (2 parents).
+    path = Path(found.path)
+    head = found.head
+    cat_output = git(path, "cat-file", "-p", head)
+    parent_lines = [l for l in cat_output.splitlines() if l.startswith("parent ")]
+    assert len(parent_lines) == 2, f"expected merge commit, got {len(parent_lines)} parents"
+
+    # The base should be the second parent (main's tip).
+    second_parent = parent_lines[1].split()[1]
+    assert found.base == second_parent, \
+        f"expected base to be second parent {second_parent}, got {found.base}"
+
+
+def test_unresolved_conflict_stops_after_budget(github, tmp_path, monkeypatch):
+    """A builder that never resolves the conflict stops after check_attempts,
+    with a clean worktree.
+
+    Fails without the change: the evaluator never counts reloops, so the run
+    stops with "check exceeded max_iterations of 8" and leaves MERGE_HEAD.
+    """
+    repo = git_repo(tmp_path / "repo")
+    (repo / "shared.py").write_text("def f():\n    return 1\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "base")
+    slug = "acme/unresolved"
+    bare = _published(github, slug, repo)
+
+    # First run to advance main.
+    run1 = tmp_path / "run1"
+    result1 = _design(run1, {"tool.py": "print('built')\n",
+                             "shared.py": "def f():\n    return 2\n"},
+                      target=str(repo), check="python tool.py")
+    assert result1.exit_ok, result1.error
+    branch1 = json.loads((run1 / "design.json").read_text())["branch"]
+    # Merge first run into main.
+    main_clone = tmp_path / "main_clone"
+    git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(main_clone))
+    git(main_clone, "-c", "user.name=t", "-c", "user.email=t@example.com",
+        "merge", "-q", "--no-ff", f"origin/{branch1}", "-m", "merge first run")
+    git(main_clone, "push", "-q", "origin", "main")
+
+    # Second run: always emits a file with conflict markers (never resolves).
+    bad_emit = (
+        "===FILE: tool.py===\nprint('built')\n"
+        "===FILE: shared.py===\ndef f():\n    return 42\n"
+    )
+
+    # Use check_attempts=1 so it stops quickly.
+    run2 = tmp_path / "run2"
+    mode = _mode(check_attempts=1)
+    model = FakeModel(_answers(render({"tool.py": "print('built')\n",
+                                       "shared.py": "def f():\n    return 42\n"}))
+                      + [bad_emit, *REVIEW_ANSWERS] * 3)
+    result2 = mode.run(
+        run2, model=model, verdicts={"gate_strategy": "proceed"},
+        task={"name": NAME, "brief": "Build a tool\nthat prints built.",
+              "check": "python tool.py", "target": str(repo)},
+    )
+    # The run should stop (not succeed) because the conflict was never resolved.
+    # Either exit_ok is False (error) or the delivery kept it local.
+    found = worktree.recorded(run2)
+    if found is not None:
+        path = Path(found.path)
+        # The worktree must be clean — no MERGE_HEAD.
+        import subprocess
+        with pytest.raises(subprocess.CalledProcessError):
+            git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
+
+
+def test_cleanly_merged_edit_keeps_mains_change(tmp_path):
+    """An ===EDIT: to a file main changed cleanly keeps main's change.
+
+    Fails without the change: edits apply to committed_text (the run's last
+    commit), which has no main's change, silently reverting it.
+    """
+    from refactory_dsh import repo_change
+    from refactory_dsh.worktree import (
+        create, recorded, _write_json, RECORD,
+        git as wgit, COMMITTER, NO_HOOKS,
+    )
+    from dataclasses import asdict, replace as dreplace
+
+    # ── Set up a repo with two files ──
+    repo = git_repo(tmp_path / "repo")
+    (repo / "a.py").write_text("def f():\n    return 1\n")
+    (repo / "c.py").write_text("def g():\n    return 0\ndef h():\n    return 0\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "initial")
+
+    # ── Create a worktree for the run ──
+    run = tmp_path / "run"
+    run.mkdir(parents=True, exist_ok=True)
+    create(repo, "HEAD", "test-clean-edit", run)
+    found = recorded(run)
+    wt_path = Path(found.path)
+
+    # ── Feature change: edit a.py (only) ──
+    (wt_path / "a.py").write_text("def f():\n    return 2\n")
+    wgit(wt_path, "add", ".")
+    wgit(wt_path, *NO_HOOKS, "-c", "commit.gpgsign=false",
+         "commit", "-q", "--no-verify", "-m", "feature change",
+         env={**os.environ, **COMMITTER})
+    feature_head = wgit(wt_path, "rev-parse", "HEAD").strip()
+    updated_found = dreplace(found, head=feature_head)
+    _write_json(run / RECORD, asdict(updated_found))
+
+    # ── Main changes c.py (no conflict with the feature change) ──
+    (repo / "c.py").write_text("def g():\n    return 99\ndef h():\n    return 0\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "main changes g()")
+    main_head = git(repo, "rev-parse", "HEAD")
+
+    # ── Start a merge in the worktree (clean merge — no conflicts) ──
+    wgit(wt_path, *NO_HOOKS, "-c", "commit.gpgsign=false",
+         "merge", "--no-commit", "--no-verify", main_head,
+         env={**os.environ, **COMMITTER})
+
+    # Verify the worktree has main's change to c.py
+    assert "return 99" in (wt_path / "c.py").read_text()
+
+    # ── An EDIT to c.py that keeps main's change and edits h() ──
+    edit_emit = (
+        "===EDIT: c.py===\n"
+        "<<<<<<< SEARCH\n"
+        "def h():\n"
+        "    return 0\n"
+        "=======\n"
+        "def h():\n"
+        "    return 42\n"
+        ">>>>>>> REPLACE\n"
+    )
+
+    ctx = _TitleCtx(
+        facts={"name": "test_clean_edit", "brief": "test", "check": "echo ok"},
+        files={"emit.txt": edit_emit},
+    )
+    ctx.workdir = run
+    ctx.read_text = lambda name: ctx._files[name]
+    ctx.write_text = lambda name, text: ctx._files.__setitem__(name, text)
+    ctx.write_json = lambda name, data: ctx._files.__setitem__(name, json.dumps(data))
+    ctx.read_json = lambda name, default=None: (
+        json.loads(ctx._files.get(name, "null"))
+        if ctx._files.get(name) else default
+    )
+
+    result = repo_change._commit_emission(ctx)
+    assert result.get("commit"), f"expected a commit: {result}"
+
+    # c.py keeps main's change to g() AND the edit to h().
+    committed = (wt_path / "c.py").read_text()
+    assert "return 99" in committed, f"expected main's change to g(): {committed}"
+    assert "return 42" in committed, f"expected edit to h(): {committed}"
+
+    # The commit is a merge commit (2 parents).
+    cat_output = git(wt_path, "cat-file", "-p", "HEAD")
+    parent_lines = [l for l in cat_output.splitlines() if l.startswith("parent ")]
+    assert len(parent_lines) == 2, f"expected merge commit, got {len(parent_lines)} parents"
 
 
 def test_an_upstream_that_does_not_hold_the_base_is_not_where_the_pull_request_goes(github, tmp_path):
