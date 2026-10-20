@@ -327,10 +327,24 @@ def create_pin(driver_checkout: Path, commit: str, dirty_diff: str | None = None
                     f"that conflict with the pin; the conflicting output: {result.stderr[:500]}"
                 )
 
+        # Resolve the worktree's own git dir so that any ``git config``
+        # calls from lifecycle scripts (lefthook, husky) write to the
+        # worktree-local config, not the driver's shared ``.git/config``.
+        wt_git_dir = subprocess.run(
+            ["git", "-C", str(pin_checkout), "rev-parse", "--absolute-git-dir"],
+            capture_output=True, text=True, check=True, timeout=30,
+        ).stdout.strip()
+
         # Prepare the pin: uv sync, pnpm install, pnpm build.
         # Errors propagate — the outer except BaseException cleans up.
         # A broken pin must never be marked ready.
-        env = {**os.environ, "LEFTHOOK": "0", "HUSKY": "0"}
+        env = {
+            **os.environ,
+            "LEFTHOOK": "0",
+            "HUSKY": "0",
+            "GIT_DIR": wt_git_dir,
+            "GIT_WORK_TREE": str(pin_checkout),
+        }
         subprocess.run(
             ["uv", "sync"], cwd=str(pin_checkout), env=env,
             check=True, capture_output=True, text=True, timeout=600,

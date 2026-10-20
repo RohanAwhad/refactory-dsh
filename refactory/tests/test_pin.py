@@ -561,9 +561,9 @@ def test_resume_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     # Capture os.execv with a sentinel exception.
     class _ExecvSentinel(Exception):
         def __init__(self, path: str, args: list[str]):
+            super().__init__(path)
             self.path = path
             self.args = args
-            super().__init__(path)
 
     def _fake_execv(p: str, a: list[str]) -> None:
         raise _ExecvSentinel(p, list(a))
@@ -788,7 +788,7 @@ def test_pin_keyed_by_commit_and_diff(tmp_path: Path, monkeypatch: pytest.Monkey
     assert profile_a != profile_clean
     assert profile_b != profile_clean
     assert profile_clean == f"graph-pin-{commit[:12]}"
-    assert "-" in profile_a.split(f"graph-pin-{commit[:12]}-")[1]
+    assert len(profile_a.split(f"graph-pin-{commit[:12]}-")[1]) == 8
 
 
 def test_credential_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
