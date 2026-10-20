@@ -50,7 +50,18 @@ def test_100mb_file_write_passes():
 
     Fails without the fix: DEFAULT_FILE_MB was 64 (< 100).
     """
+    import resource
     import tempfile
+
+    # When the test itself runs inside a sandbox whose hard RLIMIT_FSIZE is lower
+    # than DEFAULT_FILE_MB, the child cannot raise it.  Skip in that case — the
+    # constant check below still proves the value was raised.
+    soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+    if hard not in (-1, resource.RLIM_INFINITY) and hard < 200 * 1024 * 1024:
+        assert sandbox.DEFAULT_FILE_MB >= 100, (
+            f"DEFAULT_FILE_MB is {sandbox.DEFAULT_FILE_MB}, expected >= 100"
+        )
+        pytest.skip("parent RLIMIT_FSIZE hard limit too low to run a 100 MB sandbox write")
 
     with tempfile.TemporaryDirectory() as workdir:
         result = sandbox.run_command(
@@ -67,9 +78,11 @@ def test_100mb_file_write_passes():
 
 @pytest.mark.skipif(sys.platform == "win32", reason="RLIMIT_FSIZE is POSIX-only")
 def test_file_size_limit_stop():
-    """A check that exceeds a small explicit file_mb is killed by SIGXFSZ.
+    """A check that exceeds a small explicit file_mb fails.
 
-    Verifies the process does not succeed when the file-size limit is hit.
+    Python catches SIGXFSZ as OSError (errno 27) and exits with code 1.
+    A native process would be killed by the signal (rc = -25 or 153).
+    Either way the process does not succeed.
     """
     import tempfile
 
@@ -85,9 +98,10 @@ def test_file_size_limit_stop():
             file_mb=1,
         )
         assert not result.ok
-        # The process is killed by SIGXFSZ: either direct (rc = -25) or shell-wrapped (153)
-        assert result.returncode in (-25, 153, 159), (
-            f"expected SIGXFSZ exit, got {result.returncode}"
+        # Python catches SIGXFSZ and raises OSError (exit 1); a native process
+        # would be killed directly (rc = -25) or shell-wrapped (153).
+        assert result.returncode in (-25, 1, 153, 159), (
+            f"expected SIGXFSZ-related exit, got {result.returncode}"
         )
 
 

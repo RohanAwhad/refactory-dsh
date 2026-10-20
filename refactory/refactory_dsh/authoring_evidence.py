@@ -403,7 +403,8 @@ def wire_reviews(graph: Any) -> None:
         node = graph.nodes[name]
         graph.nodes[name] = replace(node, reads=(*node.reads, EVIDENCE, *((AUDIT,) if name == "gate_overwatch" else ())), max_iterations=12,
                                    writes=(*node.writes, "validation.txt"),
-                                   produces=(*node.produces, "validation", "attempts_used", "review_attempts_used"))
+                                   produces=(*node.produces, "validation", "attempts_used", "review_attempts_used"),
+                                   knobs=(*node.knobs, "review_attempts"))
     report = graph.nodes["report"]
     graph.nodes["report"] = replace(report, reads=(*report.reads, EVIDENCE, AUDIT))
 

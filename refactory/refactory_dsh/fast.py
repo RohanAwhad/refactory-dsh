@@ -124,7 +124,7 @@ class CreateFastMode(CreateMode):
     @classmethod
     def declare(cls) -> dict[str, Knob]:
         knobs = super().declare()
-        for name in ("research_attempts", "design_attempts", "attempts"):
+        for name in ("research_attempts", "design_attempts", "attempts", "review_attempts"):
             knobs.pop(name, None)
         knobs.update({
             "repair_attempts": Knob(1, "int", lo=0, hi=3, description="total repairs across admission, runtime validation and focused QA"),
@@ -179,13 +179,15 @@ class CreateFastMode(CreateMode):
                           resource_role="work",
                           writes=("validation.txt", "repair.txt", "fast-report.json"),
                           knobs=("repair_attempts",), max_iterations=4,
-                          produces=("validation", "repair_feedback", "repairs_used")))
+                          produces=("validation", "repair_feedback", "repairs_used",
+                                    "check_repairs_used")))
         _qa_nodes(graph, artifact=False)
         graph.add(replace(full.nodes["register"], resource_role="work"))
         graph.add(replace(full.nodes["smoke"], evaluator="refactory_dsh.create_ops:gate_smoke",
                           knobs=("allow_regression", "sample_knobs", "smoke_timeout_s", "repair_attempts"),
                           writes=(*full.nodes["smoke"].writes, "repair.txt", "fast-report.json"),
-                          produces=(*full.nodes["smoke"].produces, "repair_feedback", "repairs_used"),
+                          produces=(*full.nodes["smoke"].produces, "repair_feedback", "repairs_used",
+                                    "check_repairs_used", "review_repairs_used"),
                           resource_role="final_validation", max_iterations=4))
         graph.add(replace(full.nodes["report"], call=f"{OPS}:report_package",
                           resource_role="final_validation",

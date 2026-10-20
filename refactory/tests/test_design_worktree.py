@@ -223,7 +223,7 @@ def test_facts_json_records_final_attempts_used_on_failure(repo, tmp_path, monke
     node_runner.run_node(f"{repo_change.OPS}:materialise", workdir=run, node_id="materialise")
     # Before the check, attempts_used is absent from facts.json on disk.
     assert "attempts_used" not in json.loads((run / "facts.json").read_text())
-    with pytest.raises(ValueError, match=r"authoring unresolved after 1 attempt\(s\)"):
+    with pytest.raises(ValueError, match=r"check attempts exhausted after 1 check failure\(s\)"):
         node_runner.run_node(f"{design_ops.__name__}:check_artifact", workdir=run, node_id="check")
     # run_node's except clause wrote facts.json; the on-disk value agrees with the message.
     saved = json.loads((run / "facts.json").read_text())
