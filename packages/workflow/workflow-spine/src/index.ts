@@ -1164,10 +1164,12 @@ export function apply(ctx: Context, config: Config): void {
    */
   function recordWarnings(workdir: string | undefined, printed: Array<{ node: string; line: string }>): void {
     if (workdir === undefined || printed.length === 0) return
-    const invocationPath = join(workdir, '.refactory', 'invocation.json')
+    const refDir = join(workdir, '.refactory')
+    mkdirSync(refDir, { recursive: true })
+    const invocationPath = join(refDir, 'invocation.json')
     const invocation = existsSync(invocationPath) ? JSON.parse(readFileSync(invocationPath, 'utf8')).id : null
     const at = new Date().toISOString()
-    appendFileSync(join(workdir, '.refactory', 'events.jsonl'), printed.map(({ node, line }) => JSON.stringify({
+    appendFileSync(join(refDir, 'events.jsonl'), printed.map(({ node, line }) => JSON.stringify({
       schema_version: 1, run_id: resolve(workdir), invocation, at, kind: 'run_warning',
       node_id: node, state: 'warning', summary: line,
     }) + '\n').join(''))
