@@ -117,6 +117,8 @@ def test_product_registered_environment():
             "branch": "refactory/run-test",
             "base": "abc123",
             "head": "def456",
+            "target": worktree_dir,
+            "run": run_dir,
         }
         (refactory_dir / "worktree.json").write_text(json.dumps(record))
         os.environ["REFACTORY_WORKDIR"] = run_dir
@@ -196,6 +198,8 @@ def test_worker_import_sequence_has_overlay():
             "branch": "refactory/run-test",
             "base": "abc123",
             "head": "def456",
+            "target": worktree_dir,
+            "run": run_dir,
         }
         (refactory_dir / "worktree.json").write_text(json.dumps(record))
         os.environ["REFACTORY_WORKDIR"] = run_dir

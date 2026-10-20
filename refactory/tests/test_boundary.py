@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -186,7 +187,11 @@ def test_no_core_imports_product_static():
             for sub in imp_names:
                 full = f"{imp_name}.{sub}"
                 if _is_product(full, product_modules) and full not in allowed_for_mod:
-                    violations.append(f"{mod_name} -> {full}")
+                    # If the base module import is already allowed, its
+                    # imported names (attributes or submodules) are
+                    # implicitly covered by that allow-list entry.
+                    if imp_name not in allowed_for_mod:
+                        violations.append(f"{mod_name} -> {full}")
 
     # Scan core packs in refactory_packages (skip product packs)
     pack_class = boundary["refactory_packages"]
@@ -418,15 +423,16 @@ def test_references_exist_and_complete():
         for node in ast.walk(tree):
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
                 val = node.value
-                for prod in product_prefixes:
-                    if prod in val and f"refactory_dsh." in val:
-                        # Check it references a product module
-                        for pm in product_modules:
-                            if pm in val:
-                                key = (rel_path, pm)
-                                if key not in declared_refs:
-                                    missing.append(f"{rel_path} references {pm} in string constant")
-                                break
+                if "refactory_dsh." not in val:
+                    continue
+                for pm in product_prefixes:
+                    # Word-boundary match: pm must not be followed by an
+                    # identifier character, to avoid "refactory_dsh.create"
+                    # matching inside "refactory_dsh.create_ops".
+                    if re.search(re.escape(pm) + r'(?![a-zA-Z0-9_])', val):
+                        key = (rel_path, pm)
+                        if key not in declared_refs:
+                            missing.append(f"{rel_path} references {pm} in string constant")
                         break
 
     # Scan cordis.patch.yml for product module references
@@ -435,7 +441,7 @@ def test_references_exist_and_complete():
         content = patch_yml.read_text()
         rel_path = str(patch_yml.relative_to(_REPO))
         for pm in product_modules:
-            if pm in content:
+            if re.search(re.escape(pm) + r'(?![a-zA-Z0-9_])', content):
                 key = (rel_path, pm)
                 if key not in declared_refs:
                     missing.append(f"{rel_path} references {pm}")
@@ -452,7 +458,7 @@ def test_references_exist_and_complete():
             content = ts_path.read_text()
             rel_path = str(ts_path.relative_to(_REPO))
             for pm in product_modules:
-                if pm in content:
+                if re.search(re.escape(pm) + r'(?![a-zA-Z0-9_])', content):
                     key = (rel_path, pm)
                     if key not in declared_refs:
                         missing.append(f"{rel_path} references {pm}")
