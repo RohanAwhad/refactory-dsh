@@ -235,8 +235,8 @@ def focused_check(ctx: Any) -> dict[str, Any]:
             detail = (
                 "BLOCKING: these new tests pass without the change: "
                 + ", ".join(unexempted)
-                + ". Either make them fail on the base or add them to the "
-                "## Test guardedness exemptions section in design.md with reasons."
+                + ". Make them fail without the change, or explain in the "
+                "PR why each test pins existing behaviour."
             )
             ctx.write_text("check.txt", detail + "\n")
             payload["guardedness_blocked"] = True
@@ -398,6 +398,12 @@ def gate_verification(ctx: Any) -> str:
     Also enforces test guardedness in fast mode: focused_check is an op node
     and cannot return a Verdict, so guardedness blocking is checked here —
     it is the first gate after focused_check in the fast-mode pipeline.
+
+    Guardedness violations spend a ``repair_attempts`` slot (via
+    ``_repair(kind='check')``).  Verifier findings do NOT: the verifier's
+    noise is unmeasured, so it must not end a run on its own.  Findings are
+    written to ``repair.txt`` and set on ``repair_feedback`` so the next
+    emit sees them; the gate's own ``max_iterations`` bounds retries.
     """
     from refactory_dsh.verification import parse_verification_findings
 
@@ -411,7 +417,11 @@ def gate_verification(ctx: Any) -> str:
     findings = parse_verification_findings(ctx)
     if not findings:
         return "proceed"
-    return _repair(ctx, findings, kind="review")
+    # Advisory reloop: do not spend repair_attempts for verifier noise.
+    feedback = "\n".join(findings)
+    ctx.write_text("repair.txt", feedback + "\n")
+    ctx.set_fact("repair_feedback", feedback)
+    return Verdict("reloop", feedback)
 
 
 def report_artifact(ctx: Any) -> dict[str, Any]:

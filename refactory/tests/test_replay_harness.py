@@ -7,7 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from refactory_dsh.replay_harness import ReplayResult, ReplaySummary, replay_all, replay_one
+from refactory_dsh.replay_harness import (
+    ReplayResult, ReplaySummary, _finding_matches, replay_all, replay_one,
+)
 
 FIXTURES_PATH = Path(__file__).resolve().parent / "fixtures" / "evidence_log_entries.json"
 
@@ -16,9 +18,30 @@ def test_fixture_entries_have_required_fields():
     entries = json.loads(FIXTURES_PATH.read_text())
     assert len(entries) >= 3
     for entry in entries:
-        for field in ("id", "brief", "gap_description", "method", "diff",
-                      "expected_finding_pattern", "pre_fix_commit"):
+        for field in ("id", "brief", "gap_description", "method",
+                      "pre_fix_commit", "expected_finding_file",
+                      "expected_finding_terms"):
             assert field in entry, f"entry {entry.get('id', '?')} missing {field}"
+        assert isinstance(entry["expected_finding_terms"], list)
+        assert len(entry["expected_finding_terms"]) >= 1
+
+
+def test_finding_matches_file_and_term():
+    entry = {
+        "expected_finding_file": "design_ops.py",
+        "expected_finding_terms": ["marker", "unchanged"],
+    }
+    assert _finding_matches("BLOCKING: design_ops.py:245: unmarked marker sites", entry)
+    assert not _finding_matches("BLOCKING: other.py:10: marker issue", entry)
+    assert not _finding_matches("BLOCKING: design_ops.py:245: unrelated issue", entry)
+
+
+def test_finding_matches_case_insensitive():
+    entry = {
+        "expected_finding_file": "Base_Check.py",
+        "expected_finding_terms": ["Partial"],
+    }
+    assert _finding_matches("BLOCKING: base_check.py:580: partial parse accepted", entry)
 
 
 def test_replay_one_found():
@@ -28,8 +51,8 @@ def test_replay_one_found():
         "gap_description": "A rule site with no marker counted as changed",
         "method": "M1",
         "pre_fix_commit": "918151f1e4",
-        "diff": "--- a/refactory/refactory_dsh/design_ops.py\n+++ b/refactory/refactory_dsh/design_ops.py\n",
-        "expected_finding_pattern": "marker",
+        "expected_finding_file": "design_ops.py",
+        "expected_finding_terms": ["marker", "unchanged"],
     }
 
     def verifier(brief, diff, repo_path=None):
@@ -49,8 +72,8 @@ def test_replay_one_missed():
         "gap_description": "Run start accepted empty string as a valid brief",
         "method": "M13",
         "pre_fix_commit": "fcb2517800",
-        "diff": "--- a/refactory/refactory_dsh/interactive.py\n+++ b/refactory/refactory_dsh/interactive.py\n",
-        "expected_finding_pattern": "empty",
+        "expected_finding_file": "interactive.py",
+        "expected_finding_terms": ["empty", "blank", "missing"],
     }
 
     def verifier(brief, diff, repo_path=None):
@@ -68,14 +91,14 @@ def test_replay_one_noise():
         "gap_description": "unmarked sites accepted",
         "method": "M1",
         "pre_fix_commit": "918151f1e4",
-        "diff": "...",
-        "expected_finding_pattern": "marker",
+        "expected_finding_file": "design_ops.py",
+        "expected_finding_terms": ["marker", "unchanged"],
     }
 
     def verifier(brief, diff, repo_path=None):
         return [
             "BLOCKING: design_ops.py:245: a site with no marker is accepted",
-            "BLOCKING: design_ops.py:250: spurious noise finding",
+            "BLOCKING: other.py:250: spurious noise finding",
         ]
 
     result = replay_one(entry, verifier)
@@ -90,7 +113,7 @@ def test_replay_all_counts():
         if "design gate" in brief.lower():
             return [
                 "BLOCKING: design_ops.py:245: a site with no marker is accepted",
-                "BLOCKING: design_ops.py:250: spurious noise finding",
+                "BLOCKING: other.py:250: spurious noise finding",
             ]
         if "base commit" in brief.lower():
             return ["BLOCKING: base_check.py:580: partial parse results accepted"]
@@ -103,12 +126,34 @@ def test_replay_all_counts():
     assert summary.total_entries == 3
 
 
+def test_replay_all_skips_unreachable():
+    """Entries with repo_path=None are skipped, not replayed."""
+    entries = [
+        {"id": "1", "brief": "x", "method": "M1", "pre_fix_commit": "abc",
+         "repo_path": None,
+         "expected_finding_file": "f.py", "expected_finding_terms": ["x"]},
+        {"id": "2", "brief": "y", "method": "M3",
+         "expected_finding_file": "g.py", "expected_finding_terms": ["y"]},
+    ]
+
+    call_count = [0]
+    def verifier(brief, diff, repo_path=None):
+        call_count[0] += 1
+        return ["BLOCKING: g.py:1: y found"]
+
+    summary = replay_all(entries, verifier)
+    assert summary.skipped == 1
+    assert call_count[0] == 1, "unreachable entry must not be replayed"
+    assert summary.found == 1
+    assert summary.missed == 0
+
+
 def test_per_method_breakdown():
     entries = json.loads(FIXTURES_PATH.read_text())
 
     def mock_verifier(brief, diff, repo_path=None):
         if "design gate" in brief.lower():
-            return ["BLOCKING: marker issue"]
+            return ["BLOCKING: design_ops.py:245: marker issue"]
         return []
 
     summary = replay_all(entries, mock_verifier)

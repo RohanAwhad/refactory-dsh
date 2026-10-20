@@ -43,8 +43,9 @@ VERIFIER_PROMPT = (
     "\nFor each finding, report it as:\n"
     "BLOCKING: <file:line>: <description with a runnable counterexample or "
     "a cited file:line chain>\n\n"
-    "Do NOT read design.md, strategy.json or any review files. You verify "
-    "the change against the brief and the repository only.\n\n"
+    "design.md is in the run directory. Do NOT read it, or strategy.json, "
+    "or any review files. You verify the change against the brief and the "
+    "repository only.\n\n"
     "End with a line that is exactly VERDICT: PASS when there are no "
     "blocking findings, or VERDICT: FAIL when there are any."
 )
@@ -103,10 +104,10 @@ def wire_verification(graph: Any, *, fast: bool = False) -> None:
             reads=("reviews/verification.md", "focused-check.json", "check.txt"),
             writes=("reviews/verification-gate.txt", "fast-report.json", "repair.txt"),
             produces=("verification_gate", "repair_feedback", "repairs_used",
-                      "check_repairs_used", "review_repairs_used"),
+                      "check_repairs_used"),
             knobs=("repair_attempts",),
             max_iterations=4,
-            notes="proceed on PASS; reloop to emit on FAIL within repair bound",
+            notes="proceed on PASS; advisory reloop on FAIL (does not spend repair_attempts); guardedness blocks via _repair(kind='check')",
         ))
         # Remove focused_check→focused_qa edge
         graph.edges = [e for e in graph.edges
@@ -121,11 +122,10 @@ def wire_verification(graph: Any, *, fast: bool = False) -> None:
             evaluator=f"{OPS_FULL}:gate_verification",
             reads=("reviews/verification.md",),
             writes=("reviews/verification-gate.txt", "validation.txt"),
-            produces=("verification_gate", "validation", "attempts_used",
-                      "review_attempts_used"),
+            produces=("verification_gate", "validation"),
             knobs=("review_attempts",),
             max_iterations=4,
-            notes="proceed on PASS; reloop to emit on FAIL within review bound",
+            notes="proceed on PASS; advisory reloop on FAIL (does not spend review_attempts)",
         ))
         # Remove check→fork_qa (proceed) edge
         graph.edges = [e for e in graph.edges

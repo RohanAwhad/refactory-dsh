@@ -27,6 +27,7 @@ class ReplayResult:
     found: bool          # True if the verifier identified the known gap
     noise_count: int     # Number of findings that don't match the known gap
     findings: list[str]  # Raw findings from the verifier
+    skipped: bool = False  # True when the commit was unreachable
 
 
 @dataclass
@@ -35,28 +36,48 @@ class ReplaySummary:
     found: int           # Entries whose gap the verifier identified
     missed: int          # Entries whose gap the verifier did not identify
     noise: int           # Total noise findings across all entries
+    skipped: int = 0     # Entries skipped (commit unreachable)
     per_method: dict[str, dict[str, int]] = field(default_factory=dict)
     results: list[ReplayResult] = field(default_factory=list)
+
+
+def _finding_matches(finding: str, entry: dict) -> bool:
+    """Check whether a finding matches an entry's expected gap.
+
+    Matching uses the entry's ``expected_finding_file`` and
+    ``expected_finding_terms``.  A finding matches when it mentions the
+    expected file AND at least one of the key terms (case-insensitive).
+    """
+    lower = finding.lower()
+    expected_file = entry.get("expected_finding_file", "")
+    terms = entry.get("expected_finding_terms", [])
+    if not expected_file or not terms:
+        # Fallback to legacy single-pattern field
+        pattern = entry.get("expected_finding_pattern", "")
+        return bool(pattern and pattern.lower() in lower)
+    if expected_file.lower() not in lower:
+        return False
+    return any(t.lower() in lower for t in terms)
 
 
 def replay_one(entry: dict, verifier_fn: Callable) -> ReplayResult:
     """Replay one evidence-log entry through the verifier.
 
-    ``entry`` must have: id, brief, gap_description, method, diff,
-    expected_finding_pattern.
+    ``entry`` must have: id, brief, gap_description, method,
+    expected_finding_file, expected_finding_terms.
 
     ``verifier_fn(brief, diff, repo_path) -> list[str]`` returns blocking findings.
     ``repo_path`` is the path to a worktree checked out at the pre-fix commit,
     or None when no worktree is available (e.g. in unit tests).
 
-    Scoring: ``found`` is True when any finding contains the
-    ``expected_finding_pattern`` (case-insensitive substring match).
-    ``noise_count`` counts findings that do NOT match the pattern.
+    Scoring: ``found`` is True when any finding mentions the expected file
+    AND at least one key term (case-insensitive).
+    ``noise_count`` counts findings that do NOT match.
     """
-    findings = verifier_fn(entry["brief"], entry["diff"], entry.get("repo_path"))
-    pattern = entry["expected_finding_pattern"].lower()
-    matched = any(pattern in f.lower() for f in findings)
-    noise = sum(1 for f in findings if pattern not in f.lower())
+    diff = entry.get("diff", "")
+    findings = verifier_fn(entry["brief"], diff, entry.get("repo_path"))
+    matched = any(_finding_matches(f, entry) for f in findings)
+    noise = sum(1 for f in findings if not _finding_matches(f, entry))
     return ReplayResult(
         entry_id=entry["id"],
         method=entry["method"],
@@ -67,11 +88,24 @@ def replay_one(entry: dict, verifier_fn: Callable) -> ReplayResult:
 
 
 def replay_all(entries: list[dict], verifier_fn: Callable) -> ReplaySummary:
-    """Replay all entries and aggregate into a summary."""
+    """Replay all entries and aggregate into a summary.
+
+    Entries whose ``repo_path`` is ``None`` (commit unreachable) are skipped.
+    """
     results: list[ReplayResult] = []
     per_method: dict[str, dict[str, int]] = {}
+    skipped_count = 0
 
     for entry in entries:
+        # Actually skip unreachable entries
+        if entry.get("repo_path") is None and "repo_path" in entry:
+            results.append(ReplayResult(
+                entry_id=entry["id"], method=entry["method"],
+                found=False, noise_count=0, findings=[], skipped=True,
+            ))
+            skipped_count += 1
+            continue
+
         result = replay_one(entry, verifier_fn)
         results.append(result)
         method = result.method
@@ -84,7 +118,7 @@ def replay_all(entries: list[dict], verifier_fn: Callable) -> ReplaySummary:
         per_method[method]["noise"] += result.noise_count
 
     found = sum(1 for r in results if r.found)
-    missed = sum(1 for r in results if not r.found)
+    missed = sum(1 for r in results if not r.found and not r.skipped)
     noise = sum(r.noise_count for r in results)
 
     return ReplaySummary(
@@ -92,9 +126,23 @@ def replay_all(entries: list[dict], verifier_fn: Callable) -> ReplaySummary:
         found=found,
         missed=missed,
         noise=noise,
+        skipped=skipped_count,
         per_method=per_method,
         results=results,
     )
+
+
+def _build_diff(repo: Path, commit: str) -> str:
+    """Build the diff for a pre-fix commit against its parent."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), "diff", f"{commit}~1", commit],
+            capture_output=True, text=True, check=True,
+        )
+        return result.stdout
+    except subprocess.CalledProcessError:
+        return ""
 
 
 if __name__ == "__main__":
@@ -112,7 +160,20 @@ if __name__ == "__main__":
                         help="path to write the summary output")
     parser.add_argument("--repo", default=".",
                         help="repository to create worktrees from pre-fix commits")
+    parser.add_argument("--model", default=None,
+                        help="model name for the verifier backend (required)")
+    parser.add_argument("--provider", default="",
+                        help="provider for the model backend")
     args = parser.parse_args()
+
+    if not args.model:
+        print("error: --model is required; the replay harness needs a real "
+              "verifier backend, not a stub. Example:\n"
+              "  python -m refactory_dsh.replay_harness "
+              "--evidence refactory/tests/fixtures/evidence_log_entries.json "
+              "--model claude-sonnet-4-20250514 --repo .",
+              file=sys.stderr)
+        sys.exit(1)
 
     entries = json.loads(Path(args.evidence).read_text())
     replayable = [e for e in entries if e.get("pre_fix_commit")]
@@ -149,32 +210,74 @@ if __name__ == "__main__":
             except (subprocess.CalledProcessError, OSError):
                 pass
 
-    # Set up worktrees for replayable entries
+    # Set up worktrees and build diffs for replayable entries
+    actually_replayable: list[dict] = []
     for entry in replayable:
         commit = entry["pre_fix_commit"]
         wt = _create_worktree(commit)
         if wt is None:
             print(f"  {entry['id']}: commit {commit} is not reachable, skipping")
-            entry["repo_path"] = None
-        else:
-            entry["repo_path"] = str(wt)
+            continue
+        entry["repo_path"] = str(wt)
+        # Build the diff from git
+        entry["diff"] = _build_diff(repo, commit)
+        actually_replayable.append(entry)
 
-    # Default stub verifier for CLI use; real usage supplies a model-backed fn
-    def stub_verifier(brief: str, diff: str, repo_path: str | None = None) -> list[str]:
-        return []
+    # Build verifier function from the model client
+    from refactory_dsh.verification import VERIFICATION_METHODS, VERIFIER_PROMPT
+
+    def _make_verifier(model_name: str, provider: str):
+        """Create a model-backed verifier function."""
+        from refactory_dsh.model import DshModelClient
+        client = DshModelClient(route={
+            "worker_backend": "dsh", "model": model_name,
+            "provider": provider, "effort": "", "permission_mode": "default",
+        })
+
+        def verifier_fn(brief: str, diff: str, repo_path: str | None = None) -> list[str]:
+            prompt = (
+                f"Brief: {brief}\n\n"
+                f"Diff:\n{diff}\n\n"
+                + VERIFICATION_METHODS +
+                "\nFor each finding, report it as:\n"
+                "BLOCKING: <file:line>: <description>\n\n"
+                "End with VERDICT: PASS or VERDICT: FAIL.\n"
+            )
+            if repo_path:
+                prompt = f"Repository at: {repo_path}\n\n" + prompt
+            answer = client.complete(prompt)
+            # Extract BLOCKING lines
+            return [
+                line for line in answer.splitlines()
+                if line.strip().upper().startswith("BLOCKING:")
+            ]
+        return verifier_fn
+
+    verifier = _make_verifier(args.model, args.provider)
 
     try:
-        summary = replay_all(replayable, stub_verifier)
+        summary = replay_all(actually_replayable, verifier)
     finally:
         _remove_worktrees()
 
+    import datetime
     output = {
+        "model": args.model,
+        "date": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "total_entries": summary.total_entries,
         "found": summary.found,
         "missed": summary.missed,
         "noise": summary.noise,
+        "skipped": summary.skipped,
         "per_method": summary.per_method,
+        "results": [
+            {"entry_id": r.entry_id, "method": r.method,
+             "found": r.found, "noise_count": r.noise_count,
+             "skipped": r.skipped}
+            for r in summary.results
+        ],
     }
     Path(args.output).write_text(json.dumps(output, indent=2) + "\n")
     print(f"Wrote summary to {args.output}: found={summary.found}, "
-          f"missed={summary.missed}, noise={summary.noise}")
+          f"missed={summary.missed}, noise={summary.noise}, "
+          f"skipped={summary.skipped}")

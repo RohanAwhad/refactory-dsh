@@ -39,6 +39,11 @@ def test_verifier_is_design_blind():
     assert "Read the approved design from" not in node.prompt_template
 
 
+def test_verifier_prompt_says_design_md_is_in_run_dir():
+    """The prompt must say design.md is in the run directory and must not be read."""
+    assert "design.md is in the run directory" in VERIFIER_PROMPT
+
+
 def test_verifier_writes_verification_md():
     graph = DesignMode().build()
     assert "reviews/verification.md" in graph.nodes["verifier"].writes
@@ -114,11 +119,33 @@ def test_gate_verification_declares_writes_fast_mode():
     assert "reviews/verification-gate.txt" in gate.writes
 
 
+def test_gate_verification_does_not_spend_review_attempts_full():
+    """Full-mode gate_verification must NOT declare review_attempts_used."""
+    graph = DesignMode().build()
+    gate = graph.nodes["gate_verification"]
+    assert "review_attempts_used" not in gate.produces, (
+        "verification findings must not spend review_attempts"
+    )
+    assert "attempts_used" not in gate.produces, (
+        "verification findings must not spend overall attempts"
+    )
+
+
+def test_gate_verification_does_not_spend_repair_attempts_fast():
+    """Fast-mode gate_verification must NOT declare review_repairs_used."""
+    graph = DesignFastMode().build()
+    gate = graph.nodes["gate_verification"]
+    assert "review_repairs_used" not in gate.produces, (
+        "verification findings must not spend repair_attempts"
+    )
+
+
 # ── scripted run tests ────────────────────────────────────────────────────
 
 
 def test_verification_fail_reloops_to_emit_full_mode(tmp_path, monkeypatch):
-    """A BLOCKING finding from the verifier sends the attempt back to emit."""
+    """A BLOCKING finding from the verifier sends the attempt back to emit,
+    and the BLOCKING text appears in what the next emit receives."""
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
     from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
                                PITFALLS_ANSWER, RESEARCH_ANSWER,
@@ -134,12 +161,20 @@ def test_verification_fail_reloops_to_emit_full_mode(tmp_path, monkeypatch):
         VERIFICATION_PASS,                # second: PASS → proceed to reviews
         *REVIEW_ANSWERS,
     ]
+    model = FakeModel(answers)
     result = DesignMode().run(
-        tmp_path / "run", model=FakeModel(answers),
+        tmp_path / "run", model=model,
         verdicts={"gate_strategy": "proceed"},
         task={"name": "verify_test", "brief": "a tool", "check": "python tool.py"},
     )
     assert result.exit_ok, result.error
+    # The second emit prompt must contain the BLOCKING text from the verifier
+    emit_prompts = [p for p in model.prompts if "What went wrong last time" in p]
+    assert len(emit_prompts) >= 2, "emit must have been called at least twice"
+    second_emit = emit_prompts[1]
+    assert "negative values accepted" in second_emit, (
+        "the BLOCKING finding must reach the builder in the next emit's prompt"
+    )
 
 
 def test_verification_pass_proceeds_to_reviews_full_mode(tmp_path, monkeypatch):
@@ -165,12 +200,13 @@ def test_verification_pass_proceeds_to_reviews_full_mode(tmp_path, monkeypatch):
 
 
 def test_verification_fail_reloops_to_emit_fast_mode(tmp_path, monkeypatch):
-    """A BLOCKING finding from the verifier in fast mode sends the attempt back to emit."""
+    """A BLOCKING finding from the verifier in fast mode sends the attempt back to emit,
+    and the BLOCKING text appears in what the next emit receives."""
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
     from tests_support import (FakeModel, render)
     FAST_PLAN = "Change only the requested file."
     FAST_QA = json.dumps({"status": "pass", "checks": [{"name": "runs", "command": "python tool.py",
-                                                        "status": "pass", "evidence": "exit 0"}],
+                                                         "status": "pass", "evidence": "exit 0"}],
                           "findings": [], "not_run": []})
     VERIFICATION_FAIL = "BLOCKING: tool.py:1: negative values accepted\n\nVERDICT: FAIL"
     VERIFICATION_PASS = "No blocking findings.\n\nVERDICT: PASS"
@@ -186,11 +222,19 @@ def test_verification_fail_reloops_to_emit_fast_mode(tmp_path, monkeypatch):
     state = mode.state_dict()
     state["knobs"]["repair_attempts"]["value"] = 2
     mode.load_state_dict(state)
+    model = FakeModel(answers)
     result = mode.run(
-        tmp_path / "run", model=FakeModel(answers),
+        tmp_path / "run", model=model,
         task={"name": "verify_fast", "brief": "a tool", "check": "python tool.py"},
     )
     assert result.exit_ok, result.error
+    # The second emit prompt must contain the BLOCKING text from the verifier
+    emit_prompts = [p for p in model.prompts if "Repair feedback:" in p]
+    assert len(emit_prompts) >= 2, "emit must have been called at least twice"
+    second_emit = emit_prompts[1]
+    assert "negative values accepted" in second_emit, (
+        "the BLOCKING finding must reach the builder in the next emit's prompt"
+    )
 
 
 def test_verification_pass_proceeds_to_reviews_fast_mode(tmp_path, monkeypatch):
@@ -199,7 +243,7 @@ def test_verification_pass_proceeds_to_reviews_fast_mode(tmp_path, monkeypatch):
     from tests_support import (VERIFICATION_ANSWER, FakeModel, render)
     FAST_PLAN = "Change only the requested file."
     FAST_QA = json.dumps({"status": "pass", "checks": [{"name": "runs", "command": "python tool.py",
-                                                        "status": "pass", "evidence": "exit 0"}],
+                                                         "status": "pass", "evidence": "exit 0"}],
                           "findings": [], "not_run": []})
     answers = [FAST_PLAN, render({"tool.py": "print('built')\n"}), VERIFICATION_ANSWER, FAST_QA]
     result = DesignFastMode().run(

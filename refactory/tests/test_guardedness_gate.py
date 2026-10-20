@@ -115,6 +115,47 @@ def test_unavailable_guardedness_proceeds():
     assert result == []
 
 
+def test_cannot_run_on_base_not_blocked():
+    """Tests that cannot even run on the base (collection error) are NOT
+    'passing without the change' — they are excluded from guardedness blocking."""
+    guardedness = {
+        "summary": {"total_new_tests": 2, "guarding": 0, "not_guarding": 1,
+                     "cannot_run_on_base": 1},
+        "results": [
+            {"file": "test_new.py", "guarding": False, "file_level": "cannot_run_on_base"},
+            {"file": "test_trivial.py", "guarding": False, "file_level": "pass"},
+        ],
+    }
+    ctx = FakeCtx(
+        files={
+            "test-guardedness.json": json.dumps(guardedness),
+            "design.md": "# D\n\n## Summary\n\nS\n",
+        }
+    )
+    result = enforce_guardedness(ctx)
+    # Only test_trivial.py should be flagged, not test_new.py
+    assert result == ["test_trivial.py"]
+
+
+def test_cannot_run_on_base_alone_proceeds():
+    """When the only non-guarding test is cannot_run_on_base, proceed."""
+    guardedness = {
+        "summary": {"total_new_tests": 1, "guarding": 0, "not_guarding": 0,
+                     "cannot_run_on_base": 1},
+        "results": [
+            {"file": "test_new.py", "guarding": False, "file_level": "cannot_run_on_base"},
+        ],
+    }
+    ctx = FakeCtx(
+        files={
+            "test-guardedness.json": json.dumps(guardedness),
+            "design.md": "# D\n\n## Summary\n\nS\n",
+        }
+    )
+    result = enforce_guardedness(ctx)
+    assert result == []
+
+
 def test_reloop_message_names_tests():
     """The returned list names the specific test files."""
     guardedness = {
@@ -135,52 +176,41 @@ def test_reloop_message_names_tests():
     assert "test_b.py" in result
 
 
-def test_guardedness_enforced_in_check_artifact():
-    """Verify that check_artifact calls enforce_guardedness (integration-level check).
+def test_reloop_message_does_not_mention_editing_design_md():
+    """The guardedness refusal must NOT tell the builder to edit design.md.
 
-    Without the fix, check_artifact would return 'proceed' even with non-guarding tests.
-    This test mocks the environment to confirm the wiring exists.
+    The builder cannot write design.md, so the message should say to make
+    the test fail without the change, or explain in the PR.
     """
-    from refactory_dsh import design_ops
-    import inspect
-    source = inspect.getsource(design_ops.check_artifact)
-    assert "enforce_guardedness" in source, (
-        "check_artifact must call enforce_guardedness"
+    guardedness = {
+        "summary": {"total_new_tests": 1, "guarding": 0, "not_guarding": 1},
+        "results": [{"file": "test_foo.py", "guarding": False, "file_level": "pass"}],
+    }
+    ctx = FakeCtx(
+        files={
+            "test-guardedness.json": json.dumps(guardedness),
+            "design.md": "# D\n",
+        }
     )
-
-
-def test_guardedness_enforced_in_focused_check():
-    """Verify that focused_check calls enforce_guardedness for detection.
-
-    focused_check is an op node and cannot return a Verdict to reloop,
-    so it detects non-guarding tests and records guardedness_blocked in
-    focused-check.json. gate_verification (the first gate after focused_check)
-    reads the flag and does the actual reloop.
-    """
-    from refactory_dsh import fast_ops
-    import inspect
-    source = inspect.getsource(fast_ops.focused_check)
-    assert "enforce_guardedness" in source, (
-        "focused_check must call enforce_guardedness for detection"
+    # Simulate what check_artifact does when enforce_guardedness returns tests
+    unexempted = enforce_guardedness(ctx)
+    assert unexempted == ["test_foo.py"]
+    detail = (
+        "BLOCKING: these new tests pass without the change: "
+        + ", ".join(unexempted)
+        + ". Make them fail without the change, or explain in the "
+        "PR why each test pins existing behaviour."
     )
-    assert "guardedness_blocked" in source, (
-        "focused_check must set guardedness_blocked in the payload"
-    )
+    assert "design.md" not in detail.lower()
+    assert "make them fail" in detail.lower()
 
 
-def test_guardedness_enforcement_routed_through_gate_verification_fast():
-    """gate_verification in fast_ops enforces guardedness via the guardedness_blocked flag.
-
-    focused_check is an op node whose Verdict returns are silently ignored by the
-    executor, so the actual reloop happens in gate_verification — the first gate
-    node after focused_check in the fast-mode pipeline.
-    """
-    from refactory_dsh import fast_ops
-    import inspect
-    source = inspect.getsource(fast_ops.gate_verification)
-    assert "guardedness_blocked" in source, (
-        "gate_verification must check guardedness_blocked from focused-check.json"
-    )
+def test_focused_check_declares_check_txt_write():
+    """focused_check must declare check.txt in its writes for artifact mode."""
+    from refactory_dsh.fast import DesignFastMode
+    graph = DesignFastMode().build()
+    node = graph.nodes["focused_check"]
+    assert "check.txt" in node.writes
 
 
 def test_gate_verification_fast_blocks_on_guardedness():
@@ -204,21 +234,52 @@ def test_gate_verification_fast_blocks_on_guardedness():
     assert "test_foo.py" in result.reason
 
 
-def test_focused_check_declares_check_txt_write():
-    """focused_check must declare check.txt in its writes for artifact mode.
+def test_guardedness_reloops_in_full_mode_integration(tmp_path, monkeypatch):
+    """Guardedness enforcement in full mode reloops through repair(kind='check').
 
-    Without the fix, focused_check writes check.txt (for guardedness blocking
-    and inherited-failure messages) but does not declare it, causing
-    ExecutionError at runtime when enforce_writes is True.
+    Without the fix, check_artifact would return Verdict("reloop") without
+    calling repair(), so the run would hit max_iterations and raise
+    ExecutionError instead of a clean repair cycle.
     """
-    from refactory_dsh.fast import DesignFastMode
+    monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
+    from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+                               PITFALLS_ANSWER, RESEARCH_ANSWER,
+                               VERIFICATION_ANSWER,
+                               REVIEW_ANSWERS, FakeModel, render)
+    from refactory_dsh import base_check
+    from refactory_dsh.design import DesignMode
 
-    graph = DesignFastMode().build()
-    node = graph.nodes["focused_check"]
-    assert "check.txt" in node.writes, (
-        "focused_check must declare check.txt in its writes; "
-        "it writes this file for guardedness blocking and inherited-failure messages"
+    call_count = [0]
+
+    def mock_guardedness(ctx, command, timeout):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return {
+                "summary": {"total_new_tests": 1, "guarding": 0, "not_guarding": 1},
+                "results": [{"file": "test_foo.py", "guarding": False, "file_level": "pass"}],
+            }
+        return {
+            "summary": {"total_new_tests": 1, "guarding": 1, "not_guarding": 0},
+            "results": [{"file": "test_foo.py", "guarding": True}],
+        }
+
+    monkeypatch.setattr(base_check, "compute_test_guardedness", mock_guardedness)
+
+    answers = [
+        RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
+        DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+        render({"tool.py": "print('v1')\n"}),       # first emit: guardedness blocks
+        render({"tool.py": "print('v2')\n"}),       # second emit after repair
+        VERIFICATION_ANSWER,
+        *REVIEW_ANSWERS,
+    ]
+    result = DesignMode().run(
+        tmp_path / "run", model=FakeModel(answers),
+        verdicts={"gate_strategy": "proceed"},
+        task={"name": "guard_full", "brief": "a tool", "check": "python tool.py"},
     )
+    assert result.exit_ok, result.error
+    assert call_count[0] >= 2, "guardedness must be computed at least twice"
 
 
 def test_guardedness_reloops_in_fast_mode_integration(tmp_path, monkeypatch):
@@ -228,10 +289,6 @@ def test_guardedness_reloops_in_fast_mode_integration(tmp_path, monkeypatch):
     writes check.txt and sets guardedness_blocked in focused-check.json, the
     verifier runs, then gate_verification reads the flag and reloops to emit.
     On the second attempt guardedness passes and the run completes.
-
-    Without the fix (check.txt in focused_check's writes and guardedness_blocked
-    routing in gate_verification), this test would either raise ExecutionError
-    (undeclared write) or proceed without relooping.
     """
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
     from tests_support import FakeModel, render, VERIFICATION_ANSWER

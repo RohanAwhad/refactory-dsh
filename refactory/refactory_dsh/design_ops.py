@@ -448,12 +448,11 @@ def check_artifact(ctx: Any) -> str:
             detail = (
                 "BLOCKING: these new tests pass without the change: "
                 + ", ".join(unexempted)
-                + ". Either make them fail on the base or add them to the "
-                "## Test guardedness exemptions section in design.md with reasons."
+                + ". Make them fail without the change, or explain in the "
+                "PR why each test pins existing behaviour."
             )
             ctx.write_text("check.txt", detail + "\n")
-            ctx.set_fact("validation", detail)
-            return Verdict("reloop", detail)
+            return repair(ctx, [detail])
         ctx.set_fact("validation", "(the check passed)")
         return "proceed"
 
@@ -523,8 +522,13 @@ def check_artifact(ctx: Any) -> str:
 
 
 def gate_verification(ctx: Any) -> str:
-    """Proceed when the verifier finds no blocking issues; reloop to emit otherwise."""
-    from refactory_dsh.create_ops import repair
+    """Proceed when the verifier finds no blocking issues; reloop to emit otherwise.
+
+    Verifier findings do NOT spend ``review_attempts``: the verifier's noise
+    is unmeasured, so it must not end a run on its own.  The gate's own
+    ``max_iterations`` bounds retries.  Findings are written to
+    ``validation.txt`` and set on ``validation`` so the next emit sees them.
+    """
     from refactory_dsh.verification import parse_verification_findings
 
     findings = parse_verification_findings(ctx)
@@ -534,7 +538,9 @@ def gate_verification(ctx: Any) -> str:
 
     feedback = "\n".join(findings)
     ctx.write_text("reviews/verification-gate.txt", feedback + "\n")
-    return repair(ctx, findings, kind="review")
+    ctx.write_text("validation.txt", feedback + "\n")
+    ctx.set_fact("validation", feedback)
+    return Verdict("reloop", feedback)
 
 
 def enforce_guardedness(ctx: Any) -> list[str]:
@@ -542,6 +548,10 @@ def enforce_guardedness(ctx: Any) -> list[str]:
 
     Reads test-guardedness.json (already written by check_artifact)
     and design.md's ## Test guardedness exemptions section.
+
+    ``cannot_run_on_base`` files (collection error on the base, typically
+    because they import newly-added code) are excluded: they are not
+    "passing without the change".
     """
     if not ctx.exists("test-guardedness.json"):
         return []
@@ -555,9 +565,11 @@ def enforce_guardedness(ctx: Any) -> list[str]:
     # Collect non-guarding test file paths.
     # compute_test_guardedness (base_check.py) produces {"file": ..., "guarding": bool},
     # NOT {"test_file": ..., "status": "not_guarding"}.
+    # Exclude "cannot_run_on_base" entries — those fail on the base (collection
+    # error), so they are not "passing without the change".
     non_guarding = []
     for result in guardedness.get("results", []):
-        if result.get("guarding") is False:
+        if result.get("guarding") is False and result.get("file_level") != "cannot_run_on_base":
             non_guarding.append(result.get("file", "unknown"))
 
     if not non_guarding:

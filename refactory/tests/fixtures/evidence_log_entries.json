@@ -5,8 +5,8 @@
     "gap_description": "A rule site with no [changed]/[left] marker counted as changed, so a design could list a site without committing to a plan",
     "method": "M1",
     "pre_fix_commit": "918151f1e4",
-    "diff": "--- a/refactory/refactory_dsh/design_ops.py\n+++ b/refactory/refactory_dsh/design_ops.py\n@@ -245,6 +245,12 @@\n+    unmarked = [s for s in sites if not _has_marker(s)]\n+    if unmarked:\n+        problems.append(f\"rule sites without [changed]/[left] marker: {unmarked}\")\n",
-    "expected_finding_pattern": "marker"
+    "expected_finding_file": "design_ops.py",
+    "expected_finding_terms": ["marker", "unchanged", "unmarked"]
   },
   {
     "id": "5",
@@ -14,8 +14,8 @@
     "gap_description": "Excusal accepted partial parses (pytest ERROR, a later non-test step) and masked runs (-x, pnpm test && pytest with the inherited failure first)",
     "method": "M1",
     "pre_fix_commit": "ceea30362a",
-    "diff": "--- a/refactory/refactory_dsh/base_check.py\n+++ b/refactory/refactory_dsh/base_check.py\n@@ -580,5 +580,8 @@\n+    if not parsed_tests:\n+        return {\"unavailable\": \"could not parse any test results from the check output\"}\n+    for entry in parsed_tests:\n+        if entry.get(\"status\") == \"error\":\n+            non_test_entries.append(entry)\n",
-    "expected_finding_pattern": "partial"
+    "expected_finding_file": "base_check.py",
+    "expected_finding_terms": ["partial", "parse", "error", "collection"]
   },
   {
     "id": "21",
@@ -23,7 +23,7 @@
     "gap_description": "Run start accepted any value equal to the knob's default, and a brief's default is empty string, so a mode declaring a required brief still started with no brief at all",
     "method": "M13",
     "pre_fix_commit": "fcb2517800",
-    "diff": "--- a/refactory/refactory_dsh/interactive.py\n+++ b/refactory/refactory_dsh/interactive.py\n@@ -142,3 +142,6 @@\n+    for knob in mode.knobs():\n+        if knob.required and not task.get(knob.name):\n+            raise ValueError(f\"required knob {knob.name!r} is missing or empty\")\n",
-    "expected_finding_pattern": "empty"
+    "expected_finding_file": "interactive.py",
+    "expected_finding_terms": ["empty", "blank", "missing", "default"]
   }
 ]

@@ -26,7 +26,8 @@ The `--evidence` file is a JSON array of entries. Each entry must have:
 | `method` | string | The method that found it (e.g. `M1`, `M3`) |
 | `pre_fix_commit` | string | The commit hash before the fix was applied |
 | `diff` | string | The diff from the pre-fix commit |
-| `expected_finding_pattern` | string | Substring to match in verifier findings |
+| `expected_finding_file` | string | File name that must appear in a matching finding |
+| `expected_finding_terms` | list[string] | Key terms; at least one must appear alongside the file |
 
 ### Output format
 
@@ -48,12 +49,14 @@ The `--output` file is a JSON object:
 
 ### Scoring
 
-- **found**: the verifier produced at least one finding that contains the
-  entry's `expected_finding_pattern` (case-insensitive substring match).
+A finding matches when it mentions the entry's `expected_finding_file` AND
+at least one of the `expected_finding_terms` (case-insensitive).
+
+- **found**: the verifier produced at least one matching finding.
 - **missed**: the verifier produced no matching finding.
-- **noise**: each blocking finding that does NOT match the expected pattern
-  counts as one noise finding. Noise is reported but not marked wrong
-  automatically.
+- **noise**: each blocking finding that does NOT match counts as one noise
+  finding. Noise is reported but not marked wrong automatically.
+- **skipped**: the entry's pre-fix commit was not reachable in the repo.
 
 ### Committed baseline
 
@@ -66,8 +69,13 @@ baseline is produced after merge by running:
 python -m refactory_dsh.replay_harness \
   --evidence refactory/tests/fixtures/evidence_log_entries.json \
   --output refactory/tests/fixtures/verifier_baseline.json \
+  --model claude-sonnet-4-20250514 \
   --repo .
 ```
+
+The `--model` argument is required: the replay harness needs a real
+model-backed verifier to produce meaningful results. A stub that returns
+no findings would write a baseline of all zeros, which is not useful.
 
 Record the result on #400. Reviewers must not block on its absence.
 
