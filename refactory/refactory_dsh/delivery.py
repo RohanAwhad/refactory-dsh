@@ -875,9 +875,19 @@ def _deliver(ctx: Any, found: worktree.Worktree, planned: dict[str, Any], *,
         check_failure = _check_merged(ctx, found, merge.merge_commit, reviewed_commit,
                                       check_timeout_s)
         if check_failure:
+            # R1: a signal crash in the merged-tree check stops as infrastructure.
+            if "killed by SIG" in check_failure or "killed by signal" in check_failure:
+                raise ValueError(
+                    f"delivery stopped: infrastructure failure in merged-tree check: {check_failure}"
+                )
             merge = MergeResult(check_failed=check_failure)
             target_guard.warn(f"the check failed on the merged result: {check_failure[:500]}; "
                               "delivering the reviewed commit")
+    # R1: a signal crash in _merge_target's generate stops as infrastructure.
+    if merge.abandoned and ("killed by SIG" in merge.abandoned or "killed by signal" in merge.abandoned):
+        raise ValueError(
+            f"delivery stopped: infrastructure failure in merge: {merge.abandoned}"
+        )
     push_head = merge.merge_commit or found.head
 
     # ── rewrite the PR body with merge information ────────────────────

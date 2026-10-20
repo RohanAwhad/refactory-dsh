@@ -518,7 +518,7 @@ def check_artifact(ctx: Any) -> str:
         changed_files = set(base_check._all_changed_files(Path(found.path), found.base))
         for failure in sorted(attempt_failures):
             if failure not in filtered.base_failures:
-                test_file = failure.split("::")[0] if "::" in failure else ""
+                test_file = base_check._test_file(failure)
                 if test_file and test_file not in changed_files:
                     guarantee_lines.append(
                         f"Broken guarantee: {failure} passes on the base but "

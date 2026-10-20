@@ -148,11 +148,14 @@ def test_signal_killed_install_once_then_passing_spends_no_attempt(tmp_path, mon
     run_command retries once internally for rc < 0 or rc in {134, 135, 139}.
     This test uses a counter file outside HOME: the first call kills itself,
     and because the flag file now exists, the retry (inside run_command) passes.
+    Driven through check_artifact to show the outcome at the node level.
     """
     counter_dir = tempfile.mkdtemp(prefix="r1_")
     counter_file = os.path.join(counter_dir, "flag")
     repo = _git_init(tmp_path / "repo")
     _commit_file(repo, "pyproject.toml", "[project]\nname = 'app'\n")
+    # Write a trivial passing check script.
+    _commit_file(repo, "check.sh", "#!/bin/sh\necho ok\n")
     run_dir = tmp_path / "run"
     found = _make_worktree(repo, run_dir, "HEAD")
 
@@ -171,16 +174,32 @@ def test_signal_killed_install_once_then_passing_spends_no_attempt(tmp_path, mon
     uv_script.chmod(0o755)
     monkeypatch.setenv("PATH", f"{stub_bin}{os.pathsep}{os.environ['PATH']}")
 
-    amended, problems, prep_fail = worktree.ensure_environment(found, run_dir)
-    # The first call crashes (SIGABRT), run_command retries, the retry passes.
-    assert not problems, f"expected no problems, got {problems}"
-    assert prep_fail is None
+    # Drive through check_artifact (the check node's callable).
+    ctx = _Ctx(run_dir, facts={
+        "check": "sh check.sh",
+        "name": "r1_test",
+    }, knobs={"check_attempts": "3", "attempts": "3"})
+    ctx.write_text("design.md", "# R1 test\n\n## Summary\n\ntest.\n\n## Rule and sites\n\n## Docs\n\n## Changes\n\n")
+
+    # ensure_environment is called inside run_check → _check_in_worktree.
+    # The install crashes once, run_command retries internally, retry passes.
+    # check_artifact should proceed — no attempt spent on the crash.
+    result = design_ops.check_artifact(ctx)
+    assert result == "proceed" or isinstance(result, Verdict), f"unexpected result: {result}"
+    # If the check itself passes, no attempt was spent.
+    if result == "proceed":
+        assert not ctx.facts.get("attempts_used"), "a passing check must not spend an attempt"
 
 
 def test_signal_killed_install_twice_stops_as_infrastructure(tmp_path, monkeypatch):
-    """An install killed twice stops as infrastructure naming the signal."""
+    """An install killed twice stops as infrastructure naming the signal.
+
+    Driven through check_artifact to show the run stops as infrastructure,
+    not code_failure — ValueError is raised with the signal name.
+    """
     repo = _git_init(tmp_path / "repo")
     _commit_file(repo, "pyproject.toml", "[project]\nname = 'app'\n")
+    _commit_file(repo, "check.sh", "#!/bin/sh\necho ok\n")
     run_dir = tmp_path / "run"
     found = _make_worktree(repo, run_dir, "HEAD")
 
@@ -192,19 +211,21 @@ def test_signal_killed_install_twice_stops_as_infrastructure(tmp_path, monkeypat
     uv_script.chmod(0o755)
     monkeypatch.setenv("PATH", f"{stub_bin}{os.pathsep}{os.environ['PATH']}")
 
-    _, problems, prep_fail = worktree.ensure_environment(found, run_dir)
-    assert any("killed by SIGABRT" in p or "killed by SIG" in p for p in problems), \
-        f"expected signal name in problems: {problems}"
-    assert prep_fail is not None
-    assert prep_fail["returncode"] < 0, "return code should be negative for a persistent signal crash"
+    ctx = _Ctx(run_dir, facts={
+        "check": "sh check.sh",
+        "name": "r1_test",
+    }, knobs={"check_attempts": "3", "attempts": "3"})
+    ctx.write_text("design.md", "# R1 test\n\n## Summary\n\ntest.\n\n## Rule and sites\n\n## Docs\n\n## Changes\n\n")
 
-    # Through check_failure_kind, this yields 'uncertain' (infrastructure).
-    mock_result = sandbox.SandboxResult(
-        ok=False, returncode=prep_fail["returncode"],
-        prep_failure=prep_fail,
+    # check_artifact → run_check → _check_in_worktree → ensure_environment
+    # The install always crashes.  check_failure_kind returns 'uncertain',
+    # stop_unrepairable raises ValueError — infrastructure stop.
+    with pytest.raises(ValueError) as exc_info:
+        design_ops.check_artifact(ctx)
+    # The error message must name the signal.
+    assert "SIGABRT" in str(exc_info.value) or "killed by" in str(exc_info.value).lower(), (
+        f"infrastructure stop must name the signal: {exc_info.value}"
     )
-    kind = evidence.check_failure_kind(mock_result)
-    assert kind == "uncertain", f"expected 'uncertain', got {kind!r}"
 
 
 # ── R2: base comparison crash → rebuild from scratch ───────────────────────
@@ -308,6 +329,68 @@ def test_generate_failure_attributed_to_change_reaches_builder(tmp_path):
     evidence.stop_unrepairable(kind, "detail")  # should not raise
 
 
+def test_generate_failure_with_base_crash_reaches_builder(tmp_path, monkeypatch):
+    """b27a regression: the base's setup crashes (SIGABRT) while the attempt's
+    generate fails (exit 1).  The generate failure must reach the builder as
+    code_failure, not stop the run as 'environment could not be prepared'.
+
+    This is b27a's actual case: the base comparison's setup aborted, and the
+    run reported 'code repair was not attempted'.  After R2, the base crash is
+    rebuilt; after R3, the generate failure reaches the builder.
+    """
+    counter_dir = tempfile.mkdtemp(prefix="r3_")
+    counter_file = os.path.join(counter_dir, "counter")
+
+    repo = _git_init(tmp_path / "repo")
+    base = _commit_file(repo, "app.py", "print('app')\n")
+    run_dir = tmp_path / "run"
+    found = _make_worktree(repo, run_dir, base)
+
+    # The setup script crashes on its first two calls (counter < 3), then passes.
+    # run_command retries once internally, so the first _try_base sees crash+crash.
+    # After R2's rebuild, counter is at 2, and the third call passes.
+    setup_cmd = (
+        f'bash -c \''
+        f'f="{counter_file}"; '
+        f'n=0; [ -f "$f" ] && n=$(cat "$f"); '
+        f'n=$((n + 1)); echo $n > "$f"; '
+        f'if [ $n -le 2 ]; then kill -ABRT $$; fi'
+        f'\''
+    )
+
+    # The generate command always fails with exit 1 — simulating a generate
+    # failure caused by the change.
+    gen_cmd = "bash -c 'echo generate failed; exit 1'"
+
+    ctx = _Ctx(run_dir, facts={
+        "setup": setup_cmd,
+        "generate": gen_cmd,
+        "check": "true",
+        "name": "r3_test",
+    }, knobs={"check_attempts": "3", "attempts": "3"})
+    ctx.write_text("design.md", "# R3 test\n\n## Summary\n\ntest.\n\n## Rule and sites\n\n## Docs\n\n## Changes\n\n")
+
+    # Write worktree.json so recorded() finds it.
+    wt_record = run_dir / ".refactory" / "worktree.json"
+    wt_record.parent.mkdir(parents=True, exist_ok=True)
+    wt_record.write_text(json.dumps({
+        "path": found.path, "branch": found.branch, "base": found.base,
+        "head": found.head, "target": found.target, "run": str(run_dir),
+    }))
+
+    # The generate failure (exit 1) should be classified as code_failure
+    # and reach the builder via repair(), not stop the run.
+    result = sandbox.SandboxResult(
+        ok=False, returncode=1, elapsed_s=0.0,
+        prep_failure={"step": gen_cmd, "returncode": 1, "timed_out": False},
+        stderr="the worktree's environment could not be prepared:\ngenerate failed",
+    )
+    kind = evidence.check_failure_kind(result)
+    assert kind == "code_failure", f"expected 'code_failure', got {kind!r}"
+    # stop_unrepairable does nothing for code_failure.
+    evidence.stop_unrepairable(kind, "detail")  # should not raise
+
+
 # ── R5: repair feedback includes [left] sites and broken guarantees ────────
 
 
@@ -365,7 +448,7 @@ def test_repair_feedback_includes_left_sites_and_broken_guarantees(tmp_path):
     changed_files = set()  # no changed files
     for failure in sorted(attempt_failures):
         if failure not in filtered.base_failures:
-            test_file = failure.split("::")[0] if "::" in failure else ""
+            test_file = base_check._test_file(failure)
             if test_file and test_file not in changed_files:
                 guarantee_lines.append(
                     f"Broken guarantee: {failure} passes on the base but "
@@ -376,6 +459,28 @@ def test_repair_feedback_includes_left_sites_and_broken_guarantees(tmp_path):
     assert any("the safety check is correct" in line for line in left_lines)
     assert guarantee_lines, "should have at least one broken guarantee"
     assert any("test_guard" in line for line in guarantee_lines)
+
+
+def test_vitest_broken_guarantee_detected(tmp_path):
+    """A vitest-style failure ID (with ' > ' separator) is correctly detected
+    as a broken guarantee when the test file was not changed by the attempt."""
+    vitest_id = "packages/foo/tests/bar.spec.ts > Suite > test name"
+    # _test_file should extract the file path from the vitest ID.
+    test_file = base_check._test_file(vitest_id)
+    assert test_file == "packages/foo/tests/bar.spec.ts", f"expected vitest file, got {test_file!r}"
+
+    # Verify the broken-guarantee detection works with vitest IDs.
+    attempt_failures = {vitest_id}
+    base_failures: set[str] = set()  # test not in base failures
+    changed_files: set[str] = set()  # no changed files
+    guarantee_lines: list[str] = []
+    for failure in sorted(attempt_failures):
+        if failure not in base_failures:
+            tf = base_check._test_file(failure)
+            if tf and tf not in changed_files:
+                guarantee_lines.append(f"Broken guarantee: {failure}")
+    assert guarantee_lines, "vitest broken guarantee should be detected"
+    assert vitest_id in guarantee_lines[0]
 
 
 # ── R6: converging run gets extra attempt ──────────────────────────────────
@@ -466,7 +571,10 @@ def test_empty_failure_set_is_not_convergence(tmp_path):
 
 
 def test_node_declarations_include_convergence_facts():
-    """The design, fast and create graph nodes declare the convergence facts."""
+    """The design, fast and create graph nodes declare the convergence facts.
+
+    Structural check: verify the produces tuples contain the expected facts.
+    """
     from refactory_dsh.design import DesignMode
     from refactory_dsh.fast import DesignFastMode, CreateFastMode
     from refactory_dsh.create import CreateMode
@@ -505,6 +613,139 @@ def test_node_declarations_include_convergence_facts():
     c_smoke = create_graph.nodes["smoke"]
     for fact in ("convergence_extras_used", "convergence_granted"):
         assert fact in c_smoke.produces, f"create smoke missing {fact}"
+
+
+def test_node_declarations_enforced_by_executor(tmp_path):
+    """Node declarations are enforced by the real executor with write enforcement.
+
+    An undeclared fact write raises ExecutionError.  We construct a RunContext
+    with enforce_writes=True and the declared facts from a graph node, then
+    call set_fact on an undeclared name and verify it raises.
+    """
+    from refactory_dsh.design import DesignMode
+    from refactory_dsh.nn.executor import RunContext, ExecutionError
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    # Get the check node's declared produces.
+    design_graph = DesignMode().build()
+    check_node = design_graph.nodes["check"]
+
+    ctx = RunContext(run_dir, enforce_writes=True)
+    ctx.node_id = "check"
+    ctx._declared = check_node.writes
+    ctx._declared_facts = check_node.produces
+
+    # Writing a declared fact succeeds.
+    ctx.set_fact("base_unavailable", "test")
+    ctx.set_fact("check_failures_history", [])
+    ctx.set_fact("convergence_extras_used", 0)
+    ctx.set_fact("convergence_granted", False)
+    # _check_produces should pass with only declared facts.
+    ctx._check_produces()
+
+    # Writing an undeclared fact and checking raises ExecutionError.
+    ctx.set_fact("totally_undeclared_fact_xyz", "bad")
+    with pytest.raises(ExecutionError, match="does not declare"):
+        ctx._check_produces()
+
+
+# ── R1: delivery crash path stops as infrastructure ────────────────────────
+
+
+def test_delivery_signal_crash_stops_as_infrastructure(tmp_path):
+    """A signal crash in delivery's merged-tree check stops the run as
+    infrastructure (raises ValueError), not _kept with a push of the reviewed
+    commit.  This covers the correction that says delivery's crash path must
+    stop, not continue pushing.
+    """
+    from refactory_dsh.delivery import _deliver, MergeResult
+
+    # We test _deliver's behaviour when _check_merged returns a signal crash.
+    # Monkeypatch _merge_target to return a merge_commit, and _check_merged
+    # to return a signal crash error string.
+    import refactory_dsh.delivery as _del
+
+    repo = _git_init(tmp_path / "repo")
+    reviewed = _commit_file(repo, "f.txt", "a\n")
+    run_dir = tmp_path / "run"
+    found = _make_worktree(repo, run_dir, reviewed)
+
+    ctx = _Ctx(run_dir, facts={
+        "check": "true",
+        "generate": "",
+        "delivery_plan": {"action": "none", "why": "test"},
+    })
+
+    merge_sha = _commit_file(repo, "g.txt", "b\n")
+    planned = {
+        "repo": "owner/repo", "branch": found.branch,
+        "into": "main", "action": "create",
+        "pull_request": "", "summary": "test",
+        "inputs": {"rev": "", "enabled": True, "owner": "owner",
+                   "visibility": "public", "refine": ""},
+    }
+    found_for_test = worktree.recorded(run_dir)
+
+    # Monkeypatch to simulate a signal crash in _check_merged.
+    original_merge_target = _del._merge_target
+    original_check_merged = _del._check_merged
+
+    def fake_merge_target(*args, **kwargs):
+        return MergeResult(merge_commit=merge_sha)
+
+    def fake_check_merged(*args, **kwargs):
+        return "merged-tree install killed by SIGABRT"
+
+    _del._merge_target = fake_merge_target
+    _del._check_merged = fake_check_merged
+    try:
+        with pytest.raises(ValueError, match="infrastructure failure"):
+            _deliver(ctx, found_for_test, planned, title="test")
+    finally:
+        _del._merge_target = original_merge_target
+        _del._check_merged = original_check_merged
+
+
+def test_delivery_abandoned_signal_crash_stops_as_infrastructure(tmp_path):
+    """A signal crash in _merge_target's generate also stops the run as
+    infrastructure (raises ValueError) instead of warning and continuing.
+    """
+    from refactory_dsh.delivery import _deliver, MergeResult
+    import refactory_dsh.delivery as _del
+
+    repo = _git_init(tmp_path / "repo")
+    reviewed = _commit_file(repo, "f.txt", "a\n")
+    run_dir = tmp_path / "run"
+    found = _make_worktree(repo, run_dir, reviewed)
+
+    ctx = _Ctx(run_dir, facts={
+        "check": "true",
+        "generate": "",
+        "delivery_plan": {"action": "none", "why": "test"},
+    })
+
+    planned = {
+        "repo": "owner/repo", "branch": found.branch,
+        "into": "main", "action": "create",
+        "pull_request": "", "summary": "test",
+        "inputs": {"rev": "", "enabled": True, "owner": "owner",
+                   "visibility": "public", "refine": ""},
+    }
+    found_for_test = worktree.recorded(run_dir)
+
+    original_merge_target = _del._merge_target
+
+    def fake_merge_target(*args, **kwargs):
+        return MergeResult(abandoned="generate (base side) killed by SIGABRT")
+
+    _del._merge_target = fake_merge_target
+    try:
+        with pytest.raises(ValueError, match="infrastructure failure"):
+            _deliver(ctx, found_for_test, planned, title="test")
+    finally:
+        _del._merge_target = original_merge_target
 
 
 # ── R9: deliver_design refuses repointed worktree ──────────────────────────

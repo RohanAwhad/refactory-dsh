@@ -738,6 +738,11 @@ the crash persists, the call site normalises the `prep_failure` dict's `returnco
 to a negative signal number so `check_failure_kind` returns `'uncertain'`
 (infrastructure), and the run stops without spending a code attempt.
 
+In delivery, a signal crash in `_check_merged` or in `_merge_target`'s generate
+stops the run as infrastructure (raises ValueError) rather than continuing to push
+the reviewed commit. This prevents a crash from being silently swallowed with a
+`_kept` outcome.
+
 ## 11. Base comparison discard-and-rebuild on crash (dm-105)
 
 When any step of the base comparison — install, generate, setup or the check

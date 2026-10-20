@@ -204,6 +204,10 @@ def validate_package(ctx: Any) -> str:
 
 
 def focused_check(ctx: Any) -> dict[str, Any]:
+    # R2: clear base_unavailable at the start of each attempt so the PR
+    # reflects the final attempt's base comparison.
+    ctx.set_fact("base_unavailable", "")
+
     output = str(ctx.facts.get("artifact") or ctx.facts.get("package_path") or "")
     if not output:
         raise ValueError("focused QA needs the materialised output path")
@@ -331,7 +335,7 @@ def focused_check(ctx: Any) -> dict[str, Any]:
                     _changed_files = set(_bc._all_changed_files(Path(found.path), found.base))
                     for _failure in sorted(_attempt_failures):
                         if _failure not in filtered.base_failures:
-                            _tf = _failure.split("::")[0] if "::" in _failure else ""
+                            _tf = _bc._test_file(_failure)
                             if _tf and _tf not in _changed_files:
                                 _guarantee_lines.append(
                                     f"Broken guarantee: {_failure} passes on the base but "
