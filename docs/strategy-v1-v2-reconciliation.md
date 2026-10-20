@@ -18,7 +18,13 @@ Two codebases implement overlapping but architecturally divergent workflow-execu
 | Package model | Single Python package | pnpm monorepo (8 packages) + Python package |
 | UI | Dashboard + MCP server | DSH web UI + Modes panel (React) |
 
-The IR fork is explicit: `refactory_dsh/ir.py:4-5` states "Copied from `factory/workflow/primitives.py` in remote-factory at commit `e7eb24906a`". An approved plan (`dsh-execution-backend.md`) exists to pull the DSH runtime into remote-factory as an alternate workflow executor, but this has not been implemented.
+The IR fork is explicit: `refactory_dsh/ir.py:4-5` states "Copied from `factory/workflow/primitives.py` in remote-factory at commit `e7eb24906a`".
+
+### Superseded plan: `dsh-execution-engine.md`
+
+A prior proposal (`docs/design/dsh-execution-engine.md` in remote-factory, 322 lines) described integrating DSH *into* remote-factory as the execution engine via three layers: L1 (`DshRunner` as a `Runner` protocol plugin), L2 (DSH as the default executor), L3 (DoltLite data plane). Status: "proposal. Nothing in this document is implemented."
+
+This strategy supersedes L2 and L3 of that plan by going the opposite direction — pulling v1 into v2 via submodule rather than embedding DSH into v1. L1 (`DshRunner` as a v1 `Runner` plugin) remains independently useful for v1 users who want DSH model diversity without migrating to v2, but is not on the critical path.
 
 ---
 
@@ -149,7 +155,18 @@ Run v2's agent nodes inside v1's containment by invoking `factory contained --ta
 
 ### OpenShell execution boundary
 
-Before estimating integration work, we need to understand what sits where in v1's OpenShell stack:
+The confinement layer's transitive dependency chain has been verified:
+
+```
+factory/contained/openshell.py
+├── factory.contained.errors      — no imports beyond __future__
+├── factory.contained.provenance  — stdlib only (hashlib, dataclasses, pathlib)
+└── factory.podman                — stdlib only (hashlib, os, shlex, dataclasses, pathlib)
+```
+
+`factory/__init__.py` imports only `logging`, `os`, `sys`, and `structlog`. Since v2 already depends on `structlog`, the `sys.path` adapter will not introduce any new dependencies. The heavy deps (anthropic, langfuse, networkx, fastapi) are not triggered.
+
+What sits where in v1's OpenShell stack:
 
 | Layer | What it does | Location in v1 | Reusable by v2? |
 |---|---|---|---|
@@ -290,9 +307,9 @@ Validate the packaging approach and OpenShell boundary before committing to late
 3. Replace v2's forked `ir.py` with re-exports from adapter
 4. Run one representative v2 workflow end-to-end on the shared IR, via `uv run` / supported install path
 5. Verify IR serialization round-trip: v2-produced graph JSON accepted by v1's reader for the 6 shared node types
-6. Attempt a bare import of `factory.contained.openshell` via the adapter — identify which transitive deps are pulled and which layers (confinement, provisioning, credentials) are separable in practice
+6. Confirm `factory.contained.openshell` imports cleanly via the adapter (transitive deps verified as stdlib + `structlog` — both already in v2's environment). Verify the confinement and plan-composition layers are callable without triggering the CLI provisioning layer.
 
-**Exit criteria:** shared IR works through the supported install path, and we have a concrete list of what OpenShell integration requires. Use this to firm up Phase 2 estimates.
+**Exit criteria:** shared IR works through the supported install path; OpenShell confinement layer imports and can be called from v2 code; we have a concrete boundary for what the credential/provisioning adapter must cover. Use this to firm up Phase 2 estimates.
 
 ### Phase 1: Submodule + IR unification (~1 day, after spike validates approach)
 7. Finalize `_v1_compat.py` based on spike findings
@@ -307,7 +324,10 @@ Validate the packaging approach and OpenShell boundary before committing to late
 14. Wire into v2's `workers.py` as a sandbox backend option
 15. Validate: run a v2 mode inside OpenShell confinement, test cancellation and failure paths
 
-### Phase 3: Benchmark porting (~1-2 weeks, can overlap with Phase 2)
+### Phase 3: Benchmark porting (~2-3 days, can overlap with Phase 2)
+
+All 8 v1 benchmarks follow the same 4-node pattern (`FnNode → AgentNode → GateNode → FnNode` with reloop edge) and use only node types present in v2's IR. None use v1-only features (`LLMNode`, `SubgraphForkNode`, `SelectionNode`). Porting is mechanical: translate the pattern to v2's `Mode.build()` graph structure; prompt templates copy verbatim.
+
 16. Port v1's 8 contributed benchmark workflows to v2 `Mode` format
 17. Validate: benchmark results match between v1 executor and v2 DSH runtime
 
