@@ -6744,8 +6744,7 @@ Build a reusable mode package from a brief, name and task/single-shot inputs. Ca
         "data_node",
         "revision_of",
         "requires_input",
-        "smoke_timeout_s",
-        "include_uncommitted"
+        "smoke_timeout_s"
       ],
       "notes": "read the brief, set up per-run staging, and publish to the prompts",
       "role": "ceo"
@@ -6920,18 +6919,6 @@ Build a reusable mode package from a brief, name and task/single-shot inputs. Ca
       "value": 2,
       "values": []
     },
-    "include_uncommitted": {
-      "default": false,
-      "description": "start from the target's uncommitted changes",
-      "frozen": true,
-      "kind": "bool",
-      "range": [
-        null,
-        null
-      ],
-      "value": false,
-      "values": []
-    },
     "name": {
       "default": "",
       "description": "the package to create (empty takes the name from the brief)",
@@ -7061,7 +7048,7 @@ Build a reusable mode package from a brief, name and task/single-shot inputs. Ca
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a reusable mode package from a brief, name and task/single-shot inputs. Canonical smoke runs before separate QA and Overwatch; repair shares the attempt bound and completion needs current validation and intent evidence.",
-    "reviewed_schema": "a2c54c49adc379a1fd3cc1b40e3c4f32a13d3d60f24bb25357ceee7c12ea6e9b"
+    "reviewed_schema": "e46b06c075fd498119207352327459795efea4734de6ee6831f81cde06631702"
   }
 }
 ```
@@ -7220,8 +7207,7 @@ Build a small reusable package with a strategist, coder and focused QA. Canonica
         "data_node",
         "revision_of",
         "requires_input",
-        "smoke_timeout_s",
-        "include_uncommitted"
+        "smoke_timeout_s"
       ],
       "notes": "read the brief, set up per-run staging, and publish to the prompts",
       "role": "ceo"
@@ -7337,18 +7323,6 @@ Build a small reusable package with a strategist, coder and focused QA. Canonica
       "default": false,
       "description": "build the package as a DataNode that runs its subgraph once per data item; naming a Task implies this, so the knob is only for a caller that wants to be explicit",
       "frozen": false,
-      "kind": "bool",
-      "range": [
-        null,
-        null
-      ],
-      "value": false,
-      "values": []
-    },
-    "include_uncommitted": {
-      "default": false,
-      "description": "start from the target's uncommitted changes",
-      "frozen": true,
       "kind": "bool",
       "range": [
         null,
@@ -7474,7 +7448,7 @@ Build a small reusable package with a strategist, coder and focused QA. Canonica
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a small reusable package with a strategist, coder and focused QA. Canonical smoke precedes focused QA; structural, runtime and review failures share repair_attempts. Supply a brief, name and task/single-shot inputs.",
-    "reviewed_schema": "c34adf5bd601c16355a00387f7dc769946448b44777ad8fc94310083e53d2821"
+    "reviewed_schema": "139325608facacb16306c1b8fc199b04e6bd977034dc89e3334542f16126e4da"
   }
 }
 ```
@@ -8856,8 +8830,7 @@ Revise an existing mode package and validate the revision before separate QA and
         "data_node",
         "revision_of",
         "requires_input",
-        "smoke_timeout_s",
-        "include_uncommitted"
+        "smoke_timeout_s"
       ],
       "notes": "read the brief, set up per-run staging, and publish to the prompts",
       "role": "ceo"
@@ -9032,18 +9005,6 @@ Revise an existing mode package and validate the revision before separate QA and
       "value": 2,
       "values": []
     },
-    "include_uncommitted": {
-      "default": false,
-      "description": "start from the target's uncommitted changes",
-      "frozen": true,
-      "kind": "bool",
-      "range": [
-        null,
-        null
-      ],
-      "value": false,
-      "values": []
-    },
     "name": {
       "default": "",
       "description": "the package to create (empty takes the name from the brief)",
@@ -9173,7 +9134,7 @@ Revise an existing mode package and validate the revision before separate QA and
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Revise an existing mode package and validate the revision before separate QA and Overwatch. Supply revision_of, name and brief. allow_regression=true skips original execution and numerical comparison, while revised execution and intent evidence remain mandatory.",
-    "reviewed_schema": "15d8f8814e89731c7327c46d4727e9a8a94ede42790372e17049deef6fc7f853"
+    "reviewed_schema": "9da78dbad0326302ae1a8e21dd8e9f75989bcca75075fdf3a0baba324d59dec3"
   }
 }
 ```
@@ -9327,8 +9288,7 @@ Revise a small mode package with a coder and focused QA after canonical validati
         "data_node",
         "revision_of",
         "requires_input",
-        "smoke_timeout_s",
-        "include_uncommitted"
+        "smoke_timeout_s"
       ],
       "notes": "read the brief, set up per-run staging, and publish to the prompts",
       "role": "ceo"
@@ -9436,18 +9396,6 @@ Revise a small mode package with a coder and focused QA after canonical validati
       "default": false,
       "description": "build the package as a DataNode that runs its subgraph once per data item; naming a Task implies this, so the knob is only for a caller that wants to be explicit",
       "frozen": false,
-      "kind": "bool",
-      "range": [
-        null,
-        null
-      ],
-      "value": false,
-      "values": []
-    },
-    "include_uncommitted": {
-      "default": false,
-      "description": "start from the target's uncommitted changes",
-      "frozen": true,
       "kind": "bool",
       "range": [
         null,
@@ -9573,7 +9521,7 @@ Revise a small mode package with a coder and focused QA after canonical validati
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Revise a small mode package with a coder and focused QA after canonical validation. Supply revision_of, name and brief. allow_regression=true skips original execution/comparison but still requires revised validation and intent evidence.",
-    "reviewed_schema": "da1ddfab29bfc5103db2c39a9410e7319ab1a93ff2884e7eb734724eeb89928d"
+    "reviewed_schema": "54fbba3bc9fcfcf5107a7af1bd855c1f232de0bdcc487f0d6c4801e5e00f272a"
   }
 }
 ```
