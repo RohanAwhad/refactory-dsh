@@ -1291,7 +1291,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 
 ## graph-control
 
-Preview or queue boundary pause/resume/stop/rerun/redeliver/acknowledge/amend-command/withdraw controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. resume --acknowledge-failure also starts an owner for a failed checkpoint. acknowledge transitions an executing or failed checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly. redeliver brings a finished or failed-at-deliver run up to date with main in one command.
+Preview or queue boundary pause/resume/stop/rerun/redeliver/acknowledge/amend-command/withdraw/confirm-completion controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. resume --acknowledge-failure also starts an owner for a failed checkpoint. acknowledge transitions an executing or failed checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly. redeliver brings a finished or failed-at-deliver run up to date with main in one command. confirm-completion writes a person-only completion_override into spine-status.json, allowing update_goal complete despite a non-done status.
 
 Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-control.md)
 
@@ -1338,6 +1338,13 @@ Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-con
         "run": "/tmp/example-run"
       },
       "explanation": "Bring a finished or failed-at-deliver run's pull request up to date with main: merges current main, regenerates, re-checks and pushes, starting the owner process. Equivalent to rerun --node deliver plus resume, without needing --text, --revision or a preview."
+    },
+    {
+      "arguments": {
+        "action": "confirm-completion",
+        "run": "/tmp/example-run"
+      },
+      "explanation": "Write a person-only completion_override into spine-status.json, allowing update_goal complete despite a non-done status. The override is bound to the current status and invocation; it is cleared when recordStatus() writes a different status."
     }
   ],
   "interfaces": {
@@ -1369,7 +1376,8 @@ Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-con
         "acknowledge",
         "amend-command",
         "withdraw",
-        "redeliver"
+        "redeliver",
+        "confirm-completion"
       ],
       "flags": [],
       "nargs": null,
@@ -1489,8 +1497,8 @@ Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-con
       "type": "string"
     }
   },
-  "purpose": "Preview or queue boundary pause/resume/stop/rerun/redeliver/acknowledge/amend-command/withdraw controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. resume --acknowledge-failure also starts an owner for a failed checkpoint. acknowledge transitions an executing or failed checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly. redeliver brings a finished or failed-at-deliver run up to date with main in one command.",
-  "reviewed_schema": "e6051426af8d5423cc4f122642b3c2b99f7defda000f9c3a5a4c6704351fcbb1"
+  "purpose": "Preview or queue boundary pause/resume/stop/rerun/redeliver/acknowledge/amend-command/withdraw/confirm-completion controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. resume --acknowledge-failure also starts an owner for a failed checkpoint. acknowledge transitions an executing or failed checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly. redeliver brings a finished or failed-at-deliver run up to date with main in one command. confirm-completion writes a person-only completion_override into spine-status.json, allowing update_goal complete despite a non-done status.",
+  "reviewed_schema": "680c3776b4e7c3715ba34f7b94e1fe869c499390adbdf3eab26390f82a393b32"
 }
 ```
 
