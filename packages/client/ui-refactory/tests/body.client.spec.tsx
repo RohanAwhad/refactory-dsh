@@ -71,7 +71,7 @@ describe('the picker before it has read anything', () => {
     expect(console.packages).toHaveBeenCalledTimes(1)
     expect(instance.getSnapshot().byTab[TAB]?.choices).toEqual({
       kind: 'ready',
-      value: { project: '/repo', modes: [], strategies: NO_STRATEGIES, packages: [] },
+      value: { project: '/repo', modes: [], strategies: NO_STRATEGIES, packages: [], projects: [] },
     })
   })
 
