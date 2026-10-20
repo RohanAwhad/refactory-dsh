@@ -8345,7 +8345,8 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "id": "gate_verification",
       "kind": "gate",
       "knobs": [
-        "repair_attempts"
+        "repair_attempts",
+        "check_attempt_cap"
       ],
       "notes": "proceed on PASS; advisory reloop on FAIL (does not spend repair_attempts); check failures and guardedness blocks via _repair",
       "role": "ceo"
@@ -8576,7 +8577,7 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a small artifact with one sequential strategist, coder and QA agent, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none (`worktree=0` writes .factory/artifacts instead; `source_project` copies a directory there). The check runs in that worktree before focused QA. It has no approval gate, so it opens no pull request: the branch is left for you to push.",
-    "reviewed_schema": "e275c6ed9c7e8ece64dd3f20b11a15b75071a4f6f27c59768d372e7bb10ebe36"
+    "reviewed_schema": "2b8c23ecbd7226b0346deafec9f17612aa447fcaf6b826439cc460038ac269f1"
   }
 }
 ```
