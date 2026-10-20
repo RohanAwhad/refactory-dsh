@@ -43,6 +43,8 @@ def test_feedback_file_prepends_heading_to_prompt(tmp_path):
     captured_prompt = []
 
     class FakeClient:
+        def __init__(self, **kwargs):
+            pass
         def for_node(self, node):
             return self
         def complete(self, prompt, workdir=None):
@@ -120,6 +122,8 @@ def test_no_feedback_file_leaves_prompt_unchanged(tmp_path):
     captured_prompt = []
 
     class FakeClient:
+        def __init__(self, **kwargs):
+            pass
         def for_node(self, node):
             return self
         def complete(self, prompt, workdir=None):
