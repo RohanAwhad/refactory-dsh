@@ -227,6 +227,9 @@ describe('workflow-spine real composition', () => {
     expect(spineSection!.text).toContain('orchestrator')
     expect(spineSection!.text).toContain('Delegate')
     expect(spineSection!.text).toContain('Never take over')
+    // Verify tool prefix is used, not hardcoded 'wf_'
+    expect(spineSection!.text).toContain('wf_edit')
+    expect(spineSection!.text).toContain('wf_redo')
     expect(spineSection!.text).toContain('review steps')
     expect(spineSection!.text).toContain('not a reason to skip')
     expect(spineSection!.text).toContain('Never recommend skipping a check gate')

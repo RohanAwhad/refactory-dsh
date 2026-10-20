@@ -223,6 +223,25 @@ function openStub(run: string, graph: string): string {
 
 describe('subagent write confinement', () => {
   describe('configured-graph mode (CLI graph profile)', () => {
+    it('denies a subagent writing inside .refactory/ (#347, C1)', async () => {
+      const workdir = scratch()
+      const ctx = await mountConfigured({ workdir })
+
+      const child = mockAgent('child-1', {
+        delegationDepth: 1,
+        parentSession: 'ceo-1',
+        cwd: workdir,
+      })
+
+      const result = await executeTool(ctx, 'write', {
+        file_path: join(workdir, '.refactory', 'spine-status.json'),
+        content: '{"forged": true}',
+      }, child)
+      expect(result.isError).toBe(true)
+      const text = result.content.map(c => c.text).join('')
+      expect(text).toContain('.refactory')
+    })
+
     it('allows a subagent to write inside the run directory', async () => {
       const workdir = scratch()
       const ctx = await mountConfigured({ workdir })

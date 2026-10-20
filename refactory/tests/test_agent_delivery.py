@@ -402,7 +402,7 @@ def test_main_bridge_renders_templates_before_begin(tmp_path, monkeypatch):
 
 
 def test_main_bridge_refuses_unrendered_templates(tmp_path, monkeypatch):
-    """The bridge refuses a prompt with unrendered {{key}} after rendering."""
+    """The bridge refuses a prompt whose own template key has no knob or fact."""
     import io
     (tmp_path / 'facts.json').write_text(json.dumps({}))
     Ledger.seed(tmp_path, 'test')
@@ -414,6 +414,29 @@ def test_main_bridge_refuses_unrendered_templates(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     code = agent_delivery.main()
     assert code == 1
+
+
+def test_main_bridge_accepts_templates_inside_substituted_values(tmp_path, monkeypatch):
+    """A brief containing {{templates}} is accepted when substituted into the prompt."""
+    import io
+    (tmp_path / 'facts.json').write_text(json.dumps({
+        'brief': 'Fix the {{templates}} issue',
+    }))
+    Ledger.seed(tmp_path, 'test')
+    payload = json.dumps({
+        'action': 'begin', 'node': 'emit',
+        'prompt': 'Brief: {{brief}}', 'writes': ['out.txt'], 'reads': [],
+    })
+    monkeypatch.setattr('sys.stdin', io.StringIO(payload))
+    monkeypatch.chdir(tmp_path)
+    code = agent_delivery.main()
+    assert code == 0
+    # The rendered prompt should contain the brief's text including {{templates}}
+    pending_dir = tmp_path / '.refactory/agent-delivery/pending'
+    pending_files = list(pending_dir.glob('*.json'))
+    assert len(pending_files) == 1
+    record = json.loads(pending_files[0].read_text())
+    assert '{{templates}}' in record['prompt']
 
 
 def test_receipt_records_prompt_hash(tmp_path):

@@ -250,7 +250,8 @@ def begin(workdir: Path, node: str, prompt: str, writes: list[str], *, reuse: bo
 
 
 def finish(workdir: Path, node: str, *, final_response: str | None = None,
-           capture_final: bool = False) -> dict[str, Any]:
+           capture_final: bool = False,
+           sent_prompt_hash: str | None = None) -> dict[str, Any]:
     """Preserve fresh tool-written files; capture final text only as the fallback.
 
     Every required output must be newly delivered, including unchanged bytes that
@@ -287,6 +288,8 @@ def finish(workdir: Path, node: str, *, final_response: str | None = None,
     all_changes = fail_changes + warn_changes
     receipt = {key: value for key, value in record.items() if key not in ('prompt', 'target')}
     receipt['prompt_hash'] = record.get('prompt_hash')
+    if sent_prompt_hash is not None:
+        receipt['sent_prompt_hash'] = sent_prompt_hash
     receipt.update(finished=_now(), status='failed' if missing or fail_changes else 'delivered',
                    delivery='context supplied; semantic compliance not verified',
                    artifacts=after, captured_final=captured,
@@ -378,19 +381,23 @@ def main() -> int:
             from refactory_dsh.nn.executor import RunContext, render
             prompt = request['prompt']
             context = RunContext(workdir, knobs=_knobs(), facts=_read_facts(workdir))
+            # Detect unresolved template keys from the template itself, not by
+            # scanning substituted values.  A brief containing {{templates}} must
+            # not be refused when it is substituted into the prompt (#347, C2).
+            values = {**context.knobs, **context.facts}
+            template_keys = _re.findall(r'\{\{\s*([A-Za-z_]\w*)\s*\}\}', prompt)
+            unresolved = [k for k in template_keys if k.strip() not in values]
+            if unresolved:
+                raise ValueError(f'unrendered template keys in prompt: {unresolved}')
             rendered = render(prompt, context)
-            remaining = _re.findall(r'\{\{\s*[A-Za-z_]\w*\s*\}\}', rendered)
-            if remaining:
-                raise ValueError(f'unrendered template keys in prompt: {remaining}')
             result = begin(workdir, request['node'], rendered, request['writes'], reuse=True,
                            reads=request.get('reads'))
             # The bridge reads the prompt; the target snapshot is this module's own state.
             result = {key: value for key, value in result.items() if key != 'target'}
         elif request['action'] == 'finish':
             sent_prompt_hash = request.get('sent_prompt_hash')
-            result = finish(workdir, request['node'])
-            if sent_prompt_hash is not None:
-                result['sent_prompt_hash'] = sent_prompt_hash
+            result = finish(workdir, request['node'],
+                            sent_prompt_hash=sent_prompt_hash)
         elif request['action'] == 'invalidate':
             nodes = request['nodes']
             reason = request['reason']
@@ -403,6 +410,14 @@ def main() -> int:
         elif request['action'] == 'reviewers':
             from refactory_dsh.authoring_evidence import REVIEWERS
             result = {'reviewers': list(REVIEWERS)}
+        elif request['action'] == 'pending-prompt':
+            node = request['node']
+            pending = _pending(workdir, node)
+            if pending.exists():
+                record = json.loads(pending.read_text())
+                result = {'prompt': record.get('prompt', '')}
+            else:
+                result = {'prompt': ''}
         else:
             raise ValueError('unknown agent delivery action')
         print(json.dumps(result))

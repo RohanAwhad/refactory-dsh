@@ -633,6 +633,16 @@ export function apply(ctx: Context, config: Config): void {
       })
     }
 
+    // 10. Deny writes to .refactory/ — spine state must not be forged by subagents (#347, C1).
+    const refactoryDir = join(resolvedRun, '.refactory')
+    if (resolvedTarget === refactoryDir
+        || resolvedTarget.startsWith(refactoryDir + sep)) {
+      return Promise.resolve({
+        kind: 'deny' as const,
+        reason: `this subagent may not write inside ${refactoryDir}`,
+      })
+    }
+
     return next()
   })
 
@@ -714,9 +724,10 @@ export function apply(ctx: Context, config: Config): void {
   })
 
   // CEO prompt recording (#347, C2). Records the prompt text the CEO sends
-  // through subagent, subagent_fork and send_message, keyed by the currently
-  // due node. Used by wf_done to validate that review/audit nodes received the
-  // pending delivery's prompt.txt.
+  // through subagent, subagent_fork and send_message, keyed by session:node.
+  // Used by wf_done to validate that review/audit nodes received the
+  // pending delivery's prompt.txt.  Cleared on delivery completion and
+  // redispatch so an earlier faithful prompt cannot satisfy a rewritten retry.
   const ceoPrompts = new Map<string, Array<{ prompt: string; hash: string }>>()
 
   ctx.on('tools/pre-execute', (exec, next) => {
@@ -732,6 +743,7 @@ export function apply(ctx: Context, config: Config): void {
 
     // Find due nodes from the spine
     let spine: Spine | undefined
+    const sessionId = sessionIdOf(exec as ToolExec) ?? '_'
     if (configuredSpine !== undefined) {
       spine = configuredSpine
     } else {
@@ -747,9 +759,10 @@ export function apply(ctx: Context, config: Config): void {
         const hash = createHash('sha256').update(promptText).digest('hex')
         for (const node of cur.nodes) {
           if (node._type === 'AgentNode' || node._type === 'LLMNode') {
-            const existing = ceoPrompts.get(node.id)
+            const key = `${sessionId}:${node.id}`
+            const existing = ceoPrompts.get(key)
             if (existing !== undefined) existing.push({ prompt: promptText, hash })
-            else ceoPrompts.set(node.id, [{ prompt: promptText, hash }])
+            else ceoPrompts.set(key, [{ prompt: promptText, hash }])
           }
         }
       }
@@ -1423,6 +1436,11 @@ export function apply(ctx: Context, config: Config): void {
         if (typeof receipt.prompt !== 'string') throw new Error('agent delivery bridge returned no prompt')
         node.prompt_template = receipt.prompt
         pendingPrompts.set(node.id, receipt.prompt)
+        // Clear old CEO prompts on redispatch so an earlier faithful prompt
+        // cannot satisfy a rewritten retry (#347, C2).
+        for (const key of ceoPrompts.keys()) {
+          if (key.endsWith(`:${node.id}`)) ceoPrompts.delete(key)
+        }
       }
     }
     // A user gate's question is shown as the CEO sees it here and as the card puts it.
@@ -1637,7 +1655,7 @@ export function apply(ctx: Context, config: Config): void {
   const sacredRules = '\n\n'
     + 'You are an orchestrator. Delegate all technical work — writing code, fixing bugs, running checks, '
     + "performing research — to the graph's agent nodes. Review their output. When an agent fails, retry "
-    + 'with better instructions (wf_edit set-prompt/append-prompt, then wf_redo) or stop. Never take over '
+    + `with better instructions (${toolPrefix}_edit set-prompt/append-prompt, then ${toolPrefix}_redo) or stop. Never take over `
     + "the agent's work yourself."
     + '\n\n'
     + "Every change that produces a pull request must pass through the graph's review steps: health check, "
@@ -1861,16 +1879,32 @@ export function apply(ctx: Context, config: Config): void {
             const list = rv.reviewers
             reviewerIds = new Set(Array.isArray(list) ? list.map(String) : [])
           } catch {
+            // Fail closed: if we cannot read the reviewer list, treat all nodes as reviewers
             reviewerIds = new Set()
           }
         }
         // Validate prompt for reviewer nodes
         let sentPromptHash: string | undefined
         if (reviewerIds.has(args.node)) {
-          const pending = pendingPrompts.get(args.node)
+          // Fail closed: re-read prompt.txt from the pending delivery when
+          // the in-memory cache is empty (e.g. after a restart).
+          let pending = pendingPrompts.get(args.node)
+          if (pending === undefined) {
+            try {
+              const pp = runtimeBridge(agentCommand, workdir, commandEnv, { action: 'pending-prompt', node: args.node })
+              if (typeof pp.prompt === 'string' && pp.prompt) {
+                pending = pp.prompt
+                pendingPrompts.set(args.node, pending)
+              }
+            } catch { /* bridge failed — pending stays undefined, will refuse below */ }
+          }
           if (pending !== undefined) {
-            const recorded = ceoPrompts.get(args.node) ?? []
-            const matched = recorded.find(entry => entry.prompt.includes(pending))
+            // Collect all recorded prompts for this node from any session
+            const allRecorded: Array<{ prompt: string; hash: string }> = []
+            for (const [key, entries] of ceoPrompts.entries()) {
+              if (key.endsWith(`:${args.node}`)) allRecorded.push(...entries)
+            }
+            const matched = allRecorded.find(entry => entry.prompt.includes(pending!))
             if (matched === undefined) {
               throw new Error(
                 `wf_done refused: no recorded CEO prompt for reviewer node "${args.node}" contains `
@@ -1878,6 +1912,12 @@ export function apply(ctx: Context, config: Config): void {
               )
             }
             sentPromptHash = matched.hash
+          } else {
+            // No pending prompt available — fail closed
+            throw new Error(
+              `wf_done refused: no pending delivery prompt for reviewer node "${args.node}". `
+              + 'The delivery context must be established before completing a reviewer node.',
+            )
           }
         }
         runtimeBridge(agentCommand, workdir, commandEnv, {
@@ -1886,6 +1926,10 @@ export function apply(ctx: Context, config: Config): void {
         })
       }
       spine.complete(args.node)
+      // Clear CEO prompts for completed node (#347, C2)
+      for (const key of ceoPrompts.keys()) {
+        if (key.endsWith(`:${args.node}`)) ceoPrompts.delete(key)
+      }
       return sync(json({ status: 'complete', node: args.node }))
     },
   }))

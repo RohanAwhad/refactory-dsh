@@ -1497,16 +1497,39 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
                     f"`{corr_old}` \u2192 `{corr_new}`"
                     + (f" ({corr_note})" if corr_note else "") + ".\n")
 
+    import json as _json
     from refactory_dsh import authoring_evidence as evidence
 
-    if ctx.facts.get('validation'):
+    def _read_evidence() -> dict[str, Any] | None:
+        try:
+            return _json.loads(ctx.read_text(evidence.EVIDENCE)) if ctx.exists(evidence.EVIDENCE) else None
+        except Exception:
+            return None
+
+    ev_data = _read_evidence()
+    check_passed = (ev_data is not None
+                    and isinstance(ev_data.get('validation'), dict)
+                    and ev_data['validation'].get('status') == 'pass')
+    if check_passed:
         check_line = f"- **Check:** `{check_cmd}` passed in the run's worktree.\n"
     elif check_cmd:
         check_line = f"- **Check:** `{check_cmd}` **did not run**.\n"
     else:
         check_line = ""
 
-    if (ctx.exists(evidence.EVIDENCE) and ctx.exists(evidence.AUDIT)):
+    def _audit_passed() -> bool:
+        try:
+            audit_data = _json.loads(ctx.read_text(evidence.AUDIT)) if ctx.exists(evidence.AUDIT) else None
+        except Exception:
+            return False
+        if audit_data is None or not isinstance(audit_data, dict):
+            return False
+        rows = audit_data.get('requirements', [])
+        return isinstance(rows, list) and all(
+            isinstance(r, dict) and r.get('verdict') != 'BLOCKING' for r in rows
+        )
+
+    if ev_data is not None and check_passed and _audit_passed():
         reviews_line = ("- **Reviews:** the health check, code review and QA found nothing blocking, "
                         "and the overwatch audit passed.\n")
     else:

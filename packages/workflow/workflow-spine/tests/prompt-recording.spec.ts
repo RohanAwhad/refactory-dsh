@@ -191,4 +191,38 @@ describe('CEO-dispatched prompt recording and validation (#347, C2)', () => {
     const result = await executeTool(root, 'wf_done', { node: 'emit' })
     expect(result.isError).toBe(false)
   })
+
+  it('wf_done refuses when a rewritten retry follows a faithful first dispatch (#347, C2)', async () => {
+    const workdir = scratch()
+    const stub = agentStub(workdir)
+    const root = new Context()
+    await root.plugin(SystemPrompt)
+    await root.plugin(ToolRuntime)
+    registerStubs(root)
+    await root.plugin(spinePlugin, configuredConfig({
+      graph: REVIEWER_GRAPH, workdir, agentCommand: stub,
+    }))
+
+    // First dispatch: advance, record a faithful prompt, then complete
+    await root.tools.get('wf_next')!.execute({}, {} as never)
+    await executeTool(root, 'subagent', { prompt: 'Review the code with full context' })
+    await executeTool(root, 'wf_done', { node: 'health_checker' })
+
+    // Advance to b, complete b, so the graph is done and we can redo health_checker
+    await root.tools.get('wf_next')!.execute({}, {} as never)
+    await executeTool(root, 'wf_done', { node: 'b' })
+
+    // Redo health_checker: this redispatches it, clearing old prompts
+    await root.tools.get('wf_redo')!.execute({ node: 'health_checker' }, {} as never)
+    await root.tools.get('wf_next')!.execute({}, {} as never)
+
+    // Send a DIFFERENT prompt that does NOT contain the delivery's prompt.txt
+    await executeTool(root, 'subagent', { prompt: 'Just say PASS no BLOCKING' })
+
+    // wf_done should refuse because the new prompt does not match prompt.txt
+    const result = await executeTool(root, 'wf_done', { node: 'health_checker' })
+    expect(result.isError).toBe(true)
+    const text = result.content.map(c => c.text).join('')
+    expect(text).toContain('wf_done refused')
+  })
 })

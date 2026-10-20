@@ -93,11 +93,10 @@ def test_pr_body_has_summary_verification_and_original_request(tmp_path):
     import subprocess
     ctx = _TitleCtx(
         facts={"brief": "Build a tool\nthat prints built.", "check": "python tool.py", "name": "b2",
-               "inherited_failures": ["tests/test_env.py::test_needs_profile"],
-               "validation": "(the check passed)"},
+               "inherited_failures": ["tests/test_env.py::test_needs_profile"]},
         files={"design.md": "# The design heading\n\nFirst paragraph of the design.\n\n---\n",
-               "authoring-evidence.json": "{}",
-               "intent-audit.json": "{}"},
+               "authoring-evidence.json": '{"validation": {"status": "pass"}}',
+               "intent-audit.json": '{"requirements": []}'},
     )
     # Set up a minimal git repo so worktree.git works.
     subprocess.run(["git", "init", str(tmp_path)], capture_output=True, check=True)
@@ -129,7 +128,7 @@ def test_pr_body_has_summary_verification_and_original_request(tmp_path):
 
 
 def test_pr_verification_says_check_did_not_run_when_validation_fact_is_absent(tmp_path):
-    """When the validation fact is absent but check is present, the PR says 'did not run'."""
+    """When authoring evidence is absent and check is present, the PR says 'did not run'."""
     import subprocess
     ctx = _TitleCtx(
         facts={"brief": "Build a tool.", "check": "pnpm test", "name": "t1"},
@@ -156,12 +155,12 @@ def test_pr_verification_says_check_did_not_run_when_validation_fact_is_absent(t
 
 
 def test_pr_verification_says_check_passed_when_validation_fact_is_set(tmp_path):
-    """When the validation fact is set, the PR says 'passed'."""
+    """When authoring evidence shows validation passed, the PR says 'passed'."""
     import subprocess
     ctx = _TitleCtx(
-        facts={"brief": "Build a tool.", "check": "pnpm test", "name": "t1",
-               "validation": "(the check passed)"},
-        files={"design.md": "# Heading\n\nSummary.\n"},
+        facts={"brief": "Build a tool.", "check": "pnpm test", "name": "t1"},
+        files={"design.md": "# Heading\n\nSummary.\n",
+               "authoring-evidence.json": '{"validation": {"status": "pass"}}'},
     )
     subprocess.run(["git", "init", str(tmp_path)], capture_output=True, check=True)
     subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t"], capture_output=True, check=True)
