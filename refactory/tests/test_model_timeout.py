@@ -460,7 +460,7 @@ def test_resume_keeps_saved_timeout(tmp_path, monkeypatch):
     monkeypatch.setattr("refactory_dsh.interactive.require_build", lambda: None)
 
     import refactory_dsh.dsh_profile as _dp
-    monkeypatch.setattr(_dp, "require", lambda: None)
+    monkeypatch.setattr(_dp, "require", lambda **kw: None)
 
     from contextlib import contextmanager
 
