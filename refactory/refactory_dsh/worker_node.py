@@ -18,11 +18,18 @@ def execute(spec: dict[str, Any], workdir: Path) -> dict[str, Any]:
     from refactory_dsh.run import NODE_ENV, _knobs, _read_facts
     manifest = json.loads(os.environ.get(NODE_ENV, '{}'))
     prompt_file = manifest.get('prompt_file')
+    feedback_file = manifest.get('feedback_file')
     prompt = spec['prompt']
     if prompt_file:
         prompt_path = Path(prompt_file)
         if prompt_path.exists():
             prompt = prompt_path.read_text(encoding='utf-8')
+    if feedback_file:
+        fb_path = Path(feedback_file)
+        if fb_path.exists():
+            fb_text = fb_path.read_text(encoding='utf-8').strip()
+            if fb_text:
+                prompt = f"## Feedback for this visit\n\n{fb_text}\n\n{prompt}"
 
     node = spec['node_id']
     from refactory_dsh.nn.executor import RunContext, render
