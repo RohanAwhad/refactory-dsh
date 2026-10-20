@@ -218,6 +218,19 @@ describe('workflow-spine real composition', () => {
     expect(spineSection!.text).toMatch(/reads/)
     expect(spineSection!.text).toMatch(/summarise|summarize/)
   })
+
+  it('CEO system prompt includes delegation and review discipline rules (Sacred Rules 8/9)', async () => {
+    const ctx = await setup()
+    const assembly = await ctx.systemPrompt.assemble()
+    const spineSection = assembly.sections.find(s => s.name === 'tool:wf-spine')
+    expect(spineSection).toBeDefined()
+    expect(spineSection!.text).toContain('orchestrator')
+    expect(spineSection!.text).toContain('Delegate')
+    expect(spineSection!.text).toContain('Never take over')
+    expect(spineSection!.text).toContain('review steps')
+    expect(spineSection!.text).toContain('not a reason to skip')
+    expect(spineSection!.text).toContain('Never recommend skipping a check gate')
+  })
 })
 
 /** A graph whose first two nodes are commands, so the plugin can run them. */

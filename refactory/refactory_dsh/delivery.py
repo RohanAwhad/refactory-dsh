@@ -1497,12 +1497,26 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
                     f"`{corr_old}` \u2192 `{corr_new}`"
                     + (f" ({corr_note})" if corr_note else "") + ".\n")
 
+    from refactory_dsh import authoring_evidence as evidence
+
+    if ctx.facts.get('validation'):
+        check_line = f"- **Check:** `{check_cmd}` passed in the run's worktree.\n"
+    elif check_cmd:
+        check_line = f"- **Check:** `{check_cmd}` **did not run**.\n"
+    else:
+        check_line = ""
+
+    if (ctx.exists(evidence.EVIDENCE) and ctx.exists(evidence.AUDIT)):
+        reviews_line = ("- **Reviews:** the health check, code review and QA found nothing blocking, "
+                        "and the overwatch audit passed.\n")
+    else:
+        reviews_line = "- **Reviews:** not all review steps completed.\n"
+
     verification = (
         f"## Verification\n\n"
-        f"- **Check:** `{check_cmd}` passed in the run's worktree.\n"
+        + check_line
         + command_corrections
-        + "- **Reviews:** the health check, code review and QA found nothing blocking, "
-        "and the overwatch audit passed.\n"
+        + reviews_line
         + _base_evidence(ctx)
         + f"- **Base:** `{found.base[:12]}`, with {attempts} attempt commit(s) on `{found.branch}`.\n"
         + merge_line

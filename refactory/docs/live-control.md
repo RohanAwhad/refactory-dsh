@@ -280,6 +280,15 @@ node with an outgoing edge, not a fork branch or a director's child (they
 continue at the join or the director's successor), and not a data node's
 per-item exit (it returns to its data node).
 
+### Check gates
+
+A check that could not run appears as "did not run" in the PR Verification
+section and in the run report, derived from the absence of the `validation`
+fact. The CEO may ask the person how to proceed (naming what stopped the check
+and what would unblock it), but it never recommends skipping a check gate. If
+the person skips via `wf_edit skip`, the run report and PR say the check did
+not run.
+
 ### Forward-only invalidation
 
 Replaying a node invalidates only its forward path. Nodes reached exclusively
@@ -319,6 +328,17 @@ when the person reruns without `--text`. When the person supplies `--text`,
 the gate's reason appears first and the person's text follows it. A gate
 that proceeded clears its stored reason, so a rerun after a passed gate
 shows no stale refusal.
+
+### Goal completion
+
+Goal completion requires `done` status in spine-status.json. A
+`tools/pre-execute` listener in the spine denies `update_goal complete` when
+the recorded status is not `done` and no person-issued `completion_override`
+matches the current status. The person can override via
+`refactory graph-control confirm-completion`, which writes a
+`completion_override` bound to the current status and invocation into
+spine-status.json. The override is cleared when `recordStatus()` writes a
+different status, so a resumed or new invocation does not inherit it.
 
 ### CEO redo and attempt limits
 
@@ -369,6 +389,7 @@ message names this alternative.
 | spine-status.json | refactory_dsh/invocations.py | lines 84,89 | Checks existence only | Not affected |
 | spine-status.json | refactory_dsh/live.py | `snapshot` (120) | Reads all fields | Includes `last_failure` in return, overrides `wait_reason` |
 | spine-status.json | refactory_dsh/repo_change.py | line 62 | Reads `status` | `ready` not in FINISHED → run still active |
+| spine-status.json | workflow-spine/src/index.ts | C1 `tools/pre-execute` listener | Reads `status`, `completion_override` | Denies `update_goal complete` when status ≠ done and no matching override |
 
 Release checks exercised live CLI observation and native gate answers, pause/resume, reviewed replay and owned stop. Separate registered dead-owner recovery checks passed through public CLI resume and the native Resume control, preserving completed artifacts, saved configuration and accumulated resources while executing only the remaining node. An unavailable-provider guard prevented model execution. See the [validation record](release-validation-20260926.md).
 

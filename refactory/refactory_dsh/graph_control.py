@@ -104,9 +104,11 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
             tmp.replace(pending_path)
     if action == 'redeliver':
         return _redeliver(root, saved, current_revision)
+    if action == 'confirm-completion':
+        return _confirm_completion(root)
     if action not in ('pause', 'resume', 'stop', 'rerun', 'redeliver'):
         raise ValueError(f'unsupported graph control {action!r}; '
-                         f'supported: pause, resume, stop, rerun, redeliver, acknowledge, amend-command, withdraw')
+                         f'supported: pause, resume, stop, rerun, redeliver, acknowledge, amend-command, withdraw, confirm-completion')
     if action == 'rerun':
         if text and text.strip():
             graph_nodes = saved.get('graph', {}).get('nodes', {})
@@ -527,6 +529,39 @@ def _redeliver(root: Path, saved: dict[str, Any], current_revision: str) -> dict
     # Start the owner, acknowledging the failure when the due node is deliver
     owner_result = recovery.start(root, acknowledge_failed=acknowledge_failed)
     return {**result, 'owner': owner_result}
+
+
+def _confirm_completion(root: Path) -> dict[str, Any]:
+    """Write a person-only completion_override into spine-status.json.
+
+    The override is bound to the current status and invocation; it is cleared
+    when recordStatus() writes a different status.
+    """
+    status_path = root / '.refactory/spine-status.json'
+    if not status_path.exists():
+        raise ValueError('this run has no spine-status.json')
+    status_record = json.loads(status_path.read_text())
+    current_status = status_record.get('status', '')
+    invocation_path = root / '.refactory/invocation.json'
+    invocation_id = None
+    if invocation_path.exists():
+        try:
+            invocation_id = json.loads(invocation_path.read_text()).get('id')
+        except (OSError, json.JSONDecodeError):
+            pass
+    status_record['completion_override'] = {
+        'confirmed_status': current_status,
+        'invocation': invocation_id,
+        'at': datetime.now(timezone.utc).isoformat(),
+    }
+    tmp = status_path.with_suffix('.tmp')
+    tmp.write_text(json.dumps(status_record, indent=2))
+    tmp.replace(status_path)
+    return {
+        'action': 'confirm-completion',
+        'status': 'confirmed',
+        'confirmed_status': current_status,
+    }
 
 
 def queued_controls(root: Path) -> list[dict[str, Any]]:

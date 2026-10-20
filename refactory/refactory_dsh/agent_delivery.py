@@ -234,10 +234,11 @@ def begin(workdir: Path, node: str, prompt: str, writes: list[str], *, reuse: bo
     (directory / 'prompt.txt').write_text(annotated)
     if ledger_text:
         (directory / 'ledger.md').write_text(ledger_text)
+    prompt_hash = hashlib.sha256(annotated.encode()).hexdigest()
     record = {'id': identifier, 'node': node,
               'started': previous['started'] if previous is not None else context['at'], 'writes': writes,
               'before': before, 'prompt': annotated, 'entries': entries, 'contexts': contexts,
-              'execution': execution, 'target': target,
+              'execution': execution, 'target': target, 'prompt_hash': prompt_hash,
               'receipt': str(ROOT / identifier / 'receipt.json')}
     (directory / 'receipt.json').write_text(json.dumps({
         **{key: value for key, value in record.items() if key not in ('prompt', 'target')},
@@ -285,6 +286,7 @@ def finish(workdir: Path, node: str, *, final_response: str | None = None,
                  if fail_changes else None)
     all_changes = fail_changes + warn_changes
     receipt = {key: value for key, value in record.items() if key not in ('prompt', 'target')}
+    receipt['prompt_hash'] = record.get('prompt_hash')
     receipt.update(finished=_now(), status='failed' if missing or fail_changes else 'delivered',
                    delivery='context supplied; semantic compliance not verified',
                    artifacts=after, captured_final=captured,
@@ -371,12 +373,24 @@ def main() -> int:
         request = json.load(sys.stdin)
         workdir = Path.cwd()
         if request['action'] == 'begin':
-            result = begin(workdir, request['node'], request['prompt'], request['writes'], reuse=True,
+            import re as _re
+            from refactory_dsh.run import _knobs, _read_facts
+            from refactory_dsh.nn.executor import RunContext, render
+            prompt = request['prompt']
+            context = RunContext(workdir, knobs=_knobs(), facts=_read_facts(workdir))
+            rendered = render(prompt, context)
+            remaining = _re.findall(r'\{\{\s*[A-Za-z_]\w*\s*\}\}', rendered)
+            if remaining:
+                raise ValueError(f'unrendered template keys in prompt: {remaining}')
+            result = begin(workdir, request['node'], rendered, request['writes'], reuse=True,
                            reads=request.get('reads'))
             # The bridge reads the prompt; the target snapshot is this module's own state.
             result = {key: value for key, value in result.items() if key != 'target'}
         elif request['action'] == 'finish':
+            sent_prompt_hash = request.get('sent_prompt_hash')
             result = finish(workdir, request['node'])
+            if sent_prompt_hash is not None:
+                result['sent_prompt_hash'] = sent_prompt_hash
         elif request['action'] == 'invalidate':
             nodes = request['nodes']
             reason = request['reason']
@@ -386,6 +400,9 @@ def main() -> int:
                 raise ValueError('invalidate needs node ids and a non-empty reason')
             invalidate(workdir, nodes, reason)
             result = {'requested': nodes}
+        elif request['action'] == 'reviewers':
+            from refactory_dsh.authoring_evidence import REVIEWERS
+            result = {'reviewers': list(REVIEWERS)}
         else:
             raise ValueError('unknown agent delivery action')
         print(json.dumps(result))

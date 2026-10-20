@@ -721,6 +721,72 @@ asserts it exceeds 600 s with `check_timeout_s=1800`;
 `test_synthetic_deliver_op_gets_delivery_envelope` asserts that a custom op under
 another name that declares the knob gets the envelope.
 
+## 10. Goal completion requires a finished run (#347, C1)
+
+Goals were marked complete from runs that had failed before review. `spine.next()`
+reports a halted run as `done`, so the CEO believed it. The fix: a `tools/pre-execute`
+listener in the spine denies `update_goal complete` when spine-status.json records a
+non-`done` status. A dedicated `confirm-completion` control in `graph_control.request()`,
+reachable only via the CLI (not through any CEO tool), writes a `completion_override`
+bound to the current status and invocation into spine-status.json. The override is
+cleared when `recordStatus()` writes a different status. The refusal steers the CEO
+toward `update_goal blocked` or ending the turn.
+
+**Held by.** `goal-completion.spec.ts`: seven tests covering halted/failed/done status,
+matching/mismatching override, override clearing on status change, and interactive mode
+workdir resolution.
+
+## 11. Cancelled approval rewrite (#347, C3)
+
+Session #319 treated a cancelled `ask_user_question` as permission and implemented,
+committed and pushed without opening a mode. The fix: a `tools/post-execute` listener
+rewrites `ask_user_question` cancellation errors (matching `error.info.code` against
+`ASK_CANCELLED`, `ASK_ABORTED`, `ASK_TIMED_OUT`) to the unambiguous message "Not
+approved: stop and wait for the person."
+
+**Held by.** `cancel-approval.spec.ts`: five tests covering the three cancellation codes,
+a successful result, and cancellation of a different tool.
+
+## 12. CEO-dispatched prompt integrity (#347, C2)
+
+When the CEO ran a graph's agent step through its own subagent, the prompt could arrive
+with unrendered `{{templates}}`, and retries were rewritten: in #317 the CEO told
+reviewers to conclude "PASS, no BLOCKING" and handed overwatch a pre-filled audit. The
+receipt did not show what was sent. The fix: `agent_delivery.main()` renders templates
+before `begin()` (matching `worker_node.py`), refuses unrendered keys, and a spine
+`tools/pre-execute` listener records each prompt the CEO sends through `subagent`,
+`subagent_fork`, and `send_message`. For review and audit nodes, `wf_done` refuses
+completion unless a recorded prompt contains the pending delivery's prompt.txt. The
+receipt records `prompt_hash` and `sent_prompt_hash`.
+
+**Held by.** `test_agent_delivery.py`: `test_main_bridge_renders_templates_before_begin`,
+`test_main_bridge_refuses_unrendered_templates`, `test_receipt_records_prompt_hash`,
+`test_reviewers_action_returns_reviewers_list`. `prompt-recording.spec.ts`: three tests
+for wf_done validation of reviewer nodes.
+
+## 13. Sacred Rules 8 and 9
+
+Sacred Rules 8 (do not do another agent's job) and 9 (do not skip QA verification) from
+remote-factory's CEO instructions were not in the spine's CEO instructions. Both rules
+are now in the spine's `systemPrompt.section` at `index.ts`, which both GUI and CLI CEOs
+read. Rule 8: the CEO is an orchestrator that delegates all technical work to graph agents
+and never takes over their work. Rule 9: every change that produces a PR must pass through
+the graph's review steps.
+
+**Held by.** `plugin.spec.ts`: `'CEO system prompt includes delegation and review
+discipline rules (Sacred Rules 8/9)'` asserts the section contains the key phrases.
+
+## 14. Check-not-run reporting (#363)
+
+When a check could not run, the CEO recommended "Skip check gate and continue
+(Recommended)". The fix: `delivery.py`'s `_body()` derives the Check line from the
+`validation` fact (set only when the check passes at `design_ops.py:428-429`). When the
+fact is absent and a check command exists, the PR Verification says "did not run" instead
+of "passed". The CEO instructions now explicitly forbid recommending skipping a check gate.
+
+**Held by.** `test_delivery.py`: `test_pr_verification_says_check_did_not_run_when_validation_fact_is_absent`
+and `test_pr_verification_says_check_passed_when_validation_fact_is_set`.
+
 ---
 
 Two things that were on this list have moved off it, which is the point of keeping it:

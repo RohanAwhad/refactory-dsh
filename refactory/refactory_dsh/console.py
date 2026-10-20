@@ -1299,6 +1299,7 @@ def _parser() -> argparse.ArgumentParser:
     graph_control.add_argument("action", choices=[
         "pause", "resume", "stop", "preview", "rerun",
         "acknowledge", "amend-command", "withdraw", "redeliver",
+        "confirm-completion",
     ])
     graph_control.add_argument("--node", default="")
     graph_control.add_argument("--text", default="")

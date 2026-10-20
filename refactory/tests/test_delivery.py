@@ -93,8 +93,11 @@ def test_pr_body_has_summary_verification_and_original_request(tmp_path):
     import subprocess
     ctx = _TitleCtx(
         facts={"brief": "Build a tool\nthat prints built.", "check": "python tool.py", "name": "b2",
-               "inherited_failures": ["tests/test_env.py::test_needs_profile"]},
-        files={"design.md": "# The design heading\n\nFirst paragraph of the design.\n\n---\n"},
+               "inherited_failures": ["tests/test_env.py::test_needs_profile"],
+               "validation": "(the check passed)"},
+        files={"design.md": "# The design heading\n\nFirst paragraph of the design.\n\n---\n",
+               "authoring-evidence.json": "{}",
+               "intent-audit.json": "{}"},
     )
     # Set up a minimal git repo so worktree.git works.
     subprocess.run(["git", "init", str(tmp_path)], capture_output=True, check=True)
@@ -123,6 +126,61 @@ def test_pr_body_has_summary_verification_and_original_request(tmp_path):
     assert "`tests/test_env.py::test_needs_profile`" in body
     assert "## Original request" in body
     assert "Build a tool\nthat prints built." in body
+
+
+def test_pr_verification_says_check_did_not_run_when_validation_fact_is_absent(tmp_path):
+    """When the validation fact is absent but check is present, the PR says 'did not run'."""
+    import subprocess
+    ctx = _TitleCtx(
+        facts={"brief": "Build a tool.", "check": "pnpm test", "name": "t1"},
+        files={"design.md": "# Heading\n\nSummary.\n"},
+    )
+    subprocess.run(["git", "init", str(tmp_path)], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t"], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "T"], capture_output=True, check=True)
+    (tmp_path / "f.txt").write_text("a\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "init"], capture_output=True, check=True)
+    base = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    (tmp_path / "g.txt").write_text("b\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "work"], capture_output=True, check=True)
+    head = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    from types import SimpleNamespace
+    found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
+    body = delivery._body(ctx, found)
+    assert "did not run" in body
+    assert "passed in the run" not in body
+
+
+def test_pr_verification_says_check_passed_when_validation_fact_is_set(tmp_path):
+    """When the validation fact is set, the PR says 'passed'."""
+    import subprocess
+    ctx = _TitleCtx(
+        facts={"brief": "Build a tool.", "check": "pnpm test", "name": "t1",
+               "validation": "(the check passed)"},
+        files={"design.md": "# Heading\n\nSummary.\n"},
+    )
+    subprocess.run(["git", "init", str(tmp_path)], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t"], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "T"], capture_output=True, check=True)
+    (tmp_path / "f.txt").write_text("a\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "init"], capture_output=True, check=True)
+    base = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    (tmp_path / "g.txt").write_text("b\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "work"], capture_output=True, check=True)
+    head = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    from types import SimpleNamespace
+    found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
+    body = delivery._body(ctx, found)
+    assert "passed in the run" in body
+    assert "did not run" not in body
 
 
 def test_pr_verification_names_inherited_failures_and_the_new_tests_on_the_base():

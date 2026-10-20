@@ -379,6 +379,71 @@ def test_first_dispatch_leaves_other_steps_output_in_place(tmp_path):
     assert record['execution'].get('set_aside') is None
 
 
+def test_main_bridge_renders_templates_before_begin(tmp_path, monkeypatch):
+    """The bridge's begin action renders {{templates}} before calling begin()."""
+    import io
+    (tmp_path / 'facts.json').write_text(json.dumps({'artifact_name': 'rendered_value'}))
+    Ledger.seed(tmp_path, 'test')
+    payload = json.dumps({
+        'action': 'begin', 'node': 'emit',
+        'prompt': 'Build {{artifact_name}}.', 'writes': ['out.txt'], 'reads': [],
+    })
+    monkeypatch.setattr('sys.stdin', io.StringIO(payload))
+    monkeypatch.chdir(tmp_path)
+    code = agent_delivery.main()
+    assert code == 0
+    # The recorded prompt.txt should contain the rendered value
+    pending_dir = tmp_path / '.refactory/agent-delivery/pending'
+    pending_files = list(pending_dir.glob('*.json'))
+    assert len(pending_files) == 1
+    record = json.loads(pending_files[0].read_text())
+    assert 'rendered_value' in record['prompt']
+    assert '{{artifact_name}}' not in record['prompt']
+
+
+def test_main_bridge_refuses_unrendered_templates(tmp_path, monkeypatch):
+    """The bridge refuses a prompt with unrendered {{key}} after rendering."""
+    import io
+    (tmp_path / 'facts.json').write_text(json.dumps({}))
+    Ledger.seed(tmp_path, 'test')
+    payload = json.dumps({
+        'action': 'begin', 'node': 'emit',
+        'prompt': 'Build {{unknown_key}}.', 'writes': ['out.txt'], 'reads': [],
+    })
+    monkeypatch.setattr('sys.stdin', io.StringIO(payload))
+    monkeypatch.chdir(tmp_path)
+    code = agent_delivery.main()
+    assert code == 1
+
+
+def test_receipt_records_prompt_hash(tmp_path):
+    """begin() and finish() include prompt_hash in the receipt."""
+    Ledger.seed(tmp_path, 'test')
+    record = agent_delivery.begin(tmp_path, 'emit', 'Write emit.txt.', ['emit.txt'])
+    assert 'prompt_hash' in record
+    assert len(record['prompt_hash']) == 64  # SHA-256 hex
+    (tmp_path / 'emit.txt').write_text('content\n')
+    receipt = agent_delivery.finish(tmp_path, 'emit')
+    assert receipt.get('prompt_hash') == record['prompt_hash']
+
+
+def test_reviewers_action_returns_reviewers_list(tmp_path, monkeypatch):
+    """The reviewers bridge action returns the REVIEWERS list."""
+    import io
+    from refactory_dsh import authoring_evidence
+    payload = json.dumps({'action': 'reviewers'})
+    monkeypatch.setattr('sys.stdin', io.StringIO(payload))
+    monkeypatch.chdir(tmp_path)
+    import subprocess
+    result = subprocess.run(
+        [sys.executable, '-m', 'refactory_dsh.agent_delivery'],
+        input=payload, capture_output=True, text=True, cwd=str(tmp_path),
+    )
+    assert result.returncode == 0
+    data = json.loads(result.stdout)
+    assert set(data['reviewers']) == set(authoring_evidence.REVIEWERS)
+
+
 def test_reused_pending_dispatch_moves_nothing(tmp_path):
     """A reused pending dispatch does not move files — it keeps the original snapshot."""
     record = agent_delivery.begin(tmp_path, 'emit', 'Write emit.txt.', ['emit.txt'])
