@@ -254,7 +254,14 @@ def run(
     # the run directory, so a refused start leaves nothing behind.
     require_build()
     from refactory_dsh import dsh_profile
-    dsh_profile.require()
+    _profile_name = 'graph'
+    if resume and workdir:
+        try:
+            from refactory_dsh import pin as _pin_mod
+            _profile_name = _pin_mod.driver_profile(workdir)
+        except Exception:
+            pass
+    dsh_profile.require(name=_profile_name)
     with ownership(workdir) as owner:
         if resume:
             if source or source_format not in ('', 'directory') or approve or knobs or intent or model_context or provider or model or bool(worker_backend) or effort or permission_mode or role_routes or node_routes or model_timeout_s is not None:

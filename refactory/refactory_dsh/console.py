@@ -365,6 +365,11 @@ def _open_mode(
     from refactory_dsh.lowering import DECLARATIONS, SUFFIX
 
     root = Path(workdir).expanduser().resolve()
+    from refactory_dsh.paths import require_build
+    try:
+        require_build()
+    except RuntimeError as exc:
+        raise ConsoleError(str(exc)) from exc
     try:
         name, graphs = interactive.prepare(mode, workdir=root, project=project, knobs=knobs, intent=intent,
                                            **({"model_context": model_context} if model_context else {}),

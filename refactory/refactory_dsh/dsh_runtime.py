@@ -84,7 +84,15 @@ def run_on_dsh(
     selected_home = dsh_profile.model_home(context.get("dsh_home") if context else None)
     if context:
         context = {**context, "dsh_home": str(selected_home)}
-    problem = dsh_profile.requirement(home=selected_home)
+    _dsh_profile_name = "graph"
+    try:
+        _run_config_path = workdir / ".refactory" / "run-config.json"
+        if _run_config_path.exists():
+            import refactory_dsh.pin as _pin_mod
+            _dsh_profile_name = _pin_mod.driver_profile(workdir)
+    except Exception:
+        pass
+    problem = dsh_profile.requirement(name=_dsh_profile_name, home=selected_home)
     if problem is not None:
         # Checked here rather than left to the child: DSH's own error is about a
         # missing profile, which reads as a packaging bug. The profile is machine
@@ -112,15 +120,6 @@ def run_on_dsh(
     # directory and the runner reads them from there.
     lowering.write_declarations(state, workdir)
 
-    # ── pin: read the driver's profile from the run's config ──
-    _dsh_profile_name = "graph"
-    try:
-        _run_config_path = workdir / ".refactory" / "run-config.json"
-        if _run_config_path.exists():
-            import refactory_dsh.pin as _pin_mod
-            _dsh_profile_name = _pin_mod.driver_profile(workdir)
-    except Exception:
-        pass
     command = [
         *dsh_command(root=Path(context["runtime_root"]) if context else None, cli=context.get("dsh_cli") if context else None),
         "--profile", _dsh_profile_name, "run",
