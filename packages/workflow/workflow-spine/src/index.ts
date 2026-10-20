@@ -649,8 +649,228 @@ export function apply(ctx: Context, config: Config): void {
       })
     }
 
+    // 10. Deny writes to .refactory/ — spine state must not be forged by subagents (#347, C1).
+    // Compare case-insensitively: on macOS's default filesystem, .REFACTORY
+    // resolves to .refactory, so a case-folded prefix check closes the bypass (#347, C1).
+    const refactoryDir = join(resolvedRun, '.refactory')
+    const targetLower = resolvedTarget.toLowerCase()
+    const refactoryLower = refactoryDir.toLowerCase()
+    if (targetLower === refactoryLower
+        || targetLower.startsWith(refactoryLower + sep.toLowerCase())) {
+      return Promise.resolve({
+        kind: 'deny' as const,
+        reason: `this subagent may not write inside ${refactoryDir}`,
+      })
+    }
+
     return next()
   })
+
+  // Completion override records: keyed by session id so parallel CEO sessions
+  // do not share a single variable (#347, C1).  When the C1 pre-execute listener
+  // allows `update_goal complete` via a person-confirmed override, it stores the
+  // description here so the C1 post-execute listener can append it to the tool
+  // result, recording the override on the goal's completion.
+  const pendingCompletionOverrides = new Map<string, string>()
+
+  // Goal completion guard (#347, C1). A `tools/pre-execute` listener that
+  // denies `update_goal` with action `complete` when the run's recorded status
+  // (spine-status.json) is not `done` and no person-issued `completion_override`
+  // matches the current status. The refusal steers the CEO toward `update_goal
+  // blocked` (from round 3) or ending the turn (rounds 1–2).
+  ctx.on('tools/pre-execute', (exec, next) => {
+    if (exec.name !== 'update_goal') return next()
+    const args = exec.arguments as Record<string, unknown> | undefined
+    if (args?.action !== 'complete') return next()
+
+    // Find the run workdir the same way C0 does.
+    let workdir: string | undefined
+    if (configuredSpine !== undefined) {
+      workdir = config.workdir
+    } else {
+      const session = exec.agent?.session
+      if (session !== undefined) {
+        const sid = String(session.id)
+        const opened = openedBySession.get(sid)
+        if (opened !== undefined) workdir = opened.workdir
+        else {
+          let current: string | undefined = session.header.parentSession !== undefined
+            ? String(session.header.parentSession)
+            : undefined
+          for (let steps = 0; steps < 20 && current !== undefined; steps += 1) {
+            const o = openedBySession.get(current)
+            if (o !== undefined) { workdir = o.workdir; break }
+            current = childToParent.get(current)
+          }
+        }
+      }
+    }
+
+    const statusRecord = readStatusRecord(workdir)
+    if (statusRecord === undefined) return next() // no status file yet — allow
+    const currentStatus = typeof statusRecord.status === 'string' ? statusRecord.status : ''
+    if (currentStatus === 'done') return next()
+
+    // Check completion_override (status AND invocation must both match)
+    const override = statusRecord.completion_override
+    if (override !== null && typeof override === 'object' && !Array.isArray(override)) {
+      const ov = override as Record<string, unknown>
+      if (ov.confirmed_status === currentStatus) {
+        // Validate invocation: the override is bound to the invocation that confirmed it,
+        // so a resumed or new invocation does not inherit it (#347, C1).
+        const overrideInvocation = ov.invocation ?? null
+        let currentInvocation: unknown = null
+        try {
+          currentInvocation = JSON.parse(readFileSync(join(workdir!, '.refactory', 'invocation.json'), 'utf8')).id ?? null
+        } catch { /* no invocation file — invocation is null */ }
+        if (overrideInvocation === currentInvocation) {
+          // Record the override so the post-execute listener injects it into
+          // the goal's completion result ("the goal then records that").
+          const overrideSessionId = exec.agent?.session ? String(exec.agent.session.id) : '_configured_'
+          pendingCompletionOverrides.set(overrideSessionId,
+            `[Completion allowed via person-confirmed override: `
+            + `status="${currentStatus}", confirmed at ${String(ov.at ?? 'unknown')}]`)
+          return next()
+        }
+      }
+    }
+
+    return Promise.resolve({
+      kind: 'deny' as const,
+      reason: `The run's recorded status is "${currentStatus}". `
+        + 'End this turn and ask the person whether to continue or mark the goal blocked; '
+        + 'from the third goal round you may use update_goal with action "blocked".',
+    })
+  })
+
+  // Goal completion override recording (#347, C1). When the pre-execute
+  // listener allowed `update_goal complete` via a person-confirmed override,
+  // append the override note to the tool result so it is recorded on the goal.
+  ctx.on('tools/post-execute', (exec, result, next) => {
+    if (exec.name !== 'update_goal') return next()
+    const sessionId = exec.agent?.session ? String(exec.agent.session.id) : '_configured_'
+    const note = pendingCompletionOverrides.get(sessionId)
+    if (note === undefined) return next()
+    pendingCompletionOverrides.delete(sessionId)
+    if (result.isError) return next()
+    return Promise.resolve({
+      kind: 'accept' as const,
+      content: [...result.content, { type: 'text' as const, text: note }],
+    })
+  })
+
+  // Cancelled approval rewrite (#347, C3). A `tools/post-execute` listener that
+  // rewrites `ask_user_question` cancellation errors to an unambiguous refusal.
+  // Matches error.info.code against ASK_CANCELLED, ASK_ABORTED, ASK_TIMED_OUT.
+  const ASK_CANCEL_CODES = new Set(['ASK_CANCELLED', 'ASK_ABORTED', 'ASK_TIMED_OUT'])
+  ctx.on('tools/post-execute', (exec, result, next) => {
+    if (exec.name !== 'ask_user_question') return next()
+    if (!result.isError) return next()
+    const code = result.error?.info?.code
+    if (code === undefined || !ASK_CANCEL_CODES.has(code)) return next()
+    return Promise.resolve({
+      kind: 'block' as const,
+      feedback: [{ type: 'text' as const, text: 'Not approved: stop and wait for the person.' }],
+    })
+  })
+
+  // CEO prompt recording (#347, C2). Records the prompt text the CEO sends
+  // through subagent, subagent_fork and send_message, keyed by runKey:node.
+  // Used by wf_done to validate that review/audit nodes received the
+  // pending delivery's prompt.txt.  Cleared on delivery completion and
+  // redispatch so an earlier faithful prompt cannot satisfy a rewritten retry.
+  const ceoPrompts = new Map<string, Array<{ prompt: string; hash: string }>>()
+
+  /** Extract the node id from the execution contract embedded in a prompt. */
+  function extractContractNode(text: string): string | undefined {
+    const startMarker = '<!-- refactory worker execution -->'
+    const endMarker = '<!-- end refactory worker execution -->'
+    const start = text.indexOf(startMarker)
+    if (start < 0) return undefined
+    const end = text.indexOf(endMarker, start)
+    if (end < 0) return undefined
+    const block = text.substring(start + startMarker.length, end)
+    const match = block.match(/"node"\s*:\s*"([^"]+)"/)
+    return match ? match[1] : undefined
+  }
+
+  ctx.on('tools/pre-execute', (exec, next) => {
+    let promptText: string | undefined
+    if (exec.name === 'subagent' || exec.name === 'subagent_fork') {
+      const args = exec.arguments as Record<string, unknown> | undefined
+      promptText = typeof args?.prompt === 'string' ? args.prompt : undefined
+    } else if (exec.name === 'send_message') {
+      const args = exec.arguments as Record<string, unknown> | undefined
+      promptText = typeof args?.message === 'string' ? args.message : undefined
+    }
+    if (promptText === undefined) return next()
+
+    // Record only top-level CEO calls, not reviewer subagent calls (#347, C2).
+    // A delegated child (depth > 0 or has a parentSession) is a subagent whose
+    // send_message the tool filter allows but should not be recorded as a CEO prompt.
+    const session = exec.agent?.session
+    if (session !== undefined) {
+      const depth = session.header.delegationDepth
+      const parent = session.header.parentSession
+      if ((depth !== undefined && depth > 0) || parent !== undefined) return next()
+    }
+
+    // Find due nodes from the spine, keyed by run (workdir) so parallel
+    // GUI sessions cannot cross-contaminate (#347, C2).
+    let spine: Spine | undefined
+    let runKey: string = '_'
+    if (configuredSpine !== undefined) {
+      spine = configuredSpine
+      runKey = config.workdir ?? '_configured_'
+    } else {
+      if (session !== undefined) {
+        const opened = openedBySession.get(String(session.id))
+        if (opened !== undefined) {
+          spine = opened.spine
+          runKey = opened.workdir
+        }
+      }
+    }
+    if (spine !== undefined) {
+      const cur = spine.next()
+      if (cur.status === 'ready') {
+        const hash = createHash('sha256').update(promptText).digest('hex')
+        // Attribute the prompt to a due node by its delivery key: the node id
+        // from the execution contract embedded in prompt.txt (#347, C2).
+        const contractNodeId = extractContractNode(promptText)
+        if (contractNodeId !== undefined) {
+          // The prompt names a specific node via its delivery key.
+          const dueNode = cur.nodes.find(n => n.id === contractNodeId
+            && (n._type === 'AgentNode' || n._type === 'LLMNode'))
+          if (dueNode !== undefined) {
+            // Record under this node — whether faithful or rewritten, wf_done
+            // will check the latest recorded prompt for content matching.
+            const key = `${runKey}:${dueNode.id}`
+            const existing = ceoPrompts.get(key)
+            if (existing !== undefined) existing.push({ prompt: promptText, hash })
+            else ceoPrompts.set(key, [{ prompt: promptText, hash }])
+          }
+          // A contract naming a non-due node: record under none, clear nothing.
+        }
+        // A prompt with no contract (e.g. an unrelated send_message to a
+        // continuable subagent) is recorded under none and no records are
+        // cleared, so faithful reviewers are not refused (#347, C2).
+      }
+    }
+    return next()
+  })
+
+  // Reviewer node ids, fetched once from the runtime bridge and cached.
+  // undefined = not yet fetched; null = fetch failed, treat all nodes as reviewers (fail closed).
+  let reviewerIds: Set<string> | null | undefined
+  // Pending delivery prompts, cached per runKey:node at begin time.
+  // Keyed by `${runKey}:${nodeId}` so parallel GUI sessions do not share state.
+  const pendingPrompts = new Map<string, string>()
+  // Unresolved template keys per runKey:node, cached at begin for inclusion in receipt (#347, C2).
+  const pendingUnresolvedKeys = new Map<string, unknown[]>()
+  // Track which deliveries have already warned about unresolved keys, so we warn
+  // once per delivery, not per wf_next call (#347, C2).
+  const unresolvedKeyWarned = new Set<string>()
 
   /** The id of the session an execution belongs to, when it has an agent. */
   function sessionIdOf(exec: ToolExec): string | undefined {
@@ -808,6 +1028,26 @@ export function apply(ctx: Context, config: Config): void {
             : status === 'executing'
               ? (nodeList ? `running a graph check: ${nodeList}` : 'running a graph check')
               : undefined
+      // Preserve completion_override when the new status AND invocation both match;
+      // clear it when either changes (#347, C1).
+      let completionOverride: Record<string, unknown> | undefined
+      try {
+        const existing = JSON.parse(readFileSync(join(dir, 'spine-status.json'), 'utf8'))
+        const prior = existing?.completion_override
+        if (prior !== null && typeof prior === 'object' && !Array.isArray(prior)
+            && typeof prior.confirmed_status === 'string'
+            && prior.confirmed_status === status) {
+          // Also check invocation — a resumed or new invocation clears the override
+          const overrideInvocation = (prior as Record<string, unknown>).invocation ?? null
+          let currentInvocation: unknown = null
+          try {
+            currentInvocation = JSON.parse(readFileSync(join(dir, 'invocation.json'), 'utf8')).id ?? null
+          } catch { /* no invocation file */ }
+          if (overrideInvocation === currentInvocation) {
+            completionOverride = prior as Record<string, unknown>
+          }
+        }
+      } catch { /* absent file — no override to preserve */ }
       const record = {
         schema_version: 1, run_id: resolve(workdir), at: new Date().toISOString(),
         status, nodes: state.cursor, running_nodes: runningNodes, completed: state.completed,
@@ -817,6 +1057,7 @@ export function apply(ctx: Context, config: Config): void {
         ...(failedNode !== undefined ? {
           last_failure: { node: failedNode.node, error: failedNode.error, at: new Date().toISOString() },
         } : {}),
+        ...(completionOverride !== undefined ? { completion_override: completionOverride } : {}),
       }
       const path = join(dir, 'spine-status.json')
       writeFileSync(`${path}.tmp`, JSON.stringify(record, null, 2))
@@ -845,6 +1086,17 @@ export function apply(ctx: Context, config: Config): void {
     try {
       const recorded = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8')) as { status?: unknown }
       return typeof recorded?.status === 'string' ? recorded.status : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  /** The full status record {@link recordStatus} last wrote, or undefined when absent. */
+  function readStatusRecord(workdir: string | undefined): Record<string, unknown> | undefined {
+    if (workdir === undefined) return undefined
+    try {
+      const raw = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8'))
+      return raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : undefined
     } catch {
       return undefined
     }
@@ -955,10 +1207,12 @@ export function apply(ctx: Context, config: Config): void {
    */
   function recordWarnings(workdir: string | undefined, printed: Array<{ node: string; line: string }>): void {
     if (workdir === undefined || printed.length === 0) return
-    const invocationPath = join(workdir, '.refactory', 'invocation.json')
+    const refDir = join(workdir, '.refactory')
+    mkdirSync(refDir, { recursive: true })
+    const invocationPath = join(refDir, 'invocation.json')
     const invocation = existsSync(invocationPath) ? JSON.parse(readFileSync(invocationPath, 'utf8')).id : null
     const at = new Date().toISOString()
-    appendFileSync(join(workdir, '.refactory', 'events.jsonl'), printed.map(({ node, line }) => JSON.stringify({
+    appendFileSync(join(refDir, 'events.jsonl'), printed.map(({ node, line }) => JSON.stringify({
       schema_version: 1, run_id: resolve(workdir), invocation, at, kind: 'run_warning',
       node_id: node, state: 'warning', summary: line,
     }) + '\n').join(''))
@@ -1288,6 +1542,7 @@ export function apply(ctx: Context, config: Config): void {
       })
     }
     if (next.status === 'ready' && !spine.isPaused() && agentCommand !== '' && workdir !== undefined) {
+      const runKey = workdir
       for (const node of next.nodes) {
         if (node._type !== 'AgentNode' && node._type !== 'LLMNode') continue
         // Dispatched AgentNodes are run by commandOf()/drain(); skip them here
@@ -1299,6 +1554,27 @@ export function apply(ctx: Context, config: Config): void {
         })
         if (typeof receipt.prompt !== 'string') throw new Error('agent delivery bridge returned no prompt')
         node.prompt_template = receipt.prompt
+        const mapKey = `${runKey}:${node.id}`
+        // Clear old CEO prompts only on fresh dispatch (not reuse), so parallel
+        // reviewers do not lose each other's recorded prompts (#347, C2).
+        const isNewDispatch = !pendingPrompts.has(mapKey)
+        pendingPrompts.set(mapKey, receipt.prompt)
+        if (isNewDispatch) {
+          ceoPrompts.delete(mapKey)
+        }
+        // Record unresolved template keys as a run warning and cache for receipt (#347, C2).
+        // Warn once per delivery, not per wf_next call.
+        const unresolvedKeys = receipt.unresolved_keys
+        if (Array.isArray(unresolvedKeys) && unresolvedKeys.length > 0) {
+          if (!unresolvedKeyWarned.has(mapKey)) {
+            unresolvedKeyWarned.add(mapKey)
+            recordWarnings(workdir, unresolvedKeys.map((k: unknown) => ({
+              node: node.id,
+              line: `unresolved template key: {{${String(k)}}}`,
+            })))
+          }
+          pendingUnresolvedKeys.set(mapKey, unresolvedKeys as unknown[])
+        }
       }
     }
     // A user gate's question is shown as the CEO sees it here and as the card puts it.
@@ -1509,6 +1785,19 @@ export function apply(ctx: Context, config: Config): void {
       + `${toolPrefix}_done for it; call ${toolPrefix}_next again and the runtime runs it. `
       + `${toolPrefix}_done is only for a node whose work you or a subagent did.`
     : ''
+  // Sacred Rules 8/9 and check-skip guardrail (#347, #363).
+  const sacredRules = '\n\n'
+    + 'You are an orchestrator. Delegate all technical work — writing code, fixing bugs, running checks, '
+    + "performing research — to the graph's agent nodes. Review their output. When an agent fails, retry "
+    + `with better instructions (${toolPrefix}_edit set-prompt/append-prompt, then ${toolPrefix}_redo) or stop. Never take over `
+    + "the agent's work yourself."
+    + '\n\n'
+    + "Every change that produces a pull request must pass through the graph's review nodes. "
+    + '"The change is small" is not a reason to skip them.'
+    + '\n\n'
+    + 'Never recommend skipping a check gate. When a check cannot run, report what stopped it and what '
+    + 'would unblock it. Ask the person how to proceed. If the person skips, the run report and PR say '
+    + 'the check did not run.'
   // A configured graph runs many nodes per call and names none of them under `ran`,
   // so the warnings they printed come on the result itself and the CEO is told so.
   const warningInstruction = interactiveOpen
@@ -1519,7 +1808,8 @@ export function apply(ctx: Context, config: Config): void {
   ctx.systemPrompt.section({
     name: `tool:${toolPrefix}-spine`,
     order: ctx.systemPrompt.getSectionOrder('TOOL_WORKFLOW'),
-    text: `You are the CEO of a workflow run, and you are DRIVING A WORKFLOW GRAPH. Your coding tools (bash, write, edit, web, skill) are disabled — you cannot implement, edit files, or browse yourself. Advance only through the wf tools.${openInstruction}${warningInstruction} If the person requests a pause before a named node or deterministic dataset, arm it FIRST with ${toolPrefix}_edit action \`pause\` for that node, before any ${toolPrefix}_next that could reach it. Use ${toolPrefix}_state to inspect ids without executing work. When status is \`paused\`, end your turn and wait for the person. Only after an explicit request to continue, use ${toolPrefix}_edit action \`unpause\` on that boundary and resume. Repeated ${toolPrefix}_next calls do not release a pause; never skip or redo around it. ${toolPrefix}_state inspects the cursor without execution; ${toolPrefix}_next executes due deterministic work. After reading steering and arming any requested pause, call it to advance, and call it again after every ${toolPrefix}_done / ${toolPrefix}_verdict / ${toolPrefix}_edit / ${toolPrefix}_expand — those tools only confirm the mutation, they do not tell you what is next. When ${toolPrefix}_steer is available, read it before each ${toolPrefix}_next: it is what the person said about the run since you last looked. When relaying the person's own words through ${toolPrefix}_steer, set source to 'user-relayed' so they become auditable requirements; your own observations default to 'ceo' and are context, not requirements. A correction from the person is applied to that node's prompt with ${toolPrefix}_edit (\`set-prompt\`/\`append-prompt\`) and the node is re-run with ${toolPrefix}_redo. With automatic execution enabled, ${toolPrefix}_next crosses sole static ForkNode/JoinNode boundaries for you and establishes delivery contexts before returning the branch AgentNode/LLMNode prompts. Dispatch only those returned prompts in parallel; target ids in a state view are not dispatch instructions. If a ForkNode or JoinNode is explicitly returned (manual execution or a mixed cursor), acknowledge only that due control node with ${toolPrefix}_done, then call ${toolPrefix}_next before dispatching branch work. For an AgentNode or LLMNode (unless the runtime runs it — it has a dispatch command), spawn a subagent (the subagent tool) whose task is the node's prompt_template, and explicitly tell the subagent to read the node's reads files and write its result to the node's writes file (the filename in the node's writes field, e.g. candidate.py) — wait for it, then report the node with ${toolPrefix}_done. Every path in a node's reads and writes is relative to ${runDirectory}, and the subagent's own working directory is NOT that directory: give the subagent the absolute path (${runDirectory}/<the path>) for each file it must read or write, and tell it to write nowhere else. For a FnNode with a command, call ${toolPrefix}_next to execute it; only a command-less FnNode is yours to complete. Automatic gates also run through ${toolPrefix}_next; never supply their evaluator result. For a manually driven gate, use ${toolPrefix}_verdict with one of its listed outcomes. For a user gate the runtime asks the person itself and routes the answer they give: call ${toolPrefix}_verdict with the gate id and no verdict, and never answer for them — a verdict passed for their gate is refused. Before routing a user gate, read and summarise its \`reads\` files (listed in the node view returned by ${toolPrefix}_next) for the person — key decisions, scope, notable risks or non-goals — and link each file, so they see what they are deciding on before the question is put to them. Fan out a director's plan with ${toolPrefix}_expand, and apply user steering ("skip the tests") with ${toolPrefix}_edit. When a person says a step is wrong, read the run's ledger if one is configured, then use ${toolPrefix}_edit with \`set-prompt\` or \`append-prompt\` to correct that node's prompt and ${toolPrefix}_redo to run the node again with the correction. A DataNode is iterated for you: the runtime selects its items and hands you the subgraph's nodes one pass at a time, with the item being processed in the payload's item field and on disk as the node's current item file. Do not try to iterate it yourself, and do not report the data node — or the pass's last node — before its work is done. Never skip, reorder, or bypass a node — the runner refuses to advance until you report the current node complete.`,
+    text: `You are the CEO of a workflow run, and you are DRIVING A WORKFLOW GRAPH. Your coding tools (bash, write, edit, web, skill) are disabled — you cannot implement, edit files, or browse yourself. Advance only through the wf tools.${openInstruction}${warningInstruction} If the person requests a pause before a named node or deterministic dataset, arm it FIRST with ${toolPrefix}_edit action \`pause\` for that node, before any ${toolPrefix}_next that could reach it. Use ${toolPrefix}_state to inspect ids without executing work. When status is \`paused\`, end your turn and wait for the person. Only after an explicit request to continue, use ${toolPrefix}_edit action \`unpause\` on that boundary and resume. Repeated ${toolPrefix}_next calls do not release a pause; never skip or redo around it. ${toolPrefix}_state inspects the cursor without execution; ${toolPrefix}_next executes due deterministic work. After reading steering and arming any requested pause, call it to advance, and call it again after every ${toolPrefix}_done / ${toolPrefix}_verdict / ${toolPrefix}_edit / ${toolPrefix}_expand — those tools only confirm the mutation, they do not tell you what is next. When ${toolPrefix}_steer is available, read it before each ${toolPrefix}_next: it is what the person said about the run since you last looked. When relaying the person's own words through ${toolPrefix}_steer, set source to 'user-relayed' so they become auditable requirements; your own observations default to 'ceo' and are context, not requirements. A correction from the person is applied to that node's prompt with ${toolPrefix}_edit (\`set-prompt\`/\`append-prompt\`) and the node is re-run with ${toolPrefix}_redo. With automatic execution enabled, ${toolPrefix}_next crosses sole static ForkNode/JoinNode boundaries for you and establishes delivery contexts before returning the branch AgentNode/LLMNode prompts. Dispatch only those returned prompts in parallel; target ids in a state view are not dispatch instructions. If a ForkNode or JoinNode is explicitly returned (manual execution or a mixed cursor), acknowledge only that due control node with ${toolPrefix}_done, then call ${toolPrefix}_next before dispatching branch work. For an AgentNode or LLMNode (unless the runtime runs it — it has a dispatch command), spawn a subagent (the subagent tool) whose task is the node's prompt_template, and explicitly tell the subagent to read the node's reads files and write its result to the node's writes file (the filename in the node's writes field, e.g. candidate.py) — wait for it, then report the node with ${toolPrefix}_done. Every path in a node's reads and writes is relative to ${runDirectory}, and the subagent's own working directory is NOT that directory: give the subagent the absolute path (${runDirectory}/<the path>) for each file it must read or write, and tell it to write nowhere else. For a FnNode with a command, call ${toolPrefix}_next to execute it; only a command-less FnNode is yours to complete. Automatic gates also run through ${toolPrefix}_next; never supply their evaluator result. For a manually driven gate, use ${toolPrefix}_verdict with one of its listed outcomes. For a user gate the runtime asks the person itself and routes the answer they give: call ${toolPrefix}_verdict with the gate id and no verdict, and never answer for them — a verdict passed for their gate is refused. Before routing a user gate, read and summarise its \`reads\` files (listed in the node view returned by ${toolPrefix}_next) for the person — key decisions, scope, notable risks or non-goals — and link each file, so they see what they are deciding on before the question is put to them. Fan out a director's plan with ${toolPrefix}_expand, and apply user steering ("skip the tests") with ${toolPrefix}_edit. When a person says a step is wrong, read the run's ledger if one is configured, then use ${toolPrefix}_edit with \`set-prompt\` or \`append-prompt\` to correct that node's prompt and ${toolPrefix}_redo to run the node again with the correction. A DataNode is iterated for you: the runtime selects its items and hands you the subgraph's nodes one pass at a time, with the item being processed in the payload's item field and on disk as the node's current item file. Do not try to iterate it yourself, and do not report the data node — or the pass's last node — before its work is done. Never skip, reorder, or bypass a node — the runner refuses to advance until you report the current node complete.`
+    + sacredRules,
   })
 
   // Open a mode's graph after boot, for a caller that will drive it node by node.
@@ -1713,10 +2003,85 @@ export function apply(ctx: Context, config: Config): void {
       if (config.executeCommands && (isDeterministic(node) || node._type === 'DataNode')) {
         throw new Error(`${args.node} is executed by the runtime; call ${toolPrefix}_next instead of declaring it complete`)
       }
+      // C2: For review/audit nodes, validate that the CEO's recorded prompt
+      // contains the pending delivery's prompt.txt (#347, C2).
+      const runKey = workdir ?? '_configured_'
       if (agentCommand !== '' && workdir !== undefined && (node._type === 'AgentNode' || node._type === 'LLMNode')) {
-        runtimeBridge(agentCommand, workdir, commandEnv, { action: 'finish', node: args.node })
+        // Lazily fetch the reviewer list from the runtime bridge.
+        if (reviewerIds === undefined) {
+          try {
+            const rv = runtimeBridge(agentCommand, workdir, commandEnv, { action: 'reviewers' })
+            const list = rv.reviewers
+            reviewerIds = new Set(Array.isArray(list) ? list.map(String) : [])
+          } catch {
+            // Fail closed: if we cannot read the reviewer list, treat all nodes as reviewers
+            reviewerIds = null
+          }
+        }
+        // Validate prompt for reviewer nodes
+        let sentPromptHash: string | undefined
+        let sentPromptText: string | undefined
+        if (reviewerIds === null || reviewerIds.has(args.node)) {
+          const mapKey = `${runKey}:${args.node}`
+          // Fail closed: re-read prompt.txt from the pending delivery when
+          // the in-memory cache is empty (e.g. after a restart).
+          let pending = pendingPrompts.get(mapKey)
+          if (pending === undefined) {
+            try {
+              const pp = runtimeBridge(agentCommand, workdir, commandEnv, { action: 'pending-prompt', node: args.node })
+              if (typeof pp.prompt === 'string' && pp.prompt) {
+                pending = pp.prompt
+                pendingPrompts.set(mapKey, pending)
+              }
+            } catch { /* bridge failed — pending stays undefined, will refuse below */ }
+          }
+          if (pending !== undefined) {
+            // Check only the latest prompt recorded for this node's current
+            // delivery, so a rewritten second dispatch is refused (#347, C2).
+            const allRecorded = ceoPrompts.get(mapKey)
+            if (allRecorded === undefined || allRecorded.length === 0) {
+              throw new Error(
+                `wf_done refused: no recorded CEO prompt for reviewer node "${args.node}". `
+                + 'The prompt the CEO dispatched must include the pending delivery prompt.',
+              )
+            }
+            // The latest recorded prompt for this node must contain the
+            // pending prompt.  No fallback to earlier prompts: if the CEO
+            // sent a rewritten retry, the latest is the rewritten one.
+            const latest = allRecorded[allRecorded.length - 1]!
+            if (latest.prompt.includes(pending!)) {
+              sentPromptHash = latest.hash
+              sentPromptText = latest.prompt
+            } else {
+              throw new Error(
+                `wf_done refused: the latest recorded CEO prompt for reviewer node "${args.node}" does not contain `
+                + 'the delivery\'s prompt.txt. The prompt the CEO dispatched must include the pending delivery prompt.',
+              )
+            }
+          } else {
+            // No pending prompt available — fail closed
+            throw new Error(
+              `wf_done refused: no pending delivery prompt for reviewer node "${args.node}". `
+              + 'The delivery context must be established before completing a reviewer node.',
+            )
+          }
+        }
+        const mapKey = `${runKey}:${args.node}`
+        const nodeUnresolved = pendingUnresolvedKeys.get(mapKey)
+        runtimeBridge(agentCommand, workdir, commandEnv, {
+          action: 'finish', node: args.node,
+          ...(sentPromptHash !== undefined ? { sent_prompt_hash: sentPromptHash } : {}),
+          ...(sentPromptText !== undefined ? { sent_prompt: sentPromptText } : {}),
+          ...(nodeUnresolved !== undefined ? { unresolved_keys: nodeUnresolved } : {}),
+        })
       }
       spine.complete(args.node)
+      // Clear pending prompt, CEO prompts, and unresolved keys for completed node (#347, C2)
+      const completedMapKey = `${runKey}:${args.node}`
+      pendingPrompts.delete(completedMapKey)
+      pendingUnresolvedKeys.delete(completedMapKey)
+      unresolvedKeyWarned.delete(completedMapKey)
+      ceoPrompts.delete(completedMapKey)
       return sync(json({ status: 'complete', node: args.node }))
     },
   }))

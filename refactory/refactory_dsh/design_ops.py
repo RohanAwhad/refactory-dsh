@@ -693,7 +693,8 @@ def report_artifact(ctx: Any) -> dict[str, Any]:
         "artifact": ctx.facts.get("artifact"),
         "files": ctx.facts.get("files", []),
         "check": ctx.facts.get("check"),
-        "checked": True,
+        "checked": bool(ev and isinstance(ev.get("validation"), dict)
+                        and ev["validation"].get("status") == "pass"),
         "validation_evidence": ev,
         "intent_audit": audit,
     }

@@ -234,10 +234,11 @@ def begin(workdir: Path, node: str, prompt: str, writes: list[str], *, reuse: bo
     (directory / 'prompt.txt').write_text(annotated)
     if ledger_text:
         (directory / 'ledger.md').write_text(ledger_text)
+    prompt_hash = hashlib.sha256(annotated.encode()).hexdigest()
     record = {'id': identifier, 'node': node,
               'started': previous['started'] if previous is not None else context['at'], 'writes': writes,
               'before': before, 'prompt': annotated, 'entries': entries, 'contexts': contexts,
-              'execution': execution, 'target': target,
+              'execution': execution, 'target': target, 'prompt_hash': prompt_hash,
               'receipt': str(ROOT / identifier / 'receipt.json')}
     (directory / 'receipt.json').write_text(json.dumps({
         **{key: value for key, value in record.items() if key not in ('prompt', 'target')},
@@ -249,7 +250,10 @@ def begin(workdir: Path, node: str, prompt: str, writes: list[str], *, reuse: bo
 
 
 def finish(workdir: Path, node: str, *, final_response: str | None = None,
-           capture_final: bool = False) -> dict[str, Any]:
+           capture_final: bool = False,
+           sent_prompt_hash: str | None = None,
+           sent_prompt: str | None = None,
+           unresolved_keys: list[str] | None = None) -> dict[str, Any]:
     """Preserve fresh tool-written files; capture final text only as the fallback.
 
     Every required output must be newly delivered, including unchanged bytes that
@@ -285,6 +289,16 @@ def finish(workdir: Path, node: str, *, final_response: str | None = None,
                  if fail_changes else None)
     all_changes = fail_changes + warn_changes
     receipt = {key: value for key, value in record.items() if key not in ('prompt', 'target')}
+    receipt['prompt_hash'] = record.get('prompt_hash')
+    receipt['prompt_path'] = str(ROOT / record['id'] / 'prompt.txt')
+    if sent_prompt_hash is not None:
+        receipt['sent_prompt_hash'] = sent_prompt_hash
+    if sent_prompt is not None:
+        sent_path = directory / 'sent-prompt.txt'
+        sent_path.write_text(sent_prompt)
+        receipt['sent_prompt_path'] = str(ROOT / record['id'] / 'sent-prompt.txt')
+    if unresolved_keys:
+        receipt['unresolved_keys'] = unresolved_keys
     receipt.update(finished=_now(), status='failed' if missing or fail_changes else 'delivered',
                    delivery='context supplied; semantic compliance not verified',
                    artifacts=after, captured_final=captured,
@@ -371,12 +385,41 @@ def main() -> int:
         request = json.load(sys.stdin)
         workdir = Path.cwd()
         if request['action'] == 'begin':
-            result = begin(workdir, request['node'], request['prompt'], request['writes'], reuse=True,
+            import re as _re
+            from refactory_dsh.run import _knobs, _read_facts
+            from refactory_dsh.nn.executor import RunContext, render
+            prompt = request['prompt']
+            context = RunContext(workdir, knobs=_knobs(), facts=_read_facts(workdir))
+            rendered = render(prompt, context)
+            # Detect unresolved template keys from the template itself (not
+            # substituted values).  Record as a warning, not a refusal: the
+            # steering ledger folds the brief verbatim into every template,
+            # so a brief containing {{word}} must not block begin (#347, C2).
+            # Strip the STEERING_START…STEERING_END block before scanning so
+            # keys inside the brief (folded in via the ledger) are not warned.
+            from refactory_dsh.steering import STEERING_START, STEERING_END
+            scan_prompt = prompt
+            st_start = scan_prompt.find(STEERING_START)
+            st_end = scan_prompt.find(STEERING_END, st_start) if st_start >= 0 else -1
+            if st_start >= 0 and st_end >= st_start:
+                scan_prompt = scan_prompt[:st_start] + scan_prompt[st_end + len(STEERING_END):]
+            values = {**context.knobs, **context.facts}
+            template_keys = _re.findall(r'\{\{\s*([A-Za-z_]\w*)\s*\}\}', scan_prompt)
+            unresolved = [k for k in template_keys if k.strip() not in values]
+            result = begin(workdir, request['node'], rendered, request['writes'], reuse=True,
                            reads=request.get('reads'))
             # The bridge reads the prompt; the target snapshot is this module's own state.
             result = {key: value for key, value in result.items() if key != 'target'}
+            if unresolved:
+                result['unresolved_keys'] = unresolved
         elif request['action'] == 'finish':
-            result = finish(workdir, request['node'])
+            sent_prompt_hash = request.get('sent_prompt_hash')
+            sent_prompt = request.get('sent_prompt')
+            unresolved_keys = request.get('unresolved_keys')
+            result = finish(workdir, request['node'],
+                            sent_prompt_hash=sent_prompt_hash,
+                            sent_prompt=sent_prompt,
+                            unresolved_keys=unresolved_keys)
         elif request['action'] == 'invalidate':
             nodes = request['nodes']
             reason = request['reason']
@@ -386,6 +429,17 @@ def main() -> int:
                 raise ValueError('invalidate needs node ids and a non-empty reason')
             invalidate(workdir, nodes, reason)
             result = {'requested': nodes}
+        elif request['action'] == 'reviewers':
+            from refactory_dsh.authoring_evidence import REVIEWERS
+            result = {'reviewers': list(REVIEWERS)}
+        elif request['action'] == 'pending-prompt':
+            node = request['node']
+            pending = _pending(workdir, node)
+            if pending.exists():
+                record = json.loads(pending.read_text())
+                result = {'prompt': record.get('prompt', '')}
+            else:
+                result = {'prompt': ''}
         else:
             raise ValueError('unknown agent delivery action')
         print(json.dumps(result))
