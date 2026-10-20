@@ -154,7 +154,8 @@ class CreateMode(Mode):
             # here, before the first model call.
             knobs=("name", "brief", "task_ref", "single_shot", "data_node",
                    "revision_of", "requires_input", "smoke_timeout_s"),
-            writes=("brief.json", "research-review.txt", "strategy-review.txt", "validation.txt"),
+            writes=("brief.json", "research-review.txt", "strategy-review.txt", "validation.txt",
+                    "staging/source-snapshot.json"),
             produces=("name", "brief", "extends", "revision_of", "intent", "validation",
                       "design_review", "api", "reference", "task_ref", "class_of_work",
                       "data_node", "requires_input", "research_review", "qa_gate",
@@ -521,8 +522,8 @@ class CreateMode(Mode):
 
         graph.add(Node(
             "register", "op", call=f"{OPS}:register",
-            writes=("registered.json",),
-            produces=("registered", "package_path", "source_hash", "source_existed"),
+            writes=("registered.json", "staging/package-diff.json"),
+            produces=("registered", "package_path"),
             notes="confirm the registry lists the new package",
         ))
         graph.add(Node(

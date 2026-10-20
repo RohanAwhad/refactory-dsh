@@ -213,9 +213,9 @@ def test_reloop_register_does_not_refuse_itself(tmp_path, monkeypatch):
     shared = registry.workspace_root(project) / "mypkg"
     assert shared.exists()
 
-    # source_hash and source_existed were updated by register.
-    assert ctx.facts["source_hash"] != ""
-    assert ctx.facts["source_existed"] is True
+    # The run's origin is stamped in the shared package.
+    origin = json.loads((shared / ".origin.json").read_text())
+    assert origin.get("run_id") == "run1"
 
     # Simulate a reloop: materialise writes a new version to staging.
     (Path(staging) / "__init__.py").write_text("# attempt 2\n")

@@ -1094,9 +1094,9 @@ def register(ctx: Any) -> dict[str, Any]:
     state differs from what ``prepare`` recorded — including when it now exists and did
     not before — refuse and name the other run (read from ``.origin.json``).
 
-    After a successful registration, the ``source_hash`` fact is updated to the new
-    state so that a reloop (register runs before smoke in the create graph) does not
-    make this run refuse itself.
+    Reloop safety: when the shared package's ``.origin.json`` names this run, the
+    conflict check is skipped — this run already registered it on a previous iteration,
+    and re-registering the updated staging copy is the intended behaviour.
     """
     name = str(ctx.facts["name"])
     staging_root = ctx.facts.get("package_root")
@@ -1106,28 +1106,34 @@ def register(ctx: Any) -> dict[str, Any]:
         # Detect whether the shared package changed since prepare.
         source_hash = ctx.facts.get("source_hash", "")
         source_existed = ctx.facts.get("source_existed", source_hash != "")
+        own_run_id = Path(ctx.workdir).name
         if shared.exists():
             current = _dir_hash(shared)
-            if not source_existed:
-                # Package did not exist at prepare but now does: another run created it.
-                other_run = _origin_run_id(shared)
-                other_info = f" (registered by run {other_run})" if other_run else ""
-                raise ValueError(
-                    f"the shared package {name!r} did not exist when this run's prepare "
-                    f"ran, but it exists now{other_info}; another run registered it first. "
-                    f"This run's staged package is kept at {staging_root} for inspection."
-                )
-            if current != source_hash:
-                other_run = _origin_run_id(shared)
-                other_info = f" (registered by run {other_run})" if other_run else ""
-                raise ValueError(
-                    f"the shared package {name!r} changed since this run's prepare "
-                    f"(hash {source_hash[:12]} -> {current[:12]}){other_info}; another run "
-                    f"registered it first. This run's staged package is kept at "
-                    f"{staging_root} for inspection."
-                )
+            # A reloop: this run already registered the package on a previous
+            # iteration.  The origin stamp written by _stamp_origin_run_id
+            # identifies the registering run, so a match means the shared
+            # package is ours and safe to overwrite.
+            is_reloop = _origin_run_id(shared) == own_run_id
+            if not is_reloop:
+                if not source_existed:
+                    # Package did not exist at prepare but now does: another run created it.
+                    other_run = _origin_run_id(shared)
+                    other_info = f" (registered by run {other_run})" if other_run else ""
+                    raise ValueError(
+                        f"the shared package {name!r} did not exist when this run's prepare "
+                        f"ran, but it exists now{other_info}; another run registered it first. "
+                        f"This run's staged package is kept at {staging_root} for inspection."
+                    )
+                if current != source_hash:
+                    other_run = _origin_run_id(shared)
+                    other_info = f" (registered by run {other_run})" if other_run else ""
+                    raise ValueError(
+                        f"the shared package {name!r} changed since this run's prepare "
+                        f"(hash {source_hash[:12]} -> {current[:12]}){other_info}; another run "
+                        f"registered it first. This run's staged package is kept at "
+                        f"{staging_root} for inspection."
+                    )
         elif source_existed:
-            other_run = ""
             raise ValueError(
                 f"the shared package {name!r} existed when this run's prepare ran, "
                 f"but it is gone now; another run deleted it. "
@@ -1159,9 +1165,6 @@ def register(ctx: Any) -> dict[str, Any]:
                 shutil.rmtree(old_aside, ignore_errors=True)
             if temp.exists():
                 shutil.rmtree(temp, ignore_errors=True)
-        # Update source_hash so a reloop of register does not refuse itself.
-        ctx.set_fact("source_hash", _dir_hash(shared))
-        ctx.set_fact("source_existed", True)
     registry.install_workspace(project_for_nodes())
     importlib.invalidate_caches()
     if name not in registry.discover_names(project_for_nodes()):
