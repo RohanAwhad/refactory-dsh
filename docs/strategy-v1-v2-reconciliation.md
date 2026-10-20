@@ -273,16 +273,6 @@ This removes lightwell migration from the critical path entirely.
 
 ---
 
-## Ownership
-
-| Area | Owner | Responsibilities |
-|---|---|---|
-| Shared IR schema | v2 team (refactory-dsh) | Proposes field additions, ensures backward-compatible serialization |
-| remote-factory (v1) releases | v1 maintainer (TBD) | Security patches, critical bug fixes, submodule pin bumps |
-| OpenShell confinement | v1 maintainer + v2 team (shared) | v1 maintainer owns the core module; v2 team owns the adapter/shim |
-| Lightwell migration | Lightwell team | Drives Package migration, decides migration timeline |
-| Submodule pin coordination | v2 team | Bumps pin when upstream IR/OpenShell changes land |
-
 ## Decision matrix
 
 | Decision | Recommended path | Effort | Prerequisite |
