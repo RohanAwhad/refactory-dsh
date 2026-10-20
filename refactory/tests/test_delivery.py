@@ -21,7 +21,7 @@ import pytest
 from refactory_dsh import cli, console, delivery, nn, projects, worktree
 from refactory_dsh.design import DesignMode
 from refactory_dsh.projects import projects_dir
-from tests_support import DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, RESEARCH_ANSWER, REVIEW_ANSWERS, FakeModel, git, git_repo, render, stub
+from tests_support import DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, PITFALLS_ANSWER, RESEARCH_ANSWER, REVIEW_ANSWERS, FakeModel, git, git_repo, render, stub
 
 NAME = "delivered_tool"
 FAKE_GH = Path(__file__).resolve().parent / "fake_gh.py"
@@ -669,8 +669,8 @@ def _calls(tmp_path: Path) -> str:
 
 def _answers(*emits: str) -> list[str]:
     """Every answer a design run needs, in the order its graph asks."""
-    return [RESEARCH_ANSWER, "perspectives", "one plan", DESIGN_DOC_ANSWER,
-            DESIGN_REVIEW_ANSWER, *emits, *REVIEW_ANSWERS]
+    return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
+            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits, *REVIEW_ANSWERS]
 
 
 def _mode(**knobs) -> DesignMode:
@@ -1787,8 +1787,13 @@ def test_finish_commands_work_with_special_characters_in_title(github, tmp_path)
         "## Changes\n\n"
         "- tool.py\n"
     )
-    answers = [RESEARCH_ANSWER, "perspectives", "one plan", tricky_design,
-               DESIGN_REVIEW_ANSWER, render({"tool.py": "print('built')\n"}),
+    tricky_design += (
+        "\n## Anti-patterns to avoid\n\n"
+        "- PIT-001: addressed at `tool.py:1`\n"
+    )
+    answers = [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
+               tricky_design, DESIGN_REVIEW_ANSWER,
+               render({"tool.py": "print('built')\n"}),
                *REVIEW_ANSWERS]
     model = FakeModel(answers)
     result = _mode(pr=False).run(

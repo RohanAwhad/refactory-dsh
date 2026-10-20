@@ -51,8 +51,21 @@ def main():
     # Find repo root by walking up from this file
     repo_root = Path(__file__).resolve().parent.parent.parent.parent
     out_path = repo_root / 'packages' / 'workflow' / 'workflow-spine' / 'tests' / 'fixtures' / 'design-graph.json'
+    content = json.dumps(fixture, indent=2) + '\n'
+
+    if '--check' in sys.argv:
+        if not out_path.exists():
+            print(f"export-design-graph: {out_path} does not exist; "
+                  "run `python -m refactory_dsh.tools.export_design_graph`")
+            sys.exit(1)
+        if out_path.read_text() != content:
+            print(f"export-design-graph: {out_path} is stale; "
+                  "run `python -m refactory_dsh.tools.export_design_graph`")
+            sys.exit(1)
+        return
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(fixture, indent=2) + '\n')
+    out_path.write_text(content)
     print(f"Wrote {out_path}")
 
 

@@ -25,6 +25,7 @@ from refactory_dsh.run import run_node
 from tests_support import (
     DESIGN_DOC_ANSWER,
     DESIGN_REVIEW_ANSWER,
+    PITFALLS_ANSWER,
     RESEARCH_ANSWER,
     REVIEW_ANSWERS,
     FakeModel,
@@ -192,6 +193,7 @@ def _design_answers(emit: list[str]) -> list[str]:
         # The research answer is the plan array its gate checks, for the same reason
         # create's fixture is: a prose answer is the failure the gate catches.
         RESEARCH_ANSWER,
+        PITFALLS_ANSWER,
         "perspectives: the simplest thing that passes the check",
         "one plan: the files, and how the check exercises them",
         DESIGN_DOC_ANSWER,
@@ -206,8 +208,10 @@ def test_the_design_graph_is_a_different_shape_from_a_package_one():
     assert sorted(graph.nodes) == [
         "check", "code_reviewer", "deliver", "design_doc", "design_review",
         "emit", "fork_qa", "gate_design_review", "gate_overwatch",
-        "gate_qa", "gate_research", "gate_strategy", "health_checker", "join_qa",
-        "materialise", "overwatch", "prepare", "qa_director", "record_findings",
+        "gate_pitfalls", "gate_qa", "gate_research", "gate_strategy",
+        "health_checker", "join_qa",
+        "materialise", "overwatch", "pitfalls_researcher", "prepare",
+        "qa_director", "record_findings",
         "report", "research_director", "strategy_director", "synthesize_qa",
         "synthesize_strategy",
     ], "the graph is design-v2's phases, not v1's"

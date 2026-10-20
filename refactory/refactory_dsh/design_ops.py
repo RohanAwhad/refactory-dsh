@@ -29,7 +29,7 @@ STAGING = "staging"
 #: Planning steps that must not change the target or the worktree (#347).
 #: They write only into the run directory; a change they make to the target
 #: or the worktree fails the step and names what changed.
-PLANNING_STEPS = ('research_director', 'strategy_director', 'synthesize_strategy', 'design_doc')
+PLANNING_STEPS = ('research_director', 'pitfalls_researcher', 'strategy_director', 'synthesize_strategy', 'design_doc')
 
 #: The op design's materialise node called before it moved to `repo_change` (#330): a run
 #: lowered then, such as one waiting at its approval gate, still names it.
@@ -107,11 +107,23 @@ def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None =
                    "not run: initial design pass; no prior review\n")
     from refactory_dsh.create_ops import UNREFUSED
 
+    # Pitfalls facts and file are written only by full design mode (whose
+    # prepare node declares them); design_fast calls with deliver=False and
+    # filters these keys out before returning to the executor.
+    if deliver:
+        ctx.write_text("pitfalls-review.txt",
+                       "not run: initial pitfalls analysis; no prior review\n")
     planned = delivery.plan_run(ctx, task=task) if deliver else {}
+    pitfalls_facts = {
+        "has_pitfalls_step": True,
+        "pitfalls": "(no pitfalls analysis yet)",
+        "pitfalls_review": "(no pitfalls review has run yet)",
+    } if deliver else {}
     return {"name": name, "brief": brief, "check": check, "validation": "(no check has run yet)",
             "research_review": "(no research review has run yet)", "research_scope": research_scope,
             "design_review_feedback": "(no design review has run yet)",
             "design_review_findings": "(no findings yet)",
+            **pitfalls_facts,
             **UNREFUSED, **located, **planned}
 
 
@@ -256,6 +268,48 @@ def gate_design_review(ctx: Any) -> str:
                 "the design's title is the run name; it must say what the change does"
             )
 
+    # ── mechanical check 4: pitfall coverage ──
+    has_pitfalls = ctx.facts.get("has_pitfalls_step", False)
+    if has_pitfalls:
+        from refactory_dsh import pitfalls as pitfalls_mod
+
+        if ctx.exists("pitfalls.json"):
+            try:
+                pitfalls_raw = ctx.read_text("pitfalls.json")
+                pitfalls_data = json.loads(pitfalls_raw)
+                if isinstance(pitfalls_data, list):
+                    addressed, aside, pit_missing = pitfalls_mod.pitfall_coverage(
+                        design_text, pitfalls_data)
+                    missing_high = [pid for pid in pit_missing
+                                   if any(p.get("id") == pid and p.get("risk") == "high"
+                                          for p in pitfalls_data)]
+                    if missing_high:
+                        problems.append(
+                            f"high-risk pitfall(s) not addressed in the design: "
+                            f"{', '.join(missing_high)}"
+                        )
+                    coverage_lines = []
+                    for p in pitfalls_data:
+                        pid = p.get("id", "?")
+                        risk = p.get("risk", "?")
+                        if pid in addressed:
+                            coverage_lines.append(f"  {pid} ({risk}): addressed")
+                        elif pid in aside:
+                            coverage_lines.append(f"  {pid} ({risk}): set aside")
+                        else:
+                            coverage_lines.append(f"  {pid} ({risk}): MISSING")
+                    if coverage_lines:
+                        ctx.set_fact("pitfall_coverage",
+                                     "Pitfall coverage:\n" + "\n".join(coverage_lines))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                problems.append("pitfalls.json exists but is not valid JSON")
+        else:
+            problems.append(
+                "pitfalls.json is missing (gate_pitfalls should have validated it)")
+    else:
+        ctx.set_fact("pitfall_coverage",
+                     "pitfalls check skipped: no pitfalls_researcher in this graph")
+
     # ── decide: proceed, reloop, or exhaust ──
     allowed = int(ctx.knob("design_review_attempts", 2))
     used = int(ctx.facts.get("design_review_attempts_used", 0)) + 1
@@ -267,6 +321,10 @@ def gate_design_review(ctx: Any) -> str:
         ctx.set_fact("design_review_feedback", "(the design review passed)")
         ctx.set_fact("design_review_findings",
                      "(none: the design review passed)")
+        coverage = ctx.facts.get("pitfall_coverage", "")
+        if coverage:
+            ctx.set_fact("design_review_findings",
+                         ctx.facts["design_review_findings"] + "\n\n" + coverage)
         return "proceed"
 
     report = "\n".join(f"- {p}" for p in problems)
@@ -275,6 +333,9 @@ def gate_design_review(ctx: Any) -> str:
         # Exhausted: proceed to gate_strategy with findings shown.
         ctx.set_fact("design_review_feedback", report)
         ctx.set_fact("design_review_findings", report)
+        coverage = ctx.facts.get("pitfall_coverage", "")
+        if coverage:
+            ctx.set_fact("design_review_findings", report + "\n\n" + coverage)
         ctx.write_text("reviews/design-review-feedback.txt", report + "\n")
         return "proceed"
 
@@ -283,6 +344,37 @@ def gate_design_review(ctx: Any) -> str:
     ctx.set_fact("design_review_feedback", report)
     ctx.set_fact("design_review_findings",
                  "(no findings yet)")
+    return Verdict("reloop", report)
+
+
+def gate_pitfalls(ctx: Any) -> str:
+    """Validate pitfalls.json structure; reloop to pitfalls_researcher when invalid.
+
+    When attempts are exhausted, stops the run as gate_research does.
+    """
+    from refactory_dsh import pitfalls as pitfalls_mod
+
+    raw = ctx.read_text("pitfalls.json") if ctx.exists("pitfalls.json") else ""
+    source = str(ctx.facts.get("source") or ctx.facts.get("artifact") or "")
+    problems = pitfalls_mod.validate_pitfalls(raw, source)
+
+    if not problems:
+        ctx.write_text("pitfalls-review.txt", "ok\n")
+        ctx.set_fact("pitfalls_review", "(pitfalls validated)")
+        return "proceed"
+
+    allowed = int(ctx.knob("pitfalls_attempts", 2))
+    used = int(ctx.facts.get("pitfalls_attempts_used", 0)) + 1
+    ctx.set_fact("pitfalls_attempts_used", used)
+
+    report = "\n".join(f"- {p}" for p in problems)
+    ctx.write_text("pitfalls-review.txt", report + "\n")
+    ctx.set_fact("pitfalls_review", report)
+
+    if used >= allowed:
+        raise ValueError(
+            f"pitfalls are still not valid after {used} attempt(s):\n{report}"
+        )
     return Verdict("reloop", report)
 
 

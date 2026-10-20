@@ -530,8 +530,9 @@ reported the change only at materialise, 45 minutes later.
    naming the step; for output-only steps (planning steps and emit), it fails
    the step.
 3. **Planning guard.** Design's `prepare_design` passes its planning steps
-   (`research_director`, `strategy_director`, `synthesize_strategy`,
-   `design_doc`) to `repo_change.locate` as `output_only`, which merges them
+   (`research_director`, `pitfalls_researcher`, `strategy_director`,
+   `synthesize_strategy`, `design_doc`) to `repo_change.locate` as
+   `output_only`, which merges them
    with `OUTPUT_ONLY = ("emit",)` at `target_guard.record`. The watch/strayed
    bracket that catches emit editing the target now catches a planning step
    doing so. `OUTPUT_ONLY` stays `("emit",)` — design's steps are design's own.
