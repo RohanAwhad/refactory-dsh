@@ -83,6 +83,27 @@ To change completed work, choose a completed node and prompt correction, press *
 
 The run's status includes whether its owner process is alive. A failed run with a live owner may still apply queued controls and does not need recovery — wait for it or send another control. A failed run whose owner is not alive cannot apply pending controls; explicit recovery (resume) is needed to start a fresh owner from the saved checkpoint.
 
+### Retry status (dm-95)
+
+When a node command fails, `spine-status.json` records status `ready` with a `last_failure` field containing `{ node, error, at }`, not run-level `failed`. The graph is ready to retry the same boundary. `refactory status` shows "step X is being retried" when `last_failure` is present and the owner is alive. Run-level `failed` means the graph run has ended — it appears only for infrastructure errors (an uncaught exception from the graph's drain loop) or when the owner exits without retrying the failed node.
+
+When the owner exits with status `ready` and `last_failure` present, the supervisor promotes the status to `failed` before deciding whether to respawn. The promoted failure names the node and its error. The supervisor does not respawn it: the run genuinely ended because a node failure was not retried. It still respawns a real crash (an owner killed or dead while `executing`).
+
+Consumers that need finality should use the `done` or `failed` status (which now unambiguously means the run ended), not a transient status during execution.
+
+### Resume a failed due step (dm-97)
+
+When a node fails and its checkpoint records status `failed`, resume requires acknowledgement:
+
+```bash
+uv run refactory graph-control resume --acknowledge-failure --run /absolute/run
+```
+
+The acknowledgement is bound to the checkpoint's SHA-256 hash, so it cannot apply to a later failure. Without the flag, the refusal names this exact command. The failed node is re-dispatched from the saved checkpoint.
+
+For node command failures that wrote `ready` (dm-95), a plain `resume` works after promotion because the promoted `failed` checkpoint requires `--acknowledge-failure`.
+
+
 A live owner's resume control releases its boundary pause. If the old graph owner is gone, explicit resume can start a fresh owned process from the saved checkpoint. When the run's status is terminal (done, halted, failed, refused, or cancelled) and the recorded owner is still alive, resume waits briefly for it to exit. If the owner exits during the wait, a fresh owner is started automatically. If the owner is still alive after the wait, the resume is filed as a pending resume (`.refactory/resume-pending.json`) and honoured automatically when the old owner finishes exiting — no second command is needed. It preserves the run identity, completed work, route configuration and consumed resources. Larger resource limits are explicit allocations, not a reset of usage. `refactory graph-control resume --run <dir>` is the recovery command:
 
 ```bash
@@ -103,9 +124,9 @@ Inspect side effects and outputs when continuation is refused. Use explicit inva
 
 When an owner process exits and the run's spine status is neither terminal nor deliberately paused, the supervisor automatically restarts the owner from the saved checkpoint. This eliminates the need for manual `graph-control resume` after a model outage, a crash, or a killed process.
 
-**Terminal states** (no respawn): `done`, `cancelled`, `failed`.
+**Terminal states** (no respawn): `done`, `cancelled`, `failed`. Note: `failed` now appears only for infrastructure errors or when a node failure is promoted after the owner exits without retrying (dm-95). Node command failures write `ready` with `last_failure` during execution.
 **Deliberately paused states** (no respawn): `halted`, `paused`, `waiting_user`, `refused`.
-**Supervisable states** (respawn if owner is dead): `ready`, `executing`.
+**Supervisable states** (respawn if owner is dead): `ready` (without `last_failure`), `executing`.
 
 | Aspect | Detail |
 |--------|--------|
@@ -149,11 +170,13 @@ retried with the new one, without anyone editing the checkpoint.
 Follow with `refactory graph-control resume --run /absolute/run` to start a new
 owner. For a failed checkpoint, add `--acknowledge-failure` to the amend-command.
 
-### Acknowledge an executing checkpoint
+### Acknowledge an executing or failed checkpoint
 
 When the owner dies while nodes are running, the checkpoint stays `executing`.
-Recovery refuses it as an unknown outcome. Acknowledge it as your statement
-that you inspected the side effects:
+When a run is stopped during an agent node, the checkpoint may be `failed` with
+a pending dispatch under `.refactory/agent-delivery/pending/`. In either case,
+recovery refuses the checkpoint. Acknowledge it as your statement that you
+inspected the side effects:
 
 ```bash
 uv run refactory graph-control acknowledge --run /absolute/run
@@ -171,6 +194,13 @@ Only in-flight branches' partial outputs differ and are set aside. After
 resume, the spine re-dispatches only the incomplete branches from the cursor.
 When all branches complete, the join reads outputs from both the preserved
 completed branches and the re-dispatched ones.
+
+For a `failed` checkpoint with pending dispatches (the stopped-run scenario),
+acknowledge moves the pending dispatches to set-aside and writes
+`acknowledge_failed: true` in `resume-request.json`. For an `executing`
+checkpoint, it writes `acknowledge_executing: true` as before. Both are
+SHA-bound. After acknowledge, `resume` continues the run without passing the
+flag again.
 
 Acknowledge refuses while the owner or the supervisor is alive. When the
 supervisor stops on the dm-70 refusal, `start-failure.json` and
@@ -190,8 +220,8 @@ Use `refactory status` to see which controls are queued.
 ### Replay a failed run
 
 When a run's owner has exited after a failure, `--resume` refuses the
-checkpoint. To replay a specific node, preview and confirm the rerun with the
-failure acknowledged:
+checkpoint unless `--acknowledge-failure` is passed. To replay a specific
+node, preview and confirm the rerun with the failure acknowledged:
 
 ```bash
 uv run refactory graph-control preview --run /absolute/run --node NODE
@@ -200,12 +230,18 @@ uv run refactory graph-control rerun --run /absolute/run \
 ```
 
 The `--acknowledge-failure` flag confirms that the person has inspected the
-failed node's side effects. The command queues the rerun control file, then
-starts a new owner process. The owner restores the failed checkpoint, applies
-the queued rerun at its first boundary, and continues the run.
+failed node's side effects. For a simpler retry of the failed due node
+(without replaying a specific node), use:
 
-`--resume` continues to refuse failed checkpoints. Only `graph-control rerun`
-with `--acknowledge-failure` starts an owner for a failed run.
+```bash
+uv run refactory graph-control resume --acknowledge-failure --run /absolute/run
+```
+
+Both commands start a new owner process. `resume --acknowledge-failure`
+re-dispatches the failed due node from the checkpoint. `rerun` queues a
+rerun control file, then starts a new owner that applies the queued rerun
+at its first boundary. Both require the checkpoint's SHA-256 hash to match,
+so neither can apply to a later failure.
 
 ### Incomplete cursor drain
 
@@ -287,6 +323,23 @@ Gate replay is not needed. Forward-only invalidation limits the blast radius:
 replaying the upstream agent (e.g. `overwatch` for `gate_overwatch`) re-runs
 only that agent, this gate and what follows, not the loop body. The refusal
 message names this alternative.
+
+### Writer and reader inventory
+
+| File | Module | Function / Line | Reads / Writes | `last_failure` handling |
+|------|--------|-----------------|----------------|------------------------|
+| spine-status.json | workflow-spine/src/index.ts | `recordStatus` (767) | **Writer** | Writes `last_failure` when `failedNode` param is provided |
+| spine-status.json | refactory_dsh/run_state.py | `spine_status` (48) | Reads `status` | Does not read `last_failure` |
+| spine-status.json | refactory_dsh/run_state.py | `promote_unretried_failure` | Reads/writes `status`, `last_failure` | Promotes `ready`+`last_failure` to `failed` |
+| spine-status.json | refactory_dsh/console.py | `_spine` (403) | Reads all fields | Returns full dict |
+| spine-status.json | refactory_dsh/console.py | `status` (494) | Reads `status`, `last_failure` | Adds `last_failure` to activity, sets wait_reason |
+| spine-status.json | refactory_dsh/dsh_runtime.py | `_spine_status` (267) | Reads `status`, `error` | Not affected; `ready`→"did not finish" is correct |
+| spine-status.json | refactory_dsh/graph_control.py | `request` (52,84) | Reads `status` | Not affected |
+| spine-status.json | refactory_dsh/interactive.py | `_terminal_stop` (348) | Reads `status` via `spine_status()` | `ready` is not terminal → no false stop |
+| spine-status.json | refactory_dsh/interactive.py | line 393 | Reads `status`, `error` | Not affected; reads halted reason |
+| spine-status.json | refactory_dsh/invocations.py | lines 84,89 | Checks existence only | Not affected |
+| spine-status.json | refactory_dsh/live.py | `snapshot` (120) | Reads all fields | Includes `last_failure` in return, overrides `wait_reason` |
+| spine-status.json | refactory_dsh/repo_change.py | line 62 | Reads `status` | `ready` not in FINISHED → run still active |
 
 Release checks exercised live CLI observation and native gate answers, pause/resume, reviewed replay and owned stop. Separate registered dead-owner recovery checks passed through public CLI resume and the native Resume control, preserving completed artifacts, saved configuration and accumulated resources while executing only the remaining node. An unavailable-provider guard prevented model execution. See the [validation record](release-validation-20260926.md).
 

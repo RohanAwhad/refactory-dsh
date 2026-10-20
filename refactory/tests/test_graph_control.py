@@ -277,7 +277,7 @@ def test_acknowledge_before_refuses(tmp_path):
         'configuration_fingerprints': {},
     }))
 
-    with pytest.raises(ValueError, match='unknown or failed'):
+    with pytest.raises(ValueError, match='outcome is unknown'):
         recovery.prepare(root, 'test-run')
 
 
@@ -422,7 +422,7 @@ def test_executing_still_refuses_without_acknowledge(tmp_path):
         'configuration_fingerprints': {},
     }))
 
-    with pytest.raises(ValueError, match='unknown or failed'):
+    with pytest.raises(ValueError, match='outcome is unknown'):
         recovery.prepare(root, 'test-run')
 
 
@@ -574,6 +574,387 @@ def test_acknowledge_then_prepare_accepts(tmp_path):
     # Now prepare should accept
     result = recovery.prepare(root, 'test-run')
     assert result == root / 'graphs'
+
+
+# ── dm-95: retry status ───────────────────────────────────────────────────
+
+def test_status_shows_retry_when_last_failure_present(tmp_path):
+    """When spine-status has ready+last_failure, console.status shows 'being retried'.
+
+    The owner is alive (os.getpid()), so the died check does not override the
+    wait_reason. This is the window between a node failure and the CEO's next
+    wf_next call.
+    """
+    root = tmp_path
+    refactory = root / '.refactory'
+    refactory.mkdir(parents=True, exist_ok=True)
+
+    from datetime import datetime, timezone
+    now_iso = datetime.now(timezone.utc).isoformat()
+    (refactory / 'spine-status.json').write_text(json.dumps({
+        'status': 'ready',
+        'nodes': ['check'],
+        'completed': ['emit'],
+        'last_failure': {'node': 'check', 'error': 'exit 1', 'at': now_iso},
+    }))
+    checkpoint: dict[str, Any] = {
+        'status': 'ready',
+        'run_id': str(root),
+        'graph': {'name': 'test'},
+        'owner_pid': os.getpid(),
+        'file_fingerprints': {},
+    }
+    (refactory / 'spine-checkpoint.json').write_text(json.dumps(checkpoint))
+    (refactory / 'invocation.json').write_text(json.dumps({'id': 'test-inv'}))
+
+    from refactory_dsh import console
+    result = console.status(root)
+    activity = result['activity']
+    assert 'last_failure' in activity
+    assert activity['last_failure']['node'] == 'check'
+    assert 'step check is being retried' in activity.get('wait_reason', '')
+
+
+def test_status_no_retry_info_when_last_failure_absent(tmp_path):
+    """When spine-status has ready without last_failure, no retry info appears."""
+    root = tmp_path
+    refactory = root / '.refactory'
+    refactory.mkdir(parents=True, exist_ok=True)
+
+    (refactory / 'spine-status.json').write_text(json.dumps({
+        'status': 'ready',
+        'nodes': ['check'],
+        'completed': ['emit'],
+    }))
+    checkpoint: dict[str, Any] = {
+        'status': 'ready',
+        'run_id': str(root),
+        'graph': {'name': 'test'},
+        'owner_pid': os.getpid(),
+        'file_fingerprints': {},
+    }
+    (refactory / 'spine-checkpoint.json').write_text(json.dumps(checkpoint))
+    (refactory / 'invocation.json').write_text(json.dumps({'id': 'test-inv'}))
+
+    from refactory_dsh import console
+    result = console.status(root)
+    activity = result['activity']
+    assert 'last_failure' not in activity
+
+
+def test_unretried_failure_promoted_and_not_respawned(tmp_path):
+    """A run whose node fails and is not retried ends with run-level failed.
+
+    dm-95: when the owner exits with spine status ready+last_failure, the
+    supervisor promotes it to failed and does not respawn.
+    """
+    from refactory_dsh import supervisor as sv
+
+    root = tmp_path
+    refactory = root / '.refactory'
+    refactory.mkdir(parents=True, exist_ok=True)
+
+    dead_pid = _dead_pid()
+    from datetime import datetime, timezone
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    (refactory / 'spine-status.json').write_text(json.dumps({
+        'status': 'ready',
+        'nodes': ['check'],
+        'completed': ['emit'],
+        'last_failure': {'node': 'check', 'error': 'exit 1', 'at': now_iso},
+    }))
+    checkpoint: dict[str, Any] = {
+        'status': 'ready',
+        'run_id': str(root),
+        'graph': {'name': 'test-run'},
+        'owner_pid': dead_pid,
+        'file_fingerprints': {},
+    }
+    (refactory / 'spine-checkpoint.json').write_text(json.dumps(checkpoint))
+    (refactory / 'run-config.json').write_text(json.dumps({
+        'mode': 'test/run', 'project': str(root),
+        'configuration_fingerprints': {},
+    }))
+    (refactory / 'invocation.json').write_text(json.dumps({'id': 'test-inv'}))
+
+    class FakeChild:
+        def __init__(self) -> None:
+            self.pid = 50001
+            self.returncode = 1
+        def wait(self) -> None:
+            pass
+        def poll(self) -> int:
+            return 1
+
+    def mock_start_child(r: Path) -> Any:
+        return FakeChild()
+
+    def mock_prepare(r: Path, name: str, **kw: Any) -> Path:
+        return r / 'graphs'
+
+    with patch.object(sv, '_start_child', side_effect=mock_start_child), \
+         patch('refactory_dsh.recovery.prepare', side_effect=mock_prepare):
+        sv.supervise(root, max_respawns=3)
+
+    # Status promoted to failed
+    status = run_state.spine_status(root)
+    assert status == 'failed'
+
+    # Checkpoint also promoted
+    cp = json.loads((refactory / 'spine-checkpoint.json').read_text())
+    assert cp['status'] == 'failed'
+
+    # Error names the node
+    status_data = json.loads((refactory / 'spine-status.json').read_text())
+    assert 'check' in status_data.get('error', '')
+
+    # No respawn: supervision history should be empty
+    history = run_state.read_supervision_history(root)
+    assert len(history) == 0
+
+    # needs_supervision returns False
+    assert not run_state.needs_supervision(root)
+
+
+# ── dm-97: resume --acknowledge-failure ───────────────────────────────────
+
+def test_resume_failed_without_flag_names_command(tmp_path):
+    """Resuming a failed checkpoint without --acknowledge-failure names the command."""
+    root = tmp_path
+    refactory = root / '.refactory'
+    refactory.mkdir(parents=True, exist_ok=True)
+
+    dead_pid = _dead_pid()
+    source = root / 'mode.py'
+    source.write_text('answer = 42\n')
+
+    checkpoint: dict[str, Any] = {
+        'status': 'failed',
+        'run_id': str(root),
+        'graph': {'name': 'test-run'},
+        'owner_pid': dead_pid,
+        'file_fingerprints': {},
+    }
+    (refactory / 'spine-checkpoint.json').write_text(json.dumps(checkpoint))
+    (refactory / 'spine-status.json').write_text(json.dumps({'status': 'failed'}))
+    (refactory / 'run-config.json').write_text(json.dumps({
+        'mode': 'test/run', 'project': str(root),
+        'configuration_fingerprints': {str(source): _fp(source)},
+    }))
+    (refactory / 'invocation.json').write_text(json.dumps({'id': 'test-inv'}))
+
+    with pytest.raises(ValueError, match='resume --acknowledge-failure'):
+        graph_control.request(root, 'resume')
+
+
+def test_resume_failed_with_flag_succeeds(tmp_path):
+    """Resuming a failed checkpoint with --acknowledge-failure succeeds."""
+    root = tmp_path
+    refactory = root / '.refactory'
+    refactory.mkdir(parents=True, exist_ok=True)
+
+    dead_pid = _dead_pid()
+    source = root / 'mode.py'
+    source.write_text('answer = 42\n')
+
+    checkpoint: dict[str, Any] = {
+        'status': 'failed',
+        'run_id': str(root),
+        'graph': {'name': 'test-run'},
+        'owner_pid': dead_pid,
+        'file_fingerprints': {},
+    }
+    (refactory / 'spine-checkpoint.json').write_text(json.dumps(checkpoint))
+    (refactory / 'spine-status.json').write_text(json.dumps({'status': 'failed'}))
+    (refactory / 'run-config.json').write_text(json.dumps({
+        'mode': 'test/run', 'project': str(root),
+        'configuration_fingerprints': {str(source): _fp(source)},
+    }))
+    (refactory / 'invocation.json').write_text(json.dumps({'id': 'test-inv'}))
+
+    with patch('refactory_dsh.recovery.start') as mock_start:
+        mock_start.return_value = {'status': 'queued', 'action': 'resume',
+                                   'run_id': str(root), 'pid': 99999}
+        result = graph_control.request(root, 'resume', acknowledge_failure=True)
+
+    assert result['action'] == 'resume'
+    mock_start.assert_called_once_with(root, acknowledge_failed=True)
+
+
+def test_acknowledge_failed_checkpoint_with_pending(tmp_path):
+    """Acknowledge accepts a failed checkpoint with pending dispatches."""
+    root = tmp_path
+    refactory = root / '.refactory'
+    refactory.mkdir(parents=True, exist_ok=True)
+
+    dead_pid = _dead_pid()
+    checkpoint: dict[str, Any] = {
+        'status': 'failed',
+        'run_id': str(root),
+        'graph': {'name': 'test'},
+        'owner_pid': dead_pid,
+        'file_fingerprints': {},
+    }
+    (refactory / 'spine-checkpoint.json').write_text(json.dumps(checkpoint))
+    (refactory / 'spine-status.json').write_text(json.dumps({'status': 'failed'}))
+    (refactory / 'run-config.json').write_text(json.dumps({'mode': 'test/run', 'project': '.'}))
+    (refactory / 'invocation.json').write_text(json.dumps({'id': 'test-inv'}))
+
+    # Create pending dispatch files
+    pending_dir = refactory / 'agent-delivery/pending'
+    pending_dir.mkdir(parents=True, exist_ok=True)
+    (pending_dir / 'delivery1.json').write_text(json.dumps({'node': 'emit'}))
+
+    result = graph_control.request(root, 'acknowledge')
+
+    assert result['action'] == 'acknowledge'
+    assert result['status'] == 'acknowledged'
+    assert result['checkpoint_status_before'] == 'failed'
+
+    # Pending markers moved
+    assert not (pending_dir / 'delivery1.json').exists()
+
+    # resume-request.json has acknowledge_failed
+    rr = json.loads((refactory / 'resume-request.json').read_text())
+    assert rr['acknowledge_failed'] is True
+    assert 'acknowledge_executing' not in rr
+
+    # Manifest records failed status
+    set_aside_dirs = list((refactory / 'set-aside').iterdir())
+    assert len(set_aside_dirs) == 1
+    manifest = json.loads((set_aside_dirs[0] / 'manifest.json').read_text())
+    assert manifest['checkpoint_status_before'] == 'failed'
+
+
+def test_acknowledge_failed_then_prepare_accepts(tmp_path):
+    """After acknowledging a failed checkpoint, recovery.prepare() accepts it."""
+    root = tmp_path
+    refactory = root / '.refactory'
+    refactory.mkdir(parents=True, exist_ok=True)
+
+    dead_pid = _dead_pid()
+    source = root / 'mode.py'
+    source.write_text('answer = 42\n')
+
+    checkpoint: dict[str, Any] = {
+        'status': 'failed',
+        'run_id': str(root),
+        'graph': {'name': 'test-run'},
+        'owner_pid': dead_pid,
+        'file_fingerprints': {},
+    }
+    (refactory / 'spine-checkpoint.json').write_text(json.dumps(checkpoint))
+    (refactory / 'spine-status.json').write_text(json.dumps({'status': 'failed'}))
+    (refactory / 'run-config.json').write_text(json.dumps({
+        'mode': 'test/run', 'project': str(root),
+        'configuration_fingerprints': {str(source): _fp(source)},
+    }))
+    (refactory / 'invocation.json').write_text(json.dumps({'id': 'test-inv'}))
+
+    # Acknowledge first
+    graph_control.request(root, 'acknowledge')
+
+    # Now prepare should accept
+    result = recovery.prepare(root, 'test-run')
+    assert result == root / 'graphs'
+
+
+def test_stopped_run_acknowledge_then_resume(tmp_path):
+    """A stopped run (checkpoint failed + pending dispatch) is continuable.
+
+    dm-97: reproduces what 'refactory stop' during an agent step leaves:
+    checkpoint failed plus a pending dispatch under agent-delivery/pending/.
+    acknowledge then resume must work with no file edited by hand.
+    """
+    root = tmp_path
+    refactory = root / '.refactory'
+    refactory.mkdir(parents=True, exist_ok=True)
+
+    dead_pid = _dead_pid()
+    source = root / 'mode.py'
+    source.write_text('answer = 42\n')
+
+    checkpoint: dict[str, Any] = {
+        'status': 'failed',
+        'run_id': str(root),
+        'graph': {'name': 'test-run'},
+        'owner_pid': dead_pid,
+        'file_fingerprints': {},
+    }
+    (refactory / 'spine-checkpoint.json').write_text(json.dumps(checkpoint))
+    (refactory / 'spine-status.json').write_text(json.dumps({'status': 'failed'}))
+    (refactory / 'run-config.json').write_text(json.dumps({
+        'mode': 'test/run', 'project': str(root),
+        'configuration_fingerprints': {str(source): _fp(source)},
+    }))
+    (refactory / 'invocation.json').write_text(json.dumps({'id': 'test-inv'}))
+
+    # Create pending dispatch
+    pending_dir = refactory / 'agent-delivery/pending'
+    pending_dir.mkdir(parents=True, exist_ok=True)
+    (pending_dir / 'delivery1.json').write_text(json.dumps({'node': 'emit'}))
+
+    # Step 1: acknowledge
+    ack_result = graph_control.request(root, 'acknowledge')
+    assert ack_result['status'] == 'acknowledged'
+    assert not (pending_dir / 'delivery1.json').exists()
+
+    # Step 2: resume — goes through recovery.start which calls prepare()
+    with patch('refactory_dsh.recovery.start') as mock_start:
+        mock_start.return_value = {'status': 'queued', 'action': 'resume',
+                                   'run_id': str(root), 'pid': 99999}
+        result = graph_control.request(root, 'resume')
+
+    assert result['action'] == 'resume'
+    # acknowledge already wrote the acknowledgement, so no flag needed
+    mock_start.assert_called_once_with(root, acknowledge_failed=False)
+
+
+def test_resume_pending_propagates_acknowledge_failed(tmp_path):
+    """The supervisor propagates acknowledge_failed from resume-pending.json."""
+    from refactory_dsh import supervisor as sv
+
+    root = tmp_path
+    refactory = root / '.refactory'
+    refactory.mkdir(parents=True, exist_ok=True)
+
+    dead_pid = _dead_pid()
+    source = root / 'mode.py'
+    source.write_text('answer = 42\n')
+
+    checkpoint: dict[str, Any] = {
+        'status': 'failed',
+        'run_id': str(root),
+        'graph': {'name': 'test-run'},
+        'owner_pid': dead_pid,
+        'file_fingerprints': {},
+    }
+    cp_text = json.dumps(checkpoint)
+    (refactory / 'spine-checkpoint.json').write_text(cp_text)
+    (refactory / 'spine-status.json').write_text(json.dumps({'status': 'failed'}))
+    (refactory / 'run-config.json').write_text(json.dumps({
+        'mode': 'test/run', 'project': str(root),
+        'configuration_fingerprints': {str(source): _fp(source)},
+    }))
+    (refactory / 'invocation.json').write_text(json.dumps({'id': 'test-inv'}))
+
+    # Read resume-pending and verify it propagates acknowledge_failed
+    pending = sv._read_resume_pending(root)
+    assert pending is None  # No pending file yet
+
+    # Write resume-pending with acknowledge_failed
+    import hashlib as _hashlib
+    pending_data = {
+        'at': '2026-10-19T09:45:47Z',
+        'checkpoint_sha256': _hashlib.sha256(cp_text.encode()).hexdigest(),
+        'acknowledge_failed': True,
+    }
+    (refactory / 'resume-pending.json').write_text(json.dumps(pending_data))
+
+    pending = sv._read_resume_pending(root)
+    assert pending is not None
+    assert pending['acknowledge_failed'] is True
 
 
 # ── T13: Transient failed status does not stop the owner ──────────────────

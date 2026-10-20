@@ -51,14 +51,14 @@ def test_start_releases_ownership_before_launch(monkeypatch, tmp_path):
 @pytest.mark.parametrize('status', ['executing', 'unexpected', None])
 def test_unknown_outcome_never_produces_resume_request(tmp_path, status):
     saved_run(tmp_path, status)
-    with pytest.raises(ValueError, match='unknown or failed'):
+    with pytest.raises(ValueError, match='inspect side effects'):
         recovery.prepare(tmp_path, 'demo-run')
     assert not (tmp_path / '.refactory/resume-request.json').exists()
 
 
 def test_failed_status_refused_without_acknowledge_flag(tmp_path):
     saved_run(tmp_path, 'failed')
-    with pytest.raises(ValueError, match='unknown or failed'):
+    with pytest.raises(ValueError, match='resume --acknowledge-failure'):
         recovery.prepare(tmp_path, 'demo-run')
     assert not (tmp_path / '.refactory/resume-request.json').exists()
 
@@ -92,7 +92,7 @@ def test_child_prepare_honours_acknowledged_failed_from_file(tmp_path):
 def test_child_prepare_refuses_failed_without_file_acknowledgement(tmp_path):
     saved_run(tmp_path, 'failed')
     # No pre-existing resume-request.json, no acknowledge_failed argument
-    with pytest.raises(ValueError, match='unknown or failed'):
+    with pytest.raises(ValueError, match='resume --acknowledge-failure'):
         recovery.prepare(tmp_path, 'demo-run')
     assert not (tmp_path / '.refactory/resume-request.json').exists()
 
@@ -107,7 +107,7 @@ def test_child_prepare_refuses_stale_acknowledgement(tmp_path):
         'checkpoint_sha256': 'stale-sha256-that-does-not-match',
         'acknowledge_failed': True,
     }))
-    with pytest.raises(ValueError, match='unknown or failed'):
+    with pytest.raises(ValueError, match='resume --acknowledge-failure'):
         recovery.prepare(tmp_path, 'demo-run')
 
 

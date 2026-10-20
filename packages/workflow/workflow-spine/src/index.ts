@@ -763,8 +763,13 @@ export function apply(ctx: Context, config: Config): void {
    * run's own directory when a session opened the mode at run time.
    * @param status - `done`, `ready`, `failed`, or `refused`.
    * @param detail - the error, for a failure or refusal.
+   * @param failedNode - the node that failed, for a node command failure that
+   * the graph may retry. Writes `last_failure` in the status record; the
+   * run-level status stays non-terminal so the retry is not mistaken for a
+   * finished, failed run.
    */
-  function recordStatus(spine: Spine, workdir: string | undefined, status: string, detail?: string): void {
+  function recordStatus(spine: Spine, workdir: string | undefined, status: string, detail?: string,
+      failedNode?: { node: string; error: string }): void {
     if (workdir === undefined) return
     try {
       const dir = join(workdir, '.refactory')
@@ -793,6 +798,9 @@ export function apply(ctx: Context, config: Config): void {
         ...(detail === undefined ? {} : { error: detail }),
         ...(wait === undefined ? {} : { wait_reason: wait }),
         ...(status === 'paused' ? { paused_before: spine.pausedAt() } : {}),
+        ...(failedNode !== undefined ? {
+          last_failure: { node: failedNode.node, error: failedNode.error, at: new Date().toISOString() },
+        } : {}),
       }
       const path = join(dir, 'spine-status.json')
       writeFileSync(`${path}.tmp`, JSON.stringify(record, null, 2))
@@ -1010,6 +1018,7 @@ export function apply(ctx: Context, config: Config): void {
         failure: {
           ok: false,
           command: waiting.id,
+          nodeId: waiting.id,
           exitCode: null,
           stdout: '',
           stderr: '',
@@ -1224,8 +1233,15 @@ export function apply(ctx: Context, config: Config): void {
     if (failure !== undefined) {
       // The node's own stderr is why it failed. The exit code alone sends a reader
       // back to re-run the node to find out, so the reason is recorded with it.
+      // dm-95: write status ready (not failed) with last_failure — a node failure
+      // the graph may retry is not a finished, failed run. The caller (CEO) still
+      // sees status: 'failed' so it knows what happened.
       const reason = failure.stderr.trim()
-      recordStatus(spine, workdir, 'failed', reason === '' ? failure.error : `${failure.error}: ${reason.slice(-STATUS_DETAIL)}`)
+      const failDetail = reason === '' ? failure.error : `${failure.error}: ${reason.slice(-STATUS_DETAIL)}`
+      recordStatus(spine, workdir,
+        spine.isHalted() ? 'halted' : spine.isPaused() ? 'paused' : 'ready',
+        undefined,
+        { node: failure.nodeId, error: failDetail })
       return json({
         status: 'failed',
         node: failure.command,

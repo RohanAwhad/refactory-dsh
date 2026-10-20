@@ -316,7 +316,7 @@ def test_acknowledged_rerun_child_gets_past_validation(tmp_path):
     request_path.unlink()
 
     # -- one-shot: a plain resume now refuses --
-    with pytest.raises(ValueError, match='unknown or failed'):
+    with pytest.raises(ValueError, match='resume --acknowledge-failure'):
         recovery.prepare(tmp_path, 'demo-run')
     assert not request_path.exists()
 
@@ -512,7 +512,7 @@ def test_resume_waits_for_exiting_owner_then_starts_fresh(monkeypatch, tmp_path)
         )
         (directory / 'invocation.json').write_text(json.dumps({'id': 'inv1'}))
         start_calls = []
-        monkeypatch.setattr(recovery, 'start', lambda root: (
+        monkeypatch.setattr(recovery, 'start', lambda root, **_kw: (
             start_calls.append(root),
             {'status': 'queued', 'action': 'resume', 'run_id': str(root), 'pid': 9999},
         )[1])
