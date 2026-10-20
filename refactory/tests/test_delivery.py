@@ -736,6 +736,12 @@ def test_verify_git_link_refuses_mislinked_worktree(tmp_path):
                           capture_output=True, text=True, check=True).stdout.strip()
     (wt_path / ".git").write_text(f"gitdir: {repo_git_dir}\n")
 
+    # After repointing, git -C wt_path resolves through the repo's git dir,
+    # so rev-parse HEAD returns the repo's HEAD (on main-tip), not the
+    # worktree's merge.  Record it now to verify nothing is mutated.
+    repo_head_before = sp.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                              capture_output=True, text=True, check=True).stdout.strip()
+
     found = worktree.Worktree(
         path=str(wt_path), branch="run-branch", base=reviewed,
         head=reviewed, target=str(repo), run=str(tmp_path / "run"),
@@ -745,10 +751,11 @@ def test_verify_git_link_refuses_mislinked_worktree(tmp_path):
     with pytest.raises(ValueError, match="no longer points at its own git directory"):
         worktree.verify_git_link(found)
 
-    # HEAD is unchanged — git reset --hard was never called
-    after = sp.run(["git", "-C", str(wt_path), "rev-parse", "HEAD"],
-                   capture_output=True, text=True, check=True).stdout.strip()
-    assert after == merge_sha
+    # The repo's HEAD is unchanged — git reset --hard was never called.
+    # (After the .git repoint, any reset in wt_path would mutate the repo.)
+    repo_head_after = sp.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                             capture_output=True, text=True, check=True).stdout.strip()
+    assert repo_head_after == repo_head_before
 
 
 @pytest.fixture
