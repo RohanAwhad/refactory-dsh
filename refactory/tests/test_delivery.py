@@ -888,17 +888,15 @@ def _calls(tmp_path: Path) -> str:
     return log.read_text() if log.exists() else ""
 
 
-def _answers(*emits: str, corrections_answer: str = DESIGN_DOC_ANSWER) -> list[str]:
+def _answers(*emits: str) -> list[str]:
     """Every answer a design run needs, in the order its graph asks.
 
-    pick_corrections is an op (no model answer needed).  When gate_corrections
-    is empty (no ledger or no corrections), apply_corrections receives an empty
-    prompt and writes design.md unchanged — its answer is captured as design.md,
-    so it must be the full design document content.
+    pick_corrections is a gate (no model answer needed).  When gate_corrections
+    is empty (no ledger or no corrections), pick_corrections returns "skip"
+    and apply_corrections does not run — no model answer consumed.
     """
     return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
             DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
-            corrections_answer,
             *emits, *REVIEW_ANSWERS]
 
 
@@ -3056,13 +3054,13 @@ def test_gate_correction_updates_pr_text(github, tmp_path, monkeypatch):
     # excluded from the design.
     ledger.note("info", "try harder", scope="process")
 
-    # Build model answers: pick_corrections (op) extracts the gate correction
+    # Build model answers: pick_corrections (gate) extracts the gate correction
     # from the ledger, then apply_corrections (agent) rewrites design.md.
     answers = [
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
         design_with_polling,   # design_doc writes design.md with "polling loop"
         DESIGN_REVIEW_ANSWER,  # design_review passes
-        # pick_corrections is an op — no model answer needed
+        # pick_corrections is a gate — no model answer needed
         corrected_design,      # apply_corrections rewrites design.md to "websockets"
         render({"tool.py": "print('built')\n"}),  # emit
         *REVIEW_ANSWERS,

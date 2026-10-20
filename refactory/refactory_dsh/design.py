@@ -566,8 +566,9 @@ class DesignMode(Mode):
         # After the report, so only a run whose reviews passed and whose sign-offs held
         # reaches anything outside it (#350).
         graph.add(Node(
-            "pick_corrections", "op", call=f"{OPS}:pick_gate_corrections",
+            "pick_corrections", "gate", evaluator=f"{OPS}:pick_gate_corrections",
             produces=("gate_corrections", "design_corrections_applied"),
+            max_iterations=2,
             notes="deterministically extract gate_strategy corrections from the ledger; "
                   "skip the agent when there are none",
         ))
@@ -628,7 +629,8 @@ class DesignMode(Mode):
         graph.connect("gate_design_review", "gate_strategy", condition="proceed")
         graph.connect("gate_strategy", "synthesize_strategy", condition="reloop")
         graph.connect("gate_strategy", "pick_corrections", condition="proceed")
-        graph.connect("pick_corrections", "apply_corrections")
+        graph.connect("pick_corrections", "apply_corrections", condition="proceed")
+        graph.connect("pick_corrections", "emit", condition="skip")
         graph.connect("apply_corrections", "emit")
         graph.connect("emit", "materialise")
         graph.connect("materialise", "check")

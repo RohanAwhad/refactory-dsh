@@ -41,23 +41,25 @@ def noop(ctx: Any) -> dict[str, Any]:
     return {}
 
 
-def pick_gate_corrections(ctx: Any) -> dict[str, Any]:
-    """Deterministically extract gate_strategy corrections from the intent ledger.
+def pick_gate_corrections(ctx: Any) -> str:
+    """Gate evaluator: extract gate_strategy corrections from the intent ledger.
+
+    Returns ``"proceed"`` when corrections exist (route to apply_corrections),
+    or ``"skip"`` when there are none (route directly to emit, skipping the
+    agent entirely).
 
     Reads the ledger only when it exists; a missing ledger means "no corrections".
     Only constraint entries (not process-scoped) immediately following a
     gate_strategy proceed verdict are gate corrections.  Process notes and
     other gates' notes are excluded here, not by the agent prompt.
-
-    When there are no corrections, ``gate_corrections`` is empty and the
-    ``apply_corrections`` agent node is skipped (its prompt receives an empty
-    string, and the design_corrections_applied fact is already set).
     """
     from refactory_dsh.steering import LEDGER
 
     ledger_path = Path(ctx.workdir) / LEDGER
     if not ledger_path.exists():
-        return {"gate_corrections": "", "design_corrections_applied": "no corrections (no ledger)"}
+        ctx.set_fact("gate_corrections", "")
+        ctx.set_fact("design_corrections_applied", "no corrections (no ledger)")
+        return "skip"
 
     text = ledger_path.read_text()
     corrections: list[str] = []
@@ -102,10 +104,13 @@ def pick_gate_corrections(ctx: Any) -> dict[str, Any]:
             saw_proceed = False
 
     if not corrections:
-        return {"gate_corrections": "", "design_corrections_applied": "no corrections found in ledger"}
+        ctx.set_fact("gate_corrections", "")
+        ctx.set_fact("design_corrections_applied", "no corrections found in ledger")
+        return "skip"
 
     joined = "\n\n".join(f"- {c}" for c in corrections)
-    return {"gate_corrections": joined}
+    ctx.set_fact("gate_corrections", joined)
+    return "proceed"
 
 
 def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None = None) -> dict[str, Any]:

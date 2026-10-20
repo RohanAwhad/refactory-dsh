@@ -77,15 +77,15 @@ def repo(tmp_path) -> Path:
     return git_repo(tmp_path / "repo")
 
 
-def _answers(*emits: str, corrections_answer: str = DESIGN_DOC_ANSWER) -> list[str]:
+def _answers(*emits: str) -> list[str]:
     """Every answer a design run needs, in the order its graph asks.
 
-    pick_corrections is an op (no model answer).  apply_corrections is still an
-    agent whose answer is captured as design.md.
+    pick_corrections is a gate (no model answer needed).  When there are no
+    corrections, pick_corrections returns "skip" and apply_corrections does
+    not run.
     """
     return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
             DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
-            corrections_answer,
             *emits, *REVIEW_ANSWERS]
 
 
@@ -1543,7 +1543,7 @@ def test_design_named_failure_not_excused(tmp_path):
     result = DesignMode().run(
         tmp_path / "run",
         model=DesignNamingModel(_answers(not_fixed, fixed,
-                                         corrections_answer=DESIGN_DOC_ANSWER + naming_appendix)),
+                                         )),
         verdicts={"gate_strategy": "proceed"},
         task={"name": NAME, "brief": "the validation test for contract X fails",
               "check": "python -m pytest -q", "target": str(repo)},

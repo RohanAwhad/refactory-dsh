@@ -694,25 +694,36 @@ def _commit_emission(ctx: Any) -> dict[str, Any]:
             )
 
     repeated = []
-    for relative, pairs in changed.items():
-        rel_str = relative.as_posix() if hasattr(relative, 'as_posix') else str(relative)
+    try:
+        for relative, pairs in changed.items():
+            rel_str = relative.as_posix() if hasattr(relative, 'as_posix') else str(relative)
+            if merge_in_progress:
+                # During a merge, always read from the worktree (which has main's
+                # changes for cleanly-merged files, and conflict markers for unmerged
+                # files).
+                fpath = path / relative
+                if not fpath.exists():
+                    raise AttemptRefused(f"{relative} is not a file of the last attempt, so it cannot be edited; "
+                                         "write it whole with ===FILE:")
+                current = fpath.read_text()
+            else:
+                current = worktree.committed_text(found, relative, rev)
+                if current is None:
+                    raise AttemptRefused(f"{relative} is not a file of the last attempt, so it cannot be edited; "
+                                         "write it whole with ===FILE:")
+            files[relative], skipped = _edited(relative, current, pairs, f"git -C {found.path} show {rev[:12]}:{relative}")
+            if skipped:
+                repeated.append(str(relative))
+    except BaseException:
+        # Abort any merge so the worktree is never left mid-merge on failure.
         if merge_in_progress:
-            # During a merge, always read from the worktree (which has main's
-            # changes for cleanly-merged files, and conflict markers for unmerged
-            # files).
-            fpath = path / relative
-            if not fpath.exists():
-                raise AttemptRefused(f"{relative} is not a file of the last attempt, so it cannot be edited; "
-                                     "write it whole with ===FILE:")
-            current = fpath.read_text()
-        else:
-            current = worktree.committed_text(found, relative, rev)
-            if current is None:
-                raise AttemptRefused(f"{relative} is not a file of the last attempt, so it cannot be edited; "
-                                     "write it whole with ===FILE:")
-        files[relative], skipped = _edited(relative, current, pairs, f"git -C {found.path} show {rev[:12]}:{relative}")
-        if skipped:
-            repeated.append(str(relative))
+            try:
+                worktree.git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
+                worktree.git(path, "merge", "--abort")
+            except ValueError:
+                pass
+            (Path(ctx.workdir) / ".refactory" / "pending-merge.json").unlink(missing_ok=True)
+        raise
     if repeated:
         target_guard.warn(f"emit re-sent edits the last attempt already holds, so they were skipped rather than "
                           f"applied twice: {target_guard._named(repeated)}")

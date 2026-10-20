@@ -190,8 +190,9 @@ def test_design_emit_writes_the_blocks_its_scope_describes_into_emit_txt():
 def _design_answers(emit: list[str]) -> list[str]:
     """Every answer design-v2's agents need, in the order the graph asks.
 
-    pick_corrections is an op (no model answer).  apply_corrections is still an
-    agent whose answer is captured as design.md.
+    pick_corrections is a gate (no model answer needed).  When there are no
+    corrections, pick_corrections returns "skip" and apply_corrections does
+    not run — no model answer consumed.
     """
     return [
         # The research answer is the plan array its gate checks, for the same reason
@@ -202,7 +203,6 @@ def _design_answers(emit: list[str]) -> list[str]:
         "one plan: the files, and how the check exercises them",
         DESIGN_DOC_ANSWER,
         DESIGN_REVIEW_ANSWER,
-        DESIGN_DOC_ANSWER,
         *emit,
         *REVIEW_ANSWERS,
     ]

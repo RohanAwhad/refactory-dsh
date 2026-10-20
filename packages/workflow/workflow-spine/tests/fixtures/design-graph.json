@@ -124,7 +124,9 @@
     },
     "pick_corrections": {
       "id": "pick_corrections",
-      "_type": "FnNode"
+      "evaluator_type": "fn",
+      "max_iterations": 2,
+      "_type": "GateNode"
     },
     "pitfalls_researcher": {
       "id": "pitfalls_researcher",
@@ -307,7 +309,12 @@
     {
       "source": "pick_corrections",
       "target": "apply_corrections",
-      "condition": null
+      "condition": "proceed"
+    },
+    {
+      "source": "pick_corrections",
+      "target": "emit",
+      "condition": "skip"
     },
     {
       "source": "pitfalls_researcher",

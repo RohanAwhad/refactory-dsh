@@ -1634,11 +1634,13 @@ def evaluate_delivery_conflicts(ctx: Any) -> "Verdict | str":
     """
     from refactory_dsh.nn import Verdict
 
+    # Abort any stale merge left by a previous iteration, a crashed emit,
+    # or a crashed materialise, before doing anything else.  This ensures the
+    # worktree is never left mid-merge even when emit fails.
+    _abort_pending_merge(ctx)
+
     conflict_files = ctx.facts.get("delivery_conflict_files") or []
     if not conflict_files:
-        # Clean up any stale pending-merge record from a previous iteration.
-        pending = Path(ctx.workdir) / PENDING_MERGE
-        pending.unlink(missing_ok=True)
         return "proceed"
 
     detail = ctx.facts.get("delivery_conflict_detail") or []
