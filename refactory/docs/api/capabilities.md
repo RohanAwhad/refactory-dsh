@@ -4868,7 +4868,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 
 ## cli:doctor
 
-Inspect prerequisites and configured credentials without a model call; configured does not mean authenticated.
+Inspect prerequisites and configured credentials without a model call; with --run, also report a run's driver pin state. Configured does not mean authenticated.
 
 Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 
@@ -4880,11 +4880,17 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     {
       "arguments": {},
       "explanation": "Inspect prerequisites and configured credentials without a model call; configured does not mean authenticated."
+    },
+    {
+      "arguments": {
+        "run": "/path/to/run"
+      },
+      "explanation": "Check a specific run's driver pin state: its recorded commit, profile name, and whether a pin exists."
     }
   ],
   "interfaces": {
     "chat": "Unavailable as a direct chat mutation; use the documented CLI/panel route.",
-    "cli": "refactory doctor",
+    "cli": "refactory doctor [--run DIR]",
     "panel": "Unavailable as a dedicated panel control; use the documented CLI or chat route."
   },
   "parameters": {
@@ -4909,10 +4915,21 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "positional": false,
       "required": false,
       "type": "string"
+    },
+    "run": {
+      "default": null,
+      "description": "check a specific run's driver pin state",
+      "flags": [
+        "--run"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "string"
     }
   },
-  "purpose": "Inspect prerequisites and configured credentials without a model call; configured does not mean authenticated.",
-  "reviewed_schema": "4e5762fd76050e80185bfba003afaadb79684ea7d61fc91e1c086a5ccbcd1d76"
+  "purpose": "Inspect prerequisites and configured credentials without a model call; with --run, also report a run's driver pin state. Configured does not mean authenticated.",
+  "reviewed_schema": "22c0386b3491338de9e7ddfe53d52c1fd72bb93a87a9798061d8e3b33fda4f2b"
 }
 ```
 
