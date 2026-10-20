@@ -970,10 +970,13 @@ def report(ctx: Any, name: str, payload: dict[str, Any]) -> dict[str, Any]:
     payload = {**payload, "target": found.target, "branch": found.branch, "base": found.base, "head": found.head,
                "diff_stat": worktree.git(Path(found.path), "diff", "--stat", found.base, "HEAD").strip()}
     ctx.write_json(name, payload)
-    # Record outcome for runs that will not deliver (design_fast).  For design
-    # mode, delivery._delivered and _kept also record it, so this is harmless
-    # when delivery runs later: record_outcome is idempotent.
-    worktree.record_outcome(found, "succeeded")
+    # Record outcome only for runs that will NOT deliver (design_fast).
+    # For runs with a delivery plan, delivery._delivered records "succeeded"
+    # after a successful push, and _kept guards against recording it when
+    # the merge check fails, the merge is abandoned, or there are conflicts.
+    # Recording it here prematurely would persist through a failed delivery.
+    if not ctx.facts.get("delivery_plan"):
+        worktree.record_outcome(found, "succeeded")
     projects.record_run(Path(found.target), run=ctx.workdir, branch=found.branch, base=found.base,
                         status="succeeded")
     # Clean up the base worktree (created by base_check for the base comparison gate)
