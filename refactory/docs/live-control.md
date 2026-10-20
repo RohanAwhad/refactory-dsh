@@ -263,6 +263,9 @@ shows no stale refusal.
 When the CEO redoes a completed node through `wf_redo`, the redo preserves
 the run's attempt counters and gate iteration counts. A gate that was on
 iteration 2 of 3 stays there; the check gate's `attempts_used` is not reset.
+The kind-specific counters `check_attempts_used`, `review_attempts_used`,
+`check_repairs_used` and `review_repairs_used` are likewise preserved, because
+`items.py` preserves every fact ending in `'attempts_used'` or `'repairs_used'`.
 This prevents an infinite redo loop where the CEO redoes emit after the check
 gate exhausts its attempts, resetting the counter each time.
 

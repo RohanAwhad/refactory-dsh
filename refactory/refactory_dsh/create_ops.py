@@ -19,6 +19,7 @@ from typing import Any
 from refactory_dsh import registry
 from refactory_dsh.paths import project_root, project_for_nodes
 from refactory_dsh.nn import Package, PackageError, Verdict, validate_state
+from refactory_dsh.repo_change import refuse_truncated
 
 STAGING = "staging"
 
@@ -755,6 +756,7 @@ def materialise(ctx: Any) -> dict[str, Any]:
     written: list[str] = []
     for relative, content in files.items():
         inside = _package_relative(relative, name)
+        refuse_truncated(Path(inside), content)
         target = root / inside
         if not target.resolve().is_relative_to(root.resolve()):
             raise ValueError(f"{relative!r} escapes the package directory")
@@ -1224,14 +1226,38 @@ def smoke(ctx: Any) -> dict[str, Any]:
             **({"smoke_model": "used"} if agent_nodes else {}), **revised}
 
 
-def repair(ctx: Any, findings: list[str]) -> str:
-    """Share the existing full-mode attempt allowance across all build failures."""
+def repair(ctx: Any, findings: list[str], *, kind: str = "check") -> str:
+    """Share the existing full-mode attempt allowance across all build failures.
+
+    ``kind`` is ``'check'`` for a failed runtime check and ``'review'`` for a
+    review-driven reloop.  Each kind has its own counter and limit; both
+    increment ``attempts_used`` against the overall cap.
+    """
     feedback = "\n".join(findings)
     used = int(ctx.facts.get("attempts_used", 0)) + 1
     ctx.write_text("validation.txt", feedback + "\n")
     ctx.set_fact("validation", feedback)
     ctx.set_fact("attempts_used", used)
-    if used >= int(ctx.knob("attempts", ctx.knob("check_attempts", 3))):
+
+    if kind == "check":
+        kind_used = int(ctx.facts.get("check_attempts_used", 0)) + 1
+        ctx.set_fact("check_attempts_used", kind_used)
+        kind_limit = int(ctx.knob("check_attempts", ctx.knob("attempts", 3)))
+        if kind_used >= kind_limit:
+            raise ValueError(
+                f"check attempts exhausted after {kind_used} check failure(s): {feedback}"
+            )
+    else:
+        kind_used = int(ctx.facts.get("review_attempts_used", 0)) + 1
+        ctx.set_fact("review_attempts_used", kind_used)
+        kind_limit = int(ctx.knob("review_attempts", ctx.knob("check_attempts", ctx.knob("attempts", 3))))
+        if kind_used >= kind_limit:
+            raise ValueError(
+                f"review reloop limit reached after {kind_used} review cycle(s): {feedback}"
+            )
+
+    overall_limit = int(ctx.knob("attempts", ctx.knob("check_attempts", 3)))
+    if used >= overall_limit:
         raise ValueError(f"authoring unresolved after {used} attempt(s): {feedback}")
     return Verdict("reloop", feedback)
 
@@ -1687,7 +1713,7 @@ def gate_qa(ctx: Any) -> str:
     if reason:
         ctx.write_text("reviews/qa-gate.txt", reason + "\n")
         ctx.set_fact("qa_gate", reason)
-        return repair(ctx, [reason]) if ctx.exists(evidence.EVIDENCE) else Verdict("reloop", reason)
+        return repair(ctx, [reason], kind='review') if ctx.exists(evidence.EVIDENCE) else Verdict("reloop", reason)
     ctx.write_text("reviews/qa-gate.txt", "proceed: no blocking finding\n")
     ctx.set_fact("qa_gate", "(the reviews found nothing blocking)")
     ctx.write_text("validation.txt", "(reviews passed)\n")
@@ -1750,4 +1776,4 @@ def gate_overwatch(ctx: Any) -> str:
     ctx.set_fact("overwatch_review", reason)
     ctx.write_text("validation.txt", reason + "\n")
     ctx.set_fact("validation", reason)
-    return repair(ctx, [reason]) if ctx.exists(evidence.EVIDENCE) else Verdict("reloop", reason)
+    return repair(ctx, [reason], kind='review') if ctx.exists(evidence.EVIDENCE) else Verdict("reloop", reason)

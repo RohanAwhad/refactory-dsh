@@ -326,6 +326,14 @@ def check_artifact(ctx: Any) -> str:
     if result.ok:
         ctx.set_fact("validation", "(the check passed)")
         return "proceed"
+
+    # Name the specific resource limit when a file-size stop occurs.
+    rc = result.returncode
+    if rc == 153 or (rc is not None and rc < 0 and -rc == 25):
+        detail = (
+            f"the check exceeded the file-size limit ({sandbox.DEFAULT_FILE_MB} MB, "
+            "set as DEFAULT_FILE_MB in refactory_dsh/sandbox.py). " + detail
+        )
     evidence.stop_unrepairable(outcome["status"], detail)
 
     # A failure the unchanged base has too is not the attempt's (`base_check.compare_failures`).

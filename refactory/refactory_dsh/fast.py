@@ -107,7 +107,8 @@ def _qa_nodes(graph: Graph, *, artifact: bool) -> None:
         knobs=("repair_attempts",), reads=("focused-qa.json", "focused-check.json", "focused-source.json",
                                           "authoring-evidence.json", "intent-audit.json"),
         writes=("fast-report.json", "repair.txt"),
-        produces=("repair_feedback", "repairs_used", "qa_passed"), max_iterations=4,
+        produces=("repair_feedback", "repairs_used", "check_repairs_used",
+                  "review_repairs_used", "qa_passed"), max_iterations=4,
         notes="repair only within the shared bound; unresolved findings are failure",
     ))
     graph.connect("focused_check", "focused_qa")

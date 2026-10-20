@@ -467,7 +467,7 @@ def _emitted(answer: str, *, edits: bool) -> tuple[dict[Path, str], Edits, tuple
             raise AttemptRefused(f"{path}: this run has no worktree, so its artifact directory holds only "
                                  "whole files; write every file with ===FILE:")
         if kind == "FILE":
-            _refuse_truncated(path, body)
+            refuse_truncated(path, body)
             files[path] = body + "\n"
         elif kind == "EDIT":
             changed.setdefault(path, []).extend(_pairs(path, body))
@@ -509,7 +509,7 @@ def _pairs(path: Path, body: str) -> list[tuple[str, str]]:
         if not search.strip():
             raise AttemptRefused(f"an edit to {path} has nothing to search for; to add a file, write it with "
                                  "===FILE:, and to add lines, search for the lines next to them")
-        _refuse_truncated(path, replacement)
+        refuse_truncated(path, replacement)
         pairs.append((search, replacement))
         index = end + 1
     if not pairs:
@@ -599,7 +599,7 @@ def _line_starts(text: str, lines: str) -> list[int]:
     return found
 
 
-def _refuse_truncated(path: Path, text: str) -> None:
+def refuse_truncated(path: Path, text: str) -> None:
     """Refuse text copied from a read that the read tool cut short, before it is written anywhere."""
     match = TRUNCATED.search(text)
     if match:

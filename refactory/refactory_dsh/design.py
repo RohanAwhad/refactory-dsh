@@ -54,6 +54,11 @@ class DesignMode(Mode):
                 description="how many times the emit step may be retried when the "
                             "artifact does not pass its check",
             ),
+            "review_attempts": Knob(
+                3, "int", lo=1, hi=5,
+                description="how many times the review gates may reloop before "
+                            "stopping; defaults to the same as check_attempts",
+            ),
             "check_timeout_s": Knob(
                 180, "int", lo=10, hi=1800,
                 description="how long the brief's check may run",
@@ -311,7 +316,8 @@ class DesignMode(Mode):
             resource_role="final_validation",
             reads=("brief.json",),
             writes=("check.txt", "validation.txt", "authoring-evidence.json", *repo_change.CHECK_WRITES),
-            produces=("validation", "check_attempts_used", "attempts_used", "runtime_evidence",
+            produces=("validation", "check_attempts_used", "review_attempts_used",
+                      "attempts_used", "runtime_evidence",
                       *repo_change.CHECK_PRODUCES),
             knobs=("check_attempts", "check_timeout_s"),
             max_iterations=8,
