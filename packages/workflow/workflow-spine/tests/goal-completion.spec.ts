@@ -233,7 +233,6 @@ describe('goal completion guard (#347, C1)', () => {
     const graphPath = join(run, 'graphs', 't.graph.json')
     mkdirSync(join(run, 'graphs'), { recursive: true })
     writeFileSync(graphPath, JSON.stringify(AGENT_GRAPH))
-    writeStatus(run, { schema_version: 1, status: 'halted' })
 
     const { chmodSync } = await import('node:fs')
     const openStubPath = join(scratch(), 'open-stub')
@@ -256,6 +255,9 @@ describe('goal completion guard (#347, C1)', () => {
       { mode: 'pkg/t', workdir: run },
       { agent: { session: { id: ceoSession, requestHeader: () => undefined } } } as never,
     )
+
+    // Write the halted status AFTER wf_open so it is not overwritten by open's recordStatus
+    writeStatus(run, { schema_version: 1, status: 'halted' })
 
     const ceo = mockAgent(ceoSession)
     const result = await executeTool(root, 'update_goal', { action: 'complete' }, ceo)
