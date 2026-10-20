@@ -806,8 +806,10 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
 
     # No worktree: nothing to write.
     if found is None:
-        return _kept(ctx, approved, found, str(approved.get("why") or "it was never planned"),
-                     title="", finish=[])
+        result = _kept(ctx, approved, found, str(approved.get("why") or "it was never planned"),
+                       title="", finish=[])
+        result["delivery_conflict_files"] = []
+        return result
 
     # Verify the worktree's git link before recovery: a worktree whose .git was
     # repointed must be refused before git reset --hard runs in it.

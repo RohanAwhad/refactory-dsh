@@ -402,7 +402,8 @@ def test_a_refused_emit_is_redone_from_a_fresh_emit_txt(target, tmp_path):
     assert "changed while agent 'emit' ran" in (refused.error or "")
     _git(target, "checkout", "--", "app.py")
 
-    redone = DesignMode.resume(workdir, model=StaleEmitModel([render({"tool.py": "print('redone')\n"}),
+    redone = DesignMode.resume(workdir, model=StaleEmitModel(["the design document",
+                                                              render({"tool.py": "print('redone')\n"}),
                                                               *REVIEW_ANSWERS]))
     assert redone.error is None
     assert (workdir / "emit.txt").read_text() == render({"tool.py": "print('redone')\n"})

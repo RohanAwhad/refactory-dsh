@@ -2844,7 +2844,7 @@ def test_two_runs_conflict_reloop(github, tmp_path, monkeypatch):
     main_clone = tmp_path / "main_clone"
     git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(main_clone))
     git(main_clone, "-c", "user.name=t", "-c", "user.email=t@example.com",
-        "merge", "-q", "--no-ff", f"refs/heads/{branch1}",
+        "merge", "-q", "--no-ff", f"origin/{branch1}",
         "-m", "merge first run")
     git(main_clone, "push", "-q", "origin", "main")
 
