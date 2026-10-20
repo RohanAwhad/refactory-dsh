@@ -119,7 +119,7 @@ def test_pr_body_has_summary_verification_and_original_request(tmp_path):
     assert "First paragraph of the design." in body
     assert "## Verification" in body
     assert "python tool.py" in body
-    assert "the health check, code review and QA found nothing blocking" in body
+    assert "the health check, code review, independent verification and QA" in body
     assert "`tests/test_env.py::test_needs_profile`" in body
     assert "## Original request" in body
     assert "Build a tool\nthat prints built." in body

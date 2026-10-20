@@ -276,40 +276,13 @@ def gate_design_review(ctx: Any) -> str:
             )
 
     # ── mechanical check 3b: ask mapping section ──
+    # Section presence is mechanical; content validation (ask text matches the
+    # brief) is in the design_review agent's prompt — one rule in one place.
     if design_text:
         if "## ask mapping" not in design_text.lower():
             problems.append(
                 "the design is missing the required ## Ask mapping table"
             )
-        else:
-            brief_text_mapping = ""
-            if ctx.exists("brief.json"):
-                try:
-                    brief_data_mapping = json.loads(ctx.read_text("brief.json"))
-                    brief_text_mapping = str(brief_data_mapping.get("brief", ""))
-                except (json.JSONDecodeError, AttributeError):
-                    pass
-            if brief_text_mapping:
-                brief_collapsed_mapping = _re.sub(r'\s+', ' ', brief_text_mapping).strip()
-                in_mapping = False
-                for line in design_text.splitlines():
-                    stripped = line.strip()
-                    if stripped.lower() == "## ask mapping":
-                        in_mapping = True
-                        continue
-                    if in_mapping and stripped.startswith("## "):
-                        break
-                    if in_mapping and stripped.startswith("|") and "---" not in stripped:
-                        columns = [c.strip() for c in stripped.split("|")]
-                        if len(columns) >= 2:
-                            ask = columns[1].strip().strip('"').strip('\u201c').strip('\u201d')
-                            if ask and ask.lower() not in ("ask", "ask (quoted from brief)"):
-                                ask_collapsed = _re.sub(r'\s+', ' ', ask).strip()
-                                if ask_collapsed not in brief_collapsed_mapping:
-                                    problems.append(
-                                        f"ask mapping quotes {ask!r} but that text "
-                                        f"does not appear verbatim in the brief"
-                                    )
 
     # ── mechanical check 4: pitfall coverage ──
     has_pitfalls = ctx.facts.get("has_pitfalls_step", False)
