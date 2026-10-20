@@ -1510,13 +1510,57 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
             + ("…" if len(paths) > 10 else "")
             + ". They are part of this PR; that is the meaning of opting in.\n"
         )
+
+    import json as _json
+    from refactory_dsh import authoring_evidence as evidence
+
+    def _read_evidence() -> dict[str, Any] | None:
+        try:
+            return _json.loads(ctx.read_text(evidence.EVIDENCE)) if ctx.exists(evidence.EVIDENCE) else None
+        except Exception:
+            return None
+
+    ev_data = _read_evidence()
+    check_passed = (ev_data is not None
+                    and isinstance(ev_data.get('validation'), dict)
+                    and ev_data['validation'].get('status') == 'pass')
+    if check_passed:
+        check_line = f"- **Check:** `{check_cmd}` passed in the run's worktree.\n"
+    elif check_cmd:
+        check_ran_and_failed = (ev_data is not None
+                                and isinstance(ev_data.get('validation'), dict)
+                                and ev_data['validation'].get('status') != 'pass')
+        if check_ran_and_failed:
+            check_line = f"- **Check:** `{check_cmd}` **failed**.\n"
+        else:
+            check_line = f"- **Check:** `{check_cmd}` **did not run**.\n"
+    else:
+        check_line = ""
+
+    def _audit_passed() -> bool:
+        try:
+            audit_data = _json.loads(ctx.read_text(evidence.AUDIT)) if ctx.exists(evidence.AUDIT) else None
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
+        if audit_data is None or not isinstance(audit_data, dict):
+            return False
+        rows = audit_data.get('requirements', [])
+        if not isinstance(rows, list) or len(rows) == 0:
+            return False
+        return evidence.audit_problems(ctx) == []
+
+    if ev_data is not None and check_passed and _audit_passed():
+        reviews_line = ("- **Reviews:** the health check, code review, independent verification and QA found nothing blocking, "
+                        "and the overwatch audit passed.\n")
+    else:
+        reviews_line = "- **Reviews:** not all review steps completed.\n"
+
     verification = (
         f"## Verification\n\n"
-        f"- **Check:** `{check_cmd}` passed in the run's worktree.\n"
+        + check_line
         + command_corrections
         + uncommitted_line
-        + "- **Reviews:** the health check, code review, independent verification and QA "
-        "found nothing blocking, and the overwatch audit passed.\n"
+        + reviews_line
         + _base_evidence(ctx)
         + f"- **Base:** `{found.base[:12]}`, with {attempts} attempt commit(s) on `{found.branch}`.\n"
         + merge_line
@@ -1539,6 +1583,7 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
             verification += "\n- **Unresolved verification findings:**\n" + unresolved + "\n"
     verification += _process_notes_section(ctx)
     sections.append(verification)
+
     sections.append(f"## Original request\n\n{brief}")
     sections.append(f"---\n\nWritten by a refactory design run once its reviews passed.\n\n"
                     f"```\n{stat}\n```")
@@ -1547,10 +1592,17 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
 
 def _process_notes_section(ctx: Any) -> str:
     """Non-blocking summary of process-scoped steering notes for the PR body."""
+    import json as _json
     from refactory_dsh import authoring_evidence as evidence
 
-    audit = ctx.read_json(evidence.AUDIT, None) if ctx.exists(evidence.AUDIT) else None
-    ev = ctx.read_json(evidence.EVIDENCE, None) if ctx.exists(evidence.EVIDENCE) else None
+    def _safe_read_json(name: str) -> Any:
+        try:
+            return _json.loads(ctx.read_text(name))
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
+    audit = _safe_read_json(evidence.AUDIT) if ctx.exists(evidence.AUDIT) else None
+    ev = _safe_read_json(evidence.EVIDENCE) if ctx.exists(evidence.EVIDENCE) else None
     notes = (ev or {}).get("process_notes", [])
     if not notes:
         return ""
