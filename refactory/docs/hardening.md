@@ -886,6 +886,93 @@ focused_check → verifier → gate_verification → focused_qa
 The replay harness (`python -m refactory_dsh.replay_harness`) scores the
 verifier against the evidence log. See docs/replay-harness.md.
 
+## 19. cwd escape detection (#351 I3)
+
+**What should happen.** When a check's command changes directory outside the run's
+worktree, the check record and the reviewers' evidence say so, naming the directory.
+Advisory, not a failure.
+
+**How it works.** `sandbox.run_command` accepts an optional `worktree_root`
+parameter. When given, it wraps the command in a shell that installs an EXIT trap
+comparing the final `$PWD` with the worktree root (both realpath'd, prefix check).
+The trap writes to a sentinel file, not stdout or stderr, so the command's output
+is unchanged. `SandboxResult.cwd_outside` carries the escaped directory, which
+`design_ops` and `fast_ops` record as `cwd_escaped` in the check outcome.
+
+**What it does not catch.** An intermediate `cd` that returns before the command
+ends. A subshell that `cd`s. A symlink whose target resolves outside the worktree
+is caught by `pwd -P` because the trap resolves both paths.
+
+**Test.** `test_cwd_escape.py`: `cd /tmp` is flagged; `cd <subdir>` is not; `exit 3`
+keeps status 3; the sentinel never reaches stdout or stderr.
+
+## 20. Worktree isolation for create/edit modes (#351)
+
+**What should happen.** Two parallel create runs of the same package name both
+succeed in their own staging directories.
+
+**How it works.** `create_ops.prepare_create()` sets up a staging directory at
+`<run>/.factory-staging/.factory/packages/<name>/`. `materialise()` writes there,
+`validate()` imports from there (via `registry.install_workspace` with
+`project_override`), and `register()` copies atomically to the shared
+`.factory/packages/<name>/` — refusing if the shared package changed since prepare.
+
+**Test.** `test_staging_isolation.py`: two runs through `prepare_create`, then
+`register`; the second register refuses naming the first, and the first's package is
+intact; a reloop does not refuse itself; an edit whose source changed mid-run refuses;
+an edit whose `revision_of` differs from its name copies from the source.
+
+## 21. Symlink safety in copy_uncommitted (#351)
+
+**What should happen.** `copy_uncommitted` must not follow symlinks.  A tracked
+absolute symlink that was retargeted must not overwrite the old target outside the
+worktree.  An untracked symlink to a credentials file must be recreated as a link,
+not have its contents committed.
+
+**How it works.** `worktree.copy_uncommitted` checks `source.is_symlink()` before
+reading contents.  Symlinks are recreated with `os.readlink` + `os.symlink`; the
+hash records the link target string, not the file content.  Before writing any
+destination, an existing symlink at that path is unlinked so writes never follow
+a stale link.  Regular-file destinations whose resolved path escapes the worktree
+(e.g. a parent component is a symlink) are refused.
+
+**Test.** `test_uncommitted_changes.py`:
+`test_symlink_retarget_leaves_old_target_untouched` — a retargeted tracked
+symlink is recreated as a link and the old target is untouched;
+`test_untracked_symlink_outside_repo_recreated_as_link` — an untracked symlink
+to an external file is recreated as a link, not as the file's contents.
+
+## 22. Staged package validation resolves other workspace packages (#351)
+
+**What should happen.** A staged package whose ops import from another workspace
+package (e.g. `from refactory_packages.base_ws import ops`) validates and
+registers, as on main.
+
+**How it works.** `check_package` passes `shared_project=project_for_nodes()` to
+`verify_sandboxed` when `project_override` is given.  The subprocess installs the
+shared workspace behind the staging root via
+`registry.install_workspace(shared, project_override=staging)`, so the staged
+copy wins for its own name and every other package still resolves.
+
+**Test.** `test_staging_isolation.py:test_staged_package_can_import_shared_workspace_package`
+— a staged package that imports `HELPER` from a shared workspace package validates
+without import errors.
+
+## 23. Copy-on-register atomicity (#351)
+
+**How it works.** `register()` writes the staged package to a temporary sibling
+directory, renames the old package aside, renames the new one in, then deletes the
+old. If the swap fails, the old is put back. The registering run's id (its invocation
+id, as `repo_change` uses) is written into `.origin.json` so the refusal message names
+the other run. After a successful register, the origin stamp in `.origin.json`
+identifies this run so a reloop does not refuse itself.
+`prepare_create` records both `source_hash` and `source_existed`, so register can
+refuse when a new package appears (not only when an existing one changed).
+
+**Test.** `test_staging_isolation.py:test_two_parallel_creates_both_build_second_register_refuses`,
+`test_reloop_register_does_not_refuse_itself`,
+`test_edit_whose_source_changed_refuses_at_register`.
+
 ---
 
 Two things that were on this list have moved off it, which is the point of keeping it:
