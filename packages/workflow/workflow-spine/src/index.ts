@@ -634,9 +634,13 @@ export function apply(ctx: Context, config: Config): void {
     }
 
     // 10. Deny writes to .refactory/ — spine state must not be forged by subagents (#347, C1).
+    // Compare case-insensitively: on macOS's default filesystem, .REFACTORY
+    // resolves to .refactory, so a case-folded prefix check closes the bypass (#347, C1).
     const refactoryDir = join(resolvedRun, '.refactory')
-    if (resolvedTarget === refactoryDir
-        || resolvedTarget.startsWith(refactoryDir + sep)) {
+    const targetLower = resolvedTarget.toLowerCase()
+    const refactoryLower = refactoryDir.toLowerCase()
+    if (targetLower === refactoryLower
+        || targetLower.startsWith(refactoryLower + sep.toLowerCase())) {
       return Promise.resolve({
         kind: 'deny' as const,
         reason: `this subagent may not write inside ${refactoryDir}`,
@@ -761,6 +765,19 @@ export function apply(ctx: Context, config: Config): void {
   // redispatch so an earlier faithful prompt cannot satisfy a rewritten retry.
   const ceoPrompts = new Map<string, Array<{ prompt: string; hash: string }>>()
 
+  /** Extract the node id from the execution contract embedded in a prompt. */
+  function extractContractNode(text: string): string | undefined {
+    const startMarker = '<!-- refactory worker execution -->'
+    const endMarker = '<!-- end refactory worker execution -->'
+    const start = text.indexOf(startMarker)
+    if (start < 0) return undefined
+    const end = text.indexOf(endMarker, start)
+    if (end < 0) return undefined
+    const block = text.substring(start + startMarker.length, end)
+    const match = block.match(/"node"\s*:\s*"([^"]+)"/)
+    return match ? match[1] : undefined
+  }
+
   ctx.on('tools/pre-execute', (exec, next) => {
     let promptText: string | undefined
     if (exec.name === 'subagent' || exec.name === 'subagent_fork') {
@@ -772,6 +789,16 @@ export function apply(ctx: Context, config: Config): void {
     }
     if (promptText === undefined) return next()
 
+    // Record only top-level CEO calls, not reviewer subagent calls (#347, C2).
+    // A delegated child (depth > 0 or has a parentSession) is a subagent whose
+    // send_message the tool filter allows but should not be recorded as a CEO prompt.
+    const session = exec.agent?.session
+    if (session !== undefined) {
+      const depth = session.header.delegationDepth
+      const parent = session.header.parentSession
+      if ((depth !== undefined && depth > 0) || parent !== undefined) return next()
+    }
+
     // Find due nodes from the spine, keyed by run (workdir) so parallel
     // GUI sessions cannot cross-contaminate (#347, C2).
     let spine: Spine | undefined
@@ -780,7 +807,6 @@ export function apply(ctx: Context, config: Config): void {
       spine = configuredSpine
       runKey = config.workdir ?? '_configured_'
     } else {
-      const session = exec.agent?.session
       if (session !== undefined) {
         const opened = openedBySession.get(String(session.id))
         if (opened !== undefined) {
@@ -793,31 +819,26 @@ export function apply(ctx: Context, config: Config): void {
       const cur = spine.next()
       if (cur.status === 'ready') {
         const hash = createHash('sha256').update(promptText).digest('hex')
-        // Record the prompt under the due node whose pending prompt.txt it
-        // contains, not under every due node.  This prevents faithful-A,
-        // rewritten-A′, faithful-B from letting A pass (#347, C2).
-        let matchedAny = false
-        for (const node of cur.nodes) {
-          if (node._type === 'AgentNode' || node._type === 'LLMNode') {
-            const pending = pendingPrompts.get(`${runKey}:${node.id}`)
-            if (pending !== undefined && promptText.includes(pending)) {
-              const key = `${runKey}:${node.id}`
-              const existing = ceoPrompts.get(key)
-              if (existing !== undefined) existing.push({ prompt: promptText, hash })
-              else ceoPrompts.set(key, [{ prompt: promptText, hash }])
-              matchedAny = true
-            }
+        // Attribute the prompt to a due node by its delivery key: the node id
+        // from the execution contract embedded in prompt.txt (#347, C2).
+        const contractNodeId = extractContractNode(promptText)
+        if (contractNodeId !== undefined) {
+          // The prompt names a specific node via its delivery key.
+          const dueNode = cur.nodes.find(n => n.id === contractNodeId
+            && (n._type === 'AgentNode' || n._type === 'LLMNode'))
+          if (dueNode !== undefined) {
+            // Record under this node — whether faithful or rewritten, wf_done
+            // will check the latest recorded prompt for content matching.
+            const key = `${runKey}:${dueNode.id}`
+            const existing = ceoPrompts.get(key)
+            if (existing !== undefined) existing.push({ prompt: promptText, hash })
+            else ceoPrompts.set(key, [{ prompt: promptText, hash }])
           }
+          // A contract naming a non-due node: record under none, clear nothing.
         }
-        // A prompt that matches no due node is a potential rewrite: clear
-        // recorded prompts for all due nodes so wf_done sees the gap (#347, C2).
-        if (!matchedAny) {
-          for (const node of cur.nodes) {
-            if (node._type === 'AgentNode' || node._type === 'LLMNode') {
-              ceoPrompts.delete(`${runKey}:${node.id}`)
-            }
-          }
-        }
+        // A prompt with no contract (e.g. an unrelated send_message to a
+        // continuable subagent) is recorded under none and no records are
+        // cleared, so faithful reviewers are not refused (#347, C2).
       }
     }
     return next()

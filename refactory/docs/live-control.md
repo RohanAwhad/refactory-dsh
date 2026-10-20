@@ -339,6 +339,15 @@ matches the current status. The person can override via
 spine-status.json. The override is cleared when `recordStatus()` writes a
 different status, so a resumed or new invocation does not inherit it.
 
+### CEO-dispatched prompt integrity
+
+The CEO's prompt recording listener attributes prompts to due nodes by the
+delivery key: the node id from the execution contract embedded in prompt.txt,
+keyed by run and node. A prompt naming no due node's key is recorded under
+none and no records are cleared, so an unrelated `send_message` does not
+refuse faithful reviewers. Only top-level CEO calls are recorded; a
+reviewer subagent's own `send_message` is not recorded as a CEO prompt.
+
 ### CEO redo and attempt limits
 
 When the CEO redoes a completed node through `wf_redo`, the redo preserves

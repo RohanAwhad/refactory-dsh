@@ -242,6 +242,27 @@ describe('subagent write confinement', () => {
       expect(text).toContain('.refactory')
     })
 
+    it('denies a subagent writing inside .REFACTORY/ (case-insensitive bypass) (#347, C1)', async () => {
+      const workdir = scratch()
+      const ctx = await mountConfigured({ workdir })
+
+      const child = mockAgent('child-1', {
+        delegationDepth: 1,
+        parentSession: 'ceo-1',
+        cwd: workdir,
+      })
+
+      // On a case-insensitive filesystem, .REFACTORY resolves to .refactory.
+      // The guard must deny it regardless of casing.
+      const result = await executeTool(ctx, 'write', {
+        file_path: join(workdir, '.REFACTORY', 'spine-status.json'),
+        content: '{"forged": true}',
+      }, child)
+      expect(result.isError).toBe(true)
+      const text = result.content.map(c => c.text).join('')
+      expect(text).toContain('.refactory')
+    })
+
     it('allows a subagent to write inside the run directory', async () => {
       const workdir = scratch()
       const ctx = await mountConfigured({ workdir })

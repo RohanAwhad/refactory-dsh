@@ -786,7 +786,11 @@ receipt.  The sent prompt text is written to `<delivery>/sent-prompt.txt`.
 `test_reviewers_action_returns_reviewers_list`. `prompt-recording.spec.ts`: nine tests
 for wf_done validation of reviewer nodes including rewritten-retry refusal, in-delivery
 rewrite refusal, parallel reviewer acceptance, reviewer-list-fetch fail-closed behavior,
-faithful-A/rewritten-A′/faithful-B refusal, and unresolved template key recording.
+faithful-A/rewritten-A′/faithful-B refusal, unresolved template key recording,
+unrelated send_message not clearing records, and subagent calls not being recorded.
+Prompts are attributed to due nodes by the delivery key (the node id from the execution
+contract embedded in prompt.txt), keyed by run and node. A prompt that names no due
+node's key is recorded under none and no records are cleared.
 
 ## 20. Sacred Rules 8 and 9
 
@@ -800,7 +804,19 @@ the graph's review steps.
 **Held by.** `plugin.spec.ts`: `'CEO system prompt includes delegation and review
 discipline rules (Sacred Rules 8/9)'` asserts the section contains the key phrases.
 
-## 21. Check-not-run reporting (#363)
+## 21. Case-insensitive .refactory write-deny
+
+On a case-insensitive filesystem (macOS default), a subagent write to
+`<run>/.REFACTORY/spine-status.json` would pass the `.refactory/` check and
+overwrite the real file, forging `status: done` or a `completion_override`. The
+C0 write-confinement listener now compares the resolved target against the
+`.refactory` directory using a case-insensitive prefix check (lowercased
+comparison), so `.REFACTORY`, `.Refactory` and any other casing is denied.
+
+**Held by.** `confine-writes.spec.ts`:
+`'denies a subagent writing inside .REFACTORY/ (case-insensitive bypass) (#347, C1)'`.
+
+## 22. Check-not-run reporting (#363)
 
 When a check could not run, the CEO recommended "Skip check gate and continue
 (Recommended)". The fix: `delivery.py`'s `_body()` derives the Check line from the

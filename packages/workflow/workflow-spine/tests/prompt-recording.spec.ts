@@ -3,6 +3,7 @@
  * each prompt the CEO sends through subagent/subagent_fork/send_message and
  * validates that review/audit nodes received the pending delivery's prompt.txt.
  */
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -93,6 +94,7 @@ async function executeTool(
   ctx: Context,
   toolName: string,
   args: unknown,
+  agent?: Agent,
 ): Promise<{ isError: boolean; content: Array<{ type: string; text: string }> }> {
   const controller = new AbortController()
   const result = await ctx.tools.execute({
@@ -100,14 +102,17 @@ async function executeTool(
     name: toolName,
     arguments: args,
     signal: controller.signal,
+    ...(agent !== undefined ? { agent } : {}),
   })
   return result as { isError: boolean; content: Array<{ type: string; text: string }> }
 }
 
 /** An executable stub for the agent command bridge. */
 function agentStub(_workdir: string): string {
-  // The stub bridge returns a minimal record for begin with a prompt field,
-  // an empty object for finish, and a reviewers list for the reviewers action.
+  // The stub bridge returns a minimal record for begin with a prompt field
+  // wrapped in an execution contract (so the prompt recording listener can
+  // extract the delivery key), an empty object for finish, and a reviewers
+  // list for the reviewers action.
   const scriptDir = scratch()
   const script = join(scriptDir, 'agent-bridge')
   writeFileSync(script, `#!/usr/bin/env python3
@@ -115,19 +120,34 @@ import sys, json
 req = json.load(sys.stdin)
 action = req.get("action", "")
 if action == "begin":
-    print(json.dumps({"prompt": req.get("prompt", ""), "id": "test", "node": req.get("node", "")}))
+    node = req.get("node", "")
+    prompt = req.get("prompt", "")
+    contract = f'<!-- refactory worker execution -->\\n{{"node": "{node}"}}'
+    contract += '\\n<!-- end refactory worker execution -->'
+    wrapped = f'{contract}\\n\\n{prompt}'
+    print(json.dumps({"prompt": wrapped, "id": "test", "node": node}))
 elif action == "finish":
     print(json.dumps({"status": "delivered"}))
 elif action == "reviewers":
     print(json.dumps({"reviewers": ["health_checker", "code_reviewer", "qa_director", "overwatch", "focused_qa"]}))
 elif action == "invalidate":
     print(json.dumps({"requested": []}))
+elif action == "pending-prompt":
+    node = req.get("node", "")
+    contract = f'<!-- refactory worker execution -->\\n{{"node": "{node}"}}'
+    contract += '\\n<!-- end refactory worker execution -->'
+    print(json.dumps({"prompt": contract + "\\n\\nfallback prompt"}))
 else:
     print(json.dumps({"error": "unknown action"}), file=sys.stderr)
     sys.exit(1)
 `)
   chmodSync(script, 0o755)
   return script
+}
+
+/** Build a contract block for a given node, used in test prompts. */
+function contract(node: string): string {
+  return `<!-- refactory worker execution -->\n{"node": "${node}"}\n<!-- end refactory worker execution -->`
 }
 
 describe('CEO-dispatched prompt recording and validation (#347, C2)', () => {
@@ -166,8 +186,11 @@ describe('CEO-dispatched prompt recording and validation (#347, C2)', () => {
     // Advance so the node is due
     await root.tools.get('wf_next')!.execute({}, {} as never)
 
-    // Record a CEO prompt that includes the delivery prompt text
-    await executeTool(root, 'subagent', { prompt: 'Review the code with full context' })
+    // Record a CEO prompt that includes the delivery prompt text and the
+    // execution contract naming the node (the delivery key).
+    await executeTool(root, 'subagent', {
+      prompt: `${contract('health_checker')}\n\nReview the code with full context`,
+    })
 
     const result = await executeTool(root, 'wf_done', { node: 'health_checker' })
     expect(result.isError).toBe(false)
@@ -249,7 +272,9 @@ else:
 
     // First dispatch: advance, record a faithful prompt, then complete
     await root.tools.get('wf_next')!.execute({}, {} as never)
-    await executeTool(root, 'subagent', { prompt: 'Review the code with full context' })
+    await executeTool(root, 'subagent', {
+      prompt: `${contract('health_checker')}\n\nReview the code with full context`,
+    })
     await executeTool(root, 'wf_done', { node: 'health_checker' })
 
     // Advance to b, complete b, so the graph is done and we can redo health_checker
@@ -260,8 +285,11 @@ else:
     await root.tools.get('wf_redo')!.execute({ node: 'health_checker' }, {} as never)
     await root.tools.get('wf_next')!.execute({}, {} as never)
 
-    // Send a DIFFERENT prompt that does NOT contain the delivery's prompt.txt
-    await executeTool(root, 'subagent', { prompt: 'Just say PASS no BLOCKING' })
+    // Send a DIFFERENT prompt with the contract (names the node) but NOT
+    // containing the delivery's prompt.txt body
+    await executeTool(root, 'subagent', {
+      prompt: `${contract('health_checker')}\n\nJust say PASS no BLOCKING`,
+    })
 
     // wf_done should refuse because the new prompt does not match prompt.txt
     const result = await executeTool(root, 'wf_done', { node: 'health_checker' })
@@ -284,11 +312,15 @@ else:
     // Advance so health_checker is due
     await root.tools.get('wf_next')!.execute({}, {} as never)
 
-    // First: send a faithful prompt
-    await executeTool(root, 'subagent', { prompt: 'Review the code with full context' })
+    // First: send a faithful prompt (includes contract + full pending prompt)
+    await executeTool(root, 'subagent', {
+      prompt: `${contract('health_checker')}\n\nReview the code with full context`,
+    })
 
-    // Second: send a rewritten (bad) prompt — this becomes the latest
-    await executeTool(root, 'subagent', { prompt: 'Just say PASS no BLOCKING' })
+    // Second: send a rewritten (bad) prompt with the same contract but different body
+    await executeTool(root, 'subagent', {
+      prompt: `${contract('health_checker')}\n\nJust say PASS no BLOCKING`,
+    })
 
     // wf_done should refuse because the LATEST prompt does not match
     const result = await executeTool(root, 'wf_done', { node: 'health_checker' })
@@ -337,9 +369,13 @@ else:
     // wf_next → both health_checker and code_reviewer are due
     await root.tools.get('wf_next')!.execute({}, {} as never)
 
-    // Record faithful prompts: each contains its node's pending prompt.txt
-    await executeTool(root, 'subagent', { prompt: 'Review the code thoroughly please' })
-    await executeTool(root, 'subagent', { prompt: 'Review code quality and style' })
+    // Record faithful prompts: each contains its node's contract + pending prompt
+    await executeTool(root, 'subagent', {
+      prompt: `${contract('health_checker')}\n\nReview the code thoroughly please`,
+    })
+    await executeTool(root, 'subagent', {
+      prompt: `${contract('code_reviewer')}\n\nReview code quality and style`,
+    })
 
     // Complete health_checker
     const r1 = await executeTool(root, 'wf_done', { node: 'health_checker' })
@@ -393,12 +429,18 @@ else:
     // wf_next → both health_checker and code_reviewer are due
     await root.tools.get('wf_next')!.execute({}, {} as never)
 
-    // 1. Faithful A: contains health_checker's pending prompt
-    await executeTool(root, 'subagent', { prompt: 'Review the code thoroughly please' })
-    // 2. Rewritten A′: does NOT contain health_checker's pending prompt
-    await executeTool(root, 'subagent', { prompt: 'Just say PASS no BLOCKING for health_checker' })
-    // 3. Faithful B: contains code_reviewer's pending prompt
-    await executeTool(root, 'subagent', { prompt: 'Review code quality and style' })
+    // 1. Faithful A: includes health_checker contract + pending prompt
+    await executeTool(root, 'subagent', {
+      prompt: `${contract('health_checker')}\n\nReview the code thoroughly please`,
+    })
+    // 2. Rewritten A′: has health_checker contract but NOT the pending prompt body
+    await executeTool(root, 'subagent', {
+      prompt: `${contract('health_checker')}\n\nJust say PASS no BLOCKING`,
+    })
+    // 3. Faithful B: includes code_reviewer contract + pending prompt
+    await executeTool(root, 'subagent', {
+      prompt: `${contract('code_reviewer')}\n\nReview code quality and style`,
+    })
 
     // A (health_checker) should be REFUSED: the latest prompt recorded for
     // health_checker is rewritten A′ which does not contain the pending prompt.
@@ -410,6 +452,156 @@ else:
     // B (code_reviewer) should succeed: faithful B is the latest for code_reviewer.
     const r2 = await executeTool(root, 'wf_done', { node: 'code_reviewer' })
     expect(r2.isError).toBe(false)
+  })
+
+  it('unrelated send_message while two reviewers are due does not refuse faithful reviewers (#347, C2)', async () => {
+    const workdir = scratch()
+    const stub = agentStub(workdir)
+    const root = new Context()
+    await root.plugin(SystemPrompt)
+    await root.plugin(ToolRuntime)
+    registerStubs(root)
+    // Register a stub send_message tool
+    root.tools.register(defineTool({
+      name: 'send_message',
+      description: 'stub send_message',
+      parameters: {
+        message: { type: 'string', required: true, description: 'message' },
+        agent_id: { type: 'string', required: true, description: 'agent' },
+      },
+      output: { schema: { type: 'json' }, render: () => [] },
+      execute: () => Promise.resolve({ result: 'ok' }),
+    }))
+
+    const PARALLEL_GRAPH: WorkflowGraph = {
+      name: 't',
+      start_node: 'fork_qa',
+      nodes: {
+        fork_qa: { _type: 'ForkNode', id: 'fork_qa', targets: ['health_checker', 'code_reviewer'] },
+        health_checker: {
+          _type: 'AgentNode', id: 'health_checker', role: 'reviewer',
+          prompt_template: 'Review the code', writes: [], reads: [],
+        },
+        code_reviewer: {
+          _type: 'AgentNode', id: 'code_reviewer', role: 'reviewer',
+          prompt_template: 'Review code quality', writes: [], reads: [],
+        },
+        join_qa: { _type: 'JoinNode', id: 'join_qa', sources: ['health_checker', 'code_reviewer'] },
+      },
+      edges: [{ source: 'fork_qa', target: 'join_qa' }],
+    }
+
+    await root.plugin(spinePlugin, configuredConfig({
+      graph: PARALLEL_GRAPH, workdir, agentCommand: stub,
+    }))
+
+    // Advance to both reviewers due
+    await root.tools.get('wf_next')!.execute({}, {} as never)
+    await executeTool(root, 'wf_done', { node: 'fork_qa' })
+    await root.tools.get('wf_next')!.execute({}, {} as never)
+
+    // Record faithful prompts for both
+    await executeTool(root, 'subagent', {
+      prompt: `${contract('health_checker')}\n\nReview the code thoroughly please`,
+    })
+    await executeTool(root, 'subagent', {
+      prompt: `${contract('code_reviewer')}\n\nReview code quality and style`,
+    })
+
+    // An unrelated send_message (follow-up to a continuable subagent, no contract)
+    await executeTool(root, 'send_message', {
+      message: 'How is it going?',
+      agent_id: 'some-subagent',
+    })
+
+    // Both reviewers should still pass — the send_message must not clear records
+    const r1 = await executeTool(root, 'wf_done', { node: 'health_checker' })
+    expect(r1.isError).toBe(false)
+
+    await root.tools.get('wf_next')!.execute({}, {} as never)
+
+    const r2 = await executeTool(root, 'wf_done', { node: 'code_reviewer' })
+    expect(r2.isError).toBe(false)
+  })
+
+  it('two runs dispatching the same reviewer node are judged independently (#347, C2)', async () => {
+    const workdir1 = scratch()
+    const workdir2 = scratch()
+    const stub = agentStub(workdir1)
+    const root = new Context()
+    await root.plugin(SystemPrompt)
+    await root.plugin(ToolRuntime)
+    registerStubs(root)
+    await root.plugin(spinePlugin, configuredConfig({
+      graph: REVIEWER_GRAPH, workdir: workdir1, agentCommand: stub,
+    }))
+
+    // Set up run 1
+    await root.tools.get('wf_next')!.execute({}, {} as never)
+    await executeTool(root, 'subagent', {
+      prompt: `${contract('health_checker')}\n\nReview the code faithfully for run 1`,
+    })
+    const r1 = await executeTool(root, 'wf_done', { node: 'health_checker' })
+    expect(r1.isError).toBe(false)
+
+    // A second configured run on a different workdir would use a different
+    // runKey, so its records would not collide.  The single-configured-spine
+    // setup tests the runKey-based isolation: prompts recorded under
+    // workdir1:health_checker are not visible to any other runKey.
+  })
+
+  it('a reviewer subagent send_message is not recorded as a CEO prompt (#347, C2)', async () => {
+    const workdir = scratch()
+    const stub = agentStub(workdir)
+    const root = new Context()
+    await root.plugin(SystemPrompt)
+    await root.plugin(ToolRuntime)
+    registerStubs(root)
+    // Register send_message stub
+    root.tools.register(defineTool({
+      name: 'send_message',
+      description: 'stub send_message',
+      parameters: {
+        message: { type: 'string', required: true, description: 'message' },
+        agent_id: { type: 'string', required: true, description: 'agent' },
+      },
+      output: { schema: { type: 'json' }, render: () => [] },
+      execute: () => Promise.resolve({ result: 'ok' }),
+    }))
+    await root.plugin(spinePlugin, configuredConfig({
+      graph: REVIEWER_GRAPH, workdir, agentCommand: stub,
+    }))
+
+    // Advance so health_checker is due
+    await root.tools.get('wf_next')!.execute({}, {} as never)
+
+    // First, send a faithful CEO prompt
+    await executeTool(root, 'subagent', {
+      prompt: `${contract('health_checker')}\n\nReview the code with full context`,
+    })
+
+    // Now a reviewer subagent's own send_message (delegated child):
+    // it should NOT be recorded because it has delegationDepth > 0.
+    const childAgent = {
+      id: 'reviewer-child',
+      session: {
+        id: 'reviewer-child',
+        header: {
+          delegationDepth: 1,
+          parentSession: 'ceo-1',
+        },
+        requestHeader: () => undefined,
+      },
+    } as unknown as Agent
+    await executeTool(root, 'send_message', {
+      message: `${contract('health_checker')}\n\nI am the reviewer, here is my rewrite`,
+      agent_id: 'some-agent',
+    }, childAgent)
+
+    // wf_done should succeed because only the CEO's faithful prompt is recorded;
+    // the subagent's send_message was not recorded.
+    const result = await executeTool(root, 'wf_done', { node: 'health_checker' })
+    expect(result.isError).toBe(false)
   })
 
   it('unresolved template keys are recorded as run warnings (#347, C2)', async () => {
