@@ -21,7 +21,7 @@ import pytest
 
 from refactory_dsh import agent_delivery, design_ops, nn, repo_change, target_guard
 from refactory_dsh.design import DesignMode
-from tests_support import DESIGN_REVIEW_ANSWER, PITFALLS_ANSWER, RESEARCH_ANSWER, REVIEW_ANSWERS, FakeModel, StaleEmitModel, render
+from tests_support import DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, PITFALLS_ANSWER, RESEARCH_ANSWER, REVIEW_ANSWERS, FakeModel, StaleEmitModel, render
 
 NAME = "guarded_tool"
 
@@ -375,8 +375,8 @@ class _EditingModel(FakeModel):
 def test_a_design_run_whose_emit_edits_the_target_fails_before_materialise(target, tmp_path):
     model = _EditingModel([
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-        "the design document", DESIGN_REVIEW_ANSWER,
-        "the design document",
+        DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+        DESIGN_DOC_ANSWER,
         render({"tool.py": "print('built')\n"}), *REVIEW_ANSWERS,
     ], target)
     result = _without_worktree().run(
@@ -394,8 +394,8 @@ def test_a_refused_emit_is_redone_from_a_fresh_emit_txt(target, tmp_path):
     refused = _without_worktree().run(
         workdir, verdicts={"gate_strategy": "proceed"},
         model=_EditingModel([RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-                             "the design document", DESIGN_REVIEW_ANSWER,
-                             "the design document",
+                             DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+                             DESIGN_DOC_ANSWER,
                              "All changes are already applied."], target),
         task={"name": NAME, "brief": "a tool", "check": "python tool.py"},
     )
