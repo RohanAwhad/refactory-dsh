@@ -266,6 +266,28 @@ If the owner died during delivery, `graph-control resume` restarts it. If main
 has moved further since the last delivery attempt, use `redeliver` to merge the
 current main.
 
+### Automatic conflict resolution
+
+When delivery merges the target branch and an authored file conflicts, the run
+no longer pushes the reviewed commit behind main. Instead:
+
+1. Delivery records the conflict (which files, their base/ours/theirs content,
+   and what main changed) and raises `NotDelivered` — nothing is pushed.
+2. The `delivery_gate` evaluator reads the conflict facts, starts
+   `git merge --no-commit <target_tip>` in the worktree, resolves generated-file
+   conflicts to theirs (main's side), and returns `Verdict("reloop")`.
+3. The run goes back to `emit`. The builder receives the conflict markers in the
+   authored files and the conflict detail via `{{validation}}`.
+4. Materialise refuses an emission that leaves conflict markers. When MERGE_HEAD
+   is present, `git commit` creates a merge commit with main's tip as the second
+   parent.
+5. The check, the base comparison and the reviews run on the merged result before
+   delivery tries again.
+6. The loop is bounded by `check_attempts`. A run that cannot resolve stops,
+   naming the conflicting files. `graph-control redeliver` restarts it.
+
+On any failure the merge is aborted, so a worktree is never left mid-merge.
+
 `rerun` with `--text` on a node that takes no text (an op or a gate) is refused
 with `"this node takes no text; drop --text"`.
 

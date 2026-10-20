@@ -36,6 +36,11 @@ PLANNING_STEPS = ('research_director', 'pitfalls_researcher', 'strategy_director
 materialise_artifact = repo_change.materialise
 
 
+def noop(ctx: Any) -> dict[str, Any]:
+    """Terminal node: does nothing, returns an empty dict."""
+    return {}
+
+
 def prepare_design(ctx: Any, *, deliver: bool = True, in_worktree: bool | None = None) -> dict[str, Any]:
     """Read the brief, and what the brief says counts as done.
 

@@ -2,6 +2,12 @@
   "name": "design",
   "start_node": "prepare",
   "nodes": {
+    "apply_corrections": {
+      "id": "apply_corrections",
+      "role": "ceo",
+      "max_iterations": 1,
+      "_type": "AgentNode"
+    },
     "check": {
       "id": "check",
       "evaluator_type": "fn",
@@ -18,6 +24,12 @@
       "id": "deliver",
       "_type": "FnNode"
     },
+    "delivery_gate": {
+      "id": "delivery_gate",
+      "evaluator_type": "fn",
+      "max_iterations": 8,
+      "_type": "GateNode"
+    },
     "design_doc": {
       "id": "design_doc",
       "role": "ceo",
@@ -29,6 +41,10 @@
       "role": "ceo",
       "max_iterations": 1,
       "_type": "AgentNode"
+    },
+    "done": {
+      "id": "done",
+      "_type": "FnNode"
     },
     "emit": {
       "id": "emit",
@@ -155,6 +171,11 @@
   },
   "edges": [
     {
+      "source": "apply_corrections",
+      "target": "emit",
+      "condition": null
+    },
+    {
       "source": "check",
       "target": "emit",
       "condition": "reloop"
@@ -163,6 +184,21 @@
       "source": "check",
       "target": "fork_qa",
       "condition": "proceed"
+    },
+    {
+      "source": "deliver",
+      "target": "delivery_gate",
+      "condition": null
+    },
+    {
+      "source": "delivery_gate",
+      "target": "done",
+      "condition": "proceed"
+    },
+    {
+      "source": "delivery_gate",
+      "target": "emit",
+      "condition": "reloop"
     },
     {
       "source": "design_doc",
@@ -241,7 +277,7 @@
     },
     {
       "source": "gate_strategy",
-      "target": "emit",
+      "target": "apply_corrections",
       "condition": "proceed"
     },
     {

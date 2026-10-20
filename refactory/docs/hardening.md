@@ -721,6 +721,48 @@ asserts it exceeds 600 s with `check_timeout_s=1800`;
 `test_synthetic_deliver_op_gets_delivery_envelope` asserts that a custom op under
 another name that declares the knob gets the envelope.
 
+## 10. Delivery conflict resolution loop (dm-102)
+
+When delivery merges the target branch and an authored file conflicts, the run
+loops back to the builder automatically instead of pushing behind main.
+
+**The loop.** `deliver → delivery_gate → emit`. When `delivery_conflict_files`
+is non-empty, the `delivery_gate` evaluator starts `git merge --no-commit` in
+the worktree, resolves generated-file conflicts to theirs (main's side), sets
+`validation` with the conflict detail, and returns `reloop`. The builder
+resolves the authored conflicts; materialise refuses an emission that leaves
+conflict markers. When MERGE_HEAD is present, `git commit` creates a merge
+commit. The check, base comparison and reviews run on the merged result before
+delivery tries again.
+
+**Safety invariants.**
+
+- *Nothing pushes without main.* `_deliver` raises `NotDelivered` on conflict,
+  check_failed or abandoned; `push_head` is never set to `found.head` as a
+  fallback.
+- *Conflict-marker refusal.* `_commit_emission` scans each emitted file for
+  `<<<<<<<` / `>>>>>>>` (excluding `<<<<<<< SEARCH` / `>>>>>>> REPLACE`) and
+  raises `AttemptRefused` before committing.
+- *Worktree cleanup on failure.* The delivery_gate evaluator's try/finally runs
+  `git merge --abort` on any exception. The deliver op's finally block resets
+  HEAD to the reviewed commit.
+- *Loop bound.* `delivery_gate` declares `max_iterations=8` with
+  `knobs=("check_attempts",)`, bounded by the existing attempt budget.
+
+**Tests.**
+
+- `test_two_runs_conflict_reloop`: two runs editing the same function; the
+  second's delivery reloops and the pushed head is a merge commit containing
+  main.
+- `test_merge_failure_leaves_worktree_clean`: the evaluator's merge crashes;
+  no MERGE_HEAD remains.
+- `test_emission_with_conflict_markers_refused`: a file with markers is
+  refused; a normal SEARCH/REPLACE block succeeds.
+- `test_base_changed_authored_file_conflict`: delivery does not push on
+  authored-file conflict; conflict facts are set.
+- `test_merged_result_fails_check`: delivery does not push on failed merged
+  check.
+
 ---
 
 Two things that were on this list have moved off it, which is the point of keeping it:

@@ -586,12 +586,21 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
         if head != found.head and git(path, "rev-parse", "HEAD^").strip() == found.head:
             git(path, *NO_HOOKS, "reset", "-q", "--hard", found.head)
     _require_current(found)
-    restored = _restore(found, frozenset(died.get("files", [])))
-    if restored:
-        from refactory_dsh import target_guard
+    # When a merge is in progress (MERGE_HEAD present), skip _restore: the staged
+    # merge state (cleanly-merged files, unmerged entries, MERGE_HEAD) is intentional
+    # and must not be reset.
+    try:
+        git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
+        merge_in_progress = True
+    except ValueError:
+        merge_in_progress = False
+    if not merge_in_progress:
+        restored = _restore(found, frozenset(died.get("files", [])))
+        if restored:
+            from refactory_dsh import target_guard
 
-        target_guard.warn(f"tracked files in the run's worktree {path} had changed since its last attempt and "
-                          f"were put back before this one: {target_guard._named(restored)}")
+            target_guard.warn(f"tracked files in the run's worktree {path} had changed since its last attempt and "
+                              f"were put back before this one: {target_guard._named(restored)}")
     for relative in files:
         if (path / relative).is_dir() and not (path / relative).is_symlink():
             raise AttemptRefused(f"{relative} is a directory of the last attempt, not a file; write the files "
@@ -621,9 +630,32 @@ def commit_attempt(run: Path, files: dict[Path, str], message: str, deletes: tup
         raise AttemptRefused(
             "the emission changed nothing: every file and edit in it is already in the last attempt"
         )
-    git(path, *NO_HOOKS, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify",
-        "-m", message, env={**os.environ, **COMMITTER})
-    advanced = replace(found, head=git(path, "rev-parse", "HEAD").strip())
+    try:
+        git(path, *NO_HOOKS, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify",
+            "-m", message, env={**os.environ, **COMMITTER})
+    except ValueError as exc:
+        # When committing with unmerged paths, git refuses.  This can happen if
+        # not every conflicted file was resolved by the emission.
+        if "unmerged" in str(exc).lower() or "not possible" in str(exc).lower():
+            raise AttemptRefused(
+                f"the commit failed because unmerged paths remain; every conflicted file "
+                f"must appear in the emission and be fully resolved: {exc}"
+            ) from exc
+        raise
+    new_head = git(path, "rev-parse", "HEAD").strip()
+    # When the commit was a merge (MERGE_HEAD was present before commit), update the
+    # base to main's tip (the second parent) so base_check and the diff cover only
+    # this run's own change, not everything main gained.
+    try:
+        parents_output = git(path, "rev-parse", f"{new_head}^1", f"{new_head}^2")
+        parent_lines = [p.strip() for p in parents_output.strip().splitlines() if p.strip()]
+        if len(parent_lines) >= 2:
+            # This is a merge commit.  Update base to the second parent (main's tip).
+            advanced = replace(found, head=new_head, base=parent_lines[1])
+        else:
+            advanced = replace(found, head=new_head)
+    except ValueError:
+        advanced = replace(found, head=new_head)
     _write_json(Path(run) / RECORD, asdict(advanced))
     pending.unlink(missing_ok=True)
     return advanced

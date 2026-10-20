@@ -889,9 +889,16 @@ def _calls(tmp_path: Path) -> str:
 
 
 def _answers(*emits: str) -> list[str]:
-    """Every answer a design run needs, in the order its graph asks."""
+    """Every answer a design run needs, in the order its graph asks.
+
+    The apply_corrections agent runs between gate_strategy and emit; its answer
+    is a short message saying no corrections were needed, which writes design.md
+    back unchanged.
+    """
     return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits, *REVIEW_ANSWERS]
+            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+            "No gate corrections found; design.md unchanged.",
+            *emits, *REVIEW_ANSWERS]
 
 
 def _mode(**knobs) -> DesignMode:
@@ -2014,6 +2021,7 @@ def test_finish_commands_work_with_special_characters_in_title(github, tmp_path)
     )
     answers = [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
                tricky_design, DESIGN_REVIEW_ANSWER,
+               "No gate corrections found; design.md unchanged.",
                render({"tool.py": "print('built')\n"}),
                *REVIEW_ANSWERS]
     model = FakeModel(answers)
@@ -2166,11 +2174,11 @@ def test_base_moved_with_generated_conflict(github, tmp_path, monkeypatch):
 
 
 def test_base_changed_authored_file_conflict(github, tmp_path, monkeypatch):
-    """The base changes the same lines of an authored file: nothing is resolved
-    automatically, the reviewed commit is delivered, and the conflict is named.
+    """The base changes the same lines of an authored file: delivery does not push,
+    and the conflict facts are set.
 
     Fails without the change: delivery pushes the reviewed commit as-is, and the PR
-    opens behind its base. It does not name the conflicting file in the PR body.
+    opens behind its base.
     """
     repo = git_repo(tmp_path / "repo")
     (repo / "authored.py").write_text("line1\nline2\nline3\n")
@@ -2203,27 +2211,29 @@ def test_base_changed_authored_file_conflict(github, tmp_path, monkeypatch):
     assert result.exit_ok, result.error
 
     record = _record(run)
-    assert record["status"] == "opened"
-    assert not record.get("merge_commit")
+    # Delivery does not push — the run keeps the work local.
+    assert record["status"] == "kept local"
     assert "authored.py" in record.get("merge_conflicts", [])
 
-    # The PR body names the conflict.
-    [pull] = _pulls(github, slug)
-    assert "authored.py" in pull["body"]
-    assert "conflicts" in pull["body"].lower()
+    # Conflict facts are set.
+    assert "authored.py" in result.facts.get("delivery_conflict_files", [])
+    assert result.facts.get("delivery_conflict_detail")
+    detail = result.facts["delivery_conflict_detail"]
+    assert any(d["path"] == "authored.py" for d in detail)
+    authored_detail = next(d for d in detail if d["path"] == "authored.py")
+    assert authored_detail.get("base")
+    assert authored_detail.get("ours")
+    assert authored_detail.get("theirs")
 
-    # The remote head is the reviewed commit (no merge).
+    # No push happened.
     branch = json.loads((run / "design.json").read_text())["branch"]
-    reviewed = worktree.recorded(run).head
-    assert _remote_head(github, slug, branch) == reviewed
+    assert _remote_head(github, slug, branch) == ""
 
 
 def test_merged_result_fails_check(github, tmp_path, monkeypatch, capsys):
-    """The merged result fails the check: the reviewed commit is delivered, and the
-    reason names the check failure.
+    """The merged result fails the check: delivery does not push.
 
-    Fails without the change: status is "kept local", no PR is opened, and the warning
-    says "base changed under it" rather than delivering.
+    Fails without the change: delivery pushes the reviewed commit as a fallback.
     """
     repo = git_repo(tmp_path / "repo")
     (repo / "config.txt").write_text("ok\n")
@@ -2253,24 +2263,13 @@ def test_merged_result_fails_check(github, tmp_path, monkeypatch, capsys):
     assert result.exit_ok, result.error
 
     record = _record(run)
-    # The reviewed commit is delivered (not kept local).
-    assert record["status"] == "opened"
+    # Delivery does not push — the run keeps the work local.
+    assert record["status"] == "kept local"
     assert record.get("merge_check_failed")
-    assert "check failed" in record.get("merge_check_failed", "").lower() or record.get("merge_check_failed")
 
-    # The PR body says the reviewed commit was delivered and the check failed.
-    [pull] = _pulls(github, slug)
-    assert "the reviewed commit was delivered" in pull["body"]
-    assert "check failed" in pull["body"].lower()
-
-    # A run warning was emitted.
-    captured = capsys.readouterr()
-    assert "check failed on the merged result" in captured.err
-
-    # The remote branch head is the reviewed commit (not a merge commit).
+    # No push happened.
     branch = json.loads((run / "design.json").read_text())["branch"]
-    reviewed = worktree.recorded(run).head
-    assert _remote_head(github, slug, branch) == reviewed
+    assert _remote_head(github, slug, branch) == ""
 
 
 def test_base_did_not_move(github, tmp_path):
@@ -2476,7 +2475,7 @@ def test_conflict_path_regenerates_all_files(github, tmp_path, monkeypatch):
 
 def test_modify_delete_conflict(github, tmp_path, monkeypatch):
     """A modify/delete conflict where --theirs has no file to check out: the merge is
-    abandoned, the reviewed commit is delivered, and the error names the file.
+    abandoned and delivery does not push.
 
     Fails without the change: subprocess.run returns non-zero silently, and the merge
     proceeds with a broken tree.
@@ -2513,18 +2512,18 @@ def test_modify_delete_conflict(github, tmp_path, monkeypatch):
     assert result.exit_ok, result.error
 
     record = _record(run)
-    assert record["status"] == "opened"
+    # Delivery does not push.
+    assert record["status"] == "kept local"
     # The file is named as a conflict.
     assert "conflicted.txt" in record.get("merge_conflicts", [])
-    # The remote head is the reviewed commit (no merge).
+    # No push happened.
     branch = json.loads((run / "design.json").read_text())["branch"]
-    reviewed = worktree.recorded(run).head
-    assert _remote_head(github, slug, branch) == reviewed
+    assert _remote_head(github, slug, branch) == ""
 
 
 def test_generate_fails_classes_as_authored(github, tmp_path, monkeypatch):
     """When generate fails on the merged tree during conflict classification,
-    the conflicting files are classified as authored.
+    the conflicting files are classified as authored, and delivery does not push.
 
     Fails without the change: the generate failure's exit status is not checked;
     the file is classified based on stale content.
@@ -2568,13 +2567,13 @@ def test_generate_fails_classes_as_authored(github, tmp_path, monkeypatch):
     assert result.exit_ok, result.error
 
     record = _record(run)
-    assert record["status"] == "opened"
+    # Delivery does not push.
+    assert record["status"] == "kept local"
     # The conflicting file is classified as authored (not merged).
     assert "generated.txt" in record.get("merge_conflicts", [])
-    # The remote head is the reviewed commit.
+    # No push happened.
     branch = json.loads((run / "design.json").read_text())["branch"]
-    reviewed = worktree.recorded(run).head
-    assert _remote_head(github, slug, branch) == reviewed
+    assert _remote_head(github, slug, branch) == ""
 
 
 def test_post_checkout_hook_does_not_run(github, tmp_path, monkeypatch):
@@ -2761,8 +2760,7 @@ def test_dependency_install_for_merged_tree(github, tmp_path, monkeypatch):
 
 def test_merge_fails_no_conflicted_files(github, tmp_path, monkeypatch):
     """When git merge fails with no conflicted files (e.g. untracked file it would
-    overwrite), the merge is abandoned, the reviewed commit is delivered, and the
-    error is named through the abandoned field.
+    overwrite), the merge is abandoned and delivery does not push.
 
     Fails without the change: the error is stuffed into the conflicts list as a reason
     string, not into a separate abandoned field.
@@ -2799,19 +2797,309 @@ def test_merge_fails_no_conflicted_files(github, tmp_path, monkeypatch):
     assert result.exit_ok, result.error
 
     record = _record(run)
-    assert record["status"] == "opened"
+    # Delivery does not push.
+    assert record["status"] == "kept local"
     # The abandoned field names the error (not in conflicts).
     assert record.get("merge_abandoned"), f"no merge_abandoned in record: {record}"
     assert not record.get("merge_conflicts"), f"unexpected merge_conflicts: {record.get('merge_conflicts')}"
 
-    # The PR body says "merge abandoned".
-    [pull] = _pulls(github, slug)
-    assert "merge abandoned" in pull["body"].lower() or "abandoned" in pull["body"].lower()
-
-    # The remote head is the reviewed commit.
+    # No push happened.
     branch = json.loads((run / "design.json").read_text())["branch"]
-    reviewed = worktree.recorded(run).head
-    assert _remote_head(github, slug, branch) == reviewed
+    assert _remote_head(github, slug, branch) == ""
+
+
+def test_two_runs_conflict_reloop(github, tmp_path, monkeypatch):
+    """Two scripted runs edit the same function. The second's delivery goes back to
+    the builder with no person step. Its pushed head contains main, and the resolution
+    commit has main's tip as a parent.
+
+    Fails without the change: the second run pushes behind main and conflicts.
+    """
+    repo = git_repo(tmp_path / "repo")
+    (repo / "shared.py").write_text("def f():\n    return 1\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "base")
+    slug = "acme/two-runs"
+    bare = _published(github, slug, repo)
+
+    # First run: changes shared.py.
+    run1 = tmp_path / "run1"
+    result1 = _design(run1, {"tool.py": "print('built')\n",
+                             "shared.py": "def f():\n    return 2\n"},
+                      target=str(repo), check="python tool.py")
+    assert result1.exit_ok, result1.error
+    record1 = _record(run1)
+    assert record1["status"] == "opened"
+    branch1 = json.loads((run1 / "design.json").read_text())["branch"]
+
+    # Simulate main having the first run's change merged.
+    main_clone = tmp_path / "main_clone"
+    git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(main_clone))
+    git(main_clone, "merge", "-q", "--no-ff", f"refs/heads/{branch1}",
+        "-m", "merge first run",
+        "-c", "user.name=t", "-c", "user.email=t@example.com")
+    git(main_clone, "push", "-q", "origin", "main")
+
+    main_tip = git(bare, "rev-parse", "refs/heads/main")
+
+    # Second run: changes the same function differently.
+    # This will conflict with main (which now has return 2).
+    # The delivery_gate should reloop to emit.
+    # We provide two emit answers: first the conflicting one, then a resolution.
+    resolution_emit = (
+        "===FILE: tool.py===\nprint('built')\n"
+        "===FILE: shared.py===\ndef f():\n    return 3  # merged\n"
+    )
+
+    # The second run needs extra answers for the reloop:
+    # delivery_gate reloops directly to emit (not through apply_corrections),
+    # so: emit (conflict resolution) + reviews (4 answers)
+    reloop_answers = [
+        resolution_emit,
+        *REVIEW_ANSWERS,
+    ]
+
+    run2 = tmp_path / "run2"
+    model = FakeModel(_answers(render({"tool.py": "print('built')\n",
+                                       "shared.py": "def f():\n    return 42\n"}))
+                      + reloop_answers)
+    result2 = DesignMode().run(
+        run2, model=model, verdicts={"gate_strategy": "proceed"},
+        task={"name": NAME, "brief": "Build a tool\nthat prints built.",
+              "check": "python tool.py", "target": str(repo)},
+    )
+    assert result2.exit_ok, result2.error
+
+    record2 = _record(run2)
+    # Should have been delivered after the reloop.
+    assert record2.get("status") in ("opened", "already open", "updated"), \
+        f"expected delivery after reloop, got: {record2}"
+
+    # The pushed head contains main.
+    branch2 = json.loads((run2 / "design.json").read_text())["branch"]
+    remote_head2 = _remote_head(github, slug, branch2)
+    assert remote_head2, "second run's branch should be on GitHub"
+
+    # The head is a merge commit whose second parent is main's tip.
+    parents = [line.split()[1] for line in
+               git(bare, "cat-file", "-p", remote_head2).splitlines()
+               if line.startswith("parent ")]
+    assert len(parents) == 2, f"expected merge commit, got {len(parents)} parents"
+    # main's tip is an ancestor.
+    assert git(bare, "merge-base", "--is-ancestor", main_tip, remote_head2) == ""
+
+
+def test_merge_failure_leaves_worktree_clean(github, tmp_path, monkeypatch):
+    """A merge that fails partway leaves the worktree clean, with no MERGE_HEAD.
+
+    Fails without the change: the worktree is left with MERGE_HEAD present.
+    """
+    repo = git_repo(tmp_path / "repo")
+    (repo / "shared.py").write_text("def f():\n    return 1\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "base")
+    slug = "acme/clean-merge"
+    bare = _published(github, slug, repo)
+
+    real_evaluate = delivery.evaluate_delivery_conflicts
+
+    def crash_after_merge_starts(ctx):
+        """Start the merge, verify MERGE_HEAD exists, then crash."""
+        # Simulate setting up conflict facts so the evaluator starts a merge.
+        conflict_files = ctx.facts.get("delivery_conflict_files") or []
+        if not conflict_files:
+            return real_evaluate(ctx)
+
+        target_tip = str(ctx.facts.get("delivery_target_tip") or "")
+        found = worktree.recorded(ctx.workdir)
+        path = Path(found.path)
+        worktree.verify_git_link(found)
+
+        # Abort any stale merge.
+        try:
+            worktree.git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
+            worktree.git(path, *worktree.NO_HOOKS, "merge", "--abort")
+        except ValueError:
+            pass
+
+        merge_env = {**os.environ, **worktree.COMMITTER}
+        try:
+            worktree.git(path, *worktree.NO_HOOKS, "-c", "commit.gpgsign=false",
+                         "merge", "--no-commit", "--no-verify", target_tip, env=merge_env)
+        except ValueError:
+            pass
+
+        # Verify MERGE_HEAD is present.
+        worktree.git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
+
+        # Now crash — but within the evaluator's try/finally, so abort runs.
+        raise RuntimeError("simulated crash after merge started")
+
+    real = delivery.deliver_design
+
+    def advance_main_then_deliver(ctx):
+        other = tmp_path / "other"
+        git(tmp_path, "clone", "-q", f"https://github.com/{slug}.git", str(other))
+        (other / "shared.py").write_text("def f():\n    return 999\n")
+        git(other, "add", ".")
+        git(other, "-c", "user.name=t", "-c", "user.email=t@example.com",
+            "commit", "-q", "-m", "base changes shared.py")
+        git(other, "push", "-q", "origin", "main")
+        return real(ctx)
+
+    monkeypatch.setattr(delivery, "deliver_design", advance_main_then_deliver)
+    monkeypatch.setattr(delivery, "evaluate_delivery_conflicts", crash_after_merge_starts)
+
+    run = tmp_path / "run"
+    result = _design(run, {"tool.py": "print('built')\n",
+                           "shared.py": "def f():\n    return 42\n"},
+                     target=str(repo), check="python tool.py")
+    # The run should complete (the gate crash is caught).
+    # After the crash, the worktree should be clean.
+    found = worktree.recorded(run)
+    path = Path(found.path)
+    # No MERGE_HEAD should remain.
+    with pytest.raises(subprocess.CalledProcessError):
+        git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
+    # HEAD should equal the reviewed commit.
+    assert git(path, "rev-parse", "HEAD") == found.head
+
+
+def test_emission_with_conflict_markers_refused(tmp_path):
+    """An emission that leaves conflict markers is refused.
+
+    Fails without the change: materialise commits the markers.
+    """
+    from refactory_dsh import repo_change
+    from refactory_dsh.worktree import AttemptRefused
+
+    # Set up a minimal worktree.
+    repo = git_repo(tmp_path / "repo")
+    (repo / "tool.py").write_text("print('built')\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "base")
+
+    # Create a worktree record.
+    from refactory_dsh.worktree import create, recorded
+    run = tmp_path / "run"
+    run.mkdir(parents=True, exist_ok=True)
+    wt = create(repo, "HEAD", "test-markers", run)
+    found = recorded(run)
+
+    # A file with conflict markers.
+    marker_content = "before\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> main\nafter\n"
+    emit_with_markers = f"===FILE: conflicted.py===\n{marker_content}"
+
+    ctx = _TitleCtx(
+        facts={"name": "test_markers", "brief": "test", "check": "echo ok"},
+        files={"emit.txt": emit_with_markers},
+    )
+    ctx.workdir = run
+    ctx.read_text = lambda name: ctx._files[name]
+    ctx.write_text = lambda name, text: ctx._files.__setitem__(name, text)
+    ctx.write_json = lambda name, data: ctx._files.__setitem__(name, json.dumps(data))
+    ctx.read_json = lambda name, default=None: json.loads(ctx._files.get(name, "null")) if ctx._files.get(name) else default
+
+    with pytest.raises(AttemptRefused, match="conflict markers"):
+        repo_change._commit_emission(ctx)
+
+    # A normal SEARCH/REPLACE block should succeed.
+    normal_emit = (
+        "===FILE: tool.py===\n"
+        "print('built and tested')\n"
+    )
+    ctx._files["emit.txt"] = normal_emit
+    # This should not raise.
+    result = repo_change._commit_emission(ctx)
+    assert result.get("commit")
+
+
+def test_gate_correction_updates_pr_text(github, tmp_path, monkeypatch):
+    """A run whose gate correction changes a site's approach, driven through a real
+    gate answer, gets PR text with the corrected approach and not the original.
+
+    Fails without the change: the PR text contains the uncorrected approach.
+    """
+    from refactory_dsh.steering import Ledger
+
+    repo = git_repo(tmp_path / "repo")
+    slug = "acme/corrections"
+    _published(github, slug, repo)
+
+    # The design_doc agent will produce a design mentioning "polling loop".
+    design_with_polling = (
+        "# Use a polling loop to check for updates\n\n"
+        "## Summary\n\nUse a polling loop to check for updates periodically.\n\n"
+        "## Rule and sites\n\n"
+        "- `tool.py:1` — use a polling loop **[changed]**\n\n"
+        "## Docs\n\n- docs/models.md\n\n"
+        "## Changes\n\n- tool.py\n\n"
+        "## Anti-patterns to avoid\n\n"
+        "- PIT-001: addressed at `tool.py:1`\n"
+    )
+
+    # The apply_corrections agent will rewrite design.md to use websockets.
+    corrected_design = (
+        "# Use websockets to receive updates\n\n"
+        "## Summary\n\nUse websockets to receive real-time updates.\n\n"
+        "## Rule and sites\n\n"
+        "- `tool.py:1` — use websockets **[changed]**\n\n"
+        "## Docs\n\n- docs/models.md\n\n"
+        "## Changes\n\n- tool.py\n\n"
+        "## Anti-patterns to avoid\n\n"
+        "- PIT-001: addressed at `tool.py:1`\n"
+    )
+
+    run = tmp_path / "run"
+    run.mkdir(parents=True, exist_ok=True)
+
+    # Seed the ledger with a gate_strategy proceed verdict and correction,
+    # driven through the real Ledger API (steering.py:577-587).
+    ledger = Ledger.seed(run, "Build a tool\nthat prints built.")
+    # Record the verdict as a real gate answer — answered=True records it as
+    # consumed, and approval=True provides standing upfront authorization.
+    ledger.verdict("gate_strategy", "proceed", approval=True)
+    # The feedback from the person is a constraint note — this is what
+    # steering.py:584-587 does when verdict=="proceed" and there is feedback.
+    ledger.note("constraint", "use websockets instead of a polling loop")
+
+    # Also add a process note and a check-gate constraint to verify they are
+    # excluded from the design.
+    ledger.note("info", "try harder", scope="process")
+
+    # Build model answers: the key is that apply_corrections gets the corrected design.
+    answers = [
+        RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
+        design_with_polling,   # design_doc writes design.md with "polling loop"
+        DESIGN_REVIEW_ANSWER,  # design_review passes
+        corrected_design,      # apply_corrections rewrites design.md to "websockets"
+        render({"tool.py": "print('built')\n"}),  # emit
+        *REVIEW_ANSWERS,
+    ]
+
+    model = FakeModel(answers)
+    result = DesignMode().run(
+        run, model=model,
+        verdicts={"gate_strategy": "proceed"},
+        task={"name": NAME, "brief": "Build a tool\nthat prints built.",
+              "check": "python tool.py", "target": str(repo)},
+    )
+    assert result.exit_ok, result.error
+
+    # design.md should contain the corrected approach.
+    design_text = (run / "design.md").read_text()
+    # The apply_corrections agent wrote the corrected design.
+    assert "websocket" in design_text.lower(), \
+        f"design.md should mention websockets: {design_text[:500]}"
+
+    # The PR body should contain "websockets" and not "polling loop".
+    pr_text = (run / delivery.BODY).read_text()
+    assert "websocket" in pr_text.lower(), \
+        f"PR text should mention websockets: {pr_text[:500]}"
+
+    # Process notes should not appear in the design.
+    assert "try harder" not in design_text.lower(), \
+        "process note should not appear in design.md"
 
 
 def test_an_upstream_that_does_not_hold_the_base_is_not_where_the_pull_request_goes(github, tmp_path):

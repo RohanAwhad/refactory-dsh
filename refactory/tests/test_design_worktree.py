@@ -78,9 +78,14 @@ def repo(tmp_path) -> Path:
 
 
 def _answers(*emits: str) -> list[str]:
-    """Every answer a design run needs, in the order its graph asks."""
+    """Every answer a design run needs, in the order its graph asks.
+
+    The apply_corrections agent runs between gate_strategy and emit.
+    """
     return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits, *REVIEW_ANSWERS]
+            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
+            "No gate corrections found; design.md unchanged.",
+            *emits, *REVIEW_ANSWERS]
 
 
 def _mode(**knobs) -> DesignMode:

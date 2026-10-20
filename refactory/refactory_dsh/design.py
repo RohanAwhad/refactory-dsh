@@ -566,13 +566,52 @@ class DesignMode(Mode):
         # After the report, so only a run whose reviews passed and whose sign-offs held
         # reaches anything outside it (#350).
         graph.add(Node(
+            "apply_corrections", "agent",
+            prompt_template=(
+                "Read `intent-ledger.md` and `design.md` from the run directory.\n\n"
+                "In the intent ledger, find each verdict entry where gate is \"gate_strategy\" and "
+                "verdict is \"proceed\". Look at the entry immediately after it. If that entry has "
+                "kind \"constraint\" (not kind \"constraint (process)\"), it is a gate correction — "
+                "feedback the person gave when approving the design.\n\n"
+                "If there are no gate corrections, write `design.md` back unchanged and return a "
+                "short message saying no corrections were needed.\n\n"
+                "If there are gate corrections, update `design.md`: revise the ## Summary, the "
+                "heading (H1), and the description text in each site entry in ## Rule and sites to "
+                "reflect the corrections. "
+                "Do not change the ## Docs section, the ## Changes section, the "
+                "## Anti-patterns to avoid section, or the document's overall structure. Write the "
+                "updated `design.md`. Return a short message listing what was changed.\n\n"
+                "Only constraint entries immediately following a gate_strategy proceed verdict are "
+                "gate corrections. Process-scoped entries (marked \"(process)\"), corrections from "
+                "other gates (check, gate_qa, gate_overwatch, gate_design_review), and steering "
+                "notes that do not follow a gate_strategy proceed verdict are NOT gate corrections."
+            ),
+            reads=("design.md", "intent-ledger.md"),
+            writes=("design.md",),
+            produces=("design_corrections_applied",),
+            notes="revise design.md with gate-strategy corrections before the builder runs",
+        ))
+        graph.add(Node(
             "deliver", "op", call="refactory_dsh.delivery:deliver_design",
             resource_role="final_validation",
             knobs=("check_timeout_s",),
             reads=("design.json", "delivery.md"),
             writes=("delivery.json", "pull-request.md", "design.json"),
-            produces=("delivery_result", "pull_request"),
+            produces=("delivery_result", "pull_request", "delivery_conflict_files",
+                      "delivery_conflict_detail", "delivery_target_tip"),
             notes="push the run's branch and open its pull request, as the approval gate said",
+        ))
+        graph.add(Node(
+            "delivery_gate", "gate",
+            evaluator="refactory_dsh.delivery:evaluate_delivery_conflicts",
+            max_iterations=8,
+            knobs=("check_attempts",),
+            produces=("validation",),
+            notes="on authored-file conflict reloop to emit; otherwise proceed to done",
+        ))
+        graph.add(Node(
+            "done", "op", call="refactory_dsh.design_ops:noop",
+            notes="terminal node after delivery succeeds",
         ))
 
         graph.connect("prepare", "research_director")
@@ -590,7 +629,8 @@ class DesignMode(Mode):
         graph.connect("gate_design_review", "design_doc", condition="reloop")
         graph.connect("gate_design_review", "gate_strategy", condition="proceed")
         graph.connect("gate_strategy", "synthesize_strategy", condition="reloop")
-        graph.connect("gate_strategy", "emit", condition="proceed")
+        graph.connect("gate_strategy", "apply_corrections", condition="proceed")
+        graph.connect("apply_corrections", "emit")
         graph.connect("emit", "materialise")
         graph.connect("materialise", "check")
         graph.connect("check", "emit", condition="reloop")
@@ -605,6 +645,9 @@ class DesignMode(Mode):
         graph.connect("gate_overwatch", "overwatch", condition="audit")
         graph.connect("gate_overwatch", "report", condition="proceed")
         graph.connect("report", "deliver")
+        graph.connect("deliver", "delivery_gate")
+        graph.connect("delivery_gate", "emit", condition="reloop")
+        graph.connect("delivery_gate", "done", condition="proceed")
         from refactory_dsh.authoring_evidence import wire_reviews
         wire_reviews(graph)
         return graph

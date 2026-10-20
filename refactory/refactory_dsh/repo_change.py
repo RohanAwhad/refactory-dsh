@@ -655,18 +655,55 @@ def _commit_emission(ctx: Any) -> dict[str, Any]:
         # text, and the files it deletes, are gone from the last attempt itself.
         rev = str(last["applied_to"])
         deletes = tuple(name for name in deletes if worktree.committed_text(found, name) is not None)
+    # During a merge-in-progress, files with unmerged entries have markers in the
+    # working tree.  Edits must apply to that text (markers included), not the
+    # committed text that lacks main's side.
+    merge_in_progress = False
+    try:
+        worktree.git(path, "rev-parse", "--verify", "-q", "MERGE_HEAD")
+        merge_in_progress = True
+    except ValueError:
+        pass
+    unmerged_paths: set[str] = set()
+    if merge_in_progress:
+        try:
+            unmerged_output = worktree.git(path, "diff", "--name-only", "--diff-filter=U")
+            unmerged_paths = {f.strip() for f in unmerged_output.splitlines() if f.strip()}
+        except ValueError:
+            pass
+
     repeated = []
     for relative, pairs in changed.items():
-        current = worktree.committed_text(found, relative, rev)
-        if current is None:
-            raise AttemptRefused(f"{relative} is not a file of the last attempt, so it cannot be edited; "
-                                 "write it whole with ===FILE:")
+        rel_str = relative.as_posix() if hasattr(relative, 'as_posix') else str(relative)
+        if merge_in_progress and rel_str in unmerged_paths:
+            # Read from the working tree (with conflict markers), not the commit.
+            fpath = path / relative
+            if not fpath.exists():
+                raise AttemptRefused(f"{relative} is not a file of the last attempt, so it cannot be edited; "
+                                     "write it whole with ===FILE:")
+            current = fpath.read_text()
+        else:
+            current = worktree.committed_text(found, relative, rev)
+            if current is None:
+                raise AttemptRefused(f"{relative} is not a file of the last attempt, so it cannot be edited; "
+                                     "write it whole with ===FILE:")
         files[relative], skipped = _edited(relative, current, pairs, f"git -C {found.path} show {rev[:12]}:{relative}")
         if skipped:
             repeated.append(str(relative))
     if repeated:
         target_guard.warn(f"emit re-sent edits the last attempt already holds, so they were skipped rather than "
                           f"applied twice: {target_guard._named(repeated)}")
+    # ── Conflict-marker detection: refuse emissions that leave markers ──
+    _CONFLICT_MARKER = re.compile(r'^<{7}(?! SEARCH).*$|^>{7}(?! REPLACE).*$', re.MULTILINE)
+    marker_files = []
+    for relative, content in files.items():
+        if _CONFLICT_MARKER.search(content):
+            marker_files.append(str(relative))
+    if marker_files:
+        raise AttemptRefused(
+            f"the emission leaves git conflict markers in: {', '.join(marker_files)}; "
+            "resolve the conflicts and remove the <<<<<<< / >>>>>>> lines"
+        )
     # No drift warning: the run's base is pinned, so a moving checkout changes nothing it sees.
     attempt = len(worktree.git(path, "rev-list", f"{found.base}..HEAD").split()) + 1
     advanced = worktree.commit_attempt(ctx.workdir, files, f"{ctx.facts['name']}: attempt {attempt}", deletes)
@@ -881,7 +918,9 @@ def report(ctx: Any, name: str, payload: dict[str, Any]) -> dict[str, Any]:
     payload = {**payload, "target": found.target, "branch": found.branch, "base": found.base, "head": found.head,
                "diff_stat": worktree.git(Path(found.path), "diff", "--stat", found.base, "HEAD").strip()}
     ctx.write_json(name, payload)
-    worktree.record_outcome(found, "succeeded")
+    # record_outcome("succeeded") is deferred to delivery: the run is not
+    # succeeded until the pull request is pushed.  delivery._delivered and
+    # delivery._kept both record the outcome, so the run is still tracked.
     projects.record_run(Path(found.target), run=ctx.workdir, branch=found.branch, base=found.base,
                         status="succeeded")
     # Clean up the base worktree (created by base_check for the base comparison gate)
