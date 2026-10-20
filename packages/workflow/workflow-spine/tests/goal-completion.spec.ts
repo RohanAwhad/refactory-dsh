@@ -174,7 +174,7 @@ describe('goal completion guard (#347, C1)', () => {
     expect(result.isError).toBe(false)
   })
 
-  it('allows update_goal complete with completion_override matching current status', async () => {
+  it('allows update_goal complete with completion_override matching current status and invocation', async () => {
     const workdir = scratch()
     const root = new Context()
     await root.plugin(SystemPrompt)
@@ -182,9 +182,12 @@ describe('goal completion guard (#347, C1)', () => {
     registerStubs(root)
     await root.plugin(spinePlugin, configuredConfig({ workdir }))
 
+    const dir = join(workdir, '.refactory')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'invocation.json'), JSON.stringify({ id: 'inv-1' }))
     writeStatus(workdir, {
       schema_version: 1, status: 'halted',
-      completion_override: { confirmed_status: 'halted', at: '2026-01-01T00:00:00Z' },
+      completion_override: { confirmed_status: 'halted', invocation: 'inv-1', at: '2026-01-01T00:00:00Z' },
     })
     const result = await executeTool(root, 'update_goal', { action: 'complete' })
     expect(result.isError).toBe(false)
@@ -264,5 +267,41 @@ describe('goal completion guard (#347, C1)', () => {
     expect(result.isError).toBe(true)
     const text = result.content.map(c => c.text).join('')
     expect(text).toContain('halted')
+  })
+
+  it('refuses update_goal complete when completion_override invocation does not match', async () => {
+    const workdir = scratch()
+    const root = new Context()
+    await root.plugin(SystemPrompt)
+    await root.plugin(ToolRuntime)
+    registerStubs(root)
+    await root.plugin(spinePlugin, configuredConfig({ workdir }))
+
+    const dir = join(workdir, '.refactory')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'invocation.json'), JSON.stringify({ id: 'inv-new' }))
+    writeStatus(workdir, {
+      schema_version: 1, status: 'halted',
+      completion_override: { confirmed_status: 'halted', invocation: 'inv-old', at: '2026-01-01T00:00:00Z' },
+    })
+    const result = await executeTool(root, 'update_goal', { action: 'complete' })
+    expect(result.isError).toBe(true)
+  })
+
+  it('the CEO tool surface cannot issue confirm-completion (#347, C1)', async () => {
+    const workdir = scratch()
+    const root = new Context()
+    await root.plugin(SystemPrompt)
+    await root.plugin(ToolRuntime)
+    registerStubs(root)
+    await root.plugin(spinePlugin, configuredConfig({ workdir }))
+
+    // No tool named after confirm-completion or graph-control is registered
+    for (const candidate of ['confirm-completion', 'confirm_completion', 'graph_control', 'wf_confirm_completion']) {
+      expect(root.tools.get(candidate)).toBeUndefined()
+    }
+    // wf_edit is the only action-bearing wf_* tool; its enum does not include confirm-completion
+    const editJson = JSON.stringify(root.tools.get('wf_edit'))
+    expect(editJson).not.toContain('confirm-completion')
   })
 })

@@ -674,11 +674,20 @@ export function apply(ctx: Context, config: Config): void {
     const currentStatus = typeof statusRecord.status === 'string' ? statusRecord.status : ''
     if (currentStatus === 'done') return next()
 
-    // Check completion_override
+    // Check completion_override (status AND invocation must both match)
     const override = statusRecord.completion_override
     if (override !== null && typeof override === 'object' && !Array.isArray(override)) {
       const ov = override as Record<string, unknown>
-      if (ov.confirmed_status === currentStatus) return next()
+      if (ov.confirmed_status === currentStatus) {
+        // Validate invocation: the override is bound to the invocation that confirmed it,
+        // so a resumed or new invocation does not inherit it (#347, C1).
+        const overrideInvocation = ov.invocation ?? null
+        let currentInvocation: unknown = null
+        try {
+          currentInvocation = JSON.parse(readFileSync(join(workdir!, '.refactory', 'invocation.json'), 'utf8')).id ?? null
+        } catch { /* no invocation file — invocation is null */ }
+        if (overrideInvocation === currentInvocation) return next()
+      }
     }
 
     return Promise.resolve({
@@ -909,8 +918,8 @@ export function apply(ctx: Context, config: Config): void {
             : status === 'executing'
               ? (nodeList ? `running a graph check: ${nodeList}` : 'running a graph check')
               : undefined
-      // Preserve completion_override when the new status matches the override's confirmed_status;
-      // clear it when the status changes (#347, C1).
+      // Preserve completion_override when the new status AND invocation both match;
+      // clear it when either changes (#347, C1).
       let completionOverride: Record<string, unknown> | undefined
       try {
         const existing = JSON.parse(readFileSync(join(dir, 'spine-status.json'), 'utf8'))
@@ -918,7 +927,15 @@ export function apply(ctx: Context, config: Config): void {
         if (prior !== null && typeof prior === 'object' && !Array.isArray(prior)
             && typeof prior.confirmed_status === 'string'
             && prior.confirmed_status === status) {
-          completionOverride = prior as Record<string, unknown>
+          // Also check invocation — a resumed or new invocation clears the override
+          const overrideInvocation = (prior as Record<string, unknown>).invocation ?? null
+          let currentInvocation: unknown = null
+          try {
+            currentInvocation = JSON.parse(readFileSync(join(dir, 'invocation.json'), 'utf8')).id ?? null
+          } catch { /* no invocation file */ }
+          if (overrideInvocation === currentInvocation) {
+            completionOverride = prior as Record<string, unknown>
+          }
         }
       } catch { /* absent file — no override to preserve */ }
       const record = {
