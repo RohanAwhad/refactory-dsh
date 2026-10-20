@@ -159,6 +159,230 @@ def test_graph_control_shows_last_failed_receipt(tmp_path):
     assert 'graph changed since preview' in result['last_failed_receipt']['message']
 
 
+def test_status_shows_failed_control_when_finished(tmp_path):
+    """dm-101: A failed control receipt IS still rendered as 'Last failed control'
+    when the run state is 'finished', because only a later successful control
+    clears a failure (the receipt file is overwritten with status 'applied')."""
+    activity = {
+        'control': {
+            'action': 'rerun', 'status': 'failed',
+            'message': 'graph changed since preview',
+        },
+    }
+    payload = {
+        'authoring': {'name': 'test-run', 'completed': ['a']},
+        'state': 'finished',
+        'activity': activity,
+    }
+    text = readable.format_status(payload)
+    assert 'Last failed control' in text
+
+
+def test_later_success_clears_failure_warning(tmp_path):
+    """dm-101: A run_warning 'graph control rerun failed: ...' is filtered out
+    once a later control succeeded (receipt overwritten with status 'applied').
+    This covers b28a's real sequence: a failed rerun followed by an applied rerun."""
+    activity = {
+        'control': {
+            'action': 'rerun', 'status': 'applied',
+            'message': 'Applied at graph boundary.',
+        },
+        'events': [
+            {'kind': 'run_warning', 'summary': 'graph control rerun failed: graph changed since preview'},
+        ],
+    }
+    payload = {
+        'authoring': {'name': 'test-run', 'completed': ['a', 'b']},
+        'state': 'finished',
+        'activity': activity,
+    }
+    text = readable.format_status(payload)
+    assert 'Last failed control' not in text
+    assert 'graph control rerun failed' not in text
+
+
+def test_failed_control_warning_shown_when_no_later_success(tmp_path):
+    """dm-101: When no later control succeeded, the warning IS shown."""
+    activity = {
+        'control': {
+            'action': 'rerun', 'status': 'failed',
+            'message': 'graph changed since preview',
+        },
+        'events': [
+            {'kind': 'run_warning', 'summary': 'graph control rerun failed: graph changed since preview'},
+        ],
+    }
+    payload = {
+        'authoring': {'name': 'test-run', 'completed': ['a']},
+        'state': 'executing',
+        'activity': activity,
+    }
+    text = readable.format_status(payload)
+    assert 'Last failed control' in text
+    assert 'graph control rerun failed' in text
+
+
+def test_status_shows_failed_control_when_executing(tmp_path):
+    """dm-101: A failed control receipt IS rendered when the run is executing."""
+    activity = {
+        'control': {
+            'action': 'rerun', 'status': 'failed',
+            'message': 'graph changed since preview',
+        },
+    }
+    payload = {
+        'authoring': {'name': 'test-run', 'completed': ['a']},
+        'state': 'executing',
+        'activity': activity,
+    }
+    text = readable.format_status(payload)
+    assert 'Last failed control' in text
+
+
+def test_later_success_clears_failure_in_graph_control_request(tmp_path):
+    """dm-101: graph_control.request() surfaces last_failed_receipt from a
+    failed receipt even when the spine is terminal, because the receipt file
+    is the source of truth. A later applied control overwrites the receipt,
+    so the failure disappears naturally."""
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    (directory / 'spine-checkpoint.json').write_text(json.dumps({}))
+    # Receipt says 'failed' — always surfaced regardless of spine state.
+    (directory / 'graph-control-receipt.json').write_text(json.dumps({
+        'action': 'rerun', 'status': 'failed',
+        'message': 'graph changed since preview; preview invalidation again',
+    }))
+    (directory / 'spine-status.json').write_text(json.dumps({'status': 'done'}))
+    result = graph_control.request(tmp_path, 'pause')
+    assert result['status'] == 'queued'
+    assert 'last_failed_receipt' in result
+    assert result['last_failed_receipt']['status'] == 'failed'
+
+    # Now simulate a later successful control overwriting the receipt.
+    (directory / 'graph-control-receipt.json').write_text(json.dumps({
+        'action': 'rerun', 'status': 'applied',
+        'message': 'Applied at graph boundary.',
+    }))
+    result2 = graph_control.request(tmp_path, 'pause')
+    assert result2['status'] == 'queued'
+    assert 'last_failed_receipt' not in result2
+
+
+def test_preview_includes_run_id(tmp_path):
+    """dm-101: preview payloads carry run_id so the CLI prints the run name."""
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    checkpoint = directory / 'spine-checkpoint.json'
+    checkpoint.write_text(json.dumps({
+        'redo_plans': {'a': {'nodes': ['a', 'qa']}},
+    }))
+    result = graph_control.request(tmp_path, 'preview', node='a')
+    assert result['status'] == 'preview'
+    assert 'run_id' in result
+    assert str(tmp_path) in result['run_id']
+    text = readable.format_graph_control(result)
+    assert str(tmp_path) in text
+    assert 'Preview ()' not in text
+
+
+def test_format_graph_control_names_the_run(tmp_path):
+    """dm-101: every format_graph_control line names the run."""
+    payload = {
+        'status': 'queued', 'action': 'pause', 'run_id': '/runs/b28a',
+    }
+    text = readable.format_graph_control(payload)
+    assert '/runs/b28a' in text
+
+    # preview
+    payload = {
+        'status': 'preview', 'action': 'rerun', 'run_id': '/runs/b28a',
+        'invalidated': ['a', 'b'],
+    }
+    text = readable.format_graph_control(payload)
+    assert '/runs/b28a' in text
+
+    # failed
+    payload = {
+        'status': 'failed', 'action': 'rerun', 'run_id': '/runs/b28a',
+        'message': 'stale preview',
+    }
+    text = readable.format_graph_control(payload)
+    assert '/runs/b28a' in text
+
+    # acknowledged
+    payload = {
+        'status': 'acknowledged', 'action': 'acknowledge', 'run_id': '/runs/b28a',
+        'message': 'ok', 'files': [],
+    }
+    text = readable.format_graph_control(payload)
+    assert '/runs/b28a' in text
+
+    # withdrawn
+    payload = {
+        'status': 'withdrawn', 'action': 'withdraw', 'run_id': '/runs/b28a',
+        'control_id': 'ctrl-1',
+    }
+    text = readable.format_graph_control(payload)
+    assert '/runs/b28a' in text
+
+    # last_failed_receipt
+    payload = {
+        'status': 'queued', 'action': 'pause', 'run_id': '/runs/b28a',
+        'last_failed_receipt': {
+            'action': 'rerun', 'status': 'failed', 'message': 'graph changed',
+        },
+    }
+    text = readable.format_graph_control(payload)
+    assert '/runs/b28a' in text
+
+
+def test_amend_command_returns_run_id(tmp_path):
+    """dm-101: _amend_command returns a dict with run_id."""
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    checkpoint_data = {
+        'status': 'ready',
+        'state': {'cursor': ['run']},
+        'graph': {'nodes': {'run': {'_type': 'FnNode', 'command': 'old-cmd'}}},
+    }
+    (directory / 'spine-checkpoint.json').write_text(json.dumps(checkpoint_data))
+    (directory / 'invocation.json').write_text(json.dumps({'id': 'inv1'}))
+    (tmp_path / 'facts.json').write_text(json.dumps({'check': 'old-check'}))
+    result = graph_control._amend_command(
+        tmp_path, directory / 'spine-checkpoint.json', checkpoint_data,
+        field='check', value='new-check', note='test', acknowledge_failure=False,
+    )
+    assert 'run_id' in result
+    assert str(tmp_path) in result['run_id']
+
+
+def test_acknowledge_returns_run_id(tmp_path):
+    """dm-101: _acknowledge returns a dict with run_id."""
+    import fcntl
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    checkpoint_data = {'status': 'executing', 'owner_pid': 99999999}
+    checkpoint = directory / 'spine-checkpoint.json'
+    checkpoint.write_text(json.dumps(checkpoint_data))
+    result = graph_control._acknowledge(tmp_path, checkpoint, checkpoint_data)
+    assert 'run_id' in result
+    assert str(tmp_path) in result['run_id']
+
+
+def test_withdraw_returns_run_id(tmp_path):
+    """dm-101: _withdraw returns a dict with run_id."""
+    directory = tmp_path / '.refactory'
+    directory.mkdir()
+    controls_dir = directory / 'graph-controls'
+    controls_dir.mkdir()
+    (controls_dir / 'test-ctrl.json').write_text(json.dumps({
+        'id': 'test-ctrl', 'action': 'pause', 'status': 'queued',
+    }))
+    result = graph_control._withdraw(tmp_path, 'test-ctrl')
+    assert 'run_id' in result
+    assert str(tmp_path) in result['run_id']
+
+
 def test_graph_snapshot_reads_saved_topology_without_commands_or_mutations(tmp_path):
     checkpoint = tmp_path / '.refactory/spine-checkpoint.json'
     checkpoint.parent.mkdir()
