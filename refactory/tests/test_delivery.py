@@ -21,7 +21,7 @@ import pytest
 from refactory_dsh import cli, console, delivery, nn, projects, worktree
 from refactory_dsh.design import DesignMode
 from refactory_dsh.projects import projects_dir
-from tests_support import DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, PITFALLS_ANSWER, RESEARCH_ANSWER, REVIEW_ANSWERS, FakeModel, git, git_repo, render, stub
+from tests_support import DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, PITFALLS_ANSWER, RESEARCH_ANSWER, VERIFICATION_ANSWER, REVIEW_ANSWERS, FakeModel, git, git_repo, render, stub
 
 NAME = "delivered_tool"
 FAKE_GH = Path(__file__).resolve().parent / "fake_gh.py"
@@ -141,7 +141,7 @@ def test_pr_body_has_summary_verification_and_original_request(tmp_path):
     assert "First paragraph of the design." in body
     assert "## Verification" in body
     assert "python tool.py" in body
-    assert "the health check, code review and QA found nothing blocking" in body
+    assert "the health check, code review, independent verification and QA" in body
     assert "`tests/test_env.py::test_needs_profile`" in body
     assert "## Original request" in body
     assert "Build a tool\nthat prints built." in body
@@ -228,7 +228,7 @@ def test_pr_reviews_line_says_audit_did_not_pass_on_fail_row(tmp_path):
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
     assert "not all review steps completed" in body
-    assert "health check, code review and QA found nothing blocking" not in body
+    assert "health check, code review, independent verification and QA found nothing blocking" not in body
 
 
 def test_pr_reviews_line_says_audit_did_not_pass_on_unverified_row(tmp_path):
@@ -257,7 +257,7 @@ def test_pr_reviews_line_says_audit_did_not_pass_on_unverified_row(tmp_path):
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
     assert "not all review steps completed" in body
-    assert "health check, code review and QA found nothing blocking" not in body
+    assert "health check, code review, independent verification and QA found nothing blocking" not in body
 
 
 def test_pr_reviews_line_not_passed_on_excluded_row_without_user_change(tmp_path):
@@ -352,7 +352,7 @@ def test_pr_reviews_line_passed_on_excluded_row_with_valid_user_change(tmp_path)
     from types import SimpleNamespace
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
-    assert "the health check, code review and QA found nothing blocking" in body
+    assert "the health check, code review, independent verification and QA found nothing blocking" in body
     assert "not all review steps completed" not in body
 
 
@@ -1165,7 +1165,8 @@ def _calls(tmp_path: Path) -> str:
 def _answers(*emits: str) -> list[str]:
     """Every answer a design run needs, in the order its graph asks."""
     return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits, *REVIEW_ANSWERS]
+            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits, VERIFICATION_ANSWER,
+            *REVIEW_ANSWERS]
 
 
 def _mode(**knobs) -> DesignMode:
@@ -2275,6 +2276,11 @@ def test_finish_commands_work_with_special_characters_in_title(github, tmp_path)
     tricky_design = (
         "# Fix the audit's `gate` and $PATH handling\n\n"
         "## Summary\n\nFix it properly.\n\n"
+        "## Failure trace\n\nN/A — this is a new feature.\n\n"
+        "## Ask mapping\n\n"
+        "| Ask (quoted from brief) | Design section | Test |\n"
+        "|---|---|---|\n"
+        '| "gate" | § Changes | test_tool.py |\n\n'
         "## Rule and sites\n\n"
         "- `tool.py:1` — **[changed]**\n\n"
         "## Docs\n\n"
@@ -2289,6 +2295,7 @@ def test_finish_commands_work_with_special_characters_in_title(github, tmp_path)
     answers = [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
                tricky_design, DESIGN_REVIEW_ANSWER,
                render({"tool.py": "print('built')\n"}),
+               VERIFICATION_ANSWER,
                *REVIEW_ANSWERS]
     model = FakeModel(answers)
     result = _mode(pr=False).run(

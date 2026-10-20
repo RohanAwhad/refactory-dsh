@@ -1536,7 +1536,7 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
         return evidence.audit_problems(ctx) == []
 
     if ev_data is not None and check_passed and _audit_passed():
-        reviews_line = ("- **Reviews:** the health check, code review and QA found nothing blocking, "
+        reviews_line = ("- **Reviews:** the health check, code review, independent verification and QA found nothing blocking, "
                         "and the overwatch audit passed.\n")
     else:
         reviews_line = "- **Reviews:** not all review steps completed.\n"
@@ -1552,6 +1552,20 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
         + "- **Merging:** the branch's commits are the run's attempts, "
         "each the base plus that attempt's files, committed by Refactory; the change is their sum."
     )
+    # Add planning model info if available.
+    report_data = ctx.read_json("design.json", None) if ctx.exists("design.json") else None
+    if isinstance(report_data, dict):
+        planning_models = report_data.get("planning_models", {})
+        if planning_models:
+            model_lines = []
+            for node_name, model_name in sorted(planning_models.items()):
+                model_lines.append(f"`{node_name}`: `{model_name or 'default'}`")
+            verification += "\n- **Planning models:** " + ", ".join(model_lines) + ".\n"
+    # Add unresolved verification findings if present.
+    if ctx.exists("reviews/verification-unresolved.md"):
+        unresolved = ctx.read_text("reviews/verification-unresolved.md").strip()
+        if unresolved:
+            verification += "\n- **Unresolved verification findings:**\n" + unresolved + "\n"
     verification += _process_notes_section(ctx)
     sections.append(verification)
 

@@ -42,7 +42,7 @@ class MakePass(nn.Mode):
         graph.add(nn.Node(
             "prepare", "op", call=f"{OPS}:prepare",
             knobs=("name", "brief", "check", *repo_change.knob_names()),
-            writes=("feedback.txt",),
+            writes=("feedback.txt", "brief.json"),
             produces=("name", "brief", "check", "feedback", *repo_change.produces()),
             notes="read the check, and give the run its worktree",
         ))
@@ -85,4 +85,7 @@ class MakePass(nn.Mode):
         graph.connect("materialise", "check")
         graph.connect("check", "emit", condition="reloop")
         graph.connect("check", "report", condition="proceed")
+        # Independent verification step: any mode that uses repo_change gets the verifier.
+        from refactory_dsh.verification import wire_verification
+        wire_verification(graph, check_node="check", proceed_target="report")
         return graph

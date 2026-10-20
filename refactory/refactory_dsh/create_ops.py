@@ -133,8 +133,11 @@ agent node that writes `emit.txt` `emit` and put `{{emit_scope}}` in its prompt;
 `repo_change.refused(ctx)` back to `emit` and run the check with
 `repo_change.run_check(ctx, command, timeout)`, declaring `*repo_change.CHECK_WRITES` and
 `*repo_change.CHECK_PRODUCES` on that gate; call `repo_change.report(ctx, name, payload)`,
-which writes the report file `name`, from the report operation; and add
-`"refactory_dsh.repo_change"` to `PACKAGE.ops`.
+which writes the report file `name`, from the report operation; add
+`"refactory_dsh.repo_change"` to `PACKAGE.ops`; and call
+`verification.wire_verification(graph, check_node=..., proceed_target=...)` after
+the check and report edges are connected, to add the design-blind verifier between
+the check gate and the proceed target.
 `refactory_packages.fix_pack` is a complete example.
 
 Generated packages live under `.factory/packages/<name>/` and are imported as

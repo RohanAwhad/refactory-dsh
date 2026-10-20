@@ -337,10 +337,18 @@ DESIGN_REVIEW_ANSWER = (
     "All brief references verified.\n\nVERDICT: PASS"
 )
 
+#: The verifier's answer: a passing verification with no blocking findings.
+VERIFICATION_ANSWER = "No blocking findings.\n\nVERDICT: PASS"
+
 #: A contract-compliant design.md answer for design-mode's design_doc agent.
 DESIGN_DOC_ANSWER = (
     "# Do the thing\n\n"
     "## Summary\n\nFix it properly.\n\n"
+    "## Failure trace\n\nN/A — this is a new feature.\n\n"
+    "## Ask mapping\n\n"
+    "| Ask (quoted from brief) | Design section | Test |\n"
+    "|---|---|---|\n"
+    '| "a tool" | § Changes | test_tool.py |\n\n'
     "## Rule and sites\n\n"
     "- `tool.py:1` — **[changed]**\n\n"
     "## Docs\n\n"
