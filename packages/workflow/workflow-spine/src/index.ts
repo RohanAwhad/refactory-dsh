@@ -499,8 +499,12 @@ export function apply(ctx: Context, config: Config): void {
   try {
     validateWorkspaceBuild()
   } catch (err) {
-    process.stderr.write(`\n${err instanceof Error ? err.message : String(err)}\n\n`)
-    process.exit(1)
+    // Workspace stamp mismatch is a warning, not fatal: a stale workspace build
+    // must not kill a spine mount mid-run, during a resume, or at GUI boot.
+    // The per-package validateBuild() above remains fatal.
+    process.stderr.write(
+      `\nWARNING: ${err instanceof Error ? err.message : String(err)}\n\n`,
+    )
   }
 
   const { toolPrefix, maxIterations, ceoDeny, interactiveOpen } = config

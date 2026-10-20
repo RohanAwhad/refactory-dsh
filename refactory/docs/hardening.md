@@ -752,8 +752,10 @@ can rewrite the driver's shared hooks. Pin creation isolates hooks:
 
 1. `extensions.worktreeConfig` is enabled on the driver (the same extension
    run worktrees already enable, and the canary checks already expect).
-2. `core.hooksPath` is set to `/dev/null` as a per-worktree config on the pin,
-   so hooks write to the pin's own git dir, not the driver's shared hooks.
+2. `core.hooksPath` is set to `<gitdir>/hooks.isolated` as a per-worktree
+   config on the pin (the same path `worktree._isolate_hooks` uses for run
+   worktrees), so hooks write to the pin's own git dir, not the driver's
+   shared hooks.
 3. The `LEFTHOOK=0` and `HUSKY=0` environment variables are set during
    `pnpm install` and `pnpm build`.
 
@@ -770,6 +772,9 @@ refuses with a `RuntimeError` naming the commit and the conflicting paths.
 `create_pin()` acquires an exclusive `flock` on
 `<refactory_home>/pins/<commit>.lock` before staging a pin. Concurrent callers
 block until the first one finishes, then find the prepared pin and return it.
+A rebuild (`require_build`) is also refused when a live run uses the checkout:
+the run is registered on its driver at launch, and `_refuse_if_live_runs`
+checks every registered run's owner lock before allowing a build.
 
 ### In-place pin preparation
 

@@ -34,7 +34,8 @@ At launch, `require_build()` compares the stamp against the current source. When
 the build is stale:
 
 - **CLI** (`refactory ceo`, `refactory optimize`): the launcher automatically runs
-  `pnpm run build` before starting the run.
+  `pnpm run build` before starting the run, unless a live run uses the same
+  checkout — in that case it warns and continues on the existing build.
 - **GUI** (`refactory ui`): a stale build raises an error asking you to restart —
   `pnpm run build` and relaunch. The GUI does not rebuild `lib/` underneath
   itself.

@@ -511,17 +511,9 @@ def prune_pins(dsh_home: Path | None = None) -> list[str]:
         # No live runs — remove the pin.
         driver_checkout = data.get("driver_checkout")
         checkout_path = entry / "checkout"
-        if checkout_path.is_dir() and driver_checkout:
-            try:
-                subprocess.run(
-                    ["git", "-C", str(driver_checkout), "worktree", "remove", "--force",
-                     str(checkout_path)],
-                    capture_output=True, text=True, timeout=60,
-                )
-            except (OSError, subprocess.SubprocessError):
-                pass
 
-        # Remove the profile by its package name.
+        # Remove the profile by its package name BEFORE the worktree, so
+        # the bundle path the plugin command references still exists.
         profile_name = stored_profile
         try:
             from refactory_dsh.paths import dsh_command
@@ -533,6 +525,17 @@ def prune_pins(dsh_home: Path | None = None) -> list[str]:
             )
         except (OSError, subprocess.SubprocessError):
             pass
+
+        # Remove the git worktree registration.
+        if checkout_path.is_dir() and driver_checkout:
+            try:
+                subprocess.run(
+                    ["git", "-C", str(driver_checkout), "worktree", "remove", "--force",
+                     str(checkout_path)],
+                    capture_output=True, text=True, timeout=60,
+                )
+            except (OSError, subprocess.SubprocessError):
+                pass
 
         # Remove the pin directory.
         shutil.rmtree(entry, ignore_errors=True)
