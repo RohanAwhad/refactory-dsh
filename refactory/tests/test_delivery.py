@@ -3485,6 +3485,112 @@ def test_cleanly_merged_edit_keeps_mains_change(tmp_path):
     assert len(parent_lines) == 2, f"expected merge commit, got {len(parent_lines)} parents"
 
 
+def test_edit_during_conflict_keeps_mains_changes(tmp_path):
+    """During conflict resolution, ===EDIT: on a cleanly-merged file preserves
+    main's changes while ===FILE: resolves the conflicted file.  Together they
+    produce a merge commit.
+
+    Fails without the change: edits apply to committed_text (the run's last
+    commit) which lacks main's changes, so the SEARCH text is not found or
+    main's change is silently reverted.
+    """
+    from refactory_dsh import repo_change
+    from refactory_dsh.worktree import (
+        create, recorded, _write_json, RECORD,
+        git as wgit, COMMITTER, NO_HOOKS,
+    )
+    from dataclasses import asdict, replace as dreplace
+
+    # ── Set up a repo with two files ──
+    repo = git_repo(tmp_path / "repo")
+    (repo / "shared.py").write_text("def f():\n    return 1\n")
+    (repo / "util.py").write_text("def helper():\n    return 0\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "initial")
+
+    # ── Create a worktree for the run ──
+    run = tmp_path / "run"
+    run.mkdir(parents=True, exist_ok=True)
+    create(repo, "HEAD", "test-edit-conflict", run)
+    found = recorded(run)
+    wt_path = Path(found.path)
+
+    # ── Feature change: edit shared.py only ──
+    (wt_path / "shared.py").write_text("def f():\n    return 42\n")
+    wgit(wt_path, "add", ".")
+    wgit(wt_path, *NO_HOOKS, "-c", "commit.gpgsign=false",
+         "commit", "-q", "--no-verify", "-m", "feature: f returns 42",
+         env={**os.environ, **COMMITTER})
+    feature_head = wgit(wt_path, "rev-parse", "HEAD").strip()
+    updated_found = dreplace(found, head=feature_head)
+    _write_json(run / RECORD, asdict(updated_found))
+
+    # ── Main changes BOTH files: shared.py conflicts, util.py merges cleanly ──
+    (repo / "shared.py").write_text("def f():\n    return 2\n")
+    (repo / "util.py").write_text("def helper():\n    return 99\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "main: f returns 2, helper returns 99")
+    main_head = git(repo, "rev-parse", "HEAD")
+
+    # ── Start a merge that conflicts on shared.py ──
+    try:
+        wgit(wt_path, *NO_HOOKS, "-c", "commit.gpgsign=false",
+             "merge", "--no-commit", "--no-verify", main_head,
+             env={**os.environ, **COMMITTER})
+    except ValueError:
+        pass  # expected — conflict in shared.py
+
+    # Verify the conflict and the clean merge.
+    assert "<<<<<<< HEAD" in (wt_path / "shared.py").read_text(), "expected conflict markers"
+    assert "return 99" in (wt_path / "util.py").read_text(), "expected main's change in util.py"
+
+    # ── Builder's resolution: ===FILE: resolves conflict, ===EDIT: keeps main's util.py ──
+    emit_text = (
+        "===FILE: shared.py===\n"
+        "def f():\n"
+        "    return 3  # merged\n"
+        "===EDIT: util.py===\n"
+        "<<<<<<< SEARCH\n"
+        "def helper():\n"
+        "    return 99\n"
+        "=======\n"
+        "def helper():\n"
+        "    return 99  # kept from main\n"
+        ">>>>>>> REPLACE\n"
+    )
+
+    ctx = _TitleCtx(
+        facts={"name": "test_edit_conflict", "brief": "test", "check": "echo ok"},
+        files={"emit.txt": emit_text},
+    )
+    ctx.workdir = run
+    ctx.read_text = lambda name: ctx._files[name]
+    ctx.write_text = lambda name, text: ctx._files.__setitem__(name, text)
+    ctx.write_json = lambda name, data: ctx._files.__setitem__(name, json.dumps(data))
+    ctx.read_json = lambda name, default=None: (
+        json.loads(ctx._files.get(name, "null"))
+        if ctx._files.get(name) else default
+    )
+
+    result = repo_change._commit_emission(ctx)
+    assert result.get("commit"), f"expected a commit: {result}"
+
+    # shared.py is resolved (no conflict markers).
+    shared_content = (wt_path / "shared.py").read_text()
+    assert "return 3" in shared_content, f"expected resolved f(): {shared_content}"
+    assert "<<<<<<<" not in shared_content, f"conflict markers remain: {shared_content}"
+
+    # util.py keeps main's change AND has the builder's edit.
+    util_content = (wt_path / "util.py").read_text()
+    assert "return 99" in util_content, f"expected main's change: {util_content}"
+    assert "kept from main" in util_content, f"expected builder's edit: {util_content}"
+
+    # The commit is a merge commit (2 parents).
+    cat_output = git(wt_path, "cat-file", "-p", "HEAD")
+    parent_lines = [l for l in cat_output.splitlines() if l.startswith("parent ")]
+    assert len(parent_lines) == 2, f"expected merge commit, got {len(parent_lines)} parents"
+
+
 def test_an_upstream_that_does_not_hold_the_base_is_not_where_the_pull_request_goes(github, tmp_path):
     repo, _stack = _stacked(github, tmp_path)
     # main moves on GitHub; a local branch at that commit still names stack as its upstream.

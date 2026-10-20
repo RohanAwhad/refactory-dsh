@@ -596,7 +596,7 @@ class DesignMode(Mode):
             reads=("design.json", "delivery.md"),
             writes=("delivery.json", "pull-request.md", "design.json"),
             produces=("delivery_result", "pull_request", "delivery_conflict_files",
-                      "delivery_conflict_detail", "delivery_target_tip"),
+                      "delivery_conflict_detail", "delivery_target_tip", "commit"),
             notes="push the run's branch and open its pull request, as the approval gate said",
         ))
         graph.add(Node(
@@ -604,7 +604,7 @@ class DesignMode(Mode):
             evaluator="refactory_dsh.delivery:evaluate_delivery_conflicts",
             max_iterations=8,
             knobs=("check_attempts",),
-            produces=("validation",),
+            produces=("validation", "delivery_conflict_reloops"),
             notes="on authored-file conflict reloop to emit; otherwise proceed to done",
         ))
         graph.add(Node(
