@@ -796,6 +796,7 @@ export function apply(ctx: Context, config: Config): void {
         // Record the prompt under the due node whose pending prompt.txt it
         // contains, not under every due node.  This prevents faithful-A,
         // rewritten-A′, faithful-B from letting A pass (#347, C2).
+        let matchedAny = false
         for (const node of cur.nodes) {
           if (node._type === 'AgentNode' || node._type === 'LLMNode') {
             const pending = pendingPrompts.get(`${runKey}:${node.id}`)
@@ -804,6 +805,16 @@ export function apply(ctx: Context, config: Config): void {
               const existing = ceoPrompts.get(key)
               if (existing !== undefined) existing.push({ prompt: promptText, hash })
               else ceoPrompts.set(key, [{ prompt: promptText, hash }])
+              matchedAny = true
+            }
+          }
+        }
+        // A prompt that matches no due node is a potential rewrite: clear
+        // recorded prompts for all due nodes so wf_done sees the gap (#347, C2).
+        if (!matchedAny) {
+          for (const node of cur.nodes) {
+            if (node._type === 'AgentNode' || node._type === 'LLMNode') {
+              ceoPrompts.delete(`${runKey}:${node.id}`)
             }
           }
         }
