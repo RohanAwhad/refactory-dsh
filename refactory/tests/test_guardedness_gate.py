@@ -202,3 +202,87 @@ def test_gate_verification_fast_blocks_on_guardedness():
     assert isinstance(result, Verdict)
     assert str(result) == "reloop"
     assert "test_foo.py" in result.reason
+
+
+def test_focused_check_declares_check_txt_write():
+    """focused_check must declare check.txt in its writes for artifact mode.
+
+    Without the fix, focused_check writes check.txt (for guardedness blocking
+    and inherited-failure messages) but does not declare it, causing
+    ExecutionError at runtime when enforce_writes is True.
+    """
+    from refactory_dsh.fast import DesignFastMode
+
+    graph = DesignFastMode().build()
+    node = graph.nodes["focused_check"]
+    assert "check.txt" in node.writes, (
+        "focused_check must declare check.txt in its writes; "
+        "it writes this file for guardedness blocking and inherited-failure messages"
+    )
+
+
+def test_guardedness_reloops_in_fast_mode_integration(tmp_path, monkeypatch):
+    """Guardedness enforcement in fast mode reloops through the real executor.
+
+    This exercises the full pipeline: focused_check detects non-guarding tests,
+    writes check.txt and sets guardedness_blocked in focused-check.json, the
+    verifier runs, then gate_verification reads the flag and reloops to emit.
+    On the second attempt guardedness passes and the run completes.
+
+    Without the fix (check.txt in focused_check's writes and guardedness_blocked
+    routing in gate_verification), this test would either raise ExecutionError
+    (undeclared write) or proceed without relooping.
+    """
+    monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
+    from tests_support import FakeModel, render, VERIFICATION_ANSWER
+    from refactory_dsh import base_check
+    from refactory_dsh.fast import DesignFastMode
+
+    FAST_QA = json.dumps({
+        "status": "pass",
+        "checks": [{"name": "runs", "command": "python tool.py",
+                     "status": "pass", "evidence": "exit 0"}],
+        "findings": [], "not_run": [],
+    })
+
+    call_count = [0]
+
+    def mock_guardedness(ctx, command, timeout):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            # First call: test does not guard the change
+            return {
+                "summary": {"total_new_tests": 1, "guarding": 0, "not_guarding": 1},
+                "results": [{"test_file": "test_foo.py", "status": "not_guarding"}],
+            }
+        # Subsequent calls: test guards the change
+        return {
+            "summary": {"total_new_tests": 1, "guarding": 1, "not_guarding": 0},
+            "results": [{"test_file": "test_foo.py", "status": "guarding"}],
+        }
+
+    monkeypatch.setattr(base_check, "compute_test_guardedness", mock_guardedness)
+
+    answers = [
+        "Change only the requested file.",          # strategy
+        render({"tool.py": "print('v1')\n"}),       # first emit: guardedness blocks
+        VERIFICATION_ANSWER,                         # verifier after first check
+        # gate_verification sees guardedness_blocked → reloops to emit
+        render({"tool.py": "print('v2')\n"}),       # second emit after reloop
+        VERIFICATION_ANSWER,                         # verifier after second check
+        FAST_QA,                                     # focused QA
+    ]
+
+    mode = DesignFastMode()
+    state = mode.state_dict()
+    state["knobs"]["repair_attempts"]["value"] = 2
+    mode.load_state_dict(state)
+    result = mode.run(
+        tmp_path / "run", model=FakeModel(answers),
+        task={"name": "guard_fast", "brief": "a tool", "check": "python tool.py"},
+    )
+    assert result.exit_ok, result.error
+    assert call_count[0] >= 2, "guardedness must be computed at least twice"
+    assert int(result.facts.get("repairs_used", 0)) >= 1, (
+        "the pipeline must have relooped at least once for guardedness"
+    )
