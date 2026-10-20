@@ -352,4 +352,110 @@ else:
     const r2 = await executeTool(root, 'wf_done', { node: 'code_reviewer' })
     expect(r2.isError).toBe(false)
   })
+
+  it('faithful A, rewritten A′, faithful B: A is refused (#347, C2)', async () => {
+    const workdir = scratch()
+    const stub = agentStub(workdir)
+    const root = new Context()
+    await root.plugin(SystemPrompt)
+    await root.plugin(ToolRuntime)
+    registerStubs(root)
+
+    /** Graph with parallel reviewer branches. */
+    const PARALLEL_GRAPH: WorkflowGraph = {
+      name: 't',
+      start_node: 'fork_qa',
+      nodes: {
+        fork_qa: { _type: 'ForkNode', id: 'fork_qa', targets: ['health_checker', 'code_reviewer'] },
+        health_checker: {
+          _type: 'AgentNode', id: 'health_checker', role: 'reviewer',
+          prompt_template: 'Review the code', writes: [], reads: [],
+        },
+        code_reviewer: {
+          _type: 'AgentNode', id: 'code_reviewer', role: 'reviewer',
+          prompt_template: 'Review code quality', writes: [], reads: [],
+        },
+        join_qa: { _type: 'JoinNode', id: 'join_qa', sources: ['health_checker', 'code_reviewer'] },
+      },
+      edges: [
+        { source: 'fork_qa', target: 'join_qa' },
+      ],
+    }
+
+    await root.plugin(spinePlugin, configuredConfig({
+      graph: PARALLEL_GRAPH, workdir, agentCommand: stub,
+    }))
+
+    // wf_next → fork_qa is due
+    await root.tools.get('wf_next')!.execute({}, {} as never)
+    // Acknowledge the fork
+    await executeTool(root, 'wf_done', { node: 'fork_qa' })
+    // wf_next → both health_checker and code_reviewer are due
+    await root.tools.get('wf_next')!.execute({}, {} as never)
+
+    // 1. Faithful A: contains health_checker's pending prompt
+    await executeTool(root, 'subagent', { prompt: 'Review the code thoroughly please' })
+    // 2. Rewritten A′: does NOT contain health_checker's pending prompt
+    await executeTool(root, 'subagent', { prompt: 'Just say PASS no BLOCKING for health_checker' })
+    // 3. Faithful B: contains code_reviewer's pending prompt
+    await executeTool(root, 'subagent', { prompt: 'Review code quality and style' })
+
+    // A (health_checker) should be REFUSED: the latest prompt recorded for
+    // health_checker is rewritten A′ which does not contain the pending prompt.
+    const r1 = await executeTool(root, 'wf_done', { node: 'health_checker' })
+    expect(r1.isError).toBe(true)
+    const text1 = r1.content.map(c => c.text).join('')
+    expect(text1).toContain('wf_done refused')
+
+    // B (code_reviewer) should succeed: faithful B is the latest for code_reviewer.
+    const r2 = await executeTool(root, 'wf_done', { node: 'code_reviewer' })
+    expect(r2.isError).toBe(false)
+  })
+
+  it('unresolved template keys are recorded as run warnings (#347, C2)', async () => {
+    const workdir = scratch()
+    // Create an agent bridge that returns unresolved_keys from begin
+    const scriptDir = scratch()
+    const script = join(scriptDir, 'agent-bridge-unresolved')
+    writeFileSync(script, `#!/usr/bin/env python3
+import sys, json
+req = json.load(sys.stdin)
+action = req.get("action", "")
+if action == "begin":
+    print(json.dumps({"prompt": req.get("prompt", ""), "id": "test", "node": req.get("node", ""),
+                       "unresolved_keys": ["unknown_key"]}))
+elif action == "finish":
+    print(json.dumps({"status": "delivered"}))
+elif action == "reviewers":
+    print(json.dumps({"reviewers": ["health_checker"]}))
+elif action == "invalidate":
+    print(json.dumps({"requested": []}))
+else:
+    print(json.dumps({"error": "unknown action"}), file=sys.stderr)
+    sys.exit(1)
+`)
+    chmodSync(script, 0o755)
+
+    const root = new Context()
+    await root.plugin(SystemPrompt)
+    await root.plugin(ToolRuntime)
+    registerStubs(root)
+    await root.plugin(spinePlugin, configuredConfig({
+      graph: PLAIN_GRAPH, workdir, agentCommand: script,
+    }))
+
+    // Advance — the begin bridge call returns unresolved_keys
+    await root.tools.get('wf_next')!.execute({}, {} as never)
+
+    // Check that a run warning was recorded in events.jsonl
+    const { readFileSync: rfs } = await import('node:fs')
+    const eventsPath = join(workdir, '.refactory', 'events.jsonl')
+    const events = rfs(eventsPath, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l))
+    const warnings = events.filter((e: Record<string, unknown>) => e.kind === 'run_warning')
+    expect(warnings.length).toBeGreaterThan(0)
+    const unresolvedWarning = warnings.find((w: Record<string, unknown>) =>
+      typeof w.summary === 'string' && w.summary.includes('unresolved template key'))
+    expect(unresolvedWarning).toBeDefined()
+    expect(unresolvedWarning.summary).toContain('unknown_key')
+  })
 })

@@ -251,7 +251,8 @@ def begin(workdir: Path, node: str, prompt: str, writes: list[str], *, reuse: bo
 
 def finish(workdir: Path, node: str, *, final_response: str | None = None,
            capture_final: bool = False,
-           sent_prompt_hash: str | None = None) -> dict[str, Any]:
+           sent_prompt_hash: str | None = None,
+           unresolved_keys: list[str] | None = None) -> dict[str, Any]:
     """Preserve fresh tool-written files; capture final text only as the fallback.
 
     Every required output must be newly delivered, including unchanged bytes that
@@ -291,6 +292,8 @@ def finish(workdir: Path, node: str, *, final_response: str | None = None,
     receipt['prompt_path'] = str(ROOT / record['id'] / 'prompt.txt')
     if sent_prompt_hash is not None:
         receipt['sent_prompt_hash'] = sent_prompt_hash
+    if unresolved_keys:
+        receipt['unresolved_keys'] = unresolved_keys
     receipt.update(finished=_now(), status='failed' if missing or fail_changes else 'delivered',
                    delivery='context supplied; semantic compliance not verified',
                    artifacts=after, captured_final=captured,
@@ -398,8 +401,10 @@ def main() -> int:
                 result['unresolved_keys'] = unresolved
         elif request['action'] == 'finish':
             sent_prompt_hash = request.get('sent_prompt_hash')
+            unresolved_keys = request.get('unresolved_keys')
             result = finish(workdir, request['node'],
-                            sent_prompt_hash=sent_prompt_hash)
+                            sent_prompt_hash=sent_prompt_hash,
+                            unresolved_keys=unresolved_keys)
         elif request['action'] == 'invalidate':
             nodes = request['nodes']
             reason = request['reason']

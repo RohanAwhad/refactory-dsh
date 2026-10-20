@@ -182,6 +182,64 @@ def test_pr_verification_says_check_passed_when_validation_fact_is_set(tmp_path)
     assert "did not run" not in body
 
 
+def test_pr_reviews_line_says_audit_did_not_pass_on_fail_row(tmp_path):
+    """A fail row in the audit makes the Reviews line say not all steps completed."""
+    import subprocess
+    ctx = _TitleCtx(
+        facts={"brief": "Build a tool.", "check": "pnpm test", "name": "t1"},
+        files={"design.md": "# Heading\n\nSummary.\n",
+               "authoring-evidence.json": '{"validation": {"status": "pass"}}',
+               "intent-audit.json": '{"requirements": [{"id": "r1", "status": "fail", "reason": "missing"}]}'},
+    )
+    subprocess.run(["git", "init", str(tmp_path)], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t"], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "T"], capture_output=True, check=True)
+    (tmp_path / "f.txt").write_text("a\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "init"], capture_output=True, check=True)
+    base = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    (tmp_path / "g.txt").write_text("b\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "work"], capture_output=True, check=True)
+    head = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    from types import SimpleNamespace
+    found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
+    body = delivery._body(ctx, found)
+    assert "not all review steps completed" in body
+    assert "health check, code review and QA found nothing blocking" not in body
+
+
+def test_pr_reviews_line_says_audit_did_not_pass_on_unverified_row(tmp_path):
+    """An unverified row in the audit makes the Reviews line say not all steps completed."""
+    import subprocess
+    ctx = _TitleCtx(
+        facts={"brief": "Build a tool.", "check": "pnpm test", "name": "t1"},
+        files={"design.md": "# Heading\n\nSummary.\n",
+               "authoring-evidence.json": '{"validation": {"status": "pass"}}',
+               "intent-audit.json": '{"requirements": [{"id": "r1", "status": "unverified", "reason": "not checked"}]}'},
+    )
+    subprocess.run(["git", "init", str(tmp_path)], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t"], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "T"], capture_output=True, check=True)
+    (tmp_path / "f.txt").write_text("a\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "init"], capture_output=True, check=True)
+    base = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    (tmp_path / "g.txt").write_text("b\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "work"], capture_output=True, check=True)
+    head = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    from types import SimpleNamespace
+    found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
+    body = delivery._body(ctx, found)
+    assert "not all review steps completed" in body
+    assert "health check, code review and QA found nothing blocking" not in body
+
+
 def test_pr_body_includes_closes_refs_from_brief(tmp_path):
     """When the brief says 'Close #347 and #363', the PR body includes Closes lines."""
     import subprocess

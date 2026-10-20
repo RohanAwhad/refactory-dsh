@@ -788,12 +788,32 @@ export function apply(ctx: Context, config: Config): void {
       const cur = spine.next()
       if (cur.status === 'ready') {
         const hash = createHash('sha256').update(promptText).digest('hex')
+        // Record the prompt under the due node whose pending prompt.txt it
+        // contains, not under every due node.  This prevents faithful-A,
+        // rewritten-A′, faithful-B from letting A pass (#347, C2).
+        let matched = false
         for (const node of cur.nodes) {
           if (node._type === 'AgentNode' || node._type === 'LLMNode') {
-            const key = `${sessionId}:${node.id}`
-            const existing = ceoPrompts.get(key)
-            if (existing !== undefined) existing.push({ prompt: promptText, hash })
-            else ceoPrompts.set(key, [{ prompt: promptText, hash }])
+            const pending = pendingPrompts.get(node.id)
+            if (pending !== undefined && promptText.includes(pending)) {
+              const key = `${sessionId}:${node.id}`
+              const existing = ceoPrompts.get(key)
+              if (existing !== undefined) existing.push({ prompt: promptText, hash })
+              else ceoPrompts.set(key, [{ prompt: promptText, hash }])
+              matched = true
+            }
+          }
+        }
+        // If no pending prompt matched, record under all due agent nodes so
+        // the fail-closed check at wf_done still sees it.
+        if (!matched) {
+          for (const node of cur.nodes) {
+            if (node._type === 'AgentNode' || node._type === 'LLMNode') {
+              const key = `${sessionId}:${node.id}`
+              const existing = ceoPrompts.get(key)
+              if (existing !== undefined) existing.push({ prompt: promptText, hash })
+              else ceoPrompts.set(key, [{ prompt: promptText, hash }])
+            }
           }
         }
       }
@@ -806,6 +826,8 @@ export function apply(ctx: Context, config: Config): void {
   let reviewerIds: Set<string> | null | undefined
   // Pending delivery prompts, cached per node at begin time.
   const pendingPrompts = new Map<string, string>()
+  // Unresolved template keys per node, cached at begin for inclusion in receipt (#347, C2).
+  const pendingUnresolvedKeys = new Map<string, unknown[]>()
 
   /** The id of the session an execution belongs to, when it has an agent. */
   function sessionIdOf(exec: ToolExec): string | undefined {
@@ -1476,6 +1498,15 @@ export function apply(ctx: Context, config: Config): void {
             if (key.endsWith(`:${node.id}`)) ceoPrompts.delete(key)
           }
         }
+        // Record unresolved template keys as a run warning and cache for receipt (#347, C2).
+        const unresolvedKeys = receipt.unresolved_keys
+        if (Array.isArray(unresolvedKeys) && unresolvedKeys.length > 0) {
+          recordWarnings(workdir, unresolvedKeys.map((k: unknown) => ({
+            node: node.id,
+            line: `unresolved template key: {{${String(k)}}}`,
+          })))
+          pendingUnresolvedKeys.set(node.id, unresolvedKeys as unknown[])
+        }
       }
     }
     // A user gate's question is shown as the CEO sees it here and as the card puts it.
@@ -1938,6 +1969,8 @@ export function apply(ctx: Context, config: Config): void {
             // so a rewritten second dispatch within the same delivery is refused.
             // When the latest prompt targets another parallel node, look for the
             // latest matching prompt instead (#347, C2).
+            // Check only the latest prompt recorded for this node's current
+            // delivery, so a rewritten second dispatch is refused (#347, C2).
             const allRecorded: Array<{ prompt: string; hash: string }> = []
             for (const [key, entries] of ceoPrompts.entries()) {
               if (key.endsWith(`:${args.node}`)) allRecorded.push(...entries)
@@ -1948,35 +1981,17 @@ export function apply(ctx: Context, config: Config): void {
                 + 'The prompt the CEO dispatched must include the pending delivery prompt.',
               )
             }
+            // The latest recorded prompt for this node must contain the
+            // pending prompt.  No fallback to earlier prompts: if the CEO
+            // sent a rewritten retry, the latest is the rewritten one.
             const latest = allRecorded[allRecorded.length - 1]!
             if (latest.prompt.includes(pending!)) {
               sentPromptHash = latest.hash
             } else {
-              // The latest prompt does not match this node.  When parallel
-              // reviewers are dispatched, the latest may belong to another node.
-              let forOtherNode = false
-              for (const [nodeId, otherPending] of pendingPrompts.entries()) {
-                if (nodeId !== args.node && latest.prompt.includes(otherPending)) {
-                  forOtherNode = true
-                  break
-                }
-              }
-              if (forOtherNode) {
-                const matched = [...allRecorded].reverse().find(e => e.prompt.includes(pending!))
-                if (matched !== undefined) {
-                  sentPromptHash = matched.hash
-                } else {
-                  throw new Error(
-                    `wf_done refused: no recorded CEO prompt for reviewer node "${args.node}" contains `
-                    + 'the delivery\'s prompt.txt. The prompt the CEO dispatched must include the pending delivery prompt.',
-                  )
-                }
-              } else {
-                throw new Error(
-                  `wf_done refused: the latest recorded CEO prompt for reviewer node "${args.node}" does not contain `
-                  + 'the delivery\'s prompt.txt. The prompt the CEO dispatched must include the pending delivery prompt.',
-                )
-              }
+              throw new Error(
+                `wf_done refused: the latest recorded CEO prompt for reviewer node "${args.node}" does not contain `
+                + 'the delivery\'s prompt.txt. The prompt the CEO dispatched must include the pending delivery prompt.',
+              )
             }
           } else {
             // No pending prompt available — fail closed
@@ -1986,14 +2001,17 @@ export function apply(ctx: Context, config: Config): void {
             )
           }
         }
+        const nodeUnresolved = pendingUnresolvedKeys.get(args.node)
         runtimeBridge(agentCommand, workdir, commandEnv, {
           action: 'finish', node: args.node,
           ...(sentPromptHash !== undefined ? { sent_prompt_hash: sentPromptHash } : {}),
+          ...(nodeUnresolved !== undefined ? { unresolved_keys: nodeUnresolved } : {}),
         })
       }
       spine.complete(args.node)
-      // Clear pending prompt and CEO prompts for completed node (#347, C2)
+      // Clear pending prompt, CEO prompts, and unresolved keys for completed node (#347, C2)
       pendingPrompts.delete(args.node)
+      pendingUnresolvedKeys.delete(args.node)
       for (const key of ceoPrompts.keys()) {
         if (key.endsWith(`:${args.node}`)) ceoPrompts.delete(key)
       }
