@@ -89,26 +89,34 @@ def test_prefix_boundary_not_fooled(tmp_path):
 def test_check_record_carries_cwd_escaped(tmp_path):
     """The check outcome carries cwd_escaped when the command leaves the worktree.
 
-    Drives the same code path as ``design_ops.check_artifact`` and
-    ``fast_ops.focused_check``: both read ``result.cwd_outside`` via
-    ``getattr`` / ``hasattr`` and write ``cwd_escaped`` into the outcome dict.
+    Drives the production ``design_ops.apply_cwd_escaped`` helper that both
+    ``check_artifact`` (design_ops) and ``focused_check`` (fast_ops) call to
+    record a directory escape into the check outcome dict.
     """
+    from refactory_dsh.design_ops import apply_cwd_escaped
+
     workdir = tmp_path / "wt"
     workdir.mkdir()
     result = sandbox.run_command("cd /tmp && echo ok", workdir=workdir, worktree_root=workdir)
     assert result.ok
     assert result.cwd_outside is not None
 
-    # Drive the production code path used by design_ops.check_artifact (line 410-411).
+    # Part A — design_ops path: apply_cwd_escaped is the production function
+    # called by design_ops.check_artifact after run_check returns.
     design_outcome: dict = {"status": "pass", "stdout": result.stdout, "stderr": result.stderr}
-    if getattr(result, "cwd_outside", None):
-        design_outcome["cwd_escaped"] = result.cwd_outside
+    apply_cwd_escaped(result, design_outcome)
     assert "cwd_escaped" in design_outcome
     assert "/tmp" in design_outcome["cwd_escaped"]
 
-    # Drive the production code path used by fast_ops.focused_check (line 211-212).
+    # Part B — fast_ops path: fast_ops.focused_check calls the same helper
+    # via design_ops.apply_cwd_escaped(result, payload).
     fast_payload: dict = {"command": "cd /tmp && echo ok", "status": "pass"}
-    if hasattr(result, "cwd_outside") and result.cwd_outside:
-        fast_payload["cwd_escaped"] = result.cwd_outside
+    apply_cwd_escaped(result, fast_payload)
     assert "cwd_escaped" in fast_payload
     assert "/tmp" in fast_payload["cwd_escaped"]
+
+    # A result that stayed inside the worktree must NOT set cwd_escaped.
+    clean_result = sandbox.run_command("true", workdir=workdir, worktree_root=workdir)
+    clean_outcome: dict = {"status": "pass"}
+    apply_cwd_escaped(clean_result, clean_outcome)
+    assert "cwd_escaped" not in clean_outcome

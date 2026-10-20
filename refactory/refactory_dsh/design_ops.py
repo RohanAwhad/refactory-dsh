@@ -378,6 +378,18 @@ def gate_pitfalls(ctx: Any) -> str:
     return Verdict("reloop", report)
 
 
+def apply_cwd_escaped(result: Any, outcome: dict[str, Any]) -> None:
+    """Record ``cwd_escaped`` into *outcome* when *result* shows a directory escape.
+
+    Both ``check_artifact`` and ``fast_ops.focused_check`` apply this logic:
+    when ``sandbox.run_command`` was called with a ``worktree_root`` and the
+    command left that directory, ``result.cwd_outside`` is set.  This helper
+    centralises the recording so the logic is not replicated in each call site.
+    """
+    if getattr(result, "cwd_outside", None):
+        outcome["cwd_escaped"] = result.cwd_outside
+
+
 def check_artifact(ctx: Any) -> str:
     """Gate: run the brief's check, in a sandbox, and refuse what does not pass.
 
@@ -407,8 +419,7 @@ def check_artifact(ctx: Any) -> str:
         result, budget=getattr(ctx, "budget", None)),
         "stdout": result.stdout, "stderr": result.stderr, "returncode": result.returncode,
         "timed_out": result.timed_out, "elapsed_s": result.elapsed_s}
-    if getattr(result, "cwd_outside", None):
-        outcome["cwd_escaped"] = result.cwd_outside
+    apply_cwd_escaped(result, outcome)
     ctx.write_text("check.txt", detail or "ok\n")
 
     # Whether the new tests fail without the change is evidence for the reviewers, passing

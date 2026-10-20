@@ -288,3 +288,52 @@ def test_validation_imports_staged_copy(tmp_path, monkeypatch):
             assert refactory_packages.__path__.index(staged_pkgs) < refactory_packages.__path__.index(shared_pkgs)
     finally:
         refactory_packages.__path__[:] = original_path
+
+
+def test_edit_revision_of_differs_from_name(tmp_path, monkeypatch):
+    """An edit whose revision_of differs from its name copies source from revision_of."""
+    project = _make_project(tmp_path)
+    monkeypatch.setattr("refactory_dsh.paths.project_for_nodes", lambda: project)
+    monkeypatch.setattr("refactory_dsh.create_ops.project_for_nodes", lambda: project)
+    monkeypatch.setattr("refactory_dsh.sandbox.describe_package", _mock_describe)
+
+    # Create the source package under source_pkg (different from dest name).
+    source_shared = registry.workspace_root(project) / "source_pkg"
+    source_shared.mkdir(parents=True, exist_ok=True)
+    (source_shared / "__init__.py").write_text("SOURCE = True\n")
+    (source_shared / ".origin.json").write_text('{"origin": "create-mode"}\n')
+
+    run = tmp_path / "edit_run"
+    run.mkdir()
+
+    # Mock prepare() to skip its complex dependency chain (model readiness,
+    # mode contracts, revision source reading) and return the facts directly.
+    monkeypatch.setattr("refactory_dsh.create_ops.prepare", lambda ctx: {
+        "name": "dest_pkg",
+        "revision_of": "source_pkg/some_mode",
+        "brief": "test edit with different revision_of",
+    })
+
+    ctx = FakeCtx(run)
+    result = prepare_create(ctx)
+
+    # The staging directory starts from the source package's content.
+    pkg_root = Path(result["package_root"])
+    assert pkg_root.exists()
+    assert (pkg_root / "__init__.py").read_text() == "SOURCE = True\n"
+    assert result["source_existed"]
+    assert result["source_hash"] != ""
+
+    # Modify the source package mid-run (simulating another run changing it).
+    (source_shared / "__init__.py").write_text("CHANGED = True\n")
+    (source_shared / ".origin.json").write_text(json.dumps({
+        "origin": "create-mode", "run_id": "other_run",
+    }, indent=2))
+
+    # Register should refuse because the source changed since prepare.
+    ctx.facts.update(result)
+    with pytest.raises(ValueError, match="changed since this run's prepare"):
+        register(ctx)
+
+    # The source package is intact (not overwritten by register).
+    assert (source_shared / "__init__.py").read_text() == "CHANGED = True\n"

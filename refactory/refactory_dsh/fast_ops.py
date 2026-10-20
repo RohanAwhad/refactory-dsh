@@ -208,8 +208,7 @@ def focused_check(ctx: Any) -> dict[str, Any]:
         payload.update(status="pass" if result.ok else "fail", returncode=result.returncode,
                        stdout=result.stdout, stderr=result.stderr, timed_out=result.timed_out,
                        elapsed_s=result.elapsed_s)
-        if hasattr(result, "cwd_outside") and result.cwd_outside:
-            payload["cwd_escaped"] = result.cwd_outside
+        design_ops.apply_cwd_escaped(result, payload)
         if budget is not None:
             budget.checkpoint()
     # Bind the check and later QA verdict to these exact materialized files: in a worktree,

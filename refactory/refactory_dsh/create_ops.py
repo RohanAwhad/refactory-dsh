@@ -1107,6 +1107,35 @@ def register(ctx: Any) -> dict[str, Any]:
         source_hash = ctx.facts.get("source_hash", "")
         source_existed = ctx.facts.get("source_existed", source_hash != "")
         own_run_id = Path(ctx.workdir).name
+        # When editing from a different source package, verify the source
+        # hasn't changed since prepare recorded its hash.
+        _revision_of_fact = str(ctx.facts.get("revision_of") or "")
+        _source_pkg = _revision_of_fact.split("/")[0] if _revision_of_fact else ""
+        if _source_pkg and _source_pkg != name:
+            source_loc = registry.workspace_root(project_for_nodes()) / _source_pkg
+            if source_existed:
+                if source_loc.exists():
+                    current_source = _dir_hash(source_loc)
+                    if current_source != source_hash:
+                        other_run = _origin_run_id(source_loc)
+                        other_info = f" (registered by run {other_run})" if other_run else ""
+                        raise ValueError(
+                            f"the source package {_source_pkg!r} changed since this run's "
+                            f"prepare (hash {source_hash[:12]} -> {current_source[:12]})"
+                            f"{other_info}; another run registered it first. This run's "
+                            f"staged package is kept at {staging_root} for inspection."
+                        )
+                else:
+                    raise ValueError(
+                        f"the source package {_source_pkg!r} existed when this run's "
+                        f"prepare ran, but it is gone now; another run deleted it. "
+                        f"This run's staged package is kept at {staging_root} "
+                        f"for inspection."
+                    )
+            # For the destination check below: the destination is a new package
+            # in this edit, so only check whether it appeared unexpectedly.
+            source_hash = ""
+            source_existed = False
         if shared.exists():
             current = _dir_hash(shared)
             # A reloop: this run already registered the package on a previous
@@ -1328,7 +1357,14 @@ def prepare_create(ctx: Any) -> dict[str, Any]:
     # refuse when a new package appears (source_hash="" was previously skipped).
     source_hash = ""
     source_existed = False
-    shared = registry.workspace_root(project_for_nodes()) / name
+    # When revision_of is set (edit mode), use the package component of
+    # revision_of (the part before the first '/') to find the source.
+    revision_of = str(prepared.get("revision_of") or "")
+    if revision_of:
+        source_pkg_name = revision_of.split("/")[0]
+    else:
+        source_pkg_name = name
+    shared = registry.workspace_root(project_for_nodes()) / source_pkg_name
 
     # Snapshot the source package's files so register() can record a diff for
     # reviewers.  For a new create the snapshot is empty; for edit it captures
