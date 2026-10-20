@@ -58,6 +58,11 @@ def test_uncommitted_changes_are_copied_and_committed(repo, tmp_path):
     found = worktree.create(repo, "HEAD", "uctest1111", run)
     entries = worktree.copy_uncommitted(repo, Path(found.path), run)
 
+    # Re-read the worktree record: copy_uncommitted committed the working-tree
+    # state and updated the on-disk record's base and head, but the frozen
+    # Worktree dataclass returned by create() still holds the old base hash.
+    found = worktree.recorded(run)
+
     # All files are recorded.
     paths = {e["path"] for e in entries}
     assert "app.py" in paths
