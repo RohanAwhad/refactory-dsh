@@ -7,13 +7,16 @@
  * at runtime when `lib/index.js` is older than the source checkout.
  */
 
-import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { defineConfig } from 'tsdown'
 import { computeSourceStamp } from './src/build-stamp.ts'
-import { computeWorkspaceStamp } from './src/workspace-stamp.ts'
+import { computeWorkspaceStamp, writeWorkspaceStamp } from './src/workspace-stamp.ts'
 
 const workspaceStamp = computeWorkspaceStamp()
+
+// Resolve paths relative to this config file's directory (the package root),
+// not the monorepo root where pnpm sets the CWD.
+const pkgDir = import.meta.dirname
 
 export default defineConfig({
   entry: ['lib/types/index.js'],
@@ -30,8 +33,7 @@ export default defineConfig({
   },
   onSuccess() {
     // Write the workspace stamp to a file Python's require_build() reads.
-    if (workspaceStamp !== null) {
-      writeFileSync(join('lib', '.workspace-stamp'), workspaceStamp, 'utf8')
-    }
+    // Use pkgDir so the path resolves correctly regardless of CWD.
+    writeWorkspaceStamp(join(pkgDir, 'lib'), workspaceStamp)
   },
 })
