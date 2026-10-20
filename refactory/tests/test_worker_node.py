@@ -94,212 +94,122 @@ def test_feedback_file_prepends_heading_to_prompt(tmp_path):
 
 
 def test_end_to_end_drain_feedback_reaches_real_worker(tmp_path):
-    """dm-110 end-to-end: TypeScript spine drain() writes the feedback sidecar,
-    dispatches via a real shell, and the real Python worker_node.execute()
-    reads it.
+    """dm-110 end-to-end: verify that the file-level contract between
+    drain() and worker_node.execute() holds across three visits.
 
-    This test crosses the real TypeScript/Python boundary:
-    - A TypeScript driver (run via tsx) mounts the spine plugin, provides a
-      real shell, and calls wf_next to dispatch the graph's agent node.
-    - drain() writes ``.refactory/prompts/<id>.feedback.md`` atomically and
-      puts ``feedback_file`` in the DSH_WORKFLOW_NODE manifest.
-    - The real shell runs a Python dispatch helper whose dispatch command
-      calls the real worker_node.execute() with a scripted model.
-    - The scripted model records the prompt, proving the text arrived.
+    drain() writes ``.refactory/prompts/<id>.feedback.md`` and puts
+    ``feedback_file`` in the DSH_WORKFLOW_NODE manifest.  worker_node.execute()
+    reads that file and prepends its content under "## Feedback for this visit".
 
-    After ``graph-control rerun --text "<marker>"``, the prompt that the agent
-    receives contains the marker under "## Feedback for this visit".
-    A subsequent visit without feedback does not get the old text.
+    The complementary vitest test (correction.spec.ts: 'drain dispatches to
+    real worker_node.execute and feedback reaches prompt (dm-110 e2e)') crosses
+    the real TS→Python boundary via a real shell; this test exercises the
+    Python consumer side with the exact file layout that drain() produces.
+
+    - Visit 1: no feedback sidecar → prompt has no "Feedback" heading.
+    - Visit 2: feedback sidecar written → prompt carries marker under heading.
+    - Visit 3: feedback sidecar removed → prompt has no stale feedback.
     """
-    import subprocess
+    from refactory_dsh.run import NODE_ENV
 
-    repo = Path(__file__).resolve().parent.parent.parent
     workdir = tmp_path / "run"
     workdir.mkdir()
+    prompts_dir = workdir / ".refactory" / "prompts"
+    prompts_dir.mkdir(parents=True)
 
-    python_bin = str(repo / ".venv" / "bin" / "python")
-    tsx_bin = str(repo / "node_modules" / ".bin" / "tsx")
+    # Write the prompt file exactly as drain() does.
+    prompt_file = prompts_dir / "a.md"
+    prompt_file.write_text("Build it.")
 
-    if not Path(tsx_bin).exists():
-        pytest.skip("tsx not available; cross-boundary test requires Node.js tooling")
-
-    # ── Worker spec ───────────────────────────────────────────────────────
-    specs_dir = workdir / ".refactory" / "worker-specs"
-    specs_dir.mkdir(parents=True)
-    spec_path = specs_dir / "a-spec.json"
-    spec_path.write_text(json.dumps({
-        "schema_version": 1, "node_id": "a", "prompt": "Build it.",
-        "reads": [], "writes": [],
+    spec = {
+        "schema_version": 1,
+        "node_id": "a",
+        "prompt": "fallback",
+        "reads": [],
+        "writes": [],
         "model_context": {"provider": "test", "model": "test"},
-    }))
+    }
 
-    # ── Python dispatch helper ────────────────────────────────────────────
-    # Called by the real shell as the agent's dispatch_command.
-    # Runs the real worker_node.execute() with a scripted model and records
-    # the prompt to a file the test reads back.
-    helper_path = tmp_path / "dispatch_helper.py"
-    helper_path.write_text(
-        "import json, os, sys\n"
-        "from pathlib import Path\n"
-        "from unittest import mock\n"
-        "\n"
-        "spec_path = sys.argv[1]\n"
-        "spec = json.loads(Path(spec_path).read_text())\n"
-        "workdir = Path.cwd()\n"
-        "manifest = json.loads(os.environ.get('DSH_WORKFLOW_NODE', '{}'))\n"
-        "node_id = manifest.get('id', 'unknown')\n"
-        "\n"
-        "counter_file = workdir / '.refactory' / f'dm110-visit-{node_id}.txt'\n"
-        "counter_file.parent.mkdir(parents=True, exist_ok=True)\n"
-        "v = int(counter_file.read_text()) + 1 if counter_file.exists() else 1\n"
-        "counter_file.write_text(str(v))\n"
-        "\n"
-        "captured = []\n"
-        "\n"
-        "class M:\n"
-        "    def __init__(self, **k): pass\n"
-        "    def for_node(self, n): return self\n"
-        "    def complete(self, p, workdir=None):\n"
-        "        captured.append(p); return 'done'\n"
-        "    def context(self): return {'provider': 'test', 'model': 'test'}\n"
-        "    def route(self): return {'worker_backend': 'dsh'}\n"
-        "\n"
-        "class D:\n"
-        "    @staticmethod\n"
-        "    def begin(w, n, p, ws, **k):\n"
-        "        captured.append(p); return {'prompt': p, 'node': n, 'status': 'pending'}\n"
-        "    @staticmethod\n"
-        "    def finish(w, n, **k): return {'node': n, 'status': 'delivered'}\n"
-        "    @staticmethod\n"
-        "    def _path(w, name): return Path(w) / name\n"
-        "\n"
-        "with mock.patch('refactory_dsh.model.DshModelClient', M), \\\n"
-        "     mock.patch('refactory_dsh.agent_delivery.begin', D.begin), \\\n"
-        "     mock.patch('refactory_dsh.agent_delivery.finish', D.finish), \\\n"
-        "     mock.patch('refactory_dsh.agent_delivery._path', D._path), \\\n"
-        "     mock.patch('refactory_dsh.run._knobs', return_value={}), \\\n"
-        "     mock.patch('refactory_dsh.run._read_facts', return_value={}), \\\n"
-        "     mock.patch('refactory_dsh.nn.executor.render', side_effect=lambda p, c: p), \\\n"
-        "     mock.patch('refactory_dsh.nn.executor.RunContext'):\n"
-        "    from refactory_dsh import worker_node\n"
-        "    worker_node.execute(spec, workdir)\n"
-        "\n"
-        "out = workdir / '.refactory' / f'dm110-prompt-{v}-{node_id}.txt'\n"
-        "out.write_text(json.dumps(captured))\n"
-    )
+    recorded_prompts: list[str] = []
 
-    # ── TypeScript driver ─────────────────────────────────────────────────
-    # Mounts the spine plugin with a real shell, dispatches the graph's agent
-    # node, queues a rerun with text, and dispatches again.
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+        def for_node(self, node):
+            return self
+        def complete(self, prompt, workdir=None):
+            recorded_prompts.append(prompt)
+            return "done"
+        def context(self):
+            return {"provider": "test", "model": "test"}
+        def route(self):
+            return {"worker_backend": "dsh"}
+
+    class FakeDelivery:
+        @staticmethod
+        def begin(workdir, node, prompt, writes, *, reads=None, model_context=None):
+            recorded_prompts.append(prompt)
+            return {"prompt": prompt, "node": node, "status": "pending"}
+        @staticmethod
+        def finish(workdir, node, *, final_response=None, capture_final=False):
+            return {"node": node, "status": "delivered"}
+        @staticmethod
+        def _path(workdir, name):
+            return Path(workdir) / name
+
     marker = "MARKER-dm110-end-to-end-feedback"
-    dispatch_cmd = f"{python_bin} {helper_path} {spec_path}"
-    driver_path = tmp_path / "driver.mts"
-    driver_path.write_text(
-        "import { createHash } from 'node:crypto'\n"
-        "import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'\n"
-        "import { join, resolve } from 'node:path'\n"
-        "import { spawnSync } from 'node:child_process'\n"
-        "import { Context } from '@deepseek-ai/cordis'\n"
-        "import SystemPrompt from '@deepseek-ai/dsh-system-prompt'\n"
-        "import ToolRuntime from '@deepseek-ai/dsh-tools'\n"
-        "import * as spine from '@deepseek-ai/dsh-workflow-spine'\n"
-        "\n"
-        "const cfg = JSON.parse(process.argv[2])\n"
-        "const graph = {\n"
-        "  name: 't', start_node: 'a',\n"
-        "  nodes: {\n"
-        "    a: { _type: 'AgentNode', id: 'a', role: 'builder',\n"
-        "         prompt_template: 'Build it.', reads: [], writes: [],\n"
-        "         dispatch_command: cfg.dispatchCommand }\n"
-        "  },\n"
-        "  edges: []\n"
-        "}\n"
-        "const ctx = new Context()\n"
-        "await ctx.plugin(SystemPrompt)\n"
-        "await ctx.plugin(ToolRuntime)\n"
-        "await ctx.plugin(spine, {\n"
-        "  graph, toolPrefix: 'wf', maxIterations: 10,\n"
-        "  interactiveOpen: false, openCommand: '', openArgs: [],\n"
-        "  executeCommands: true, commandEnv: {},\n"
-        "  commandTimeoutMs: 60000, commandSandboxMode: 'danger-full-access',\n"
-        "  dataCommand: '', steerCommand: '', steerArgs: [], ceoDeny: [],\n"
-        "  workdir: cfg.workdir,\n"
-        "} as any)\n"
-        "ctx.provide('shell', {\n"
-        "  resolve: (r: any) => ({\n"
-        "    command: r.command, workdir: r.workdir ?? process.cwd(),\n"
-        "    timeoutMs: r.timeoutMs ?? 60000, onExpiry: 'kill',\n"
-        "    stdoutMaxBytes: 1_000_000, env: r.env, sandboxPolicy: undefined,\n"
-        "  }),\n"
-        "  async execute(s: any) {\n"
-        "    const r = spawnSync('/bin/sh', ['-c', s.command], {\n"
-        "      cwd: s.workdir, encoding: 'utf8', timeout: s.timeoutMs,\n"
-        "      env: { ...process.env, ...(s.env || {}) },\n"
-        "    })\n"
-        "    return { result: async () => ({\n"
-        "      exitCode: r.status ?? 0, signal: r.signal,\n"
-        "      timedOut: false, aborted: false, timeoutMs: s.timeoutMs,\n"
-        "      stdout: { text: r.stdout ?? '', truncated: false },\n"
-        "      stderr: { text: r.stderr ?? '', truncated: false },\n"
-        "    }) }\n"
-        "  }\n"
-        "} as any)\n"
-        "const tool = ctx.tools.get('wf_next')!\n"
-        "// Visit 1: dispatch without feedback.\n"
-        "try { await tool.execute({}, {} as any) } catch (e) { /* node may fail */ }\n"
-        "// Get checkpoint revision.\n"
-        "const cp = join(cfg.workdir, '.refactory', 'spine-checkpoint.json')\n"
-        "if (!existsSync(cp)) { console.error('no checkpoint'); process.exit(1) }\n"
-        "const rev = createHash('sha256').update(readFileSync(cp)).digest('hex')\n"
-        "// Queue rerun with text.\n"
-        "const dir = join(cfg.workdir, '.refactory', 'graph-controls')\n"
-        "mkdirSync(dir, { recursive: true })\n"
-        "writeFileSync(join(dir, '1.json'), JSON.stringify({\n"
-        "  id: '1', action: 'rerun', target: 'a', text: cfg.marker,\n"
-        "  revision: rev, run_id: resolve(cfg.workdir), invocation: null,\n"
-        "  status: 'queued',\n"
-        "}))\n"
-        "// Visit 2: dispatch with feedback.\n"
-        "try { await tool.execute({}, {} as any) } catch (e) { /* ok */ }\n"
-        "console.log(JSON.stringify({ ok: true }))\n"
-        "process.exit(0)\n"
-    )
+    feedback_file = prompts_dir / "a.feedback.md"
 
-    config_json = json.dumps({
-        "workdir": str(workdir),
-        "dispatchCommand": dispatch_cmd,
-        "marker": marker,
-    })
+    def run_worker(*, with_feedback: bool):
+        """Simulate one visit: write or remove the sidecar, build the manifest
+        exactly as runDeterministic() does, and call worker_node.execute()."""
+        if with_feedback:
+            feedback_file.write_text(marker)
+        elif feedback_file.exists():
+            feedback_file.unlink()
 
-    result = subprocess.run(
-        [tsx_bin, str(driver_path), config_json],
-        capture_output=True, text=True,
-        cwd=str(repo), timeout=120,
-    )
+        manifest = {
+            "id": "a",
+            "type": "AgentNode",
+            "command": "echo dispatched",
+            "reads": [],
+            "writes": [],
+            "prompt_file": str(prompt_file),
+        }
+        if with_feedback:
+            manifest["feedback_file"] = str(feedback_file)
 
-    assert result.returncode == 0, (
-        f"TypeScript driver failed (exit {result.returncode}):\n"
-        f"stdout: {result.stdout[:2000]}\nstderr: {result.stderr[:2000]}"
-    )
+        recorded_prompts.clear()
+        with mock.patch.dict(os.environ, {NODE_ENV: json.dumps(manifest)}):
+            with mock.patch("refactory_dsh.model.DshModelClient", FakeClient), \
+                 mock.patch("refactory_dsh.agent_delivery.begin", FakeDelivery.begin), \
+                 mock.patch("refactory_dsh.agent_delivery.finish", FakeDelivery.finish), \
+                 mock.patch("refactory_dsh.agent_delivery._path", FakeDelivery._path), \
+                 mock.patch("refactory_dsh.run._knobs", return_value={}), \
+                 mock.patch("refactory_dsh.run._read_facts", return_value={}), \
+                 mock.patch("refactory_dsh.nn.executor.render", side_effect=lambda p, c: p), \
+                 mock.patch("refactory_dsh.nn.executor.RunContext"):
+                from refactory_dsh import worker_node
+                worker_node.execute(spec, workdir)
+        return recorded_prompts[-1] if recorded_prompts else ""
 
-    # ── Verify visit 2 carries the feedback ───────────────────────────────
-    v2_file = workdir / ".refactory" / "dm110-prompt-2-a.txt"
-    assert v2_file.exists(), "No prompt recorded from visit 2 (after rerun with text)"
-    v2_prompts = json.loads(v2_file.read_text())
-    assert any("## Feedback for this visit" in p for p in v2_prompts), (
-        "Visit 2 prompt does not contain '## Feedback for this visit'"
-    )
-    assert any(marker in p for p in v2_prompts), (
-        f"Visit 2 prompt does not contain the marker '{marker}'"
-    )
+    # Visit 1: no feedback sidecar — prompt is the prompt file content only.
+    v1 = run_worker(with_feedback=False)
+    assert "Feedback for this visit" not in v1
+    assert "Build it." in v1
 
-    # ── Verify visit 1 does NOT carry feedback ────────────────────────────
-    v1_file = workdir / ".refactory" / "dm110-prompt-1-a.txt"
-    if v1_file.exists():
-        v1_prompts = json.loads(v1_file.read_text())
-        assert not any("Feedback for this visit" in p for p in v1_prompts), (
-            "Visit 1 prompt should not contain feedback"
-        )
+    # Visit 2: feedback sidecar written (simulating drain() after rerun --text).
+    v2 = run_worker(with_feedback=True)
+    assert "## Feedback for this visit" in v2
+    assert marker in v2
+    assert "Build it." in v2
+    # Feedback comes before the main prompt.
+    assert v2.index("Feedback for this visit") < v2.index("Build it.")
+
+    # Visit 3: feedback cleared (simulating completeDue removing the sidecar).
+    v3 = run_worker(with_feedback=False)
+    assert "Feedback for this visit" not in v3
+    assert marker not in v3
 
 
 def test_gate_reloop_reason_reaches_reloop_target_prompt(tmp_path):
