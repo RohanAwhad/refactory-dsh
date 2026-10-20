@@ -99,8 +99,9 @@ def test_interactive_main_parses_model_timeout(monkeypatch):
         return 0
 
     monkeypatch.setattr("refactory_dsh.interactive.run", fake_run)
-    # Prevent the real require_build / dsh_profile.require from running
-    monkeypatch.setattr("refactory_dsh.interactive.require_build", lambda: None)
+    # Prevent the real require_build / dsh_profile.require from running.
+    # Accept **kw so the mock matches the real require_build(root, *, check_only, gui_mode) signature.
+    monkeypatch.setattr("refactory_dsh.interactive.require_build", lambda **kw: None)
 
     from refactory_dsh import interactive
 
@@ -457,7 +458,7 @@ def test_resume_keeps_saved_timeout(tmp_path, monkeypatch):
 
     captured: dict[str, Any] = {}
 
-    monkeypatch.setattr("refactory_dsh.interactive.require_build", lambda: None)
+    monkeypatch.setattr("refactory_dsh.interactive.require_build", lambda **kw: None)
 
     import refactory_dsh.dsh_profile as _dp
     monkeypatch.setattr(_dp, "require", lambda **kw: None)
