@@ -6,7 +6,7 @@
  * These are the parts a run depends on but a single tool call does not reach.
  */
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -104,10 +104,15 @@ function shell(behaviour: (command: string) => { exitCode?: number; stdout?: str
   }
 }
 
-async function call(ctx: Context, name: string, args: unknown = {}): Promise<unknown> {
+async function call(ctx: Context, name: string, args: unknown = {}, exec: unknown = {}): Promise<unknown> {
   const definition = ctx.tools.get(name)
   if (definition === undefined) throw new Error(`tool ${name} not registered`)
-  return definition.execute(args, {} as never)
+  return definition.execute(args, exec as never)
+}
+
+/** Session context for wf_open calls in interactiveOpen tests. */
+function as(session: string): unknown {
+  return { agent: { session: { id: session, requestHeader: () => undefined } } }
 }
 
 describe('mounting a graph', () => {
@@ -190,6 +195,77 @@ describe('the cursor status a run leaves behind', () => {
     const recorded = JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8')) as { status: string; last_failure?: { node: string; error: string } }
     expect(recorded.status).toBe('ready')
     expect(recorded.last_failure).toMatchObject({ node: 'run', error: expect.stringContaining('broken on purpose') })
+  })
+
+  it('failure payload has node id, command field, and descriptive error (E7)', async () => {
+    const workdir = scratch()
+    const { ctx } = await mount({
+      workdir,
+      executeCommands: true,
+      graph: {
+        name: 't',
+        start_node: 'run',
+        nodes: { run: { _type: 'FnNode', id: 'run', command: 'run-it', reads: [], writes: [] } },
+        edges: [],
+      },
+    })
+    ctx.provide('shell', shell(() => ({ exitCode: 4, stderr: 'broken on purpose\n' })))
+    const result = await call(ctx, 'wf_next') as { status: string; node: string; command: string; error: string }
+    expect(result.status).toBe('failed')
+    expect(result.node).toBe('run')
+    expect(result.command).toBe('run-it')
+    expect(result.error).toContain('run exited with code 4')
+    expect(result.error).toContain('broken on purpose')
+  })
+
+  it('facts summary replaces inline facts with keys, sizes and small inlines — 512-char limit (E10)', async () => {
+    // `ran` is populated only in interactiveOpen mode, so this test uses wf_open
+    // with a FnNode → AgentNode graph: drain runs the FnNode (one boundary),
+    // `ran` carries its facts summary, and the AgentNode is the next due node.
+    // The 512-character inline limit keeps short strings visible while excluding
+    // large blobs (a design run's facts.json is about 37 KB).
+    const workdir = scratch()
+    writeFileSync(join(workdir, 'facts.json'), JSON.stringify({
+      small: 'hello',
+      big: 'x'.repeat(600),
+    }))
+    const graph = {
+      name: 't', start_node: 'run',
+      nodes: {
+        run: { _type: 'FnNode', id: 'run', command: 'run-it', reads: [], writes: [] },
+        agent: { _type: 'AgentNode', id: 'agent', role: 'builder', prompt_template: 'A', reads: [], writes: [] },
+      },
+      edges: [{ source: 'run', target: 'agent' }],
+    }
+    const graphPath = join(workdir, 'graphs', 't.graph.json')
+    mkdirSync(join(workdir, 'graphs'), { recursive: true })
+    writeFileSync(graphPath, JSON.stringify(graph))
+    const stubDir = scratch()
+    const stub = join(stubDir, 'open-stub')
+    const openPayload = JSON.stringify({
+      mode: 'pkg/t', run: workdir, name: 't', graph: graphPath,
+      declarations: join(workdir, '.refactory', 'declarations.json'),
+    })
+    writeFileSync(stub, `#!/bin/sh\nprintf '%s' '${openPayload}'\n`)
+    chmodSync(stub, 0o755)
+    const { ctx } = await mount({
+      interactiveOpen: true,
+      openCommand: stub,
+      openArgs: [],
+      executeCommands: true,
+      workdir,
+    })
+    ctx.provide('shell', shell(() => ({ exitCode: 0 })))
+    const result = await call(ctx, 'wf_open', { mode: 'pkg/t', workdir }, as('e10-session')) as {
+      ran: { facts: { _summary: boolean; keys: string[]; sizes: Record<string, number>; inline: Record<string, unknown>; path: string } }
+    }
+    expect(result.ran.facts._summary).toBe(true)
+    expect(result.ran.facts.path).toBe('facts.json')
+    expect(result.ran.facts.keys).toEqual(expect.arrayContaining(['small', 'big']))
+    expect(result.ran.facts.sizes.small).toBeLessThanOrEqual(512)
+    expect(result.ran.facts.sizes.big).toBeGreaterThan(512)
+    expect(result.ran.facts.inline.small).toBe('hello')
+    expect(result.ran.facts.inline).not.toHaveProperty('big')
   })
 
   it('records the exit code alone when a failed node said nothing', async () => {
@@ -615,6 +691,16 @@ describe('asking a person', () => {
       .rejects.toThrow(/could not be asked: no answerer here/)
     expect(JSON.parse(readFileSync(join(workdir, '.refactory', 'spine-status.json'), 'utf8')))
       .toMatchObject({ status: 'refused' })
+  })
+})
+
+describe('CEO instructions include the source rule (C5)', () => {
+  it('tells the CEO to set source to user-relayed when relaying the person\'s words', async () => {
+    const { ctx } = await mount()
+    const section = (await ctx.systemPrompt.assemble()).sections.find(s => s.name === 'tool:wf-spine')
+    expect(section).toBeDefined()
+    expect(section!.text).toContain("source to 'user-relayed'")
+    expect(section!.text).toContain('auditable requirements')
   })
 })
 

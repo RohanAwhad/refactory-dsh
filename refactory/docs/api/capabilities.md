@@ -3955,7 +3955,8 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "note": "note",
       "run": "run",
       "runsRoot": "runs_root",
-      "scope": "scope"
+      "scope": "scope",
+      "source": "source"
     },
     "order": [
       "run",
@@ -3963,7 +3964,8 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "intent",
       "note",
       "kind",
-      "scope"
+      "scope",
+      "source"
     ],
     "required": [
       "run"
@@ -3978,7 +3980,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
         "note": "Keep the output text unchanged",
         "run": "/tmp/example-run"
       },
-      "explanation": "Read or append to the run\u2019s intent ledger. CLI/panel also expose gate answers and boundary controls; chat only exposes notes, constraints and seed."
+      "explanation": "Read or append to the run\u2019s intent ledger. CLI/panel also expose gate answers and boundary controls; chat only exposes notes, constraints and seed. Use --source ceo for the CEO\u2019s own observations (context only, not auditable); the CLI default is user-relayed (the person\u2019s words, auditable)."
     }
   ],
   "interfaces": {
@@ -4161,6 +4163,21 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
       "required": false,
       "type": "string"
     },
+    "source": {
+      "default": "user-relayed",
+      "description": "who said this: user-relayed (default) for the person's words, ceo for the CEO's own observations; CEO notes are context, not auditable requirements",
+      "enum": [
+        "user-relayed",
+        "ceo"
+      ],
+      "flags": [
+        "--source"
+      ],
+      "nargs": null,
+      "positional": false,
+      "required": false,
+      "type": "string"
+    },
     "stop": {
       "default": false,
       "description": "end the run at its next boundary, recording that a person asked",
@@ -4188,7 +4205,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
     }
   },
   "purpose": "Read or append to the run\u2019s intent ledger. CLI/panel also expose gate answers and boundary controls; chat only exposes notes, constraints and seed.",
-  "reviewed_schema": "c3a42de5f6185bb5ad9ff8cb2349f43a09c4013b5b493b2f12eb7a69311da410"
+  "reviewed_schema": "1cd553bcc1982fe5717a19d9a0dfd396ab3e3037efef6f634d15f165afa921df"
 }
 ```
 
