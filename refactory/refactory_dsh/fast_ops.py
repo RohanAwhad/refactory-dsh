@@ -342,7 +342,7 @@ def focused_check(ctx: Any) -> dict[str, Any]:
 
                 # R6: store failure history for convergence detection.
                 _attempt_out_r6 = "\n".join((result.stdout or "", result.stderr or "")).strip()
-                _cur_failures = sorted(_bc.parse_test_failures(_attempt_out_r6)) if 'result' in dir() else []
+                _cur_failures = sorted(base_check.parse_test_failures(_attempt_out_r6))
                 _hist = list(ctx.facts.get("check_failures_history", []))
                 _hist.append(_cur_failures)
                 ctx.set_fact("check_failures_history", _hist)
