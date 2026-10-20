@@ -1298,7 +1298,7 @@ def _parser() -> argparse.ArgumentParser:
     graph_control = add(sub.add_parser("graph-control", help="preview or queue a graph boundary control"))
     graph_control.add_argument("action", choices=[
         "pause", "resume", "stop", "preview", "rerun",
-        "acknowledge", "amend-command", "withdraw",
+        "acknowledge", "amend-command", "withdraw", "redeliver",
     ])
     graph_control.add_argument("--node", default="")
     graph_control.add_argument("--text", default="")

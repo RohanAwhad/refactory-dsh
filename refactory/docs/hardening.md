@@ -697,6 +697,30 @@ This is an exit-code-only check with no text scanning.
 
 **Tests.** `tests/test_check_sandbox.py` has one test per fix: a 100 MB file write passes, exit 137/152/153 are classified as uncertain, exit 134/135/139 are code_failure, exit 1 is still code_failure, the create materialiser refuses truncated text, review reloops do not consume check attempts, and each limit's stop message names itself.
 
+## 9. Delivery envelope covers the merged check (dm-107)
+
+The deliver node's `command_timeout_s` is computed at lowering as
+`_check_envelope_s + INSTALL_TIMEOUT_S + NODE_DISPATCH_OVERHEAD_S`. At defaults
+(`check_timeout_s=180`): `6540 + 1800 + 600 = 8940 s` (≈ 2 h 29 min). This covers
+the full merged-check envelope (three installs, generate, setup and the check
+itself) plus one additional install cycle for the merged tree's dependencies and
+overhead for the merge and regeneration steps.
+
+The predicate is declaration-based: any op that declares `check_timeout_s` in its
+knobs and does not produce `CHECK_PRODUCES` (i.e. is not itself the check node) gets
+the delivery envelope. This follows the convention `_is_check_node` uses for the
+check node itself.
+
+Without this, the spine's default 600 s kills delivery when the merged check takes
+more than 10 minutes. The b27c_recovery run (`check_timeout_s=1800`) was killed at
+10 minutes with the merge committed locally and nothing pushed.
+
+**Held by.** `test_lowering.py`: `test_deliver_node_gets_delivery_envelope` asserts
+the lowered value equals the formula; `test_deliver_timeout_exceeds_spine_default`
+asserts it exceeds 600 s with `check_timeout_s=1800`;
+`test_synthetic_deliver_op_gets_delivery_envelope` asserts that a custom op under
+another name that declares the knob gets the envelope.
+
 ---
 
 Two things that were on this list have moved off it, which is the point of keeping it:

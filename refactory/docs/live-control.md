@@ -243,6 +243,32 @@ rerun control file, then starts a new owner that applies the queued rerun
 at its first boundary. Both require the checkpoint's SHA-256 hash to match,
 so neither can apply to a later failure.
 
+### Redelivering
+
+Bring a finished run's pull request up to date with main in one command:
+
+    uv run refactory graph-control redeliver --run /absolute/run
+
+This merges the current main, regenerates, re-checks and pushes, starting the
+owner process itself. It is equivalent to `rerun --node deliver` plus `resume`,
+without needing `--text`, `--revision` or a preview.
+
+When the run failed at the deliver node (the usual case after a timeout),
+`redeliver` passes the failure acknowledgement automatically. If the failure
+is at another node, `redeliver` refuses with a message naming the due node.
+
+When delivery is interrupted between its local merge and its push, the run
+recognises its own merge commit on retry and resets to the reviewed commit
+before re-merging. No manual `git reset` is needed. A commit that is truly
+outside the run (not delivery's own merge) is still refused.
+
+If the owner died during delivery, `graph-control resume` restarts it. If main
+has moved further since the last delivery attempt, use `redeliver` to merge the
+current main.
+
+`rerun` with `--text` on a node that takes no text (an op or a gate) is refused
+with `"this node takes no text; drop --text"`.
+
 ### Incomplete cursor drain
 
 A run whose cursor empties before reaching a graph sink — for example after

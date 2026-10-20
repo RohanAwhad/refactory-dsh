@@ -12,6 +12,7 @@ from typing import Any
 from datetime import datetime, timezone
 
 from refactory_dsh.live import emit, read
+from refactory_dsh import recovery
 
 #: How long a resume waits for an exiting owner at a terminal status.
 #: Short enough that the CLI stays responsive; long enough to cover
@@ -101,10 +102,17 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
             tmp = pending_path.with_suffix('.tmp')
             tmp.write_text(json.dumps(pending_data))
             tmp.replace(pending_path)
-    if action not in ('pause', 'resume', 'stop', 'rerun'):
+    if action == 'redeliver':
+        return _redeliver(root, saved, current_revision)
+    if action not in ('pause', 'resume', 'stop', 'rerun', 'redeliver'):
         raise ValueError(f'unsupported graph control {action!r}; '
-                         f'supported: pause, resume, stop, rerun, acknowledge, amend-command, withdraw')
+                         f'supported: pause, resume, stop, rerun, redeliver, acknowledge, amend-command, withdraw')
     if action == 'rerun':
+        if text and text.strip():
+            graph_nodes = saved.get('graph', {}).get('nodes', {})
+            target_node = graph_nodes.get(node, {})
+            if target_node.get('_type') not in ('AgentNode', 'LLMNode'):
+                raise ValueError("this node takes no text; drop --text")
         immediate_plan = saved.get('redo_plans', {}).get(node)
         deferred_plan = saved.get('deferred_redo_plans', {}).get(node)
         restart_owner = False
@@ -443,6 +451,82 @@ def _find_rerun_target(saved: dict[str, Any], node: str = '') -> str:
         return cursor[0]
     due = ', '.join(cursor) if cursor else 'none'
     raise ValueError(f'name the node to rerun with --node: the run has {len(cursor)} due node(s) ({due})')
+
+
+def _find_deliver_node(graph_nodes: dict[str, Any]) -> str | None:
+    """The deliver node's id, found by its callable from ``delivery.DELIVER_ENTRY_POINTS``.
+
+    Checks ``callable_name`` first (set by lowering) and falls back to
+    the ``command`` field for older checkpoints that lack the field.
+    """
+    from refactory_dsh.delivery import DELIVER_ENTRY_POINTS
+
+    for nid, ndata in graph_nodes.items():
+        if not isinstance(ndata, dict):
+            continue
+        call = ndata.get('callable_name') or ''
+        if call in DELIVER_ENTRY_POINTS:
+            return nid
+        cmd = ndata.get('command') or ''
+        for ep in DELIVER_ENTRY_POINTS:
+            if ep in cmd:
+                return nid
+    return None
+
+
+def _redeliver(root: Path, saved: dict[str, Any], current_revision: str) -> dict[str, Any]:
+    """Merge current main, regenerate, re-check and push in one command.
+
+    Works on runs that finished (``done``) or that failed at the deliver
+    node.  When the checkpoint is ``failed`` and the due node is the
+    deliver node, the checkpoint-bound acknowledgement is passed
+    automatically, as ``rerun --acknowledge-failure`` does.
+    """
+    spine_status = read(root / '.refactory/spine-status.json').get('status', '')
+    if spine_status not in OWNER_STOPPED:
+        raise ValueError(f'redeliver requires a stopped run (status: {spine_status!r})')
+
+    # Find the deliver node by its callable, not by its id
+    graph_nodes = saved.get('graph', {}).get('nodes', {})
+    deliver_node_id = _find_deliver_node(graph_nodes)
+    if deliver_node_id is None:
+        raise ValueError('this run has no deliver node')
+
+    # Handle failed-at-deliver: pass the acknowledgement automatically
+    acknowledge_failed = False
+    if saved.get('status') == 'failed':
+        state = saved.get('state') if isinstance(saved.get('state'), dict) else saved
+        cursor = [n for n in (state.get('cursor') or []) if isinstance(n, str)]
+        if deliver_node_id in cursor:
+            acknowledge_failed = True
+        else:
+            due = ', '.join(cursor) if cursor else 'none'
+            raise ValueError(
+                f'this run failed at node(s) {due}, not at delivery; '
+                f'redeliver works only when the failure is at the deliver node'
+            )
+
+    # Queue a rerun control file targeting the deliver node
+    identifier = f'{time.time_ns():020d}-{uuid.uuid4().hex}'
+    invocation_data = read(root / '.refactory/invocation.json')
+    result: dict[str, Any] = {
+        'id': identifier, 'action': 'rerun', 'target': deliver_node_id,
+        'source': 'redeliver', 'text': '', 'revision': current_revision,
+        'run_id': str(root), 'invocation': invocation_data.get('id'),
+        'status': 'queued',
+        'message': 'Redeliver: merge current main, regenerate, re-check and push.',
+    }
+    directory = root / '.refactory/graph-controls'
+    directory.mkdir(parents=True, exist_ok=True)
+    temporary = directory / f'{identifier}.tmp'
+    temporary.write_text(json.dumps(result))
+    temporary.replace(directory / f'{identifier}.json')
+    emit(root, 'control_requested', state='queued', summary='redeliver',
+         node_id=deliver_node_id)
+
+    # Start the owner, acknowledging the failure when the due node is deliver
+    owner_result = recovery.start(root, acknowledge_failed=acknowledge_failed)
+    return {**result, 'owner': owner_result}
 
 
 def queued_controls(root: Path) -> list[dict[str, Any]]:

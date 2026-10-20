@@ -568,6 +568,7 @@ class DesignMode(Mode):
         graph.add(Node(
             "deliver", "op", call="refactory_dsh.delivery:deliver_design",
             resource_role="final_validation",
+            knobs=("check_timeout_s",),
             reads=("design.json", "delivery.md"),
             writes=("delivery.json", "pull-request.md", "design.json"),
             produces=("delivery_result", "pull_request"),

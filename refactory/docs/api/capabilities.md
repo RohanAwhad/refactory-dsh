@@ -1291,7 +1291,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 
 ## graph-control
 
-Preview or queue boundary pause/resume/stop/rerun/acknowledge/amend-command/withdraw controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. resume --acknowledge-failure also starts an owner for a failed checkpoint. acknowledge transitions an executing or failed checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly.
+Preview or queue boundary pause/resume/stop/rerun/redeliver/acknowledge/amend-command/withdraw controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. resume --acknowledge-failure also starts an owner for a failed checkpoint. acknowledge transitions an executing or failed checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly. redeliver brings a finished or failed-at-deliver run up to date with main in one command.
 
 Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-control.md)
 
@@ -1331,6 +1331,13 @@ Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-con
         "run": "/tmp/example-run"
       },
       "explanation": "Remove a queued control that was never applied, so it does not affect the next owner. Refuses if the control has already been applied."
+    },
+    {
+      "arguments": {
+        "action": "redeliver",
+        "run": "/tmp/example-run"
+      },
+      "explanation": "Bring a finished or failed-at-deliver run's pull request up to date with main: merges current main, regenerates, re-checks and pushes, starting the owner process. Equivalent to rerun --node deliver plus resume, without needing --text, --revision or a preview."
     }
   ],
   "interfaces": {
@@ -1361,7 +1368,8 @@ Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-con
         "rerun",
         "acknowledge",
         "amend-command",
-        "withdraw"
+        "withdraw",
+        "redeliver"
       ],
       "flags": [],
       "nargs": null,
@@ -1481,8 +1489,8 @@ Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-con
       "type": "string"
     }
   },
-  "purpose": "Preview or queue boundary pause/resume/stop/rerun/acknowledge/amend-command/withdraw controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. resume --acknowledge-failure also starts an owner for a failed checkpoint. acknowledge transitions an executing or failed checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly.",
-  "reviewed_schema": "f6939effaa49d5d7309bd21577197ddd6583f8d8d3849bb0fc83d722370e976b"
+  "purpose": "Preview or queue boundary pause/resume/stop/rerun/redeliver/acknowledge/amend-command/withdraw controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. resume --acknowledge-failure also starts an owner for a failed checkpoint. acknowledge transitions an executing or failed checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly. redeliver brings a finished or failed-at-deliver run up to date with main in one command.",
+  "reviewed_schema": "e6051426af8d5423cc4f122642b3c2b99f7defda000f9c3a5a4c6704351fcbb1"
 }
 ```
 
@@ -7595,7 +7603,9 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "call": "refactory_dsh.delivery:deliver_design",
       "id": "deliver",
       "kind": "op",
-      "knobs": [],
+      "knobs": [
+        "check_timeout_s"
+      ],
       "notes": "push the run's branch and open its pull request, as the approval gate said",
       "role": "ceo"
     },
@@ -8086,7 +8096,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`). The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-    "reviewed_schema": "19510e37db271a732098922894f37b621f1378cbd4244ead9297529e39830dfa"
+    "reviewed_schema": "0bdf6df91cb2c16aa30e6b0a7319b99c56d2e2be894037a3f70b05a456d80f0f"
   }
 }
 ```

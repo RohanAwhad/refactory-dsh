@@ -95,6 +95,10 @@ TITLE_LIMIT = 72
 VERIFY_ATTEMPTS = 5
 VERIFY_WAIT_S = 2.0
 
+#: The callable names of delivery's entry points, used by graph_control to find
+#: the deliver node by its callable rather than by its id or a command substring.
+DELIVER_ENTRY_POINTS = frozenset({"refactory_dsh.delivery:deliver_design"})
+
 
 #: A GitHub remote: HTTPS, with or without a user, or SSH in either spelling.
 _REMOTE = re.compile(r"^(?:https://(?:[^@/]+@)?github\.com/|(?:ssh://)?git@github\.com[:/])"
@@ -746,6 +750,40 @@ def announce(knobs: dict[str, Any], workdir: Path) -> None:
 
 
 # ── the `deliver` step ──────────────────────────────────────────────────────
+def _recover_interrupted_merge(found: worktree.Worktree) -> None:
+    """Reset delivery's own interrupted merge commit so ``require_current`` passes.
+
+    When delivery is killed between its local merge commit and the ``finally``
+    block that resets HEAD, the worktree stays at the merge commit.  On retry,
+    ``require_current`` sees HEAD != found.head and refuses with "outside the
+    run".  This function detects that specific case — HEAD is a merge whose
+    first parent is ``found.head`` — and resets to the reviewed commit so
+    delivery can merge again from a clean state.
+
+    A commit that is truly outside the run (not delivery's own merge) is left
+    alone: ``require_current`` will refuse it as before.
+    """
+    path = Path(found.path)
+    if not path.is_dir():
+        return
+    try:
+        head = worktree.git(path, "rev-parse", "HEAD").strip()
+    except ValueError:
+        return
+    if head == found.head:
+        return  # no recovery needed
+    # Check if HEAD is a merge whose first parent is found.head
+    try:
+        output = worktree.git(path, "rev-parse", f"{head}^1", f"{head}^2")
+        parents = [p.strip() for p in output.strip().splitlines() if p.strip()]
+    except ValueError:
+        return  # not a merge commit; let require_current handle it
+    if len(parents) >= 2 and parents[0] == found.head:
+        # This is delivery's own merge commit; reset to the reviewed commit
+        worktree.git(path, *worktree.NO_HOOKS, "reset", "--hard", found.head)
+    # Otherwise, let require_current handle it (foreign commit)
+
+
 def deliver_design(ctx: Any) -> dict[str, Any]:
     """The `deliver` step: what the approval gate said delivery would do, and nothing else.
 
@@ -764,6 +802,13 @@ def deliver_design(ctx: Any) -> dict[str, Any]:
     if found is None:
         return _kept(ctx, approved, found, str(approved.get("why") or "it was never planned"),
                      title="", finish=[])
+
+    # Verify the worktree's git link before recovery: a worktree whose .git was
+    # repointed must be refused before git reset --hard runs in it.
+    worktree.verify_git_link(found)
+
+    # Recover from an interrupted merge before require_current checks HEAD.
+    _recover_interrupted_merge(found)
 
     # All paths with a worktree write the pull request text once.
     found = worktree.require_current(ctx.workdir)

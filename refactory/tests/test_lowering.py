@@ -337,6 +337,142 @@ def test_op_without_check_produces_keeps_default_timeout():
     )
 
 
+# ── delivery envelope ──────────────────────────────────────────────────────
+#
+# The deliver node runs the merged check plus merge/regeneration overhead.
+# Its spine envelope must cover all of them, or the spine kills it.
+
+
+def _deliver_op_state(*, check_timeout_s: int = 180) -> dict:
+    """A minimal state with both a check gate and a deliver op that declares check_timeout_s."""
+    from refactory_dsh.repo_change import CHECK_PRODUCES, CHECK_WRITES
+
+    graph = Graph()
+    graph.add(Node(
+        "check", "gate", evaluator="somepackage.ops:check_artifact",
+        knobs=("check_timeout_s",),
+        writes=("check.txt", *CHECK_WRITES),
+        produces=("validation", *CHECK_PRODUCES),
+        max_iterations=4,
+    ))
+    graph.add(Node(
+        "deliver", "op", call="refactory_dsh.delivery:deliver_design",
+        knobs=("check_timeout_s",),
+        writes=("delivery.json", "pull-request.md"),
+        produces=("delivery_result", "pull_request"),
+    ))
+    return {
+        "version": 1,
+        "graph": graph.to_state(),
+        "knobs": {"check_timeout_s": {"value": check_timeout_s, "spec": {"default": 180}}},
+        "ports": [],
+        "memory": [],
+    }
+
+
+def test_deliver_node_gets_delivery_envelope():
+    """The real DesignMode's deliver node gets a command_timeout_s that covers the
+    full check envelope plus merge/regeneration overhead.
+    """
+    from refactory_dsh.design import DesignMode
+    from refactory_dsh.worktree import INSTALL_TIMEOUT_S
+    from refactory_dsh.model import NODE_DISPATCH_OVERHEAD_S
+
+    mode = DesignMode()
+    state = mode.state_dict()
+    workflow = lowering.to_workflow(state, name="design")
+
+    check_envelope = lowering._check_envelope_s(state)
+    deliver_expected = check_envelope + INSTALL_TIMEOUT_S + NODE_DISPATCH_OVERHEAD_S
+
+    lowered_deliver = workflow.nodes["deliver"]
+    assert lowered_deliver.command_timeout_s == deliver_expected, (
+        f"deliver: expected {deliver_expected}, got {lowered_deliver.command_timeout_s}"
+    )
+    # The delivery envelope must exceed the check envelope
+    lowered_check = workflow.nodes["check"]
+    assert lowered_deliver.command_timeout_s > lowered_check.command_timeout_s, (
+        f"deliver ({lowered_deliver.command_timeout_s}) must exceed "
+        f"check ({lowered_check.command_timeout_s})"
+    )
+
+
+def test_deliver_timeout_exceeds_spine_default():
+    """With check_timeout_s=1800, the delivery envelope far exceeds the spine's
+    default 600 s, so the b27c scenario would not be killed.
+    """
+    state = _deliver_op_state(check_timeout_s=1800)
+    workflow = lowering.to_workflow(state, name="design")
+    lowered = workflow.nodes["deliver"]
+    assert lowered.command_timeout_s > 600, (
+        f"delivery envelope {lowered.command_timeout_s} must exceed "
+        f"the spine's default 600 s"
+    )
+    # At check_timeout_s=1800: check_envelope = 3*1800 + 3*1800 + 600 = 11400
+    # delivery = 11400 + 1800 + 600 = 13800
+    assert lowered.command_timeout_s > 10000, (
+        f"with check_timeout_s=1800 the envelope should be > 10000, "
+        f"got {lowered.command_timeout_s}"
+    )
+
+
+def test_synthetic_deliver_op_gets_delivery_envelope():
+    """A synthetic op under a different name that declares check_timeout_s gets
+    the delivery envelope, not the spine's default.
+
+    This tests the knob-declaration predicate, not a function name match:
+    the node is named 'ship_it', not 'deliver', and its call is not
+    'delivery:deliver'.
+    """
+    from refactory_dsh.repo_change import CHECK_PRODUCES, CHECK_WRITES
+    from refactory_dsh.worktree import INSTALL_TIMEOUT_S
+    from refactory_dsh.model import NODE_DISPATCH_OVERHEAD_S
+
+    graph = Graph()
+    graph.add(Node(
+        "check", "gate", evaluator="somepackage.ops:check_artifact",
+        knobs=("check_timeout_s",),
+        writes=("check.txt", *CHECK_WRITES),
+        produces=("validation", *CHECK_PRODUCES),
+        max_iterations=4,
+    ))
+    graph.add(Node(
+        "ship_it", "op", call="custom_mode.ops:ship_it",
+        knobs=("check_timeout_s",),
+        writes=("delivery.json",),
+        produces=("delivery_result",),
+    ))
+    state = {
+        "version": 1,
+        "graph": graph.to_state(),
+        "knobs": {"check_timeout_s": {"value": 180, "spec": {"default": 180}}},
+        "ports": [],
+        "memory": [],
+    }
+    workflow = lowering.to_workflow(state, name="custom_mode")
+    lowered = workflow.nodes["ship_it"]
+    check_envelope = lowering._check_envelope_s(state)
+    expected = check_envelope + INSTALL_TIMEOUT_S + NODE_DISPATCH_OVERHEAD_S
+    assert lowered.command_timeout_s == expected, (
+        f"ship_it: expected {expected}, got {lowered.command_timeout_s}"
+    )
+
+
+def test_deliver_envelope_grows_with_check_timeout_s():
+    from refactory_dsh.worktree import INSTALL_TIMEOUT_S
+    from refactory_dsh.model import NODE_DISPATCH_OVERHEAD_S
+
+    for timeout in (180, 600, 1500):
+        state = _deliver_op_state(check_timeout_s=timeout)
+        workflow = lowering.to_workflow(state, name="design")
+        lowered = workflow.nodes["deliver"]
+        check_envelope = 3 * INSTALL_TIMEOUT_S + 3 * timeout + NODE_DISPATCH_OVERHEAD_S
+        expected = check_envelope + INSTALL_TIMEOUT_S + NODE_DISPATCH_OVERHEAD_S
+        assert lowered.command_timeout_s == expected, (
+            f"check_timeout_s={timeout}: expected {expected}, got {lowered.command_timeout_s}"
+        )
+
+
 # ── fidelity to refactory's IR ─────────────────────────────────────────────
 #
 # Issue #21 said not to invent a command string, because `FnNode.callable_name`
