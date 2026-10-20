@@ -70,9 +70,11 @@ Typed parameters: the only thing an optimizer may write.
 |---|---|---|
 | class | `Knob` | `(default: 'Any', kind: 'str' = 'float', lo: 'float \| None' = None, hi: 'float \| None' = None, enum: 'tuple[Any, ...]' = (), values: 'tuple[str, ...]' = (), frozen: 'bool' = False, description: 'str' = '', required: 'bool' = False) -> None` |
 | class | `KnobError` | `` |
+| function | `check_required_knobs` | `(declared: "Mapping[str, 'Knob']", values: 'Mapping[str, Any]', *, allow_defaults: 'bool' = False) -> 'list[tuple[str, str]]'` |
 
 - **`Knob`** — A declared parameter: a default, a kind, and optional bounds.
 - **`KnobError`** — A value does not satisfy the knob it was written to.
+- **`check_required_knobs`** — Return ``(name, message)`` for every required knob whose value is empty.
 
 
 <a id="refactory_dsh-nn-mode"></a>

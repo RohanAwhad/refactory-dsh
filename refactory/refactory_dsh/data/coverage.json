@@ -175,7 +175,7 @@
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
       "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`). The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-      "reviewed_schema": "232bd533cf53530af038eb26d7e54a67be1966c5072424c0cb915ff898a4ac88"
+      "reviewed_schema": "0556acf73fcd4801c479dcbe515649942ca5e76f4b8523406537e7444794f9b5"
     },
     "default_pack/design_fast": {
       "doc": "refactory/docs/budgets-fast-modes.md",
@@ -204,7 +204,7 @@
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
       "purpose": "Build a small artifact with one sequential strategist, coder and QA agent, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none (`worktree=0` writes .factory/artifacts instead; `source_project` copies a directory there). The check runs in that worktree before focused QA. It has no approval gate, so it opens no pull request: the branch is left for you to push.",
-      "reviewed_schema": "251795ee3c0005c0d3abf41b3d1624c5ff60c6e929d8cbd31c75c4e950b48147"
+      "reviewed_schema": "75a7f09a27cb047d93867ea56a1a69b5b436215049eb16505dda70ab1165053a"
     },
     "default_pack/edit": {
       "doc": "refactory/docs/authoring-validation.md",
@@ -264,7 +264,7 @@
         "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
       },
       "purpose": "Change a repository until a failing check passes, on a branch of its own, through the steps any mode that changes a repository attaches (`repo_change`): the example mode authors copy. It opens no pull request; unscored, so not an optimization target.",
-      "reviewed_schema": "e23089c592149082b0c64eb7bda81bd8adde05ee284df5157e7bf8e402de0007"
+      "reviewed_schema": "c23f78ab9a97b32bfc8cc4a9fedcfab5c99092e892c50860f48c6e722385af9d"
     },
     "java_build_pack/build": {
       "doc": "refactory/docs/concepts.md",
@@ -963,6 +963,13 @@
             "run": "/tmp/example-run"
           },
           "explanation": "Bring a finished or failed-at-deliver run's pull request up to date with main: merges current main, regenerates, re-checks and pushes, starting the owner process. Equivalent to rerun --node deliver plus resume, without needing --text, --revision or a preview."
+        },
+        {
+          "arguments": {
+            "action": "confirm-completion",
+            "run": "/tmp/example-run"
+          },
+          "explanation": "Write a person-only completion_override into spine-status.json, allowing update_goal complete despite a non-done status. The override is bound to the current status and invocation; it is cleared when recordStatus() writes a different status."
         }
       ],
       "interfaces": {
@@ -970,8 +977,8 @@
         "cli": "python -m refactory_dsh.console graph-control",
         "panel": "Graph boundary controls and recovery preview."
       },
-      "purpose": "Preview or queue boundary pause/resume/stop/rerun/redeliver/acknowledge/amend-command/withdraw controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. resume --acknowledge-failure also starts an owner for a failed checkpoint. acknowledge transitions an executing or failed checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly. redeliver brings a finished or failed-at-deliver run up to date with main in one command.",
-      "reviewed_schema": "e6051426af8d5423cc4f122642b3c2b99f7defda000f9c3a5a4c6704351fcbb1"
+      "purpose": "Preview or queue boundary pause/resume/stop/rerun/redeliver/acknowledge/amend-command/withdraw/confirm-completion controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. resume --acknowledge-failure also starts an owner for a failed checkpoint. acknowledge transitions an executing or failed checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly. redeliver brings a finished or failed-at-deliver run up to date with main in one command. confirm-completion writes a person-only completion_override into spine-status.json, allowing update_goal complete despite a non-done status.",
+      "reviewed_schema": "680c3776b4e7c3715ba34f7b94e1fe869c499390adbdf3eab26390f82a393b32"
     },
     "help": {
       "chat": {

@@ -229,7 +229,7 @@ class Mode:
         carry the same facts -- or an empty or blank one, is refused before the work
         directory is created. Its declared default is a placeholder, never a value.
         """
-        from refactory_dsh.brief_guard import check_required_knobs
+        from refactory_dsh.nn.knob import check_required_knobs
 
         declared = self.parameters()
         given = {**self.values(), **{name: value for name, value in (task or {}).items()
@@ -306,7 +306,7 @@ class Mode:
         if source_manifest.exists():
             source = json.loads(source_manifest.read_text())
             if source.get("source_project"):
-                from refactory_dsh.fast_ops import _source_manifest
+                from refactory_dsh.paths import _source_manifest
 
                 if _source_manifest(Path(source["source_project"])) != source.get("files"):
                     raise ValueError("source project changed; dependent results are invalid; start a new run")

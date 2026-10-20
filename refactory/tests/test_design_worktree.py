@@ -29,7 +29,7 @@ from refactory_dsh.nn import Verdict
 from refactory_dsh.paths import REPO_ROOT
 from refactory_dsh.projects import projects_dir
 from tests_support import (DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, PITFALLS_ANSWER,
-                           RESEARCH_ANSWER,
+                           RESEARCH_ANSWER, VERIFICATION_ANSWER,
                            REVIEW_ANSWERS, FakeModel,
                            StaleEmitModel, git, git_repo, render, stub)
 
@@ -85,8 +85,8 @@ def _answers(*emits: str) -> list[str]:
     not run.
     """
     return [RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
-            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
-            *emits, *REVIEW_ANSWERS]
+            DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, *emits, VERIFICATION_ANSWER,
+            *REVIEW_ANSWERS]
 
 
 def _mode(**knobs) -> DesignMode:
@@ -706,6 +706,7 @@ def test_a_refused_emit_is_redone_from_a_fresh_emit_txt(repo, tmp_path):
     git(worktree.recorded(run).path, "checkout", "--", "app.py")
 
     redone = DesignMode.resume(run, model=StaleEmitModel([render({"tool.py": "print('redone')\n"}),
+                                                          VERIFICATION_ANSWER,
                                                           *REVIEW_ANSWERS]))
     assert redone.error is None
     assert (run / "emit.txt").read_text() == render({"tool.py": "print('redone')\n"})
@@ -1178,7 +1179,8 @@ def _fast(workdir: Path, *emits: str, refused: int = 0, knobs: dict | None = Non
         state["knobs"][name]["value"] = value
     mode.load_state_dict(state)
     answers = [FAST_PLAN] + [answer for index, emit in enumerate(emits)
-                             for answer in ((emit,) if index < refused else (emit, FAST_QA))]
+                             for answer in ((emit,) if index < refused
+                                            else (emit, VERIFICATION_ANSWER, FAST_QA))]
     return mode.run(workdir, model=FakeModel(answers),
                     task={"name": NAME, "brief": "a tool", "check": "python tool.py", **task})
 
@@ -1190,13 +1192,13 @@ def test_design_fast_changes_a_repository_in_a_worktree_and_delivers_nothing(rep
     # Passes only where app.py is as committed and the setup command has run: the worktree, prepared.
     tool = ("import pathlib\nassert pathlib.Path('app.py').read_text() == \"print('app')\\n\"\n"
             "assert pathlib.Path('built.txt').exists()\n")
-    model = FakeModel([FAST_PLAN, render({"tool.py": tool}), FAST_QA])
+    model = FakeModel([FAST_PLAN, render({"tool.py": tool}), VERIFICATION_ANSWER, FAST_QA])
     result = DesignFastMode().run(tmp_path / "run", model=model, task={
         "name": NAME, "brief": "a tool", "check": "python tool.py", "target": str(repo),
         "setup": "python -c \"open('built.txt', 'w').write('built')\""})
     assert result.exit_ok, result.error
     assert "===EDIT: <relative path>===" in model.prompts[1], "emit is told it may edit the last attempt"
-    assert str(worktree.WRAPPER) in model.prompts[2], "focused QA is told how to run a command in the worktree"
+    assert str(worktree.WRAPPER) in model.prompts[3], "focused QA is told how to run a command in the worktree"
     assert (git(repo, "rev-parse", "HEAD"), (repo / "app.py").read_text()) == (head, "print('mine, not committed')\n")
     payload = _report(tmp_path / "run")
     assert (payload["target"], payload["base"]) == (str(repo.resolve()), head)
@@ -1374,7 +1376,7 @@ def test_inherited_failure_does_not_excuse_a_check_that_stopped_at_it(tmp_path):
     repo = git_repo(tmp_path / "repo")
     _commit(repo, "test_base_broken.py", "def test_base_broken():\n    assert False\n")
     fixed = render({"tool.py": "print('built')\n",
-                    "test_base_broken.py": "def test_base_broken():\n    assert True\n"})
+                    "test_base_broken.py": "def test_base_broken():\n    import tool\n    assert hasattr(tool, '__file__')\n"})
     result = _design(
         tmp_path / "run",
         FakeModel(_answers(render({"tool.py": "print('built')\n"}), fixed)),
@@ -1394,7 +1396,7 @@ def test_new_failure_introduced_by_attempt_is_refused(tmp_path):
     failing = render({"tool.py": "print('built')\n",
                       "test_new.py": "def test_new_broken():\n    assert False\n"})
     fixed = render({"tool.py": "print('built')\n",
-                    "test_new.py": "def test_new_broken():\n    assert True\n"})
+                    "test_new.py": "def test_new_broken():\n    import tool\n    assert hasattr(tool, '__file__')\n"})
     result = _design(
         tmp_path / "run",
         FakeModel(_answers(failing, fixed)),
@@ -1413,7 +1415,7 @@ def test_brief_mentioned_failure_not_excused(tmp_path):
     repo = git_repo(tmp_path / "repo")
     _commit(repo, "test_fix_me.py", "def test_fix_me():\n    assert False\n")
     not_fixed = render({"tool.py": "print('did not fix it')\n"})
-    fixed = render({"test_fix_me.py": "def test_fix_me():\n    assert True\n"})
+    fixed = render({"test_fix_me.py": "def test_fix_me():\n    import tool\n    assert hasattr(tool, '__file__')\n"})
     result = DesignMode().run(
         tmp_path / "run",
         model=FakeModel(_answers(not_fixed, fixed)),
@@ -1523,7 +1525,7 @@ def test_design_named_failure_not_excused(tmp_path):
     repo = git_repo(tmp_path / "repo")
     _commit(repo, "test_oblique.py", "def test_oblique():\n    assert False\n")
     not_fixed = render({"tool.py": "print('did not fix it')\n"})
-    fixed = render({"test_oblique.py": "def test_oblique():\n    assert True\n"})
+    fixed = render({"test_oblique.py": "def test_oblique():\n    import tool\n    assert hasattr(tool, '__file__')\n"})
 
     naming_appendix = "\n\n## Tests to fix\n- test_oblique.py::test_oblique\n"
 

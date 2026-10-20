@@ -21,7 +21,7 @@ import pytest
 
 from refactory_dsh import agent_delivery, design_ops, nn, repo_change, target_guard
 from refactory_dsh.design import DesignMode
-from tests_support import DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, PITFALLS_ANSWER, RESEARCH_ANSWER, REVIEW_ANSWERS, FakeModel, StaleEmitModel, render
+from tests_support import DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER, PITFALLS_ANSWER, RESEARCH_ANSWER, VERIFICATION_ANSWER, REVIEW_ANSWERS, FakeModel, StaleEmitModel, render
 
 NAME = "guarded_tool"
 
@@ -377,7 +377,7 @@ def test_a_design_run_whose_emit_edits_the_target_fails_before_materialise(targe
         RESEARCH_ANSWER, PITFALLS_ANSWER, "perspectives", "one plan",
         DESIGN_DOC_ANSWER, DESIGN_REVIEW_ANSWER,
         DESIGN_DOC_ANSWER,
-        render({"tool.py": "print('built')\n"}), *REVIEW_ANSWERS,
+        render({"tool.py": "print('built')\n"}), VERIFICATION_ANSWER, *REVIEW_ANSWERS,
     ], target)
     result = _without_worktree().run(
         tmp_path / "run", model=model, verdicts={"gate_strategy": "proceed"},
@@ -403,6 +403,7 @@ def test_a_refused_emit_is_redone_from_a_fresh_emit_txt(target, tmp_path):
     _git(target, "checkout", "--", "app.py")
 
     redone = DesignMode.resume(workdir, model=StaleEmitModel([render({"tool.py": "print('redone')\n"}),
+                                                              VERIFICATION_ANSWER,
                                                               *REVIEW_ANSWERS, "VERDICT: PASS"]))
     assert redone.error is None
     assert (workdir / "emit.txt").read_text() == render({"tool.py": "print('redone')\n"})

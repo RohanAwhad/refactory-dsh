@@ -1291,7 +1291,7 @@ Documentation: [refactory/docs/cli.md](../../../refactory/docs/cli.md)
 
 ## graph-control
 
-Preview or queue boundary pause/resume/stop/rerun/redeliver/acknowledge/amend-command/withdraw controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. resume --acknowledge-failure also starts an owner for a failed checkpoint. acknowledge transitions an executing or failed checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly. redeliver brings a finished or failed-at-deliver run up to date with main in one command.
+Preview or queue boundary pause/resume/stop/rerun/redeliver/acknowledge/amend-command/withdraw/confirm-completion controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. resume --acknowledge-failure also starts an owner for a failed checkpoint. acknowledge transitions an executing or failed checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly. redeliver brings a finished or failed-at-deliver run up to date with main in one command. confirm-completion writes a person-only completion_override into spine-status.json, allowing update_goal complete despite a non-done status.
 
 Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-control.md)
 
@@ -1338,6 +1338,13 @@ Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-con
         "run": "/tmp/example-run"
       },
       "explanation": "Bring a finished or failed-at-deliver run's pull request up to date with main: merges current main, regenerates, re-checks and pushes, starting the owner process. Equivalent to rerun --node deliver plus resume, without needing --text, --revision or a preview."
+    },
+    {
+      "arguments": {
+        "action": "confirm-completion",
+        "run": "/tmp/example-run"
+      },
+      "explanation": "Write a person-only completion_override into spine-status.json, allowing update_goal complete despite a non-done status. The override is bound to the current status and invocation; it is cleared when recordStatus() writes a different status."
     }
   ],
   "interfaces": {
@@ -1369,7 +1376,8 @@ Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-con
         "acknowledge",
         "amend-command",
         "withdraw",
-        "redeliver"
+        "redeliver",
+        "confirm-completion"
       ],
       "flags": [],
       "nargs": null,
@@ -1489,8 +1497,8 @@ Documentation: [refactory/docs/live-control.md](../../../refactory/docs/live-con
       "type": "string"
     }
   },
-  "purpose": "Preview or queue boundary pause/resume/stop/rerun/redeliver/acknowledge/amend-command/withdraw controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. resume --acknowledge-failure also starts an owner for a failed checkpoint. acknowledge transitions an executing or failed checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly. redeliver brings a finished or failed-at-deliver run up to date with main in one command.",
-  "reviewed_schema": "e6051426af8d5423cc4f122642b3c2b99f7defda000f9c3a5a4c6704351fcbb1"
+  "purpose": "Preview or queue boundary pause/resume/stop/rerun/redeliver/acknowledge/amend-command/withdraw/confirm-completion controls. Recovery preserves saved routes and rejects unknown side effects or stale fingerprints; a rerun of a failed run takes acknowledge_failure once its side effects are inspected. resume --acknowledge-failure also starts an owner for a failed checkpoint. acknowledge transitions an executing or failed checkpoint whose owner died. amend-command corrects a run's setup, check or generate command. withdraw removes a stale queued control. stop on a terminal run signals the lingering owner directly. redeliver brings a finished or failed-at-deliver run up to date with main in one command. confirm-completion writes a person-only completion_override into spine-status.json, allowing update_goal complete despite a non-done status.",
+  "reviewed_schema": "680c3776b4e7c3715ba34f7b94e1fe869c499390adbdf3eab26390f82a393b32"
 }
 ```
 
@@ -7413,11 +7421,6 @@ Build a software artifact from a brief, name and acceptance command, as commits 
   "description": "design, emit and check a software artifact from a brief",
   "edges": [
     {
-      "condition": null,
-      "source": "apply_corrections",
-      "target": "emit"
-    },
-    {
       "condition": "reloop",
       "source": "check",
       "target": "emit"
@@ -7425,22 +7428,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     {
       "condition": "proceed",
       "source": "check",
-      "target": "fork_qa"
-    },
-    {
-      "condition": null,
-      "source": "deliver",
-      "target": "delivery_gate"
-    },
-    {
-      "condition": "proceed",
-      "source": "delivery_gate",
-      "target": "done"
-    },
-    {
-      "condition": "reloop",
-      "source": "delivery_gate",
-      "target": "emit"
+      "target": "verifier"
     },
     {
       "condition": null,
@@ -7520,12 +7508,22 @@ Build a software artifact from a brief, name and acceptance command, as commits 
     {
       "condition": "proceed",
       "source": "gate_strategy",
-      "target": "pick_corrections"
+      "target": "emit"
     },
     {
       "condition": "reloop",
       "source": "gate_strategy",
       "target": "synthesize_strategy"
+    },
+    {
+      "condition": "reloop",
+      "source": "gate_verification",
+      "target": "emit"
+    },
+    {
+      "condition": "proceed",
+      "source": "gate_verification",
+      "target": "fork_qa"
     },
     {
       "condition": null,
@@ -7541,16 +7539,6 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "condition": null,
       "source": "overwatch",
       "target": "gate_overwatch"
-    },
-    {
-      "condition": "proceed",
-      "source": "pick_corrections",
-      "target": "apply_corrections"
-    },
-    {
-      "condition": "skip",
-      "source": "pick_corrections",
-      "target": "emit"
     },
     {
       "condition": null,
@@ -7591,15 +7579,16 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "condition": null,
       "source": "synthesize_strategy",
       "target": "design_doc"
+    },
+    {
+      "condition": null,
+      "source": "verifier",
+      "target": "gate_verification"
     }
   ],
   "gates": [
     {
       "id": "check",
-      "user": false
-    },
-    {
-      "id": "delivery_gate",
       "user": false
     },
     {
@@ -7627,21 +7616,13 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "user": true
     },
     {
-      "id": "pick_corrections",
+      "id": "gate_verification",
       "user": false
     }
   ],
   "guidance": "",
   "id": "default_pack/design",
   "nodes": [
-    {
-      "call": "",
-      "id": "apply_corrections",
-      "kind": "agent",
-      "knobs": [],
-      "notes": "revise design.md with gate-strategy corrections before the builder runs",
-      "role": "ceo"
-    },
     {
       "call": "refactory_dsh.design_ops:check_artifact",
       "gate_kind": "fn",
@@ -7673,17 +7654,6 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "role": "ceo"
     },
     {
-      "call": "refactory_dsh.delivery:evaluate_delivery_conflicts",
-      "gate_kind": "fn",
-      "id": "delivery_gate",
-      "kind": "gate",
-      "knobs": [
-        "check_attempts"
-      ],
-      "notes": "on authored-file conflict reloop to emit; otherwise proceed to done",
-      "role": "ceo"
-    },
-    {
       "call": "",
       "id": "design_doc",
       "kind": "agent",
@@ -7697,14 +7667,6 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "kind": "agent",
       "knobs": [],
       "notes": "review the design for open alternatives and unconfirmed claims",
-      "role": "ceo"
-    },
-    {
-      "call": "refactory_dsh.design_ops:noop",
-      "id": "done",
-      "kind": "op",
-      "knobs": [],
-      "notes": "terminal node after delivery succeeds",
       "role": "ceo"
     },
     {
@@ -7788,6 +7750,17 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "role": "ceo"
     },
     {
+      "call": "refactory_dsh.design_ops:gate_verification",
+      "gate_kind": "fn",
+      "id": "gate_verification",
+      "kind": "gate",
+      "knobs": [
+        "review_attempts"
+      ],
+      "notes": "proceed on PASS; advisory reloop on FAIL (does not spend review_attempts)",
+      "role": "ceo"
+    },
+    {
       "call": "",
       "id": "health_checker",
       "kind": "agent",
@@ -7817,15 +7790,6 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "kind": "agent",
       "knobs": [],
       "notes": "audit the evidence behind the reviews",
-      "role": "ceo"
-    },
-    {
-      "call": "refactory_dsh.design_ops:pick_gate_corrections",
-      "gate_kind": "fn",
-      "id": "pick_corrections",
-      "kind": "gate",
-      "knobs": [],
-      "notes": "deterministically extract gate_strategy corrections from the ledger; skip the agent when there are none",
       "role": "ceo"
     },
     {
@@ -7913,6 +7877,14 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "knobs": [],
       "notes": "compile the perspectives into one plan",
       "role": "ceo"
+    },
+    {
+      "call": "",
+      "id": "verifier",
+      "kind": "agent",
+      "knobs": [],
+      "notes": "design-blind verification: apply the evidence log's methods to the brief, diff and repo",
+      "role": "code_reviewer"
     }
   ],
   "parameters": {
@@ -8187,7 +8159,7 @@ Build a software artifact from a brief, name and acceptance command, as commits 
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a software artifact from a brief, name and acceptance command, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none. A design review checks the design for open choices and unchecked claims before the approval gate (`design_review_attempts`). The command runs in that worktree before separate QA and Overwatch; final current validation and intent evidence are required. Once they pass, the branch is delivered as a pull request (into the branch its base came from, or the default branch), which the approval gate's question names first (`pr=0` keeps it local, with its pull request text in pull-request.md and finishing commands in delivery.json; `refine` updates an open one).",
-    "reviewed_schema": "232bd533cf53530af038eb26d7e54a67be1966c5072424c0cb915ff898a4ac88"
+    "reviewed_schema": "0556acf73fcd4801c479dcbe515649942ca5e76f4b8523406537e7444794f9b5"
   }
 }
 ```
@@ -8208,7 +8180,7 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
     {
       "condition": null,
       "source": "focused_check",
-      "target": "focused_qa"
+      "target": "verifier"
     },
     {
       "condition": null,
@@ -8236,6 +8208,16 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "target": "report"
     },
     {
+      "condition": "reloop",
+      "source": "gate_verification",
+      "target": "emit"
+    },
+    {
+      "condition": "proceed",
+      "source": "gate_verification",
+      "target": "focused_qa"
+    },
+    {
       "condition": null,
       "source": "materialise",
       "target": "gate_emit"
@@ -8249,6 +8231,11 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "condition": null,
       "source": "strategy",
       "target": "emit"
+    },
+    {
+      "condition": null,
+      "source": "verifier",
+      "target": "gate_verification"
     }
   ],
   "gates": [
@@ -8258,6 +8245,10 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
     },
     {
       "id": "gate_qa",
+      "user": false
+    },
+    {
+      "id": "gate_verification",
       "user": false
     }
   ],
@@ -8314,6 +8305,17 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "role": "ceo"
     },
     {
+      "call": "refactory_dsh.fast_ops:gate_verification",
+      "gate_kind": "fn",
+      "id": "gate_verification",
+      "kind": "gate",
+      "knobs": [
+        "repair_attempts"
+      ],
+      "notes": "proceed on PASS; advisory reloop on FAIL (does not spend repair_attempts); check failures and guardedness blocks via _repair",
+      "role": "ceo"
+    },
+    {
       "call": "refactory_dsh.fast_ops:materialise_artifact",
       "id": "materialise",
       "kind": "op",
@@ -8354,6 +8356,14 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "knobs": [],
       "notes": "one concise strategy, followed by one coder and one QA agent; no parallel workers",
       "role": "strategist"
+    },
+    {
+      "call": "",
+      "id": "verifier",
+      "kind": "agent",
+      "knobs": [],
+      "notes": "design-blind verification: apply the evidence log's methods to the brief, diff and repo",
+      "role": "code_reviewer"
     }
   ],
   "parameters": {
@@ -8519,7 +8529,7 @@ Build a small artifact with one sequential strategist, coder and QA agent, as co
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Build a small artifact with one sequential strategist, coder and QA agent, as commits on the run's own branch in a git worktree: of the repository `target` names, or of a new project when it names none (`worktree=0` writes .factory/artifacts instead; `source_project` copies a directory there). The check runs in that worktree before focused QA. It has no approval gate, so it opens no pull request: the branch is left for you to push.",
-    "reviewed_schema": "251795ee3c0005c0d3abf41b3d1624c5ff60c6e929d8cbd31c75c4e950b48147"
+    "reviewed_schema": "75a7f09a27cb047d93867ea56a1a69b5b436215049eb16505dda70ab1165053a"
   }
 }
 ```
@@ -9541,12 +9551,22 @@ Change a repository until a failing check passes, on a branch of its own, throug
     {
       "condition": "proceed",
       "source": "check",
-      "target": "report"
+      "target": "verifier"
     },
     {
       "condition": null,
       "source": "emit",
       "target": "materialise"
+    },
+    {
+      "condition": "reloop",
+      "source": "gate_verification",
+      "target": "emit"
+    },
+    {
+      "condition": "proceed",
+      "source": "gate_verification",
+      "target": "report"
     },
     {
       "condition": null,
@@ -9557,11 +9577,20 @@ Change a repository until a failing check passes, on a branch of its own, throug
       "condition": null,
       "source": "prepare",
       "target": "emit"
+    },
+    {
+      "condition": null,
+      "source": "verifier",
+      "target": "gate_verification"
     }
   ],
   "gates": [
     {
       "id": "check",
+      "user": false
+    },
+    {
+      "id": "gate_verification",
       "user": false
     }
   ],
@@ -9586,6 +9615,15 @@ Change a repository until a failing check passes, on a branch of its own, throug
       "kind": "agent",
       "knobs": [],
       "notes": "write the fix as blocks in emit.txt",
+      "role": "ceo"
+    },
+    {
+      "call": "refactory_dsh.verification:gate_verification_generic",
+      "gate_kind": "fn",
+      "id": "gate_verification",
+      "kind": "gate",
+      "knobs": [],
+      "notes": "advisory verification gate; always proceeds",
       "role": "ceo"
     },
     {
@@ -9620,6 +9658,14 @@ Change a repository until a failing check passes, on a branch of its own, throug
       "knobs": [],
       "notes": "say which branch holds the fix",
       "role": "ceo"
+    },
+    {
+      "call": "",
+      "id": "verifier",
+      "kind": "agent",
+      "knobs": [],
+      "notes": "design-blind verification: apply the evidence log's methods to the brief, diff and repo",
+      "role": "code_reviewer"
     }
   ],
   "parameters": {
@@ -9764,7 +9810,7 @@ Change a repository until a failing check passes, on a branch of its own, throug
       "panel": "Mode picker; Run once executes enabled modes including authoring; Optimize requires a scored mode. Use chat for stepwise gates."
     },
     "purpose": "Change a repository until a failing check passes, on a branch of its own, through the steps any mode that changes a repository attaches (`repo_change`): the example mode authors copy. It opens no pull request; unscored, so not an optimization target.",
-    "reviewed_schema": "e23089c592149082b0c64eb7bda81bd8adde05ee284df5157e7bf8e402de0007"
+    "reviewed_schema": "c23f78ab9a97b32bfc8cc4a9fedcfab5c99092e892c50860f48c6e722385af9d"
   }
 }
 ```

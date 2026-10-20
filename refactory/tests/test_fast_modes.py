@@ -8,7 +8,7 @@ import pytest
 
 from refactory_dsh import nn, registry
 from refactory_dsh.fast import CreateFastMode, DesignFastMode, EditFastMode
-from tests_support import FakeModel, git, good_files, render
+from tests_support import FakeModel, VERIFICATION_ANSWER, git, good_files, render
 
 
 PLAN = "Change only the requested file, preserve its public behavior, and review the required check result."
@@ -22,7 +22,9 @@ def test_fast_graphs_are_inspectable_and_have_one_focused_review(cls):
     mode = cls()
     assert nn.validate_state(mode.state_dict(), resolve_calls=True) == []
     agents = [node.id for node in mode.graph().nodes.values() if node.kind == "agent"]
-    expected = {"emit", "focused_qa"} if cls is EditFastMode else {"strategy", "emit", "focused_qa"}
+    expected = {"emit", "focused_qa"} if cls is EditFastMode else (
+        {"strategy", "emit", "focused_qa", "verifier"} if cls is DesignFastMode else
+        {"strategy", "emit", "focused_qa"})
     assert set(agents) == expected
     assert not any(node.kind in ("fork", "join") for node in mode.graph().nodes.values())
     if cls is EditFastMode:
@@ -40,7 +42,7 @@ def test_design_catches_known_defect_and_repairs_within_bound(tmp_path, monkeypa
     monkeypatch.setenv("REFACTORY_PROJECT", str(tmp_path))
     bad = "===FILE: answer.py===\nassert 1 + 1 == 3\n"
     good = "===FILE: answer.py===\nassert 1 + 1 == 2\n"
-    client = FakeModel([PLAN, bad, QA_PASS, good, QA_PASS])
+    client = FakeModel([PLAN, bad, VERIFICATION_ANSWER, good, VERIFICATION_ANSWER, QA_PASS])
     run = DesignFastMode().run(tmp_path / "run", model=client,
                                task={"name": "small", "brief": "assert two", "check": f"{sys.executable} answer.py"})
     assert run.exit_ok, run.error
@@ -50,7 +52,7 @@ def test_design_catches_known_defect_and_repairs_within_bound(tmp_path, monkeypa
     assert report["research"] == "not requested/run"
     assert report["canonical_smoke"] == "not run"
     assert (tmp_path / "run/repair.txt").read_text().startswith("requested runtime check failed")
-    assert len(client.prompts) == 5, "repairs repeat coder/QA, never the strategist"
+    assert len(client.prompts) == 6, "repairs repeat coder/verifier/QA, never the strategist"
     assert (tmp_path / "run/implementation-plan.txt").read_text() == PLAN
     assert PLAN in client.prompts[1] and PLAN in client.prompts[3]
 
@@ -73,7 +75,7 @@ def test_a_check_with_no_target_imports_refactory_however_the_shell_path_reads(t
     state = mode.state_dict()
     state["knobs"]["worktree"]["value"] = False  # the artifact directory, not a worktree
     mode.load_state_dict(state)
-    run = mode.run(tmp_path / "run", model=FakeModel([PLAN, "===FILE: answer.py===\nanswer = 1\n", QA_PASS]),
+    run = mode.run(tmp_path / "run", model=FakeModel([PLAN, "===FILE: answer.py===\nanswer = 1\n", VERIFICATION_ANSWER, QA_PASS]),
                    task={"name": "imports", "brief": "import refactory",
                          "check": "python -c 'import refactory_dsh, answer'"})
     assert run.exit_ok, run.error
@@ -86,7 +88,7 @@ def test_design_exhausted_repair_is_unresolved_and_has_no_success(tmp_path, monk
     state = mode.state_dict()
     state["knobs"]["repair_attempts"]["value"] = 0
     mode.load_state_dict(state)
-    run = mode.run(tmp_path / "run", model=FakeModel([PLAN, "===FILE: answer.py===\nassert False\n", QA_PASS]),
+    run = mode.run(tmp_path / "run", model=FakeModel([PLAN, "===FILE: answer.py===\nassert False\n", VERIFICATION_ANSWER, QA_PASS]),
                    task={"name": "unresolved", "brief": "assert true", "check": f"{sys.executable} answer.py"})
     assert not run.exit_ok
     assert "after 0 repair(s)" in run.error
@@ -101,7 +103,7 @@ def test_design_project_change_preserves_source_and_unmodified_files(tmp_path, m
     (source / "feature.py").write_text("answer = 1\n")
     (source / "keep.txt").write_text("preserve me\n")
     (source / ".env").write_text("PRIVATE=never-copy\n")
-    client = FakeModel([PLAN, "===FILE: feature.py===\nanswer = 2\n", QA_PASS])
+    client = FakeModel([PLAN, "===FILE: feature.py===\nanswer = 2\n", VERIFICATION_ANSWER, QA_PASS])
     run = DesignFastMode().run(tmp_path / "run", model=client,
                                task={"name": "feature", "brief": "set answer to two", "source_project": str(source),
                                      "check": f'{sys.executable} -c "from feature import answer; assert answer == 2"'})
@@ -113,7 +115,7 @@ def test_design_project_change_preserves_source_and_unmodified_files(tmp_path, m
     assert not (output / ".env").exists()
     assert run.facts["source_files"] == '["feature.py", "keep.txt"]'
     assert run.facts["review_files"] == '["feature.py"]'
-    assert 'Emitted or changed files to review: ["feature.py"]' in client.prompts[2]
+    assert 'Emitted or changed files to review: ["feature.py"]' in client.prompts[3]
     assert json.loads((tmp_path / "run/focused-source.json").read_text())["review_files"] == ["feature.py"]
 
 
@@ -149,7 +151,7 @@ def test_qa_cannot_silently_repair_or_invalidate_checked_source(tmp_path, monkey
     state["knobs"]["repair_attempts"]["value"] = 0
     state["knobs"]["worktree"]["value"] = False
     mode.load_state_dict(state)
-    run = mode.run(tmp_path / "run", model=MutatingQA([PLAN, "===FILE: answer.py===\nassert True\n", QA_PASS]),
+    run = mode.run(tmp_path / "run", model=MutatingQA([PLAN, "===FILE: answer.py===\nassert True\n", VERIFICATION_ANSWER, QA_PASS]),
                    task={"name": "immutable_qa", "brief": "assert true", "check": f"{sys.executable} answer.py"})
     assert not run.exit_ok and "focused QA changed the checked output" in run.error
     assert json.loads((tmp_path / "run/focused-check.json").read_text())["status"] == "pass"
@@ -171,7 +173,7 @@ def test_qa_cannot_rewrite_even_a_provenance_record_of_an_output_directory_unnot
     state["knobs"]["repair_attempts"]["value"] = 0
     state["knobs"]["worktree"]["value"] = False
     mode.load_state_dict(state)
-    model = ProvenanceQA([PLAN, "===FILE: answer.py===\nassert True\n", QA_PASS])
+    model = ProvenanceQA([PLAN, "===FILE: answer.py===\nassert True\n", VERIFICATION_ANSWER, QA_PASS])
     run = mode.run(tmp_path / "run", model=model, task={
         "name": "provenance_qa", "brief": "assert true", "check": f"{sys.executable} answer.py"})
     assert not run.exit_ok and "focused QA changed the checked output" in run.error
@@ -189,7 +191,7 @@ def test_qa_cannot_move_the_branch_it_reviews(tmp_path):
     state = mode.state_dict()
     state["knobs"]["repair_attempts"]["value"] = 0
     mode.load_state_dict(state)
-    model = CommittingQA([PLAN, "===FILE: answer.py===\nassert True\n", QA_PASS])
+    model = CommittingQA([PLAN, "===FILE: answer.py===\nassert True\n", VERIFICATION_ANSWER, QA_PASS])
     run = mode.run(tmp_path / "run", model=model, task={
         "name": "immutable_branch", "brief": "assert true", "check": f"{sys.executable} answer.py"})
     assert not run.exit_ok and "focused QA changed the checked output" in run.error
@@ -205,7 +207,7 @@ def test_qa_build_output_does_not_invalidate_the_checked_attempt(tmp_path):
                 (root / "dist").mkdir()
                 (root / "dist" / "out.txt").write_text("built\n")
             return super().complete(*args, workdir=workdir, **kwargs)
-    model = BuildingQA([PLAN, "===FILE: answer.py===\nassert True\n", QA_PASS])
+    model = BuildingQA([PLAN, "===FILE: answer.py===\nassert True\n", VERIFICATION_ANSWER, QA_PASS])
     run = DesignFastMode().run(tmp_path / "run", model=model, task={
         "name": "built_by_qa", "brief": "assert true", "check": f"{sys.executable} answer.py"})
     assert run.exit_ok, run.error
@@ -226,17 +228,17 @@ def test_design_validation_reserve_cannot_fund_repair(tmp_path, monkeypatch, nee
 
         def complete(self, prompt, *, system="", workdir=None):
             index = len(self.prompts)
-            self.budget.record_usage(f"request-{index}", [5, 55, qa_tokens, 0, 0][index])
+            self.budget.record_usage(f"request-{index}", [5, 55, 0, qa_tokens, 0, 0, 0][index])
             return super().complete(prompt, system=system, workdir=workdir)
 
-    client = MeteredModel([PLAN, initial, QA_PASS, good, QA_PASS])
+    client = MeteredModel([PLAN, initial, VERIFICATION_ANSWER, QA_PASS, good, VERIFICATION_ANSWER, QA_PASS])
     workdir = tmp_path / "run"
     result = DesignFastMode().run(
         workdir, model=client,
         task={"name": "reserved", "brief": "assert true", "check": f"{sys.executable} answer.py"},
         resource_limits={"max_tokens": 100, "validation_reserve_tokens": 20},
     )
-    assert len(client.prompts) == 3, "implementation must not restart using validation reserve"
+    assert len(client.prompts) == 4, "implementation must not restart using validation reserve"
     state = RunBudget.open(workdir).snapshot()
     assert state["known_tokens"] == 60 + qa_tokens
     if needs_repair:

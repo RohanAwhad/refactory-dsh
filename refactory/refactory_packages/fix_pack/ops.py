@@ -25,6 +25,7 @@ def prepare(ctx: Any) -> dict[str, Any]:
     located = repo_change.locate(ctx, name, task)
     feedback = "(no check has run yet)"
     ctx.write_text(FEEDBACK, feedback + "\n")
+    ctx.write_json("brief.json", {"name": name, "brief": brief, "check": check})
     return {"name": name, "brief": brief, "check": check, "feedback": feedback, **located}
 
 

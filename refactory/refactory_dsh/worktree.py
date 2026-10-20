@@ -36,13 +36,8 @@ from typing import Any, Iterator
 from refactory_dsh.paths import refactory_home, venv_bin
 from refactory_dsh.run_ownership import held
 
-#: Where a run records the worktree it works in: runtime metadata, beside the spine's own.
-RECORD = Path(".refactory") / "worktree.json"
-
-#: Where an attempt records the files it is about to write, until its commit lands. A
-#: materialise that dies between writing and committing leaves exactly these paths
-#: dirty, and the redo may put them back; any other edit is refused.
-PENDING = Path(".refactory") / "materialise-pending.json"
+from refactory_dsh.invocations import WORKTREE_RECORD as RECORD  # canonical in invocations
+from refactory_dsh.invocations import PENDING  # canonical in invocations
 
 #: The prefix of every branch this module creates. Only branches matching
 #: :data:`STANDARD_BRANCH` are ever deleted: a branch a person named is never touched.
@@ -70,27 +65,16 @@ MANIFESTS = ("pyproject.toml", "uv.lock", "package.json", "pnpm-lock.yaml",
 #: environment it knows the provenance of (remote-factory's ``WORKTREE_VENV_MARKER``).
 MARKER = ".refactory-managed"
 
-#: The script reviewers run commands through, so they see the worktree's own
-#: environment and not the launcher's.
-WRAPPER = Path(".refactory") / "in-worktree"
+from refactory_dsh.invocations import WRAPPER  # canonical in invocations
 
 #: The environment names a check in a worktree is given, besides PATH and HOME. Nothing
 #: of refactory's own -- ``PYTHONPATH``, ``REFACTORY_KNOBS``, ``DSH_WORKFLOW_NODE`` --
 #: reaches a target's tests (#330 E1).
 CHECK_ENV = ("LANG", "LC_ALL", "TMPDIR", "SYSTEMROOT")
 
-#: The HOME a check, its setup command and the reviewers' wrapper run with: the run's
-#: own, so tool caches stay out of the worktree and its diff (#330 E6).
-CHECK_HOME = Path(".refactory") / "check-home"
-
-#: The HOME the unchanged base is prepared and checked with (`base_check`): its own, never
-#: the attempt's. A setup that writes into HOME and keeps what it finds there -- a tool's
-#: profile link, a cache that records where it was built -- would otherwise leave every
-#: later check of the attempt reading the base's.
-BASE_CHECK_HOME = Path(".refactory") / "base-check-home"
-
-#: How long one install may take before it is reported as failed.
-INSTALL_TIMEOUT_S = 1800
+from refactory_dsh.invocations import CHECK_HOME  # canonical in invocations
+from refactory_dsh.invocations import BASE_CHECK_HOME  # canonical in invocations
+from refactory_dsh.invocations import INSTALL_TIMEOUT_S  # canonical in invocations
 
 #: The largest file an install may write, in MB: native packages exceed a check's limit.
 INSTALL_FILE_MB = 16384
@@ -115,9 +99,9 @@ ENDED = ("failed", "done")
 NO_HOOKS = ("-c", "core.hooksPath=/dev/null")
 
 #: Suppress git hook managers (lefthook, husky) so installs and commands in the
-#: worktree do not rewrite the shared repository's hooks (#347). Defined once
-#: and used in _install_env, check_environment and model._environment.
-HOOK_SUPPRESS: dict[str, str] = {"LEFTHOOK": "0", "HUSKY": "0"}
+#: worktree do not rewrite the shared repository's hooks (#347). Canonical
+#: definition in invocations.py; re-imported here for internal use.
+from refactory_dsh.invocations import HOOK_SUPPRESS  # canonical in invocations
 
 #: Where the spine records the invocation that owns a run directory (`invocations`).
 INVOCATION = Path(".refactory") / "invocation.json"
@@ -1172,6 +1156,25 @@ def amend(found: Worktree, run: Path, paths: list[str], message: str) -> Worktre
     found = replace(found, head=git(path, "rev-parse", "HEAD").strip())
     _write_json(Path(run) / RECORD, asdict(found))
     return found
+
+
+def _worktree_environment_overlay(workdir: Path) -> dict[str, str] | None:
+    """Environment overlay for model._environment().
+
+    Called via importlib.metadata entry_points when the product is installed.
+    Wraps recorded() + check_environment() to provide the worktree's PATH
+    and VIRTUAL_ENV.
+    """
+    found = recorded(Path(workdir))
+    if found is None:
+        return None
+    home = Path(workdir).resolve() / CHECK_HOME
+    home.mkdir(parents=True, exist_ok=True)
+    target_env = check_environment(Path(found.path), home)
+    result: dict[str, str] = {"PATH": target_env["PATH"]}
+    if "VIRTUAL_ENV" in target_env:
+        result["VIRTUAL_ENV"] = target_env["VIRTUAL_ENV"]
+    return result
 
 
 def write_wrapper(found: Worktree, run: Path) -> Path:

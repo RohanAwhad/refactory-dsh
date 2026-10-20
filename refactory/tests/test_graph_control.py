@@ -1398,3 +1398,37 @@ def test_redeliver_failed_at_delivery_gate(tmp_path):
     assert result['source'] == 'redeliver'
     assert result['status'] == 'queued'
     mock_start.assert_called_once_with(root, acknowledge_failed=True)
+
+
+def test_confirm_completion_writes_completion_override(tmp_path):
+    """confirm-completion writes completion_override into spine-status.json."""
+    root = tmp_path
+    refactory_dir = root / '.refactory'
+    refactory_dir.mkdir(parents=True, exist_ok=True)
+    (refactory_dir / 'spine-status.json').write_text(json.dumps({'status': 'halted', 'schema_version': 1}))
+    (refactory_dir / 'invocation.json').write_text(json.dumps({'id': 'test-inv'}))
+
+    # confirm-completion does not need a checkpoint, only spine-status.json
+    # But graph_control.request() reads the checkpoint first. We need to provide one.
+    checkpoint: dict[str, Any] = {
+        'status': 'halted',
+        'run_id': str(root),
+        'graph': {'name': 't', 'nodes': {}, 'edges': []},
+        'state': {'cursor': [], 'completed': [], 'skipped': [], 'pause_before': [],
+                  'gate_verdicts': {}, 'iterations': {}, 'feedback': {},
+                  'gate_reasons': {}, 'afters': [], 'prompts': {}, 'log': []},
+        'file_fingerprints': {},
+        'owner_pid': _dead_pid(),
+    }
+    (refactory_dir / 'spine-checkpoint.json').write_text(json.dumps(checkpoint))
+
+    result = graph_control.request(root, 'confirm-completion')
+    assert result['action'] == 'confirm-completion'
+    assert result['status'] == 'confirmed'
+    assert result['confirmed_status'] == 'halted'
+
+    # Read back spine-status.json and check completion_override
+    status = json.loads((refactory_dir / 'spine-status.json').read_text())
+    assert status['completion_override']['confirmed_status'] == 'halted'
+    assert 'at' in status['completion_override']
+    assert status['completion_override']['invocation'] == 'test-inv'
