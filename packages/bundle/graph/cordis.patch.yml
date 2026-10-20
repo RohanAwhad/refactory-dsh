@@ -21,7 +21,7 @@
 # reminder for other tools; argument repetition is not workflow progress evidence.
 - id: repeat-tool-reminder
   config:
-    exclude: [wf_next]
+    exclude: [wf_next, wf_verdict]
 
 - id: tools
   config:
