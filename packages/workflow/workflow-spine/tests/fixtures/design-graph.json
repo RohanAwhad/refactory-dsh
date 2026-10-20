@@ -81,6 +81,12 @@
       "max_iterations": 4,
       "_type": "GateNode"
     },
+    "gate_verification": {
+      "id": "gate_verification",
+      "evaluator_type": "fn",
+      "max_iterations": 5,
+      "_type": "GateNode"
+    },
     "health_checker": {
       "id": "health_checker",
       "role": "ceo",
@@ -151,6 +157,12 @@
       "role": "ceo",
       "max_iterations": 1,
       "_type": "AgentNode"
+    },
+    "verifier": {
+      "id": "verifier",
+      "role": "code_reviewer",
+      "max_iterations": 1,
+      "_type": "AgentNode"
     }
   },
   "edges": [
@@ -161,7 +173,7 @@
     },
     {
       "source": "check",
-      "target": "fork_qa",
+      "target": "verifier",
       "condition": "proceed"
     },
     {
@@ -250,6 +262,16 @@
       "condition": "reloop"
     },
     {
+      "source": "gate_verification",
+      "target": "emit",
+      "condition": "reloop"
+    },
+    {
+      "source": "gate_verification",
+      "target": "fork_qa",
+      "condition": "proceed"
+    },
+    {
       "source": "join_qa",
       "target": "synthesize_qa",
       "condition": null
@@ -302,6 +324,11 @@
     {
       "source": "synthesize_strategy",
       "target": "design_doc",
+      "condition": null
+    },
+    {
+      "source": "verifier",
+      "target": "gate_verification",
       "condition": null
     }
   ]

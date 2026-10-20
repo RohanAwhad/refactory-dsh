@@ -1,0 +1,29 @@
+[
+  {
+    "id": "2",
+    "brief": "Make the design gate reject rule-site lines that have no [changed] or [left] marker, so a design that lists a site without saying what it plans for it is caught before the approval gate",
+    "gap_description": "A rule site with no [changed]/[left] marker counted as changed, so a design could list a site without committing to a plan",
+    "method": "M1",
+    "pre_fix_commit": "918151f1e4",
+    "expected_finding_file": "design_ops.py",
+    "expected_finding_terms": ["marker", "unchanged", "unmarked"]
+  },
+  {
+    "id": "5",
+    "brief": "Record whether the new tests fail on the base commit and excuse inherited failures. When test-guardedness cannot parse the check output, say so; do not silently excuse every failure",
+    "gap_description": "Excusal accepted partial parses (pytest ERROR, a later non-test step) and masked runs (-x, pnpm test && pytest with the inherited failure first)",
+    "method": "M1",
+    "pre_fix_commit": "ceea30362a",
+    "expected_finding_file": "base_check.py",
+    "expected_finding_terms": ["partial", "parse", "error", "collection"]
+  },
+  {
+    "id": "21",
+    "brief": "A mode that declares a required brief (a Knob with required=True) must refuse to start when the brief is missing or empty, before any run directory is created",
+    "gap_description": "Run start accepted any value equal to the knob's default, and a brief's default is empty string, so a mode declaring a required brief still started with no brief at all",
+    "method": "M13",
+    "pre_fix_commit": "fcb2517800",
+    "expected_finding_file": "interactive.py",
+    "expected_finding_terms": ["empty", "blank", "missing", "default"]
+  }
+]

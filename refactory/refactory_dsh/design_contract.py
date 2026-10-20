@@ -24,10 +24,26 @@ import re
 
 TITLE = "Title"
 SUMMARY = "Summary"
+FAILURE_TRACE = "Failure trace"
+ASK_MAPPING = "Ask mapping"
 RULE_AND_SITES = "Rule and sites"
 DOCS = "Docs"
 CHANGES = "Changes"
+GUARDEDNESS_EXEMPTIONS = "Test guardedness exemptions"
 CONTRACT_SECTIONS = (SUMMARY, RULE_AND_SITES, DOCS, CHANGES)
+
+
+def has_non_empty_section(text: str, section: str) -> bool:
+    """Check if the design text has the named ``## section`` with non-empty content."""
+    lower = text.lower()
+    heading = f"## {section.lower()}"
+    pos = lower.find(heading)
+    if pos < 0:
+        return False
+    after = pos + len(heading)
+    next_heading = lower.find("\n## ", after)
+    content = text[after:next_heading].strip() if next_heading >= 0 else text[after:].strip()
+    return bool(content)
 
 
 @dataclasses.dataclass
@@ -430,17 +446,32 @@ def prompt_contract() -> str:
         "the run name or artifact name as the title.\n\n"
         "2. `## Summary` — a prose summary of the problem and the change, "
         "in two to four sentences.\n\n"
-        "3. `## Rule and sites` — the rule this change makes or corrects, "
+        "3. `## Failure trace` — for each failure the brief reports, "
+        "a file:line chain from the symptom to the root cause, and the "
+        "link (call, import, config) the fix breaks or replaces. When the "
+        "brief asks for a new feature with no existing failures, write "
+        "`N/A — this is a new feature.` The section heading is always "
+        "required.\n\n"
+        "4. `## Ask mapping` — a markdown table with columns "
+        "`| Ask (quoted from brief) | Design section | Test |`, one row "
+        "per ask in the brief. Quote the brief's words verbatim in the "
+        "Ask column.\n\n"
+        "5. `## Rule and sites` — the rule this change makes or corrects, "
         "then every place in the code that applies or restates that rule, "
         "found by searching the source. List each as a bullet with its "
         "file path and line range cited, and mark it [changed] (this "
         "change modifies it) or [left: <reason>] (this change leaves it "
         "unchanged, with the reason). A site left unchanged without a "
         "reason is a defect.\n\n"
-        "4. `## Docs` — the docs that describe the changed behaviour, found "
+        "6. `## Docs` — the docs that describe the changed behaviour, found "
         "by searching `docs/` and any other documentation directories. "
         "List each as a bullet with its path, and say what update the "
         "design plans for it.\n\n"
-        "5. `## Changes` — the list of files this change adds or modifies, "
-        "as bullets.\n"
+        "7. `## Changes` — the list of files this change adds or modifies, "
+        "as bullets.\n\n"
+        "8. `## Test guardedness exemptions` (optional) — when the design "
+        "expects new tests that pass on the base (for example, tests that "
+        "pin existing behaviour), list each test file path and the reason "
+        "it cannot fail without the change. A new test that passes on the "
+        "base and is not listed here will be rejected.\n"
     )
