@@ -1,10 +1,10 @@
-"""Independent verification step: design-blind methods applied after the build's check.
+"""Independent verification step: design-blind methods applied after the build's check passes.
 
 The verifier is given the brief, the diff and the repository — never design.md.
 It applies the evidence log's design-blind methods (M1, M2, M3, M11, M12, M13, M15)
 and reports each finding with a runnable counterexample or a cited file:line.
 
-See docs/hardening.md for why the verifier is design-blind.
+See docs/hardening.md §10 for why the verifier is design-blind.
 """
 
 from __future__ import annotations
