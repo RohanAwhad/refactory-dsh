@@ -67,10 +67,12 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
         deferred_plan = saved.get('deferred_redo_plans', {}).get(node)
         if isinstance(plan, dict):
             return {'action': action, 'target': node, 'status': 'preview', 'revision': current_revision,
+                    'run_id': str(root),
                     'invalidated': plan.get('nodes', []),
                     'message': 'Prior evidence will be archived. Confirm this revision to queue replay.'}
         if isinstance(deferred_plan, dict):
             return {'action': action, 'target': node, 'status': 'deferred', 'revision': current_revision,
+                    'run_id': str(root),
                     'invalidated': deferred_plan.get('nodes', []),
                     'message': 'Replay will apply after concurrent work joins; confirm to queue.'}
         raise ValueError('node cannot safely be replayed at the current boundary')
@@ -156,6 +158,11 @@ def request(root: Path, action: str, *, node: str = '', text: str = '', revision
         try:
             last_receipt = json.loads(receipt_path.read_text())
             if isinstance(last_receipt, dict) and last_receipt.get('status') == 'failed':
+                # dm-101: A stale failed control is cleared only when a later
+                # control on the same run succeeded (the receipt file is
+                # overwritten with status 'applied').  Since we are reading
+                # the receipt file and it still says 'failed', no later
+                # success has occurred — always surface it.
                 result['last_failed_receipt'] = {
                     'action': last_receipt.get('action'),
                     'status': 'failed',
@@ -296,6 +303,7 @@ def _acknowledge(root: Path, checkpoint: Path, saved: dict[str, Any]) -> dict[st
     return {
         'action': 'acknowledge',
         'status': 'acknowledged',
+        'run_id': str(root),
         'checkpoint_status_before': checkpoint_status,
         'set_aside': str(set_aside_dir.relative_to(root)),
         'files': manifest_files,
@@ -324,7 +332,8 @@ def _withdraw(root: Path, control_id: str) -> dict[str, Any]:
             pass
     control_path.unlink()
     emit(root, 'control_requested', state='withdrawn', summary=f'withdraw {control_id}')
-    return {'action': 'withdraw', 'control_id': control_id, 'status': 'withdrawn',
+    return {'action': 'withdraw', 'control_id': control_id, 'run_id': str(root),
+            'status': 'withdrawn',
             'message': f'Control {control_id} withdrawn.'}
 
 
@@ -420,6 +429,7 @@ def _amend_command(root: Path, checkpoint: Path, saved: dict[str, Any], *,
         'old_value': old_value,
         'new_value': value,
         'note': note,
+        'run_id': str(root),
         'status': 'queued',
         'rerun_control_id': rerun_id,
         'rerun_target': target_node,

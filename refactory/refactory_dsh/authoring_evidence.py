@@ -176,6 +176,9 @@ def requirements(ctx: Any) -> list[dict[str, str]]:
         if entry["kind"] in ("correction", "constraint"):
             if entry.get("scope") == "process":
                 continue
+            # C5: CEO notes are context, not auditable requirements.
+            if entry.get("source") == "ceo":
+                continue
             result.append({"id": f"ledger-{index + 1}", "text": entry["text"], "kind": entry["kind"]})
     return result
 

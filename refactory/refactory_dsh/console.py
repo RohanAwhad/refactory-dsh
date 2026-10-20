@@ -867,6 +867,7 @@ def _steer(
     note: str | None = None,
     kind: str = "info",
     scope: str = "product",
+    source: str = "user-relayed",
     verdicts: tuple[str, ...] | list[str] = (),
     with_gates: bool = False,
     control: str | None = None,
@@ -897,7 +898,7 @@ def _steer(
     if seed is not None:
         Ledger.seed(run_root, seed)
     if note is not None:
-        ledger.note(kind, note, scope=scope)
+        ledger.note(kind, note, scope=scope, source=source)
     recorded_scopes: dict[str, str] = {}
     for pair in verdicts:
         gate, _, value = str(pair).partition("=")
@@ -907,6 +908,18 @@ def _steer(
     # (a single mode run does; an outer-loop run keeps its candidates in subdirs).
     outputs = outputs_in(run_root) if ledger.exists() else {}
     deliveries = receipts_in(run_root)
+    # E9: read the spine's completed-nodes list so chain() and fidelity() can
+    # distinguish "has not run" from "ran and wrote nothing".
+    _completed: set[str] | None = None
+    spine_path = run_root / '.refactory' / 'spine-status.json'
+    if spine_path.exists():
+        try:
+            _spine_data = json.loads(spine_path.read_text())
+            _cl = _spine_data.get('completed')
+            if isinstance(_cl, list):
+                _completed = set(_cl)
+        except (OSError, json.JSONDecodeError):
+            pass
     payload: dict[str, Any] = {
         "run": str(run_root),
         "ledger": str(ledger.path),
@@ -915,8 +928,10 @@ def _steer(
         "constraints": ledger.constraints(),
         "verdicts": ledger.verdicts(),
         "recorded_scopes": recorded_scopes,
-        "chain": chain(ledger, outputs, deliveries=deliveries) if ledger.exists() else [],
-        "problems": fidelity(ledger, outputs, deliveries=deliveries),
+        "chain": chain(ledger, outputs, deliveries=deliveries,
+                        completed_nodes=_completed) if ledger.exists() else [],
+        "problems": fidelity(ledger, outputs, deliveries=deliveries,
+                              completed_nodes=_completed),
         "deliveries": deliveries,
         "finished": search_finished(run_root),
         "control": latest_receipt(run_root),
@@ -1339,6 +1354,11 @@ def _parser() -> argparse.ArgumentParser:
              "record run-level directives that are visible but not auditable",
     )
     steer.add_argument(
+        "--source", default="user-relayed", choices=["user-relayed", "ceo"],
+        help="who said this: user-relayed (default) for the person's words, ceo for "
+             "the CEO's own observations; CEO notes are context, not auditable requirements",
+    )
+    steer.add_argument(
         "--verdict", action="append", default=[],
         help="record a one-use gate answer as <gate>=<value> (repeatable), scoped "
              "to the current declared review inputs; changed inputs require a fresh answer",
@@ -1756,7 +1776,7 @@ def main(argv: list[str] | None = None) -> int:
             payload = _steer(
                 _root_for(args, project),
                 seed=args.seed, note=args.note, kind=args.kind,
-                scope=args.scope,
+                scope=args.scope, source=args.source,
                 verdicts=args.verdict, with_gates=args.gates,
                 control=asked,
                 target=args.keep or args.reject,
