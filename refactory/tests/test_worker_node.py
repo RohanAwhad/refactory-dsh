@@ -31,7 +31,6 @@ def test_feedback_file_prepends_heading_to_prompt(tmp_path):
         "feedback_file": str(fb_path),
     }
 
-    # Patch out the heavy imports and the model call.
     spec = {
         "schema_version": 1,
         "node_id": "emit",
@@ -67,15 +66,17 @@ def test_feedback_file_prepends_heading_to_prompt(tmp_path):
         def _path(workdir, name):
             return Path(workdir) / name
 
+    # Mock at the source modules (deferred imports inside execute() import from
+    # these, not from worker_node module-level attributes).
     with mock.patch.dict(os.environ, {NODE_ENV: json.dumps(manifest)}):
-        with mock.patch("refactory_dsh.worker_node.DshModelClient", FakeClient):
-            with mock.patch("refactory_dsh.worker_node.begin", FakeDelivery.begin):
-                with mock.patch("refactory_dsh.worker_node.finish", FakeDelivery.finish):
-                    with mock.patch("refactory_dsh.worker_node._path", FakeDelivery._path):
-                        with mock.patch("refactory_dsh.worker_node._knobs", return_value={}):
-                            with mock.patch("refactory_dsh.worker_node._read_facts", return_value={}):
-                                with mock.patch("refactory_dsh.worker_node.render", side_effect=lambda p, c: p):
-                                    with mock.patch("refactory_dsh.worker_node.RunContext"):
+        with mock.patch("refactory_dsh.model.DshModelClient", FakeClient):
+            with mock.patch("refactory_dsh.agent_delivery.begin", FakeDelivery.begin):
+                with mock.patch("refactory_dsh.agent_delivery.finish", FakeDelivery.finish):
+                    with mock.patch("refactory_dsh.agent_delivery._path", FakeDelivery._path):
+                        with mock.patch("refactory_dsh.run._knobs", return_value={}):
+                            with mock.patch("refactory_dsh.run._read_facts", return_value={}):
+                                with mock.patch("refactory_dsh.nn.executor.render", side_effect=lambda p, c: p):
+                                    with mock.patch("refactory_dsh.nn.executor.RunContext"):
                                         from refactory_dsh import worker_node
                                         worker_node.execute(spec, tmp_path)
 
@@ -142,15 +143,17 @@ def test_no_feedback_file_leaves_prompt_unchanged(tmp_path):
         def _path(workdir, name):
             return Path(workdir) / name
 
+    # Mock at the source modules (deferred imports inside execute() import from
+    # these, not from worker_node module-level attributes).
     with mock.patch.dict(os.environ, {NODE_ENV: json.dumps(manifest)}):
-        with mock.patch("refactory_dsh.worker_node.DshModelClient", FakeClient):
-            with mock.patch("refactory_dsh.worker_node.begin", FakeDelivery.begin):
-                with mock.patch("refactory_dsh.worker_node.finish", FakeDelivery.finish):
-                    with mock.patch("refactory_dsh.worker_node._path", FakeDelivery._path):
-                        with mock.patch("refactory_dsh.worker_node._knobs", return_value={}):
-                            with mock.patch("refactory_dsh.worker_node._read_facts", return_value={}):
-                                with mock.patch("refactory_dsh.worker_node.render", side_effect=lambda p, c: p):
-                                    with mock.patch("refactory_dsh.worker_node.RunContext"):
+        with mock.patch("refactory_dsh.model.DshModelClient", FakeClient):
+            with mock.patch("refactory_dsh.agent_delivery.begin", FakeDelivery.begin):
+                with mock.patch("refactory_dsh.agent_delivery.finish", FakeDelivery.finish):
+                    with mock.patch("refactory_dsh.agent_delivery._path", FakeDelivery._path):
+                        with mock.patch("refactory_dsh.run._knobs", return_value={}):
+                            with mock.patch("refactory_dsh.run._read_facts", return_value={}):
+                                with mock.patch("refactory_dsh.nn.executor.render", side_effect=lambda p, c: p):
+                                    with mock.patch("refactory_dsh.nn.executor.RunContext"):
                                         from refactory_dsh import worker_node
                                         worker_node.execute(spec, tmp_path)
 
