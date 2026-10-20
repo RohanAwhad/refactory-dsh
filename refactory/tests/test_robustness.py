@@ -11,7 +11,6 @@ import os
 import subprocess
 import sys
 import tempfile
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +18,7 @@ import pytest
 
 from refactory_dsh import base_check, delivery, nn, sandbox, worktree
 from refactory_dsh import authoring_evidence as evidence
-from refactory_dsh import design_contract, design_ops, repo_change
+from refactory_dsh import design_contract
 from refactory_dsh.create_ops import repair
 from refactory_dsh.fast_ops import _repair as fast_repair
 from refactory_dsh.nn import Verdict
