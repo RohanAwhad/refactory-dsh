@@ -311,7 +311,23 @@ function recordedStep(
     // use, and is reported as absent rather than as a malformed value.
     const parsed: unknown = JSON.parse(readFileSync(join(workdir, 'facts.json'), 'utf8'))
     if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      step.facts = parsed as JsonValue
+      // E10: 512 characters keeps short strings, numbers, booleans, and small
+      // arrays visible in the CEO's wf_next result while excluding large blobs
+      // like file contents that would fill the context window (a design run's
+      // facts.json is about 37 KB).  Values whose JSON serialization exceeds
+      // this limit are reported by key and size only; the full value is not
+      // available through wf_next (the CEO's coding tools are disabled while
+      // driving a graph).
+      const FACT_INLINE_LIMIT = 512
+      const factKeys = Object.keys(parsed as Record<string, unknown>)
+      const sizes: Record<string, number> = {}
+      const inline: Record<string, unknown> = {}
+      for (const key of factKeys) {
+        const size = JSON.stringify((parsed as Record<string, unknown>)[key]).length
+        sizes[key] = size
+        if (size <= FACT_INLINE_LIMIT) inline[key] = (parsed as Record<string, unknown>)[key]
+      }
+      step.facts = { _summary: true, path: 'facts.json', keys: factKeys, sizes, inline } as unknown as JsonValue
     }
   } catch {
     // No facts file yet, or one a command left mid-write: the run directory
@@ -1379,6 +1395,24 @@ export function apply(ctx: Context, config: Config): void {
       const ceiling = cap > 0 ? cap : Number.POSITIVE_INFINITY
       let inFlight = 0
       const waiters: Array<() => void> = []
+      // dm-110: write feedback sidecar files for dispatched agent nodes.
+      const feedbackMap = spine.next().feedback ?? {}
+      const feedbackFiles: Record<string, string> = {}
+      if (workdir !== undefined) {
+        const promptDir = join(workdir, '.refactory', 'prompts')
+        for (const node of automatic) {
+          const fbText = feedbackMap[node.id]
+          if (fbText !== undefined && fbText.trim() !== '') {
+            mkdirSync(promptDir, { recursive: true })
+            const fbFile = join(promptDir, `${node.id}.feedback.md`)
+            // Atomic write: temporary file then rename, so a stale file is never read.
+            const fbTmp = join(promptDir, `${node.id}.feedback.tmp`)
+            writeFileSync(fbTmp, fbText)
+            renameSync(fbTmp, fbFile)
+            feedbackFiles[node.id] = fbFile
+          }
+        }
+      }
       const outcomes = await Promise.all(automatic.map(async node => {
         // A finishing command hands its slot straight to the first waiter rather
         // than returning it to the pool, so a fresh starter cannot slip in
@@ -1386,7 +1420,7 @@ export function apply(ctx: Context, config: Config): void {
         if (inFlight >= ceiling) await new Promise<void>(resolve => waiters.push(resolve))
         else inFlight += 1
         try {
-          return await runDeterministic(shell, node, runner)
+          return await runDeterministic(shell, node, runner, feedbackFiles[node.id])
         } finally {
           const next = waiters.shift()
           if (next === undefined) inFlight -= 1
@@ -1471,9 +1505,10 @@ export function apply(ctx: Context, config: Config): void {
         { node: failure.nodeId, error: failDetail })
       return json({
         status: 'failed',
-        node: failure.command,
+        node: failure.nodeId,
+        command: failure.command,
         exit_code: failure.exitCode,
-        error: failure.error,
+        error: failDetail,
         stdout: failure.stdout,
         stderr: failure.stderr,
         ...unreported,
@@ -1742,7 +1777,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.systemPrompt.section({
     name: `tool:${toolPrefix}-spine`,
     order: ctx.systemPrompt.getSectionOrder('TOOL_WORKFLOW'),
-    text: `You are the CEO of a workflow run, and you are DRIVING A WORKFLOW GRAPH. Your coding tools (bash, write, edit, web, skill) are disabled — you cannot implement, edit files, or browse yourself. Advance only through the wf tools.${openInstruction}${warningInstruction} If the person requests a pause before a named node or deterministic dataset, arm it FIRST with ${toolPrefix}_edit action \`pause\` for that node, before any ${toolPrefix}_next that could reach it. Use ${toolPrefix}_state to inspect ids without executing work. When status is \`paused\`, end your turn and wait for the person. Only after an explicit request to continue, use ${toolPrefix}_edit action \`unpause\` on that boundary and resume. Repeated ${toolPrefix}_next calls do not release a pause; never skip or redo around it. ${toolPrefix}_state inspects the cursor without execution; ${toolPrefix}_next executes due deterministic work. After reading steering and arming any requested pause, call it to advance, and call it again after every ${toolPrefix}_done / ${toolPrefix}_verdict / ${toolPrefix}_edit / ${toolPrefix}_expand — those tools only confirm the mutation, they do not tell you what is next. When ${toolPrefix}_steer is available, read it before each ${toolPrefix}_next: it is what the person said about the run since you last looked. A correction from the person is applied to that node's prompt with ${toolPrefix}_edit (\`set-prompt\`/\`append-prompt\`) and the node is re-run with ${toolPrefix}_redo. With automatic execution enabled, ${toolPrefix}_next crosses sole static ForkNode/JoinNode boundaries for you and establishes delivery contexts before returning the branch AgentNode/LLMNode prompts. Dispatch only those returned prompts in parallel; target ids in a state view are not dispatch instructions. If a ForkNode or JoinNode is explicitly returned (manual execution or a mixed cursor), acknowledge only that due control node with ${toolPrefix}_done, then call ${toolPrefix}_next before dispatching branch work. For an AgentNode or LLMNode (unless the runtime runs it — it has a dispatch command), spawn a subagent (the subagent tool) whose task is the node's prompt_template, and explicitly tell the subagent to read the node's reads files and write its result to the node's writes file (the filename in the node's writes field, e.g. candidate.py) — wait for it, then report the node with ${toolPrefix}_done. Every path in a node's reads and writes is relative to ${runDirectory}, and the subagent's own working directory is NOT that directory: give the subagent the absolute path (${runDirectory}/<the path>) for each file it must read or write, and tell it to write nowhere else. For a FnNode with a command, call ${toolPrefix}_next to execute it; only a command-less FnNode is yours to complete. Automatic gates also run through ${toolPrefix}_next; never supply their evaluator result. For a manually driven gate, use ${toolPrefix}_verdict with one of its listed outcomes. For a user gate the runtime asks the person itself and routes the answer they give: call ${toolPrefix}_verdict with the gate id and no verdict, and never answer for them — a verdict passed for their gate is refused. Before routing a user gate, read and summarise its \`reads\` files (listed in the node view returned by ${toolPrefix}_next) for the person — key decisions, scope, notable risks or non-goals — and link each file, so they see what they are deciding on before the question is put to them. Fan out a director's plan with ${toolPrefix}_expand, and apply user steering ("skip the tests") with ${toolPrefix}_edit. When a person says a step is wrong, read the run's ledger if one is configured, then use ${toolPrefix}_edit with \`set-prompt\` or \`append-prompt\` to correct that node's prompt and ${toolPrefix}_redo to run the node again with the correction. A DataNode is iterated for you: the runtime selects its items and hands you the subgraph's nodes one pass at a time, with the item being processed in the payload's item field and on disk as the node's current item file. Do not try to iterate it yourself, and do not report the data node — or the pass's last node — before its work is done. Never skip, reorder, or bypass a node — the runner refuses to advance until you report the current node complete.`
+    text: `You are the CEO of a workflow run, and you are DRIVING A WORKFLOW GRAPH. Your coding tools (bash, write, edit, web, skill) are disabled — you cannot implement, edit files, or browse yourself. Advance only through the wf tools.${openInstruction}${warningInstruction} If the person requests a pause before a named node or deterministic dataset, arm it FIRST with ${toolPrefix}_edit action \`pause\` for that node, before any ${toolPrefix}_next that could reach it. Use ${toolPrefix}_state to inspect ids without executing work. When status is \`paused\`, end your turn and wait for the person. Only after an explicit request to continue, use ${toolPrefix}_edit action \`unpause\` on that boundary and resume. Repeated ${toolPrefix}_next calls do not release a pause; never skip or redo around it. ${toolPrefix}_state inspects the cursor without execution; ${toolPrefix}_next executes due deterministic work. After reading steering and arming any requested pause, call it to advance, and call it again after every ${toolPrefix}_done / ${toolPrefix}_verdict / ${toolPrefix}_edit / ${toolPrefix}_expand — those tools only confirm the mutation, they do not tell you what is next. When ${toolPrefix}_steer is available, read it before each ${toolPrefix}_next: it is what the person said about the run since you last looked. When relaying the person's own words through ${toolPrefix}_steer, set source to 'user-relayed' so they become auditable requirements; your own observations default to 'ceo' and are context, not requirements. A correction from the person is applied to that node's prompt with ${toolPrefix}_edit (\`set-prompt\`/\`append-prompt\`) and the node is re-run with ${toolPrefix}_redo. With automatic execution enabled, ${toolPrefix}_next crosses sole static ForkNode/JoinNode boundaries for you and establishes delivery contexts before returning the branch AgentNode/LLMNode prompts. Dispatch only those returned prompts in parallel; target ids in a state view are not dispatch instructions. If a ForkNode or JoinNode is explicitly returned (manual execution or a mixed cursor), acknowledge only that due control node with ${toolPrefix}_done, then call ${toolPrefix}_next before dispatching branch work. For an AgentNode or LLMNode (unless the runtime runs it — it has a dispatch command), spawn a subagent (the subagent tool) whose task is the node's prompt_template, and explicitly tell the subagent to read the node's reads files and write its result to the node's writes file (the filename in the node's writes field, e.g. candidate.py) — wait for it, then report the node with ${toolPrefix}_done. Every path in a node's reads and writes is relative to ${runDirectory}, and the subagent's own working directory is NOT that directory: give the subagent the absolute path (${runDirectory}/<the path>) for each file it must read or write, and tell it to write nowhere else. For a FnNode with a command, call ${toolPrefix}_next to execute it; only a command-less FnNode is yours to complete. Automatic gates also run through ${toolPrefix}_next; never supply their evaluator result. For a manually driven gate, use ${toolPrefix}_verdict with one of its listed outcomes. For a user gate the runtime asks the person itself and routes the answer they give: call ${toolPrefix}_verdict with the gate id and no verdict, and never answer for them — a verdict passed for their gate is refused. Before routing a user gate, read and summarise its \`reads\` files (listed in the node view returned by ${toolPrefix}_next) for the person — key decisions, scope, notable risks or non-goals — and link each file, so they see what they are deciding on before the question is put to them. Fan out a director's plan with ${toolPrefix}_expand, and apply user steering ("skip the tests") with ${toolPrefix}_edit. When a person says a step is wrong, read the run's ledger if one is configured, then use ${toolPrefix}_edit with \`set-prompt\` or \`append-prompt\` to correct that node's prompt and ${toolPrefix}_redo to run the node again with the correction. A DataNode is iterated for you: the runtime selects its items and hands you the subgraph's nodes one pass at a time, with the item being processed in the payload's item field and on disk as the node's current item file. Do not try to iterate it yourself, and do not report the data node — or the pass's last node — before its work is done. Never skip, reorder, or bypass a node — the runner refuses to advance until you report the current node complete.`
     + sacredRules,
   })
 
@@ -1902,7 +1937,7 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.tools.register(defineTool({
     name: `${toolPrefix}_next`,
-    description: 'Get the next node(s) the workflow graph says are due now. Deterministic nodes (a command an `fn` gate or an `FnNode` runs) and a data node\'s item passes are executed for you and do not appear, except that when a mode is open interactively one dispatch boundary runs per call: every deterministic node the cursor holds at once is a fork peer the graph declared concurrent, so they are dispatched together and a node that ran is named under `ran` (with its id, declared outputs, the run\'s facts, `peers` naming the whole boundary when more than one ran, and, for a gate the runtime evaluated, its `verdict` and the `reason` it gave — when that sent the run back, `feedback` carries the same reason to the node it went back to, so tell the person why), and `nodes` then names what is due next — which may itself be deterministic, in which case call this tool again rather than running it or calling `wf_done`. Returns `{ status, nodes }`: for `ready`, the node views you must act on (agent task / one-shot LLM / user gate / fork) with the fields you need, plus `item` while a data node is iterating; for `done`, the run is complete; for `failed`, a deterministic node failed; its fork peers that did run have completed, and the failure names the node that did not. A top-level `warnings` lists run warnings that steps this call ran printed and no `ran` step carries, each led by its node id: tell the person what each one says. With automatic execution, sole static ForkNode/JoinNode boundaries are crossed for you and returned branch prompts already have their delivery contexts. Dispatch only returned AgentNode/LLMNode prompts, never fork target ids from a state view. Pass each returned prompt in full; coordination notes must not weaken its requirements or waive the original brief/approved design without explicit user steering. A documented limitation is not a waiver. If a control node is explicitly returned (manual execution or a mixed cursor), acknowledge it with `wf_done`, then call this tool before dispatching branches. Always call this first and act only on what it returns — never skip or reorder.',
+    description: 'Get the next node(s) the workflow graph says are due now. Deterministic nodes (a command an `fn` gate or an `FnNode` runs) and a data node\'s item passes are executed for you and do not appear, except that when a mode is open interactively one dispatch boundary runs per call: every deterministic node the cursor holds at once is a fork peer the graph declared concurrent, so they are dispatched together and a node that ran is named under `ran` (with its id, declared outputs, a facts summary — `{ _summary, path, keys, sizes, inline }` with values ≤ 512 characters inlined and larger ones reported by key and size only — `peers` naming the whole boundary when more than one ran, and, for a gate the runtime evaluated, its `verdict` and the `reason` it gave — when that sent the run back, `feedback` carries the same reason to the node it went back to, so tell the person why), and `nodes` then names what is due next — which may itself be deterministic, in which case call this tool again rather than running it or calling `wf_done`. Returns `{ status, nodes }`: for `ready`, the node views you must act on (agent task / one-shot LLM / user gate / fork) with the fields you need, plus `item` while a data node is iterating; for `done`, the run is complete; for `failed`, a deterministic node failed (`node` is the node id, `command` is its command string, `error` contains the `<id> exited with code N` prefix followed by the reason); its fork peers that did run have completed, and the failure names the node that did not. A top-level `warnings` lists run warnings that steps this call ran printed and no `ran` step carries, each led by its node id: tell the person what each one says. With automatic execution, sole static ForkNode/JoinNode boundaries are crossed for you and returned branch prompts already have their delivery contexts. Dispatch only returned AgentNode/LLMNode prompts, never fork target ids from a state view. Pass each returned prompt in full; coordination notes must not weaken its requirements or waive the original brief/approved design without explicit user steering. A documented limitation is not a waiver. If a control node is explicitly returned (manual execution or a mixed cursor), acknowledge it with `wf_done`, then call this tool before dispatching branches. Always call this first and act only on what it returns — never skip or reorder.',
     parameters: {},
     output: {
       schema: { type: 'json' },
@@ -2216,10 +2251,11 @@ export function apply(ctx: Context, config: Config): void {
     const steerArgs = [...config.steerArgs]
     ctx.tools.register(defineTool({
       name: `${toolPrefix}_steer`,
-      description: `Read the run’s intent ledger, or append the user’s stated note with optional kind (info, correction, constraint). A write returns the updated ledger; an invalid or failed write is an error, never a read-only success. Read what the person said about this run since you last looked, before deciding anything. Runs the run's steering command and returns its ledger payload unchanged: the origin, every entry (a note, a correction, a constraint), recorded gate verdicts, and the fidelity problems found. Read it before each \`${toolPrefix}_next\`; when it carries a correction, apply it to that node's prompt with \`${toolPrefix}_edit\` (\`set-prompt\`/\`append-prompt\`) and re-run the node with \`${toolPrefix}_redo\`. On a read, an unreadable or unavailable ledger is reported as \`status: 'unavailable'\`, never thrown, so it cannot stop the run.`,
+      description: `Read the run’s intent ledger, or append a note with optional kind (info, correction, constraint) and source. A write returns the updated ledger; an invalid or failed write is an error, never a read-only success. Read what was said about this run since you last looked, before deciding anything. Runs the run's steering command and returns its ledger payload unchanged: the origin, every entry (a note, a correction, a constraint), recorded gate verdicts, and the fidelity problems found. Read it before each \`${toolPrefix}_next\`; when it carries a correction, apply it to that node's prompt with \`${toolPrefix}_edit\` (\`set-prompt\`/\`append-prompt\`) and re-run the node with \`${toolPrefix}_redo\`. On a read, an unreadable or unavailable ledger is reported as \`status: 'unavailable'\`, never thrown, so it cannot stop the run. When relaying the person's own words, set source to 'user-relayed' so they become auditable requirements; your own observations default to 'ceo' and are context only.`,
       parameters: {
-        note: { type: 'string', description: 'Append the user’s stated note, correction, or constraint to this run. Omit to read without writing.' },
+        note: { type: 'string', description: 'Append a note, correction, or constraint to this run. Omit to read without writing.' },
         kind: { type: 'string', enum: ['info', 'correction', 'constraint'], description: 'The note kind; defaults to info. Requires note.' },
+        source: { type: 'string', enum: ['user-relayed', 'ceo'], description: "Who said this: 'user-relayed' for the person's words you are relaying (they become auditable requirements), 'ceo' (default) for your own observations (context only, not auditable). When in doubt, use 'ceo'; mark as 'user-relayed' only what the person actually said." },
       },
       output: {
         schema: { type: 'json' },
@@ -2229,7 +2265,7 @@ export function apply(ctx: Context, config: Config): void {
       presentCall: args => presentCall('steer', args as Record<string, unknown>),
       presentResult: (args, result) => presentResult('steer', args as Record<string, unknown>, result),
       execute(args, exec) {
-        const unknown = Object.keys(args).filter(key => key !== 'note' && key !== 'kind')
+        const unknown = Object.keys(args).filter(key => key !== 'note' && key !== 'kind' && key !== 'source')
         if (unknown.length > 0) throw new Error(`${toolPrefix}_steer does not support: ${unknown.join(', ')}`)
         if (args.kind !== undefined && args.note === undefined) throw new Error('kind requires a note')
         if (args.note !== undefined && args.note.trim() === '') throw new Error('an empty note records nothing')
@@ -2241,7 +2277,7 @@ export function apply(ctx: Context, config: Config): void {
           return sync(json({ status: 'unavailable', error: 'this run has no work directory to read' }))
         }
         const argv = [...steerArgs, run.workdir]
-        if (args.note !== undefined) argv.push(`--note=${args.note}`, `--kind=${args.kind ?? 'info'}`)
+        if (args.note !== undefined) argv.push(`--note=${args.note}`, `--kind=${args.kind ?? 'info'}`, `--source=${args.source ?? 'ceo'}`)
         const result = spawnSync(command, argv, { encoding: 'utf8' })
         if (result.status === 0) {
           try {
