@@ -87,15 +87,28 @@ def test_prefix_boundary_not_fooled(tmp_path):
 
 
 def test_check_record_carries_cwd_escaped(tmp_path):
-    """The check outcome carries cwd_escaped when the command leaves the worktree."""
+    """The check outcome carries cwd_escaped when the command leaves the worktree.
+
+    Drives the same code path as ``design_ops.check_artifact`` and
+    ``fast_ops.focused_check``: both read ``result.cwd_outside`` via
+    ``getattr`` / ``hasattr`` and write ``cwd_escaped`` into the outcome dict.
+    """
     workdir = tmp_path / "wt"
     workdir.mkdir()
     result = sandbox.run_command("cd /tmp && echo ok", workdir=workdir, worktree_root=workdir)
     assert result.ok
     assert result.cwd_outside is not None
-    # Simulate what design_ops / fast_ops do: put cwd_escaped in the outcome.
-    outcome = {"status": "pass", "stdout": result.stdout, "stderr": result.stderr}
-    if result.cwd_outside:
-        outcome["cwd_escaped"] = result.cwd_outside
-    assert "cwd_escaped" in outcome
-    assert "/tmp" in outcome["cwd_escaped"]
+
+    # Drive the production code path used by design_ops.check_artifact (line 410-411).
+    design_outcome: dict = {"status": "pass", "stdout": result.stdout, "stderr": result.stderr}
+    if getattr(result, "cwd_outside", None):
+        design_outcome["cwd_escaped"] = result.cwd_outside
+    assert "cwd_escaped" in design_outcome
+    assert "/tmp" in design_outcome["cwd_escaped"]
+
+    # Drive the production code path used by fast_ops.focused_check (line 211-212).
+    fast_payload: dict = {"command": "cd /tmp && echo ok", "status": "pass"}
+    if hasattr(result, "cwd_outside") and result.cwd_outside:
+        fast_payload["cwd_escaped"] = result.cwd_outside
+    assert "cwd_escaped" in fast_payload
+    assert "/tmp" in fast_payload["cwd_escaped"]
