@@ -735,11 +735,11 @@ export function RefactoryBody({
         </div>
         <p className={css.note}>{t(intent === 'run' ? 'panel.onceHelp' : 'panel.startHelp')}</p>
         {projects.length > 0 && <div className={css.field}>
-          <FieldLabel htmlFor="refactory-target" help={t('help.target') ?? 'The repository or project this run changes'}>{t('target.label') ?? 'Target'}</FieldLabel>
+          <FieldLabel htmlFor="refactory-target" help={t('help.target')}>{t('target.label')}</FieldLabel>
           <select id="refactory-target" className={css.control} data-refactory-target
             value={state.knobs?.target ?? ''}
             onChange={event => { setKnob(tab.id, 'target', event.target.value) }}>
-            <option value="">{t('target.new') ?? 'New project'}</option>
+            <option value="">{t('target.new')}</option>
             {projects.map(p => <option key={p.path} value={p.path}>{p.name} · {p.kind}</option>)}
           </select>
         </div>}

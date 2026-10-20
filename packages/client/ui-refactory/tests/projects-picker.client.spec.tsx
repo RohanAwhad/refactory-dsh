@@ -4,9 +4,9 @@
  * sets the `target` knob in the start request (#351).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent } from '@testing-library/react'
 import {
-  AUTHORING, MODE, NO_STRATEGIES, PACKAGE, PROJECT, STRATEGIES, ok,
+  AUTHORING, MODE, PACKAGE, PROJECT, STRATEGIES,
 } from './fake-console.client.ts'
 import { TAB, mountBody } from './mount.client.tsx'
 
