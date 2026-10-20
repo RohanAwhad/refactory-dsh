@@ -526,7 +526,6 @@ else:
 
   it('two runs dispatching the same reviewer node are judged independently (#347, C2)', async () => {
     const workdir1 = scratch()
-    const workdir2 = scratch()
     const stub = agentStub(workdir1)
     const root = new Context()
     await root.plugin(SystemPrompt)
