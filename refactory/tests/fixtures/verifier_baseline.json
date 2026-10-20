@@ -1,5 +1,5 @@
 {
   "status": "not_measured",
   "note": "This baseline has not been measured yet. Run the replay harness with a model-backed verifier to produce the measured baseline, then record the result on #400.",
-  "command": "python -m refactory_dsh.replay_harness --evidence refactory/tests/fixtures/evidence_log_entries.json --output refactory/tests/fixtures/verifier_baseline.json"
+  "command": "python -m refactory_dsh.replay_harness --evidence refactory/tests/fixtures/evidence_log_entries.json --output refactory/tests/fixtures/verifier_baseline.json --model claude-sonnet-4-20250514 --repo ."
 }
