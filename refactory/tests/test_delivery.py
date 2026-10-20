@@ -96,7 +96,7 @@ def test_pr_body_has_summary_verification_and_original_request(tmp_path):
                "inherited_failures": ["tests/test_env.py::test_needs_profile"]},
         files={"design.md": "# The design heading\n\nFirst paragraph of the design.\n\n---\n",
                "authoring-evidence.json": '{"validation": {"status": "pass"}}',
-               "intent-audit.json": '{"requirements": []}'},
+               "intent-audit.json": '{"requirements": [{"id": "r1", "status": "pass", "reason": ""}]}'},
     )
     # Set up a minimal git repo so worktree.git works.
     subprocess.run(["git", "init", str(tmp_path)], capture_output=True, check=True)
