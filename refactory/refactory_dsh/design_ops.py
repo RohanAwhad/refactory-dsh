@@ -407,6 +407,8 @@ def check_artifact(ctx: Any) -> str:
         result, budget=getattr(ctx, "budget", None)),
         "stdout": result.stdout, "stderr": result.stderr, "returncode": result.returncode,
         "timed_out": result.timed_out, "elapsed_s": result.elapsed_s}
+    if result.cwd_outside:
+        outcome["cwd_escaped"] = result.cwd_outside
     ctx.write_text("check.txt", detail or "ok\n")
 
     # Whether the new tests fail without the change is evidence for the reviewers, passing

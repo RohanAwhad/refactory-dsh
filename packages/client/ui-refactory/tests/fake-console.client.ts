@@ -14,6 +14,7 @@ import type {
   RefactoryCandidateRow,
   RefactoryModeChoice,
   RefactoryPackageChoice,
+  RefactoryProject,
   RefactoryRunStatus,
   RefactorySingleRun,
   RefactoryStartReceipt,
@@ -194,11 +195,19 @@ export function failure<T>(code: string, message: string): RemoteResult<T> {
   return { ok: false, error: { code, message } as unknown as RemoteFailure }
 }
 
+/** One project, as the console lists them. */
+export const PROJECT: RefactoryProject = {
+  name: 'weather-cli',
+  path: '/projects/weather-cli',
+  kind: 'new',
+}
+
 /** The scripted Remote face and the mocks behind it. */
 export interface FakeConsole {
   readonly remote: RefactoryRemote
   readonly modes: Mock
   readonly project: Mock
+  readonly projects: Mock
   readonly strategies: Mock
   readonly packages: Mock
   readonly start: Mock
@@ -220,6 +229,7 @@ export function fakeConsole(): FakeConsole {
   const methods = {
     modes: vi.fn(async () => ok<readonly RefactoryModeChoice[]>([])),
     project: vi.fn(async () => ok('/repo')),
+    projects: vi.fn(async () => ok<readonly RefactoryProject[]>([])),
     strategies: vi.fn(async () => ok(NO_STRATEGIES)),
     packages: vi.fn(async () => ok<readonly RefactoryPackageChoice[]>([])),
     start: vi.fn(async () => ok(RECEIPT)),

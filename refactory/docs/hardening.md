@@ -723,6 +723,50 @@ another name that declares the knob gets the envelope.
 
 ---
 
+## 19. cwd escape detection (#351 I3)
+
+**What should happen.** When a check's command changes directory outside the run's
+worktree, the check record and the reviewers' evidence say so, naming the directory.
+Advisory, not a failure.
+
+**How it works.** `sandbox.run_command` accepts an optional `worktree_root`
+parameter. When given, it wraps the command in a shell that installs an EXIT trap
+comparing the final `$PWD` with the worktree root (both realpath'd, prefix check).
+The trap writes to a sentinel file, not stdout or stderr, so the command's output
+is unchanged. `SandboxResult.cwd_outside` carries the escaped directory, which
+`design_ops` and `fast_ops` record as `cwd_escaped` in the check outcome.
+
+**What it does not catch.** An intermediate `cd` that returns before the command
+ends. A subshell that `cd`s. A symlink that resolves outside the worktree.
+
+**Test.** `test_cwd_escape.py`: `cd /tmp` is flagged; `cd <subdir>` is not; `exit 3`
+keeps status 3; the sentinel never reaches stdout or stderr.
+
+## 20. Worktree isolation for create/edit modes (#351)
+
+**What should happen.** Two parallel create runs of the same package name both
+succeed in their own staging directories.
+
+**How it works.** `create_ops.prepare_create()` sets up a staging directory at
+`<run>/.factory-staging/.factory/packages/<name>/`. `materialise()` writes there,
+`validate()` imports from there (via `registry.install_workspace` with
+`project_override`), and `register()` copies atomically to the shared
+`.factory/packages/<name>/` — refusing if the shared package changed since prepare.
+
+**Test.** `test_staging_isolation.py`: two parallel creates use separate staging;
+the second to register refuses when the shared package changed.
+
+## 21. Copy-on-register atomicity (#351)
+
+**How it works.** `register()` writes the staged package to a temporary sibling
+directory, then renames it over the target. If the rename fails, the temp is
+cleaned up. If the shared package's content hash differs from the one `prepare`
+recorded, the copy is refused.
+
+**Test.** `test_staging_isolation.py:test_second_register_refuses_when_shared_changed`.
+
+---
+
 Two things that were on this list have moved off it, which is the point of keeping it:
 
 - **mathlib is no longer untested.** It was installed and the mathlib problem ran, and

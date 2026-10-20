@@ -122,6 +122,9 @@ HOOK_SUPPRESS: dict[str, str] = {"LEFTHOOK": "0", "HUSKY": "0"}
 #: Where the spine records the invocation that owns a run directory (`invocations`).
 INVOCATION = Path(".refactory") / "invocation.json"
 
+#: The per-worktree record of files copied from the person's uncommitted working tree.
+UNCOMMITTED_RECORD = "uncommitted-files.json"
+
 
 class AttemptRefused(ValueError):
     """An attempt's files cannot be applied as they were emitted.
@@ -393,6 +396,114 @@ def _readd(target: Path, path: Path, branch: str) -> None:
         git(target, "worktree", "remove", str(path))
     git(target, *NO_HOOKS, "worktree", "add", "-q", str(path), branch)
     _isolate_hooks(target, path)
+
+
+def copy_uncommitted(target: Path, worktree_path: Path, run: Path) -> list[dict[str, str]]:
+    """Copy every uncommitted change from ``target`` into ``worktree_path`` and record it.
+
+    Copies modified tracked files, staged files, untracked unignored files, and deletes
+    tracked files the person deleted.  The worktree is then committed as the run's base
+    ("working-tree base for run-<id>"), so the attempts' diffs show only the run's own
+    change, and the PR's Verification lists which files came from the working tree.
+
+    The person's checkout is never modified.
+    """
+    import hashlib as _hl
+
+    target = Path(target).resolve()
+    worktree_path = Path(worktree_path).resolve()
+    run = Path(run).resolve()
+    run_id = run.name.removeprefix("run-") if run.name.startswith("run-") else run.name
+
+    # 1. Modified / staged tracked files (union of --name-only HEAD and --cached)
+    try:
+        modified = git(target, "diff", "--name-only", "HEAD").splitlines()
+    except ValueError:
+        modified = []
+    try:
+        staged = git(target, "diff", "--cached", "--name-only", "HEAD").splitlines()
+    except ValueError:
+        staged = []
+    # 2. Untracked unignored files
+    try:
+        untracked = git(target, "ls-files", "--others", "--exclude-standard").splitlines()
+    except ValueError:
+        untracked = []
+    # 3. Deleted tracked files
+    try:
+        deleted = git(target, "diff", "--name-only", "--diff-filter=D", "HEAD").splitlines()
+    except ValueError:
+        deleted = []
+
+    all_paths = sorted(set(modified + staged + untracked))
+    entries: list[dict[str, str]] = []
+
+    for rel in all_paths:
+        if not rel.strip():
+            continue
+        source = target / rel
+        dest = worktree_path / rel
+        if rel in deleted or not source.exists():
+            # Person deleted a tracked file — delete it in the worktree too.
+            if dest.exists():
+                dest.unlink()
+            entries.append({"path": rel, "kind": "deleted", "sha256": ""})
+            continue
+        try:
+            content = source.read_bytes()
+        except OSError:
+            continue
+        sha = _hl.sha256(content).hexdigest()
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(content)
+        kind = "untracked" if rel in untracked else "modified"
+        entries.append({"path": rel, "kind": kind, "sha256": sha})
+
+    # Handle pure deletions not in all_paths
+    for rel in deleted:
+        if rel.strip() and rel not in [e["path"] for e in entries]:
+            dest = worktree_path / rel
+            if dest.exists():
+                dest.unlink()
+            entries.append({"path": rel, "kind": "deleted", "sha256": ""})
+
+    if not entries:
+        return entries
+
+    # Stage and commit the working-tree state as the run's base commit.
+    git(worktree_path, *NO_HOOKS, "add", "--all")
+    env = {**os.environ, **COMMITTER}
+    git(worktree_path, *NO_HOOKS, "commit", "-q", "--allow-empty",
+        "-m", f"working-tree base for run-{run_id}", env=env)
+
+    # Update the run's worktree record so `found.head` and `found.base` reflect
+    # the new commit (the base is now the working-tree commit, and so is head).
+    new_head = git(worktree_path, "rev-parse", "HEAD").strip()
+    run_record = _json(run / RECORD)
+    if run_record:
+        run_record["head"] = new_head
+        run_record["base"] = new_head
+        _write_json(run / RECORD, run_record)
+    # Also update the per-slot record.
+    slot_record_path = slot(target) / f"run-{run_id}.json"
+    slot_data = _json(slot_record_path)
+    if slot_data:
+        slot_data["base"] = new_head
+        _write_json(slot_record_path, slot_data)
+
+    # Record the uncommitted files alongside the worktree record.
+    record_path = slot(target) / f"run-{run_id}.{UNCOMMITTED_RECORD}"
+    _write_json(record_path, {"files": entries})
+
+    return entries
+
+
+def uncommitted_record(found: "Worktree") -> list[dict[str, str]]:
+    """The uncommitted files that were copied into ``found``'s worktree, or empty."""
+    run_id = Path(found.path).name.removeprefix("run-")
+    path = slot(Path(found.target)) / f"run-{run_id}.{UNCOMMITTED_RECORD}"
+    data = _json(path)
+    return data.get("files", [])
 
 
 def _branch_exists(target: Path, branch: str) -> bool:

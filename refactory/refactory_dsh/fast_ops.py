@@ -30,7 +30,7 @@ COPY_SCOPE = (
 
 
 def prepare_package(ctx: Any) -> dict[str, Any]:
-    prepared = create_ops.prepare(ctx)
+    prepared = create_ops.prepare_create(ctx)
     ctx.write_text("repair.txt", "(initial implementation; no repair requested)\n")
     ctx.write_text("validation.txt", "(structural admission not run)\n")
     return {**prepared, **FAST_UNREFUSED, "repair_feedback": "(initial implementation)", "repairs_used": 0}
@@ -203,6 +203,8 @@ def focused_check(ctx: Any) -> dict[str, Any]:
         payload.update(status="pass" if result.ok else "fail", returncode=result.returncode,
                        stdout=result.stdout, stderr=result.stderr, timed_out=result.timed_out,
                        elapsed_s=result.elapsed_s)
+        if hasattr(result, "cwd_outside") and result.cwd_outside:
+            payload["cwd_escaped"] = result.cwd_outside
         if budget is not None:
             budget.checkpoint()
     # Bind the check and later QA verdict to these exact materialized files: in a worktree,

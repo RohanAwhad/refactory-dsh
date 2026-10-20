@@ -54,6 +54,10 @@ _AMBIGUOUS_SHELL_EXITS = frozenset({134, 135, 139})
 #: A generated package has no reason to read a key, and every reason not to.
 _SECRET_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "AUTH")
 
+#: The file the EXIT-trap epilogue writes its final cwd into when it leaves the
+#: worktree root.  Parsed from there and stripped from the child's output.
+_CWD_SENTINEL_FILE = ".refactory-cwd-sentinel"
+
 #: The environment a sandboxed run is allowed to see. An allowlist, not a denylist:
 #: a name nobody thought of is a name that is not passed.
 _ALLOWED_ENV = (
@@ -81,6 +85,7 @@ class SandboxResult:
     elapsed_s: float | None = None
     progress: dict[str, Any] = field(default_factory=dict)
     prep_failure: dict[str, Any] | None = None
+    cwd_outside: str | None = None
 
     def problem(self) -> str:
         if self.timed_out:
@@ -376,6 +381,7 @@ def run_command(
     home: Path | None = None,
     exact_env: bool = False,
     stdin: Any = None,
+    worktree_root: Path | None = None,
 ) -> SandboxResult:
     """Run a shell command in the sandbox, bounded by time rather than memory.
 
@@ -393,6 +399,9 @@ def run_command(
     ``home`` moves HOME out of ``workdir``, so tool caches stay out of what is checked.
     ``stdin`` is the command's standard input, empty unless given: a check runs
     unattended, so nothing it runs can read or wait on the launcher's stdin.
+    ``worktree_root``, when given, enables cwd-escape detection: an EXIT trap compares
+    the command's final working directory with the worktree root (both realpath'd, prefix
+    check) and records the directory in ``SandboxResult.cwd_outside`` when it has left.
     """
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
@@ -402,12 +411,33 @@ def run_command(
     if sys.platform != "win32":
         cpu = cpu_s if cpu_s is not None else math.ceil(timeout_s) * (os.cpu_count() or 1)
         kwargs["preexec_fn"] = _limits(memory_mb, cpu, file_mb)
+    # When the caller wants cwd-escape detection, wrap the command in a shell that
+    # installs an EXIT trap: the trap writes the final $PWD to a sentinel file so
+    # the sentinel never reaches stdout or stderr.  The command sits on its own
+    # line, so comments, `exit` and multi-line commands all work, and the trap
+    # fires after `exit` too (#351 I3).
+    sentinel_path: Path | None = None
+    if worktree_root is not None:
+        sentinel_path = workdir / _CWD_SENTINEL_FILE
+        sentinel_path.unlink(missing_ok=True)
+        wt_real = str(Path(worktree_root).resolve())
+        wrapped = (
+            f"__refactory_wt_root='{wt_real}'\n"
+            f"__refactory_sentinel='{sentinel_path}'\n"
+            "trap '__refactory_final=\"$(cd -P . 2>/dev/null && pwd -P)\"; "
+            "case \"$__refactory_final\" in \"$__refactory_wt_root\"*) ;; "
+            "*) printf \"%s\" \"$__refactory_final\" > \"$__refactory_sentinel\" ;; "
+            "esac' EXIT\n"
+            f"{command}\n"
+        )
+    else:
+        wrapped = command
     options = dict(shell=True, text=True, cwd=str(workdir), env=child_env,
                    stdin=subprocess.DEVNULL if stdin is None else stdin, **kwargs)
 
     def _once(deadline: float) -> subprocess.CompletedProcess[str]:
         """Run the command once, bounded by *deadline*; raise on timeout or budget."""
-        proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        proc = subprocess.Popen(wrapped, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 start_new_session=os.name == "posix", **options)
         try:
             while True:
@@ -475,6 +505,14 @@ def run_command(
             elapsed_s=round(time.monotonic() - started, 3), progress=_progress_at(workdir),
             stderr=f"timed out after {timeout_s}s",
         )
+    cwd_outside: str | None = None
+    if sentinel_path is not None:
+        try:
+            cwd_outside = sentinel_path.read_text().strip() or None
+        except OSError:
+            pass
+        finally:
+            sentinel_path.unlink(missing_ok=True)
     return SandboxResult(
         ok=result.returncode == 0,
         timeout_s=timeout_s,
@@ -482,6 +520,7 @@ def run_command(
         returncode=result.returncode,
         stdout=result.stdout,
         stderr=result.stderr,
+        cwd_outside=cwd_outside,
     )
 
 

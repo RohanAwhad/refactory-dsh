@@ -21,6 +21,15 @@ from refactory_dsh.paths import project_root, project_for_nodes
 from refactory_dsh.nn import Package, PackageError, Verdict, validate_state
 from refactory_dsh.repo_change import refuse_truncated
 
+#: Where a create/edit run stages its package inside the run directory, so two
+#: parallel runs of the same package name never collide.  A git worktree is not
+#: used because ``.factory/`` is gitignored: a worktree of the project would
+#: contain no ``.factory/packages/`` and nothing written there becomes a commit.
+#: A staging copy inside the run directory isolates the run and records its own
+#: content hash so ``register()`` can detect whether the shared package changed
+#: since ``prepare``.
+STAGING_DIR = Path(".factory-staging")
+
 STAGING = "staging"
 
 #: The marker the emit agent uses to separate files. JSON would need every
@@ -747,9 +756,13 @@ def materialise(ctx: Any) -> dict[str, Any]:
             "nothing to write"
         )
     name = str(ctx.facts["name"])
-    # The workspace, not the install tree: a run must not write generated code into
-    # the checkout, and the workspace is also the boundary a sandbox needs.
-    root = registry.workspace_root(project_for_nodes()) / name
+    # When the run has a staging directory (from prepare_create), write there
+    # instead of the shared .factory/packages/<name>/.
+    staging_root = ctx.facts.get("package_root")
+    if staging_root:
+        root = Path(staging_root)
+    else:
+        root = registry.workspace_root(project_for_nodes()) / name
     if root.exists():
         shutil.rmtree(root)
     root.mkdir(parents=True)
@@ -778,7 +791,13 @@ def materialise(ctx: Any) -> dict[str, Any]:
             indent=2,
         )
     )
-    registry.install_workspace(project_for_nodes())
+    # When staging, make the staged package importable for validation.
+    staging_root = ctx.facts.get("package_root")
+    if staging_root:
+        staging_base = Path(staging_root).parent.parent.parent  # up from .factory/packages/<name>
+        registry.install_workspace(project_for_nodes(), project_override=staging_base)
+    else:
+        registry.install_workspace(project_for_nodes())
     ctx.write_json(f"{STAGING}/manifest.json", {"package": name, "files": sorted(written)})
     return {"package_path": str(root), "files": sorted(written)}
 
@@ -1056,8 +1075,40 @@ def check_package(
 
 
 def register(ctx: Any) -> dict[str, Any]:
-    """Confirm the registry now sees the package under its own name."""
+    """Confirm the registry now sees the package under its own name.
+
+    When the run staged the package in its own directory (``prepare_create``), copy it
+    atomically to the shared ``.factory/packages/<name>/``.  If the shared package
+    changed since ``prepare`` recorded its hash, refuse and name the other run.
+    """
     name = str(ctx.facts["name"])
+    staging_root = ctx.facts.get("package_root")
+    if staging_root:
+        import tempfile
+        shared = registry.workspace_root(project_for_nodes()) / name
+        # Check whether the shared package changed since prepare.
+        source_hash = ctx.facts.get("source_hash", "")
+        if shared.exists():
+            current = _dir_hash(shared)
+            if source_hash and current != source_hash:
+                raise ValueError(
+                    f"the shared package {name!r} changed since this run's prepare "
+                    f"(hash {source_hash[:12]} -> {current[:12]}); another run "
+                    f"registered it first. This run's staged package is kept at "
+                    f"{staging_root} for inspection."
+                )
+        # Atomic copy: write to a sibling temp dir, then rename over the target.
+        shared.parent.mkdir(parents=True, exist_ok=True)
+        temp = Path(tempfile.mkdtemp(prefix=f".{name}-", dir=shared.parent))
+        try:
+            dest = temp / name
+            shutil.copytree(staging_root, dest)
+            if shared.exists():
+                shutil.rmtree(shared)
+            dest.rename(shared)
+        finally:
+            if temp.exists():
+                shutil.rmtree(temp, ignore_errors=True)
     registry.install_workspace(project_for_nodes())
     importlib.invalidate_caches()
     if name not in registry.discover_names(project_for_nodes()):
@@ -1073,6 +1124,54 @@ def register(ctx: Any) -> dict[str, Any]:
         )
     ctx.write_json("registered.json", described.payload["describe"])
     return {"registered": ", ".join(described.payload["ids"])}
+
+
+def _dir_hash(root: Path) -> str:
+    """A content hash of every file under ``root``, for change detection."""
+    h = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        if path.is_file():
+            h.update(str(path.relative_to(root)).encode())
+            h.update(path.read_bytes())
+    return h.hexdigest()
+
+
+def prepare_create(ctx: Any) -> dict[str, Any]:
+    """Read the brief and set up a per-run staging directory for the package.
+
+    This replaces ``prepare()`` for create/edit modes that need isolation.  The
+    package is written into a staging directory inside the run directory rather
+    than the shared ``.factory/packages/<name>/``, so two parallel runs of the
+    same package name never collide.  For edit mode, the source package is copied
+    into the staging directory and its content hash recorded so ``register()``
+    can detect mid-run changes.
+
+    Why staging rather than a git worktree: ``.factory/`` is in ``.gitignore``
+    in this repository, so a git worktree of the project contains no
+    ``.factory/packages/``, and nothing written there can become a commit.
+    """
+    # First, run the original prepare to get all the standard facts.
+    prepared = prepare(ctx)
+    name = str(prepared["name"])
+
+    # Set up the staging directory.
+    staging_base = Path(ctx.workdir) / STAGING_DIR
+    pkg_root = staging_base / ".factory" / "packages" / name
+    pkg_root.mkdir(parents=True, exist_ok=True)
+
+    # For edit mode: if a source package exists, copy it into staging.
+    source_hash = ""
+    shared = registry.workspace_root(project_for_nodes()) / name
+    if shared.is_dir():
+        # Copy existing package as the starting point for an edit.
+        shutil.copytree(shared, pkg_root, dirs_exist_ok=True)
+        source_hash = _dir_hash(shared)
+
+    return {
+        **prepared,
+        "package_root": str(pkg_root),
+        "source_hash": source_hash,
+    }
 
 
 #: A wheel's mandatory members, beside `RECORD`, for it to be a wheel at all.

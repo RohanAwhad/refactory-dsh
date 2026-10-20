@@ -18,6 +18,7 @@ import type {
   RefactoryKnob,
   RefactoryModeChoice,
   RefactoryPackageChoice,
+  RefactoryProject,
   RefactoryRunStatus,
   RefactorySingleRun,
   RefactorySingleLaunch,
@@ -42,6 +43,8 @@ export interface RefactoryChoices {
   readonly strategies: RefactoryStrategies
   /** The packages the registry knows. */
   readonly packages: readonly RefactoryPackageChoice[]
+  /** The registered projects for target selection. */
+  readonly projects: readonly RefactoryProject[]
 }
 
 /** Search implementation choices and optional candidate evaluation limits. */

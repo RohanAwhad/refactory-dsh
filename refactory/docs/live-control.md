@@ -372,4 +372,18 @@ message names this alternative.
 
 Release checks exercised live CLI observation and native gate answers, pause/resume, reviewed replay and owned stop. Separate registered dead-owner recovery checks passed through public CLI resume and the native Resume control, preserving completed artifacts, saved configuration and accumulated resources while executing only the remaining node. An unavailable-provider guard prevented model execution. See the [validation record](release-validation-20260926.md).
 
+## Target selection and uncommitted changes
+
+The GUI lets a person pick a run's target repository or project from the registered projects list (the same registry as `refactory projects`). The `target` knob names the repository; an empty value starts a new project. A `ProjectPicker` select appears in the **Configure a run** section when registered projects exist.
+
+The `include_uncommitted` knob (off by default) opts a run into starting from the person's uncommitted changes. When set, modified tracked files, staged files, untracked unignored files and deleted tracked files are copied into the worktree and committed as the run's base. The run records each file with its kind and content hash. The PR's Verification says "The base included uncommitted changes from the working tree." The person's checkout is never changed.
+
+## cwd escape detection
+
+When a check's command changes its working directory outside the run's worktree, the check outcome includes `cwd_escaped` naming the directory. This is advisory: the check still passes or fails on its own exit code. Detection uses an EXIT trap that compares the shell's final `$PWD` with the worktree root (both realpath'd, prefix check), writing a sentinel to a file rather than stdout or stderr. A `cd` into a subdirectory of the worktree is not flagged. The trap fires even after `exit`, and the command's original exit status is preserved.
+
+## Worktree and staging isolation
+
+Design and design_fast modes use a git worktree of the target repository, on a branch `refactory/run-<id>`. Create, create_fast, edit and edit_fast modes stage their package in a per-run directory (`<run>/.factory-staging/.factory/packages/<name>/`), so two parallel runs never collide. At registration, the staged package is copied atomically (write to a temp sibling, then rename) to the shared `.factory/packages/<name>/`. If the shared package changed since prepare, registration refuses and names the other run. Modes that only write into their run directory (loop, optimize) need no isolation.
+
 [Profiles and candidate evidence](optimization-profiles.md) · [Fast modes and resource recovery](budgets-fast-modes.md) · [Worker capabilities](models.md#model-provider-versus-coding-agent)

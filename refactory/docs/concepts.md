@@ -16,7 +16,20 @@ Refactory makes an agentic workflow explicit, interactive and searchable. A mode
 
 Shipped packages live in `refactory/refactory_packages/`. Created, imported and adopted packages live in the project's `.factory/packages/`. Both use the same registry. A package may be disabled without deleting it.
 
-Create produces a reusable package; Edit produces a revised package and records where it came from. Design produces software: commits on its own branch, in a git worktree of the repository it changes or of a new project in `~/refactory-projects/` (a run with its worktree off writes `.factory/artifacts/` instead). A Design run whose reviews pass delivers that branch as a pull request, which its approval gate names first; design_fast, which has no approval gate, leaves it on the branch. Any mode that changes a repository can take the same steps: see [if your mode changes a repository](tutorials/01-write-a-mode.md#if-your-mode-changes-a-repository). Create and Design are deliberately unscored authoring modes: successful completion is governed by their graph's checks, not a numeric search objective. Standalone Design artifacts are not optimizer candidates.
+Create produces a reusable package; Edit produces a revised package and records where it came from. Both stage their output in a per-run directory inside the run, so two parallel runs of the same package name never collide; at registration the staged package is copied atomically to the shared `.factory/packages/<name>/`, and the copy is refused if the shared package changed since prepare. Design produces software: commits on its own branch, in a git worktree of the repository it changes or of a new project in `~/refactory-projects/` (a run with its worktree off writes `.factory/artifacts/` instead). A Design run whose reviews pass delivers that branch as a pull request, which its approval gate names first; design_fast, which has no approval gate, leaves it on the branch. Any mode that changes a repository can take the same steps: see [if your mode changes a repository](tutorials/01-write-a-mode.md#if-your-mode-changes-a-repository). Create, create_fast, edit and edit_fast also isolate their writes; see the [mode classification table](#mode-classification-table) below. Create and Design are deliberately unscored authoring modes: successful completion is governed by their graph's checks, not a numeric search objective. Standalone Design artifacts are not optimizer candidates.
+
+### Mode classification table
+
+| Mode | Writes today | Isolation method |
+|---|---|---|
+| design | worktree at `~/.refactory/worktrees/` (via `repo_change.locate`) | git worktree |
+| design_fast | worktree at `~/.refactory/worktrees/` (via `repo_change.locate`) | git worktree |
+| create | `.factory/packages/<name>/` via per-run staging, then copy-on-register | staging directory |
+| create_fast | `.factory/packages/<name>/` via per-run staging, then copy-on-register | staging directory |
+| edit | `.factory/packages/<name>/` via per-run staging, then copy-on-register | staging directory |
+| edit_fast | `.factory/packages/<name>/` via per-run staging, then copy-on-register | staging directory |
+| loop | `.factory/loop/<run-id>/` (run directory only) | none needed |
+| optimize | `.factory/loop/<run-id>/` (run directory only) | none needed |
 
 ## What a graph contains
 
