@@ -33,13 +33,22 @@ LOGIN = "octo"
 
 class _TitleCtx:
     """Minimal context for _title() and _body() unit tests."""
-    def __init__(self, facts=None, files=None):
+    def __init__(self, facts=None, files=None, workdir=None):
         self.facts = dict(facts or {})
         self._files = dict(files or {})
+        self.workdir = Path(workdir) if workdir else None
     def exists(self, name):
         return name in self._files
     def read_text(self, name):
         return self._files[name]
+    def read_json(self, name, default=None):
+        import json as _j
+        if name not in self._files:
+            return default
+        try:
+            return _j.loads(self._files[name])
+        except (ValueError, TypeError):
+            return default
 
 
 def test_pr_title_from_design_heading():
@@ -95,8 +104,19 @@ def test_pr_body_has_summary_verification_and_original_request(tmp_path):
         facts={"brief": "Build a tool\nthat prints built.", "check": "python tool.py", "name": "b2",
                "inherited_failures": ["tests/test_env.py::test_needs_profile"]},
         files={"design.md": "# The design heading\n\nFirst paragraph of the design.\n\n---\n",
-               "authoring-evidence.json": '{"validation": {"status": "pass"}}',
-               "intent-audit.json": '{"requirements": [{"id": "r1", "status": "pass", "reason": ""}]}'},
+               "authoring-evidence.json": json.dumps({
+                   "validation": {"status": "pass"},
+                   "identity": {"root": str(tmp_path)},
+                   "requirements": [{"id": "r1", "text": "Build a tool that prints built."}],
+               }),
+               "intent-audit.json": json.dumps({
+                   "requirements": [{
+                       "id": "r1", "status": "pass",
+                       "requirement": "Build a tool that prints built.",
+                       "evidence": [{"path": "tool.py", "detail": "implements the tool"}],
+                   }],
+               })},
+        workdir=tmp_path,
     )
     # Set up a minimal git repo so worktree.git works.
     subprocess.run(["git", "init", str(tmp_path)], capture_output=True, check=True)
@@ -294,6 +314,46 @@ def test_pr_reviews_line_not_passed_on_empty_requirements(tmp_path):
     found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
     body = delivery._body(ctx, found)
     assert "not all review steps completed" in body
+
+
+def test_pr_reviews_line_passed_on_excluded_row_with_valid_user_change(tmp_path):
+    """An excluded row with a valid user_change passes (audit_problems validates exclusions)."""
+    import subprocess
+    ctx = _TitleCtx(
+        facts={"brief": "Build a tool.", "check": "pnpm test", "name": "t1"},
+        files={"design.md": "# Heading\n\nSummary.\n",
+               "authoring-evidence.json": json.dumps({
+                   "validation": {"status": "pass"},
+                   "requirements": [{"id": "brief", "text": "Build a tool."}],
+               }),
+               "intent-audit.json": json.dumps({
+                   "requirements": [{
+                       "id": "brief", "status": "excluded",
+                       "requirement": "Build a tool.",
+                       "reason": "The person decided to skip this.",
+                       "user_change": "brief",
+                       "user_quote": "Build a tool.",
+                   }],
+               })},
+    )
+    subprocess.run(["git", "init", str(tmp_path)], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t"], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "T"], capture_output=True, check=True)
+    (tmp_path / "f.txt").write_text("a\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "init"], capture_output=True, check=True)
+    base = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    (tmp_path / "g.txt").write_text("b\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "work"], capture_output=True, check=True)
+    head = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+    from types import SimpleNamespace
+    found = SimpleNamespace(path=str(tmp_path), base=base, head=head, branch="refactory/run-test")
+    body = delivery._body(ctx, found)
+    assert "the health check, code review and QA found nothing blocking" in body
+    assert "not all review steps completed" not in body
 
 
 def test_pr_check_line_says_failed_when_validation_failed(tmp_path):

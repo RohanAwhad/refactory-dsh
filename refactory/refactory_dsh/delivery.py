@@ -1533,9 +1533,7 @@ def _body(ctx: Any, found: worktree.Worktree, *, merge: MergeResult | None = Non
         rows = audit_data.get('requirements', [])
         if not isinstance(rows, list) or len(rows) == 0:
             return False
-        return all(
-            isinstance(r, dict) and r.get('status') == 'pass' for r in rows
-        )
+        return evidence.audit_problems(ctx) == []
 
     if ev_data is not None and check_passed and _audit_passed():
         reviews_line = ("- **Reviews:** the health check, code review and QA found nothing blocking, "
