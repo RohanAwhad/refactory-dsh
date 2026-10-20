@@ -10,7 +10,7 @@ import { mountBody, TAB } from './mount.client.tsx'
 import { AUTHORING, FRAME, MODE, PACKAGE, RECEIPT, STRATEGIES, ok } from './fake-console.client.ts'
 
 const dialogMethods = Object.fromEntries(['showModal', 'close'].map(name => [name, Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, name)]))
-const choices = { project: '/repo', modes: [MODE, AUTHORING], packages: [PACKAGE], strategies: STRATEGIES }
+const choices = { project: '/repo', modes: [MODE, AUTHORING], packages: [PACKAGE], strategies: STRATEGIES, projects: [] }
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
