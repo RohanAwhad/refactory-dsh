@@ -101,7 +101,7 @@ def test_require_build_skips_when_running_from_source(tmp_path: Path) -> None:
 
 
 def test_refuse_rebuild_when_unpinned_live_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """An unpinned live run on the same checkout blocks a rebuild."""
+    """An unpinned live run on the same checkout warns but does not rebuild."""
     from refactory_dsh import paths
     from refactory_dsh.pin import WORKSPACE_PACKAGES, register_run_on_driver
 
@@ -123,12 +123,14 @@ def test_refuse_rebuild_when_unpinned_live_run(tmp_path: Path, monkeypatch: pyte
     # Mock run_ownership.held to report the run as live.
     monkeypatch.setattr("refactory_dsh.run_ownership.held", lambda wd: True)
 
-    with pytest.raises(RuntimeError, match="live run"):
+    with patch("subprocess.run") as mock_run:
+        # Should warn but not raise or rebuild.
         paths.require_build(root=tmp_path)
+        assert not mock_run.called
 
 
 def test_require_build_check_only_never_rebuilds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """check_only=True raises instead of rebuilding, so mid-run calls never build."""
+    """check_only=True warns instead of rebuilding, so mid-run calls never build."""
     from refactory_dsh import paths
     from refactory_dsh.pin import WORKSPACE_PACKAGES
 
@@ -141,5 +143,7 @@ def test_require_build_check_only_never_rebuilds(tmp_path: Path, monkeypatch: py
 
     monkeypatch.delenv("REFACTORY_GUI_MODE", raising=False)
 
-    with pytest.raises(RuntimeError, match="stale"):
+    with patch("subprocess.run") as mock_run:
+        # Should warn but not raise or rebuild.
         paths.require_build(root=tmp_path, check_only=True)
+        assert not mock_run.called

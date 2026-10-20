@@ -231,15 +231,22 @@ def require_build(root: Path | None = None, *, check_only: bool = False) -> None
                     "run `pnpm run build` and relaunch"
                 )
             if check_only:
-                raise RuntimeError(
+                import logging
+                logging.getLogger(__name__).warning(
                     "the build is stale; run `pnpm run build` to rebuild"
                 )
-            # Refuse to rebuild when a live run uses this checkout.
-            _refuse_if_live_runs(selected)
+                return
+            # When a live run uses this checkout, warn but do not rebuild.
+            try:
+                _refuse_if_live_runs(selected)
+            except RuntimeError as exc:
+                import logging
+                logging.getLogger(__name__).warning(str(exc))
+                return
             import fcntl
             import logging
             logging.getLogger(__name__).info("workspace build is stale; rebuilding")
-            build_lock = selected / ".refactory" / "build.lock"
+            build_lock = refactory_home() / "build.lock"
             build_lock.parent.mkdir(parents=True, exist_ok=True)
             lock_fd = os.open(str(build_lock), os.O_CREAT | os.O_RDWR, 0o600)
             try:
