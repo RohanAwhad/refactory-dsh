@@ -749,3 +749,144 @@ def test_withdraw_then_rerun_not_stopped(tmp_path):
     # No respawn was needed (ran clean)
     history = run_state.read_supervision_history(root)
     assert len(history) == 0
+
+
+# ── helpers for redeliver tests ────────────────────────────────────────────
+
+def _make_run_dir_with_deliver(tmp_path: Path, *, status: str = 'done',
+                                cursor: list[str] | None = None) -> Path:
+    """Create a run directory that has a deliver node, for redeliver tests."""
+    root = tmp_path
+    refactory = root / '.refactory'
+    refactory.mkdir(parents=True, exist_ok=True)
+    (refactory / 'spine-status.json').write_text(json.dumps({'status': status}))
+
+    checkpoint: dict[str, Any] = {
+        'status': status,
+        'run_id': str(root),
+        'graph': {
+            'name': 'default_pack-design',
+            'nodes': {
+                'check': {'_type': 'GateNode', 'id': 'check', 'evaluator_type': 'fn',
+                          'evaluator_command': 'true', 'reads': [],
+                          'writes': ['check.txt']},
+                'emit': {'_type': 'AgentNode', 'id': 'emit', 'role': 'builder',
+                         'prompt_template': 'E', 'reads': [], 'writes': []},
+                'deliver': {'_type': 'FnNode', 'id': 'deliver',
+                            'command': 'dsh-run refactory_dsh.delivery:deliver_design',
+                            'reads': [], 'writes': []},
+            },
+            'edges': [
+                {'source': 'emit', 'target': 'check'},
+                {'source': 'check', 'target': 'deliver'},
+            ],
+        },
+        'state': {
+            'cursor': cursor or [],
+            'completed': ['emit', 'check'] + (['deliver'] if status == 'done' else []),
+            'skipped': [],
+            'pause_before': [],
+            'gate_verdicts': {},
+            'iterations': {},
+            'feedback': {},
+            'gate_reasons': {},
+            'afters': [],
+            'prompts': {},
+            'log': [],
+        },
+        'file_fingerprints': {},
+        'owner_pid': _dead_pid(),
+    }
+    (refactory / 'spine-checkpoint.json').write_text(json.dumps(checkpoint))
+    (refactory / 'run-config.json').write_text(json.dumps({
+        'mode': 'default_pack/design', 'project': str(root),
+        'configuration_fingerprints': {},
+    }))
+    (refactory / 'invocation.json').write_text(json.dumps({'id': 'test-inv'}))
+    (root / 'facts.json').write_text(json.dumps({'name': 'test'}))
+    return root
+
+
+# ── dm-106: redeliver ─────────────────────────────────────────────────────
+
+
+def test_redeliver_queues_rerun_and_starts_owner(tmp_path):
+    """redeliver on a done run queues a rerun targeting 'deliver' and starts
+    the owner.
+    """
+    root = _make_run_dir_with_deliver(tmp_path, status='done')
+    with patch('refactory_dsh.graph_control.recovery.start',
+               return_value={'action': 'resume', 'status': 'queued', 'pid': 1}) as mock_start:
+        result = graph_control.request(root, 'redeliver')
+
+    assert result['action'] == 'rerun'
+    assert result['target'] == 'deliver'
+    assert result['source'] == 'redeliver'
+    assert result['status'] == 'queued'
+    assert 'owner' in result
+    mock_start.assert_called_once_with(root, acknowledge_failed=False)
+    # A control file was written
+    controls_dir = root / '.refactory/graph-controls'
+    control_files = list(controls_dir.glob('*.json'))
+    assert len(control_files) == 1
+    control = json.loads(control_files[0].read_text())
+    assert control['target'] == 'deliver'
+    assert control['source'] == 'redeliver'
+
+
+def test_redeliver_failed_at_deliver(tmp_path):
+    """redeliver works on a run that failed at the deliver node, passing the
+    checkpoint-bound acknowledgement automatically.
+    """
+    root = _make_run_dir_with_deliver(tmp_path, status='failed', cursor=['deliver'])
+    with patch('refactory_dsh.graph_control.recovery.start',
+               return_value={'action': 'resume', 'status': 'queued', 'pid': 1}) as mock_start:
+        result = graph_control.request(root, 'redeliver')
+
+    assert result['target'] == 'deliver'
+    assert result['status'] == 'queued'
+    mock_start.assert_called_once_with(root, acknowledge_failed=True)
+
+
+def test_redeliver_failed_elsewhere_refused(tmp_path):
+    """redeliver refuses a run that failed at a node other than deliver."""
+    root = _make_run_dir_with_deliver(tmp_path, status='failed', cursor=['check'])
+    with pytest.raises(ValueError, match='failed at node.*check.*not at delivery'):
+        graph_control.request(root, 'redeliver')
+
+
+def test_redeliver_running_refused(tmp_path):
+    """redeliver refuses a run that is still running."""
+    root = _make_run_dir_with_deliver(tmp_path, status='executing', cursor=['deliver'])
+    (root / '.refactory/spine-status.json').write_text(json.dumps({'status': 'executing'}))
+    with pytest.raises(ValueError, match='redeliver requires a stopped run'):
+        graph_control.request(root, 'redeliver')
+
+
+def test_rerun_text_on_no_prompt_node_refused(tmp_path):
+    """rerun --text on a FnNode (no prompt) is refused with a clear message."""
+    root = _make_run_dir(tmp_path, status='halted', owner_pid=_dead_pid())
+    # Try to rerun the 'materialise' FnNode with text
+    # First get the revision
+    checkpoint = root / '.refactory/spine-checkpoint.json'
+    revision = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    with pytest.raises(ValueError, match='this node takes no text; drop --text'):
+        graph_control.request(root, 'rerun', node='materialise',
+                              text='fix this', revision=revision)
+
+
+def test_rerun_text_on_agent_node_not_refused_by_text_check(tmp_path):
+    """rerun --text on an AgentNode passes the text check (may fail later
+    at preview/revision, but not at the text check).
+    """
+    root = _make_run_dir(tmp_path, status='halted', owner_pid=_dead_pid())
+    checkpoint = root / '.refactory/spine-checkpoint.json'
+    revision = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    # The 'emit' node is an AgentNode — text should pass the type check
+    # but may fail at redo_plans/revision validation
+    try:
+        graph_control.request(root, 'rerun', node='emit',
+                              text='fix this', revision=revision)
+    except ValueError as exc:
+        # It should NOT be the text check error
+        assert 'this node takes no text' not in str(exc)

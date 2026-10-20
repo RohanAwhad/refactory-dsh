@@ -659,6 +659,30 @@ and the fail-open case when no run is open.
 - `post_checks` and fork/join are unused (§5).
 - The GUI is not audited here at all. Its defects were tracked as issues #60–#73, and the panel's behaviour is held by `packages/client/ui-refactory/tests/` and [tutorial 7](tutorials/07-pick-and-watch-from-the-panel.md).
 
+## Delivery envelope covers the merged check (dm-107)
+
+The deliver node's `command_timeout_s` is computed at lowering as
+`_check_envelope_s + INSTALL_TIMEOUT_S + NODE_DISPATCH_OVERHEAD_S`. At defaults
+(`check_timeout_s=180`): `6540 + 1800 + 600 = 8940 s` (≈ 2 h 29 min). This covers
+the full merged-check envelope (three installs, generate, setup and the check
+itself) plus one additional install cycle for the merged tree's dependencies and
+overhead for the merge and regeneration steps.
+
+The predicate is declaration-based: any op that declares `check_timeout_s` in its
+knobs and does not produce `CHECK_PRODUCES` (i.e. is not itself the check node) gets
+the delivery envelope. This follows the convention `_is_check_node` uses for the
+check node itself.
+
+Without this, the spine's default 600 s kills delivery when the merged check takes
+more than 10 minutes. The b27c_recovery run (`check_timeout_s=1800`) was killed at
+10 minutes with the merge committed locally and nothing pushed.
+
+**Held by.** `test_lowering.py`: `test_deliver_node_gets_delivery_envelope` asserts
+the lowered value equals the formula; `test_deliver_timeout_exceeds_spine_default`
+asserts it exceeds 600 s with `check_timeout_s=1800`;
+`test_synthetic_deliver_op_gets_delivery_envelope` asserts that a custom op under
+another name that declares the knob gets the envelope.
+
 Two things that were on this list have moved off it, which is the point of keeping it:
 
 - **mathlib is no longer untested.** It was installed and the mathlib problem ran, and

@@ -184,6 +184,8 @@ def to_workflow(state: dict[str, Any], *, name: str = "", description: str = "")
                 command_timeout_s = 3 * budget + 600
             elif _is_check_node(node):
                 command_timeout_s = _check_envelope_s(state)
+            elif _is_deliver_node(node):
+                command_timeout_s = _delivery_envelope_s(state)
             nodes[node_id] = FnNode(
                 command_timeout_s=command_timeout_s,
                 **common,
@@ -323,6 +325,38 @@ def _check_envelope_s(state: dict[str, Any]) -> int:
     if not 1 <= budget <= 86400:
         raise LoweringError("check_timeout_s must be between 1 and 86400 seconds")
     return 3 * INSTALL_TIMEOUT_S + 3 * budget + NODE_DISPATCH_OVERHEAD_S
+
+
+def _is_deliver_node(node: Any) -> bool:
+    """Whether this op needs the delivery envelope: it declares ``check_timeout_s``
+    but does not produce the check's own facts.
+
+    An op that runs the merged check declares ``check_timeout_s`` in its knobs,
+    following the convention ``_is_check_node`` uses.  Every such op that is not
+    itself a check node gets the delivery envelope.  This is generic: any future
+    mode whose delivery runs a merged check declares the knob and gets the
+    envelope automatically.
+    """
+    from refactory_dsh.repo_change import CHECK_PRODUCES
+
+    return (
+        "check_timeout_s" in node.knobs
+        and not set(CHECK_PRODUCES).issubset(set(node.produces))
+    )
+
+
+def _delivery_envelope_s(state: dict[str, Any]) -> int:
+    """The command_timeout_s a deliver node needs, in seconds.
+
+    Covers the full merged-check envelope (``_check_envelope_s``) plus one
+    additional install cycle for the merged tree's dependencies
+    (``INSTALL_TIMEOUT_S``) and overhead for the merge and regeneration steps
+    (``NODE_DISPATCH_OVERHEAD_S``).
+    """
+    from refactory_dsh.model import NODE_DISPATCH_OVERHEAD_S
+    from refactory_dsh.worktree import INSTALL_TIMEOUT_S
+
+    return _check_envelope_s(state) + INSTALL_TIMEOUT_S + NODE_DISPATCH_OVERHEAD_S
 
 
 def _ir_knobs(knobs: dict[str, Any]) -> dict[str, str | float]:
