@@ -65,6 +65,11 @@ def format_status(payload: dict[str, Any]) -> str:
             lines.append(f"Error: {error}")
 
         control = (activity.get('control') or {}) if isinstance(activity.get('control'), dict) else {}
+        # dm-101: A stale failed control is cleared only when a later control on
+        # the same run succeeded (the receipt file is overwritten with status
+        # 'applied').  Both the "Last failed control" line and the matching
+        # run_warning are suppressed once a later success overwrites the receipt.
+        control_succeeded = control.get('status') == 'applied'
         if control.get('status') == 'failed':
             action = control.get('action', '')
             message = control.get('message', '')
@@ -73,6 +78,7 @@ def format_status(payload: dict[str, Any]) -> str:
         warnings = [
             e.get('summary', '') for e in (activity.get('events') or [])
             if isinstance(e, dict) and e.get('kind') == 'run_warning' and e.get('summary')
+            and not (control_succeeded and e.get('summary', '').startswith('graph control'))
         ]
         for w in dict.fromkeys(warnings):
             lines.append(f"Warning: {w}")
@@ -158,33 +164,33 @@ def format_graph_control(payload: dict[str, Any]) -> str:
         nodes = payload.get('invalidated') or []
         count = len(nodes)
         names = ', '.join(str(n) for n in nodes)
-        lines.append(f"Preview: {count} node(s) would be invalidated: {names}.")
+        lines.append(f"Preview ({run_id}): {count} node(s) would be invalidated: {names}.")
     elif status == 'deferred':
         nodes = payload.get('invalidated') or []
         count = len(nodes)
         names = ', '.join(str(n) for n in nodes)
-        lines.append(f"Preview (deferred): {count} node(s) would be invalidated: {names}.")
+        lines.append(f"Preview (deferred, {run_id}): {count} node(s) would be invalidated: {names}.")
     elif status == 'failed':
         message = payload.get('message', '')
-        lines.append(f"{action} failed: {message}.")
+        lines.append(f"{action} failed ({run_id}): {message}.")
 
     last_failed = payload.get('last_failed_receipt')
     if isinstance(last_failed, dict):
         fa = last_failed.get('action', '')
         fm = last_failed.get('message', '')
-        lines.append(f"Last failed control: {fa} — {fm}.")
+        lines.append(f"Last failed control ({run_id}): {fa} — {fm}.")
 
     if status == 'acknowledged':
         message = payload.get('message', '')
         files = payload.get('files', [])
-        lines.append(f"Acknowledged: {message}")
+        lines.append(f"Acknowledged ({run_id}): {message}")
         if files:
             lines.append(f"Set aside {len(files)} file(s):")
             for f in files:
                 lines.append(f"  {f.get('original_path', '?')}")
     elif status == 'withdrawn':
         control_id = payload.get('control_id', '')
-        lines.append(f"Withdrawn control {control_id}.")
+        lines.append(f"Withdrawn control {control_id} ({run_id}).")
     elif action == 'amend-command':
         field = payload.get('field', '')
         old_val = payload.get('old_value', '')

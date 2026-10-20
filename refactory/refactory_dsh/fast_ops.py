@@ -47,18 +47,7 @@ def survey_package(ctx: Any) -> dict[str, Any]:
                        if selected else "No reference package requested; implement from the supplied API and brief.")}
 
 
-def _source_manifest(root: Path) -> dict[str, str]:
-    ignored = {".git", ".factory", ".venv", "node_modules", "__pycache__", ".pytest_cache"}
-    result = {}
-    for path in sorted(root.rglob("*")):
-        relative = path.relative_to(root)
-        if any(part in ignored or part.startswith(".env") for part in relative.parts):
-            continue
-        if path.is_symlink():
-            raise ValueError(f"source project contains a symlink: {relative}; use an explicit plain-file source")
-        if path.is_file():
-            result[str(relative)] = hashlib.sha256(path.read_bytes()).hexdigest()
-    return result
+from refactory_dsh.paths import _source_manifest  # moved to paths.py; re-exported for callers  # noqa: E402
 
 
 def prepare_artifact(ctx: Any) -> dict[str, Any]:

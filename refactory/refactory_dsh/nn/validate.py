@@ -284,7 +284,7 @@ def validate(
     # V9 required-knob check.  allow_defaults=True so the starting state (whose
     # required knobs are empty placeholders) passes structural validation; only a
     # candidate that actively sets an empty value is refused.
-    from refactory_dsh.brief_guard import check_required_knobs as _check_req
+    from refactory_dsh.nn.knob import check_required_knobs as _check_req
 
     for knob_name, message in _check_req(declared_knobs, values, allow_defaults=True):
         issues.append(Issue("V9", message, knob=knob_name))

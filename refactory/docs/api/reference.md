@@ -70,9 +70,11 @@ Typed parameters: the only thing an optimizer may write.
 |---|---|---|
 | class | `Knob` | `(default: 'Any', kind: 'str' = 'float', lo: 'float \| None' = None, hi: 'float \| None' = None, enum: 'tuple[Any, ...]' = (), values: 'tuple[str, ...]' = (), frozen: 'bool' = False, description: 'str' = '', required: 'bool' = False) -> None` |
 | class | `KnobError` | `` |
+| function | `check_required_knobs` | `(declared: "Mapping[str, 'Knob']", values: 'Mapping[str, Any]', *, allow_defaults: 'bool' = False) -> 'list[tuple[str, str]]'` |
 
 - **`Knob`** — A declared parameter: a default, a kind, and optional bounds.
 - **`KnobError`** — A value does not satisfy the knob it was written to.
+- **`check_required_knobs`** — Return ``(name, message)`` for every required knob whose value is empty.
 
 
 <a id="refactory_dsh-nn-mode"></a>
@@ -282,9 +284,9 @@ Steering a run while *using* it: the intent ledger, and the transform that adds 
 | class | `Ledger` | `(root: 'Path') -> 'None'` |
 | class | `SteeringError` | `` |
 | function | `annotate` | `(workflow: 'Any', ledger: 'Ledger') -> 'Any'` |
-| function | `chain` | `(ledger: 'Ledger', outputs: 'Mapping[str, str]', *, deliveries: 'Mapping[str, Any] \| None' = None) -> 'list[str]'` |
+| function | `chain` | `(ledger: 'Ledger', outputs: 'Mapping[str, str]', *, deliveries: 'Mapping[str, Any] \| None' = None, completed_nodes: 'frozenset[str] \| set[str] \| None' = None) -> 'list[str]'` |
 | function | `citations` | `(text: 'str') -> 'list[str]'` |
-| function | `fidelity` | `(ledger: 'Ledger', outputs: 'Mapping[str, str] \| None' = None, *, deliveries: 'Mapping[str, Any] \| None' = None) -> 'list[str]'` |
+| function | `fidelity` | `(ledger: 'Ledger', outputs: 'Mapping[str, str] \| None' = None, *, deliveries: 'Mapping[str, Any] \| None' = None, completed_nodes: 'frozenset[str] \| set[str] \| None' = None) -> 'list[str]'` |
 | function | `for_run` | `(workflow: 'Any', workdir: 'Path') -> 'Any'` |
 | function | `interactive` | `(state: 'dict[str, Any]', workdir: 'Path', *, request: 'str' = '', name: 'str' = '', description: 'str' = '') -> 'tuple[Any, Ledger]'` |
 | function | `outputs_in` | `(run_root: 'Path') -> 'dict[str, str]'` |

@@ -298,7 +298,7 @@ def _is_check_node(node: Any) -> bool:
     CHECK_PRODUCES alone) can exclude materialise, because materialise
     writes ``changes.diff`` and produces both ``commit`` and ``files``.
     """
-    from refactory_dsh.repo_change import CHECK_PRODUCES
+    from refactory_dsh.invocations import CHECK_PRODUCES
 
     return (
         set(CHECK_PRODUCES).issubset(set(node.produces))
@@ -315,7 +315,7 @@ def _check_envelope_s(state: dict[str, Any]) -> int:
     overhead.
     """
     from refactory_dsh.model import NODE_DISPATCH_OVERHEAD_S
-    from refactory_dsh.worktree import INSTALL_TIMEOUT_S
+    from refactory_dsh.invocations import INSTALL_TIMEOUT_S
 
     knob_entry = (state.get("knobs") or {}).get("check_timeout_s", {})
     budget = int(knob_entry.get(
@@ -337,7 +337,7 @@ def _is_deliver_node(node: Any) -> bool:
     mode whose delivery runs a merged check declares the knob and gets the
     envelope automatically.
     """
-    from refactory_dsh.repo_change import CHECK_PRODUCES
+    from refactory_dsh.invocations import CHECK_PRODUCES
 
     return (
         "check_timeout_s" in node.knobs
@@ -354,7 +354,7 @@ def _delivery_envelope_s(state: dict[str, Any]) -> int:
     (``NODE_DISPATCH_OVERHEAD_S``).
     """
     from refactory_dsh.model import NODE_DISPATCH_OVERHEAD_S
-    from refactory_dsh.worktree import INSTALL_TIMEOUT_S
+    from refactory_dsh.invocations import INSTALL_TIMEOUT_S
 
     return _check_envelope_s(state) + INSTALL_TIMEOUT_S + NODE_DISPATCH_OVERHEAD_S
 
