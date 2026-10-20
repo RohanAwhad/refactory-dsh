@@ -80,6 +80,7 @@
     "refactory_dsh.pitfalls",
     "refactory_dsh.projects",
     "refactory_dsh.readable",
+    "refactory_dsh.replay_harness",
     "refactory_dsh.repo_change",
     "refactory_dsh.target_guard",
     "refactory_dsh.tools.check_recipes",
@@ -89,6 +90,7 @@
     "refactory_dsh.tools.gen_tutorial",
     "refactory_dsh.tools.recipes",
     "refactory_dsh.unbuilt_check",
+    "refactory_dsh.verification",
     "refactory_dsh.worktree"
   ],
   "allowed_leaks": {
